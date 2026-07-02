@@ -1,0 +1,286 @@
+# Fix Implementation System — Design
+
+Status: draft v1 · Owner: operator · Issue: #23 · Scope: Phase 1 (operator-run) with Phase 2 hooks noted
+Inputs: a validated `FindingsDocument` (`src/findings.ts`), a client-approved fix list, a local checkout of the client repo, client-granted GitHub access.
+
+Harvey's scan produces findings; this system turns approved findings into reviewed, reversible PRs in the client's repo. Design center: **the PR is the unit of delivery, the operator is the last gate, and nothing merges without the client.** Everything below is built so a solo auditor can run it on a laptop against one engagement at a time, fanning implementation out to parallel subagents.
+
+---
+
+## 1. Pipeline
+
+```
+findings.json ──▶ INTAKE ──▶ PLAN ──▶ BATCH ──▶ IMPLEMENT ──▶ VERIFY ──▶ PR ──▶ OPERATOR GATE ──▶ CLIENT HANDOFF
+                 (human)   (cheap    (solver)  (worktrees,   (client's  (gh)   (human)          (client merges)
+                            model)              parallel)     commands)
+```
+
+### 1.1 Intake
+
+- Input is a findings doc that passes `validateFindings()` **plus** an engagement manifest listing which finding ids the client approved for fixing. No approval record, no fix — findings the client hasn't signed off on never enter the pipeline.
+- Eligibility filter before anything runs, keyed off the schema:
+  - `confidence` must be `Confirmed` or `Likely`. `Review`/`N/A` findings are never auto-fixed; they become "recommended fix" notes.
+  - `ease >= 4 && safety >= 4` (the BFTB inputs) for the automated path. Lower scores route to `manual` mode: a fix plan is drafted for the operator, but no subagent touches code.
+  - Category must be in the engagement's enabled category set (see MVP cut, §8).
+- Intake pins the client repo commit (`meta.commit` from the findings doc must match, or the operator explicitly re-baselines — findings against a stale commit get their `location` re-verified before planning).
+
+### 1.2 Per-finding fix plan (cheap model)
+
+A low-cost-tier subagent reads the finding (`id`, `location`, `evidence`, `fix`) plus the referenced source and drafts a `FixPlan`. The plan is cheap on purpose: it exists to make batching and rail-checking possible *before* any code changes, and to give the operator something reviewable when a fix gets downgraded.
+
+The plan must include a **blast-radius estimate**: the concrete file list the fix will touch, the symbols/routes affected, callers/importers of changed code (from a grep pass, not guesswork), and whether the change is behavior-preserving. A plan whose blast radius exceeds the rails (§3) is downgraded at this stage — cheaply, before a worktree ever spins up.
+
+```typescript
+// src/fix/plan.ts
+import type { Finding, Severity } from "../findings";
+
+export type FixMode = "auto" | "manual" | "recommend-only";
+export type EscalationTier = "cheap" | "standard" | "flagship";
+
+export interface BlastRadius {
+  files: string[];              // concrete paths the fix will modify
+  createdFiles: string[];       // new files (tests, helpers) — must also pass the allowlist
+  symbols: string[];            // functions/routes/policies touched
+  callers: string[];            // grep-discovered importers/callers of changed symbols
+  behaviorPreserving: boolean;  // false => operator gate is mandatory-with-diff-walkthrough
+  estimatedChangedLines: number;
+}
+
+export interface FixPlan {
+  findingId: string;            // Finding.id — the join key for everything downstream
+  severity: Severity;
+  category: string;
+  mode: FixMode;
+  detectorId: string;           // which scan detector produced the finding (re-run in verify)
+  approach: string;             // 2–5 sentences: what changes and why it resolves the finding
+  blastRadius: BlastRadius;
+  verifyCommands: string[];     // discovered client commands this fix must pass (§2)
+  testPlan: string;             // which existing tests cover this; what new test (if any) is added
+  tier: EscalationTier;         // starting model tier (§5)
+  risks: string[];              // e.g. "callers may rely on the silent no-op"
+  downgradeReason?: string;     // set when mode === "recommend-only"
+}
+```
+
+### 1.3 Batching
+
+- Build a conflict graph over eligible plans: nodes are findings, an edge means **overlapping `blastRadius.files`** (or overlapping `createdFiles`). Directory-level overlap is not an edge; file-level is.
+- Connected components serialize internally (ordered by severity desc, then BFTB desc); independent components run in parallel up to the concurrency cap (§4).
+- Findings the operator marks as one *coherent batch* (e.g. five instances of the same anti-pattern class, like the zero-row-update sites in D-091 #7) collapse into a single node → single worktree → single PR. Batching across *different* pattern classes is prohibited even when files don't overlap — one PR must have one reviewable story.
+
+### 1.4 Implement → Verify → PR
+
+Each node gets an isolated git worktree (§4), a subagent at the plan's tier implements the fix, verification runs (§2), and a PR is opened as **draft**. Failures loop back per the escalation ladder (§5); exhausted attempts downgrade to recommend-only with the failure evidence attached.
+
+### 1.5 Operator gate → client handoff
+
+- Every PR sits in **draft** until the operator reviews the diff and the `VerificationEvidence` block. Marking a PR ready-for-review is a human action, never automated. The operator checklist is the existing `docs/runbooks/pr-self-review.md` plus a slop sweep of the generated diff.
+- Client handoff = the PR set plus a fix summary appended to the engagement report: table of finding id → PR link → verification status → recommended merge order (§4). **The client merges. Harvey never merges.**
+
+---
+
+## 2. Verification contract
+
+The contract, in one line: **a fix is "verified" only if the client's own checks pass AND the detector that found the problem no longer fires — both actually executed, in this worktree, with output captured.**
+
+### 2.1 Discover the client's verify commands
+
+Run once per engagement (cached in the engagement manifest, operator-editable):
+
+1. `package.json` scripts, in preference order: `verify` > `check`/`ci` > the union of `typecheck|tsc`, `lint`, `test`. Monorepos: same per affected workspace, plus the root.
+2. `.github/workflows/*.yml`: extract `run:` steps from PR-triggered jobs. Anything CI runs that the scripts don't (e.g. `pnpm check:*` gates, knip, jscpd) gets appended. Steps needing secrets/services we don't have are recorded as `skipped: needs-ci` — *explicitly*, in the evidence.
+3. Baseline run on the pinned commit **before any fix work starts**. Pre-existing failures are recorded once and treated as ambient: a fix is green if it introduces no *new* failures. Never silently absorb a pre-existing failure — it's listed in every PR body it applies to.
+
+### 2.2 Never report green without running
+
+- The verifier is a separate step from the implementer, and it only trusts captured process output (command, exit code, stdout/stderr tail, duration). A subagent *claiming* tests pass is worth nothing; the harness runs the commands itself. This is the "fail loud / never present a guess as fact" doctrine applied mechanically.
+- If a verify command cannot be run locally (needs prod env, needs CI secrets), the fix is **not** reported green — the PR says "local checks green; `<command>` requires CI, will run on this PR" and the operator gate confirms CI went green before handoff.
+
+### 2.3 Re-run the detector
+
+Every plan carries `detectorId` — the scan detector (from `scan-extras.txt` / the D-091 gate set / the module scanner) that produced the finding. Verification re-runs **that detector scoped to the fixed location** and requires it to no longer fire. Detector-clean without client-checks-green is not done; client-checks-green without detector-clean is not done. Both, or it fails.
+
+### 2.4 Evidence
+
+```typescript
+// src/fix/verify.ts
+export interface CommandRun {
+  command: string;
+  cwd: string;
+  exitCode: number;
+  durationMs: number;
+  outputTail: string;           // last ~50 lines, secrets-scrubbed
+  skipped?: "needs-ci" | "pre-existing-failure-on-baseline";
+}
+
+export interface VerificationEvidence {
+  findingId: string;
+  worktreeCommit: string;                 // HEAD after the fix
+  baselineCommit: string;                 // pinned engagement commit
+  detectorBefore: { detectorId: string; fired: true; output: string };   // from the original scan
+  detectorAfter:  { detectorId: string; fired: boolean; output: string }; // must be fired: false
+  clientChecks: CommandRun[];             // every discovered command, run or explicitly skipped
+  newTestAdded?: string;                  // path of regression test, if the plan called for one
+  green: boolean;                         // detectorAfter.fired === false && no NEW clientCheck failures
+  attempts: number;                       // implementation attempts consumed (§5 escalation input)
+}
+```
+
+The `detectorBefore`/`detectorAfter` pair goes verbatim into the PR body — before/after evidence is the client-facing proof, not an internal artifact.
+
+---
+
+## 3. Safety rails
+
+### 3.1 Hard rules (violation ⇒ abort, always)
+
+1. **Never push a protected branch.** Push targets are `harvey/fix/<finding-id>` branches only; `main`/`master`/anything in the repo's protected set is refused at the git-wrapper level, not by convention.
+2. **Never modify secrets, env, or CI-credential files.** Built-in denylist, non-overridable: `.env*`, `**/secrets*`, `**/*.pem|*.key|*credentials*`, `.github/workflows/**`, `.git/**`, deploy configs that carry tokens. A fix whose correct implementation requires touching these (e.g. "rotate the leaked key") is *by definition* recommend-only.
+3. **Path allowlist per engagement.** The client scopes each engagement to a path set (e.g. `apps/main/src/**`, `supabase/**` excluded). The implementer's write surface is the allowlist minus the denylist; a write outside it aborts the fix and logs a rail-violation event.
+4. **Max-diff-size guard per PR.** Default: 300 changed lines / 10 files (operator-tunable per engagement, never per finding). Exceeded ⇒ abort and downgrade; a "small mechanical fix" that grows past this was mis-planned, and a big diff defeats the reviewability the whole system depends on.
+5. **Dry-run mode.** `--dry-run` runs intake → plan → batch → rails-check and emits the full plan set + would-be PR bodies, with zero worktrees created and zero pushes. First run of every engagement is a dry run, reviewed with the client.
+6. **Every change reversible by closing the PR.** Corollaries: no direct commits to any shared branch, no migrations that execute on merge without a client-run step, no dependency additions in the automated path (a `package.json`+lockfile change is not "reversible by closing the PR" in any practical client workflow — it invites drift and supply-chain review the client didn't sign up for).
+
+### 3.2 Abort vs. downgrade
+
+| Situation | Outcome |
+|---|---|
+| Hard-rule violation attempted (denylist write, protected-branch push, diff cap) | **Abort** the fix, log the event, surface to operator. Repeated rail violations in one engagement pause the whole pipeline. |
+| `location` no longer matches the pinned commit (code moved/changed) | **Abort**, flag for re-scan. Fixing stale evidence is how you break things. |
+| Correct fix requires: schema/RLS migration, secret rotation, product/UX decision, contract change visible to client's users, or dependency change | **Downgrade** to recommend-only: ship the `FixPlan` prose + a suggested diff sketch in the report, no PR. |
+| Verification unrunnable locally and no CI available to the operator | **Downgrade** (a fix we can't verify is a liability, not a deliverable). |
+| Verification fails after the escalation ladder is exhausted (§5) | **Downgrade**, attach every `CommandRun` so the failure itself is a finding-grade artifact. |
+| Blast radius grows mid-implementation beyond the plan (new files needed, callers must change) | **Abort and re-plan** once; if the second plan also exceeds rails, downgrade. |
+
+Downgrades are not failures of the engagement — they're the honest half of the deliverable. The report's fix section has two tables: "PRs opened" and "Recommended fixes (why not automated)".
+
+---
+
+## 4. Parallelism
+
+- **Worktree per node.** `git worktree add .harvey/wt/<finding-id> <baseline-commit>` inside the operator's client checkout; branch `harvey/fix/<finding-id>` created at the baseline. Worktrees are disposable: green ⇒ push branch + open draft PR + remove worktree; failed ⇒ preserve worktree for operator autopsy until end of engagement.
+- **Concurrency cap:** default **4** concurrent implement/verify slots (Phase 1 is a laptop; the binding constraint is the client's test suite runtime, not tokens). Verification slots are the scarce resource — implementation can overlap freely, but at most 2 full client-check runs execute at once to keep timings honest.
+- **File-conflict detection** happens twice: statically at batch time (blast-radius overlap, §1.3), and dynamically at completion — before pushing, diff the worktree's changed-file set against every already-pushed fix branch. Late-discovered overlap ⇒ the later fix rebases onto the earlier fix branch *only for local conflict assessment*; if it conflicts, it re-queues to run serially after the earlier PR's disposition. PRs are always cut against the client's default branch, never stacked.
+- **Merge-order suggestion:** the handoff summary emits a suggested order — severity desc within each conflict component, components ordered by highest contained severity — with an explicit "PRs #a and #b touch `<file>`; merge #a first, then re-run CI on #b" note wherever dynamic overlap was detected. It's advice to the client, not automation.
+
+---
+
+## 5. Model tiering
+
+Tiers map to the router's `bulk`/`standard`/`flagship` (see `model-routing.md`; "cheap" below = `bulk`):
+
+| Tier | Used for | Rationale |
+|---|---|---|
+| **cheap** (bulk) | All fix plans; implementation of mechanical MVP classes (§8) | These are pattern-application jobs — the D-091 catalog literally contains the before/after shape. |
+| **standard** | Implementation after any escalation trigger; all non-mechanical categories | |
+| **flagship** | Final adversarial review of every **Security-category** fix diff before it can leave draft; implementation of fixes that hit two or more escalation triggers | Review is cheaper than implementation and catches the "fix that technically silences the detector" class. |
+
+**Escalation triggers** (any one bumps cheap → standard):
+
+1. `severity` is `Critical` or `High`.
+2. Path or plan touches **state-machine, auth/permission, or payment-adjacent code** (matched against an engagement-configured sensitive-path list — the analogue of "sensitive paths never auto-change" — plus keyword heuristics: `assertPermission`, `transition`, `payout`, `stripe`, `webhook`).
+3. **Verification failure after N=2 attempts** at the current tier (max 2 attempts per tier; exhausting standard ⇒ downgrade, no flagship implementation retries in Phase 1 — cost discipline).
+4. **Cheap-model self-disagreement:** plans are drafted twice by the cheap tier with independent contexts; if the two plans disagree on file set or approach materially, the finding escalates to standard for planning *and* implementation. Agreement is a cheap consistency check; disagreement is a signal the fix isn't mechanical.
+
+Flagship Security review has abort authority: its rejection sends the fix back one tier with the review notes, once; a second rejection downgrades to recommend-only.
+
+```typescript
+// src/fix/result.ts
+export type FixOutcome = "pr-opened" | "recommend-only" | "aborted";
+
+export interface FixResult {
+  findingId: string;
+  outcome: FixOutcome;
+  plan: FixPlan;
+  branch?: string;              // harvey/fix/<finding-id>
+  prUrl?: string;               // draft PR
+  evidence?: VerificationEvidence;
+  tiersUsed: EscalationTier[];  // e.g. ["cheap","standard"] — cost/quality telemetry
+  flagshipReview?: { verdict: "approved" | "rejected"; notes: string }; // Security category only
+  downgradeOrAbortReason?: string;
+  railEvents: string[];         // any rail checks that fired, even non-fatal ones
+}
+```
+
+---
+
+## 6. Client access modes
+
+### Phase 1 — local checkout + operator's client-granted GitHub access
+
+- Operator clones the client repo with credentials the client granted (collaborator invite or fine-grained PAT the *client* issued, scoped to the one repo). Worktrees, implementation, and verification are all local.
+- Rails specific to this mode: the git wrapper refuses any push whose ref isn't `harvey/fix/*`; `gh pr create --draft` is the only PR-affecting command the pipeline may issue (no merge, no ready-for-review, no branch-protection or settings API calls — those aren't wrapped, they're absent). Client code never leaves the operator's machine except as PR diffs to the client's own repo; no client source in Harvey's repo, scratch dirs, or prompts beyond what the fix requires.
+- Credential hygiene: PAT lives in the OS keychain, engagement-scoped, revoked (or client uninvites) at engagement close — put it in the engagement-close checklist.
+
+### Phase 2 — GitHub App, least privilege
+
+- A Harvey GitHub App the client installs on **selected repositories only**. Permissions: `contents: write`, `pull_requests: write`, `checks: read`, `metadata: read`. Explicitly **not** requested: `workflows`, `administration`, `secrets`, `environments`, `members`. Short-lived installation tokens per run; nothing long-lived stored.
+- Branch rails move from wrapper-enforced to structurally enforced where possible: the client keeps branch protection on their default branch, so even a buggy Harvey cannot push it; Harvey additionally keeps the `harvey/fix/*`-only wrapper as belt-and-braces.
+- Phase 2 also unlocks: reading CI results on Harvey's own PRs (`checks: read`) to close the "needs-ci" verification gap in §2.2, and running the pipeline without a full operator-side clone (ephemeral runner). The pipeline stages, rails, and evidence contract are identical — only the transport changes.
+
+---
+
+## 7. PR conventions
+
+- **One finding per PR**, or one coherent same-pattern batch (§1.3). Branch `harvey/fix/<finding-id>`; title `[<finding-id>] <imperative fix summary>` (e.g. `[F-pay-01] Assert affected-row count on payout status transition`).
+- Always opened as **draft**; operator flips to ready.
+- Body template (generated from `FixResult`):
+
+```markdown
+## Fixes finding <id> — <title>
+Severity: <severity> · Category: <category> · Confidence: <confidence>
+Audit report ref: <report section link> · Engagement commit: <baselineCommit>
+
+### What was wrong
+<finding.evidence, trimmed> — <finding.impact, one line>
+
+### What this PR does
+<plan.approach>
+Files touched: <blastRadius.files>
+
+### Verification
+| Check | Result |
+|---|---|
+| Detector `<detectorId>` before | FIRED (output excerpt) |
+| Detector `<detectorId>` after  | clean |
+| `<each client command>` | exit 0, 42s (or: skipped — needs CI, see below) |
+Pre-existing failures on baseline (not caused here): <list or "none">
+New regression test: <path or "n/a — covered by <existing test>">
+
+### Rollback
+Close this PR / revert this single commit. No migrations, no dependency changes,
+no config changes are included; reverting restores the exact prior behavior.
+
+---
+Generated by Harvey fix-implementation · reviewed by <operator> before leaving draft.
+```
+
+The rollback section is mandatory and must be *true* — it's the enforcement mirror of rail 3.1(6). If a fix can't honestly write that paragraph, it shouldn't be a PR.
+
+---
+
+## 8. MVP cut
+
+**In-scope finding classes first** — mechanical, high-`safety`, detector-verifiable, all with exact before/after shapes already documented in `docs/runbooks/anti-patterns.md`:
+
+1. **Zero-row update returns `error: null`** (D-091 #7) — chain `.select('id')` + assert row count. Purely additive, per-site.
+2. **Unchecked Supabase mutations** (D-091 #3) — add error handling on ignored `{ error }`.
+3. **Raw error message egress** (D-091 #16) — route through the generic-response helper pattern.
+4. **`z.string().url()` on stored/rendered URL fields** (D-091 #17) — swap to a safe-URL validator.
+5. **`void`-prefixed async in serverless functions** (D-091 #8) — `await` or platform `waitUntil`.
+6. **TODO/stub-shaped code with an obvious completion** (D-091 #1) — only when the finding's `fix` field states the completion; otherwise recommend-only.
+
+Each of these maps to an existing `check:*`-style detector, satisfying §2.3 without new detector work.
+
+**Calibration:** run the full pipeline against the deliberately-broken calibration target (issue #9) before any client engagement. The target's ground-truth doc gives planted instances of classes 1–5; acceptance = every in-scope planted bug yields a green draft PR whose detector-after is clean and whose diff the operator would sign, every out-of-scope planted bug (RLS-off table, `USING (true)` policy, service-role query building) yields a correct recommend-only downgrade with the right reason, and zero rail events fire. That last clause matters: the calibration run validates the *rails*, not just the fixes.
+
+**Explicit non-goals (MVP):**
+
+- No RLS policy or migration changes (anti-patterns #2, #5, #13 are recommend-only — DB-layer enforcement changes need client DBA eyes).
+- No auth/permission-matrix, state-machine, or payment-flow rewrites (#9, #11, #14, #15, #18-as-RPC — the escalation triggers in §5 exist precisely because these aren't mechanical).
+- No webhook replay-protection *implementation* (#20 needs provider-specific idempotency design; recommend-only with the pattern's reference implementations cited).
+- No dependency additions/upgrades, no secret rotation, no CI/workflow edits — hard rails, not just non-goals.
+- No auto-merge, no ready-for-review automation, no fixing findings the client didn't approve, no multi-engagement concurrency.
+- No Phase 2 GitHub App build — designed for above so nothing in Phase 1 forecloses it, but not built until Phase 1 has run on ≥2 real engagements.
+
+**Proposed file layout:** `src/fix/plan.ts`, `src/fix/verify.ts`, `src/fix/result.ts` (schemas above), `src/fix/rails.ts` (denylist + allowlist + diff-cap checks, pure functions, tested like `findings.ts` is), orchestration as an operator-invoked CLI (`pnpm fix:dry-run <engagement>`, `pnpm fix:run <engagement>`).
