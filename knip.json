@@ -1,0 +1,4 @@
+{
+  "entry": ["src/findings.ts", "src/cli/*.ts", "src/**/*.test.ts", "report-template/render.mjs", "tools/*.mjs"],
+  "project": ["src/**/*.ts", "report-template/*.mjs", "tools/*.mjs"]
+}

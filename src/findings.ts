@@ -1,0 +1,126 @@
+// Findings schema for the audit deliverable. report-template/render.mjs consumes
+// this shape; validate an engagement's findings.json here before rendering.
+
+export const SEVERITIES = ["Critical", "High", "Medium", "Low", "Perf", "Info", "Watch"] as const;
+export const CONFIDENCES = ["Confirmed", "Likely", "Review", "N/A"] as const;
+
+export type Severity = (typeof SEVERITIES)[number];
+export type Confidence = (typeof CONFIDENCES)[number];
+
+export interface Finding {
+  id: string;
+  title: string;
+  severity: Severity;
+  confidence: Confidence;
+  category: string;
+  taxonomy: string;
+  location: string;
+  status: string;
+  evidence: string;
+  impact: string;
+  fix: string;
+  // BFTB inputs, each 1–5: business value of fixing, ease of fix, safety of fix.
+  value: number;
+  ease: number;
+  safety: number;
+  okWhen?: string;
+  notOkWhen?: string;
+  note?: string;
+}
+
+export interface ReportMeta {
+  client: string;
+  subtitle: string;
+  date: string;
+  commit: string;
+  auditor: string;
+  confidential: boolean;
+  overallHealth: number;
+  tenantIsolation: string;
+  authModel: string;
+  headline: string;
+  scope: string;
+  methodology: string;
+  outOfScope: string;
+}
+
+export interface FindingsDocument {
+  meta: ReportMeta;
+  findings: Finding[];
+}
+
+// Bang-for-the-buck score, 0–100. Mirrors the formula in report-template/render.mjs.
+export function bftb(f: Pick<Finding, "value" | "ease" | "safety">): number {
+  return Math.round(((f.value * f.ease * f.safety) / 125) * 100);
+}
+
+export interface ValidationResult {
+  ok: boolean;
+  errors: string[];
+}
+
+const META_STRING_FIELDS: (keyof ReportMeta)[] = [
+  "client", "subtitle", "date", "commit", "auditor", "tenantIsolation",
+  "authModel", "headline", "scope", "methodology", "outOfScope",
+];
+
+const FINDING_STRING_FIELDS: (keyof Finding)[] = [
+  "id", "title", "category", "taxonomy", "location", "status", "evidence", "impact", "fix",
+];
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function scoreInRange(v: unknown): boolean {
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 5;
+}
+
+export function validateFindings(data: unknown): ValidationResult {
+  const errors: string[] = [];
+
+  if (!isRecord(data)) return { ok: false, errors: ["document is not an object"] };
+
+  if (!isRecord(data.meta)) {
+    errors.push("meta: missing or not an object");
+  } else {
+    for (const k of META_STRING_FIELDS) {
+      if (typeof data.meta[k] !== "string") errors.push(`meta.${k}: expected string`);
+    }
+    if (typeof data.meta.confidential !== "boolean") errors.push("meta.confidential: expected boolean");
+    const h = data.meta.overallHealth;
+    if (typeof h !== "number" || h < 0 || h > 10) errors.push("meta.overallHealth: expected number 0–10");
+  }
+
+  if (!Array.isArray(data.findings)) {
+    errors.push("findings: missing or not an array");
+    return { ok: false, errors };
+  }
+
+  const seenIds = new Set<string>();
+  data.findings.forEach((f: unknown, i: number) => {
+    const at = `findings[${i}]`;
+    if (!isRecord(f)) {
+      errors.push(`${at}: not an object`);
+      return;
+    }
+    for (const k of FINDING_STRING_FIELDS) {
+      if (typeof f[k] !== "string") errors.push(`${at}.${k}: expected string`);
+    }
+    if (!SEVERITIES.includes(f.severity as Severity)) {
+      errors.push(`${at}.severity: "${String(f.severity)}" not one of ${SEVERITIES.join("/")}`);
+    }
+    if (!CONFIDENCES.includes(f.confidence as Confidence)) {
+      errors.push(`${at}.confidence: "${String(f.confidence)}" not one of ${CONFIDENCES.join("/")}`);
+    }
+    for (const k of ["value", "ease", "safety"] as const) {
+      if (!scoreInRange(f[k])) errors.push(`${at}.${k}: expected integer 1–5`);
+    }
+    if (typeof f.id === "string") {
+      if (seenIds.has(f.id)) errors.push(`${at}.id: duplicate id "${f.id}"`);
+      seenIds.add(f.id);
+    }
+  });
+
+  return { ok: errors.length === 0, errors };
+}

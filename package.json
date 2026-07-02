@@ -1,0 +1,34 @@
+{
+  "name": "harvey",
+  "version": "0.1.0",
+  "private": true,
+  "description": "External code-audit service — multi-tenant Supabase/Next.js security & codebase-health scanning",
+  "type": "module",
+  "packageManager": "pnpm@11.1.3",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "knip": "knip",
+    "check:duplication": "jscpd --config .jscpd.json src tools",
+    "validate:findings": "tsx src/cli/validate-findings.ts",
+    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.30.0",
+    "jscpd": "^4.0.5",
+    "knip": "^5.61.0",
+    "playwright": "^1.53.0",
+    "postgres": "^3.4.5",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.35.0",
+    "vitest": "^3.2.0"
+  }
+}

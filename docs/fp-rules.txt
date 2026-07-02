@@ -1,0 +1,68 @@
+# fp-rules — triage exclusions for the multi-tenant Supabase/Next.js scan
+#
+# Pass to the reference harness triage:
+#   /triage VULN-FINDINGS.json --fp-rules docs/fp-rules.txt
+#
+# These suppress the known false-positive classes so the report is high-signal.
+# A scanner that flags these wastes the client's trust. Each rule says when NOT
+# to flag — and, importantly, the narrow condition under which it IS still a finding.
+
+## Service-role / RLS
+
+- SERVICE-ROLE BYPASS IS NOT A FINDING BY ITSELF. Server-side jobs, crons, and
+  trusted internal code legitimately use the service-role client to bypass RLS.
+  Only flag when the service-role path is (a) reachable from untrusted input
+  (user text, webhook body, an LLM tool call that builds a query), or (b) the
+  service-role key is exposed to the client/edge or a URL.
+
+- RLS-ENABLED-NO-POLICY ON A SERVICE-ROLE-ONLY TABLE IS SAFE BY DESIGN. RLS on
+  with zero policies is deny-all to anon/authenticated. Note it; do not flag as a
+  vulnerability. (Contrast: RLS OFF with no policy IS exposed — that's a real finding.)
+
+## Counters / concurrency
+
+- DERIVED ABSOLUTE VALUE IS NOT AN RMW RACE. `.update({ status: 'done' })` or a
+  field set to a freshly computed absolute value (not `stored_value ± n` read from
+  a prior SELECT) is not a read-modify-write race. Only flag when the new value is
+  computed FROM a previously read copy of the same counter/balance column.
+
+## URL validation
+
+- OPERATOR / ENV CONFIG URLS ARE EXEMPT. `z.string().url()` (or no validation) on
+  a trusted operator-supplied env/config value — which may be non-http like
+  `redis://` or `postgres://` — is fine. Only flag USER-ingested, persisted, or
+  rendered `*_url` fields (source_url, image_url, avatar_url, webhook_url, etc.).
+
+## Permission gates
+
+- A SHARED PERMISSION GATE IS ONLY A FINDING IF THE ACTIONS DIFFER. Reusing one
+  gate across a route is fine when every action behind it requires the same
+  authority. Only flag when a single gate covers actions with DIFFERENT authority
+  requirements (e.g. read + delete behind one check).
+
+## Rate limiting
+
+- IN-PROCESS CACHES ARE NOT LIMITERS. A module-level `Map`/`Set` used as a CACHE
+  (memoization, dedup, lookup) is fine. Only flag when the structure is acting as a
+  RATE LIMIT / QUOTA / THROTTLE (name or usage reads like rate/limit/attempt/
+  bucket/quota/hits and it gates request admission).
+
+## Webhooks
+
+- REPLAY PROTECTION MAY LIVE UPSTREAM. Before flagging a webhook handler for
+  missing replay defense, check whether protection lives in an imported shared
+  handler, middleware, or the provider SDK (Stripe `constructEvent` enforces a
+  timestamp window). Only flag when no replay signal exists anywhere in the path.
+
+## Scope
+
+- TEST / FIXTURE / SEED / DEV-SCRIPT CODE IS OUT OF SCOPE. Findings in `*.test.*`,
+  `__tests__`, `fixtures/`, `seed`/`scripts` that never ship, and storybook/mocks —
+  downgrade to informational or drop. The audit is about SHIPPED application code
+  (the request path, migrations/policies, server routes).
+
+## General
+
+- AN INTENTIONAL, DOCUMENTED EXCEPTION IS NOT A FINDING. If the code carries an
+  explicit inline justification (an allow-comment with a reason) for a flagged
+  pattern, treat it as accepted risk — note it in an appendix, don't headline it.

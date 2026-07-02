@@ -1,0 +1,190 @@
+# scan-extras — multi-tenant Supabase/Next.js security brief
+#
+# Pass to the reference harness scan:
+#   /vuln-scan <client-repo>/src --extra docs/scan-extras.txt
+#
+# These are ADDITIONAL vulnerability categories to hunt for, on top of the
+# default scan brief — the high-signal, security-adjacent bug classes that
+# generic AI reviewers and presence-checking scanners miss in multi-tenant
+# Supabase/Next.js SaaS. Ordered by blast radius. Stack-generic (no client
+# file paths). Derived from the D-091 taxonomy.
+
+## APPLICABILITY — gate every rule before it becomes a finding
+
+A finding is only real if its PRECONDITION holds for this app. Establish each precondition
+DETECT-first (from code/schema), ask only for facts not in the repo, infer last. Each rule's
+[when: …] tag is its precondition; if the surface is absent, the rule is N/A (not a finding):
+
+- Webhook replay / signature       [when: an inbound SIGNED webhook handler exists]
+- Server Action auth / validation  [when: a `'use server'` action exists]  (e.g. ATC has 0 → N/A)
+- SSRF via stored URL field         [when: server-side code fetches a user-supplied URL]
+- In-memory rate limit             [when: a public/anon limiter exists]
+- Unsafe / missing cache           [when: cacheable read paths exist]
+- Dynamic-rendering opt-in         [when: the page could be static — i.e. doesn't need per-request data]
+- CSRF                             [when: cookie-based auth]  (Bearer-only → N/A)
+- Password-strength / leaked-pw    [when: email/password auth is enabled]  (OAuth-only → N/A)
+- Data-sensitivity weighting       DETECTED, never asked — see M10 (PII dictionary)
+
+## DETECT DEEPER before falling back to "confirm intent"
+
+Don't stop at the advisor's summary — read the actual artifacts; most "ambiguous" findings resolve to a verdict:
+- SECURITY DEFINER exposure: READ THE FUNCTION BODY (`pg_get_functiondef`). Uses `auth.uid()`/`auth.jwt()` to
+  constrain by the caller → caller-scoped (OK). Filters only by a parameter (target_tenant_id/user_id) with no
+  caller check → returns data for arbitrary IDs (NOT OK). [ATC: 2 of 3 cleared, only tenant_is_active flagged.]
+- RLS-enabled-no-policy: CHECK THE GRANTS (`information_schema.role_table_grants`). No anon/authenticated SELECT
+  grant → deny-all by design, confirmed server-only (OK). HAS a client SELECT grant but no policy → grant/policy
+  mismatch (vestigial grant, or a silently-broken client read). Also cross-reference code query sites: which
+  client (service-role vs tenant/anon) actually reads the table. [ATC: 11 of 13 confirmed locked, 2 to confirm.]
+The OK-when / Not-OK-when criteria below are the FALLBACK for the genuinely-undetermined residue, not the default.
+
+## UNCERTAINTY — be upfront; give decision criteria, not "confirm intent"
+
+For findings that are safe-or-not depending on design (RLS-enabled-no-policy, SECURITY DEFINER
+exposure, unused indexes, low-confidence PII names): state it plainly AND give the client an
+OK-when / NOT-OK-when so they can self-resolve. Never assert; never silently drop. Examples:
+- RLS-enabled-no-policy: OK if the table is service-role-only (deny-all by design); NOT OK if a
+  user feature must read it via PostgREST (policy missing → feature silently returns empty).
+- SECURITY DEFINER RPC-exposed: OK if caller-scoped (uses auth.uid()); NOT OK if it returns
+  cross-tenant data or leaks existence/status for arbitrary IDs.
+
+## CRITICAL — cross-tenant data exposure
+
+- PERMISSIVE OR MISSING RLS. Flag any public table with RLS disabled, and any
+  policy whose USING/WITH CHECK is `true`, `auth.role() = 'authenticated'`, or
+  otherwise lacks a tenant predicate. `auth.role() = 'authenticated'` is the
+  canonical footgun: it lets ANY logged-in user read EVERY tenant's rows. The
+  policy looks correct; only reading it catches the leak. Supabase RLS is
+  opt-in — a table with no policy and RLS off is fully exposed via the anon key.
+
+- SERVICE-ROLE RLS BYPASS. The `service_role` key bypasses ALL RLS by design.
+  Flag: service_role key shipped to the client/edge bundle or embedded in a URL;
+  any request path where service-role runs a query built from untrusted input
+  (user text, webhook body, an LLM tool call → SQL); admin/automation endpoints
+  that reach service-role without an in-handler authority check.
+
+## HIGH — auth bypass / isolation / replay
+
+- SINGLE-LAYER TENANT ISOLATION. Tenant scoping enforced by an app-code `.eq(
+  'tenant_id', …)` OR an RLS policy but not BOTH. One defense is one bug from a
+  cross-tenant leak. Flag service-role queries relying solely on app-layer filtering.
+
+- PER-ROUTE / PER-ACTION AUTHORIZATION GAPS. A route that switches on
+  `body.action` or serves multiple HTTP methods behind a SINGLE permission gate
+  (over- or under-permissive). Admin routes whose only gate is a cookie/shape
+  check rather than an in-handler authority assertion.
+
+- WEBHOOK SIGNATURE WITHOUT REPLAY PROTECTION. An inbound signed webhook that
+  verifies the HMAC but has no freshness defense — no timestamp tolerance, no
+  dedup/idempotency row on the provider delivery id, no nonce, no monotonic
+  version guard. A captured signed delivery can be replayed.
+
+- FAIL-OPEN ENFORCEMENT. An auth / quota / rate-limit / signature check that
+  returns `allowed:true` or HTTP 200 when its backing store (Redis, DB, secret)
+  is missing or errors, instead of denying. Worst mode: silent AND retry-killing.
+
+- INSECURE POSTGRES FUNCTIONS / TRIGGERS (SECURITY DEFINER). A `SECURITY DEFINER`
+  function/RPC runs as its definer (often table owner / superuser) and BYPASSES
+  the caller's RLS. Flag definer functions exposed via PostgREST/RPC that read or
+  write tenant data without re-checking the caller's identity inside the function,
+  and triggers that mutate across tenants. `SECURITY INVOKER` is the safe default;
+  a definer function needs an explicit in-function authorization check.
+
+## MEDIUM — integrity / concurrency / SSRF
+
+- UNCHECKED SUPABASE MUTATIONS. supabase-js v2 does NOT throw. Flag
+  `.update/.insert/.delete/.upsert` whose `{ error }` is ignored, and CAS-style
+  `.update(...).eq('status', X)` that doesn't assert the affected-row count
+  (zero matched rows returns `{ error: null }` — a silent no-op).
+
+- READ-MODIFY-WRITE ON COUNTERS / BALANCES. `.update({ count: prev + 1 })` /
+  `.update({ balance: current - amount })` computed in app code from a previously
+  read row → two concurrent requests both read the old value → lost update, quota
+  overrun, money double-counted. Wants a DB-atomic increment or a CAS reserve-row.
+
+- IDEMPOTENCY ROW WRITTEN BEFORE DISPATCH. A dedup/idempotency row that means
+  "received" rather than "fully processed" — a crash mid-handler strands the work
+  behind a duplicate-rejection. Want a separate in-flight marker + a post-dispatch
+  commit.
+
+- IN-MEMORY RATE LIMIT / QUOTA IN SERVERLESS. A module-level `Map`/`Set` used as
+  a limiter is per-instance under serverless and resets on cold start → the cap is
+  bypassable by spreading requests across instances. Needs a shared store (Redis /
+  DB-atomic counter), failing closed.
+
+- SSRF / UNSAFE-SCHEME VIA STORED URL FIELDS. `z.string().url()` on a persisted
+  or rendered `*_url` field accepts `file://`, cloud-metadata (169.254.169.254),
+  and RFC1918 hosts; rendered into `<img src>`/`<a href>` it's client-side SSRF.
+  Server-side fetches of such URLs without an SSRF/host-deny guard.
+
+- STATE-MACHINE TRANSITIONS NOT VALIDATED AT THE BOUNDARY. `transitionTo(
+  body.target)` etc. that trusts a caller-supplied target without asserting it is
+  enum-valid AND a permitted transition from the current state.
+
+## LOW — hardening
+
+- ERROR-MESSAGE SCHEMA DISCLOSURE. Raw DB/Postgres error `.message`/`.details`
+  echoed into an API response — leaks table/column/constraint names.
+
+- UNJUSTIFIED FIRE-AND-FORGET ASYNC. `void someAsync()` in a serverless route —
+  the host can kill the process before the work completes.
+
+## NEXT.JS APP ROUTER — boundary & rendering (M9)
+
+Framework-specific footguns generic tools miss. Severity in brackets.
+
+- SERVER → CLIENT DATA LEAK [HIGH]. A Server Component passing a full DB row/object
+  as a prop to a Client Component (`'use client'`). EVERYTHING crossing the boundary
+  is serialized into the RSC/HTML payload sent to the browser — including fields the
+  client never renders: other-tenant data, secrets, internal flags, password hashes,
+  tokens. Flag `async` Server Component → `<ClientComp data={dbRow} />` (or
+  `{...row}`) without projecting to an explicit minimal DTO. Fix: whitelist only the
+  fields the client needs.
+
+- MISSING `server-only` GUARD [HIGH]. The enforcement side of the leak above: a
+  server-exclusive module (reads secret env vars, holds service-role/internal business
+  logic) that does NOT import `'server-only'` can be transitively pulled into a Client
+  Component and bundled to the browser with no error. Flag files that touch
+  `process.env.<secret>` / the service-role client / server-internal logic but omit the
+  `import 'server-only'` poison-pill. Cheap, mechanical, high-signal.
+
+- SERVER ACTION MISSING AUTH [HIGH]. A `'use server'` action that mutates data with
+  no in-body authority/tenant check. Server Actions are public POST endpoints —
+  invocable directly with a crafted request; "only called from a protected page" is
+  NOT a control. Flag actions with no assertPermission/auth gate.
+
+- SERVER ACTION MISSING INPUT VALIDATION [HIGH/MED]. An action reading its args /
+  `formData.get(...)` straight into a DB call with no schema validation (Zod/valibot)
+  — type-unsafe, injectable, and `tenant_id`/ids trusted from the client. Flag
+  unvalidated action inputs (the Server-Action analogue of the route input-validation gap).
+
+- UNSAFE / MISSING CACHE CONFIG [MED — cost & isolation]. Two failure modes: (a) hot
+  read paths with no `unstable_cache` / cache tags / `'use cache'` → repeated DB+compute
+  on every request → Vercel + Supabase bill; (b) over-broad caching of per-tenant/
+  per-user data with no per-key tag → cross-user cache bleed (isolation bug). Flag both.
+
+- DATA-FETCHING WATERFALL [MED — cost & latency]. An async Server Component (or loader)
+  issuing consecutive awaited supabase/fetch calls that don't depend on each other
+  (`const a = await getTeams(); const b = await getProjects();`) → serialized round-trips.
+  Flag independent sequential awaits; fix with `Promise.all([...])` or a single combined
+  query (a join/RPC). Compounds latency and DB compute on every render.
+
+- ACCIDENTAL DYNAMIC RENDERING [MED — cost]. A page silently forced from static to
+  per-request dynamic SSR because a dynamic API (`searchParams`, `headers()`, `cookies()`,
+  `noStore()`) is read high in the tree — so every hit re-renders server-side and re-runs
+  its queries. Flag dynamic-API reads that defeat static/ISR on otherwise-cacheable pages;
+  fix by pushing the dynamic read down to a leaf or isolating it in a Suspense boundary.
+
+- UNBOUNDED / SELF-CALLING ROUTE OR EDGE FN [MED]. An API route / edge function with
+  an unbounded loop, uncapped retry/fan-out, or a fetch to itself → runaway compute,
+  cost, and timeouts. Flag missing pagination bounds and self-referential fetches.
+
+- SSR-ONLY API MISUSE / HYDRATION [LOW]. `window`/`document`/`localStorage` referenced
+  on a path that runs during SSR → hydration mismatch or crash. Lower priority (Next
+  warns at runtime) but flag in shipped code.
+
+## How to report a finding (for the grader)
+
+For each: severity, the table/route/policy, the precise cross-tenant or auth
+impact (blast radius), a minimal repro (the query/request that demonstrates it),
+and the concrete fix. The headline question for every audit is: CAN ONE TENANT
+REACH ANOTHER TENANT'S DATA — yes/no, and how.

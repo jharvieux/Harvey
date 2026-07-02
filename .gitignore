@@ -1,0 +1,9 @@
+# Vitals provenance data
+.vitals/
+
+node_modules/
+coverage/
+dist/
+report-template/out/
+*.log
+.DS_Store

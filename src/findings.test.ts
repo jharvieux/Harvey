@@ -1,0 +1,44 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+import { bftb, validateFindings } from "./findings.js";
+
+const example = JSON.parse(readFileSync(new URL("../report-template/findings.atc.json", import.meta.url), "utf8"));
+
+describe("validateFindings", () => {
+  it("accepts the shipped example report (the renderer's reference input)", () => {
+    const result = validateFindings(example);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects non-object documents", () => {
+    expect(validateFindings(null).ok).toBe(false);
+    expect(validateFindings([]).ok).toBe(false);
+  });
+
+  it("reports unknown severities and out-of-range BFTB inputs by path", () => {
+    const doc = {
+      ...example,
+      findings: [{ ...example.findings[0], severity: "Catastrophic", value: 0 }],
+    };
+    const { ok, errors } = validateFindings(doc);
+    expect(ok).toBe(false);
+    expect(errors).toContainEqual(expect.stringContaining("findings[0].severity"));
+    expect(errors).toContainEqual(expect.stringContaining("findings[0].value"));
+  });
+
+  it("rejects duplicate finding ids — ids anchor the report and client follow-ups", () => {
+    const doc = { ...example, findings: [example.findings[0], example.findings[0]] };
+    const { ok, errors } = validateFindings(doc);
+    expect(ok).toBe(false);
+    expect(errors).toContainEqual(expect.stringContaining("duplicate id"));
+  });
+});
+
+describe("bftb", () => {
+  it("matches the renderer's formula: round(value*ease*safety/125*100)", () => {
+    expect(bftb({ value: 5, ease: 5, safety: 5 })).toBe(100);
+    expect(bftb({ value: 1, ease: 1, safety: 1 })).toBe(1);
+    expect(bftb({ value: 4, ease: 3, safety: 5 })).toBe(48);
+  });
+});

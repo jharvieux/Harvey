@@ -1,0 +1,75 @@
+# quality-extras — maintainability / simplification / reuse / test-quality review brief
+#
+# The non-security half of the audit (modules M5 slop + M6 simplification/reuse + M8 test intent).
+# Use as the brief for a whole-repo quality pass (alongside jscpd for M4 duplication
+# and the hotspot script for M3). Complements scan-extras.txt (security). Generic to
+# any TypeScript/Next.js codebase; derived from the D-091 anti-slop checklist and the
+# pre-pr-reviewer / simplify doctrine.
+
+## SLOP / DEAD CODE (M5) — flag for deletion or inlining
+
+- NARRATING COMMENTS — comments that restate WHAT the next line does. Keep only WHY comments.
+- SINGLE-USE HELPERS — a function called exactly once; inline it at the call site.
+- PASS-THROUGH TRY/CATCH — catch blocks that only re-throw or swallow; let the error propagate.
+- JSDoc PARAGRAPHS on trivial functions — one line max.
+- ORPHAN TODOs — TODO/FIXME with no owner or issue ref.
+- DEAD CODE — unused exports, unreachable branches, dead `if/else` arms, unused parameters.
+- DEFENSIVE VALIDATION for inputs that can't be invalid (validating internal, already-typed callers).
+- STUB-SHAPED CODE — a parameter that doesn't affect output; a returned variant that's never reachable;
+  an arg that resolves to one value (worse than no arg).
+
+## SIMPLIFICATION / REUSE / "DON'T REINVENT THE WHEEL" (M6) — flag for replacement
+
+- HAND-ROLLED PRIMITIVES — a bespoke implementation of something the language/stdlib/framework already
+  provides: date math, deep-clone/equal, debounce/throttle, retry/backoff, UUID, query-string parsing,
+  array group-by/chunk, deep-merge, env parsing, etc. → name the standard replacement.
+- HAND-ROLLED versions of a well-known, already-in-the-dependency-tree library's feature (e.g. re-implementing
+  what zod / date-fns / lodash-es / the framework router already does). Prefer the existing dep over a new one.
+- OVER-ABSTRACTION — an interface/factory/generic with a single implementation or single call site; a
+  "manager/handler/service" wrapper that adds indirection without behavior. Collapse to the concrete code.
+- PREMATURE/ SPECULATIVE GENERALITY — config flags, plugin hooks, or extension points with one user.
+- INCONSISTENT PATTERNS — the same task done three different ways across the codebase (raises bus-factor and
+  onboarding cost). Recommend converging on one.
+- OVERCOMPLICATED — would a senior engineer call this overcomplicated for what it does? If yes, propose the
+  simpler shape.
+
+## SUPPORTABILITY / MAINTENANCE SIGNALS (feeds M3 hotspots + the report)
+
+- BUS-FACTOR RISK — a complex module with no tests, no comments explaining WHY, and concentrated git authorship.
+- MISSING SEAMS — business logic entangled with I/O so it can't be tested without the DB/network.
+- CONFIG SPRAWL — the same constant/threshold duplicated across files instead of one source of truth.
+
+## HOW TO REPORT (for M5/M6)
+
+- M5 items: a grouped delete/inline/simplify list with an estimated net line reduction.
+- M6 items: for each, the current hand-rolled/over-abstracted code → the concrete replacement (library,
+  stdlib, framework primitive, or "collapse to inline") → the maintenance/onboarding cost it removes.
+- Frame M6 as **lowering ongoing maintenance + onboarding cost** — it lands with clients who don't believe
+  they have a security problem, and it's the reason a one-time audit becomes a recurring relationship.
+
+## TEST QUALITY / INTENT (M8) — flag tests that can't fail
+
+The mutation scan (StrykerJS) gives the quantitative score; this brief is the qualitative read of the
+high-value tests (auth, tenant isolation, payments, state machines, money math). Flag a test when:
+
+- TAUTOLOGICAL — it asserts a value it just set, or mocks the very thing under test so the assertion can't fail.
+- SNAPSHOT-ONLY — a snapshot/inline-snapshot is the only assertion; it pins WHAT renders, not WHY it's correct,
+  and "update snapshots" silently absorbs real regressions.
+- ASSERTS WHAT, NOT WHY — checks a shape/count/string but not the business rule (e.g. "returns 200" without
+  asserting the row is actually tenant-scoped; "array has 3 items" without asserting which items).
+- WOULD PASS IF THE BEHAVIOR BROKE — the litmus test: if you deleted/inverted the logic it covers, would this
+  test go red? If no, it's intent-less. (This is exactly what a surviving Stryker mutant proves mechanically.)
+- COVERS THE HAPPY PATH ONLY — no failure/denial/edge assertion on a security- or money-critical path (the
+  denial case is the one that matters for tenant isolation and authz).
+- MOCKS THE DATABASE/RLS — a "tenant isolation" test that mocks the DB layer can't observe an RLS regression;
+  the assertion needs a real (or local) DB to mean anything.
+
+Report: the mutation score per critical module + a ranked "these tests give false confidence" list (location +
+the rule they fail to assert), prioritizing tests on a security/perf hotspot.
+
+## FALSE POSITIVES (don't flag)
+
+- A "single-use" helper that exists for testability/seam reasons, or that's clearly about to have more callers.
+- An abstraction mandated by a framework/library contract (not gratuitous).
+- A re-implementation chosen deliberately to drop a heavy dependency — note the tradeoff, don't flag as a defect.
+- Comments that explain WHY (intent, gotcha, non-obvious constraint) — those are good, keep them.
