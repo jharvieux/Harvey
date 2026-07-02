@@ -4,14 +4,18 @@ Status: v1 (researched 2026-07-01) · Related: `mechanical-toolchain.md`, `scan-
 
 Audience: solo devs, small shops, AI-reliant "vibe coders" on Next.js + Supabase.
 
-## ⚠️ Decision needed: what the free tier reveals
+## Decision (2026-07-01): Variant B, with remediation gated — "free diagnosis, paid treatment"
 
-The proposed model (as originally framed) was: **free quick scan → tell them how many issues we found → gate the details AND the deep scan behind payment.** The competitive/ethics research pushes back on the "gate the details" half, and this is a genuine business call the operator should make. Both variants are laid out below; the research **recommends Variant B**.
+**Decided by the operator.** The free tier tells the user **what** each problem is and **where** it is (finding + location), but gates **how to fix it** (the remediation/patch) along with the deep scan. This is the "free diagnosis, paid treatment" line: it stays clear of the shakedown pattern (you disclose the actual problem and its location — nothing is hidden), while the paid value is the remediation and the deep dynamic/semantic layer.
 
-- **Variant A — "count only" (as originally described).** Free scan shows counts by severity; every finding's *location and detail* is paywalled. Simplest, but the research finds this reads to a burned, FUD-wary audience as the **"we found 12 criticals, pay to see them" shakedown / beg-bounty** pattern they've been trained to distrust — and it maps to the FTC "sneaking" dark-pattern category. No credible freemium security tool gates the *existence/detail* of findings this way.
-- **Variant B — "free triage, paid remediation" (recommended).** The **mechanical layer is genuinely free and complete** — findings, locations, and the (publicly-googleable) mechanical fixes are all shown. What's gated is the **DEEP scan** (LLM semantic review + dynamic RLS/auth pen test), the fixes/patches for deep findings, and monitoring/re-scan. You charge for *depth and labor a solo dev cannot self-serve*, not for un-redacting a count. This matches how every credible tool (Snyk, Semgrep, Socket, GitGuardian, Pentest-Tools) structures free vs paid, and it still converts because the deep layer is the expensive thing they can't do alone.
+This is a deliberate narrowing of the research's Variant B, which had recommended giving the mechanical *fixes* away too (on the grounds they're googleable and withholding them can read as bad faith). The operator's call: reveal the diagnosis, charge for the fix. That trade is acceptable because the anti-shakedown property that matters — the user is told exactly what's wrong and where, not just a scary count — is preserved; only the remediation labor is monetized.
 
-The rest of this doc assumes Variant B and notes where A would differ.
+For reference, the options considered:
+- **Variant A — "count only" (rejected).** Free scan shows counts by severity; every finding's *location and detail* is paywalled. Reads to a burned, FUD-wary audience as the **"we found 12 criticals, pay to see them" shakedown / beg-bounty** pattern (FTC "sneaking" dark-pattern category). No credible freemium security tool gates the *existence/detail* of findings this way.
+- **Variant B (research-recommended) — free triage incl. mechanical fixes.** Everything mechanical free (findings, locations, *and* fixes); gate only the deep scan + deep fixes + monitoring.
+- **Variant B′ (CHOSEN) — free diagnosis, gated remediation.** Findings + locations + types free; **fix/remediation gated for both mechanical and deep findings**, alongside the deep scan and monitoring.
+
+The rest of this doc reflects the chosen model (B′).
 
 ## 1. Competitive teaser mechanics
 
@@ -32,34 +36,34 @@ The two closest analogs to the quick-scan: **Pentest-Tools' Light→Deep split**
 
 ## 2. Free-vs-gated output spec
 
-The free tier must pass three tests: (a) *not useless* (real, located findings), (b) *not a shakedown* (no hidden counts, no fear-without-proof), (c) *not self-defeating* (a savvy dev shouldn't be able to fully remediate the *hard* stuff alone). Resolution: give away the **mechanical layer completely** (cheap, low-FP, googleable anyway — withholding it only signals bad faith); charge for the **DEEP layer** a solo dev cannot self-serve.
+The free tier must pass three tests: (a) *not useless* (real, located findings), (b) *not a shakedown* (no hidden counts, no fear-without-proof), (c) *not self-defeating* (a savvy dev shouldn't be able to fully remediate everything alone from the free output). Resolution under the chosen model (B′): give away the full **diagnosis** — every finding's type and location, mechanical and deep alike — and charge for the **remediation** (how to fix) plus the deep dynamic/semantic scan.
 
-### FREE (Quick Scan)
+### FREE (Quick Scan) — the diagnosis
 
 | Element | Show free? | Rationale |
 |---|---|---|
-| Total counts by severity | ✅ | Expected; fine only when paired with detail below (alone = Variant A shakedown). |
+| Total counts by severity | ✅ | Expected; fine only when paired with the located findings below (alone = Variant A shakedown). |
 | Categories/types found | ✅ | "3× exposed `service_role` key, 2× RLS-disabled table, 5× dependency CVE." Naming the *type* separates triage from extortion. |
-| File + line locations (mechanical) | ✅ | The key anti-shakedown move; mechanical findings are deterministic and public. |
-| The actual fix (mechanical) | ✅ | Enable RLS on X; move key to server env; bump `next`. Public knowledge — give freely to earn trust. |
-| One fully-revealed DEEP sample finding | ✅ (exactly one) | Best converter — a real end-to-end example (finding → exploit path → fix) from *their* repo, proving the paid depth. |
+| File + line locations (mechanical) | ✅ | The key anti-shakedown move — the user is told exactly what's wrong and where. |
+| What the problem is / why it matters | ✅ | A one-line explanation of the risk per finding (e.g. "this key bypasses all RLS = full DB read/write"). Diagnosis, not remediation. |
+| The fix / how to remediate | ❌ **gated** | The paid value. Mechanical *and* deep fixes/patches are behind the unlock. |
+| One fully-revealed sample finding **with its fix** | ✅ (exactly one) | Best converter — one complete example incl. remediation from *their* repo, proving what the paid unlock delivers for every finding. |
 | Letter grade / score (A–F) | ✅ | Proven hook: urgency when low, shareable when high (viral loop / backlinks). Flavor, not core payload. |
 | Benchmark vs peers | ⚠️ later | "Cleaner than 60% of scanned Next.js+Supabase repos" — motivating, but only once a real corpus exists; a fabricated benchmark destroys trust. |
 
-### GATED (paid unlock)
+### GATED (paid unlock) — the remediation + depth
 
+- **The fix for every finding** — remediation steps / patches for the mechanical findings (enable RLS on X, move key to server env, bump `next` to the patched version) *and* the deep findings, with optional one-click patch PR.
 - The **DEEP scan**: LLM semantic review (broken-auth logic, IDOR, tenant-isolation bugs, injection reachability) + **dynamic RLS/auth pen test** (actively probes whether policies are bypassable with the anon key — the single highest-value check for this audience given the 170+ real Lovable/Supabase RLS breaches).
-- Fixes/patches for DEEP findings (+ optional one-click patch PR).
-- Full detail/locations for DEEP findings beyond the one free sample.
 - Re-scan / monitoring / history, PR checks, exportable report (PDF/SARIF).
 
-Under **Variant A**, mechanical locations + fixes move into the gated column and only counts+categories stay free — accept the shakedown-perception risk in exchange for a stronger paywall.
+The single free sample finding is shown *with* its fix precisely because remediation is otherwise gated — it demonstrates the concrete thing the user is paying for, on their own code.
 
 ## 3. Trust & ethics framing ("free triage, paid remediation," not ransom)
 
 This audience smells FUD and "beg bounties" (automated scanners that flag trivia then send escalating pay-or-else emails). Guardrails:
 
-1. **Never hide the existence/nature of a finding behind payment.** Issue types + locations + mechanical fixes are always free; you charge for *depth and labor* (dynamic testing, semantic analysis, patches, monitoring). This is the line between shakedown and service.
+1. **Never hide the existence/nature of a finding behind payment.** Issue types + locations + a plain-English "what's wrong and why it matters" are always free; you charge for *remediation and depth* (the fix/patch, dynamic testing, semantic analysis, monitoring). Disclosing the diagnosis is what keeps this on the "service" side of the line — the user is never left guessing what you found, only how to fix it.
 2. **No fear-language on trivia.** Severity must be earned and contextual — flag exploitability, not theoretical presence.
 3. **Frame explicitly as triage → remediation:** *"The free scan is real and complete for mechanical issues — fixes included. Paid gets you the deep semantic + live pen-test that catches the logic and auth bugs a static scan physically can't."*
 4. **Cite neutral authorities** (CISA/NIST/OWASP, the real CVE-2025-48757 Lovable-RLS class, Escape.tech findings) instead of dramatized breach stats.
@@ -97,11 +101,11 @@ Failure modes:
 1. **False positives destroy everything.** A single wrong "critical" in the free count nukes credibility and reads as a manufactured shakedown. This is *the* existential risk and the entire reason the free tier is **mechanical-only** — tune mechanical checks for near-zero FP even at the cost of recall, and never surface a probabilistic/semantic finding in the free count (see `mechanical-toolchain.md` §7 trust boundary).
 2. **Too noisy → distrust** (over-flagging trivia as high-severity = beg-bounty smell). Contextualize severity by exploitability; default low-confidence to "info."
 3. **Too clean → "I don't need you."** Convert clean repos on monitoring + the DEEP-sample teaser, not fear.
-4. **Shakedown perception on the gate** — mitigated structurally by Variant B (locations + mechanical fixes free; gate visibly on depth/labor).
+4. **Shakedown perception on the gate** — mitigated structurally by the chosen model (full diagnosis — type + location + why-it-matters — is free; the gate sits visibly on the fix and the deep scan, i.e. labor, not on un-redacting what was found). Watch the copy: "here's exactly what's wrong and where — unlock to get the fixes" reads as a service; "we found 12 issues, pay to see them" does not. Never gate location.
 5. **Repo-access trust** — mitigated by local-`npx`-first; ask for a scoped GitHub App only after payment + monitoring intent.
 6. **DEEP-scan code egress objection** — disclose plainly, ephemeral/no-train, confine free tier to local so trust is earned before any upload.
 
-**Strategic bet:** win trust with a genuinely useful, honest, low-FP, *local* free scan that gives away the cheap fixes — and monetize the expensive thing a solo dev physically can't do themselves (dynamic RLS/auth pen test + semantic review), which is exactly the failure class (missing RLS, leaked `service_role` keys) documented in 170+ real Lovable/Supabase breaches and ~380k exposed apps.
+**Strategic bet:** win trust with a genuinely useful, honest, low-FP, *local* free scan that gives away the full **diagnosis** (what's wrong and where) — and monetize the **remediation** plus the deep dynamic/semantic scan a solo dev can't self-serve. The failure class this targets (missing RLS, leaked `service_role` keys) is documented in 170+ real Lovable/Supabase breaches and ~380k exposed apps.
 
 ## Sources
 
