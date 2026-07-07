@@ -72,5 +72,7 @@ async function inventory() {
   console.log("\nLow-confidence (review):", hits.filter((x) => x.confidence === "low").length);
 }
 
-if (process.argv.includes("--selftest")) selftest();
-else inventory();
+if (import.meta.url === `file://${process.argv[1]}`) {
+  if (process.argv.includes("--selftest")) selftest();
+  else inventory();
+}
