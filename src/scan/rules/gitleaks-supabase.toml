@@ -1,0 +1,33 @@
+# Custom gitleaks rules layered on the default ruleset (see src/scan/secrets.ts for the
+# invocation). Run with --max-decode-depth 2 so gitleaks base64-decodes matched JWT bodies
+# before applying supabase-service-role-jwt — anon and service-role Supabase JWTs are
+# structurally identical, so the only reliable signal is the decoded "role" claim.
+
+title = "harvey supabase secret rules"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "supabase-service-role-jwt"
+description = "Supabase service_role JWT (decoded role claim)"
+regex = '''"role"\s*:\s*"service_role"'''
+
+[[rules]]
+id = "supabase-next-public-secret-leak"
+description = "NEXT_PUBLIC_ env var whose name implies a secret/key/token/service credential"
+regex = '''NEXT_PUBLIC_[A-Z0-9_]*(KEY|SECRET|TOKEN|SERVICE)[A-Z0-9_]*\s*=\s*\S+'''
+
+[[rules]]
+id = "supabase-secret-key"
+description = "Supabase new-format secret key (sb_secret_...)"
+regex = '''sb_secret_[A-Za-z0-9_]{20,}'''
+
+[allowlist]
+description = "Known-safe patterns: publishable anon key env var, documented example env file"
+regexes = [
+  '''NEXT_PUBLIC_SUPABASE_ANON_KEY''',
+]
+paths = [
+  '''\.env\.example$''',
+]
