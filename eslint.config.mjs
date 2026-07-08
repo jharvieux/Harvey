@@ -2,11 +2,11 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["node_modules", "report-template/out", "coverage"] },
+  { ignores: ["node_modules", "report-template/out", "coverage", "targets"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
     files: ["**/*.mjs"],
-    languageOptions: { globals: { console: "readonly", process: "readonly" } },
+    languageOptions: { globals: { console: "readonly", process: "readonly", fetch: "readonly" } },
   },
 );

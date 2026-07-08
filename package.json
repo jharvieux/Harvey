@@ -17,6 +17,8 @@
     "check:duplication": "jscpd --config .jscpd.json src tools",
     "validate:findings": "tsx src/cli/validate-findings.ts",
     "quality-scan": "tsx src/cli/quality-scan.ts",
+    "detect-deeper": "tsx src/cli/detect-deeper.ts",
+    "mutation-scan": "tsx src/cli/mutation-scan.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip"
   },
   "devDependencies": {
