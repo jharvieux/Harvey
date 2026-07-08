@@ -6,7 +6,9 @@ serverless function; no build step, no dependencies.
 
 **Security posture:** the form has no fields for tokens or connection strings,
 and the page tells clients not to paste them anywhere. Credentials are
-exchanged out-of-band after kickoff. Submissions are emailed to the operator
+exchanged out-of-band after kickoff via expiring share links (client's own
+password manager preferred; Bitwarden Send as the default — decision recorded
+on issue #33). Submissions are emailed to the operator
 and stored nowhere.
 
 ## Deploy (Vercel)

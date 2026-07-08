@@ -129,7 +129,7 @@
       </li>
       <li>
         <h3>Access</h3>
-        <p>You grant the short access list described below. Credentials and tokens are exchanged over a secure channel we set up at kickoff — never through this form, never by plain email.</p>
+        <p>You grant the short access list described below. The two credentials involved (token and connection string) are shared as an expiring, view-limited link from your password manager — or via Bitwarden Send if you don't use one; we'll send instructions. Never through this form, never by plain email.</p>
       </li>
       <li>
         <h3>Audit</h3>
@@ -177,7 +177,7 @@
     <ul class="promise">
       <li><strong>No code egress.</strong> Your repository is audited on a local, access-controlled machine. It is not uploaded to third-party services.</li>
       <li><strong>Least privilege, always.</strong> Read-only access everywhere except optional PR delivery. We never hold production credentials — that's a hard rule, not a preference.</li>
-      <li><strong>Secrets out-of-band.</strong> Tokens and connection strings move over a secure channel established at kickoff. This form has no fields for them by design; please don't put credentials in any free-text box.</li>
+      <li><strong>Secrets out-of-band.</strong> Tokens and connection strings move as expiring, view-limited share links — from your password manager, or Bitwarden Send if you don't use one. This form has no fields for them by design; please don't put credentials in any free-text box.</li>
       <li><strong>Purge at close.</strong> When the engagement ends, access is revoked, and the checkout and all scan artifacts are destroyed. We retain the delivered report and the engagement record.</li>
     </ul>
   </div>
@@ -186,7 +186,7 @@
 <section id="intake">
   <div class="wrap">
     <h2>Start an engagement</h2>
-    <p class="note"><strong>Never put credentials, tokens, or connection strings in this form.</strong> We'll set up a secure channel for those after kickoff.</p>
+    <p class="note"><strong>Never put credentials, tokens, or connection strings in this form.</strong> Those move after kickoff via an expiring share link from your password manager (or Bitwarden Send) — we'll send instructions.</p>
 
     <form id="intake-form" novalidate>
       <p class="hp" aria-hidden="true"><label>Leave this field empty<input type="text" name="website" tabindex="-1" autocomplete="off"></label></p>
@@ -301,7 +301,7 @@
         <div class="checks">
           <label><input type="checkbox" name="access_confirm" value="Repo read access"> I can grant read access to the repository</label>
           <label><input type="checkbox" name="access_confirm" value="Fine-grained PAT"> I can issue a fine-grained GitHub token scoped to this repo</label>
-          <label><input type="checkbox" name="access_confirm" value="Read-only DB connection"> I can provide a read-only database connection string (via the secure channel)</label>
+          <label><input type="checkbox" name="access_confirm" value="Read-only DB connection"> I can provide a read-only database connection string (via expiring share link)</label>
           <label><input type="checkbox" name="access_confirm" value="No-prod-creds policy acknowledged"> I understand Harvey never uses production credentials and secrets are never sent through this form</label>
         </div>
       </fieldset>
