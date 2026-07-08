@@ -1,0 +1,11 @@
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+
+const DeleteAccountSchema = z.object({ accountId: z.string().uuid() });
+
+export async function deleteAccount(input: unknown) {
+  const { accountId } = DeleteAccountSchema.parse(input);
+  await supabase.from("accounts").delete().eq("id", accountId);
+}

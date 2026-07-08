@@ -1,0 +1,20 @@
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+import { requireUser } from "../lib/auth";
+
+const ProfileSchema = z.object({
+  name: z.string().min(1),
+  bio: z.string().max(280),
+});
+
+export async function updateProfile(formData: FormData) {
+  const user = await requireUser();
+  const parsed = ProfileSchema.parse({
+    name: formData.get("name"),
+    bio: formData.get("bio"),
+  });
+
+  await supabase.from("profiles").update(parsed).eq("user_id", user.id);
+}
