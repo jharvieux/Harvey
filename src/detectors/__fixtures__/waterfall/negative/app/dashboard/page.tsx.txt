@@ -1,0 +1,15 @@
+import { supabase } from "../../lib/db";
+
+export default async function DashboardPage() {
+  const [{ data: teams }, { data: projects }] = await Promise.all([
+    supabase.from("teams").select("id, name"),
+    supabase.from("projects").select("id, name"),
+  ]);
+
+  return (
+    <div>
+      <p>{teams?.length} teams</p>
+      <p>{projects?.length} projects</p>
+    </div>
+  );
+}

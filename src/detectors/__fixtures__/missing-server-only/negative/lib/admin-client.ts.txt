@@ -1,0 +1,7 @@
+import "server-only";
+
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+export function createAdminClient() {
+  return { key: serviceRoleKey };
+}

@@ -1,0 +1,5 @@
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+export async function GET() {
+  return new Response(JSON.stringify({ ok: true, key: serviceRoleKey }));
+}
