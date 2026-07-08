@@ -5,5 +5,6 @@ node_modules/
 coverage/
 dist/
 report-template/out/
+.epic-builder/
 *.log
 .DS_Store
