@@ -219,6 +219,15 @@
           </select>
         </label>
         <label>What column or mechanism ties a row to its tenant? <span class="hint">(e.g. org_id on every table)</span><input type="text" name="tenant_link"></label>
+        <label>Can a single user belong to more than one tenant/org?
+          <select name="multi_tenant_membership">
+            <option value="">Select…</option>
+            <option>No — each user belongs to exactly one tenant</option>
+            <option>Yes — users can belong to multiple tenants and switch between them</option>
+            <option>Yes, but only for a cross-tenant support/admin role</option>
+            <option>Not sure</option>
+          </select>
+        </label>
         <label>Auth provider
           <select name="auth_provider">
             <option value="">Select…</option>
@@ -268,6 +277,15 @@
             <option>Yes</option>
             <option>No, but we could create one</option>
             <option>No — use a locally seeded stack instead</option>
+          </select>
+        </label>
+        <label>If we use that staging or a locally seeded stack, is synthetic test-tenant data okay to create there? <span class="hint">(e.g. two throwaway orgs, for tenant-isolation testing)</span>
+          <select name="seeded_tenants_ok">
+            <option value="">Select…</option>
+            <option>Yes, on staging</option>
+            <option>Yes, but only on a local/locally seeded stack</option>
+            <option>No — need to discuss first</option>
+            <option>Not sure</option>
           </select>
         </label>
         <label>Webhooks, background jobs, edge functions, third-party integrations? <span class="hint">(Stripe, queues, cron, etc.)</span><textarea name="integrations"></textarea></label>

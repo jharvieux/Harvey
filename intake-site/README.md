@@ -29,6 +29,7 @@ use `vercel dev` from this directory to exercise the full flow.
 
 ## Question set
 
-The questionnaire mirrors the kickoff auth questionnaire (issue #31). When the
-canonical doc lands at `docs/templates/auth-questionnaire.md`, keep the two in
-sync — the doc is the source of truth.
+The questionnaire mirrors the canonical kickoff auth questionnaire at
+`docs/templates/auth-questionnaire.md` (issue #31) — that doc is the source of
+truth. If the two ever diverge, update this form to match it, not the other
+way around.
