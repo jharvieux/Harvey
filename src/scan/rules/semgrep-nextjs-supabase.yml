@@ -24,7 +24,7 @@ rules:
       dangerouslySetInnerHTML renders raw HTML. Confirm $VAL is sanitized (e.g. DOMPurify)
       before it reaches this prop — otherwise this is a stored/reflected XSS sink.
     patterns:
-      - pattern: <$EL dangerouslySetInnerHTML={{ __html: $VAL }} />
+      - pattern: "<$EL dangerouslySetInnerHTML={{ __html: $VAL }} />"
 
   - id: harvey-permissive-cors
     languages: [typescript, javascript]

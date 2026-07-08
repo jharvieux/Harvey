@@ -1,0 +1,62 @@
+{
+  "tenants": {
+    "columns": [
+      {
+        "column": "name",
+        "infotype": "NAME?",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "NAME?"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
+    "severity": "Low",
+    "phi": false,
+    "pci": false
+  },
+  "profiles": {
+    "columns": [
+      {
+        "column": "email",
+        "infotype": "EMAIL",
+        "category": "PII",
+        "confidence": "high"
+      }
+    ],
+    "infotypes": [
+      "EMAIL"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 1,
+    "severity": "Low",
+    "phi": false,
+    "pci": false
+  },
+  "counters": {
+    "columns": [
+      {
+        "column": "name",
+        "infotype": "NAME?",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "NAME?"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
+    "severity": "Low",
+    "phi": false,
+    "pci": false
+  }
+}
