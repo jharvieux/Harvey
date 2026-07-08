@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harvey — Security &amp; codebase-health audits for Supabase/Next.js</title>
+<meta name="description" content="Fixed-fee security and codebase-health audits for multi-tenant Supabase/Next.js applications. Start an engagement here.">
+<style>
+  :root {
+    --bg: #fafaf8;
+    --surface: #ffffff;
+    --ink: #1a1d23;
+    --muted: #5b6270;
+    --line: #e4e2dc;
+    --accent: #1f3a5f;
+    --accent-ink: #ffffff;
+    --ok: #1d6b45;
+    --err: #a33030;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --surface: #1c1f25;
+      --ink: #e8e6e1;
+      --muted: #9aa1ad;
+      --line: #2c3038;
+      --accent: #7da4d3;
+      --accent-ink: #10141c;
+      --ok: #6cc296;
+      --err: #e08a8a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 0 24px; }
+  header { border-bottom: 1px solid var(--line); padding: 20px 0; }
+  header .wrap { display: flex; align-items: baseline; gap: 14px; }
+  .wordmark { font-size: 22px; font-weight: 700; letter-spacing: .04em; }
+  .tagline { color: var(--muted); font-size: 14px; }
+  .hero { padding: 56px 0 40px; }
+  h1 { font-size: 34px; line-height: 1.2; margin: 0 0 14px; letter-spacing: -.01em; }
+  .hero p { max-width: 60ch; color: var(--muted); margin: 0 0 24px; }
+  .cta {
+    display: inline-block; background: var(--accent); color: var(--accent-ink);
+    padding: 12px 22px; border-radius: 8px; text-decoration: none; font-weight: 600;
+  }
+  section { padding: 36px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 22px; margin: 0 0 18px; }
+  h3 { font-size: 16px; margin: 0 0 6px; }
+  .steps { display: grid; gap: 16px; counter-reset: step; padding: 0; margin: 0; list-style: none; }
+  .steps li {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px 16px 58px; position: relative;
+  }
+  .steps li::before {
+    counter-increment: step; content: counter(step);
+    position: absolute; left: 18px; top: 17px;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--accent); color: var(--accent-ink);
+    font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center;
+  }
+  .steps p, .cards p { margin: 4px 0 0; color: var(--muted); font-size: 15px; }
+  .cards { display: grid; gap: 14px; padding: 0; margin: 0; list-style: none; }
+  .cards li { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; }
+  .cards code { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 13px; }
+  .promise { margin: 0; padding-left: 20px; }
+  .promise li { margin-bottom: 8px; }
+  .promise strong { font-weight: 600; }
+  .note {
+    background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    border-radius: 6px; padding: 12px 16px; font-size: 15px; margin: 18px 0 0;
+  }
+  form fieldset {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+    padding: 18px 20px; margin: 0 0 18px;
+  }
+  form legend { font-weight: 700; padding: 0 8px; }
+  label { display: block; font-weight: 600; font-size: 14px; margin: 14px 0 4px; }
+  label:first-of-type { margin-top: 2px; }
+  .hint { font-weight: 400; color: var(--muted); }
+  input[type=text], input[type=email], input[type=url], select, textarea {
+    width: 100%; padding: 9px 11px; font: inherit; font-size: 15px;
+    color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 7px;
+  }
+  textarea { min-height: 84px; resize: vertical; }
+  .checks { display: grid; gap: 8px; margin-top: 6px; }
+  .checks label { display: flex; gap: 10px; align-items: flex-start; font-weight: 400; margin: 0; font-size: 15px; }
+  .checks input { margin-top: 4px; flex: none; }
+  button[type=submit] {
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px;
+    padding: 13px 26px; font: inherit; font-weight: 700; cursor: pointer;
+  }
+  button[disabled] { opacity: .6; cursor: wait; }
+  #form-status { margin-top: 14px; font-weight: 600; }
+  #form-status.ok { color: var(--ok); }
+  #form-status.err { color: var(--err); }
+  .hp { position: absolute; left: -9999px; }
+  footer { border-top: 1px solid var(--line); padding: 26px 0 40px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <span class="wordmark">HARVEY</span>
+    <span class="tagline">Security &amp; codebase-health audits for multi-tenant Supabase / Next.js apps</span>
+  </div>
+</header>
+
+<div class="hero wrap">
+  <h1>Know what an attacker — or your next big customer's security review — would find. Before they do.</h1>
+  <p>Harvey is a fixed-fee, nine-module audit built specifically for multi-tenant applications on Supabase and Next.js: cross-tenant data isolation, row-level security, auth enforcement, plus codebase health — performance, test quality, dead weight. Findings come with proof, severity, and a prioritized action plan.</p>
+  <a class="cta" href="#intake">Start an engagement</a>
+</div>
+
+<section>
+  <div class="wrap">
+    <h2>How an engagement works</h2>
+    <ol class="steps">
+      <li>
+        <h3>Intake</h3>
+        <p>Fill in the form below — about fifteen minutes. We reply within one business day with scope, a fixed quote, and the kickoff checklist.</p>
+      </li>
+      <li>
+        <h3>Access</h3>
+        <p>You grant the short access list described below. Credentials and tokens are exchanged over a secure channel we set up at kickoff — never through this form, never by plain email.</p>
+      </li>
+      <li>
+        <h3>Audit</h3>
+        <p>The audit runs against a local, access-controlled checkout of your repository. Your code never leaves the engagement machine, and we never touch production credentials. Dynamic testing runs against a seeded local stack or your staging environment only.</p>
+      </li>
+      <li>
+        <h3>Report &amp; remediation</h3>
+        <p>You receive a severity-ranked findings report with evidence for every claim, a "checked and ruled out" section so you know what was verified clean, and a prioritized action plan. Optionally, we deliver fixes as reviewable pull requests.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What we'll ask you for</h2>
+    <ul class="cards">
+      <li>
+        <h3>1. Repository read access</h3>
+        <p>A collaborator invite with read permission (or a zip export if you prefer). We clone once to the engagement machine.</p>
+      </li>
+      <li>
+        <h3>2. A fine-grained GitHub token</h3>
+        <p>Scoped to the single repository under audit: <code>contents: read</code>. If you purchase fix delivery, additionally <code>pull_requests: write</code> so fixes arrive as PRs you review. Nothing broader.</p>
+      </li>
+      <li>
+        <h3>3. A read-only database connection</h3>
+        <p>A read-only Supabase connection string. It drives the data-classification pass (what PII/PHI/payment data actually lives where) and database configuration checks. Read-only is verified before use.</p>
+      </li>
+      <li>
+        <h3>4. A staging environment <span class="hint">(optional)</span></h3>
+        <p>For dynamic penetration testing of tenant isolation. If you don't have one, we run those probes against a locally seeded copy of your stack instead. We never test against production.</p>
+      </li>
+      <li>
+        <h3>5. Fifteen minutes of answers</h3>
+        <p>The questionnaire in the intake form below — the handful of facts we can't detect from code, like your intended tenancy model and compliance context. Everything detectable, we detect rather than ask.</p>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>How we handle your data</h2>
+    <ul class="promise">
+      <li><strong>No code egress.</strong> Your repository is audited on a local, access-controlled machine. It is not uploaded to third-party services.</li>
+      <li><strong>Least privilege, always.</strong> Read-only access everywhere except optional PR delivery. We never hold production credentials — that's a hard rule, not a preference.</li>
+      <li><strong>Secrets out-of-band.</strong> Tokens and connection strings move over a secure channel established at kickoff. This form has no fields for them by design; please don't put credentials in any free-text box.</li>
+      <li><strong>Purge at close.</strong> When the engagement ends, access is revoked, and the checkout and all scan artifacts are destroyed. We retain the delivered report and the engagement record.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="intake">
+  <div class="wrap">
+    <h2>Start an engagement</h2>
+    <p class="note"><strong>Never put credentials, tokens, or connection strings in this form.</strong> We'll set up a secure channel for those after kickoff.</p>
+
+    <form id="intake-form" novalidate>
+      <p class="hp" aria-hidden="true"><label>Leave this field empty<input type="text" name="website" tabindex="-1" autocomplete="off"></label></p>
+
+      <fieldset>
+        <legend>Contact</legend>
+        <label>Your name *<input type="text" name="name" required autocomplete="name"></label>
+        <label>Email *<input type="email" name="email" required autocomplete="email"></label>
+        <label>Company<input type="text" name="company" autocomplete="organization"></label>
+        <label>Your role <span class="hint">(founder, CTO, eng lead…)</span><input type="text" name="role"></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Your application</legend>
+        <label>Repository URL *<input type="url" name="repo_url" required placeholder="https://github.com/org/repo"></label>
+        <label>Production URL <span class="hint">(if public)</span><input type="url" name="app_url" placeholder="https://app.example.com"></label>
+        <label>Where is it hosted?<input type="text" name="hosting" placeholder="Vercel, AWS, self-hosted…"></label>
+        <label>What does the app do, in a sentence or two?<textarea name="description"></textarea></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Tenancy &amp; authentication</legend>
+        <label>How are tenants modeled?
+          <select name="tenancy_model">
+            <option value="">Select…</option>
+            <option>Organizations / workspaces table, users belong to orgs</option>
+            <option>Per-user only — each user is effectively the tenant</option>
+            <option>Schema-per-tenant</option>
+            <option>Other / not sure</option>
+          </select>
+        </label>
+        <label>What column or mechanism ties a row to its tenant? <span class="hint">(e.g. org_id on every table)</span><input type="text" name="tenant_link"></label>
+        <label>Auth provider
+          <select name="auth_provider">
+            <option value="">Select…</option>
+            <option>Supabase Auth</option>
+            <option>Clerk</option>
+            <option>Auth0</option>
+            <option>NextAuth / Auth.js</option>
+            <option>Custom</option>
+            <option>Other</option>
+          </select>
+        </label>
+        <label>Where is authorization enforced today? <span class="hint">(check all that apply)</span></label>
+        <div class="checks">
+          <label><input type="checkbox" name="enforcement" value="RLS policies"> Postgres row-level security policies</label>
+          <label><input type="checkbox" name="enforcement" value="Middleware"> Next.js middleware</label>
+          <label><input type="checkbox" name="enforcement" value="Per-route checks"> Per-route / API handler checks</label>
+          <label><input type="checkbox" name="enforcement" value="DB functions"> Database functions / stored procedures</label>
+          <label><input type="checkbox" name="enforcement" value="Not sure"> Not sure</label>
+        </div>
+        <label>What user roles exist, and what should each be able to do?<textarea name="roles" placeholder="e.g. owner: everything in their org; member: read/write own projects; admin: cross-org support access"></textarea></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Data sensitivity &amp; compliance</legend>
+        <label>What kinds of regulated data does the app handle? <span class="hint">(check all that apply)</span></label>
+        <div class="checks">
+          <label><input type="checkbox" name="data_types" value="PII"> Personal data (PII)</label>
+          <label><input type="checkbox" name="data_types" value="PHI"> Health data (PHI)</label>
+          <label><input type="checkbox" name="data_types" value="Payment data"> Payment / card data</label>
+          <label><input type="checkbox" name="data_types" value="None / not sure"> None / not sure</label>
+        </div>
+        <label>Compliance regimes that apply to you <span class="hint">(check all that apply)</span></label>
+        <div class="checks">
+          <label><input type="checkbox" name="compliance" value="SOC 2"> SOC 2</label>
+          <label><input type="checkbox" name="compliance" value="HIPAA"> HIPAA</label>
+          <label><input type="checkbox" name="compliance" value="PCI-DSS"> PCI-DSS</label>
+          <label><input type="checkbox" name="compliance" value="GDPR"> GDPR</label>
+          <label><input type="checkbox" name="compliance" value="None / N/A"> None / not applicable</label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Environments &amp; integrations</legend>
+        <label>Do you have a staging environment we could use for dynamic testing?
+          <select name="staging">
+            <option value="">Select…</option>
+            <option>Yes</option>
+            <option>No, but we could create one</option>
+            <option>No — use a locally seeded stack instead</option>
+          </select>
+        </label>
+        <label>Webhooks, background jobs, edge functions, third-party integrations? <span class="hint">(Stripe, queues, cron, etc.)</span><textarea name="integrations"></textarea></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Context</legend>
+        <label>What prompted the audit? Any known concerns or past incidents?<textarea name="reason"></textarea></label>
+        <label>Timeline
+          <select name="timeline">
+            <option value="">Select…</option>
+            <option>As soon as possible</option>
+            <option>Within the month</option>
+            <option>This quarter</option>
+            <option>Just exploring</option>
+          </select>
+        </label>
+        <label>What are you interested in?
+          <select name="tier">
+            <option value="">Select…</option>
+            <option>Free quick scan</option>
+            <option>Full audit</option>
+            <option>Full audit + fix delivery</option>
+            <option>Not sure yet</option>
+          </select>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Access confirmations</legend>
+        <div class="checks">
+          <label><input type="checkbox" name="access_confirm" value="Repo read access"> I can grant read access to the repository</label>
+          <label><input type="checkbox" name="access_confirm" value="Fine-grained PAT"> I can issue a fine-grained GitHub token scoped to this repo</label>
+          <label><input type="checkbox" name="access_confirm" value="Read-only DB connection"> I can provide a read-only database connection string (via the secure channel)</label>
+          <label><input type="checkbox" name="access_confirm" value="No-prod-creds policy acknowledged"> I understand Harvey never uses production credentials and secrets are never sent through this form</label>
+        </div>
+      </fieldset>
+
+      <button type="submit">Submit intake</button>
+      <p id="form-status" role="status"></p>
+    </form>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">Harvey — independent code audits. Questions before filling this in? Email us and we'll talk it through first.</div>
+</footer>
+
+<script>
+  const form = document.getElementById("intake-form");
+  const status = document.getElementById("form-status");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    status.className = "";
+    status.textContent = "";
+
+    if (!form.reportValidity()) return;
+
+    const data = {};
+    for (const [key, value] of new FormData(form)) {
+      if (key in data) data[key] += "; " + value;
+      else data[key] = value;
+    }
+
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    status.textContent = "Sending…";
+
+    try {
+      const res = await fetch("/api/intake", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "submission failed");
+      status.className = "ok";
+      status.textContent = "Received — we'll reply within one business day with scope, quote, and the kickoff checklist.";
+      form.reset();
+    } catch (err) {
+      status.className = "err";
+      status.textContent = "Something went wrong (" + err.message + "). Please email us directly instead.";
+      button.disabled = false;
+      return;
+    }
+    button.disabled = false;
+  });
+</script>
+
+</body>
+</html>
