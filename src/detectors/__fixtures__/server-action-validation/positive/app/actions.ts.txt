@@ -1,0 +1,12 @@
+"use server";
+
+import { supabase } from "../lib/db";
+import { requireUser } from "../lib/auth";
+
+export async function updateProfile(formData: FormData) {
+  const user = await requireUser();
+  const name = formData.get("name");
+  const bio = formData.get("bio");
+
+  await supabase.from("profiles").update({ name, bio }).eq("user_id", user.id);
+}

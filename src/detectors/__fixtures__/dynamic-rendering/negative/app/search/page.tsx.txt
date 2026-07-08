@@ -1,0 +1,14 @@
+import { Suspense } from "react";
+import { SearchResults } from "./SearchResults";
+
+export default function SearchPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
+  return (
+    <Suspense fallback={<p>Loading…</p>}>
+      <SearchResults searchParams={searchParams} />
+    </Suspense>
+  );
+}

@@ -1,0 +1,17 @@
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+import { getCurrentUser } from "../lib/auth";
+
+const DeleteAccountSchema = z.object({ accountId: z.string().uuid() });
+
+export async function deleteAccount(input: unknown) {
+  const { accountId } = DeleteAccountSchema.parse(input);
+  const currentUser = await getCurrentUser();
+  if (!currentUser || currentUser.id !== accountId) {
+    throw new Error("Not authorized");
+  }
+
+  await supabase.from("accounts").delete().eq("id", accountId);
+}

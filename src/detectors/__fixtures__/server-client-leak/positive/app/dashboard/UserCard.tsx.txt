@@ -1,0 +1,14 @@
+'use client';
+
+interface RawUser {
+  id: string;
+  email: string;
+  password_hash: string;
+  tenant_id: string;
+  stripe_customer_id: string;
+  name: string;
+}
+
+export function UserCard({ user }: { user: RawUser }) {
+  return <div>{user.name}</div>;
+}

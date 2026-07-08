@@ -1,0 +1,9 @@
+'use client';
+
+interface UserSummary {
+  name: string;
+}
+
+export function UserCard({ user }: { user: UserSummary }) {
+  return <div>{user.name}</div>;
+}

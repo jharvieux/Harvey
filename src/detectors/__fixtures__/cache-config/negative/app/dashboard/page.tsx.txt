@@ -1,0 +1,23 @@
+import { unstable_cache } from "next/cache";
+import { supabase } from "../../lib/db";
+
+const getTeams = unstable_cache(
+  async () => {
+    const { data: teams } = await supabase.from("teams").select("id, name");
+    return teams;
+  },
+  ["teams"],
+  { revalidate: 60, tags: ["teams"] },
+);
+
+export default async function DashboardPage() {
+  const teams = await getTeams();
+
+  return (
+    <ul>
+      {teams?.map((team) => (
+        <li key={team.id}>{team.name}</li>
+      ))}
+    </ul>
+  );
+}
