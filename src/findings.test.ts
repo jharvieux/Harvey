@@ -35,6 +35,36 @@ describe("validateFindings", () => {
   });
 });
 
+describe("validateFindings — mechanical scan fields", () => {
+  it("accepts a finding with mechanical + precisionTier set", () => {
+    const doc = {
+      ...example,
+      findings: [{ ...example.findings[0], mechanical: true, precisionTier: "high" }],
+    };
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+
+  it("rejects an unknown precisionTier", () => {
+    const doc = {
+      ...example,
+      findings: [{ ...example.findings[0], precisionTier: "certain" }],
+    };
+    const { ok, errors } = validateFindings(doc);
+    expect(ok).toBe(false);
+    expect(errors).toContainEqual(expect.stringContaining("findings[0].precisionTier"));
+  });
+
+  it("rejects a non-boolean mechanical flag", () => {
+    const doc = {
+      ...example,
+      findings: [{ ...example.findings[0], mechanical: "yes" }],
+    };
+    const { ok, errors } = validateFindings(doc);
+    expect(ok).toBe(false);
+    expect(errors).toContainEqual(expect.stringContaining("findings[0].mechanical"));
+  });
+});
+
 describe("bftb", () => {
   it("matches the renderer's formula: round(value*ease*safety/125*100)", () => {
     expect(bftb({ value: 5, ease: 5, safety: 5 })).toBe(100);

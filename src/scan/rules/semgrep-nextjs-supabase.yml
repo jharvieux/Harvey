@@ -1,0 +1,76 @@
+# Custom Semgrep OSS rules for the Next.js/Supabase footgun taxonomy (dangerouslySetInnerHTML,
+# permissive CORS, service-role-in-client, open redirects). Run alongside the registry packs —
+# see src/scan/semgrep.ts for the full invocation.
+#
+# NOTE: written against Semgrep's documented rule syntax but not validated against a live
+# `semgrep` binary in this environment (no network/binary access here). Run
+# `semgrep --validate --config src/scan/rules/semgrep-nextjs-supabase.yml` before first use
+# and fix up any pattern syntax semgrep rejects.
+#
+# metadata.confidence + severity: ERROR feed the "high" precision-tier trust boundary in
+# src/scan/semgrep.ts (docs/design/mechanical-toolchain.md); metadata.harveySeverity overrides
+# the default severity-from-semgrep-severity mapping where the product taxonomy disagrees
+# (e.g. a leaked service-role key is Critical, not just "ERROR").
+
+rules:
+  - id: harvey-dangerously-set-inner-html
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      dangerouslySetInnerHTML renders raw HTML. Confirm $VAL is sanitized (e.g. DOMPurify)
+      before it reaches this prop — otherwise this is a stored/reflected XSS sink.
+    patterns:
+      - pattern: <$EL dangerouslySetInnerHTML={{ __html: $VAL }} />
+
+  - id: harvey-permissive-cors
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      Access-Control-Allow-Origin is wildcarded. If credentials are also allowed on this
+      response, this defeats CORS's same-origin protection for authenticated requests.
+    patterns:
+      - pattern-either:
+          - pattern: $RES.setHeader("Access-Control-Allow-Origin", "*")
+          - pattern: $RES.headers.set("Access-Control-Allow-Origin", "*")
+
+  - id: harvey-service-role-in-client
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Critical
+    message: >
+      SUPABASE_SERVICE_ROLE_KEY is referenced in a module with no "server-only" import guard.
+      If this module is ever imported from client code, the service-role key ships to the
+      browser bundle — full RLS bypass for anyone who inspects it.
+    patterns:
+      - pattern-either:
+          - pattern: process.env.SUPABASE_SERVICE_ROLE_KEY
+          - pattern: process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY
+      - pattern-not-inside: |
+          import "server-only";
+          ...
+
+  - id: harvey-open-redirect
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      Redirect target is read directly from a request-controlled value with no allowlist
+      check — a classic open-redirect primitive for phishing.
+    patterns:
+      - pattern-either:
+          - pattern: $RES.redirect($REQ.nextUrl.searchParams.get($X))
+          - pattern: redirect($SEARCHPARAMS.get($X))

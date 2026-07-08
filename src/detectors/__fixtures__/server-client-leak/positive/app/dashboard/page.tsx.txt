@@ -1,0 +1,8 @@
+import { UserCard } from "./UserCard";
+import { supabase } from "../../lib/db";
+
+export default async function DashboardPage() {
+  const { data: user } = await supabase.from("users").select("*").single();
+
+  return <UserCard user={user} />;
+}

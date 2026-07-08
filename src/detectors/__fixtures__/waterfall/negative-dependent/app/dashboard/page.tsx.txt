@@ -1,0 +1,8 @@
+import { supabase } from "../../lib/db";
+
+export default async function DashboardPage() {
+  const { data: team } = await supabase.from("teams").select("id, owner_id").single();
+  const { data: owner } = await supabase.from("users").select("id, name").eq("id", team.owner_id).single();
+
+  return <p>{owner?.name}</p>;
+}

@@ -3,9 +3,14 @@
 
 export const SEVERITIES = ["Critical", "High", "Medium", "Low", "Perf", "Info", "Watch"] as const;
 export const CONFIDENCES = ["Confirmed", "Likely", "Review", "N/A"] as const;
+// Trust tier for mechanically-generated findings: "high" = ~100%-precision source (verified
+// secret, decoded service-role JWT, exact CVE match, advisor lint, HIGH-confidence ERROR
+// Semgrep rule) — safe to count without triage. "review" = heuristic/grep-sourced, needs triage.
+export const PRECISION_TIERS = ["high", "review"] as const;
 
 export type Severity = (typeof SEVERITIES)[number];
 export type Confidence = (typeof CONFIDENCES)[number];
+export type PrecisionTier = (typeof PRECISION_TIERS)[number];
 
 export interface Finding {
   id: string;
@@ -26,6 +31,10 @@ export interface Finding {
   okWhen?: string;
   notOkWhen?: string;
   note?: string;
+  // Set by scan modules (src/scan/**) on findings produced by a deterministic tool pass,
+  // as opposed to a human/LLM-authored engagement finding.
+  mechanical?: boolean;
+  precisionTier?: PrecisionTier;
 }
 
 export interface ReportMeta {
@@ -119,6 +128,12 @@ export function validateFindings(data: unknown): ValidationResult {
     if (typeof f.id === "string") {
       if (seenIds.has(f.id)) errors.push(`${at}.id: duplicate id "${f.id}"`);
       seenIds.add(f.id);
+    }
+    if (f.mechanical !== undefined && typeof f.mechanical !== "boolean") {
+      errors.push(`${at}.mechanical: expected boolean`);
+    }
+    if (f.precisionTier !== undefined && !PRECISION_TIERS.includes(f.precisionTier as PrecisionTier)) {
+      errors.push(`${at}.precisionTier: "${String(f.precisionTier)}" not one of ${PRECISION_TIERS.join("/")}`);
     }
   });
 
