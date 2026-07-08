@@ -1,11 +1,18 @@
 // Scan CLI entry point.
 //   pnpm exec tsx src/cli/scan.ts --mechanical --dir <path> [--bundle <path>] [--out <file>]
+//   pnpm exec tsx src/cli/scan.ts --supabase <project-ref|local> [--functions <dir>] [--out <file>]
+//
+// --supabase against a hosted project needs SUPABASE_ACCESS_TOKEN (a Management API personal
+// access token) in the environment; `--supabase local` targets a `supabase start` stack and
+// needs none. --functions <dir> points at the client repo's supabase/functions directory to
+// also run the edge-function secret/webhook-signature checks. See src/scan/supabase.ts.
 //
 // Prints a Finding[] JSON array to stdout (or writes it to --out).
 
 import { writeFileSync } from "node:fs";
 import type { Finding } from "../findings.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
+import { runSupabaseScan } from "../scan/supabase.js";
 
 function arg(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -19,15 +26,31 @@ function emit(findings: Finding[]): void {
   else console.log(json);
 }
 
-function main(): void {
+async function main(): Promise<void> {
   if (process.argv.includes("--mechanical")) {
     const dir = arg("--dir") ?? process.cwd();
     const bundle = arg("--bundle");
     emit(runMechanicalScan({ dir, bundleDir: bundle }));
     return;
   }
+
+  const supabaseTarget = arg("--supabase");
+  if (supabaseTarget) {
+    const functionsDir = arg("--functions");
+    const findings =
+      supabaseTarget === "local"
+        ? await runSupabaseScan({ local: true, functionsDir })
+        : await runSupabaseScan({ projectRef: supabaseTarget, functionsDir });
+    emit(findings);
+    return;
+  }
+
   console.error("usage: scan --mechanical --dir <path> [--bundle <path>] [--out <file>]");
+  console.error("       scan --supabase <project-ref|local> [--functions <dir>] [--out <file>]");
   process.exit(2);
 }
 
-main();
+main().catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});
