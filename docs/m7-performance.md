@@ -139,3 +139,4 @@ single additive covering-index migration (BFTB 80 — cheap, safe, high value); 
   script. Low effort to add once M9's detector scaffolding exists, to share conventions.
 - **`/advisors/performance` endpoint path:** inferred by analogy, not exercised live — verify on
   the first real engagement (§1).
+
