@@ -284,3 +284,25 @@ Each of these maps to an existing `check:*`-style detector, satisfying §2.3 wit
 - No Phase 2 GitHub App build — designed for above so nothing in Phase 1 forecloses it, but not built until Phase 1 has run on ≥2 real engagements.
 
 **Proposed file layout:** `src/fix/plan.ts`, `src/fix/verify.ts`, `src/fix/result.ts` (schemas above), `src/fix/rails.ts` (denylist + allowlist + diff-cap checks, pure functions, tested like `findings.ts` is), orchestration as an operator-invoked CLI (`pnpm fix:dry-run <engagement>`, `pnpm fix:run <engagement>`).
+
+---
+
+## 9. Implementation status (issue #23)
+
+Landed as of this PR — the **decision core** of the pipeline, fully unit-tested:
+
+| File | What it provides | Design ref |
+|---|---|---|
+| `src/fix/plan.ts` | `FixPlan`/`BlastRadius` schema; `screenFinding()` — eligibility + tier assignment | §1.1, §1.2, §5 |
+| `src/fix/rails.ts` | denylist / allowlist (glob) / push-ref / protected-branch / diff-cap checks; `checkBlastRadius()` | §3 |
+| `src/fix/verify.ts` | `VerificationEvidence` schema; `discoverVerifyCommands()`, `runCommand()` (spawns + captures, never trusts a claim), `computeGreen()`, `scrubSecrets()` | §2 |
+| `src/fix/result.ts` | `FixResult` schema; `fixBranch()`, `prTitle()`, `renderPrBody()` (the §7 template) | §5, §7 |
+| `src/fix/pipeline.ts` | `intake()` (screen the client-approved subset), `batch()` (file-overlap conflict components), `checkPlanRails()` | §1.1, §1.3 |
+| `src/cli/fix-dry-run.ts` | `pnpm exec tsx src/cli/fix-dry-run.ts <findings.json> <manifest.json>` — side-effect-free intake report (rail 3.1(5)) | §3.1 |
+
+**Deliberately not yet built** (all needs the live client-repo transport, which is validated against the calibration target #9):
+
+- The **live execution layer**: `git worktree` orchestration, the wrapped git/`gh` client (push-ref rail enforced at the wrapper, `gh pr create --draft`), and the implement→verify→PR loop that ties the modules together against a real checkout. The pure decision core above is transport-agnostic and ready for it.
+- The **MVP acceptance run** (≥3 finding classes → reviewable PRs) is **deferred pending issue #9** (the deliberately-broken calibration target), which does not exist in the repo yet. Once #9 lands, validate: each in-scope planted class (§8 classes 1–5) yields a green draft PR with a clean detector-after; each out-of-scope planted bug yields a correct recommend-only downgrade; zero rail events fire on the clean path.
+- The **`fix:dry-run` / `fix:run` package.json scripts**: intentionally not added — `package.json` is a supervised dependency-manifest path for automated sweeps. The dry-run CLI runs today via `pnpm exec tsx`; wiring the scripts is a one-line human edit.
+- **Model tiering** is config surface only (`EscalationTier` + `screenFinding`/`assignTier` decide the tier per §5). No multi-provider router is built — none exists in `src/` yet; see `docs/design/model-routing.md` for the target `bulk`/`standard`/`flagship` mapping.
