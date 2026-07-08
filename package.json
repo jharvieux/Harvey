@@ -19,6 +19,7 @@
     "quality-scan": "tsx src/cli/quality-scan.ts",
     "detect-deeper": "tsx src/cli/detect-deeper.ts",
     "mutation-scan": "tsx src/cli/mutation-scan.ts",
+    "perf-scan": "tsx src/cli/perf-scan.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip"
   },
   "devDependencies": {
