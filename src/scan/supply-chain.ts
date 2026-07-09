@@ -92,6 +92,31 @@ export function checkUnpinnedDependencies(deps: DependencyMap): Finding[] {
   ];
 }
 
+// Install-time lifecycle scripts (preinstall/install/postinstall) run arbitrary code on every
+// `npm install`, so a compromised or malicious dependency (or the project itself) uses them as
+// the execution foothold — the Shai-Hulud npm worm class. Presence is a deterministic fact but
+// not proof of malice (many legit packages build native addons here) → always "review" tier.
+const INSTALL_SCRIPT_HOOKS = ["preinstall", "install", "postinstall"];
+
+export function checkInstallScripts(scripts: Record<string, string>): Finding[] {
+  const present = INSTALL_SCRIPT_HOOKS.filter((h) => typeof scripts[h] === "string");
+  if (present.length === 0) return [];
+  return [
+    mechanicalFinding({
+      id: "SUP-INSTALL-SCRIPT",
+      title: `package.json defines install lifecycle script(s): ${present.join(", ")}`,
+      severity: "Medium",
+      category: "Supply chain",
+      taxonomy: "Install lifecycle script",
+      location: "package.json (scripts)",
+      evidence: present.map((h) => `${h}: ${scripts[h]}`).join("; "),
+      impact: "Install-time scripts run on every `npm install` before any code review — the standard execution foothold for supply-chain worms (Shai-Hulud). Confirm each is expected.",
+      fix: "Confirm the script is intentional; install with --ignore-scripts in CI where the build doesn't need it.",
+      precisionTier: "review",
+    }),
+  ];
+}
+
 export function checkLockfilePresence(projectDir: string): Finding[] {
   const lockfiles = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"];
   const present = lockfiles.some((f) => existsSync(join(projectDir, f)));

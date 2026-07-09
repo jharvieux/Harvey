@@ -66,3 +66,53 @@
 - AN INTENTIONAL, DOCUMENTED EXCEPTION IS NOT A FINDING. If the code carries an
   explicit inline justification (an allow-comment with a reason) for a flagged
   pattern, treat it as accepted risk — note it in an appendix, don't headline it.
+
+## Secret scanning (mechanical layer — calibration corpus #52/#61)
+
+- THE SUPABASE ANON / PUBLISHABLE KEY IS PUBLIC BY DESIGN — NEVER A FINDING. It
+  ships in browser code and grants only what RLS allows. anon and service_role
+  JWTs are structurally identical, so distinguish by the DECODED `role` claim:
+  `role: anon` → benign, `role: service_role` → Critical. Suppress any hit on a
+  `NEXT_PUBLIC_SUPABASE_ANON_KEY` line (gitleaks allowlist regexTarget=line).
+
+- PLACEHOLDER SECRETS IN SAMPLE FILES ARE NOT FINDINGS. `.env.example`, `*.sample`,
+  `*.template`, and documented fixtures hold docs, not credentials (`your_key_here`,
+  `changeme`, empty `PASSWORD=`). Path-allowlist them; require live verification
+  (TruffleHog `--only-verified`) before counting a real-looking value elsewhere.
+
+- A SECRET IS NOT A FINDING ON VARIABLE NAME ALONE. A value is only a credential
+  if it matches a provider key pattern or passes entropy+verification. A variable
+  merely NAMED like one (`passwordLabel`, `awaiting_password_reset`, `secretQuestion`)
+  holding a UI string is benign (vs name-only detectors like Sonar S2068).
+
+## SQL / query construction
+
+- A PARAMETERIZED QUERY IS NOT SQL INJECTION. `pool.query("… where x = $1", [val])`
+  binds the untrusted value as a parameter — it never enters the SQL text. Only flag
+  string CONCATENATION / template-literal INTERPOLATION of untrusted input into the
+  query string (the P-SQLI-CONCAT shape).
+
+## XSS / dangerouslySetInnerHTML
+
+- SANITIZED OR CONSTANT `dangerouslySetInnerHTML` IS NOT A FINDING. `__html` fed a
+  string literal, or a value returned from a known sanitizer (`DOMPurify.sanitize`,
+  `sanitizeHtml`), is benign — single-file SAST FPs here. Only a value tainted from
+  request input reaching `__html` unsanitized is a finding.
+
+## Quality-rule noise (never in the SECURITY count)
+
+- BENIGN `obj[key]` BRACKET ACCESS on a hardcoded/enum-validated key is not
+  injection (vs eslint detect-object-injection). Composite/stable JSX keys
+  (`${item.id}-${index}`) are not a bug (vs Sonar S6479). A LINEAR regex with negated
+  classes (`^[^\s@]+@[^\s@]+\.[^\s@]+$`) is not ReDoS (vs Sonar S5852). MD5/SHA-1 used
+  as a cache key / ETag / dedup fingerprint is not a weak-crypto finding unless the
+  hash flows into an auth/integrity/password/signature sink (vs Sonar S4790). A
+  STATIC/derived-safe `fs` path or a non-fs method that merely happens to be named
+  `.open()`/`.exists()` is not a finding (vs eslint fs/child_process rules).
+
+## Dependencies
+
+- A DEV-ONLY VULNERABLE DEPENDENCY IS NOT A FREE-COUNT FINDING. Build/test-chain
+  tools (webpack, babel, eslint plugins) in `devDependencies` don't run in prod;
+  downgrade to informational. Only an exact known-critical CVE on a runtime dep with
+  a confirmed version range is trustworthy for the count.

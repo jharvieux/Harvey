@@ -41,3 +41,10 @@ create policy invoices_select_authenticated on public.invoices
 -- audit_logs: BUG (PLANTED) — row level security is never enabled on this table, so the
 -- PostgREST API exposes all tenants' audit trails to anyone with the anon key.
 -- (Intentionally NO "alter table public.audit_logs enable row level security;")
+
+-- service_state: NEGATIVE (N-RLS-DENY-ALL) — RLS enabled with ZERO policies on a
+-- service-role-only table. This is deny-all to anon/authenticated (safe by design), NOT the
+-- same as RLS OFF. The Splinter advisor lint 0008 (rls_enabled_no_policy) is informational
+-- here, not a vulnerability — must NOT be reported as a finding. (Contrast audit_logs above:
+-- RLS OFF with no policy IS exposed.)
+alter table public.service_state enable row level security;

@@ -1,0 +1,9 @@
+# GitGuardian (ggshield) config.
+# targets/ holds deliberately-vulnerable calibration fixtures with PLANTED, FAKE,
+# inert secrets used as scanner ground truth — the app is never deployed. Exclude it
+# from secret scanning so the intentional fixtures don't raise false alarms.
+# See docs/design/calibration-corpus-spec.md and targets/calibration/GROUND-TRUTH.md.
+version: 2
+secret:
+  ignored-paths:
+    - "targets/calibration/**"

@@ -2,18 +2,24 @@
   "name": "calibration-target",
   "version": "0.0.0",
   "private": true,
-  "description": "INTENTIONALLY VULNERABLE calibration target for the Harvey audit scanner. Never deploy.",
+  "description": "INTENTIONALLY VULNERABLE calibration target for the Harvey audit scanner. Never deploy. Never `npm install` — react-supabase-helpers is a deliberately nonexistent slopsquat fixture.",
   "scripts": {
     "dev": "next dev -p 3100",
     "build": "next build",
-    "start": "next start -p 3100"
+    "start": "next start -p 3100",
+    "postinstall": "echo calibration-postinstall-fixture"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
+    "lodash": "4.17.11",
     "next": "^14.2.5",
     "pg": "^8.12.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-supabase-helpers": "1.0.0",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "webpack": "4.42.0"
   }
 }

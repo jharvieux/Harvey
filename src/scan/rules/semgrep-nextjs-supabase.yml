@@ -1,31 +1,108 @@
-# Custom Semgrep OSS rules for the Next.js/Supabase footgun taxonomy (dangerouslySetInnerHTML,
-# permissive CORS, service-role-in-client, open redirects). Run alongside the registry packs —
-# see src/scan/semgrep.ts for the full invocation.
-#
-# NOTE: written against Semgrep's documented rule syntax but not validated against a live
-# `semgrep` binary in this environment (no network/binary access here). Run
-# `semgrep --validate --config src/scan/rules/semgrep-nextjs-supabase.yml` before first use
-# and fix up any pattern syntax semgrep rejects.
+# Custom Semgrep OSS rules for the Next.js/Supabase footgun taxonomy. Run alongside the
+# maintained registry packs (p/react, p/nextjs, p/owasp-top-ten, p/secrets, p/security-audit) —
+# see src/scan/semgrep.ts for the full invocation. Validated with
+# `semgrep --validate --config src/scan/rules/semgrep-nextjs-supabase.yml` and exercised against
+# targets/calibration by the calibration harness (src/scan/calibration.ts, `pnpm validate:calibration`).
 #
 # metadata.confidence + severity: ERROR feed the "high" precision-tier trust boundary in
-# src/scan/semgrep.ts (docs/design/mechanical-toolchain.md); metadata.harveySeverity overrides
-# the default severity-from-semgrep-severity mapping where the product taxonomy disagrees
-# (e.g. a leaked service-role key is Critical, not just "ERROR").
+# src/scan/semgrep.ts (docs/design/mechanical-toolchain.md §2/§7) — only HIGH-confidence,
+# ERROR-severity, non-`.audit.*` rules enter the free count; MEDIUM/WARNING route to review.
+# metadata.harveySeverity overrides the default severity-from-semgrep mapping where the product
+# taxonomy disagrees (e.g. a leaked service-role key is Critical, not just "ERROR").
 
 rules:
+  # SQL injection via untrusted input interpolated into a template-literal / concatenated SQL
+  # string. Taint mode so it fires whether the interpolation is inline in the .query() call or
+  # assembled into a variable first (calibration #4 does the latter). The sink focuses on the
+  # SQL text argument only, so a PARAMETERIZED query — pool.query("... $1", [req.x]) — is NOT a
+  # finding: the untrusted value is in the params array, never in the (untainted) SQL string.
+  - id: harvey-sql-injection-template
+    languages: [javascript, typescript]
+    mode: taint
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Critical
+    message: >
+      Untrusted request input is interpolated into a raw SQL string reaching .query(). Use
+      parameterized queries ($1 placeholders with a params array), never string interpolation.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $C.query($SQL, ...)
+              - pattern: $C.query($SQL)
+          - focus-metavariable: $SQL
+
+  # Open redirect: a request-controlled value drives a redirect with no host allowlist. Taint
+  # (Pages-Router req.query/body and App-Router searchParams as sources; res.redirect /
+  # NextResponse.redirect / a Location header as sinks). MEDIUM/WARNING → review tier: a static
+  # rule cannot see an allowlist check that may live elsewhere.
+  - id: harvey-open-redirect
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      Redirect target derives from a request-controlled value with no host allowlist — a
+      classic open-redirect primitive for phishing (and SSRF-shaped if fetched server-side).
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+      - pattern: $SP.get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.redirect($URL)
+              - pattern: $RES.redirect($CODE, $URL)
+              - pattern: NextResponse.redirect($URL)
+              - pattern: "$RES.writeHead($CODE, { Location: $URL })"
+              - pattern: '$RES.setHeader("Location", $URL)'
+          - focus-metavariable: $URL
+
+  # Reflected XSS: request-controlled value flows into dangerouslySetInnerHTML. Taint mode with
+  # sanitizer stops (DOMPurify.sanitize / sanitizeHtml / sanitize) so a sanitized OR constant
+  # value is NOT a finding — only a value tainted from request input is. HIGH → free count.
   - id: harvey-dangerously-set-inner-html
-    languages: [typescript, javascript]
+    languages: [javascript, typescript]
+    mode: taint
     severity: ERROR
     metadata:
       confidence: HIGH
       category: security
       harveySeverity: High
     message: >
-      dangerouslySetInnerHTML renders raw HTML. Confirm $VAL is sanitized (e.g. DOMPurify)
-      before it reaches this prop — otherwise this is a stored/reflected XSS sink.
-    patterns:
-      - pattern: "<$EL dangerouslySetInnerHTML={{ __html: $VAL }} />"
+      A request-controlled value reaches dangerouslySetInnerHTML unsanitized — reflected/stored
+      XSS. Sanitize (e.g. DOMPurify.sanitize) before it reaches __html, or render as text.
+    pattern-sources:
+      - pattern: $REQ.query
+      - pattern: $REQ.body
+      - pattern: $RT.query.$K
+      - pattern: $SP.get(...)
+      - pattern: useSearchParams()
+    pattern-sanitizers:
+      - pattern: DOMPurify.sanitize(...)
+      - pattern: sanitizeHtml(...)
+      - pattern: sanitize(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: "<$EL dangerouslySetInnerHTML={{ __html: $VAL }} />"
+              - pattern: "<$EL dangerouslySetInnerHTML={{ __html: $VAL }}>...</$EL>"
+          - focus-metavariable: $VAL
 
+  # Permissive CORS: wildcard Access-Control-Allow-Origin. Combined with Allow-Credentials this
+  # defeats same-origin protection for authenticated requests. HIGH → free count.
   - id: harvey-permissive-cors
     languages: [typescript, javascript]
     severity: ERROR
@@ -41,36 +118,48 @@ rules:
           - pattern: $RES.setHeader("Access-Control-Allow-Origin", "*")
           - pattern: $RES.headers.set("Access-Control-Allow-Origin", "*")
 
+  # Service-role key referenced inside a Client Component ("use client"). Gating on the
+  # "use client" directive is the high-precision signal: it means the module (and the key) ships
+  # to the browser bundle. A server-only module holding the service-role key (lib/supabaseAdmin.js,
+  # lib/cron.js) has no "use client" and is correctly NOT flagged. HIGH → free count.
   - id: harvey-service-role-in-client
-    languages: [typescript, javascript]
+    languages: [javascript, typescript]
     severity: ERROR
     metadata:
       confidence: HIGH
       category: security
       harveySeverity: Critical
     message: >
-      SUPABASE_SERVICE_ROLE_KEY is referenced in a module with no "server-only" import guard.
-      If this module is ever imported from client code, the service-role key ships to the
-      browser bundle — full RLS bypass for anyone who inspects it.
+      SUPABASE_SERVICE_ROLE_KEY is referenced inside a Client Component ("use client"). The
+      service-role key ships to the browser bundle — full RLS bypass for anyone who inspects it.
+      Move service-role usage to a server-only module.
     patterns:
       - pattern-either:
           - pattern: process.env.SUPABASE_SERVICE_ROLE_KEY
           - pattern: process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY
-      - pattern-not-inside: |
-          import "server-only";
+      - pattern-inside: |
+          "use client";
           ...
 
-  - id: harvey-open-redirect
-    languages: [typescript, javascript]
+  # SSRF: server fetches a request-controlled URL with no host allow/deny. Review tier —
+  # exploitability depends on the deploy network (internal ranges / cloud metadata reachability).
+  - id: harvey-ssrf-fetch
+    languages: [javascript, typescript]
+    mode: taint
     severity: WARNING
     metadata:
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
     message: >
-      Redirect target is read directly from a request-controlled value with no allowlist
-      check — a classic open-redirect primitive for phishing.
-    patterns:
-      - pattern-either:
-          - pattern: $RES.redirect($REQ.nextUrl.searchParams.get($X))
-          - pattern: redirect($SEARCHPARAMS.get($X))
+      A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate
+      the host against an allowlist and block internal/link-local ranges before fetching.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern: fetch($URL, ...)
+          - focus-metavariable: $URL

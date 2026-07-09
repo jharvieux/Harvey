@@ -23,11 +23,20 @@ id = "supabase-secret-key"
 description = "Supabase new-format secret key (sb_secret_...)"
 regex = '''sb_secret_[A-Za-z0-9_]{20,}'''
 
+# The anon/publishable key is public by design and is the most credibility-fatal false positive
+# (docs/design/mechanical-toolchain.md §3). regexTarget = "line" so any line naming
+# NEXT_PUBLIC_SUPABASE_ANON_KEY is suppressed for EVERY rule — including the default JWT/entropy
+# rules that would otherwise flag the anon token's `eyJ...` shape. The service_role JWT lives on
+# its own line and is NOT suppressed. Paths cover documented sample/example files and deps.
 [allowlist]
-description = "Known-safe patterns: publishable anon key env var, documented example env file"
+description = "Public anon key env var, documented sample env files, and dependency trees"
+regexTarget = "line"
 regexes = [
   '''NEXT_PUBLIC_SUPABASE_ANON_KEY''',
 ]
 paths = [
-  '''\.env\.example$''',
+  '''(^|/)\.env\.example$''',
+  '''\.sample$''',
+  '''\.template$''',
+  '''(^|/)node_modules/''',
 ]

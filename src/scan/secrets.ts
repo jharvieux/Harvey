@@ -16,7 +16,7 @@
 // "review". The anon key and .env.example are allowlisted in the gitleaks config, not here.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
@@ -120,7 +120,20 @@ function runTruffleHogFilesystem(dir: string): TruffleHogResult[] {
   return runJson<TruffleHogResult>("trufflehog", ["filesystem", "--only-verified", "--json", dir]);
 }
 
+// trufflehog's git pass clones the target as a repo, so it only works when the scan target is a
+// git repo ROOT. A subdirectory of a repo (e.g. targets/calibration inside this repo) has no
+// clonable .git and would error — there's simply no separate history to scan, so skip it.
+function isGitRepoRoot(dir: string): boolean {
+  try {
+    const top = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+    return realpathSync(top) === realpathSync(dir);
+  } catch {
+    return false;
+  }
+}
+
 function runTruffleHogGitHistory(repoDir: string): TruffleHogResult[] {
+  if (!isGitRepoRoot(repoDir)) return [];
   return runJson<TruffleHogResult>("trufflehog", ["git", "--only-verified", "--json", `file://${repoDir}`]);
 }
 
