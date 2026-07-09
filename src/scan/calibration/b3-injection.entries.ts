@@ -1,0 +1,35 @@
+// Batch B3 — injection & code-execution family (#71, spec §"Batch 1 — Injection & code-execution").
+// Custom Semgrep taint rules (src/scan/rules/semgrep/injection.yml) scored against targets/
+// calibration. Tiering follows the locked preamble: only ~100%-precision sinks are `high` (free
+// count) — a raw-SQL-executor RPC, `exec`/`execSync` of a request string, and `eval`/`new
+// Function` of request input. The heuristic sinks (PostgREST string filters, recursive merge,
+// deserialize, XXE options, path traversal, zip-slip, SSTI, ReDoS, log forging) are `review`.
+// SQLi-via-template-literal (P-SQLI-CONCAT) and its safe lookalike N-PARAM-QUERY already ship in
+// base.entries.ts; the ReDoS-safe / static-fs negatives (N-REDOS-SAFE, N-FS-STATIC) too. See
+// GROUND-TRUTH.md §B3.
+
+import type { CorpusEntry } from "./types.js";
+
+export const b3InjectionEntries: CorpusEntry[] = [
+  // --- POSITIVES (must be caught) ---
+  { id: "P-SQLI-RPC", kind: "positive", cls: "SQLi via raw-SQL-executor RPC", location: "report.js", match: ["rpc", "sql"], expectedTier: "high", note: "req.query.id interpolated into a SQL string run via admin.rpc('exec_sql', { query }) in pages/api/report.js. harvey-sql-injection-rpc gates the sink on raw-SQL-executor function names (exec_sql/execute/run_sql) → high." },
+  { id: "P-CMD-INJECTION", kind: "positive", cls: "OS command injection (exec)", location: "convert.js", match: ["command"], expectedTier: "high", note: "req.query.f interpolated into exec(`convert ${f} ...`) in pages/api/convert.js — child_process.exec spawns a shell. harvey-command-injection taint (req → exec/execSync string) → high." },
+  { id: "P-EVAL-CODE-INJ", kind: "positive", cls: "Code injection via eval", location: "calc.js", match: ["eval", "code-injection"], expectedTier: "high", note: "eval(req.body.expr) in pages/api/calc.js — arbitrary code execution. harvey-code-injection-eval taint (req → eval/new Function) → high." },
+  { id: "P-POSTGREST-FILTER-INJ", kind: "positive", cls: "PostgREST filter injection", location: "find.js", match: ["postgrest", "filter"], expectedTier: "review", note: "req.query.n interpolated into a string .or(`name.eq.${n}`) in pages/api/find.js. harvey-postgrest-filter-injection taint → review (blast radius scoped to the table)." },
+  { id: "P-PROTO-POLLUTION", kind: "positive", cls: "Prototype pollution via recursive merge", location: "merge.js", match: ["prototype", "pollution"], expectedTier: "review", note: "lodash.merge(config, req.body) in lib/merge.js — a __proto__ key mutates Object.prototype. harvey-prototype-pollution taint (req.body → merge/defaultsDeep) → review." },
+  { id: "P-INSECURE-DESERIALIZE", kind: "positive", cls: "Unsafe deserialization", location: "import.js", match: ["deserial"], expectedTier: "review", note: "unserialize(req.body.data) in pages/api/import.js — node-serialize executes an embedded function body. harvey-unsafe-deserialization taint → review." },
+  { id: "P-XXE", kind: "positive", cls: "XXE (external entities enabled)", location: "xml.js", match: ["xxe"], expectedTier: "review", note: "xml2js parseStringPromise(req.body, { noent: true }) in pages/api/xml.js resolves external entities. harvey-xxe pattern (noent/resolveEntities true) → review." },
+  { id: "P-PATH-TRAVERSAL", kind: "positive", cls: "Path traversal", location: "file.js", match: ["traversal"], expectedTier: "review", note: "req.query.name joined into path.join('/var/data/uploads', name) then fs.readFileSync in pages/api/file.js. harvey-path-traversal taint (req → fs read/write; path.basename is a sanitizer) → review." },
+  { id: "P-ZIP-SLIP", kind: "positive", cls: "Zip-slip archive traversal", location: "unzip.js", match: ["zip-slip", "zip"], expectedTier: "review", note: "fs.writeFileSync(path.join(outDir, entry.entryName), ...) with no containment check in lib/unzip.js. harvey-zip-slip pattern → review." },
+  { id: "P-SSTI", kind: "positive", cls: "Server-side template injection", location: "render.js", match: ["template-injection", "template"], expectedTier: "review", note: "ejs.render(req.body.tpl, ...) in pages/api/render.js — user controls the template source (SSTI → RCE on EJS). harvey-template-injection taint → review." },
+  { id: "P-REDOS", kind: "positive", cls: "ReDoS (catastrophic backtracking)", location: "parse.js", match: ["redos"], expectedTier: "review", note: "new RegExp('^(a+)+$') in lib/parse.js — nested quantifier. harvey-redos (metavariable-regex on the nested-quantifier shape) → review." },
+  { id: "P-LOG-INJECTION", kind: "positive", cls: "Log injection / forging", location: "track.js", match: ["log-injection"], expectedTier: "review", note: "console.log(`... ${req.query.u} ...`) in pages/api/track.js — CR/LF log forging. harvey-log-injection taint → review (common shape, low severity)." },
+
+  // --- NEGATIVES (must NOT be flagged in the free count) ---
+  { id: "N-CMD-SAFE", kind: "negative", cls: "execFile with argv array (no shell)", location: "img.js", note: "execFile('convert', [inputPath, ...]) in lib/img.js — discrete argv, no shell, no injection. harvey-command-injection fires only on exec/execSync of a string — cleared." },
+  { id: "N-EVAL-JSON", kind: "negative", cls: "JSON.parse, not eval", location: "cfg.js", note: "JSON.parse(req.body) in lib/cfg.js parses data, cannot execute. harvey-code-injection-eval fires only on eval/new Function — cleared." },
+  { id: "N-PROTO-SAFE", kind: "negative", cls: "Shallow Object.assign of picked fields", location: "opts.js", note: "Object.assign({}, DEFAULTS, {theme, pageSize}) in lib/opts.js — shallow, explicit fields, no recursive merge. harvey-prototype-pollution fires only on merge/defaultsDeep/mergeWith — cleared." },
+  { id: "N-XXE-SAFE", kind: "negative", cls: "XML parse with entities disabled", location: "xml-safe.js", note: "xml2js parse with { noent: false } in lib/xml-safe.js — hardened. harvey-xxe fires only on noent/resolveEntities true — cleared." },
+  { id: "N-PATH-BASENAME", kind: "negative", cls: "path.basename-sanitized file read", location: "dl.js", note: "path.basename(req.query.f) strips directory components before the join in pages/api/dl.js. harvey-path-traversal registers path.basename as a sanitizer — cleared." },
+  { id: "N-RPC-PARAM", kind: "negative", cls: "Parameterized Supabase RPC", location: "rep.js", note: "admin.rpc('report_total', { uid }) in pages/api/rep.js — a normal RPC with a bound argument (PostgREST parameterizes it). harvey-sql-injection-rpc fires only on raw-SQL-executor RPC names — cleared." },
+];
