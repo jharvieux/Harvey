@@ -192,6 +192,7 @@ function selftest() {
     ["date_of_birth", "PII", "high"],
     ["card_last4", "PCI", "high"],
     ["cvv", "PCI", "high"],
+    ["passport_number", "SENSITIVE_PII", "high"],
     ["medical_record_number", "PHI", "high"],
     ["genetic_marker", "SENSITIVE_PII", "high"],
     ["product_name", "PII", "low"],

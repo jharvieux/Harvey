@@ -15,6 +15,12 @@ export interface CorpusEntry {
   id: string;
   kind: CorpusKind;
   cls: string;
+  // Which audit module this entry belongs to. Omitted = "M1" (the original mechanical-scan
+  // corpus, base+secrets — scored by validate-calibration.ts against runMechanicalScan output).
+  // A module whose findings aren't produced by runMechanicalScan (e.g. "M10", a name/type
+  // classifier with its own live pipeline) must be excluded from that scoring pass — see the
+  // module filter in src/cli/validate-calibration.ts.
+  module?: string;
   // Substring expected in a relevant finding's `location` (file path / lockfile coordinate).
   location: string;
   // Optional keywords; a finding is relevant only if one appears in its id/title/taxonomy/
