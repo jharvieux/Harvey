@@ -79,4 +79,8 @@ describe("parseOsvFindings", () => {
     expect(findings[0]?.precisionTier).toBe("review");
     expect(findings[0]?.severity).toBe("High");
   });
+
+  it("degrades gracefully to no findings for a target with no lockfile (mechanical.ts's runOsvScanner returns {})", () => {
+    expect(parseOsvFindings({})).toEqual([]);
+  });
 });

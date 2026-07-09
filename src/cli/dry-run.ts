@@ -31,9 +31,9 @@ interface PhaseResult {
   notes: string;
 }
 
-function timePhase<T>(phase: string, module: string, fn: () => T): { result: T; report: PhaseResult; findings: Finding[] } {
+async function timePhase<T>(phase: string, module: string, fn: () => T | Promise<T>): Promise<{ result: T; report: PhaseResult; findings: Finding[] }> {
   const start = performance.now();
-  const result = fn();
+  const result = await fn();
   const ms = Math.round((performance.now() - start) * 10) / 10;
   const findings = Array.isArray(result) ? (result as unknown as Finding[]) : [];
   return { result, findings, report: { phase, module, ms, findingCount: findings.length, notes: "" } };
@@ -64,7 +64,7 @@ function arg(flag: string, fallback: string): string {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1]! : fallback;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const targetDir = arg("--target", join(import.meta.dirname, "..", "..", "targets", "calibration"));
   const outDir = arg("--out", join(import.meta.dirname, "..", "..", "dry-run"));
   mkdirSync(outDir, { recursive: true });
@@ -73,7 +73,7 @@ function main(): void {
   const allFindings: Finding[] = [];
 
   // --- M1 (+ dependency CVE / supply-chain / leftover-auth): mechanical scan ---
-  const mech = timePhase("M1 + supply chain", "mechanical scan (secrets, deps, semgrep, supply-chain, leftover-auth)", () =>
+  const mech = await timePhase("M1 + supply chain", "mechanical scan (secrets, deps, semgrep, supply-chain, leftover-auth)", () =>
     runMechanicalScan({ dir: targetDir }),
   );
   mech.report.notes = "secrets (trufflehog+gitleaks), dependency CVEs (osv-scanner + curated Next.js ranges), semgrep, supply-chain, leftover-auth grep — all ran live against the target.";
@@ -82,7 +82,7 @@ function main(): void {
 
   // --- M1 detect-deeper: grant/definer classifiers fed from parsed migration SQL ---
   const migrationSql = readMigrations(targetDir);
-  const m1Deeper = timePhase("M1 detect-deeper", "grant/definer classifiers (static migration-SQL feed, no live DB)", () => {
+  const m1Deeper = await timePhase("M1 detect-deeper", "grant/definer classifiers (static migration-SQL feed, no live DB)", () => {
     const definerFns: DefinerFunction[] = parseDefinerFunctions(migrationSql).map((fn) => ({
       ...fn,
       exposedTo: ASSUMED_DEFAULT_FUNCTION_EXPOSURE,
@@ -102,7 +102,7 @@ function main(): void {
   allFindings.push(...m1Deeper.findings);
 
   // --- M10: PII data map over parsed migration columns ---
-  const piiPhase = timePhase("M10", "PII/PHI/PCI data map (tools/pii-classify.mjs, static migration-SQL feed)", () => {
+  const piiPhase = await timePhase("M10", "PII/PHI/PCI data map (tools/pii-classify.mjs, static migration-SQL feed)", () => {
     const columns = parseColumns(migrationSql);
     const dataMap = buildDataMap(columns);
     return { columns, dataMap };
@@ -125,4 +125,7 @@ function main(): void {
   console.log(`\nWrote ${outDir}/{findings.json,pii-data-map.json,timing.json}`);
 }
 
-main();
+main().catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});
