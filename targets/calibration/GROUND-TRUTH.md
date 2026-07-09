@@ -113,3 +113,69 @@ exist and would fail a real install; the entry stays package.json-only, exactly 
 `registry.npmjs.org` existence check (issue #66) — `react-supabase-helpers` 404s. N-DEV-DEP stays
 clear: the live OSV pass finds zero CVEs on `webpack@4.42.0` itself (only its dev-only transitive
 deps carry non-curated, review-tier CVEs).
+
+---
+
+## Batch B1 (#71) — secrets & credential-exposure breadth
+
+The first #71 expansion batch (spec `docs/design/spec-71-security-corpus.md` §B1). Adds the
+full secret-provider breadth as planted positives + the benign lookalikes secret scanners throw.
+All secret values are FAKE (valid-shape only); the app is never deployed. Tiering per the spec's
+locked preamble: only ~100%-precision detections are `high` (free count) — the **decoded**
+`service_role` claim, and the unambiguous `sb_secret_` / private-key / DB-connection-URI prefixes.
+Provider patterns that only live TruffleHog verification would confirm (OpenAI/Stripe/AWS/GitHub/
+SendGrid) land at `review`, because a FAKE key can't verify — the same honest outcome already used
+for `P-HARDCODED-KEY`.
+
+### B1 positives — planted secrets (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-SRV-ROLE-JWT-SRC | `lib/admin.js:8` | gitleaks `supabase-service-role-jwt` (base64-decodes the JWT body, `--max-decode-depth 2`, matches `"role":"service_role"`) | high |
+| P-SB-SECRET-KEY | `lib/edge-config.js:4` | gitleaks custom `supabase-secret-key` (`sb_secret_` prefix — Supabase's secret namespace, never public) | high |
+| P-PRIVATE-KEY | `certs/key.pem:1` | gitleaks `private-key` (`-----BEGIN PRIVATE KEY-----` block) | high |
+| P-SRV-ROLE-IN-BUNDLE | `prebuilt-bundle/chunk.4f2a.js:7` | gitleaks `supabase-service-role-jwt` on a committed pre-built chunk (models a service-role key leaked into browser-shipped `.next/static`) | high |
+| P-DB-URL-PASSWORD | `.env.local:19` | gitleaks custom `harvey-db-uri-credentials` (`postgres://user:password@host`; loopback hosts allowlisted) | high |
+| P-OPENAI-KEY | `lib/llm.js:5` | gitleaks `generic-api-key` (value defanged for push protection — see note; `openai-api-key` validated pre-commit) | review |
+| P-STRIPE-SECRET | `lib/pay.js:4` | gitleaks `generic-api-key` (value defanged; `stripe-access-token` validated pre-commit) | review |
+| P-AWS-KEY | `lib/s3.js:5` | gitleaks `generic-api-key` on the secret (values defanged; `aws-access-token` validated pre-commit) | review |
+| P-GH-TOKEN | `scripts/deploy.js:4` | gitleaks `github-pat` (`ghp_`; push protection did not block this fake; unverifiable → review) | review |
+| P-SENDGRID-KEY | `lib/email.js:4` | gitleaks `generic-api-key` (value defanged; `sendgrid-api-token` validated pre-commit) | review |
+| P-JWT-SIGNING-SECRET | `lib/auth.js:7` | gitleaks `generic-api-key` (high-entropy signing-secret literal to `jwt.sign`; heuristic → review) | review |
+
+**Push-protection defang note.** GitHub push protection blocks committing a real-shape OpenAI /
+Stripe / AWS / SendGrid key. For those four, the committed literal is a pure high-entropy fake
+with the provider prefix removed, keeping the provider word in its `*_API_KEY` variable name — so
+gitleaks catches it via `generic-api-key` at review (the provider word rides along in the match).
+The provider-specific patterns (`openai-api-key`, `stripe-access-token`, `aws-access-token`,
+`sendgrid-api-token`) were confirmed to fire on the real-shape values during pre-commit validation
+(gitleaks 8.30.1). Class and tier (hardcoded provider secret, review) are unchanged; only the
+firing rule differs. The `ghp_` GitHub PAT fake and all high-tier prefix/claim-based detections
+(service_role, `sb_secret_`, private-key, DB-URI) were not blocked and are committed as-is.
+
+### B1 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-STRIPE-PK-PUBLISHABLE | `.env.local` (`NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_…`) | Stripe publishable keys are public by design (like the anon key). gitleaks allowlist `pk_(live|test)_` (regexTarget=line) suppresses every rule on the line. |
+| N-STRIPE-TEST-KEY | `.env.local` (`sk_test_…`) | Test-mode key, no production risk. gitleaks `stripe-access-token` still pattern-matches it → review only (triaged out), never high. |
+| N-AWS-EXAMPLE-KEY | `docs/aws-setup.md` (`AKIAIOSFODNN7EXAMPLE`) | AWS-docs placeholder; gitleaks stopword-allowlists the `EXAMPLE` marker — `aws-access-token` stays silent. |
+| N-DB-URL-LOCAL | `README.md:53` (`postgres://postgres:postgres@127.0.0.1`) | Standard local Supabase dev string, not a committed credential. `harvey-db-uri-credentials` allowlists loopback hosts (`localhost`/`127.0.0.1`). |
+
+**Deferred to a later batch (spec §B1 rows not built here, tracked follow-ups):**
+`P-ENV-COMMITTED` (a committed `.env` with live values — overlaps `P-DB-URL-PASSWORD`, which
+already exercises a committed non-anon secret in `.env.local`); `P-SECRET-GIT-HISTORY` (a secret
+added+removed across commits — the TruffleHog git-history pass only runs against a repo **root**,
+not the `targets/calibration` subdirectory, so it can't be validated by this harness as-is;
+needs a dedicated single-repo history fixture).
+
+### B1 live result (2026-07-09, static binaries: gitleaks 8.30.1, trufflehog 3.95.8, no Docker)
+
+`pnpm validate:calibration`: **positives caught 27/27 static (12 at high/free-count), 1
+connected-tier N/A; negatives cleared 19/19; zero free-count false positives — GATE PASS.** The 11
+new B1 positives all fire (5 at high: the two decoded service_role claims, `sb_secret_`,
+private-key, DB-URI; 6 at review: the unverifiable provider patterns). The 4 new negatives clear:
+the publishable key and loopback DB URI are gitleaks-allowlisted (silent), the AWS example key is
+stopword-allowlisted (silent), and the test-mode Stripe key draws a review hit only (triaged out).
+TruffleHog contributes nothing (every planted key is a dead fake, `--only-verified`), exactly as
+scored. `pnpm verify` (offline) is green via recorded gitleaks output in `calibration.test.ts`.

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildCoverageMatrix, CORPUS, scoreEntry, type CorpusEntry } from "./calibration.js";
+import { secretsEntries } from "./calibration/secrets.entries.js";
+import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
 import type { Finding, PrecisionTier } from "../findings.js";
 
 // Recorded-output helper: a minimal Finding mirroring what the scan modules emit, so these
@@ -61,6 +63,51 @@ describe("scoreEntry", () => {
     const row = scoreEntry(e, []);
     expect(row.pass).toBe(true);
     expect(row.detail).toContain("connected");
+  });
+});
+
+describe("Batch B1 secrets corpus (recorded gitleaks output → tier mapping)", () => {
+  // Recorded gitleaks findings mirroring the live `pnpm validate:calibration` run over
+  // targets/calibration. Fed through the real secrets.ts tier mapping so this exercises which
+  // rules are high-precision vs review, then scored against the B1 entries. No binary invoked.
+  const gitleaks: GitleaksResult[] = [
+    { RuleID: "supabase-service-role-jwt", File: "lib/admin.js", StartLine: 8, Match: '"role":"service_role"' },
+    { RuleID: "supabase-secret-key", File: "lib/edge-config.js", StartLine: 4, Match: "sb_secret_Z9Qm2v" },
+    { RuleID: "private-key", File: "certs/key.pem", StartLine: 1, Match: "-----BEGIN PRIVATE KEY-----" },
+    { RuleID: "supabase-service-role-jwt", File: "prebuilt-bundle/chunk.4f2a.js", StartLine: 7, Match: '"role":"service_role"' },
+    { RuleID: "harvey-db-uri-credentials", File: ".env.local", StartLine: 19, Match: "postgres://appuser:pw@db.calibrationref01.supabase.co" },
+    // The 4 provider keys below are DEFANGED in the committed fixtures (real provider shapes trip
+    // GitHub push protection), so the committed catch is generic-api-key with the provider word in
+    // the var name; the match keyword resolves against that.
+    { RuleID: "generic-api-key", File: "lib/llm.js", StartLine: 5, Match: 'OPENAI_API_KEY = "Z9Qm2vXcW8rNpKdLhGfYsAe4Uo1Bx6Vt0Zi7Ny5Mw3Qr8Kp2"' },
+    { RuleID: "generic-api-key", File: "lib/pay.js", StartLine: 4, Match: 'STRIPE_SECRET_KEY = "Rt7Yu1Ki5Op8Ld2Hj9Qw3Z9Qm2vXcW8rNpKdLhGfYsAe4"' },
+    { RuleID: "generic-api-key", File: "lib/s3.js", StartLine: 5, Match: 'AWS_SECRET_ACCESS_KEY = "Uo1Bx6Vt0Zi7Ny5Mw3Qr8Kp2Ld6Hj4Gg1Fa9Sc0Rb5Tn3Uv8"' },
+    { RuleID: "github-pat", File: "scripts/deploy.js", StartLine: 4, Match: "ghp_Z9Qm2vXcW8rNpKdLhGfYsAe4Uo1Bx6Vt0Zi7N" },
+    { RuleID: "generic-api-key", File: "lib/email.js", StartLine: 4, Match: 'SENDGRID_API_KEY = "Yl4ZpQaWsEdRfTgYhUjIkOlPzXcVbNmZ9Qm2vXcW8rNp"' },
+    { RuleID: "generic-api-key", File: "lib/auth.js", StartLine: 7, Match: 'JWT_SIGNING_SECRET = "hs512_9QmZ2vXcW8rNpKdLhGfYsAe4Uo1Bx6Vt0Zi7Ny5Mw3Qr8Kp2Ld6Hj4Gg1Fa"' },
+    // sk_test key trips stripe-access-token at review; the publishable line is gitleaks-allowlisted
+    // (no finding); aws-setup.md and README.md are cleared, so they produce no rows here.
+    { RuleID: "stripe-access-token", File: ".env.local", StartLine: 29, Match: "sk_test_51…" },
+  ];
+  const findings = parseGitleaksFindings(gitleaks, "source");
+
+  it("catches every B1 positive at its declared tier and clears every B1 negative", () => {
+    for (const e of secretsEntries) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe(e.expectedTier);
+      else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("promotes only the ~100%-precision rules to the free count (5 high, 6 review)", () => {
+    const m = buildCoverageMatrix(findings, secretsEntries);
+    const positives = secretsEntries.filter((e) => e.kind === "positive");
+    expect(m.positivesCaught).toBe(positives.length);
+    expect(m.positivesCaughtHigh).toBe(positives.filter((e) => e.expectedTier === "high").length);
+    expect(m.positivesCaughtHigh).toBe(5);
+    expect(m.negativesCleared).toBe(m.negativesTotal);
+    expect(m.ok).toBe(true);
   });
 });
 

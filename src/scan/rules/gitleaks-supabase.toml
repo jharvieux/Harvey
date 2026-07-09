@@ -23,16 +23,32 @@ id = "supabase-secret-key"
 description = "Supabase new-format secret key (sb_secret_...)"
 regex = '''sb_secret_[A-Za-z0-9_]{20,}'''
 
+# A committed database connection URI with an inline (non-placeholder) password. The scheme +
+# user:password@host shape is high-specificity; sample/placeholder URIs live in path-allowlisted
+# files (.env.example, *.sample). Requires a 6+ char password to skip trivial "x:y@" fragments.
+# Only DB schemes — redis://amqp:// operator/config URLs are exempt (docs/fp-rules.txt).
+[[rules]]
+id = "harvey-db-uri-credentials"
+description = "Database connection URI with an inline password"
+regex = '''(?i)(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?)://[a-z0-9._-]+:[^:@/\s'"]{6,}@[a-z0-9._-]+'''
+[[rules.allowlists]]
+description = "Local-dev DB URIs on a loopback host (e.g. postgres:postgres@127.0.0.1) are default dev creds, not committed secrets"
+regexTarget = "match"
+regexes = ['''@(?:localhost|127\.0\.0\.1)''']
+
 # The anon/publishable key is public by design and is the most credibility-fatal false positive
 # (docs/design/mechanical-toolchain.md §3). regexTarget = "line" so any line naming
 # NEXT_PUBLIC_SUPABASE_ANON_KEY is suppressed for EVERY rule — including the default JWT/entropy
 # rules that would otherwise flag the anon token's `eyJ...` shape. The service_role JWT lives on
 # its own line and is NOT suppressed. Paths cover documented sample/example files and deps.
 [allowlist]
-description = "Public anon key env var, documented sample env files, and dependency trees"
+description = "Public anon key env var, Stripe publishable keys, documented sample env files, and dependency trees"
 regexTarget = "line"
 regexes = [
   '''NEXT_PUBLIC_SUPABASE_ANON_KEY''',
+  # Stripe publishable keys (pk_live_/pk_test_) are public by design, like the anon key — the
+  # NEXT_PUBLIC_*KEY name rule + generic-api-key would otherwise flag the line. Suppress the line.
+  '''pk_(?:live|test)_[A-Za-z0-9]+''',
 ]
 paths = [
   '''(^|/)\.env\.example$''',
