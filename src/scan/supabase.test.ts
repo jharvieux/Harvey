@@ -2,7 +2,21 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runSupabaseScan } from "./supabase.js";
+import { dedupeAutoExposed, runSupabaseScan } from "./supabase.js";
+import { mechanicalFinding } from "./common.js";
+
+vi.mock("postgres", () => ({
+  default: vi.fn(() => ({
+    unsafe: vi.fn(async (query: string) => {
+      if (query.includes("pg_tables")) return [{ schema: "public", name: "widgets", rlsEnabled: false }];
+      if (query.includes("pg_extension")) return [{ name: "pg_net", schema: "extensions", installed_version: "0.20.3" }];
+      if (query.includes("storage.buckets")) return [{ id: "b1", name: "avatars", public: true }];
+      if (query.includes("pg_policies")) return [];
+      return [];
+    }),
+    end: vi.fn(async () => {}),
+  })),
+}));
 
 function mockFetch(responses: {
   advisors: unknown;
@@ -82,5 +96,62 @@ describe("runSupabaseScan", () => {
       const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, functionsDir: dir });
       expect(findings.some((f) => f.taxonomy === "Unsigned/unverified webhook handler")).toBe(true);
     });
+  });
+
+  // #54 — local mode now runs Splinter (via the injectable splinterImpl, mirroring fetchImpl
+  // above) alongside the SQL-derived checks (postgres mocked via vi.mock at the top of this file).
+  describe("local mode — Splinter wiring (#54)", () => {
+    it("merges Splinter advisor findings with the SQL-derived checks Splinter doesn't cover", async () => {
+      const splinterImpl = () => ({
+        lints: [{ name: "unused_index", title: "Unused Index", level: "INFO" as const, metadata: { name: "widgets", schema: "public" }, cache_key: "unused_index_public_widgets_idx" }],
+      });
+
+      const findings = await runSupabaseScan({ local: true, splinterImpl });
+      const taxonomies = findings.map((f) => f.taxonomy);
+
+      expect(taxonomies).toContain("unused_index"); // from Splinter
+      expect(taxonomies).toContain("Dangerous extension enabled"); // from checkDangerousExtensions
+      expect(taxonomies).toContain("Public bucket with no policies"); // from checkPublicBucketsWithNoPolicies
+      expect(findings.every((f) => f.mechanical)).toBe(true);
+    });
+
+    it("dedupes checkAutoExposedTables against Splinter's rls_disabled_in_public for the same table", async () => {
+      const splinterImpl = () => ({
+        lints: [{ name: "rls_disabled_in_public", title: "RLS Disabled in Public", level: "ERROR" as const, metadata: { name: "widgets", schema: "public" }, cache_key: "rls_disabled_in_public_public_widgets" }],
+      });
+
+      const findings = await runSupabaseScan({ local: true, splinterImpl });
+      const rlsFindings = findings.filter((f) => f.location === "public.widgets");
+
+      expect(rlsFindings).toHaveLength(1); // Splinter's hit only, not also "Auto-exposed public-schema table"
+      expect(rlsFindings[0]?.taxonomy).toBe("rls_disabled_in_public");
+    });
+  });
+});
+
+describe("dedupeAutoExposed", () => {
+  const splinterHit = mechanicalFinding({
+    id: "SB-ADV-1", title: "RLS Disabled in Public", severity: "Critical", category: "Supabase advisor",
+    taxonomy: "rls_disabled_in_public", location: "public.orders", evidence: "e", impact: "i", fix: "f", precisionTier: "high",
+  });
+  const autoExposedHit = mechanicalFinding({
+    id: "SB-EXPOSED-public-orders", title: "public.orders has RLS disabled", severity: "Critical", category: "Supabase config",
+    taxonomy: "Auto-exposed public-schema table", location: "public.orders", evidence: "e", impact: "i", fix: "f", precisionTier: "high",
+  });
+  const autoExposedOther = mechanicalFinding({
+    id: "SB-EXPOSED-public-widgets", title: "public.widgets has RLS disabled", severity: "Critical", category: "Supabase config",
+    taxonomy: "Auto-exposed public-schema table", location: "public.widgets", evidence: "e", impact: "i", fix: "f", precisionTier: "high",
+  });
+
+  it("drops an auto-exposed finding whose location Splinter already flagged as rls_disabled_in_public", () => {
+    expect(dedupeAutoExposed([splinterHit], [autoExposedHit])).toEqual([]);
+  });
+
+  it("keeps an auto-exposed finding for a table Splinter didn't flag", () => {
+    expect(dedupeAutoExposed([splinterHit], [autoExposedOther])).toEqual([autoExposedOther]);
+  });
+
+  it("keeps auto-exposed findings untouched when Splinter found nothing", () => {
+    expect(dedupeAutoExposed([], [autoExposedHit, autoExposedOther])).toEqual([autoExposedHit, autoExposedOther]);
   });
 });
