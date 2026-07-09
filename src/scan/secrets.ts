@@ -23,7 +23,16 @@ import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 
 const GITLEAKS_CONFIG = new URL("./rules/gitleaks-supabase.toml", import.meta.url).pathname;
-const HIGH_PRECISION_GITLEAKS_RULES = new Set(["supabase-service-role-jwt"]);
+// Rules whose match alone is ~100%-precision (no live verification needed): the decoded
+// service_role JWT claim, the sb_secret_ / connection-string / private-key prefixes — all
+// unambiguous committed credentials. Every other gitleaks rule (provider patterns that only
+// TruffleHog verification would confirm, entropy/generic matches) stays "review".
+const HIGH_PRECISION_GITLEAKS_RULES = new Set([
+  "supabase-service-role-jwt",
+  "supabase-secret-key",
+  "harvey-db-uri-credentials",
+  "private-key",
+]);
 
 export interface TruffleHogResult {
   DetectorName?: string;
