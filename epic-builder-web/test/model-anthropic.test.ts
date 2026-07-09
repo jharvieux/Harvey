@@ -143,7 +143,7 @@ describe("selectModel (lib/deps.ts)", () => {
     vi.resetModules();
     const { productionDeps } = await import("../lib/deps.js");
     const { AnthropicModelClient: LiveClient } = await import("../lib/model-anthropic.js");
-    expect(productionDeps().model).toBeInstanceOf(LiveClient);
+    expect((await productionDeps("test-user")).deps.model).toBeInstanceOf(LiveClient);
   });
 
   it("falls back to the scaffold when EPIC_BUILDER_MODEL is unset", async () => {
@@ -152,7 +152,7 @@ describe("selectModel (lib/deps.ts)", () => {
     vi.resetModules();
     const { productionDeps } = await import("../lib/deps.js");
     const { ScaffoldModelClient } = await import("../../src/epic-builder/model-scaffold.js");
-    expect(productionDeps().model).toBeInstanceOf(ScaffoldModelClient);
+    expect((await productionDeps("test-user")).deps.model).toBeInstanceOf(ScaffoldModelClient);
   });
 
   it("falls back to the scaffold when EPIC_BUILDER_MODEL=anthropic but no key is present", async () => {
@@ -161,6 +161,6 @@ describe("selectModel (lib/deps.ts)", () => {
     vi.resetModules();
     const { productionDeps } = await import("../lib/deps.js");
     const { ScaffoldModelClient } = await import("../../src/epic-builder/model-scaffold.js");
-    expect(productionDeps().model).toBeInstanceOf(ScaffoldModelClient);
+    expect((await productionDeps("test-user")).deps.model).toBeInstanceOf(ScaffoldModelClient);
   });
 });

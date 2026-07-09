@@ -3,8 +3,10 @@
 // Everything here is server-only — it is imported exclusively from route handlers, never from a
 // client component, so no key or token can reach the browser.
 
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createClient } from "@supabase/supabase-js";
 import { GitHubTracker } from "../../src/trackers/github.js";
 import type { Tracker } from "../../src/trackers/types.js";
 import { ScaffoldModelClient } from "../../src/epic-builder/model-scaffold.js";
@@ -13,9 +15,7 @@ import type { Templates } from "../../src/epic-builder/session.js";
 import type { CoreDeps } from "./core.js";
 import { NoopTracker } from "./core.js";
 import { AnthropicModelClient } from "./model-anthropic.js";
-
-// The single operator partition in the MVP (design §6). Becomes the Supabase user id in production.
-const OPERATOR = "operator";
+import { supabaseStore, type SupabaseLike } from "./storage.js";
 
 function dataRoot(): string {
   return process.env.EPIC_BUILDER_DATA_DIR ?? join(process.cwd(), ".data");
@@ -59,11 +59,34 @@ function requireEnv(name: string): string {
   return v;
 }
 
-export function productionDeps(): CoreDeps {
+// Server-side Supabase client for the storage adapter (design §4). Uses the SERVICE-ROLE key, which is
+// never shipped to the browser; the adapter scopes every query by user_id, and RLS guards the anon path.
+function supabaseServiceClient(): SupabaseLike {
+  const url = requireEnv("SUPABASE_URL");
+  const serviceKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+  return createClient(url, serviceKey, { auth: { persistSession: false } }) as unknown as SupabaseLike;
+}
+
+// Assemble the wrap-layer deps for one authenticated request, partitioned by userId (design §4, §6), plus
+// a commit() the route runs after the handler succeeds.
+//   - filesystem (default): cwd is the user's durable dir; commit is a no-op (the core writes it directly).
+//   - supabase (EPIC_BUILDER_STORAGE=supabase): the user's rows are hydrated into a per-request temp copy,
+//     the core runs against it, and commit flushes the copy back to Postgres and removes the temp dir.
+export async function productionDeps(
+  userId: string,
+): Promise<{ deps: CoreDeps; commit: () => Promise<void> }> {
+  const base = { model: selectModel(), templates: loadTemplates(), makeTracker };
+  if (process.env.EPIC_BUILDER_STORAGE !== "supabase") {
+    return { deps: { ...base, cwd: join(dataRoot(), userId) }, commit: async () => {} };
+  }
+  const store = supabaseStore(supabaseServiceClient());
+  const cwd = mkdtempSync(join(tmpdir(), "epic-web-"));
+  await store.hydrate(userId, cwd);
   return {
-    model: selectModel(),
-    cwd: join(dataRoot(), OPERATOR),
-    templates: loadTemplates(),
-    makeTracker,
+    deps: { ...base, cwd },
+    commit: async () => {
+      await store.flush(userId, cwd);
+      rmSync(cwd, { recursive: true, force: true });
+    },
   };
 }

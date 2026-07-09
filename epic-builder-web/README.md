@@ -41,27 +41,51 @@ idempotent re-run without a live model, a live tracker, or a running server.
 
 | Var | Purpose |
 |---|---|
-| `EPIC_BUILDER_PASSWORD` | Operator sign-in secret (MVP auth). |
+| `EPIC_BUILDER_PASSWORD` | Operator sign-in secret (shared-secret auth, the default). |
 | `EPIC_BUILDER_SESSION_SECRET` | HMAC key for the session cookie. |
-| `EPIC_BUILDER_DATA_DIR` | Where per-user workspaces are stored (default `./.data`). |
+| `EPIC_BUILDER_DATA_DIR` | Where per-user workspaces are stored on the filesystem store (default `./.data`). |
 | `GITHUB_TOKEN` / `GITHUB_OWNER` / `GITHUB_REPO` | Per-engagement publish target (real publish only). |
 | `EPIC_BUILDER_MODEL=anthropic` + `ANTHROPIC_API_KEY` | Selects the live Anthropic model client (`lib/model-anthropic.ts`, issue #102) in place of the scaffold. Standard tier calls use Haiku 4.5, flagship tier calls use Sonnet 5 (per `docs/design/model-routing.md` §6); the key must belong to a ZDR-eligible account and is read only server-side. Falls back to the scaffold if either var is missing. |
+| `EPIC_BUILDER_STORAGE=supabase` | Switch the store from the filesystem to Supabase Postgres (below). |
+| `EPIC_BUILDER_AUTH=supabase` | Switch sign-in from the shared secret to Supabase Auth (below). |
+| `SUPABASE_URL` | Supabase project URL (server + auth). |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service-role key — **server only**, used by the storage adapter. Never shipped to the browser. |
+| `SUPABASE_ANON_KEY` | Anon/publishable key — used to verify access tokens for Supabase Auth. |
 
-Secrets are read only in server routes; none reach the browser.
+Secrets are read only in server routes; none reach the browser. The service-role key stays server-side;
+client-side code uses the anon key and is confined by RLS.
+
+## Supabase storage + auth (multi-user path, issue #103)
+
+The single-instance MVP runs on the filesystem store + shared-secret auth. For the multi-user path, set
+`EPIC_BUILDER_STORAGE=supabase` and `EPIC_BUILDER_AUTH=supabase` and provide the `SUPABASE_*` vars above.
+
+- **Storage** (`lib/storage.ts`): a durable, per-user store on two Postgres tables —
+  `epic_sessions(user_id, slug, state, json)` and `epic_drafts(user_id, slug, path, body)`. Because the
+  core (`src/epic-builder`) is a synchronous filesystem workspace, a request hydrates the signed-in
+  user's rows into a temp working copy, the unchanged core runs against it, and the request flushes the
+  copy back — Supabase is the durable source of truth, the temp dir is per-request scratch.
+- **Auth** (`lib/auth.ts`): the Supabase access token is verified server-side and the user's id becomes
+  the storage partition key. Shared-secret remains the default (partition key `operator`).
+- **Migration:** apply `supabase/migrations/0001_epic_builder_storage.sql`. It creates both tables and
+  enables **RLS** scoping every row to `auth.uid() = user_id`.
+- **Live use needs a Supabase project**; CI never touches one — the adapter and auth are tested with
+  `@supabase/supabase-js` mocked (`test/storage.test.ts`, `test/auth.test.ts`). The browser sign-in page
+  that sets the Supabase session cookie is the remaining live-only wiring.
 
 ## Deploy (Vercel)
 
 Separate Vercel project, **root directory = `epic-builder-web`** (mirrors `intake-site`). Set the env
 vars above. Two caveats from the design doc:
 
-- **Storage:** Vercel serverless has an ephemeral filesystem, so the MVP's file-backed store needs a
-  single persistent instance / mounted volume, or the deferred Supabase adapter, before real
-  multi-user use (design §4).
+- **Storage:** Vercel serverless has an ephemeral filesystem, so the file-backed store needs a single
+  persistent instance / mounted volume. For multi-instance / multi-user, switch to the Supabase store
+  (above), which uses the ephemeral fs only as per-request scratch (design §4).
 - **Templates:** the app reads `../docs/templates/{epic,user-story,implementation-brief}.md` at
   runtime; a deploy rooted here must include those three files (copy them in at build, or deploy from
   the repo root). Override the location with `EPIC_BUILDER_TEMPLATES_DIR`.
 
 ## Not in the MVP (deferred, see design §9)
 
-Supabase storage + Supabase Auth multi-user · two-phase revision confirm · multi-round web clarify ·
-per-engagement tracker tokens · the `intake-site` footer link (added once a deploy URL exists).
+Two-phase revision confirm · multi-round web clarify · per-engagement tracker tokens · the browser
+sign-in page for Supabase Auth · the `intake-site` footer link (added once a deploy URL exists).
