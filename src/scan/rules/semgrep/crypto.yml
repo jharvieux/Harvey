@@ -1,0 +1,195 @@
+# Batch B6 — JWT / crypto / randomness (#71, spec §"Batch 8 — JWT / crypto / randomness"). Per-batch
+# custom-rule file (see base.yml header for the directory convention). Tiering follows the locked
+# preamble: only ~100%-precision sinks are ERROR + HIGH confidence (free count) — an explicit
+# `algorithms:['none']` JWT verify, a weak hash (md5/sha1) whose immediate input is named like a
+# password/token/secret/signature (the sink-gating that separates it from a non-security cache-key
+# hash), a named-weak cipher (DES/RC4/ECB), and an explicit `rejectUnauthorized: false`/
+# `NODE_TLS_REJECT_UNAUTHORIZED=0`. The rest (unverified jwt.decode(), a hardcoded/static IV,
+# Math.random() feeding a token/secret-named sink, a raw password column with no hash fn) are
+# WARNING + MEDIUM → review tier — each needs more context than a static rule can see.
+#
+# Exercised against targets/calibration by `pnpm validate:calibration`; see GROUND-TRUTH.md §B6.
+
+rules:
+  # JWT verified with algorithms:['none'] (or 'none' present in the allowlist) — the classic
+  # "alg confusion" bypass: an attacker crafts an unsigned token and the app trusts it. The
+  # explicit literal "none" in the algorithms array is the ~100%-precision signal.
+  - id: harvey-jwt-none-alg
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Critical
+    message: >
+      jwt.verify() allows the "none" algorithm — an attacker can present an unsigned token with
+      an arbitrary payload and it will verify successfully. Remove "none" from the algorithms
+      allowlist (allowlist only the specific algorithm your signing key uses, e.g. RS256).
+    patterns:
+      - pattern-either:
+          - pattern: 'jwt.verify($T, $K, { ..., algorithms: [..., "none", ...], ... })'
+          - pattern: 'jsonwebtoken.verify($T, $K, { ..., algorithms: [..., "none", ...], ... })'
+
+  # jwt.decode() reads the payload WITHOUT checking the signature. Review — decode() has
+  # legitimate non-authz uses (e.g. reading `exp` client-side before a refresh); this rule
+  # flags every use as a heuristic because distinguishing "used for an authz decision" from
+  # "informational read" needs the caller's control-flow context, not just the call site.
+  - id: harvey-jwt-decode-noverify
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      jwt.decode() reads the token's claims WITHOUT verifying the signature. If the result feeds
+      an authorization decision, anyone can forge a token with an arbitrary claim (no key
+      needed). Use jwt.verify() (with an explicit algorithms allowlist) for anything security-relevant.
+    patterns:
+      - pattern-either:
+          - pattern: jwt.decode($T)
+          - pattern: jsonwebtoken.decode($T)
+
+  # Weak hash (MD5/SHA-1) whose immediate input is named like a password/token/secret/signature —
+  # the sink-gating signal that separates a SECURITY use (broken: no work factor, crackable via
+  # rainbow tables / collision attacks) from a non-security cache-key/ETag fingerprint (the
+  # N-WEAK-HASH-CACHE shape in lib/cache.js, which hashes `JSON.stringify(params)` — no match).
+  - id: harvey-weak-hash-security
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      MD5/SHA-1 hashes a password/token/secret/signature value directly — both are
+      cryptographically broken (collision + rainbow-table attacks) and unsafe for anything
+      security-sensitive. Use bcrypt/argon2 for passwords, HMAC-SHA256+ for signatures/integrity.
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createHash("md5").update($ARG)
+          - pattern: crypto.createHash("sha1").update($ARG)
+      - metavariable-regex:
+          metavariable: $ARG
+          regex: (?i).*(password|pwd|passwd|secret|token|signature|signing).*
+
+  # Named-weak cipher: DES/3DES/RC4 (broken by brute force / bias attacks) or AES in ECB mode
+  # (identical plaintext blocks encrypt identically — leaks structure). The algorithm literal is
+  # an unambiguous, ~100%-precision signal.
+  - id: harvey-weak-cipher
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      A cryptographically weak or broken cipher (DES/3DES/RC4, or AES in ECB mode) is used for
+      encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use
+      AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createCipheriv("des", ...)
+          - pattern: crypto.createCipheriv("des-cbc", ...)
+          - pattern: crypto.createCipheriv("des-ecb", ...)
+          - pattern: crypto.createCipheriv("des-ede3", ...)
+          - pattern: crypto.createCipheriv("des-ede3-cbc", ...)
+          - pattern: crypto.createCipheriv("rc4", ...)
+          - pattern: crypto.createCipheriv("rc4-40", ...)
+          - pattern: crypto.createCipheriv("aes-128-ecb", ...)
+          - pattern: crypto.createCipheriv("aes-192-ecb", ...)
+          - pattern: crypto.createCipheriv("aes-256-ecb", ...)
+          - pattern: crypto.createDecipheriv("des", ...)
+          - pattern: crypto.createDecipheriv("des-cbc", ...)
+          - pattern: crypto.createDecipheriv("des-ecb", ...)
+          - pattern: crypto.createDecipheriv("des-ede3", ...)
+          - pattern: crypto.createDecipheriv("des-ede3-cbc", ...)
+          - pattern: crypto.createDecipheriv("rc4", ...)
+          - pattern: crypto.createDecipheriv("aes-128-ecb", ...)
+          - pattern: crypto.createDecipheriv("aes-192-ecb", ...)
+          - pattern: crypto.createDecipheriv("aes-256-ecb", ...)
+
+  # Hardcoded/static IV: the third createCipheriv/createDecipheriv argument is a literal string
+  # wrapped in Buffer.from (not freshly random per call). Review — a static rule can't confirm the
+  # value is reused across every call (vs. e.g. read from a per-record config), only that it's a
+  # literal at this call site, which is already a strong smell.
+  - id: harvey-static-iv
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      The IV passed to createCipheriv/createDecipheriv is a hardcoded literal, not freshly random
+      per encryption. Reusing an IV with the same key breaks CBC/CTR/GCM's security guarantees
+      (CBC leaks identical plaintext blocks; CTR/GCM can be fully broken). Generate it with
+      crypto.randomBytes() for every call.
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createCipheriv($ALGO, $KEY, Buffer.from($IV, ...))
+          - pattern: crypto.createDecipheriv($ALGO, $KEY, Buffer.from($IV, ...))
+      - metavariable-regex:
+          metavariable: $IV
+          regex: ^".*"$
+
+  # Math.random() (a non-cryptographic, predictable PRNG) feeding a function whose name signals a
+  # security-sensitive value (token/secret/otp/session/password/reset). Review — the name-based
+  # gate gives it a real signal without needing dataflow to a specific sink; a UI-jitter/animation
+  # use (N-RANDOM-NONSEC) has no such name and stays silent.
+  - id: harvey-insecure-random-token
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      Math.random() is not cryptographically secure (its internal state is predictable/seedable)
+      and this function's name signals a security-sensitive value (token/secret/session/otp).
+      Use crypto.randomBytes()/crypto.randomUUID() for anything security-relevant.
+    patterns:
+      - pattern: Math.random()
+      - pattern-inside: |
+          function $FN(...) { ... }
+      - metavariable-regex:
+          metavariable: $FN
+          regex: (?i).*(token|secret|otp|session|password|reset).*
+
+  # Plaintext password: a request body value is written directly to a `password` column/field
+  # with no hash-function call in between. Review — a heuristic (no dataflow proof that no
+  # hashing ever happens; only that this direct shape has none at the call site).
+  - id: harvey-plaintext-password
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      A request-controlled value is written directly to a `password` column with no hashing step
+      (bcrypt/argon2) in between — passwords land in the DB in plaintext. Hash with bcrypt/argon2
+      before persisting; never store or compare raw passwords.
+    patterns:
+      - pattern-either:
+          - pattern: '$C.insert({ ..., password: req.body.$K, ... })'
+          - pattern: '$C.update({ ..., password: req.body.$K, ... })'
+
+  # TLS certificate verification explicitly disabled — either per-connection
+  # (rejectUnauthorized: false) or process-wide (NODE_TLS_REJECT_UNAUTHORIZED=0). Either way any
+  # man-in-the-middle can present an arbitrary certificate and it will be trusted silently.
+  - id: harvey-tls-verify-disabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Critical
+    message: >
+      TLS certificate verification is explicitly disabled (rejectUnauthorized: false, or
+      NODE_TLS_REJECT_UNAUTHORIZED=0). Any man-in-the-middle can present an arbitrary certificate
+      and this client will trust it silently — fix the underlying certificate problem instead.
+    patterns:
+      - pattern-either:
+          - pattern: "{ ..., rejectUnauthorized: false, ... }"
+          - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"

@@ -231,6 +231,65 @@ injection; 9 at review: the heuristic sinks). The 6 new negatives clear with no 
 `path.basename` sanitizer, and parameterized RPC are each correctly ignored). No regression on the
 base or B1 batches. `pnpm verify` (offline) is green: the scorecard logic over the expanded CORPUS
 is exercised in `calibration.test.ts`; the Semgrep rules themselves are proven by the live gate.
+
+---
+
+## Batch B6 (#71) — JWT / crypto / randomness
+
+The JWT/crypto expansion batch (spec `docs/design/spec-71-security-corpus.md` §"Batch 8 — JWT /
+crypto / randomness"). Custom Semgrep rules in `src/scan/rules/semgrep/crypto.yml` (the per-batch
+rule-file directory established by the Part-1 modularization). Tiering per the locked preamble:
+only ~100%-precision sinks are `high` (free count) — an explicit `algorithms:['none']` JWT verify,
+a weak hash (MD5/SHA-1) whose immediate input is named like a password/token/secret/signature (the
+sink-gating signal that separates it from a non-security cache-key hash), a named-weak cipher
+(DES/3DES/RC4/ECB), and an explicit `rejectUnauthorized: false`/`NODE_TLS_REJECT_UNAUTHORIZED=0`.
+The rest (unverified `jwt.decode()`, a hardcoded/static IV, `Math.random()` feeding a
+token/secret-named sink, a raw password column with no hash fn) stay `review` — each needs more
+context than a static rule can see. `N-WEAK-HASH-CACHE` and `N-REDOS-SAFE` (the classic
+MD5-as-cache-key and linear-regex-not-ReDoS lookalikes) already ship in the base corpus — B6 does
+not duplicate them, and this batch's `harvey-weak-hash-security` rule is exercised against the
+existing `lib/cache.js` fixture as its negative.
+
+### B6 positives — planted JWT/crypto bugs (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-JWT-NONE-ALG | `lib/jwt.js:8` | Semgrep `harvey-jwt-none-alg` (literal `"none"` in the `jwt.verify` `algorithms` allowlist) | high |
+| P-WEAK-HASH-SEC | `lib/pw.js:9` | Semgrep `harvey-weak-hash-security` (`crypto.createHash('md5').update($ARG)`, `$ARG` name-gated to password/pwd/secret/token/signature) | high |
+| P-WEAK-CIPHER | `lib/crypto.js:8` | Semgrep `harvey-weak-cipher` (`createCipheriv('des-ede3-cbc', …)` — algorithm-literal allowlist: DES/3DES/RC4/ECB) | high |
+| P-TLS-VERIFY-DISABLED | `lib/http.js:6` | Semgrep `harvey-tls-verify-disabled` (`{ rejectUnauthorized: false }` / `NODE_TLS_REJECT_UNAUTHORIZED=0`) | high |
+| P-JWT-DECODE-NOVERIFY | `middleware.ts:10` | Semgrep `harvey-jwt-decode-noverify` (`jwt.decode()` used to feed an authz decision — heuristic: flags every call) | review |
+| P-STATIC-IV-SALT | `lib/static-iv.js:8` | Semgrep `harvey-static-iv` (`createCipheriv($ALGO, $KEY, Buffer.from($IV, …))` with `$IV` a string literal) | review |
+| P-INSECURE-RANDOM | `lib/token.js:7` | Semgrep `harvey-insecure-random-token` (`Math.random()` inside a function named like token/secret/otp/session/password/reset) | review |
+| P-PLAINTEXT-PASSWORD | `pages/api/register.js:7` | Semgrep `harvey-plaintext-password` (`.insert({ …, password: req.body.$K, … })`, no hash call) | review |
+
+### B6 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-JWT-VERIFY-OK | `lib/jwt-safe.js` | `jwt.verify(token, key, { algorithms: ['RS256'] })` — signature checked, `'none'` not in the allowlist. (Named `jwt-safe.js`, not the spec's `lib/auth.js`, to avoid a location collision with `P-JWT-SIGNING-SECRET`'s existing fixture in `lib/auth.js`.) |
+| N-RANDOM-NONSEC | `lib/ui.js` | `Math.random() * 100` inside `jitterDelay()` — a UI stagger delay; the function name doesn't match the token/secret/session/otp/password/reset gate. |
+| N-SHA256-INTEGRITY | `lib/hash.js` | `crypto.createHash('sha256')` on a file buffer for an integrity checksum; `harvey-weak-hash-security` only matches md5/sha1. |
+| N-TLS-VERIFY-ON | `lib/http-safe.js` | `new https.Agent()` with no override — `rejectUnauthorized` defaults to `true`. (Named `http-safe.js`, not the spec's `lib/http.js`, to avoid a location collision with `P-TLS-VERIFY-DISABLED`'s fixture already in `lib/http.js`.) |
+| N-WEAK-HASH-CACHE `[reused from base corpus]` | `lib/cache.js` | MD5 as an ETag/cache-tag fingerprint (`.update(JSON.stringify(params))`) — `harvey-weak-hash-security`'s name-gate on the immediate hash input requires password/pwd/secret/token/signature; `params` doesn't match — cleared. |
+
+### B6 live result (2026-07-09, static binaries: semgrep 1.164.0, gitleaks 8.30.1, trufflehog 3.95.8, osv-scanner 2.3.8, no Docker)
+
+`pnpm validate:calibration`: **positives caught 47/47 static (19 at high/free-count), 1
+connected-tier N/A; negatives cleared 29/29; zero free-count false positives — GATE PASS.** All 8
+new B6 positives fire (4 at high: JWT `"none"` alg, name-gated weak-hash-in-security-sink,
+named-weak cipher, disabled TLS verification; 4 at review: `jwt.decode()`, static IV, name-gated
+insecure-random token, plaintext password). The 4 new negatives clear with no free-count finding,
+and — the precision-critical check for this batch — `N-WEAK-HASH-CACHE` (the existing MD5-as-
+cache-key fixture in `lib/cache.js`) stays clear too: `harvey-weak-hash-security`'s gate on the
+immediate `.update()` argument's name (password/pwd/secret/token/signature) does not match
+`JSON.stringify(params)`, confirming the sink-gating holds against the classic MD5-cache-key FP.
+No regression on the base, B1, or B3 batches. `pnpm verify` (offline) is green: the scorecard logic
+over the expanded CORPUS is exercised in `calibration.test.ts`; the Semgrep rules themselves are
+proven by the live gate above.
+
+---
+
 ## Batch B4 (#71) — XSS & client-side sink family
 
 The XSS/client-sink expansion batch (spec `docs/design/spec-71-security-corpus.md` §"Batch 2 —
