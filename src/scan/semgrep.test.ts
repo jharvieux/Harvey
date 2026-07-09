@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkMissingSecurityHeaders, parseSemgrepFindings, type SemgrepOutput } from "./semgrep.js";
+import { checkMissingCsp, parseSemgrepFindings, type SemgrepOutput } from "./semgrep.js";
 
 describe("parseSemgrepFindings", () => {
   it("tags ERROR+HIGH-confidence non-audit rules as high precision", () => {
@@ -47,21 +50,43 @@ describe("parseSemgrepFindings", () => {
   });
 });
 
-describe("checkMissingSecurityHeaders", () => {
-  it("flags a headers() function with no CSP header", () => {
-    const source = `module.exports = { async headers() { return [{ source: "/(.*)", headers: [{ key: "X-Frame-Options", value: "DENY" }] }]; } };`;
-    const findings = checkMissingSecurityHeaders("next.config.js", source);
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.precisionTier).toBe("review");
+describe("checkMissingCsp", () => {
+  function withDir(files: Record<string, string>, fn: (dir: string) => void): void {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-csp-"));
+    try {
+      for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
+      fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("flags a next.config with no CSP (P-NO-CSP) at review tier", () => {
+    withDir({ "next.config.js": `module.exports = { reactStrictMode: true };` }, (dir) => {
+      const findings = checkMissingCsp(dir);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.precisionTier).toBe("review");
+    });
   });
 
-  it("does not flag when CSP is present", () => {
-    const source = `module.exports = { async headers() { return [{ headers: [{ key: "Content-Security-Policy", value: "default-src 'self'" }] }]; } };`;
-    expect(checkMissingSecurityHeaders("next.config.js", source)).toEqual([]);
+  it("does not flag when a CSP is present in next.config", () => {
+    withDir({ "next.config.js": `headers: [{ key: "Content-Security-Policy", value: "default-src 'self'" }]` }, (dir) => {
+      expect(checkMissingCsp(dir)).toEqual([]);
+    });
   });
 
-  it("does not flag configs with no headers() function at all", () => {
-    const source = `module.exports = { reactStrictMode: true };`;
-    expect(checkMissingSecurityHeaders("next.config.js", source)).toEqual([]);
+  it("does not flag when CSP lives in middleware instead of next.config", () => {
+    withDir({
+      "next.config.js": `module.exports = {};`,
+      "middleware.ts": `res.headers.set("Content-Security-Policy", "default-src 'self'");`,
+    }, (dir) => {
+      expect(checkMissingCsp(dir)).toEqual([]);
+    });
+  });
+
+  it("does not flag a directory with no Next config to assert against", () => {
+    withDir({ "readme.md": "hi" }, (dir) => {
+      expect(checkMissingCsp(dir)).toEqual([]);
+    });
   });
 });

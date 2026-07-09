@@ -6,17 +6,21 @@
 // or `brew install semgrep` (https://semgrep.dev/docs/getting-started/). `--config p/*`
 // packs are fetched from the Semgrep registry over the network on first run (cached after).
 //
-// Invocation:
+// Invocation (maintained registry packs from mechanical-toolchain.md §2 + our custom rules):
 //   semgrep --config p/typescript --config p/react --config p/nextjs --config p/owasp-top-ten \
-//     --config src/scan/rules/semgrep-nextjs-supabase.yml --json <dir>
+//     --config p/secrets --config p/security-audit \
+//     --config src/scan/rules/semgrep-nextjs-supabase.yml --exclude node_modules --json <dir>
 //
 // Trust boundary: severity ERROR + metadata.confidence HIGH + not a `.audit.`-suffixed rule
-// is "high" precision (docs/design/mechanical-toolchain.md); everything else is "review".
+// is "high" precision (docs/design/mechanical-toolchain.md §2/§7) — the free count; everything
+// else (MEDIUM/LOW confidence, WARNING/INFO, `.audit.*`) is "review" tier.
 //
-// Missing security-headers/CSP is checked separately below (checkMissingSecurityHeaders) —
-// it's a next.config shape check, not something a Semgrep AST pattern expresses reliably.
+// Missing CSP is checked separately below (checkMissingCsp) — it's a config-presence check
+// across next.config/middleware/vercel.json, not something a Semgrep AST pattern expresses.
 
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Finding, Severity } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 
@@ -64,22 +68,30 @@ export function parseSemgrepFindings(output: SemgrepOutput): Finding[] {
   });
 }
 
-// next.config.{js,ts,mjs} headers() shape check — flags a headers() function whose returned
-// values don't mention Content-Security-Policy. Heuristic: a project may set CSP via a
-// middleware or a hosting-platform config instead, so this is always "review" tier.
-export function checkMissingSecurityHeaders(configPath: string, configSource: string): Finding[] {
-  const definesHeaders = /\bheaders\s*(:|\()\s*(async)?\s*\(?\)?\s*(=>|\{)/.test(configSource);
-  if (!definesHeaders) return [];
-  if (/content-security-policy/i.test(configSource)) return [];
+// CSP presence check across the places a Next app can set it: next.config.{js,mjs,ts},
+// middleware.{ts,js} (also under src/), and vercel.json. Flags when a Next config exists but
+// none of them declares a Content-Security-Policy. Always "review" tier — CSP can legitimately
+// be set at the CDN/hosting layer this repo scan can't see.
+const CSP_CONFIG_FILES = [
+  "next.config.js", "next.config.mjs", "next.config.ts",
+  "middleware.ts", "middleware.js", "src/middleware.ts", "src/middleware.js",
+  "vercel.json",
+];
+
+export function checkMissingCsp(dir: string): Finding[] {
+  const present = CSP_CONFIG_FILES.map((f) => join(dir, f)).filter(existsSync);
+  if (present.length === 0) return [];
+  const hasCsp = present.some((p) => /content-security-policy/i.test(readFileSync(p, "utf8")));
+  if (hasCsp) return [];
   return [
     mechanicalFinding({
       id: "SEM-CSP-1",
-      title: "next.config headers() defined with no Content-Security-Policy",
+      title: "No Content-Security-Policy configured",
       severity: "Medium",
       category: "Next.js/web footgun",
       taxonomy: "Missing security headers",
-      location: configPath,
-      evidence: `${configPath} defines a headers() function but no header sets Content-Security-Policy.`,
+      location: present[0]!.slice(dir.length + 1),
+      evidence: `No Content-Security-Policy found in ${present.map((p) => p.slice(dir.length + 1)).join(", ")}.`,
       impact: "No CSP leaves XSS sinks (e.g. dangerouslySetInnerHTML) without a defense-in-depth mitigation.",
       fix: "Add a Content-Security-Policy header (in next.config headers(), middleware, or the hosting platform config).",
       precisionTier: "review",
@@ -93,7 +105,10 @@ export function runSemgrep(dir: string): SemgrepOutput {
     "--config", "p/react",
     "--config", "p/nextjs",
     "--config", "p/owasp-top-ten",
+    "--config", "p/secrets",
+    "--config", "p/security-audit",
     "--config", CUSTOM_RULES,
+    "--exclude", "node_modules",
     "--json",
     "--quiet",
     dir,
