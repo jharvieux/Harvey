@@ -12,12 +12,13 @@ import type { Finding } from "../findings.js";
 import { checkNextVersionCVEs, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { scanSecrets } from "./secrets.js";
-import { checkMissingSecurityHeaders, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
-import { checkLockfilePresence, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
+import { checkMissingCsp, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
+import { checkInstallScripts, checkLockfilePresence, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
   devDependencies?: DependencyMap;
+  scripts?: Record<string, string>;
 }
 
 function readPackageJson(dir: string): PackageJson | null {
@@ -64,21 +65,16 @@ export function runMechanicalScan(opts: MechanicalScanOptions): Finding[] {
   const nextVersion = pkg?.dependencies?.next ?? pkg?.devDependencies?.next;
   if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion.replace(/^[\^~]/, "")));
 
-  // Semgrep footguns.
+  // Semgrep footguns + missing-CSP config check.
   findings.push(...parseSemgrepFindings(runSemgrep(dir)));
-  for (const configName of ["next.config.js", "next.config.mjs", "next.config.ts"]) {
-    const configPath = join(dir, configName);
-    if (existsSync(configPath)) {
-      findings.push(...checkMissingSecurityHeaders(configName, readFileSync(configPath, "utf8")));
-      break;
-    }
-  }
+  findings.push(...checkMissingCsp(dir));
 
   // Supply chain.
   if (pkg) {
     const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
     findings.push(...checkTyposquat(Object.keys(allDeps)));
     findings.push(...checkUnpinnedDependencies(allDeps));
+    findings.push(...checkInstallScripts(pkg.scripts ?? {}));
   }
   findings.push(...checkLockfilePresence(dir));
 
