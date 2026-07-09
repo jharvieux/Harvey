@@ -1,0 +1,29 @@
+// Batch M4+M5 (#72, spec §M4/§M5) — duplication (jscpd) + dead code (knip). Fully
+// self-contained, static: no live DB, no external service. Findings come from
+// src/quality-scan.ts::jscpdToFindings / knipToFindings via `pnpm quality-scan
+// targets/calibration`. See GROUND-TRUTH.md "Batch M4+M5 (#72)" for the fixtures.
+// Per the spec's locked precision-tier discipline, both are `high`: jscpd's text-match
+// and knip's dead-export detection are ~100% precise once the FP class (generated code /
+// framework magic / dynamic reference / public API) is configured — the negatives below
+// are exactly that configuration.
+
+import type { CorpusEntry } from "./types.js";
+
+export const m4m5Entries: CorpusEntry[] = [
+  // --- M4 duplication (jscpd) POSITIVES ---
+  { module: "M4", id: "M4-P-CLONE-A", kind: "positive", cls: "Copy-pasted tax/rounding block", location: "invoice-total.ts", expectedTier: "high", note: "dup/invoice-total.ts and dup/order-total.ts share a genuine 27-line copy-pasted tax/rounding block (299 tokens). jscpd clone cluster; jscpdToFindings emits an M4-* finding at Low severity (15-49 duplicated lines)." },
+  { module: "M4", id: "M4-P-CLONE-B", kind: "positive", cls: "Copy-pasted report aggregation block", location: "report-a.ts", expectedTier: "high", note: "dup/report-a.ts and dup/report-b.ts share a 52-line copy-pasted metric-aggregation block (658 tokens). jscpd clone cluster; jscpdToFindings' severityForClone -> Medium (>=50 lines)." },
+
+  // --- M4 duplication NEGATIVES ---
+  { module: "M4", id: "M4-N-GENERATED", kind: "negative", cls: "Generated file repeating a block found elsewhere", location: "schema.gen.ts", note: "dup/generated/schema.gen.ts repeats the invoice-total.ts tax block but is a generated file, not a hand-maintained duplicate. Excluded via the quality-scan CLI's jscpd --ignore glob (extended to **/generated/**, src/cli/quality-scan.ts) — jscpd never sees it." },
+  { module: "M4", id: "M4-N-BOILERPLATE", kind: "negative", cls: "Framework-mandated route boilerplate", location: "route-a.ts", note: "dup/route-a.ts and dup/route-b.ts share the Next.js API-route config+handler-signature boilerplate. The shared span stays under jscpd's 50-token minimum (.jscpd.json minTokens) — not a defect, not flagged." },
+
+  // --- M5 dead code (knip) POSITIVES ---
+  { module: "M5", id: "M5-P-DEAD-EXPORT", kind: "positive", cls: "Unused named export", location: "dead/orphan.ts", match: ["unusedhelper"], expectedTier: "high", note: "dead/orphan.ts exports unusedHelper(), imported nowhere (dead/consumer.ts only uses computeTotal). knip issues[].exports; knipToFindings -> M5-*." },
+  { module: "M5", id: "M5-P-DEAD-FILE", kind: "positive", cls: "Unreferenced file", location: "dead/never-imported.ts", expectedTier: "high", note: "dead/never-imported.ts is never imported by any entry point. knip top-level files[]; knipToFindings -> M5-* (measured line count)." },
+
+  // --- M5 dead code NEGATIVES ---
+  { module: "M5", id: "M5-N-NEXT-MAGIC", kind: "negative", cls: "Next.js framework-magic exports", location: "pages/dead-page.js", note: "pages/dead-page.js's default export + getServerSideProps are called by Next.js routing/build convention, never by import. knip's built-in Next.js plugin (auto-detected via the target's `next` dependency) treats pages/**/*.{js,jsx,ts,tsx} as entry points — not flagged." },
+  { module: "M5", id: "M5-N-DYNAMIC-REF", kind: "negative", cls: "String-lookup dynamic export", location: "dead/registry.ts", note: "dead/registry.ts's handlerA is referenced only via dead/dispatch.ts's handlers[name] runtime lookup, invisible to static analysis. Tagged @lintignore; knip.json's tags:[\"-lintignore\"] silences it — not flagged." },
+  { module: "M5", id: "M5-N-PUBLIC-API", kind: "negative", cls: "Package public-API entry point", location: "dead/index.ts", note: "dead/index.ts is the package's declared public entry (package.json exports['.']) for external consumers. targets/calibration/knip.json lists it under entry, so the file and its export stay silent instead of a false dead-file/dead-export report." },
+];
