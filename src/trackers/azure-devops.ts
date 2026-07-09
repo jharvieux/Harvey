@@ -10,9 +10,12 @@
 // Auth: a Personal Access Token sent as HTTP Basic with an empty username
 // (Authorization: Basic base64(":" + pat)). Work-item type names are process-dependent, so the
 // epic/story type names are configurable (defaults "Epic" / "User Story", the Agile process).
+//
+// #50: findByMarker runs a WIQL CONTAINS query then fetches the hit for its html link; updateStory
+// PATCHes System.Description / System.Tags via the same JSON-Patch endpoint setLabels/setEstimate use.
 
 import { trackerFetch, trackerFetchJson } from "./http.js";
-import type { AttachedRef, CreatedRef, ItemInput, Tracker } from "./types.js";
+import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "./types.js";
 
 export interface AzureDevOpsConfig {
   orgUrl: string; // https://dev.azure.com/{org}
@@ -37,6 +40,10 @@ interface AdoWorkItem {
 
 interface AdoAttachment {
   url: string;
+}
+
+interface AdoWiqlResult {
+  workItems: { id: number }[];
 }
 
 export class AzureDevOpsTracker implements Tracker {
@@ -99,8 +106,34 @@ export class AzureDevOpsTracker implements Tracker {
     });
   }
 
+  // WIQL text search (real shape, #50), then a follow-up GET for the html link since WIQL only
+  // returns work-item ids.
+  async findByMarker(marker: string): Promise<CreatedRef | null> {
+    const wiql = `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '${this.#project}' AND [System.Description] CONTAINS '${marker.replace(/'/g, "''")}'`;
+    const result = await trackerFetchJson<AdoWiqlResult>(
+      this.#fetch,
+      `${this.#orgUrl}/${this.#project}/_apis/wit/wiql?api-version=${this.#apiVersion}`,
+      { method: "POST", headers: { Authorization: this.#auth, "Content-Type": "application/json" }, body: JSON.stringify({ query: wiql }) },
+    );
+    const hit = result.workItems[0];
+    if (!hit) return null;
+    const wi = await trackerFetchJson<AdoWorkItem>(this.#fetch, `${this.#workItemApiUrl(String(hit.id))}?api-version=${this.#apiVersion}`, {
+      method: "GET",
+      headers: { Authorization: this.#auth },
+    });
+    return { id: String(wi.id), url: wi._links.html.href };
+  }
+
   async setLabels(id: string, labels: string[]): Promise<void> {
     await this.#patchWorkItem(id, [{ op: "add", path: "/fields/System.Tags", value: labels.join("; ") }]);
+  }
+
+  async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
+    const ops: JsonPatchOp[] = [];
+    if (patch.body !== undefined) ops.push({ op: "add", path: "/fields/System.Description", value: patch.body });
+    if (patch.labels !== undefined) ops.push({ op: "add", path: "/fields/System.Tags", value: patch.labels.join("; ") });
+    if (ops.length === 0) return;
+    await this.#patchWorkItem(id, ops);
   }
 
   async setEstimate(id: string, estimate: number): Promise<void> {

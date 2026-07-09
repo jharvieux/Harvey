@@ -71,6 +71,44 @@ describe.each(adapters)("$name credential handling", ({ make, tokenSent }) => {
     expect(JSON.stringify(error)).not.toContain(TOKEN);
   });
 
+  it("sends the token for findByMarker and updateStory too (#50 additions)", async () => {
+    const seenAuth: string[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      seenAuth.push((init?.headers as Record<string, string>)?.Authorization ?? "");
+      // Lowest-common-denominator body: an empty result set for every adapter's marker search shape.
+      return new Response(JSON.stringify({ items: [], issues: [], workItems: [] }));
+    }) as unknown as typeof fetch;
+
+    const tracker = make(fetchImpl);
+    expect(await tracker.findByMarker("<!-- epic-builder:acme/epic -->")).toBeNull();
+    await tracker.updateStory("1", { body: "new body", labels: ["security"] });
+
+    expect(seenAuth.length).toBeGreaterThan(0);
+    for (const auth of seenAuth) expect(tokenSent(auth)).toBe(true);
+  });
+
+  it("never puts the token in a thrown error from findByMarker or updateStory", async () => {
+    const fetchImpl = vi.fn(async () => new Response("upstream said no", { status: 401 })) as unknown as typeof fetch;
+    const tracker = make(fetchImpl);
+
+    for (const attempt of [
+      () => tracker.findByMarker("<!-- epic-builder:acme/epic -->"),
+      () => tracker.updateStory("1", { body: "new body" }),
+    ]) {
+      let err: unknown;
+      try {
+        await attempt();
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(TrackerError);
+      const error = err as Error;
+      expect(error.message).not.toContain(TOKEN);
+      expect(String(error.stack ?? "")).not.toContain(TOKEN);
+      expect(JSON.stringify(error)).not.toContain(TOKEN);
+    }
+  });
+
   it("never writes the token to the console during a failing call", async () => {
     const spies = consoleMethods.map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
     const fetchImpl = vi.fn(async () => new Response("nope", { status: 403 })) as unknown as typeof fetch;

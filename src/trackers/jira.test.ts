@@ -83,4 +83,37 @@ describe("JiraTracker", () => {
     const { tracker } = harness(() => []);
     await expect(tracker.attachBrief("AUD-2", "x")).rejects.toThrow(/no attachment/);
   });
+
+  it("finds an existing item by marker via a JQL text search (#50)", async () => {
+    const { tracker, calls } = harness(() => ({ issues: [{ key: "AUD-9" }] }));
+    const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");
+
+    expect(ref).toEqual({ id: "AUD-9", url: "https://acme.atlassian.net/browse/AUD-9" });
+    expect(calls[0]?.url).toContain("/rest/api/3/search?jql=");
+    const jql = decodeURIComponent(String(calls[0]?.url).split("?jql=")[1] ?? "");
+    expect(jql).toBe('project = AUD AND text ~ "<!-- epic-builder:csv-export/epic -->"');
+  });
+
+  it("returns null from findByMarker when the JQL search has no hits", async () => {
+    const { tracker } = harness(() => ({ issues: [] }));
+    expect(await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->")).toBeNull();
+  });
+
+  it("updateStory PUTs description and/or labels only when the patch provides them", async () => {
+    const { tracker, calls } = harness(() => ({}));
+    await tracker.updateStory("AUD-2", { body: "First para.\n\nSecond para.", labels: ["security"] });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://acme.atlassian.net/rest/api/3/issue/AUD-2");
+    const fields = jsonBody(calls[0]).fields as { description: { type: string; content: unknown[] }; labels: string[] };
+    expect(fields.description.type).toBe("doc");
+    expect(fields.description.content).toHaveLength(2);
+    expect(fields.labels).toEqual(["security"]);
+  });
+
+  it("updateStory makes no request when the patch is empty", async () => {
+    const { tracker, calls } = harness(() => ({}));
+    await tracker.updateStory("AUD-2", {});
+    expect(calls).toHaveLength(0);
+  });
 });

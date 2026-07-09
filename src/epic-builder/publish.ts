@@ -1,12 +1,17 @@
 // Publish orchestrator (design §8.2–§8.4). Adapters are dumb transport; this owns sequencing
 // (epic -> stories in dependency order -> briefs), idempotency, and partial-failure recovery.
 //
-// Idempotency here is the design's mechanism 1 (local record): each artifact's `published`
-// frontmatter block is written immediately after its create call succeeds, and a re-run skips any
-// artifact that already carries one. The design's mechanism 2 (remote `findByMarker` probe, which
-// repairs a record lost between the API call and the frontmatter write) is NOT implemented because
-// the delivered Tracker interface (#22) has no findByMarker — see the follow-up note in the PR. We
-// still stamp the marker comment into every created body so that recovery can be added later.
+// Idempotency is belt-and-suspenders (design §8.2):
+//   1. Local record: each artifact's `published` frontmatter block is written immediately after
+//      its create call succeeds, and a re-run skips any artifact that already carries one.
+//   2. Remote marker (#50): when an artifact has no local record, the orchestrator calls
+//      `tracker.findByMarker()` for the hidden marker comment before creating anything. A hit
+//      means a prior run created the item remotely but crashed before the frontmatter write —
+//      the local record is repaired from the found ref instead of creating a duplicate.
+//
+// Brief linking (#50): a story's brief URL is only known after createStory returns, so once
+// attachBrief succeeds the orchestrator calls `tracker.updateStory()` to push a brief link line
+// into the story's remote body (frontmatter alone isn't visible to whoever reads the tracker item).
 
 import type { Tracker, CreatedRef, ItemInput, AttachedRef } from "../trackers/types.js";
 import type { DraftSession, PublishedRef, StoryState } from "./types.js";
@@ -26,8 +31,12 @@ interface PublishOutcome {
   summary: string;
 }
 
+function markerText(slug: string, artifact: string): string {
+  return `<!-- epic-builder:${slug}/${artifact} -->`;
+}
+
 function marker(slug: string, artifact: string): string {
-  return `\n\n<!-- epic-builder:${slug}/${artifact} -->\n`;
+  return `\n\n${markerText(slug, artifact)}\n`;
 }
 
 function readPublished(data: FrontmatterData): PublishedRef | null {
@@ -65,15 +74,25 @@ export async function publish(
     if (epicRef.contentHash !== epicHash) warnings.push(`epic changed since publish — skipping (re-publish not supported in MVP)`);
     skipped++;
   } else {
-    const input: ItemInput = { title: epicTitle, description: epicDoc.body + marker(session.slug, "epic") };
-    const ref = await createEpicRef(tracker, input, epicHash);
-    epicRef = ref;
-    if (persist) {
-      await tracker.setLabels(ref.ref, ["epic"]);
-      writePublished(epicDoc.data, ref);
-      writeDraft(dir, "epic.md", epicDoc);
+    const recovered = await tracker.findByMarker(markerText(session.slug, "epic"));
+    if (recovered) {
+      epicRef = { adapter: "github", ref: recovered.id, url: recovered.url, contentHash: epicHash };
+      if (persist) {
+        writePublished(epicDoc.data, epicRef);
+        writeDraft(dir, "epic.md", epicDoc);
+      }
+      skipped++;
+    } else {
+      const input: ItemInput = { title: epicTitle, description: epicDoc.body + marker(session.slug, "epic") };
+      const ref = await createEpicRef(tracker, input, epicHash);
+      epicRef = ref;
+      if (persist) {
+        await tracker.setLabels(ref.ref, ["epic"]);
+        writePublished(epicDoc.data, ref);
+        writeDraft(dir, "epic.md", epicDoc);
+      }
+      created++;
     }
-    created++;
   }
 
   // --- Stories, in dependency (sequence) order ---
@@ -90,26 +109,39 @@ export async function publish(
       if (ref.contentHash !== bodyHash) warnings.push(`${story.file} changed since publish — skipping`);
       skipped++;
     } else {
-      const depSlugs = Array.isArray(doc.data.dependsOn) ? doc.data.dependsOn : [];
-      const depRefs = depSlugs
-        .map((slug) => refByStorySlug.get(slug))
-        .filter((r): r is PublishedRef => r !== undefined)
-        .map((r) => `#${r.ref}`);
-      const body = renderStoryBody(doc.body, depRefs) + marker(session.slug, storySlug(story.file));
-      const createdRef: CreatedRef = await tracker.createStory({ title: storyTitle, description: body }, epicRef.ref);
-      ref = { adapter: "github", ref: createdRef.id, url: createdRef.url, contentHash: bodyHash };
-      if (persist) {
-        const sizing = String(doc.data.sizing ?? "M");
-        await tracker.setLabels(ref.ref, ["story", `size:${sizing}`]);
-        const brief = readBrief(dir, story.file);
-        if (brief) {
-          const attached: AttachedRef = await tracker.attachBrief(ref.ref, brief);
-          (doc.data as FrontmatterData).brief = attached.url;
+      const slug = storySlug(story.file);
+      const recovered = await tracker.findByMarker(markerText(session.slug, slug));
+      if (recovered) {
+        ref = { adapter: "github", ref: recovered.id, url: recovered.url, contentHash: bodyHash };
+        if (persist) {
+          writePublished(doc.data, ref);
+          writeDraft(dir, story.file, doc);
         }
-        writePublished(doc.data, ref);
-        writeDraft(dir, story.file, doc);
+        skipped++;
+      } else {
+        const depSlugs = Array.isArray(doc.data.dependsOn) ? doc.data.dependsOn : [];
+        const depRefs = depSlugs
+          .map((s) => refByStorySlug.get(s))
+          .filter((r): r is PublishedRef => r !== undefined)
+          .map((r) => `#${r.ref}`);
+        const body = renderStoryBody(doc.body, depRefs) + marker(session.slug, slug);
+        const createdRef: CreatedRef = await tracker.createStory({ title: storyTitle, description: body }, epicRef.ref);
+        ref = { adapter: "github", ref: createdRef.id, url: createdRef.url, contentHash: bodyHash };
+        if (persist) {
+          const sizing = String(doc.data.sizing ?? "M");
+          await tracker.setLabels(ref.ref, ["story", `size:${sizing}`]);
+          const brief = readBrief(dir, story.file);
+          if (brief) {
+            const attached: AttachedRef = await tracker.attachBrief(ref.ref, brief);
+            (doc.data as FrontmatterData).brief = attached.url;
+            const linked = `${body}\n\n📄 Implementation brief: ${attached.url}\n`;
+            await tracker.updateStory(ref.ref, { body: linked });
+          }
+          writePublished(doc.data, ref);
+          writeDraft(dir, story.file, doc);
+        }
+        created++;
       }
-      created++;
     }
     refByStorySlug.set(storySlug(story.file), ref);
     storyRefs.push({ file: story.file, ref });
@@ -179,6 +211,11 @@ export class NoopTracker implements Tracker {
   async attachBrief(id: string): Promise<AttachedRef> {
     return { url: `dry-run://brief/${id}` };
   }
+  // A dry run fabricates a fresh plan every time — nothing pre-exists remotely to recover.
+  async findByMarker(): Promise<CreatedRef | null> {
+    return null;
+  }
+  async updateStory(): Promise<void> {}
   #next(): CreatedRef {
     const id = ++this.#n;
     return { id: `DRY-${id}`, url: `dry-run://item/${id}` };

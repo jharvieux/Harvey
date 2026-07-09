@@ -17,9 +17,12 @@
 //   - Brief    -> issues can't take file uploads via the API, so the brief markdown is committed to
 //     the repo at briefs/issue-<n>.md via the Contents API and the file's canonical URL returned.
 //     Chosen over a gist so the brief is versioned with the repo and needs no extra token scope.
+//
+// #50: findByMarker uses the Issues Search API (in:body) scoped to this repo; updateStory PATCHes
+// the issue body and/or re-PUTs labels via the same endpoints createStory/setLabels already use.
 
 import { trackerFetch, trackerFetchJson } from "./http.js";
-import type { AttachedRef, CreatedRef, ItemInput, Tracker } from "./types.js";
+import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "./types.js";
 
 export interface GitHubConfig {
   token: string;
@@ -37,6 +40,10 @@ interface GitHubIssue {
 
 interface GitHubContentResponse {
   content: { html_url: string };
+}
+
+interface GitHubSearchResponse {
+  items: GitHubIssue[];
 }
 
 export class GitHubTracker implements Tracker {
@@ -101,12 +108,36 @@ export class GitHubTracker implements Tracker {
     });
   }
 
+  // Issue search scoped to this repo's body text (design §8.2 mechanism 2). GitHub's search index
+  // lags writes by a few seconds, which is an accepted MVP limitation here — same as the design.
+  async findByMarker(marker: string): Promise<CreatedRef | null> {
+    const q = `repo:${this.#owner}/${this.#repo} in:body "${marker}"`;
+    const res = await trackerFetchJson<GitHubSearchResponse>(
+      this.#fetch,
+      `${this.#base}/search/issues?q=${encodeURIComponent(q)}`,
+      { method: "GET", headers: this.#headers() },
+    );
+    const hit = res.items[0];
+    return hit ? { id: String(hit.number), url: hit.html_url } : null;
+  }
+
   async setLabels(id: string, labels: string[]): Promise<void> {
     await trackerFetch(this.#fetch, this.#repoUrl(`/issues/${id}/labels`), {
       method: "PUT",
       headers: this.#headers(),
       body: JSON.stringify({ labels }),
     });
+  }
+
+  async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
+    if (patch.body !== undefined) {
+      await trackerFetch(this.#fetch, this.#repoUrl(`/issues/${id}`), {
+        method: "PATCH",
+        headers: this.#headers(),
+        body: JSON.stringify({ body: patch.body }),
+      });
+    }
+    if (patch.labels !== undefined) await this.setLabels(id, patch.labels);
   }
 
   async setEstimate(id: string, estimate: number): Promise<void> {

@@ -2,29 +2,37 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AttachedRef, CreatedRef, ItemInput, Tracker } from "../trackers/types.js";
+import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "../trackers/types.js";
 import { GitHubTracker } from "../trackers/github.js";
 import { NoopTracker, publish } from "./publish.js";
 import type { DraftSession } from "./types.js";
 import { createWorkspace, readDraft, writeDraft, writeFile } from "./workspace.js";
 
-// A recording fake of the delivered #22 Tracker interface. `failTitles` lets a test simulate a
-// mid-publish adapter failure to prove idempotent recovery.
+// A recording fake of the delivered #22/#50 Tracker interface. `failTitles` lets a test simulate a
+// mid-publish adapter failure to prove idempotent recovery. `findByMarker` searches the descriptions
+// of everything created so far — a realistic stand-in for a tracker's full-text body search — so
+// tests can simulate "created remotely on a prior run, marker present" by seeding the tracker
+// directly before calling publish().
 class FakeTracker implements Tracker {
   epics: ItemInput[] = [];
   stories: { input: ItemInput; epicId: string }[] = [];
   labels: { id: string; labels: string[] }[] = [];
   briefs: string[] = [];
+  updates: { id: string; patch: UpdateStoryPatch }[] = [];
   failTitles = new Set<string>();
   #n = 0;
+  #createdByDescription: { description: string; ref: CreatedRef }[] = [];
   async createEpic(input: ItemInput): Promise<CreatedRef> {
     this.epics.push(input);
-    return this.#ref("E");
+    return this.#record(input, "E");
   }
   async createStory(input: ItemInput, epicId: string): Promise<CreatedRef> {
     if (this.failTitles.has(input.title)) throw new Error(`simulated failure creating ${input.title}`);
     this.stories.push({ input, epicId });
-    return this.#ref("S");
+    return this.#record(input, "S");
+  }
+  async findByMarker(marker: string): Promise<CreatedRef | null> {
+    return this.#createdByDescription.find((c) => c.description.includes(marker))?.ref ?? null;
   }
   async setLabels(id: string, labels: string[]): Promise<void> {
     this.labels.push({ id, labels });
@@ -33,6 +41,14 @@ class FakeTracker implements Tracker {
   async attachBrief(id: string, briefMarkdown: string): Promise<AttachedRef> {
     this.briefs.push(briefMarkdown);
     return { url: `https://tracker.test/brief/${id}` };
+  }
+  async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
+    this.updates.push({ id, patch });
+  }
+  #record(input: ItemInput, prefix: string): CreatedRef {
+    const ref = this.#ref(prefix);
+    this.#createdByDescription.push({ description: input.description, ref });
+    return ref;
   }
   #ref(prefix: string): CreatedRef {
     const n = ++this.#n;
@@ -87,6 +103,11 @@ describe("publish orchestrator", () => {
     expect(filter.input.description).toMatch(/Blocked by #S2/);
     // Both briefs were attached.
     expect(tracker.briefs).toHaveLength(2);
+    // Each brief's URL (only known after attachBrief returns) is pushed into the story's remote
+    // body via updateStory (#50) — frontmatter alone wouldn't be visible on the tracker item.
+    expect(tracker.updates).toHaveLength(2);
+    const endpointUpdate = tracker.updates.find((u) => u.id === "S2");
+    expect(endpointUpdate?.patch.body).toContain("📄 Implementation brief: https://tracker.test/brief/S2");
     // The local record is written so a re-run is idempotent (design §8.2).
     expect(readDraft(dir, "epic.md").data.published).toMatchObject({ ref: "E1" });
   });
@@ -116,6 +137,29 @@ describe("publish orchestrator", () => {
     expect(outcome.created).toBe(1);
   });
 
+  it("recovers a remote item via findByMarker instead of duplicating, when the local record was lost (#50)", async () => {
+    const tracker = new FakeTracker();
+    // Simulate a prior run that created the epic remotely — its stamped marker is in the body —
+    // but crashed before epic.md's `published` frontmatter block was ever written, so the local
+    // record readPublished() would find is missing even though the remote item exists.
+    const epicBody = readDraft(dir, "epic.md").body;
+    const priorRef = await tracker.createEpic({
+      title: "CSV export",
+      description: `${epicBody}\n\n<!-- epic-builder:${session.slug}/epic -->\n`,
+    });
+    expect(tracker.epics).toHaveLength(1);
+    expect(readDraft(dir, "epic.md").data.published).toBeUndefined();
+
+    const outcome = await publish(dir, session, tracker);
+
+    // No duplicate epic created — the orchestrator found the existing remote item by its marker.
+    expect(tracker.epics).toHaveLength(1);
+    expect(readDraft(dir, "epic.md").data.published).toMatchObject({ ref: priorRef.id, url: priorRef.url });
+    // The two stories genuinely didn't exist yet, so those still get created.
+    expect(outcome.created).toBe(2);
+    expect(outcome.skipped).toBe(1); // the recovered epic
+  });
+
   it("dry-run fabricates a plan without writing local records", async () => {
     const outcome = await publish(dir, session, new NoopTracker(), { dryRun: true });
     expect(outcome.created).toBe(3);
@@ -140,6 +184,7 @@ describe("publish through the real GitHub adapter (mocked HTTP)", () => {
         return ok({ number: n, html_url: `https://github.com/o/r/issues/${n}`, body: "" });
       }
       if (method === "GET" && /\/issues\/\d+$/.test(u)) return ok({ number: 41, html_url: "", body: "epic body" });
+      if (method === "GET" && u.includes("/search/issues?")) return ok({ items: [] }); // no prior run to recover (#50)
       if (method === "PATCH" && /\/issues\/\d+$/.test(u)) return ok({});
       if (method === "PUT" && /\/labels$/.test(u)) return ok([]);
       if (method === "POST" && /\/labels$/.test(u)) return ok([]);
