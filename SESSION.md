@@ -16,9 +16,13 @@ B6 crypto, B7 auth, B8 Supabase-connected (+ B2 CVE/supply-chain via #65/#66) ·
 M4+M5 dup/dead-code, M8 mutation, M7 perf-advisors. **Corpus: 99 positives + 62 negatives (161
 entries), 49 Semgrep rules; gate 72/72 static positives (24 high/free-count, 15 connected N/A) /
 47/47 negatives — PASS.**
-**Deferred:** #72 M3 hotspots (judgment-heavy ranking, and the `vitals --json` schema is
-undocumented — needs a real capture first) · #72 M6 simplification (LLM rubric, paid-only — a
-design note, not a gate).
+**In flight:** #72 M3 hotspots — `vitals` confirmed not runnable in this environment and its
+`--json` schema is undocumented, so this landed as design + fixture, not a live gate:
+`src/hotspot-scan.ts` (adapter, ASSUMED schema) + `src/hotspot-scan.test.ts` (Layer-1 top-K
+ordering + boolean-fact gate, `pnpm verify`-green) + `src/scan/calibration/m3.entries.ts`
+(boolean sub-signals only, never the rank — a rank isn't a precision measure). Live vitals
+schema capture + git-history fixture + `pnpm validate:hotspots` tracked in **#94**.
+**Deferred:** #72 M6 simplification (LLM rubric, paid-only — a design note, not a gate).
 
 ## Owed: connected-tier live confirmation pass (supervisor, needs Docker)
 Once B8/M7 merge, do one live pass: `colima start` → `supabase start -x vector,analytics` +
