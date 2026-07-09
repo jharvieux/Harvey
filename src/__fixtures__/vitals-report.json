@@ -1,0 +1,185 @@
+{
+  "_note": "Synthetic vitals 0.2.0 report fixture, shaped to the REAL schema captured live for issue #94. Paths and values below are synthetic (no ATC data); the field names, nesting, and top-level shape are not. Plants the M3 corpus fixtures from docs/design/spec-72-crossmodule-corpus.md §M3: core/checkout.ts (M3-P-HOTSPOT, high churn + high complexity -> highest risk_score, top-K), generated/schema.gen.ts (M3-N-CHURN-TRIVIAL, highest raw churn but trivial complexity -> low risk_score, must NOT be top-K), core/billing.ts (M3-P-TRUCK1, sole-author -> truck_factor 1 in knowledge_risk), core/reporting.ts (M3-N-MULTIAUTHOR, 3 seeded authors -> truck_factor 3, must not be flagged), core/a.ts / core/b.ts (M3-P-COUPLING, always co-committed -> one coupling edge), lib/stable.ts (not a corpus fixture, rounds out the ranking).",
+  "mode": "full",
+  "files_analyzed": 7,
+  "overall_health": 5.9,
+  "repo_info": {
+    "total_commits": 512,
+    "contributors": 4,
+    "repo_age_days": 240
+  },
+  "file_health": {
+    "core/checkout.ts": 3.1,
+    "generated/schema.gen.ts": 6.0,
+    "core/billing.ts": 5.0,
+    "core/reporting.ts": 5.5,
+    "core/a.ts": 6.5,
+    "core/b.ts": 6.6,
+    "lib/stable.ts": 8.5
+  },
+  "hotspots": [
+    {
+      "file_path": "core/checkout.ts",
+      "health": 3.1,
+      "role": "core",
+      "centrality": 9,
+      "churn_data": {
+        "changes": 38,
+        "lines_added": 900,
+        "lines_removed": 300,
+        "author_count": 2,
+        "last_change": "2026-06-01T00:00:00Z"
+      },
+      "churn_label": "HIGH",
+      "complexity_score": 61,
+      "coupling_strength": 0.2,
+      "changes": 38,
+      "risk_score": 92.0
+    },
+    {
+      "file_path": "generated/schema.gen.ts",
+      "health": 6.0,
+      "role": "generated",
+      "centrality": 1,
+      "churn_data": {
+        "changes": 55,
+        "lines_added": 4000,
+        "lines_removed": 3900,
+        "author_count": 1,
+        "last_change": "2026-06-15T00:00:00Z"
+      },
+      "churn_label": "HIGH",
+      "complexity_score": 4,
+      "coupling_strength": 0.0,
+      "changes": 55,
+      "risk_score": 8.0
+    },
+    {
+      "file_path": "core/billing.ts",
+      "health": 5.0,
+      "role": "core",
+      "centrality": 6,
+      "churn_data": {
+        "changes": 20,
+        "lines_added": 400,
+        "lines_removed": 150,
+        "author_count": 1,
+        "last_change": "2026-05-20T00:00:00Z"
+      },
+      "churn_label": "MEDIUM",
+      "complexity_score": 30,
+      "coupling_strength": 0.1,
+      "changes": 20,
+      "risk_score": 40.0
+    },
+    {
+      "file_path": "core/reporting.ts",
+      "health": 5.5,
+      "role": "core",
+      "centrality": 5,
+      "churn_data": {
+        "changes": 18,
+        "lines_added": 300,
+        "lines_removed": 100,
+        "author_count": 3,
+        "last_change": "2026-05-18T00:00:00Z"
+      },
+      "churn_label": "MEDIUM",
+      "complexity_score": 25,
+      "coupling_strength": 0.1,
+      "changes": 18,
+      "risk_score": 35.0
+    },
+    {
+      "file_path": "core/a.ts",
+      "health": 6.5,
+      "role": "core",
+      "centrality": 4,
+      "churn_data": {
+        "changes": 12,
+        "lines_added": 150,
+        "lines_removed": 40,
+        "author_count": 2,
+        "last_change": "2026-05-01T00:00:00Z"
+      },
+      "churn_label": "LOW",
+      "complexity_score": 15,
+      "coupling_strength": 0.9,
+      "changes": 12,
+      "risk_score": 30.0
+    },
+    {
+      "file_path": "core/b.ts",
+      "health": 6.6,
+      "role": "core",
+      "centrality": 4,
+      "churn_data": {
+        "changes": 11,
+        "lines_added": 140,
+        "lines_removed": 35,
+        "author_count": 2,
+        "last_change": "2026-05-01T00:00:00Z"
+      },
+      "churn_label": "LOW",
+      "complexity_score": 14,
+      "coupling_strength": 0.9,
+      "changes": 11,
+      "risk_score": 28.0
+    },
+    {
+      "file_path": "lib/stable.ts",
+      "health": 8.5,
+      "role": "lib",
+      "centrality": 1,
+      "churn_data": {
+        "changes": 3,
+        "lines_added": 20,
+        "lines_removed": 5,
+        "author_count": 2,
+        "last_change": "2026-03-01T00:00:00Z"
+      },
+      "churn_label": "LOW",
+      "complexity_score": 5,
+      "coupling_strength": 0.0,
+      "changes": 3,
+      "risk_score": 5.0
+    }
+  ],
+  "coupling": [
+    {
+      "file_a": "core/a.ts",
+      "file_b": "core/b.ts",
+      "co_changes": 10,
+      "coupling_strength": 0.9,
+      "total_a": 12,
+      "total_b": 11
+    }
+  ],
+  "knowledge_risk": [
+    {
+      "file_path": "core/billing.ts",
+      "truck_factor": 1,
+      "author_count": 1,
+      "authors": [["alice", 20]]
+    },
+    {
+      "file_path": "core/reporting.ts",
+      "truck_factor": 3,
+      "author_count": 3,
+      "authors": [["alice", 6], ["bob", 6], ["carol", 6]]
+    }
+  ],
+  "provenance": {
+    "has_data": false,
+    "summary": {
+      "total_events": 0,
+      "unique_files": 0,
+      "total_sessions": 0,
+      "first_event": 0,
+      "last_event": 0
+    },
+    "ai_files": []
+  },
+  "trends": null,
+  "scope": null
+}

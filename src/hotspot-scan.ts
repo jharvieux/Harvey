@@ -2,19 +2,12 @@
 // risk output into (a) a ranked hotspot table and (b) the deterministic boolean sub-signals
 // (truck-factor-1, co-change coupling) as Finding[] for the shared calibration harness.
 //
-// STATUS: design + fixture, NOT live-verified. Before writing this file, `vitals` / `vitals_cli.py`
-// were confirmed not runnable in this environment (no binary, no importable `vitals` python
-// module), and `vitals --json`'s schema is not documented anywhere in this repo — only its
-// *concepts* are (docs/audit-modules.md M3): churn×complexity ROI ranking, co-change coupling,
-// truck-factor-1/sole-author, AI-provenance. The one piece of real field-shaped evidence is a
-// prior engagement's actual output, captured as report-template/findings.atc.json's F-13:
-// "vitals: health 2.4, 41 changes/90d, co-changes with 29 files" for app/api/chat/route.ts — a
-// 6.3/10 overall-health run with 50 truck-factor-1 files. VitalsHotspotRow below is an ASSUMED
-// schema built from that citation's field concepts (health, churn count over a 90-day window,
-// complexity, an ROI-style rank score, co-change file list, truck-factor flag) — plausible field
-// names, UNVERIFIED shape and nesting. Do not treat it as ground truth; it exists so the mapping
-// logic can be written and regression-tested now, and swapped for the real schema in one place
-// once a live `vitals_cli.py report --json <path>` capture is available (tracked: issue #94).
+// STATUS: schema VERIFIED against a live `vitals 0.2.0 report --json <path>` run (issue #94).
+// VitalsReport/VitalsHotspotRow below match the real top-level shape: `hotspots` (per-file rows,
+// sorted by `risk_score`), a separate top-level `coupling` array (not nested per-row), and a
+// separate top-level `knowledge_risk` array (truck-factor lives there, not on hotspot rows).
+// `src/__fixtures__/vitals-report.json` is a synthetic report built to this real shape (paths and
+// values are synthetic; the field names and nesting are not).
 //
 // Per the locked product decision (docs/design/spec-72-crossmodule-corpus.md preamble #2) and its
 // M3 section: a hotspot RANK is an ordering over a continuous score, not a true/false finding —
@@ -27,35 +20,63 @@
 
 import type { Finding } from "./findings.js";
 
+interface VitalsChurnData {
+  changes: number;
+  lines_added: number;
+  lines_removed: number;
+  author_count: number;
+  last_change: string;
+}
+
 export interface VitalsHotspotRow {
-  file: string;
-  health: number; // 0–10, lower = worse (F-13: "health 2.4")
-  churn: number; // commit count in vitals' scan window (F-13: "41 changes/90d")
-  complexity: number; // cyclomatic complexity
-  roi: number; // vitals' own churn×complexity-weighted rank score (core > test, central > leaf per docs/audit-modules.md M3) — ASSUMED field name; the real sort key is unverified
-  coChanges?: string[]; // files this one is co-committed with (F-13: "co-changes with 29 files")
-  truckFactor1?: boolean; // sole-author flag
-  soleAuthor?: string;
+  file_path: string;
+  health: number; // 0–10, lower = worse
+  role: string;
+  centrality: number;
+  churn_data: VitalsChurnData;
+  churn_label: string;
+  complexity_score: number;
+  coupling_strength: number;
+  changes: number; // flat duplicate of churn_data.changes
+  risk_score: number; // vitals' own churn×complexity-weighted rank score — the sort key
+}
+
+export interface VitalsCouplingEdgeRow {
+  file_a: string;
+  file_b: string;
+  co_changes: number;
+  coupling_strength: number;
+  total_a: number;
+  total_b: number;
+}
+
+export interface VitalsKnowledgeRiskRow {
+  file_path: string;
+  truck_factor: number;
+  author_count: number;
+  authors: Array<[string, number]>;
 }
 
 export interface VitalsReport {
   hotspots: VitalsHotspotRow[];
+  coupling: VitalsCouplingEdgeRow[];
+  knowledge_risk: VitalsKnowledgeRiskRow[];
 }
 
-// Worst-first by vitals' ROI score. Rank is an ordering, never scored as a percentage — callers
+// Worst-first by vitals' risk_score. Rank is an ordering, never scored as a percentage — callers
 // use this (or topKFiles) for a top-K membership check, not a pass/fail per row.
 export function rankHotspots(report: VitalsReport): VitalsHotspotRow[] {
-  return [...report.hotspots].sort((a, b) => b.roi - a.roi);
+  return [...report.hotspots].sort((a, b) => b.risk_score - a.risk_score);
 }
 
 export function topKFiles(report: VitalsReport, k: number): string[] {
   return rankHotspots(report)
     .slice(0, k)
-    .map((r) => r.file);
+    .map((r) => r.file_path);
 }
 
 export function truckFactorOneFiles(report: VitalsReport): string[] {
-  return report.hotspots.filter((r) => r.truckFactor1).map((r) => r.file);
+  return report.knowledge_risk.filter((r) => r.truck_factor === 1).map((r) => r.file_path);
 }
 
 interface CouplingEdge {
@@ -63,7 +84,8 @@ interface CouplingEdge {
   b: string;
 }
 
-// Derives coupling edges from each row's coChanges list, deduped (a<>b and b<>a collapse to one).
+// Derives coupling edges from the report's top-level coupling array, deduped (a<>b and b<>a
+// collapse to one).
 function edgeKey(a: string, b: string): string {
   return [a, b].sort().join("::");
 }
@@ -71,13 +93,11 @@ function edgeKey(a: string, b: string): string {
 export function couplingEdges(report: VitalsReport): CouplingEdge[] {
   const seen = new Set<string>();
   const edges: CouplingEdge[] = [];
-  for (const row of report.hotspots) {
-    for (const other of row.coChanges ?? []) {
-      const key = edgeKey(row.file, other);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      edges.push({ a: row.file, b: other });
-    }
+  for (const row of report.coupling) {
+    const key = edgeKey(row.file_a, row.file_b);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    edges.push({ a: row.file_a, b: row.file_b });
   }
   return edges;
 }
