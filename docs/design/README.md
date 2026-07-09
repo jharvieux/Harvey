@@ -12,5 +12,6 @@
 | [mechanical-toolchain.md](mechanical-toolchain.md) | Low-FP mechanical scanner toolchain (Semgrep OSS core, TruffleHog, OSV, Supabase Advisors); SonarQube CE tuning + why it stays out of the free count | quick-scan |
 | [quick-scan-tier.md](quick-scan-tier.md) | Freemium model (decided): free **diagnosis** (finding + location + why-it-matters), gated **remediation** (the fix) + deep dynamic/semantic scan | quick-scan (#27) |
 | [exploratory-pentest.md](exploratory-pentest.md) | Exploratory dynamic pen testing beyond verify-only: local two-tenant harness, PostgREST/Server-Action/storage probe checklist, safety rails | #5 |
+| [m6-simplification-eval.md](m6-simplification-eval.md) | M6 rubric: what counts as a simplification/reuse opportunity, LLM rubric-agreement eval (not a precision gate), why M6 is paid-only | #72 |
 
 Tracker adapter implementation details live in the interface sketches of `epic-builder.md` §8 (issue #22).
