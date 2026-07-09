@@ -50,8 +50,21 @@ export const CORPUS: CorpusEntry[] = [
   ...m3Entries,
 ];
 
+// `location` may be an absolute path rooted in the environment-dependent checkout (e.g. a tool
+// invoked against an absolute target dir), so it can carry arbitrary text — like a worktree
+// directory name — that has nothing to do with the finding. Strip that prefix before the location
+// enters the keyword-matching haystack, so a corpus `match` keyword can't spuriously match the
+// checkout path instead of the finding (issue #86).
+function normalizeLocation(location: string): string {
+  const cwdPrefix = `${process.cwd()}/`;
+  if (location.startsWith(cwdPrefix)) return location.slice(cwdPrefix.length);
+  const anchorIndex = location.lastIndexOf("targets/");
+  const atSegmentStart = anchorIndex === 0 || location[anchorIndex - 1] === "/" || location[anchorIndex - 1] === "\\";
+  return anchorIndex !== -1 && atSegmentStart ? location.slice(anchorIndex) : location;
+}
+
 function haystack(f: Finding): string {
-  return `${f.id} ${f.title} ${f.taxonomy} ${f.evidence} ${f.location}`.toLowerCase();
+  return `${f.id} ${f.title} ${f.taxonomy} ${f.evidence} ${normalizeLocation(f.location)}`.toLowerCase();
 }
 
 // A finding is relevant to an entry when its location contains the entry's location substring
