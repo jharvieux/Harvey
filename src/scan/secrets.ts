@@ -174,10 +174,14 @@ function runGitleaks(dir: string): GitleaksResult[] {
 // Runs all three secret-scan passes (source tree, git history, built .next/static bundle if
 // present) and merges the results. bundleDir is optional — pass it only when a production
 // build exists (`.next/static` after `next build`).
-export function scanSecrets(sourceDir: string, bundleDir?: string): Finding[] {
+//
+// sourceDir and historyDir are usually the same directory, but mechanical.ts passes a scoped,
+// tracked-files-only copy as sourceDir (issue #101) — that copy has no `.git`, so the
+// git-history pass needs the real, clonable original directory instead (historyDir).
+export function scanSecrets(sourceDir: string, historyDir: string, bundleDir?: string): Finding[] {
   const findings: Finding[] = [
     ...parseTruffleHogFindings(runTruffleHogFilesystem(sourceDir), "source"),
-    ...parseTruffleHogFindings(runTruffleHogGitHistory(sourceDir), "git-history"),
+    ...parseTruffleHogFindings(runTruffleHogGitHistory(historyDir), "git-history"),
     ...parseGitleaksFindings(runGitleaks(sourceDir), "source"),
   ];
   if (bundleDir) {
