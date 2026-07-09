@@ -85,4 +85,41 @@ describe("GitHubTracker", () => {
     const tracker = new GitHubTracker({ token: "gh-token", owner: "acme", repo: "app", fetchImpl });
     await expect(tracker.createEpic({ title: "x", description: "y" })).rejects.toThrow(/404/);
   });
+
+  it("finds an existing item by marker via a repo-scoped body search (#50)", async () => {
+    const { tracker } = harness((call) => {
+      expect(call.method).toBe("GET");
+      expect(call.url).toContain("/search/issues?q=");
+      const q = decodeURIComponent(call.url.split("?q=")[1] ?? "");
+      expect(q).toBe('repo:acme/app in:body "<!-- epic-builder:csv-export/epic -->"');
+      return { items: [{ number: 41, html_url: "https://github.com/acme/app/issues/41", body: "..." }] };
+    });
+
+    const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");
+    expect(ref).toEqual({ id: "41", url: "https://github.com/acme/app/issues/41" });
+  });
+
+  it("returns null from findByMarker when the search has no hits", async () => {
+    const { tracker } = harness(() => ({ items: [] }));
+    const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");
+    expect(ref).toBeNull();
+  });
+
+  it("updateStory PATCHes the body and PUTs labels only when the patch provides them", async () => {
+    const { tracker, calls } = harness(() => ({}));
+    await tracker.updateStory("11", { body: "new body" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: "PATCH", url: "https://api.github.com/repos/acme/app/issues/11" });
+    expect(calls[0]?.body).toEqual({ body: "new body" });
+
+    const { tracker: tracker2, calls: calls2 } = harness(() => ({}));
+    await tracker2.updateStory("11", { labels: ["security"] });
+    expect(calls2).toHaveLength(1);
+    expect(calls2[0]).toMatchObject({ method: "PUT", url: "https://api.github.com/repos/acme/app/issues/11/labels" });
+    expect(calls2[0]?.body).toEqual({ labels: ["security"] });
+
+    const { tracker: tracker3, calls: calls3 } = harness(() => ({}));
+    await tracker3.updateStory("11", { body: "new body", labels: ["security"] });
+    expect(calls3.map((c) => c.method)).toEqual(["PATCH", "PUT"]);
+  });
 });

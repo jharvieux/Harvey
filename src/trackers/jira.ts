@@ -10,9 +10,12 @@
 // injected { email, apiToken }. Epic linkage uses the modern `parent` field. Story points live in an
 // instance-specific custom field, so its id is configurable (default customfield_10016, the common
 // Jira Cloud default) — confirm the field id for the target instance before the first real run.
+//
+// #50: findByMarker runs a JQL `text ~` search (see caveat on the method); updateStory PUTs
+// description/labels fields via the same endpoint setLabels/setEstimate use.
 
 import { trackerFetch, trackerFetchJson } from "./http.js";
-import type { AttachedRef, CreatedRef, ItemInput, Tracker } from "./types.js";
+import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "./types.js";
 
 export interface JiraConfig {
   baseUrl: string; // https://your-domain.atlassian.net
@@ -31,6 +34,10 @@ interface JiraCreatedIssue {
 
 interface JiraAttachment {
   content: string; // canonical download URL of the uploaded file
+}
+
+interface JiraSearchResponse {
+  issues: JiraCreatedIssue[];
 }
 
 interface AdfNode {
@@ -97,11 +104,38 @@ export class JiraTracker implements Tracker {
     return { id: created.key, url: `${this.#baseUrl}/browse/${created.key}` };
   }
 
+  // JQL text search (real shape, #50) — NOTE: Jira's `text ~` operator tokenizes on punctuation,
+  // so a marker like `<!-- epic-builder:slug/story -->` will not match as an exact phrase the way
+  // GitHub's search does; confirm against a real Jira Cloud instance before relying on this for
+  // recovery. Quoting the marker keeps it a single JQL string literal in the meantime.
+  async findByMarker(marker: string): Promise<CreatedRef | null> {
+    const jql = `project = ${this.#projectKey} AND text ~ "${marker.replace(/"/g, '\\"')}"`;
+    const res = await trackerFetchJson<JiraSearchResponse>(
+      this.#fetch,
+      `${this.#baseUrl}/rest/api/3/search?jql=${encodeURIComponent(jql)}`,
+      { method: "GET", headers: this.#jsonHeaders() },
+    );
+    const hit = res.issues[0];
+    return hit ? { id: hit.key, url: `${this.#baseUrl}/browse/${hit.key}` } : null;
+  }
+
   async setLabels(id: string, labels: string[]): Promise<void> {
     await trackerFetch(this.#fetch, `${this.#baseUrl}/rest/api/3/issue/${id}`, {
       method: "PUT",
       headers: this.#jsonHeaders(),
       body: JSON.stringify({ fields: { labels } }),
+    });
+  }
+
+  async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
+    const fields: Record<string, unknown> = {};
+    if (patch.body !== undefined) fields.description = markdownToAdf(patch.body);
+    if (patch.labels !== undefined) fields.labels = patch.labels;
+    if (Object.keys(fields).length === 0) return;
+    await trackerFetch(this.#fetch, `${this.#baseUrl}/rest/api/3/issue/${id}`, {
+      method: "PUT",
+      headers: this.#jsonHeaders(),
+      body: JSON.stringify({ fields }),
     });
   }
 

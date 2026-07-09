@@ -85,4 +85,40 @@ describe("AzureDevOpsTracker", () => {
     expect(patch[0]?.value.rel).toBe("AttachedFile");
     expect(patch[0]?.value.url).toBe(attachmentUrl);
   });
+
+  it("finds an existing item by marker via a WIQL CONTAINS query, then fetches its html link (#50)", async () => {
+    const { tracker, calls } = harness((call) =>
+      call.url.includes("/wiql?") ? { workItems: [{ id: 9 }] } : workItem(9),
+    );
+    const ref = await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->");
+
+    expect(ref).toEqual({ id: "9", url: "https://dev.azure.com/acme/Audit/_workitems/edit/9" });
+    expect(calls[0]?.url).toBe("https://dev.azure.com/acme/Audit/_apis/wit/wiql?api-version=7.1");
+    const body = JSON.parse(calls[0]!.bodyText) as { query: string };
+    expect(body.query).toContain("[System.Description] CONTAINS '<!-- epic-builder:csv-export/epic -->'");
+    expect(calls[1]?.url).toBe("https://dev.azure.com/acme/_apis/wit/workItems/9?api-version=7.1");
+  });
+
+  it("returns null from findByMarker when the WIQL query has no hits", async () => {
+    const { tracker } = harness(() => ({ workItems: [] }));
+    expect(await tracker.findByMarker("<!-- epic-builder:csv-export/epic -->")).toBeNull();
+  });
+
+  it("updateStory PATCHes description and/or tags only when the patch provides them", async () => {
+    const { tracker, calls } = harness(() => workItem(6));
+    await tracker.updateStory("6", { body: "new description", labels: ["security", "backend"] });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("PATCH");
+    expect(JSON.parse(calls[0]!.bodyText)).toEqual([
+      { op: "add", path: "/fields/System.Description", value: "new description" },
+      { op: "add", path: "/fields/System.Tags", value: "security; backend" },
+    ]);
+  });
+
+  it("updateStory makes no request when the patch is empty", async () => {
+    const { tracker, calls } = harness(() => workItem(6));
+    await tracker.updateStory("6", {});
+    expect(calls).toHaveLength(0);
+  });
 });

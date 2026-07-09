@@ -26,10 +26,25 @@ export interface ItemInput {
   description: string; // markdown
 }
 
+// Minimal patch payload for updateStory: only the fields the epic-builder's publish orchestrator
+// needs to touch after creation. Omitted fields are left untouched by the adapter.
+export interface UpdateStoryPatch {
+  body?: string;
+  labels?: string[];
+}
+
 export interface Tracker {
   createEpic(input: ItemInput): Promise<CreatedRef>;
   createStory(input: ItemInput, epicId: string): Promise<CreatedRef>;
   setLabels(id: string, labels: string[]): Promise<void>;
   setEstimate(id: string, estimate: number): Promise<void>;
   attachBrief(id: string, briefMarkdown: string): Promise<AttachedRef>;
+  // Idempotency recovery (#50, design §8.2 mechanism 2): look up an item already created by a
+  // prior run via the hidden marker the epic-builder stamps into every created body (see
+  // publish.ts `marker()`). Returns null on no match — never throws for "not found".
+  findByMarker(marker: string): Promise<CreatedRef | null>;
+  // Update an existing story's body and/or labels (#50). Needed because the implementation
+  // brief's URL is only known after createStory returns, so the brief link is pushed into the
+  // body with a follow-up updateStory call rather than being included at creation time.
+  updateStory(id: string, patch: UpdateStoryPatch): Promise<void>;
 }
