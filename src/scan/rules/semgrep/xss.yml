@@ -1,0 +1,177 @@
+# Batch B4 — XSS / client-side sink family (#71, spec §"Batch 2 — XSS & client-side sink
+# family"). Per-batch custom-rule file (see base.yml header for the directory convention).
+# Taint mode with request/DOM sources (Pages-Router router.query, URLSearchParams .get(),
+# location.hash/.search, App-Router searchParams), mirroring the base DSIH/SSRF rules. Tiering
+# follows the locked preamble: only ~100%-precision sinks are ERROR + HIGH confidence (free
+# count) — .innerHTML/insertAdjacentHTML and document.write, both of which execute markup/script
+# unconditionally with no legitimate "safe by default" reading once the source is tainted. The
+# heuristic sinks (href schemes, window.location assignment, setAttribute, a DB-read source
+# reaching dangerouslySetInnerHTML) are WARNING + MEDIUM → review tier, exactly as the spec
+# quarantines them. harvey-dangerously-set-inner-html (reflected, request-sourced, high) already
+# ships in base.yml; this file adds the DB-sourced (stored) variant and the DOM/client sinks.
+#
+# Exercised against targets/calibration by `pnpm validate:calibration`; see GROUND-TRUTH.md §B4.
+
+rules:
+  # DOM XSS via .innerHTML / insertAdjacentHTML assigned a request/URL-controlled value. High —
+  # both sinks execute any <script>/event-handler markup in the string unconditionally; there is
+  # no benign "just text" reading of an innerHTML assignment from a tainted source.
+  - id: harvey-dom-innerhtml
+    languages: [javascript, typescript]
+    mode: taint
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS.
+      Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.
+    pattern-sources:
+      - pattern: router.query.$K
+      - pattern: $RT.query.$K
+      - pattern: location.hash
+      - pattern: location.search
+      - pattern: $SP.get(...)
+      - pattern: useSearchParams()
+    pattern-sanitizers:
+      - pattern: DOMPurify.sanitize(...)
+      - pattern: sanitizeHtml(...)
+      - pattern: sanitize(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $EL.innerHTML = $VAL
+              - pattern: $EL.insertAdjacentHTML($POS, $VAL)
+          - focus-metavariable: $VAL
+
+  # DOM XSS via document.write(). High — document.write executes any <script> tag in its
+  # argument unconditionally once the browser is parsing it; a URL/DOM source is ~100% precise.
+  - id: harvey-document-write
+    languages: [javascript, typescript]
+    mode: taint
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      document.write() is called with a request/URL-controlled value — DOM XSS (document.write
+      executes any script in its argument). Remove document.write, or sanitize and use a safe
+      DOM API (textContent / a sanitized innerHTML assignment).
+    pattern-sources:
+      - pattern: location.hash
+      - pattern: location.search
+      - pattern: $SP.get(...)
+      - pattern: router.query.$K
+      - pattern: $RT.query.$K
+    pattern-sinks:
+      - patterns:
+          - pattern: document.write($VAL)
+          - focus-metavariable: $VAL
+
+  # Reflected/stored XSS variant: a DATABASE-READ value (a Supabase select result) reaches
+  # dangerouslySetInnerHTML unsanitized. Review — a static rule can't confirm whether the write
+  # path sanitized the value before it was persisted.
+  - id: harvey-dangerously-set-inner-html-stored
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      A database-read value (Supabase select result) reaches dangerouslySetInnerHTML unsanitized
+      — stored XSS (the payload was persisted by an earlier write, e.g. a comment body). Sanitize
+      before rendering, or sanitize at write time.
+    pattern-sources:
+      - pattern: $C.from($T).select(...)
+    pattern-sanitizers:
+      - pattern: DOMPurify.sanitize(...)
+      - pattern: sanitizeHtml(...)
+      - pattern: sanitize(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: "<$EL dangerouslySetInnerHTML={{ __html: $VAL }} />"
+              - pattern: "<$EL dangerouslySetInnerHTML={{ __html: $VAL }}>...</$EL>"
+          - focus-metavariable: $VAL
+
+  # javascript: URL XSS via a native <a href>. Review — a static rule can't see whether a scheme
+  # allowlist runs elsewhere before render; the sink is scoped to a plain <a>, not next/link's
+  # <Link> (an internal-route string on <Link> is a different element and not a scheme sink).
+  - id: harvey-href-js-url
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A request-controlled value reaches an <a href> with no scheme allowlist — an attacker can
+      supply javascript: to run script in the victim's session (XSS) on click.
+    pattern-sources:
+      - pattern: router.query.$K
+      - pattern: $RT.query.$K
+      - pattern: $SP.get(...)
+      - pattern: useSearchParams()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: "<a href={$URL}>...</a>"
+              - pattern: "<a href={$URL} />"
+          - focus-metavariable: $URL
+
+  # Open-URL sink: a request-controlled value assigned directly to window.location. Review — any
+  # URL enables phishing/open-redirect, and a javascript:/data: value can execute script; a
+  # static rule can't see a host allowlist that may run first.
+  - id: harvey-open-url-sink
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A request/URL-controlled value is assigned directly to window.location — an
+      attacker-chosen javascript:/data: value can execute script, and any URL enables
+      phishing/open-redirect. Validate against a host allowlist first.
+    pattern-sources:
+      - pattern: $SP.get(...)
+      - pattern: router.query.$K
+      - pattern: $RT.query.$K
+      - pattern: useSearchParams()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: window.location = $URL
+              - pattern: window.location.href = $URL
+              - pattern: location.href = $URL
+          - focus-metavariable: $URL
+
+  # javascript: URL XSS via setAttribute("href"/"src", ...). Review — same reasoning as the <a
+  # href> sink, generalized to imperative DOM attribute writes.
+  - id: harvey-set-attribute-xss
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A request-controlled value is passed to setAttribute("href"/"src", ...) with no scheme
+      allowlist — an attacker can supply a javascript: URL that runs script on click/load.
+    pattern-sources:
+      - pattern: router.query.$K
+      - pattern: $RT.query.$K
+      - pattern: $SP.get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $EL.setAttribute("href", $VAL)
+              - pattern: $EL.setAttribute("src", $VAL)
+          - focus-metavariable: $VAL

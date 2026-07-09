@@ -231,6 +231,58 @@ injection; 9 at review: the heuristic sinks). The 6 new negatives clear with no 
 `path.basename` sanitizer, and parameterized RPC are each correctly ignored). No regression on the
 base or B1 batches. `pnpm verify` (offline) is green: the scorecard logic over the expanded CORPUS
 is exercised in `calibration.test.ts`; the Semgrep rules themselves are proven by the live gate.
+## Batch B4 (#71) — XSS & client-side sink family
+
+The XSS/client-sink expansion batch (spec `docs/design/spec-71-security-corpus.md` §"Batch 2 —
+XSS & client-side sink family"). Custom Semgrep taint rules in `src/scan/rules/semgrep/xss.yml`
+(the per-batch rule-file directory established by the Part-1 modularization). Tiering per the
+locked preamble: only ~100%-precision sinks are `high` (free count) — `.innerHTML`/
+`insertAdjacentHTML` and `document.write`, which execute markup/script unconditionally once the
+source is tainted, with no benign "just text" reading. The heuristic sinks (href scheme, a direct
+`window.location` assignment, `setAttribute`, and a DB-read source reaching
+`dangerouslySetInnerHTML`) stay `review`. XSS-via-tainted-`dangerouslySetInnerHTML` (`P-XSS-DSIH`)
+and its sanitized/constant lookalike (`N-DSIH-SANITIZED`) already ship in the base corpus — B4
+does not duplicate them.
+
+### B4 positives — planted XSS/client sinks (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-DOM-XSS-INNERHTML | `components/Widget.jsx:11` | Semgrep `harvey-dom-innerhtml` (taint: `router.query` → `.innerHTML`/`insertAdjacentHTML`) | high |
+| P-DOM-XSS-DOCWRITE | `components/Embed.jsx:9` | Semgrep `harvey-document-write` (taint: `location.hash` → `document.write()`) | high |
+| P-XSS-STORED-DSIH | `pages/comment.js:10` | Semgrep `harvey-dangerously-set-inner-html-stored` (taint: Supabase `.from().select()` → `dangerouslySetInnerHTML`) | review |
+| P-XSS-HREF-JS | `components/AnchorLink.jsx:9` | Semgrep `harvey-href-js-url` (taint: `router.query` → native `<a href>`) | review |
+| P-XSS-DANGEROUS-URL | `components/LocationNav.jsx:10` | Semgrep `harvey-open-url-sink` (taint: `URLSearchParams.get()` → `window.location` assignment) | review |
+| P-XSS-SETATTR | `components/ImgAttr.jsx:12` | Semgrep `harvey-set-attribute-xss` (taint: `router.query` → `setAttribute('src', …)`) | review |
+
+### B4 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-INNERHTML-STATIC | `components/WidgetSafe.jsx` | `ref.current.innerHTML = '<strong>Loading…</strong>'` — constant string, no tainted source. `harvey-dom-innerhtml` fires only on `router.query`/`location`/`searchParams`. (Named `WidgetSafe.jsx`, not the spec's `Widget.jsx`, to avoid a basename collision with the `P-DOM-XSS-INNERHTML` positive — the same disambiguation B3 used for `xml-safe.js`.) |
+| N-HREF-INTERNAL | `components/NavLink.jsx` | `<Link href="/dashboard">` — `next/link`, constant string, not a native `<a>` and not request-derived. `harvey-href-js-url`'s sink is a native `<a href={...}>` from a tainted source; neither the element nor the source matches. |
+| N-SEARCHPARAMS-TEXT | `pages/search-results.js` | `<p>Results for: {router.query.q}</p>` — a React text child (JSX auto-escapes), never an `innerHTML`/`href`/`setAttribute`/`document.write` sink. None of the B4 rules match a plain text expression. |
+
+### B4 live result (2026-07-08, static: semgrep 1.164.0, no Docker)
+
+`pnpm validate:calibration`: **positives caught 45/45 static (17 at high/free-count), 1
+connected-tier N/A; negatives cleared 28/28 static; zero free-count false positives — GATE
+PASS.** The 6 new B4 positives all fire exactly once each, at their declared tier (2 at high:
+`.innerHTML`/`insertAdjacentHTML` and `document.write`; 4 at review: the DB-sourced DSIH variant,
+the `<a href>` scheme sink, the `window.location` open-URL sink, and `setAttribute`). The 3 new
+negatives clear with no finding at all (not even a review-tier hit): the constant `innerHTML`,
+the `next/link` internal route, and the text-rendered search param. No regression on the base,
+B1, or B3 batches. One tuning note during development: the fixture for `P-XSS-STORED-DSIH`
+originally destructured the DB row's HTML field as `.body` (matching the spec's `pages/comment.js`
+sketch), which accidentally also matched the pre-existing `harvey-dangerously-set-inner-html`
+rule's `$REQ.body` source pattern (a generic `<expr>.body` member-access match, not scoped to an
+actual request object) — the fixture was renamed to `.content` to isolate the new `-stored` rule
+and avoid over-crediting a DB-read source as a request-tainted `high` finding. `pnpm verify`
+(offline) is green: the scorecard logic over the expanded `CORPUS` is exercised in
+`calibration.test.ts`; the Semgrep rules themselves are proven by the live gate above.
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
