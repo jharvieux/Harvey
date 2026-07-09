@@ -44,6 +44,24 @@ describe("classifyLeftoverAuth", () => {
     expect(findings.some((f) => f.taxonomy === "Unauthenticated debug/admin route")).toBe(false);
   });
 
+  it("flags a login route file with no rate-limiter hint", () => {
+    const findings = classifyLeftoverAuth({ path: "pages/api/auth/login.js", content: "export default async function handler(req, res) { res.json({ ok: true }); }" });
+    expect(findings.some((f) => f.taxonomy === "Missing rate limit on auth endpoint")).toBe(true);
+  });
+
+  it("does not flag a login route file that calls a rate limiter", () => {
+    const findings = classifyLeftoverAuth({
+      path: "pages/api/auth/login.js",
+      content: "export default async function handler(req, res) { const ok = await rateLimit(req); if (!ok) return res.status(429).end(); res.json({ ok: true }); }",
+    });
+    expect(findings.some((f) => f.taxonomy === "Missing rate limit on auth endpoint")).toBe(false);
+  });
+
+  it("does not flag a non-auth route path for missing rate limiting", () => {
+    const findings = classifyLeftoverAuth({ path: "pages/api/products/list.js", content: "export default async function handler(req, res) { res.json([]); }" });
+    expect(findings.some((f) => f.taxonomy === "Missing rate limit on auth endpoint")).toBe(false);
+  });
+
   it("all findings from a single file get distinct ids", () => {
     const findings = classifyLeftoverAuth({ path: "lib/multi.ts", content: "// TODO: auth\nif (true) {}\nconst isAdmin = true;\nbypassAuth();" });
     const ids = findings.map((f) => f.id);

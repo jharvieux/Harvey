@@ -614,3 +614,78 @@ default test glob — without it, root `vitest run` picks up
 happened to pass, since the weak test is weak in its *assertions*, not broken as a test — but
 running the target's own tests through the root suite was never the intent, and a future,
 deliberately-failing weak-test fixture would break `pnpm verify` on an unrelated branch).
+
+---
+
+## Batch B7 (#71) — auth / access-control heuristics
+
+The auth expansion batch (spec `docs/design/spec-71-security-corpus.md` §"Batch 7 — Auth /
+access-control / left-open"). Custom Semgrep rules in `src/scan/rules/semgrep/auth.yml` (the
+per-batch rule-file directory established by the Part-1 modularization), plus one extension to the
+existing `leftover-auth` grep (`src/scan/leftover-auth.ts` — a sensitive-auth-route +
+no-rate-limiter-hint check, mirroring its existing sensitive-debug-route + no-auth-hint check) and
+one reuse of its existing `bypassAuth` grep. Three rows already ship (`[exists]`) and are not
+duplicated here: `P-DEBUG-ENDPOINT` and `P-TODO-AUTH` (`leftover-auth` greps, `base.entries.ts`)
+and `P-SRV-KEY-CLIENT` (`harvey-service-role-in-client`, `base.yml`).
+
+The spec deliberately schedules this batch **last** in the #71 fan-out because it carries the
+**highest negative-precision risk** of the whole corpus: a static tool cannot confirm an
+ownership/permission/rate-limit check is *correct*, only that a specific guard shape is *absent*.
+Per the locked preamble, every rule in this batch is `WARNING` + `MEDIUM` confidence → **`review`
+tier — none feed the free count**, including the two classes that read as unambiguous elsewhere
+(`if (true)` bypass, hardcoded hardcoded-flag gate) — the existing `leftover-auth` module is a pure
+text grep with no AST, so even a `bypassAuth` hit stays `review` by that module's own design.
+
+**Known, intentional overlap (not a bug):** `harvey-route-noauth`'s "mutation with no auth-check
+call" shape also fires, at `review` tier, on several pre-existing fixtures planted for a
+*different* named bug — `pages/api/dev/seed.js`, `pages/api/admin/reset.js`,
+`pages/api/comments/create.js`, `pages/api/counter/increment.js` (all genuinely lack an
+auth-check call too) and `pages/api/register.js`/`pages/api/webhook.js` (registration and an
+HMAC-signed webhook are legitimately *not* session-authed by design; the heuristic can't tell HMAC
+verification from "no auth" — a known, documented limitation of a `review`-tier heuristic, not a
+gate concern). Similarly `harvey-missing-server-only` also fires on the pre-existing
+`lib/supabaseAdmin.js` and `pages/api/webhook.js` (both genuinely lack a `server-only` guard).
+None of this affects the gate — only `high`-tier findings on registered `negative` entries can
+fail it, and every rule in this batch is `review`.
+
+### B7 positives — planted auth/access-control bugs (must be caught, all `review` tier)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-AUTH-BYPASS-CONST | `pages/api/reports/export.js:7` | `leftover-auth`'s existing `bypassAuth` grep (`const bypassAuth = true;` guards a data read) | review |
+| P-SERVER-ACTION-NOAUTH | `app/actions-auth.ts:9` | Semgrep `harvey-server-action-noauth` (`'use server'` mutation, Origin checked but no `assertPermission`/`requirePermission`/`requireRole` call) | review |
+| P-ROUTE-NOAUTH | `pages/api/settings/delete.js:8` | Semgrep `harvey-route-noauth` (Pages Router handler deletes data, no `getServerSession`/`supabase.auth.getUser()` call) | review |
+| P-IDOR-PARAM | `pages/api/order/get.js:7` | Semgrep `harvey-idor-param` (taint: `req.query.id` → exact-shape `.eq('id', $ID)` sink, no owner predicate) | review |
+| P-MASS-ASSIGNMENT | `pages/api/profile/settings.js:6` | Semgrep `harvey-mass-assignment` (taint: `req.body` → `{ ...req.body }` spread into `.update()`) | review |
+| P-SERVER-CLIENT-LEAK | `app/documents/detail-page.tsx:9` | Semgrep `harvey-server-client-leak` (`select('*')` row spread whole into a `'use client'` component's props) | review |
+| P-MISSING-SERVER-ONLY | `lib/secret.js:5` | Semgrep `harvey-missing-server-only` (`process.env.INTERNAL_API_SECRET`, no `import "server-only"`, no `"use client"`) | review |
+| P-NO-RATE-LIMIT | `pages/api/auth/login.js:7` | `leftover-auth`'s new sensitive-auth-route + no-rate-limiter-hint check (`src/scan/leftover-auth.ts`) | review |
+| P-FAIL-OPEN | `lib/rate-limiter.js:4-11` | Semgrep `harvey-fail-open` (`catch` block returns `true` on a Redis error) | review |
+
+### B7 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-SERVER-ACTION-GUARDED | `app/actions-auth.ts` | `restoreDocument()` calls `assertPermission('documents:restore')` before mutating — `harvey-server-action-noauth`'s `pattern-not-inside` excludes it. |
+| N-ROUTE-AUTH-CHECKED | `pages/api/settings/delete-safe.js` | Reads `getServerSession(req)` and 401s before the delete — `harvey-route-noauth`'s `pattern-not-inside` excludes it. This is the operator-flagged precision case: "a route that DOES check auth before the sensitive call." |
+| N-IDOR-SCOPED | `pages/api/order/scoped.js` | Chains `.eq('id', req.query.id).eq('user_id', session.user.id)` — the extra `.eq()` makes the destructured statement's RHS a different (longer) expression tree than `harvey-idor-param`'s exact-shape sink pattern. The operator-flagged case: "an id-param handler that DOES scope by the caller." |
+| N-MASS-ASSIGN-PICK | `pages/api/profile/settings-safe.js` | Destructures `{ displayName, bio } = req.body` and updates only those named fields — no `{ ...req.body }` spread. |
+| N-DTO-MAPPED | `app/documents/detail-page-safe.tsx` | Passes two named fields (`title`, `updated_at`) to `<DocumentCard>`, not the raw `select('*')` row. |
+| N-SERVER-ONLY-PRESENT | `lib/secret-safe.js` | Starts with `import "server-only";` — `harvey-missing-server-only`'s `pattern-not-inside` excludes it. |
+| N-RATE-LIMIT-PRESENT | `pages/api/auth/login-limited.js` | Calls `rateLimit(req)` and 429s before signing in — `leftover-auth`'s rate-limiter-hint regex matches the call. |
+| N-DEBUG-ROUTE-GUARDED | `pages/api/debug/status.js` | Sits under a `/debug` path segment but reads `getServerSession(req)` and 401s first — clears the *existing* `leftover-auth` sensitive-route heuristic's `AUTH_HINT` check. The operator-flagged case: "a debug route that IS auth-gated" — this is a regression guard on the pre-existing `P-DEBUG-ENDPOINT` heuristic, not a new rule. |
+
+### B7 live result (2026-07-08, static: semgrep 1.164.0, gitleaks 8.30.1, trufflehog 3.95.8, osv-scanner 2.3.8, no Docker)
+
+`pnpm validate:calibration`: **positives caught 72/72 static (24 at high/free-count), 1
+connected-tier N/A; negatives cleared 47/47; zero free-count false positives — GATE PASS.** All 9
+new B7 positives fire, every one at exactly `review` tier as tiered (none landed at `high` —
+confirms the conservative tiering held). All 8 new B7 negatives clear; `N-MASS-ASSIGN-PICK` draws
+one `review`-tier hit (the expected `harvey-route-noauth` overlap — that fixture also has no
+`getServerSession` call — correctly triaged out, not a gate failure). The three
+operator-flagged precision cases (route-with-auth-check, id-param-scoped-by-caller,
+auth-gated-debug-route) all clear cleanly. No regression on the base, B1, B3, B4, B5, or B6
+batches. `pnpm verify` (offline) is green: `src/scan/leftover-auth.test.ts` gained three unit
+tests for the new rate-limit heuristic; the scorecard logic over the expanded `CORPUS` is
+exercised in `calibration.test.ts`; the Semgrep rules themselves (`semgrep --validate` clean, 49
+rules across the directory) are proven by the live gate above.

@@ -24,6 +24,13 @@ const SENSITIVE_ROUTE_SEGMENT = /(^|\/)(debug|seed|admin|api\/dev)(\/|$|\.)/i;
 const AUTH_HINT = /(getServerSession|auth\(\)|requireAuth|withAuth|assertAuth|supabase\.auth\.getUser|createServerClient)/;
 const ROUTE_FILE = /(^|\/)(route\.(ts|tsx|js)|pages\/api\/.*\.(ts|tsx|js))$/;
 
+// B7 (#71): a login/signup/OTP/password-reset route with no rate-limiter hint — an attacker can
+// brute-force credentials/OTP codes with unlimited attempts. Same grep-and-hint shape as the
+// sensitive-route check above (review tier — a limiter living in middleware/an edge config this
+// file can't see is a false negative, not a gate concern).
+const AUTH_SENSITIVE_ROUTE = /(^|\/)(login|signin|sign-in|signup|sign-up|register|otp|reset-password|forgot-password)(\/|$|\.)/i;
+const RATE_LIMIT_HINT = /(rateLimit|ratelimit|Ratelimit|limiter\.)/;
+
 function slug(path: string): string {
   return path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
@@ -60,6 +67,22 @@ export function classifyLeftoverAuth(file: SourceFile): Finding[] {
         evidence: `Route path matches /debug|seed|admin|api\\/dev/ and no auth-check call pattern was found in the file.`,
         impact: "If genuinely unauthenticated, this route is reachable by anyone who finds the path.",
         fix: "Add an auth/role check, or remove the route before shipping.",
+        precisionTier: "review",
+      }),
+    );
+  }
+  if (ROUTE_FILE.test(file.path) && AUTH_SENSITIVE_ROUTE.test(file.path) && !RATE_LIMIT_HINT.test(file.content)) {
+    findings.push(
+      mechanicalFinding({
+        id: `AUTH-no-rate-limit-${slug(file.path)}`,
+        title: `${file.path} looks like a login/signup/OTP/reset route with no rate-limiter hint`,
+        severity: "Medium",
+        category: "Leftover auth",
+        taxonomy: "Missing rate limit on auth endpoint",
+        location: file.path,
+        evidence: `Route path matches /login|signup|otp|reset-password/ and no rate-limiter call pattern was found in the file.`,
+        impact: "An attacker can brute-force credentials/OTP codes with unlimited attempts.",
+        fix: "Add a rate limiter (e.g. Upstash Ratelimit, a token-bucket middleware) in front of this route.",
         precisionTier: "review",
       }),
     );
