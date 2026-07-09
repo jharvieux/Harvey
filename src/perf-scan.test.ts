@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseAdvisorFindings, type AdvisorReport } from "./perf-scan.js";
+import { buildCoverageMatrix } from "./scan/calibration.js";
+import { m7Entries } from "./scan/calibration/m7.entries.js";
 
 // Fixture shaped from the Supabase Management API's documented advisors response
 // (GET /v1/projects/{ref}/advisors/performance → { lints: [...] }, fields name/title/level/
@@ -104,5 +106,63 @@ describe("parseAdvisorFindings", () => {
     const [fk] = parseAdvisorFindings(report);
     expect(fk?.evidence).toContain("unindexed_foreign_keys");
     expect(fk?.evidence).toContain("bookings_tenant_id_fkey");
+  });
+
+  it("tags every finding precisionTier: high — advisor lints are schema-truth, ~100% precise once connected (spec §72 M7(d))", () => {
+    for (const f of parseAdvisorFindings(report)) expect(f.precisionTier, f.taxonomy).toBe("high");
+  });
+});
+
+// M7 calibration corpus (#72 §M7) — a MODELED advisor JSON shaped from what a live Splinter
+// pull over targets/calibration/supabase/migrations/20260708000004_perf_calibration.sql should
+// return (NOT a live capture — the connected-tier live confirmation is a deferred supervisor
+// pass, SESSION.md "Owed: connected-tier live confirmation pass"). Exercises the answer key's
+// location+match matching against parseAdvisorFindings' real shaping logic: exactly the 3
+// planted lints appear (perf_line_items' unindexed FK, perf_orders' bare-auth.uid() RLS policy,
+// perf_orders' unused legacy_region index); the 3 benign lookalikes (perf_shipments' indexed FK,
+// perf_events' wrapped RLS policy, perf_orders' used customer_email index) generate no lint at
+// all, so they're absent from this report by construction.
+const m7CalibrationReport: AdvisorReport = {
+  lints: [
+    {
+      name: "unindexed_foreign_keys",
+      title: "Unindexed foreign keys",
+      level: "INFO",
+      detail: "Table `public.perf_line_items` has a foreign key `perf_line_items_order_id_fkey` without a covering index",
+      metadata: { schema: "public", name: "perf_line_items", type: "table" },
+    },
+    {
+      name: "auth_rls_initplan",
+      title: "Auth RLS Initialization Plan",
+      level: "WARN",
+      detail: "Table `public.perf_orders` has a row level security policy that re-evaluates auth.uid() for each row",
+      metadata: { schema: "public", name: "perf_orders", type: "table" },
+    },
+    {
+      name: "unused_index",
+      title: "Unused Index",
+      level: "INFO",
+      detail: "Index `idx_perf_orders_legacy_region` on `public.perf_orders` has not been used",
+      metadata: { schema: "public", name: "perf_orders", type: "table" },
+    },
+  ],
+};
+
+describe("M7 calibration corpus — modeled advisor pull (#72 §M7)", () => {
+  const findings = parseAdvisorFindings(m7CalibrationReport);
+
+  it("attributes exactly the 3 planted lints to their answer-key entries, at high precision", () => {
+    for (const e of m7Entries.filter((e) => e.kind === "positive")) {
+      const row = buildCoverageMatrix(findings, [e]).rows[0];
+      expect(row?.caughtTier, `${e.id}: ${row?.detail}`).toBe("high");
+      expect(row?.expectedTier).toBe("connected"); // N/A in this static test; a live pull scores it for real
+    }
+  });
+
+  it("clears all 3 benign lookalikes — none draw a finding from the modeled report", () => {
+    for (const e of m7Entries.filter((e) => e.kind === "negative")) {
+      const row = buildCoverageMatrix(findings, [e]).rows[0];
+      expect(row?.highFlagged, `${e.id}: ${row?.detail}`).toBe(false);
+    }
   });
 });
