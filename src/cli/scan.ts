@@ -30,7 +30,7 @@ async function main(): Promise<void> {
   if (process.argv.includes("--mechanical")) {
     const dir = arg("--dir") ?? process.cwd();
     const bundle = arg("--bundle");
-    emit(runMechanicalScan({ dir, bundleDir: bundle }));
+    emit(await runMechanicalScan({ dir, bundleDir: bundle }));
     return;
   }
 

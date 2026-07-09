@@ -73,10 +73,10 @@ function render(r: QuickScanReport): string {
   return lines.join("\n");
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const dir = arg("--dir") ?? process.cwd();
   const bundle = arg("--bundle");
-  const report = buildQuickScanReport(runMechanicalScan({ dir, bundleDir: bundle }));
+  const report = buildQuickScanReport(await runMechanicalScan({ dir, bundleDir: bundle }));
 
   const out = arg("--out");
   const body = process.argv.includes("--json") ? JSON.stringify(report, null, 2) : render(report);
@@ -84,4 +84,7 @@ function main(): void {
   else console.log(body);
 }
 
-main();
+main().catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});

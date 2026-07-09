@@ -1,13 +1,10 @@
-// Supply chain: typosquat/slopsquat name check + unpinned-dependency / missing-lockfile checks.
+// Supply chain: typosquat/slopsquat name check + unpinned-dependency / missing-lockfile checks
+// + a live npm-registry existence cross-check (issue #66) for nonexistent/hallucinated deps.
 //
-// The issue asks for a typosquat check against the *live* npm registry. That needs a network
-// call with no existing precedent in this repo (no other scan module makes live external
-// requests). Rather than stub the check out, this implements the real detection logic
-// (edit-distance against a corpus of popular package names) offline — the corpus and network
-// lookup are the only missing piece, not the classification logic. Wiring in a live-registry
-// download-count/publish-recency signal is a natural follow-up once network egress from a
-// scan run is an approved product decision (privacy pitch is "no code egress" — a name-only
-// registry lookup is a smaller ask, but still a scope decision, not this module's to make).
+// checkSlopsquat is the first live external network call in this repo's scan modules other than
+// src/scan/supabase.ts and src/pentest/client.ts — it sends dependency NAMES only (never source)
+// to https://registry.npmjs.org, matching the privacy pitch's "no code egress" (a name-only
+// registry lookup is a smaller ask than code egress, but still noted as a scope decision).
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -60,6 +57,50 @@ export function checkTyposquat(depNames: string[]): Finding[] {
           precisionTier: "review",
         }),
       );
+    }
+  }
+  return findings;
+}
+
+const NPM_REGISTRY = "https://registry.npmjs.org";
+
+// Live npm-registry existence cross-check (P-SLOPSQUAT): an AI coding assistant can hallucinate
+// a plausible-looking package name that was never published. A 404 from the registry is
+// deterministic ground truth for "this name doesn't exist" — not a heuristic corpus match — so
+// it's "high" precision, unlike the offline edit-distance check above. A network error can't
+// distinguish "doesn't exist" from "registry unreachable", so it's left unflagged (indeterminate)
+// rather than risk a false positive on a real dependency; typo/edit-distance-to-a-real-package
+// detection (the "review" half of P-SLOPSQUAT's tier split) stays in checkTyposquat above, not
+// duplicated here.
+export async function checkSlopsquat(depNames: string[], fetchImpl: typeof fetch = fetch): Promise<Finding[]> {
+  const findings: Finding[] = [];
+  for (const name of depNames) {
+    let res: Response;
+    try {
+      res = await fetchImpl(`${NPM_REGISTRY}/${encodeURIComponent(name)}`, { method: "HEAD" });
+    } catch (err) {
+      console.warn(`checkSlopsquat: "${name}" indeterminate — npm registry unreachable (${err instanceof Error ? err.message : String(err)})`);
+      continue;
+    }
+    if (res.status === 404) {
+      findings.push(
+        mechanicalFinding({
+          id: `SUP-SLOPSQUAT-${name}`,
+          title: `Dependency "${name}" does not exist on the npm registry`,
+          severity: "High",
+          category: "Supply chain",
+          taxonomy: "Slopsquatted/hallucinated dependency",
+          location: `package.json (${name})`,
+          evidence: `HEAD ${NPM_REGISTRY}/${name} returned 404 — no package named "${name}" has ever been published.`,
+          impact: "A hallucinated dependency name is a hijack-in-waiting: whoever publishes it first captures every future install. This is confirmed nonexistent, not a heuristic guess.",
+          fix: `Confirm "${name}" is the package you intend. If it's hallucinated, find the real package or vendor the code directly.`,
+          precisionTier: "high",
+        }),
+      );
+      continue;
+    }
+    if (!res.ok) {
+      console.warn(`checkSlopsquat: "${name}" indeterminate — npm registry returned ${res.status}`);
     }
   }
   return findings;

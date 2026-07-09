@@ -13,7 +13,7 @@ import { checkNextVersionCVEs, parseOsvFindings, type OsvScanResult } from "./de
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { scanSecrets } from "./secrets.js";
 import { checkMissingCsp, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
-import { checkInstallScripts, checkLockfilePresence, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
+import { checkInstallScripts, checkLockfilePresence, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
@@ -52,7 +52,7 @@ interface MechanicalScanOptions {
   bundleDir?: string; // .next/static after `next build`, if available — passed to the secret scan
 }
 
-export function runMechanicalScan(opts: MechanicalScanOptions): Finding[] {
+export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Finding[]> {
   const { dir, bundleDir } = opts;
   const findings: Finding[] = [];
 
@@ -75,6 +75,7 @@ export function runMechanicalScan(opts: MechanicalScanOptions): Finding[] {
     findings.push(...checkTyposquat(Object.keys(allDeps)));
     findings.push(...checkUnpinnedDependencies(allDeps));
     findings.push(...checkInstallScripts(pkg.scripts ?? {}));
+    findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
   }
   findings.push(...checkLockfilePresence(dir));
 

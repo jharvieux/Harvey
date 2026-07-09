@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { checkInstallScripts, checkLockfilePresence, checkTyposquat, checkUnpinnedDependencies } from "./supply-chain.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { checkInstallScripts, checkLockfilePresence, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies } from "./supply-chain.js";
 
 describe("checkTyposquat", () => {
   it("flags a name one edit from a popular package", () => {
@@ -62,5 +62,51 @@ describe("checkLockfilePresence", () => {
     dir = mkdtempSync(join(tmpdir(), "harvey-lockfile-"));
     writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
     expect(checkLockfilePresence(dir)).toEqual([]);
+  });
+});
+
+describe("checkSlopsquat", () => {
+  it("does not flag a package the registry confirms exists (200)", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 })) as unknown as typeof fetch;
+    const findings = await checkSlopsquat(["react"], fetchImpl);
+    expect(findings).toEqual([]);
+  });
+
+  it("flags a package the registry confirms does not exist (404) at high precision", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 404 })) as unknown as typeof fetch;
+    const findings = await checkSlopsquat(["react-supabase-helpers"], fetchImpl);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.title).toContain("react-supabase-helpers");
+    expect(findings[0]?.precisionTier).toBe("high");
+  });
+
+  it("checks scoped package names against the registry with the name URL-encoded", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      calls.push(url.toString());
+      return new Response(null, { status: 200 });
+    }) as unknown as typeof fetch;
+    await checkSlopsquat(["@supabase/supabase-js"], fetchImpl);
+    expect(calls[0]).toBe("https://registry.npmjs.org/%40supabase%2Fsupabase-js");
+  });
+
+  it("degrades gracefully (no finding, no throw) on a network error", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("getaddrinfo ENOTFOUND registry.npmjs.org");
+    }) as unknown as typeof fetch;
+    const findings = await checkSlopsquat(["react"], fetchImpl);
+    expect(findings).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("indeterminate"));
+    warn.mockRestore();
+  });
+
+  it("does not flag on a non-404 error status (e.g. registry rate-limiting) — indeterminate, not confirmed missing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
+    const findings = await checkSlopsquat(["react"], fetchImpl);
+    expect(findings).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("indeterminate"));
+    warn.mockRestore();
   });
 });

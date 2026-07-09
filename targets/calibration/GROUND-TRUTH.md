@@ -60,12 +60,12 @@ Every secret value in these fixtures is FAKE (valid-shape only); this app is nev
 | P-HARDCODED-KEY | `lib/ai.js:4` | gitleaks `anthropic-api-key` (fake, valid-shape; TruffleHog can't verify a dead key → not high) | review |
 | P-NEXT-CVE-29927 | `package.json` (`next@^14.2.5`) | `checkNextVersionCVEs` (< 14.2.25, GHSA-f82v-jwr5-mffw) | high |
 | P-NEXT-CVE-RSC | `package.json` (`next@^14.2.5`) | `checkNextVersionCVEs` (< 14.2.35, React2Shell RSC RCE) | high |
-| P-DEP-CVE | `package.json` (`lodash@4.17.11`) | OSV-Scanner — **needs a committed lockfile**; the target ships none, so this is a documented miss in a lockfile-less run (follow-up) | review (not caught) |
+| P-DEP-CVE | `package.json` (`lodash@4.17.11`) | OSV-Scanner over the committed `package-lock.json` (issue #65) — live run 2026-07-08 matches 7 GHSA advisories against `lodash@4.17.11` (prototype pollution among them) | review (caught) |
 | P-XSS-DSIH | `pages/post.js:8` | Semgrep `harvey-dangerously-set-inner-html` (taint: `router.query` → `__html`) | high |
 | P-CORS-WILDCARD | `pages/api/data.js:5` | Semgrep `harvey-permissive-cors` | high |
 | P-NO-CSP | `next.config.js` | `checkMissingCsp` (no CSP in next.config/middleware/vercel.json) | review |
 | P-SSRF-FETCH | `pages/api/fetch-preview.js:5` | Semgrep `harvey-ssrf-fetch` (taint: `req.query` → `fetch`) | review |
-| P-SLOPSQUAT | `package.json` (`react-supabase-helpers`) | npm-registry existence check — **not yet built** (offline typosquat corpus only catches edit-distance-1); documented miss (follow-up) | review (not caught) |
+| P-SLOPSQUAT | `package.json` (`react-supabase-helpers`) | `checkSlopsquat` npm-registry existence check (issue #66) — live 404 against `registry.npmjs.org/react-supabase-helpers` | high (caught) |
 | P-POSTINSTALL | `package.json` (scripts) | `checkInstallScripts` (postinstall lifecycle hook) | review |
 | P-DEBUG-ENDPOINT | `pages/api/dev/seed.js`, `pages/api/admin/reset.js` | leftover-auth (sensitive-route + `isAdmin = true` greps) | review |
 | P-TODO-AUTH | `pages/api/comments/create.js` | leftover-auth (`// TODO: auth` grep) | review |
@@ -84,7 +84,7 @@ Every secret value in these fixtures is FAKE (valid-shape only); this app is nev
 | N-WEAK-HASH-CACHE | `lib/cache.js` | md5 as an ETag/cache tag, not auth/integrity. |
 | N-REDOS-SAFE | `lib/validate.js` | Linear email regex (negated classes); ReDoS stays out of the count. |
 | N-FS-STATIC | `lib/read-config.js` | Static `fs.readFileSync(path.join(__dirname,…))` + an unrelated `widget.open()`. |
-| N-DEV-DEP | `package.json` (`webpack@4.42.0`, dev) | Dev-only dep — excluded from the count (OSV/npm audit would list it at review/informational, never high). |
+| N-DEV-DEP | `package.json` (`webpack@4.42.0`, dev) | Dev-only dep — excluded from the count. Live OSV run (issue #65) over the committed lockfile finds zero CVEs on `webpack@4.42.0` itself; its dev-only transitive deps (`braces`, `elliptic`, `micromatch`, `serialize-javascript`) do carry real CVEs but land at review tier (non-curated), never high. |
 | N-SERVICE-ROLE-SERVER | `lib/cron.js` | `import "server-only"` + admin client, no `"use client"` — service-role use is not a finding by itself. |
 | N-RLS-DENY-ALL | `supabase/migrations/…` (`service_state`) | RLS on + zero policies = deny-all by design; Advisor `0008` is informational, not a finding (connected tier). |
 | N-URL-ENV | `lib/redis.js` | `z.string().url()` on `process.env.REDIS_URL` (`redis://`) — operator/env URLs are exempt. |
@@ -100,3 +100,16 @@ replaces the pre-tuning baseline of **0 true positives / 1 false positive** (dry
 §8.3). The one prior FP (`harvey-service-role-in-client` on `lib/supabaseAdmin.js`, issue #56) is
 resolved: the rule now gates on the `"use client"` directive, so the server-only admin client is
 correctly silent.
+
+### Follow-up live result (2026-07-08, issues #65/#66 — lockfile + npm-registry existence check)
+
+`pnpm validate:calibration`: **positives caught 16/16 static (7 at high/free-count), 1
+connected-tier N/A; negatives cleared 15/15; zero free-count false positives — GATE PASS.**
+Both prior review-tier recall gaps are now closed: P-DEP-CVE is caught by OSV-Scanner over a
+newly-committed `package-lock.json` (issue #65 — generated with `react-supabase-helpers`
+temporarily removed via `npm install --package-lock-only --ignore-scripts`, since it doesn't
+exist and would fail a real install; the entry stays package.json-only, exactly as intended for
+#66 to catch); P-SLOPSQUAT is caught at **high** tier by `checkSlopsquat`, a live
+`registry.npmjs.org` existence check (issue #66) — `react-supabase-helpers` 404s. N-DEV-DEP stays
+clear: the live OSV pass finds zero CVEs on `webpack@4.42.0` itself (only its dev-only transitive
+deps carry non-curated, review-tier CVEs).

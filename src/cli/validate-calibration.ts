@@ -23,7 +23,7 @@ function arg(flag: string): string | undefined {
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const dir = arg("--dir") ?? join(repoRoot, "targets", "calibration");
 
-const findings = runMechanicalScan({ dir });
+const findings = await runMechanicalScan({ dir });
 const matrix = buildCoverageMatrix(findings, CORPUS);
 
 if (process.argv.includes("--json")) {
