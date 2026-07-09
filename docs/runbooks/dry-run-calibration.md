@@ -26,6 +26,13 @@ number, coverage verdict, or finding below was estimated or invented.
   perf, M8 mutation testing) or the reference-harness LLM skills. Exact commands to complete
   those are in §5.
 
+> **UPDATE — 2026-07-08, Docker up (live run):** the environment above was later unblocked
+> (colima started). The live run of the config auditor + dynamic pen-test against a real
+> `supabase start` stack + running app is in **§8**, and it changes the picture materially:
+> the **dynamic pen-test caught all 3 cross-tenant RLS bugs with zero false positives**, and
+> live exploitation established the true status of every one of the 8 planted bugs. Read §8
+> alongside §3 — §3's "requires-live-run" / "missed" verdicts are now resolved there.
+
 ## 1. What actually ran, and per-module timing
 
 | Module | What ran | Wall clock | Findings |
@@ -214,3 +221,95 @@ are explicit that this is a partial dry run, not a scored client audit — see
   `pnpm exec tsx src/cli/dry-run-scorecard.ts`.
 - `src/migration-sql-parse.ts`, `src/coverage-scorecard.ts` — the new pure logic, unit tested
   (`src/migration-sql-parse.test.ts`, `src/coverage-scorecard.test.ts`).
+
+## 8. Live run addendum (2026-07-08, Docker up)
+
+After the sandbox run above, `colima` was started and the full stack was stood up:
+`supabase start -x vector,analytics` (the `vector`/analytics container fails on colima's
+`docker.sock` mount — exclude it), `supabase db reset`, and a production `next build && next
+start -p 3100` of the target app. Personas were minted as JWTs signed with the local
+`JWT_SECRET` (the seeded password logins fail with "Database error querying schema", a gotrue
+quirk on this stack). Every row below is the literal result of a command run against that live
+stack.
+
+### 8.1 The target is genuinely vulnerable (ground truth confirmed by raw exploit)
+
+| # | Bug | Live exploit result |
+|---|---|---|
+| 1 | RLS-USING-TRUE | anon `GET /rest/v1/documents` returned **both** tenants' rows (`aaaaaaaa` + `bbbbbbbb`) |
+| 2 | RLS-AUTH-ROLE | Alice's JWT `GET /rest/v1/invoices` returned **both** tenants' rows |
+| 3 | RLS-DISABLED | anon `GET /rest/v1/audit_logs` returned all tenants' rows |
+| 4 | SQLI-SERVICE | `q=' UNION SELECT id, id, encrypted_password FROM auth.users --` **exfiltrated 2 bcrypt password hashes** |
+| 5 | WEBHOOK-REPLAY | one valid signed request POSTed 3× → **3** `audit_logs` rows inserted |
+| 6 | COUNTER-RACE | 30 concurrent `POST /api/counter/increment` → final counter value **1** (29 lost updates) |
+| 7 | UPDATE-UNSCOPED | **NOT exploitable as planted** — PostgREST rejects the unqualified UPDATE (`{"error":"UPDATE requires a WHERE clause"}`), both profiles unchanged. Ground-truth defect → issue #59 |
+| 8 | OPEN-REDIRECT | `GET /api/redirect?url=https://evil.example/phish` → `302 Location: https://evil.example/phish` |
+
+True-negatives held: anon reads of the correctly-scoped `notes` returned 0 rows.
+
+### 8.2 What Harvey's tools caught against that live stack
+
+| # | Bug | Sev | Really exploitable? | Config auditor (#26) | Pen-test (#5) | Net |
+|---|---|---|---|---|---|---|
+| 1 | RLS-USING-TRUE | Crit | yes | ❌ (RLS on + policy present — advisor lints can't judge policy quality) | ✅ explore | **caught** |
+| 2 | RLS-AUTH-ROLE | Crit | yes | ❌ same | ✅ explore | **caught** |
+| 3 | RLS-DISABLED | High | yes | ✅ `SB-EXPOSED` | ✅ explore | **caught** |
+| 4 | SQLI-SERVICE | Crit | yes | — | ❌ verify probe 500s (type-incompatible UNION) → #58 | **missed (real bug)** |
+| 5 | WEBHOOK-REPLAY | Med | yes | — | ❌ no automated replay probe → #60 | **missed (real bug)** |
+| 6 | COUNTER-RACE | Med | yes | — | ❌ no concurrency probe → #60 | **missed (real bug)** |
+| 7 | UPDATE-UNSCOPED | High | **no** | — | ✅ correctly `unproven` | **correct** |
+| 8 | OPEN-REDIRECT | Low | yes | — | ✅ verify `proven` | **caught** |
+
+Live dynamic tooling gives **correct verdicts on 5 of 8** (4 real bugs proven + the 1 mis-plant
+correctly cleared), zero false positives on the correctly-scoped tables. The 3 misses are all
+real bugs and all tracked: #58 (SQLi probe payload), #60 (replay + race probes).
+
+### 8.3 The mechanical/static layer, re-run live — the part to distrust
+
+`semgrep --config src/scan/rules/semgrep-nextjs-supabase.yml targets/calibration` produced
+**exactly one finding: `harvey-service-role-in-client` on `lib/supabaseAdmin.js:7` — a false
+positive** (that file is a server-only admin client that is *supposed* to hold the service-role
+key; see issue #56). It caught **none** of the 8 planted bugs. Two reasons, both structural:
+
+- **#4 SQLi has no rule at all** — the ruleset has no pattern for untrusted input concatenated
+  into a raw SQL string / template literal. It cannot catch the most classic web vuln present.
+- **#8 open-redirect's rule targets the wrong framework** — it matches the App-Router
+  `res.redirect(req.nextUrl.searchParams.get(...))` shape; the target (and many real apps) use
+  the Pages-Router `req.query` idiom, so it never fires.
+
+**Live mechanical score on this target: 0 true positives, 1 false positive.** This is not a
+payload-tuning problem — the layer has essentially no working detection today. Six of the eight
+bugs (the RLS/replay/race/unscoped-update classes) are logic/config bugs that *no* pattern
+scanner can find by design; the remaining two are in a scanner's wheelhouse and are missed
+because the rules are absent or framework-mismatched. See §8.4.
+
+### 8.4 Confidence read (honest)
+
+- **Do not present the mechanical/static layer as a bug-finder.** Signature scanners only find
+  what they have a validated rule for; ours currently has near-zero validated true-positive
+  coverage and a demonstrated false positive. Its legitimate role is high-precision *known*
+  issues (verified secrets, known CVEs) — and even that is unvalidated against ground truth.
+  This directly affects the free quick-scan tier (#27), which draws on this layer: a free scan
+  that finds nothing (or one FP) is worse than none. Tracked under #52; a calibration-gated
+  rule-validation harness ("prove coverage before claiming it") is issue **#61**.
+- **The dynamic pen-test explore is the mechanism that generalizes to unknown bugs.** It found
+  the cross-tenant leaks *without being told they existed* — it enumerates the real attack
+  surface (table × persona × verb) and diffs against a service-role oracle. It's deterministic
+  (no model), so its true positives are trustworthy. This is the part that plausibly finds
+  unknown bugs in a third-party repo — but so far it's validated only on the cross-tenant class
+  against a target whose bugs we knew. **Next confidence step: run explore against a real
+  third-party Supabase/Next repo where the bugs are unknown.**
+- **The logic-bug classes (race, replay, novel auth flaws) that neither signatures nor
+  oracle-diffing cover are the semantic/LLM tier's job — and that tier is entirely unvalidated
+  (no provider keys set).**
+
+### 8.5 Issues filed from the live run
+
+- **#58** — M2 SQLi verify probe uses a type-incompatible UNION → false-negative on a real
+  Critical. Highest-priority tool fix.
+- **#59** — calibration bug #7 (unscoped update) isn't exploitable as planted (PostgREST blocks
+  unqualified UPDATE); fix the plant or relabel it a true-negative.
+- **#60** — add automated WEBHOOK-REPLAY and COUNTER-RACE probes to verify mode (both confirmed
+  real by hand).
+- **#61** — mechanical layer: gate rules on calibration validation; treat unvalidated rules as
+  non-shipping (the confidence fix; supersedes #52's framing).
