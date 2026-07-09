@@ -182,6 +182,71 @@ scored. `pnpm verify` (offline) is green via recorded gitleaks output in `calibr
 
 ---
 
+## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
+
+The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
+§M4/§M5). Both are fully-mechanical, static, self-contained — no live DB, no external service.
+Scored via `src/scan/calibration/m4-m5.entries.ts` against `Finding[]` produced by
+`pnpm quality-scan targets/calibration` (`src/quality-scan.ts::jscpdToFindings` /
+`knipToFindings`, `src/cli/quality-scan.ts`). Per the spec's locked precision-tier discipline both
+land at **`high`**: jscpd's text-match and knip's dead-export detection are ~100% precise once the
+FP class (generated code / framework magic / dynamic reference / public API) is configured — the
+negatives below are exactly that configuration.
+
+### M4 — Duplication (jscpd)
+
+**Positives — planted clones (must be caught)**
+
+| id | location | detection | tier |
+|---|---|---|---|
+| M4-P-CLONE-A | `dup/invoice-total.ts` ↔ `dup/order-total.ts` | genuine 27-line copy-pasted tax/rounding block (299 tokens); jscpd clone cluster; `jscpdToFindings` → Low severity | high |
+| M4-P-CLONE-B | `dup/report-a.ts` ↔ `dup/report-b.ts` | genuine 52-line copy-pasted metric-aggregation block (658 tokens); jscpd clone cluster; `severityForClone` → Medium (≥50 lines) | high |
+
+**Negatives — benign lookalikes (must NOT be flagged)**
+
+| id | location | why benign / suppression |
+|---|---|---|
+| M4-N-GENERATED | `dup/generated/schema.gen.ts` | repeats the `invoice-total.ts` tax block but is a generated file, not hand-maintained duplication. Excluded via the quality-scan CLI's jscpd `--ignore` glob, extended to `**/generated/**` (`src/cli/quality-scan.ts`) — jscpd never sees it. |
+| M4-N-BOILERPLATE | `dup/route-a.ts` ↔ `dup/route-b.ts` | shares the Next.js API-route `config` + handler-signature boilerplate — a framework contract, not a defect. Shared span stays under jscpd's 50-token minimum (`.jscpd.json` `minTokens`) — not flagged. |
+
+### M5 — Slop / dead code (knip)
+
+Requires `targets/calibration/knip.json` (`entry`: `dead/consumer.ts`, `dead/dispatch.ts`,
+`dead/index.ts`; `project`: `dead/**/*.ts`, `pages/dead-page.js`; `tags`: `["-lintignore"]`) so the
+framework-magic and dynamic-reference negatives resolve — scoped narrowly to the M4/M5 fixture
+subtree so it doesn't pull the M1 security fixtures (`pages/api/*.js`, `lib/*.js`) into the dead-code
+report.
+
+**Positives — planted dead code (must be caught)**
+
+| id | location | detection | tier |
+|---|---|---|---|
+| M5-P-DEAD-EXPORT | `dead/orphan.ts` | exports `unusedHelper()`, imported nowhere (`dead/consumer.ts` only uses `computeTotal`); knip `issues[].exports` → `knipToFindings` | high |
+| M5-P-DEAD-FILE | `dead/never-imported.ts` | no entry point ever imports this file; knip top-level `files[]` → `knipToFindings` (measured 6-line count) | high |
+
+**Negatives — benign lookalikes (knip's FP class: dynamically-referenced / framework / public-API exports — must NOT be flagged)**
+
+| id | location | why benign / suppression |
+|---|---|---|
+| M5-N-NEXT-MAGIC | `pages/dead-page.js` | default export + `getServerSideProps` are called by Next.js routing/build convention, never by import. knip's built-in Next.js plugin (auto-detected via the target's `next` dependency) treats `pages/**` as entry points. |
+| M5-N-DYNAMIC-REF | `dead/registry.ts` | `handlerA` is referenced only via `dead/dispatch.ts`'s `handlers[name]` runtime lookup, invisible to static analysis. Tagged `@lintignore`; `knip.json`'s `tags: ["-lintignore"]` silences it. |
+| M5-N-PUBLIC-API | `dead/index.ts` | the package's declared public entry (`package.json` `exports["."]`) for external consumers. Listed under `knip.json`'s `entry`, so the file and its export stay silent instead of a false dead-file/dead-export report. |
+
+### M4+M5 live result (2026-07-08, static: jscpd 4.2.5, knip 5.88.1, no Docker)
+
+`pnpm quality-scan targets/calibration` scored against `src/scan/calibration/m4-m5.entries.ts`:
+**positives caught 4/4 (4 at high); negatives cleared 5/5; zero false positives — GATE PASS.**
+jscpd reports exactly 2 clone clusters (both planted: 27-line Low + 52-line Medium, 4.63%
+duplication overall) and zero clusters touching the two benign-lookalike fixtures. knip reports
+exactly 1 unused file + 1 file with unused exports (both planted) and zero issues on the three
+benign-lookalike fixtures. `pnpm verify` (offline) is green — `quality-scan.test.ts` covers the new
+`precisionTier: "high"` tagging on recorded jscpd/knip fixtures; the live run above is the
+Layer-2 gate (issue #61 two-layer pattern). No dedicated `validate:quality-calibration` CLI exists
+yet — scoring above was run ad hoc against `buildCoverageMatrix`; adding that CLI (mirroring
+`src/cli/validate-calibration.ts`) is a tracked follow-up, not a regression.
+
+---
+
 ## M10 (#72) — PII/PHI/PCI data classification corpus
 
 The first #72 cross-module batch (spec `docs/design/spec-72-crossmodule-corpus.md` §M10).

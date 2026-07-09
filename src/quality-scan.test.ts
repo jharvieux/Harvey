@@ -55,6 +55,11 @@ describe("jscpdToFindings", () => {
     const findings = jscpdToFindings(jscpdReport);
     expect(findings.map((f) => f.id)).toEqual(["M4-01", "M4-02"]);
   });
+
+  it("tags every clone at the high precision tier (issue #72 calibration)", () => {
+    const findings = jscpdToFindings(jscpdReport);
+    expect(findings.every((f) => f.precisionTier === "high")).toBe(true);
+  });
 });
 
 describe("duplicationSummary", () => {
@@ -106,5 +111,10 @@ describe("knipToFindings", () => {
     const findings = knipToFindings(knipReport);
     const mixed = findings.find((f) => f.location === "src/mixed.ts");
     expect(mixed?.impact).toContain("manual look");
+  });
+
+  it("tags every finding at the high precision tier (issue #72 calibration)", () => {
+    const findings = knipToFindings(knipReport);
+    expect(findings.every((f) => f.precisionTier === "high")).toBe(true);
   });
 });
