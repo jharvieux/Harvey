@@ -26,6 +26,15 @@ Run it before every push. If it fails, fix and re-verify before pushing. If a fa
 
 Other checks, run on demand: `pnpm check:duplication` (jscpd), `pnpm validate:findings <file>`.
 
+## Session log
+
+`SESSION.md` (repo root) is the running "where we left off" log, refreshed toward the end of a
+working session. It complements the issue-tracking rule above: GitHub issues track individual
+deferrals; `SESSION.md` holds the current cross-cutting state — what's in flight, what's queued
+next and in what order, open decisions, operator/manual action items, and any notes needed to
+resume live work (e.g. how to bring the local stack up). Keep it forward-looking and current:
+overwrite stale items rather than appending a full history. It is not sensitive — update it freely.
+
 ## Sensitive paths — never auto-change
 
 Automated agents (issue-sweep or any batch pipeline) must never modify these without an explicit human request naming the file:
