@@ -1,0 +1,249 @@
+# Batch B5 (#71, spec §"Batch 6 — Headers / CORS / CSRF / transport / error-hygiene").
+# Per-batch custom-rule file (see base.yml header for the directory convention). This batch's
+# detection mechanism is mostly "config-parse custom" rather than taint: reflected-origin CORS,
+# missing-header presence-in-an-array checks, insecure cookie flags, CSRF-missing on a
+# cookie-authed Server Action, and dev-mode error/config leakage. Two rows already ship
+# ([exists]): P-NO-CSP (checkMissingCsp, src/scan/semgrep.ts) and P-CORS-WILDCARD
+# (harvey-permissive-cors, base.yml) — not duplicated here. Tiering per the locked preamble:
+# only the reflected-origin CORS rule and the bare-cookie rule are ~100%-precision (`high`,
+# free count); the rest are heuristic presence/pattern checks (`review`).
+#
+# Missing-header rules (harvey-missing-hsts/frame-options/nosniff) use the Semgrep
+# "pattern minus pattern-not, both with `...`" idiom to detect a next.config.js headers() route
+# object whose `headers:` array lacks a specific key — verified directly against fixture pairs
+# with `semgrep --config headers.yml` before being wired in (a Semgrep AST rule can't express
+# "absent anywhere in this file", but it CAN express "this specific array literal has no element
+# shaped like X", which is what's needed here). This deliberately does NOT reuse
+# checkMissingCsp's cross-file (next.config.js/middleware.ts/vercel.json) global-OR presence
+# check — that check is correctly global (a CSP set in any one of the three means the app has a
+# CSP), so folding new headers into those files would flip the existing P-NO-CSP fixture off.
+# Keeping these as per-object-literal Semgrep matches lets the positive (incomplete) and negative
+# (complete) route objects coexist in the same next.config.js without disturbing it.
+#
+# Exercised against targets/calibration by `pnpm validate:calibration`; see GROUND-TRUTH.md §B5.
+
+rules:
+  # Reflected-origin CORS: Access-Control-Allow-Origin is set to the request's own Origin header
+  # (not validated against an allowlist) AND Allow-Credentials is true — an attacker's page can
+  # read the response with the victim's cookies attached, for any origin. The two-statement
+  # pattern with a `...` gap requires both header sets to appear in the same function; a single
+  # reflected-origin set with no credentials, or an allowlisted origin (N-CORS-ALLOWLIST), does
+  # not match. HIGH → free count.
+  - id: harvey-cors-reflected-origin
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      Access-Control-Allow-Origin reflects the request's Origin header verbatim (no allowlist),
+      combined with Access-Control-Allow-Credentials: true. This defeats CORS's same-origin
+      protection for authenticated requests from any origin. Validate Origin against an
+      allowlist before echoing it back.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $RES.headers.set("Access-Control-Allow-Origin", $REQ.headers.get("origin"))
+              ...
+              $RES.headers.set("Access-Control-Allow-Credentials", "true")
+          - pattern: |
+              $RES.setHeader("Access-Control-Allow-Origin", $REQ.headers.origin)
+              ...
+              $RES.setHeader("Access-Control-Allow-Credentials", "true")
+
+  # CSP present but weakened with 'unsafe-inline'/'unsafe-eval' in script-src — defeats the
+  # policy's main XSS mitigation (inline/eval'd script runs regardless of the policy). Review —
+  # some apps genuinely need unsafe-inline for a third-party widget and accept the trade-off.
+  - id: harvey-csp-unsafe-inline
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      Content-Security-Policy's script-src allows 'unsafe-inline' or 'unsafe-eval', which
+      defeats CSP's main XSS mitigation (inline/eval'd script executes regardless of the
+      policy). Use nonces/hashes for inline scripts instead.
+    patterns:
+      - pattern: '{ key: "Content-Security-Policy", value: $V }'
+      - metavariable-regex:
+          metavariable: $V
+          regex: (?is).*script-src.*unsafe-(inline|eval).*
+
+  # Missing Strict-Transport-Security on a next.config.js headers() route. Review — HSTS can
+  # legitimately be set at the CDN/hosting layer this repo scan can't see (same caveat as CSP).
+  - id: harvey-missing-hsts
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      This next.config.js headers() route does not set Strict-Transport-Security. Without HSTS
+      a user's first request (or any downgraded request) can be intercepted over plain HTTP.
+    patterns:
+      - pattern: '{ source: $S, headers: $ARR }'
+      - pattern-not: '{ source: $S, headers: [..., { key: "Strict-Transport-Security", ... }, ...] }'
+
+  # Missing X-Frame-Options (or an equivalent frame-ancestors CSP directive) — clickjacking.
+  # Review — same hosting-layer caveat as HSTS/CSP.
+  - id: harvey-missing-frame-options
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      This next.config.js headers() route does not set X-Frame-Options (or a frame-ancestors
+      CSP directive) — the page can be framed by any site and used for clickjacking.
+    patterns:
+      - pattern: '{ source: $S, headers: $ARR }'
+      - pattern-not: '{ source: $S, headers: [..., { key: "X-Frame-Options", ... }, ...] }'
+
+  # Missing X-Content-Type-Options: nosniff — a browser may MIME-sniff a response into an
+  # executable content type. Review — same hosting-layer caveat.
+  - id: harvey-missing-nosniff
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Low
+    message: >
+      This next.config.js headers() route does not set X-Content-Type-Options: nosniff — a
+      browser may MIME-sniff the response into an executable content type.
+    patterns:
+      - pattern: '{ source: $S, headers: $ARR }'
+      - pattern-not: '{ source: $S, headers: [..., { key: "X-Content-Type-Options", ... }, ...] }'
+
+  # CSRF on a cookie-authed Server Action: a mutation ('use server' + delete/update) with no
+  # Origin check anywhere in the function. Review — a heuristic (can't see a global CSRF
+  # middleware living elsewhere), and correctly N/A on token-authed (non-cookie) APIs, which
+  # never reach this pattern-inside scope.
+  - id: harvey-csrf-missing
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      This 'use server' Server Action mutates data with no Origin/CSRF check. Cookie-based auth
+      is submitted automatically by the browser on cross-site requests too — without an Origin
+      allowlist or CSRF token, a malicious page can trigger this mutation as the logged-in user.
+    patterns:
+      - pattern-inside: |
+          "use server";
+          ...
+      - pattern: |
+          async function $F(...) {
+            ...
+          }
+      - pattern-either:
+          - pattern-inside: |
+              async function $F(...) {
+                ...
+                $DB.from($T).delete(...)
+                ...
+              }
+          - pattern-inside: |
+              async function $F(...) {
+                ...
+                $DB.from($T).update(...)
+                ...
+              }
+      - pattern-not-inside: |
+          async function $F(...) {
+            ...
+            $H.get("origin")
+            ...
+          }
+
+  # Bare Set-Cookie with no attributes at all (no Secure/HttpOnly/SameSite) — the metavariable
+  # captures the cookie value expression's source text; a value with zero semicolons has no
+  # attributes appended. A hardened cookie string (`sid=...; HttpOnly; Secure; SameSite=Strict`)
+  # contains semicolons and is not matched (N-COOKIE-SECURE). HIGH → free count.
+  - id: harvey-cookie-insecure
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      Set-Cookie is written with no Secure/HttpOnly/SameSite attributes. A session cookie
+      without HttpOnly is readable by any injected script (XSS → session theft); without
+      Secure it can be sent over plain HTTP; without SameSite it rides cross-site requests.
+    patterns:
+      - pattern: $RES.setHeader("Set-Cookie", $V)
+      - metavariable-regex:
+          metavariable: $V
+          regex: (?s)^[^;]*$
+
+  # A caught error's .stack or .message is echoed straight into the JSON response — leaks stack
+  # traces / internal paths / library versions to the client. Review — some apps intentionally
+  # surface .message in dev, and this is common enough to need triage rather than an auto-Critical.
+  - id: harvey-verbose-error
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Low
+    message: >
+      A caught error's .stack or .message is echoed directly into the JSON response — this
+      leaks stack traces, file paths, and library versions to the client. Log the detail
+      server-side and return a generic error to the client.
+    patterns:
+      - pattern-either:
+          - pattern: '$RES.json({ ..., stack: $ERR.stack, ... })'
+          - pattern: '$RES.status($CODE).json({ ..., stack: $ERR.stack, ... })'
+          - pattern: '$RES.json({ ..., error: $ERR.message, ... })'
+          - pattern: '$RES.status($CODE).json({ ..., error: $ERR.message, ... })'
+
+  # The raw Postgres/PostgREST error object (conventionally named `error`, matching Supabase-js's
+  # `{ data, error } = await supabase...` destructure) is echoed straight into the JSON response
+  # — leaks constraint names, column names, and query internals. Review — matches on the `error`
+  # identifier by name, the near-universal supabase-js convention; a generic message object
+  # (N-ERROR-GENERIC) is a different shape and is not matched.
+  - id: harvey-db-error-disclosure
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Low
+    message: >
+      The raw database error object is echoed directly into the JSON response — this leaks
+      constraint/column names and query internals. Log it server-side and return a generic
+      error to the client.
+    patterns:
+      - pattern-either:
+          - pattern: $RES.status($CODE).json(error)
+          - pattern: $RES.json(error)
+          - pattern: $RES.status($CODE).json({ error })
+          - pattern: $RES.json({ error })
+
+  # NODE_ENV is force-assigned to a non-production value in application code — ships dev-mode
+  # behavior (verbose errors, disabled optimizations, permissive CORS in some frameworks)
+  # regardless of the actual deploy environment. Review — presence isn't automatically
+  # exploitable, but it's a config footgun worth a human look.
+  - id: harvey-node-env-not-prod
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Low
+    message: >
+      NODE_ENV is force-assigned to a non-production value in application code, overriding
+      whatever the deploy environment actually set — this can ship dev-mode behavior
+      (verbose errors, disabled optimizations) to production.
+    patterns:
+      - pattern-either:
+          - pattern: process.env.NODE_ENV = "development"
+          - pattern: process.env.NODE_ENV = 'development'

@@ -342,6 +342,76 @@ and avoid over-crediting a DB-read source as a request-tainted `high` finding. `
 
 ---
 
+## Batch B5 (#71) — headers / CORS / CSRF / transport / error-hygiene
+
+The headers expansion batch (spec `docs/design/spec-71-security-corpus.md` §"Batch 6 — Headers /
+CORS / CSRF / transport / error-hygiene"). Custom Semgrep rules in
+`src/scan/rules/semgrep/headers.yml` (the per-batch rule-file directory established by the Part-1
+modularization). Two rows already ship (`[exists]`) and are not duplicated here: `P-NO-CSP`
+(`checkMissingCsp`, `src/scan/semgrep.ts`) and `P-CORS-WILDCARD` (`harvey-permissive-cors`,
+`base.yml`); `P-OPEN-REDIRECT` (`[exists]`) is also part of this spec batch conceptually but ships
+in the base corpus. Tiering per the locked preamble: only `harvey-cors-reflected-origin` and
+`harvey-cookie-insecure` are ~100%-precision (`high`, free count); the rest are heuristic
+presence/pattern checks (`review`).
+
+Three of the new rules (`harvey-missing-hsts`/`-frame-options`/`-nosniff`) use the Semgrep
+"pattern minus `pattern-not`, both with `...`" idiom to detect a `next.config.js` `headers()`
+route object whose `headers:` array lacks a specific key — a genuine per-object-literal Semgrep
+match rather than `checkMissingCsp`'s cross-file global-OR presence check, so the positive
+(incomplete route) and negative (complete route) can coexist in the same `next.config.js` without
+disturbing the existing `P-NO-CSP` fixture (which stays global: no `Content-Security-Policy`
+string appears anywhere in `next.config.js`/`middleware.ts`/`vercel.json`). The CSP-unsafe-inline
+positive/negative pair lives in `lib/security-headers.js` for the same reason — kept out of the
+three files `checkMissingCsp` scans.
+
+### B5 positives — planted header/CORS/CSRF/error bugs (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-CORS-REFLECT-ORIGIN | `middleware.ts:5` | Semgrep `harvey-cors-reflected-origin` (two-statement pattern: `Access-Control-Allow-Origin` set to `req.headers.get('origin')` verbatim, `Access-Control-Allow-Credentials: true` in the same function) | high |
+| P-COOKIE-INSECURE | `pages/api/session.js:6` | Semgrep `harvey-cookie-insecure` (`Set-Cookie` value with zero semicolons — no attributes) | high |
+| P-CSP-UNSAFE-INLINE | `lib/security-headers.js:9` | Semgrep `harvey-csp-unsafe-inline` (CSP header object; `metavariable-regex` requires `script-src`+`unsafe-inline`/`unsafe-eval`) | review |
+| P-NO-HSTS | `next.config.js:13` | Semgrep `harvey-missing-hsts` (`{source, headers}` route object missing a `Strict-Transport-Security` element) | review |
+| P-NO-FRAME-OPTIONS | `next.config.js:13` | Semgrep `harvey-missing-frame-options` (same route object, missing `X-Frame-Options`) | review |
+| P-NO-NOSNIFF | `next.config.js:13` | Semgrep `harvey-missing-nosniff` (same route object, missing `X-Content-Type-Options`) | review |
+| P-CSRF-MISSING | `app/actions.ts:6` | Semgrep `harvey-csrf-missing` (`'use server'` function calling `.delete()`/`.update()`, `pattern-not-inside` any `headers().get("origin")` call) | review |
+| P-VERBOSE-ERROR | `pages/api/verbose.js:8` | Semgrep `harvey-verbose-error` (`err.stack`/`err.message` echoed into a JSON response) | review |
+| P-DB-ERROR-DISCLOSURE | `pages/api/orders.js:6` | Semgrep `harvey-db-error-disclosure` (raw `error` identifier, the supabase-js destructure convention, echoed into a JSON response) | review |
+| P-NODE-ENV-NOT-PROD | `lib/env.js:4` | Semgrep `harvey-node-env-not-prod` (`process.env.NODE_ENV = "development"` literal assignment) | review |
+
+### B5 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-CORS-ALLOWLIST | `lib/cors-allowlist.js` | `Access-Control-Allow-Origin` is only ever set to a validated `origin` variable checked against an explicit allowlist, never directly to `req.headers.get("origin")` — `harvey-cors-reflected-origin`'s pattern requires that literal expression as the value. |
+| N-COOKIE-SECURE | `pages/api/session-secure.js` | `Set-Cookie` value carries `HttpOnly; Secure; SameSite=Strict` (three semicolons) — `harvey-cookie-insecure` requires zero. |
+| N-CSP-PRESENT | `lib/security-headers.js` | `script-src 'self'` only, no `unsafe-inline`/`unsafe-eval` — `harvey-csp-unsafe-inline`'s `metavariable-regex` doesn't match. |
+| N-HEADERS-VERCEL | `next.config.js` | a second `headers()` route sets HSTS + X-Frame-Options + nosniff together (modeled here rather than `vercel.json` so it's in the same Semgrep-scanned surface as the positives, avoiding a JSON-vs-JS language gap) — none of the three missing-header rules match it. |
+| N-CSRF-ORIGIN-CHECKED | `app/actions.ts` | `updateAccountName()` checks `headers().get("origin")` against an allowlisted `APP_ORIGIN` before mutating — `harvey-csrf-missing`'s `pattern-not-inside` excludes it. |
+| N-ERROR-GENERIC | `pages/api/orders-safe.js` | `res.status(500).json({ error: "Server error" })` — a literal string, not `.stack`/`.message` access or the raw `error` identifier; clears both `harvey-verbose-error` and `harvey-db-error-disclosure`. |
+| N-NODE-ENV-PROD | `lib/env-check.js` | reads `process.env.NODE_ENV` in a conditional, never assigns it — `harvey-node-env-not-prod` only matches a literal assignment. |
+
+Four of the negatives above (`N-CSP-PRESENT`, `N-HEADERS-VERCEL`, `N-CSRF-ORIGIN-CHECKED`, and
+partially `N-CORS-ALLOWLIST` via an unrelated registry-pack hit) share a fixture file with a B5
+positive; each carries a `match` keyword disjoint from its sibling positive's rule-id keyword
+(guarded by `calibration.test.ts`'s "keeps fixtures that share a file apart" collision test) so
+they can't be cross-attributed a finding that belongs to the positive.
+
+### B5 live result (2026-07-09, static binaries: semgrep 1.164.0, no Docker)
+
+`pnpm validate:calibration`: **positives caught 49/49 static (17 at high/free-count), 1
+connected-tier N/A; negatives cleared 32/32; zero free-count false positives — GATE PASS.** The 10
+new B5 positives all fire (2 at high: reflected-origin CORS, bare `Set-Cookie`; 8 at review: the
+missing-header/CSRF/error-disclosure/dev-mode heuristics). The 7 new negatives clear with no
+free-count finding; one (`N-CORS-ALLOWLIST`) draws an unrelated `p/owasp-top-ten` registry-pack
+hit at review tier (a known third-party heuristic FP on any `Access-Control-Allow-Origin` set from
+a request-derived variable, regardless of the allowlist check) — correctly triaged out, not a gate
+failure. No regression on the base, B1, or B3 batches. `pnpm verify` (offline) is green: the
+scorecard logic over the expanded CORPUS is exercised in `calibration.test.ts`, including the
+file-sharing collision guard; the Semgrep rules themselves are proven by the live gate above.
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
