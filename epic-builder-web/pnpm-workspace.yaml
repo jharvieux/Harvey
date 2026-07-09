@@ -1,0 +1,6 @@
+# Makes this app its own pnpm workspace root, so `pnpm install` here installs the web app's deps
+# into ./node_modules instead of being absorbed by the repo-root workspace. Also whitelists the
+# native build scripts vitest/Next need.
+allowBuilds:
+  esbuild: true
+  sharp: true

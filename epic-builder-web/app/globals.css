@@ -1,0 +1,50 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --line: #2a2f3a;
+  --ink: #e6e9ef;
+  --muted: #9aa4b2;
+  --accent: #6ea8fe;
+  --ok: #57d38c;
+  --err: #ff6b6b;
+  --add: #1f3a2a;
+  --del: #3a1f24;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 32px 20px 80px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 24px 0 10px; }
+.sub { color: var(--muted); margin: 0 0 20px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin: 14px 0; }
+label { display: block; font-weight: 600; margin: 12px 0 6px; }
+textarea, input[type=text], input[type=password] {
+  width: 100%; background: #0c0e12; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 10px 12px; font: inherit;
+}
+textarea { min-height: 320px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+button {
+  background: var(--accent); color: #08111f; border: 0; border-radius: 8px;
+  padding: 9px 16px; font: inherit; font-weight: 700; cursor: pointer;
+}
+button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); font-weight: 600; }
+button:disabled { opacity: .5; cursor: default; }
+.crumbs { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+.crumbs .on { color: var(--accent); font-weight: 700; }
+.q { margin: 10px 0; }
+.q .assume { color: var(--muted); font-size: 13px; }
+pre.diff { background: #0c0e12; border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; font-size: 12.5px; }
+pre.diff .a { color: var(--ok); background: var(--add); display: block; }
+pre.diff .d { color: var(--err); background: var(--del); display: block; }
+pre.summary { background: #0c0e12; border: 1px solid var(--line); border-radius: 8px; padding: 12px; overflow: auto; font-size: 12.5px; }
+.err { color: var(--err); }
+.ok { color: var(--ok); }
+.storylist li { margin: 4px 0; }
+.badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+a { color: var(--accent); }
