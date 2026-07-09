@@ -99,3 +99,78 @@ describe("toReportRows", () => {
     expect(findingsRow).toEqual({ module: "src", mutationScore: 100, survivingCount: 0, hotspotSurvivingCount: 0 });
   });
 });
+
+// M8 calibration corpus (#72 §M8) — a REAL Stryker 9.6.1 JSON capture (trimmed to the
+// StrykerReport shape; dropped fields unused by this module: testFiles, config, framework,
+// projectRoot) from `npx stryker run` against targets/calibration/test-quality/
+// (stryker.config.json, coverageAnalysis: "perTest", vitest test runner). Closes the
+// docs/m8-test-quality.md "Deferred: live timed run" gap — unlike `report` above, this is not
+// shaped from the documented schema, it's an actual run's output. See
+// src/scan/calibration/m8.entries.ts (M8-P-TAUTOLOGICAL / M8-N-STRONG) and
+// targets/calibration/GROUND-TRUTH.md "M8 (#72)" for the full answer key + live result.
+const m8Report: StrykerReport = {
+  schemaVersion: "1.0",
+  thresholds: { high: 80, low: 60 },
+  files: {
+    "discount.ts": {
+      language: "typescript",
+      mutants: [
+        mutant({ id: "15", mutatorName: "StringLiteral", status: "NoCoverage", replacement: '""', location: { start: { line: 4, column: 34 }, end: { line: 4, column: 62 } } }),
+        mutant({ id: "24", mutatorName: "ArithmeticOperator", status: "NoCoverage", replacement: "total / 0.9", location: { start: { line: 7, column: 10 }, end: { line: 7, column: 21 } } }),
+        mutant({ id: "10", mutatorName: "BlockStatement", status: "Killed", replacement: "{}", location: { start: { line: 3, column: 73 }, end: { line: 8, column: 2 } } }),
+        mutant({ id: "11", mutatorName: "ConditionalExpression", status: "Killed", replacement: "true", location: { start: { line: 4, column: 7 }, end: { line: 4, column: 16 } } }),
+        mutant({ id: "12", mutatorName: "ConditionalExpression", status: "Survived", replacement: "false", location: { start: { line: 4, column: 7 }, end: { line: 4, column: 16 } } }),
+        mutant({ id: "13", mutatorName: "EqualityOperator", status: "Survived", replacement: "total <= 0", location: { start: { line: 4, column: 7 }, end: { line: 4, column: 16 } } }),
+        mutant({ id: "14", mutatorName: "EqualityOperator", status: "Killed", replacement: "total >= 0", location: { start: { line: 4, column: 7 }, end: { line: 4, column: 16 } } }),
+        mutant({ id: "16", mutatorName: "BooleanLiteral", status: "Killed", replacement: "isMember", location: { start: { line: 5, column: 7 }, end: { line: 5, column: 16 } } }),
+        mutant({ id: "17", mutatorName: "ConditionalExpression", status: "Killed", replacement: "true", location: { start: { line: 5, column: 7 }, end: { line: 5, column: 16 } } }),
+        mutant({ id: "18", mutatorName: "ConditionalExpression", status: "Survived", replacement: "false", location: { start: { line: 5, column: 7 }, end: { line: 5, column: 16 } } }),
+        mutant({ id: "19", mutatorName: "ConditionalExpression", status: "Survived", replacement: "true", location: { start: { line: 6, column: 7 }, end: { line: 6, column: 19 } } }),
+        mutant({ id: "20", mutatorName: "ConditionalExpression", status: "Killed", replacement: "false", location: { start: { line: 6, column: 7 }, end: { line: 6, column: 19 } } }),
+        mutant({ id: "21", mutatorName: "EqualityOperator", status: "Killed", replacement: "total > 100", location: { start: { line: 6, column: 7 }, end: { line: 6, column: 19 } } }),
+        mutant({ id: "22", mutatorName: "EqualityOperator", status: "Killed", replacement: "total < 100", location: { start: { line: 6, column: 7 }, end: { line: 6, column: 19 } } }),
+        mutant({ id: "23", mutatorName: "ArithmeticOperator", status: "Killed", replacement: "total / 0.8", location: { start: { line: 6, column: 28 }, end: { line: 6, column: 39 } } }),
+      ],
+    },
+    "authz.ts": {
+      language: "typescript",
+      mutants: [
+        mutant({ id: "1", mutatorName: "ConditionalExpression", status: "Killed", replacement: "true", location: { start: { line: 7, column: 7 }, end: { line: 7, column: 23 } } }),
+        mutant({ id: "0", mutatorName: "BlockStatement", status: "Killed", replacement: "{}", location: { start: { line: 6, column: 64 }, end: { line: 9, column: 2 } } }),
+        mutant({ id: "2", mutatorName: "ConditionalExpression", status: "Killed", replacement: "false", location: { start: { line: 7, column: 7 }, end: { line: 7, column: 23 } } }),
+        mutant({ id: "3", mutatorName: "EqualityOperator", status: "Killed", replacement: 'role !== "admin"', location: { start: { line: 7, column: 7 }, end: { line: 7, column: 23 } } }),
+        mutant({ id: "4", mutatorName: "StringLiteral", status: "Killed", replacement: '""', location: { start: { line: 7, column: 16 }, end: { line: 7, column: 23 } } }),
+        mutant({ id: "5", mutatorName: "BooleanLiteral", status: "Killed", replacement: "false", location: { start: { line: 7, column: 32 }, end: { line: 7, column: 36 } } }),
+        mutant({ id: "6", mutatorName: "ConditionalExpression", status: "Killed", replacement: "true", location: { start: { line: 8, column: 10 }, end: { line: 8, column: 27 } } }),
+        mutant({ id: "7", mutatorName: "ConditionalExpression", status: "Killed", replacement: "false", location: { start: { line: 8, column: 10 }, end: { line: 8, column: 27 } } }),
+        mutant({ id: "8", mutatorName: "EqualityOperator", status: "Killed", replacement: 'action !== "read"', location: { start: { line: 8, column: 10 }, end: { line: 8, column: 27 } } }),
+        mutant({ id: "9", mutatorName: "StringLiteral", status: "Killed", replacement: '""', location: { start: { line: 8, column: 21 }, end: { line: 8, column: 27 } } }),
+      ],
+    },
+  },
+};
+
+describe("M8 calibration corpus — live Stryker capture (#72 §M8)", () => {
+  it("leaves surviving mutants on discount.ts (M8-P-TAUTOLOGICAL: the weak test's false confidence)", () => {
+    const summary = summarizeMutationReport(m8Report);
+    const discountModule = summary.byModule.find((m) => m.module === "discount.ts");
+    // Real Stryker run: 9 killed / 15 valid mutants = 60.0% — matches Stryker's own reported score.
+    expect(discountModule).toMatchObject({ totalMutants: 15, killed: 9, survived: 4, noCoverage: 2, mutationScore: 60 });
+    const discountSurvivors = summary.survivingMutants.filter((m) => m.file === "discount.ts");
+    expect(discountSurvivors).toHaveLength(6); // 4 Survived + 2 NoCoverage
+  });
+
+  it("leaves zero surviving mutants on authz.ts (M8-N-STRONG: must not land on the false-confidence list)", () => {
+    const summary = summarizeMutationReport(m8Report);
+    const authzModule = summary.byModule.find((m) => m.module === "authz.ts");
+    // Real Stryker run: 10/10 killed = 100.0% — the strong test's exhaustive truth table.
+    expect(authzModule).toMatchObject({ totalMutants: 10, killed: 10, survived: 0, noCoverage: 0, mutationScore: 100 });
+    expect(summary.survivingMutants.some((m) => m.file === "authz.ts")).toBe(false);
+  });
+
+  it("computes the overall mutation score across both fixtures", () => {
+    const summary = summarizeMutationReport(m8Report);
+    // 19 killed / 25 valid = 76.0% — matches Stryker's own "All files" score-table row.
+    expect(summary.overall).toMatchObject({ totalMutants: 25, killed: 19, survived: 4, noCoverage: 2, mutationScore: 76 });
+  });
+});
