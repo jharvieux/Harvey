@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { checkNextVersionCVEs, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
+import { resolveScanScope } from "./scan-scope.js";
 import { scanSecrets } from "./secrets.js";
 import { checkMissingCsp, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
 import { checkInstallScripts, checkLockfilePresence, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
@@ -54,33 +55,45 @@ interface MechanicalScanOptions {
 
 export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Finding[]> {
   const { dir, bundleDir } = opts;
-  const findings: Finding[] = [];
 
-  // Secrets — source, git history, and built bundle if present.
-  findings.push(...scanSecrets(dir, bundleDir && existsSync(bundleDir) ? bundleDir : undefined));
+  // Scope the walk to what should actually be scanned (issue #101): git-tracked files only
+  // when dir is a git repo (excludes .env.local, .claude/worktrees/, node_modules, .next —
+  // whatever's untracked/gitignored — while keeping deliberately-committed fixtures), or a
+  // hard exclude list for a non-git target (zip export). Every filesystem-walking tool below
+  // gets the scoped copy; only the git-history secret pass needs the real `dir` (it clones
+  // the actual .git, which the scoped copy doesn't have).
+  const { scanDir, cleanup } = resolveScanScope(dir);
+  try {
+    const findings: Finding[] = [];
 
-  // Framework/dependency CVEs.
-  findings.push(...parseOsvFindings(runOsvScanner(dir)));
-  const pkg = readPackageJson(dir);
-  const nextVersion = pkg?.dependencies?.next ?? pkg?.devDependencies?.next;
-  if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion.replace(/^[\^~]/, "")));
+    // Secrets — source, git history, and built bundle if present.
+    findings.push(...scanSecrets(scanDir, dir, bundleDir && existsSync(bundleDir) ? bundleDir : undefined));
 
-  // Semgrep footguns + missing-CSP config check.
-  findings.push(...parseSemgrepFindings(runSemgrep(dir)));
-  findings.push(...checkMissingCsp(dir));
+    // Framework/dependency CVEs.
+    findings.push(...parseOsvFindings(runOsvScanner(scanDir)));
+    const pkg = readPackageJson(scanDir);
+    const nextVersion = pkg?.dependencies?.next ?? pkg?.devDependencies?.next;
+    if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion.replace(/^[\^~]/, "")));
 
-  // Supply chain.
-  if (pkg) {
-    const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
-    findings.push(...checkTyposquat(Object.keys(allDeps)));
-    findings.push(...checkUnpinnedDependencies(allDeps));
-    findings.push(...checkInstallScripts(pkg.scripts ?? {}));
-    findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
+    // Semgrep footguns + missing-CSP config check.
+    findings.push(...parseSemgrepFindings(runSemgrep(scanDir)));
+    findings.push(...checkMissingCsp(scanDir));
+
+    // Supply chain.
+    if (pkg) {
+      const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+      findings.push(...checkTyposquat(Object.keys(allDeps)));
+      findings.push(...checkUnpinnedDependencies(allDeps));
+      findings.push(...checkInstallScripts(pkg.scripts ?? {}));
+      findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
+    }
+    findings.push(...checkLockfilePresence(scanDir));
+
+    // Leftover-auth greps.
+    findings.push(...scanLeftoverAuth(scanDir));
+
+    return findings;
+  } finally {
+    cleanup();
   }
-  findings.push(...checkLockfilePresence(dir));
-
-  // Leftover-auth greps.
-  findings.push(...scanLeftoverAuth(dir));
-
-  return findings;
 }

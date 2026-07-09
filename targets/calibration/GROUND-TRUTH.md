@@ -180,6 +180,33 @@ stopword-allowlisted (silent), and the test-mode Stripe key draws a review hit o
 TruffleHog contributes nothing (every planted key is a dead fake, `--only-verified`), exactly as
 scored. `pnpm verify` (offline) is green via recorded gitleaks output in `calibration.test.ts`.
 
+### Scan-scope guard (issue #101) — N-UNTRACKED-ENV
+
+The mechanical scan used to walk the raw target directory, so a scan against a real *working
+checkout* (not a clone) would pick up untracked/gitignored local artifacts — most credibility-fatal,
+the operator's own `.env.local` — and hand them back as "Critical" findings. Fixed in
+`src/scan/scan-scope.ts` / `src/scan/mechanical.ts`: when the target is a git repo, every
+filesystem-walking tool (gitleaks, TruffleHog's filesystem pass, Semgrep, the leftover-auth walk,
+OSV/lockfile reads) now runs against a scratch copy of the git-**tracked** files only
+(`git ls-files`), not the raw directory. Untracked/gitignored files never reach the scratch copy.
+The git-history TruffleHog pass is the one exception — it needs the real, clonable `.git`, so it
+still points at the original directory (unaffected either way, since it already scans committed
+history, not the working tree).
+
+This is why this target's `.env.local` (tracked despite being listed in `.gitignore` — see
+`git ls-files -- .env.local`) keeps working as B1's committed-secret positives while a genuinely
+untracked `.env.local` would not: git tracking, not the filename, is what the scoping keys off.
+**N-UNTRACKED-ENV** encodes that intent as a negative — "an untracked artifact must not be
+scanned" — but can't be represented as a fixture *in this committed target* (a file can't be both
+committed and untracked at once). It's verified at the logic/test layer instead:
+`src/scan/scan-scope.test.ts` builds a throwaway git repo with a tracked file plus an untracked
+`.env.local` and asserts the untracked file is excluded from the scoped copy (and, separately,
+that a force-added-despite-gitignored fixture — mirroring this target's real `.env.local` — is
+kept). The non-git (zip-export) fallback path is covered by the same test file: a hard exclude
+list (`node_modules`, `.claude/`, `.next`, `dist`, `build`, `coverage`, worktree dirs) applies, but
+`.env*` is deliberately NOT excluded there (no git history to distinguish a legitimately-committed
+`.env` from a leaked working-tree one — best-effort only; git-clone access is preferred).
+
 ---
 
 ## Batch B3 (#71) — injection & code-execution family
