@@ -908,3 +908,48 @@ signals + reproducible ranking against an assumed schema" — never "M3 precisio
 "validated against a live vitals run." Issue #94 tracks getting `vitals` runnable, capturing the
 real schema, reconciling `src/hotspot-scan.ts`'s types against it, and building the git-history
 fixture + `pnpm validate:hotspots` Layer 2.
+
+---
+
+## M6 (#72) — Simplification / reuse rubric-eval corpus
+
+The M6 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
+§M6; full rubric writeup `docs/design/m6-simplification-eval.md`). **Not a gate — M6 has no
+mechanical detector.** Unlike every other module in this file, there is no `Finding[]`-emitting
+adapter, no `precisionTier`, and no `CorpusEntry` rows in `src/scan/calibration.ts` for this
+batch: M6's output is prose from an LLM review (the `/simplify` skill against
+`docs/quality-extras.txt`'s SIMPLIFICATION section), not a tool result a scorer can match against
+a `location`. Folding it into `CorpusEntry`/`buildCoverageMatrix` — even filtered out of today's
+gate, the way M8/M10's entries are — would leave a row shaped exactly like a precision-tier
+finding, one line away from being scored as one. Per the spec's locked preamble (item 2): "M6
+simplification is paid-only (LLM opinion; no false-positive-safe automated free version)."
+
+Fixtures: `targets/calibration/simplify/` — four planted reinventions to flag, two benign
+lookalikes to spare, paired 1:1 by shape so the reviewer has to reason about *why* (a `// WHY:`
+tradeoff comment, a framework contract) rather than pattern-match on shape alone.
+
+### M6 positives — planted reinventions (should be flagged for replacement)
+
+| id | location | the standard replacement a review should name |
+|---|---|---|
+| M6-P-DEBOUNCE | `simplify/debounce.ts` | a hand-rolled `setTimeout`-based debounce → stdlib/existing-dep debounce (e.g. lodash-es `debounce`) |
+| M6-P-GROUPBY | `simplify/group.ts` | a hand-rolled array group-by reduce → `Object.groupBy` / `Map.groupBy` / lodash-es `groupBy` |
+| M6-P-UUID | `simplify/id.ts` | a hand-rolled random-id string builder (`Math.random()`-based) → `crypto.randomUUID()` |
+| M6-P-OVERABSTRACT | `simplify/manager.ts` | a single-implementation `InvoiceManager` interface + `createInvoiceManager` factory wrapping one concrete class → collapse to the concrete code |
+
+### M6 negatives — benign lookalikes (should NOT be flagged)
+
+| id | location | why benign |
+|---|---|---|
+| M6-N-DEPDROP | `simplify/depdrop.ts` | a small hand-rolled `throttle`, shaped like `debounce.ts`, but carries a `// WHY:` comment recording a deliberate tradeoff (drop a heavy dep for an 8-line function) — `quality-extras.txt` "FALSE POSITIVES": note the tradeoff, don't flag as a defect. |
+| M6-N-FRAMEWORK | `simplify/framework-adapter.ts` | an interface + factory shaped like `manager.ts`'s over-abstraction, but the shape is mandated by a Next.js `getServerSideProps`-style framework contract, not gratuitous — `quality-extras.txt` "FALSE POSITIVES": an abstraction mandated by a framework/library contract. |
+
+### M6 eval status
+
+No live rubric-agreement run has been scored yet — this batch ships the labeled corpus and the
+design note (`docs/design/m6-simplification-eval.md`), not a completed eval pass. Running the
+`/simplify` skill against `targets/calibration/simplify/` and recording which of the 4 positives
+it names and which of the 2 negatives it correctly spares is a documented follow-up, tracked the
+same way M3's live-git and M7's live-branch confirmations are: build the fixture first, run and
+record the live result later. Whatever that run produces, report it as **"reviewer agreed N/4
+positives, M/2 negatives"** — never as an "M6 precision" percentage.
