@@ -9,6 +9,6 @@ import { configDefaults, defineConfig } from "vitest/config";
 // own tests here. Extends (not replaces) vitest's own default excludes.
 export default defineConfig({
   test: {
-    exclude: [...configDefaults.exclude, "targets/**"],
+    exclude: [...configDefaults.exclude, "targets/**", "epic-builder-web/**"],
   },
 });

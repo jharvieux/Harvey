@@ -269,9 +269,9 @@ scanner toolkit.
 **Deferred (tracked, non-essential to prove the flow):**
 
 - Live `ModelClient` implementation (Anthropic per §5) — seam + selector present, prompts not yet
-  written; needs a key + CI eval before it can be trusted.
+  written; needs a key + CI eval before it can be trusted. **Tracked: #102.**
 - Supabase Postgres storage adapter + Supabase Auth multi-user (§4, §6) — the seam is `workspace.ts`
-  and the `userId` partition; nothing above it changes.
+  and the `userId` partition; nothing above it changes. **Tracked: #103.**
 - Two-phase revision confirm and multi-round web clarify (§3) — MVP uses apply-then-show-diff and a
   single clarify round.
 - Per-engagement (per-repo) tracker tokens beyond the single env token (§7).
