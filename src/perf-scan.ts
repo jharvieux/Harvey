@@ -153,6 +153,11 @@ export function parseAdvisorFindings(report: AdvisorReport): Finding[] {
       category: "Performance",
       taxonomy: profile.taxonomy,
       location: locationFor(lints),
+      // Supabase performance-advisor lints are schema-truth (Splinter runs against the live
+      // schema) — ~100% precise once connected, the same trust class as a verified secret or an
+      // exact CVE match (src/findings.ts's PRECISION_TIERS comment). The corpus's "connected"
+      // expectedTier (src/scan/calibration/m7.entries.ts) tracks the separate live-DB dependency.
+      precisionTier: "high",
       status: "Open",
       evidence: `Supabase performance advisor: ${name}.${first.detail ? ` e.g. "${first.detail}"` : ""}`,
       impact: profile.impact,

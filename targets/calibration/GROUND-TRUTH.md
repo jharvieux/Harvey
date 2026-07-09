@@ -688,3 +688,63 @@ default test glob — without it, root `vitest run` picks up
 happened to pass, since the weak test is weak in its *assertions*, not broken as a test — but
 running the target's own tests through the root suite was never the intent, and a future,
 deliberately-failing weak-test fixture would break `pnpm verify` on an unrelated branch).
+
+---
+
+## M7 (#72) — Performance (Supabase advisors) corpus
+
+The M7 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
+§M7). **Connected tier** — like `P-RLS-DISABLED` in the base corpus, Splinter's performance
+lints (`unindexed_foreign_keys`, `auth_rls_initplan`, `unused_index`) only fire against a LIVE
+schema (`unused_index` additionally needs `pg_stat_user_indexes` usage history), so they can't be
+scored by a static run. Fixture: `supabase/migrations/20260708000004_perf_calibration.sql`
+(tables `perf_orders`, `perf_line_items`, `perf_shipments`, `perf_events`). Tool + invocation:
+`pnpm perf-scan <project-ref>` → `src/perf-scan.ts::parseAdvisorFindings`, already wired with
+curated `LINT_PROFILES` for all three rules (no scanner changes needed for this batch beyond
+tagging every emitted `Finding` `precisionTier: "high"` — advisor lints are schema-truth, ~100%
+precise once connected).
+
+Answer key: `src/scan/calibration/m7.entries.ts` (`module: "M7"`, `expectedTier: "connected"` on
+the 3 positives, spread into `CORPUS` in `src/scan/calibration.ts`). Excluded from
+`pnpm validate:calibration`'s `runMechanicalScan` gate by the same `module === undefined` filter
+as M8/M10 — the performance advisor isn't part of the mechanical/security scan. Bundle/Core Web
+Vitals (Lighthouse, `next build` first-load JS) stays documented-plan-only per
+`docs/m7-performance.md` §3 — no fixture built for it here, per spec.
+
+### M7 positives — planted advisor lints (connected tier — must be caught once a live pull is scored)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| M7-P-UNINDEXED-FK | `perf_line_items.order_id` (FK to `perf_orders.id`, no covering index) | Splinter `unindexed_foreign_keys` | connected |
+| M7-P-RLS-INITPLAN | `perf_orders_select_own` policy (`created_by = auth.uid()`, bare) | Splinter `auth_rls_initplan` | connected |
+| M7-P-UNUSED-INDEX | `idx_perf_orders_legacy_region` (no seeded/hot query touches it) | Splinter `unused_index` | connected |
+
+### M7 negatives — benign lookalikes (must NOT be flagged once a live pull is scored)
+
+| id | location | why benign |
+|---|---|---|
+| M7-N-INDEXED-FK | `perf_shipments.order_id` (FK to `perf_orders.id`, covered by `idx_perf_shipments_order_id`) | advisor must not raise `unindexed_foreign_keys` |
+| M7-N-WRAPPED-RLS | `perf_events_select_own` policy (`actor = (select auth.uid())`, wrapped) | advisor must not raise `auth_rls_initplan` |
+| M7-N-USED-INDEX | `idx_perf_orders_customer_email` (backs the seeded customer-email lookup) | advisor must not raise `unused_index` once the query is exercised live — removing it would be a false "unused" call |
+
+`M7-P-UNUSED-INDEX` and `M7-N-USED-INDEX` share a table (`perf_orders`) and rule name
+(`unused_index`) — `locationFor()` groups by table, not by index, so both entries match on the
+specific *index name* instead of the rule name: a genuinely-used index never generates a lint at
+all, so `idx_perf_orders_customer_email` can never collide with a real finding.
+
+### M7 offline result (2026-07-08, static — no live DB, `pnpm verify` only)
+
+`src/perf-scan.test.ts`'s "M7 calibration corpus — modeled advisor pull" block scores
+`parseAdvisorFindings` against a **modeled** advisor JSON (NOT a live capture — shaped from what
+a live Splinter pull over `20260708000004_perf_calibration.sql` should return) through
+`buildCoverageMatrix`: **all 3 planted positives attribute correctly at `high` precision (the
+matching logic resolves `location` + rule-name/index-name `match` keywords to the exact intended
+finding); all 3 negatives draw zero findings from the modeled report.** Since every
+`M7-P-*` entry is `expectedTier: "connected"`, `pnpm validate:calibration`'s live gate reports
+them **N/A**, not passing — the precision claim is only earned by the deferred live-branch run
+(SESSION.md "Owed: connected-tier live confirmation pass": `colima start` → `supabase start` →
+apply this migration on a throwaway branch → `get_advisors(performance)` → confirm the 3
+positives fire and the 3 negatives don't, then delete the branch). `pnpm verify` (offline) is
+green: `calibration.test.ts`'s generic `buildCoverageMatrix` tests already cover a connected-tier
+entry scoring N/A regardless of findings; the new `perf-scan.test.ts` block is this batch's
+Layer-1 gate, proving the shaping/matching logic ahead of that live run.
