@@ -13,17 +13,18 @@
 
 import type { Finding, PrecisionTier } from "../findings.js";
 import { baseEntries } from "./calibration/base.entries.js";
+import { m10Entries } from "./calibration/m10.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
 import type { CorpusEntry } from "./calibration/types.js";
 
 export type { CorpusEntry } from "./calibration/types.js";
 
 // Answer key, assembled from per-batch entry modules under ./calibration/. CONVENTION: each
-// corpus batch (#71 fan-out) adds a `<batch>.entries.ts` file exporting a CorpusEntry[] and one
-// spread below — this keeps parallel batches conflict-free (a new batch touches only its own
+// corpus batch (#71/#72 fan-out) adds a `<batch>.entries.ts` file exporting a CorpusEntry[] and
+// one spread below — this keeps parallel batches conflict-free (a new batch touches only its own
 // file plus this single line). Positives extend GROUND-TRUTH.md's planted bugs; negatives are
 // the benign lookalikes from the FP catalog (docs/fp-rules.txt).
-export const CORPUS: CorpusEntry[] = [...baseEntries, ...secretsEntries];
+export const CORPUS: CorpusEntry[] = [...baseEntries, ...secretsEntries, ...m10Entries];
 
 function haystack(f: Finding): string {
   return `${f.id} ${f.title} ${f.taxonomy} ${f.evidence} ${f.location}`.toLowerCase();
