@@ -2,7 +2,7 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-09 (corpus expansion complete, connected-tier live-confirmed)_
+_Last updated: 2026-07-09 (corpus + follow-ups done; #53 run against ATC surfaced the scoping gap #101)_
 
 ## Corpus expansion (#71 security, #72 cross-module) — COMPLETE
 All mechanical batches merged. Answer key + Semgrep rules are per-batch modular
@@ -18,15 +18,22 @@ All mechanical batches merged. Answer key + Semgrep rules are per-batch modular
   M7 perf lint fires against real Splinter on a live stack. Gap found: `harvey scan --supabase local`
   runs a subset, not full Splinter → **#54** is what unlocks the connected coverage locally.
 
-## Open agent-doable follow-ups (mechanical-scan maturity)
-- **#54** wire `splinter.sql` into local Supabase scan (unlocks B8/M7 connected coverage locally; live evidence attached).
-- **#94** M3: capture the real `vitals --json` schema + a git-history hotspot fixture + `pnpm validate:hotspots` Layer-2.
-- **#86** normalize the calibration gate's `location` matcher to repo-relative (env-independent scoring).
-- **#73** OSV dedup (`next@14.2.35` double-matches a curated CVE).
-- **#53** LLM `/threat-model`→`/vuln-scan`→`/triage` pipeline unverified (needs reference-harness).
+## Open agent-doable follow-ups
+- **#101 (PRIORITY)** — mechanical scan must scope to the COMMITTED tree. Running `scan --mechanical`
+  against ATC (a real repo, for #53) flagged the operator's gitignored `.env.local` secrets +
+  `.claude/worktrees/` as findings — it scans the working tree, not a clean clone. On a client this
+  would hand them back their own secrets + flood noise. THE blocker between "pipeline runs" and
+  "client-ready" (#10/#34). Fix: clean `git clone`/`git archive` or respect `.gitignore` + exclude list,
+  with a gitignored-`.env.local`-must-NOT-flag calibration fixture.
+- **#102** epic-builder-web: live Anthropic ModelClient (seam present; MVP ships on scaffold). 
+- **#103** epic-builder-web: Supabase storage adapter + Supabase Auth (MVP is filesystem/single-instance).
+- **#53** the reference-harness `/threat-model`→`/vuln-scan`→`/triage` SKILLS aren't installed here;
+  pipeline verified via Harvey's own scanners against ATC instead. Installing the harness skills (or
+  keeping Harvey's own pipeline) is the remaining choice; #101 gates client-readiness either way.
 
-## New product surface
-- **#76** epic-builder web UI (opus; design doc first) — closes the "onboarding site has no link to the epic tool" gap.
+DONE this round (merged): #54 (Splinter wired into local scan), #94 (M3 adapter corrected to the real
+vitals schema, captured from a live ATC run), #86 (gate path-matcher), #73 (OSV dedup),
+#76 (epic-builder web UI MVP — internal tool, filesystem + scaffold model).
 
 ## Operator / manual action items (not agent-executable)
 - **Vercel 404:** set the `harvey` project Root Directory to `intake-site` + add `RESEND_API_KEY`
