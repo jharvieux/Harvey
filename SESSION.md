@@ -19,12 +19,13 @@ All mechanical batches merged. Answer key + Semgrep rules are per-batch modular
   runs a subset, not full Splinter → **#54** is what unlocks the connected coverage locally.
 
 ## Open agent-doable follow-ups
-- **#101 (PRIORITY)** — mechanical scan must scope to the COMMITTED tree. Running `scan --mechanical`
-  against ATC (a real repo, for #53) flagged the operator's gitignored `.env.local` secrets +
-  `.claude/worktrees/` as findings — it scans the working tree, not a clean clone. On a client this
-  would hand them back their own secrets + flood noise. THE blocker between "pipeline runs" and
-  "client-ready" (#10/#34). Fix: clean `git clone`/`git archive` or respect `.gitignore` + exclude list,
-  with a gitignored-`.env.local`-must-NOT-flag calibration fixture.
+- **#101** — zip/working-folder scan scoping (NOT a general blocker). A git clone / collaborator
+  invite (the primary path) carries only committed files, so gitignored `.env.local` / `.claude/worktrees/`
+  never appear — the noise seen against ATC was from scanning a local working checkout. The real case is
+  the runbook's **zip-export** option: a working-folder zip can carry `.env*`, `node_modules`, `.claude/`,
+  build output. Fix: prefer git-clone access; when a zip IS the target, normalize it (respect `.gitignore`
+  or an exclude list) before scanning. Git-history secret scanning still legitimately catches
+  committed-then-removed secrets in a clone.
 - **#102** epic-builder-web: live Anthropic ModelClient (seam present; MVP ships on scaffold). 
 - **#103** epic-builder-web: Supabase storage adapter + Supabase Auth (MVP is filesystem/single-instance).
 - **#53** the reference-harness `/threat-model`→`/vuln-scan`→`/triage` SKILLS aren't installed here;
