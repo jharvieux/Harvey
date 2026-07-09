@@ -23,9 +23,16 @@
 // Local mode (`--supabase local`) targets a `supabase start` stack directly over Postgres
 // (default: postgresql://postgres:postgres@127.0.0.1:54322/postgres) using the `postgres`
 // package (already a project dependency) — no Management API assumptions needed. Advisor
-// lints are a hosted-dashboard feature backed by Splinter; local mode skips them and relies
-// on the SQL-derived checks only. The Supabase CLI also ships `supabase db lint`, which may
-// cover similar ground locally, but its JSON output wasn't verified here, so it isn't wired in.
+// lints are a hosted-dashboard feature backed by Splinter (Supabase's open-source Postgres
+// linter); local mode runs the vendored copy directly (src/scan/rules/splinter.sql, via
+// src/scan/supabase-splinter.ts#runSplinter) against the same connection, so local scans get
+// the full Advisor lint set, not just the SQL-derived checks below. Those SQL-derived checks
+// (checkAutoExposedTables/checkDangerousExtensions/checkPublicBucketsWithNoPolicies) cover
+// ground Splinter doesn't (dangerous extensions, public-bucket policy coverage) and are kept;
+// checkAutoExposedTables overlaps Splinter's rls_disabled_in_public lint for the same table,
+// so that overlap is deduped (dedupeAutoExposed below) rather than double-emitted. The Supabase
+// CLI also ships `supabase db lint`, which may cover similar ground, but its JSON output wasn't
+// verified here, so it isn't wired in.
 //
 // Edge function secret/webhook-signature checks read source from the client repo's
 // `supabase/functions/<name>/index.ts` layout (functionsDir option) rather than fetching
@@ -37,6 +44,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { parseAdvisorFindings, type AdvisorsResponse } from "./supabase-advisors.js";
+import { runSplinter } from "./supabase-splinter.js";
 import {
   checkAuthConfig,
   checkAutoExposedTables,
@@ -65,6 +73,7 @@ interface SupabaseScanOptions {
   managementApiToken?: string; // falls back to SUPABASE_ACCESS_TOKEN
   fetchImpl?: typeof fetch; // injection point for tests
   functionsDir?: string; // path to the client repo's supabase/functions directory, if scanning it
+  splinterImpl?: (connectionString: string) => AdvisorsResponse; // injection point for tests, defaults to runSplinter
 }
 
 function readEdgeFunctionSources(functionsDir: string): EdgeFunctionSource[] {
@@ -120,7 +129,16 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch): 
   return findings;
 }
 
-async function scanLocal(connectionString: string = LOCAL_CONNECTION): Promise<Finding[]> {
+// checkAutoExposedTables and Splinter's rls_disabled_in_public lint both flag "public-schema
+// table, RLS disabled" for the same table — Splinter is the ground-truth Advisor source, so
+// drop the checkAutoExposedTables hit for any table Splinter already caught rather than
+// double-emit the same underlying issue under two taxonomies.
+export function dedupeAutoExposed(splinterFindings: Finding[], autoExposedFindings: Finding[]): Finding[] {
+  const covered = new Set(splinterFindings.filter((f) => f.taxonomy === "rls_disabled_in_public").map((f) => f.location));
+  return autoExposedFindings.filter((f) => !covered.has(f.location));
+}
+
+async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterImpl: (connectionString: string) => AdvisorsResponse = runSplinter): Promise<Finding[]> {
   const { default: postgres } = await import("postgres");
   const sql = postgres(connectionString, { max: 1, idle_timeout: 5 });
   try {
@@ -128,8 +146,12 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION): Promise<F
     const extensions = (await sql.unsafe(EXTENSIONS_SQL)) as unknown as ExtensionInfo[];
     const buckets = (await sql.unsafe(BUCKETS_SQL)) as unknown as StorageBucket[];
     const policyRows = (await sql.unsafe(BUCKET_POLICY_COUNTS_SQL)) as unknown as { bucket_id: string; count: number }[];
+
+    const splinterFindings = parseAdvisorFindings(splinterImpl(connectionString));
+
     return [
-      ...checkAutoExposedTables(tables),
+      ...splinterFindings,
+      ...dedupeAutoExposed(splinterFindings, checkAutoExposedTables(tables)),
       ...checkDangerousExtensions(extensions),
       ...checkPublicBucketsWithNoPolicies(buckets, bucketPolicyCounts(policyRows)),
     ];
@@ -141,7 +163,7 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION): Promise<F
 export async function runSupabaseScan(opts: SupabaseScanOptions): Promise<Finding[]> {
   let findings: Finding[];
   if (opts.local) {
-    findings = await scanLocal();
+    findings = await scanLocal(LOCAL_CONNECTION, opts.splinterImpl);
   } else {
     if (!opts.projectRef) throw new Error("runSupabaseScan requires projectRef unless local is set");
     const token = opts.managementApiToken ?? process.env.SUPABASE_ACCESS_TOKEN;
