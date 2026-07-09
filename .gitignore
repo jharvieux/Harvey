@@ -8,3 +8,8 @@ report-template/out/
 .epic-builder/
 *.log
 .DS_Store
+
+# M8 (#72) Stryker output — targets/calibration/test-quality/ (generated, machine/run-specific;
+# the answer-key capture lives in src/mutation-scan.test.ts instead)
+reports/mutation/
+stryker-tmp/

@@ -1,0 +1,16 @@
+{
+  "name": "m8-calibration-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "M8 calibration fixture (#72 §M8) — deliberately isolated from targets/calibration/package.json, whose react-supabase-helpers dependency is a nonexistent slopsquat fixture that makes `npm install` fail at that level. This nested package.json gives the mutation-testing suite its own installable dependency tree.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "mutation": "stryker run"
+  },
+  "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
+    "vitest": "^3.2.0"
+  }
+}

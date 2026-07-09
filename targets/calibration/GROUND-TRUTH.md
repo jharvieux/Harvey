@@ -290,6 +290,58 @@ proven by the live gate above.
 
 ---
 
+## Batch B4 (#71) — XSS & client-side sink family
+
+The XSS/client-sink expansion batch (spec `docs/design/spec-71-security-corpus.md` §"Batch 2 —
+XSS & client-side sink family"). Custom Semgrep taint rules in `src/scan/rules/semgrep/xss.yml`
+(the per-batch rule-file directory established by the Part-1 modularization). Tiering per the
+locked preamble: only ~100%-precision sinks are `high` (free count) — `.innerHTML`/
+`insertAdjacentHTML` and `document.write`, which execute markup/script unconditionally once the
+source is tainted, with no benign "just text" reading. The heuristic sinks (href scheme, a direct
+`window.location` assignment, `setAttribute`, and a DB-read source reaching
+`dangerouslySetInnerHTML`) stay `review`. XSS-via-tainted-`dangerouslySetInnerHTML` (`P-XSS-DSIH`)
+and its sanitized/constant lookalike (`N-DSIH-SANITIZED`) already ship in the base corpus — B4
+does not duplicate them.
+
+### B4 positives — planted XSS/client sinks (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-DOM-XSS-INNERHTML | `components/Widget.jsx:11` | Semgrep `harvey-dom-innerhtml` (taint: `router.query` → `.innerHTML`/`insertAdjacentHTML`) | high |
+| P-DOM-XSS-DOCWRITE | `components/Embed.jsx:9` | Semgrep `harvey-document-write` (taint: `location.hash` → `document.write()`) | high |
+| P-XSS-STORED-DSIH | `pages/comment.js:10` | Semgrep `harvey-dangerously-set-inner-html-stored` (taint: Supabase `.from().select()` → `dangerouslySetInnerHTML`) | review |
+| P-XSS-HREF-JS | `components/AnchorLink.jsx:9` | Semgrep `harvey-href-js-url` (taint: `router.query` → native `<a href>`) | review |
+| P-XSS-DANGEROUS-URL | `components/LocationNav.jsx:10` | Semgrep `harvey-open-url-sink` (taint: `URLSearchParams.get()` → `window.location` assignment) | review |
+| P-XSS-SETATTR | `components/ImgAttr.jsx:12` | Semgrep `harvey-set-attribute-xss` (taint: `router.query` → `setAttribute('src', …)`) | review |
+
+### B4 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-INNERHTML-STATIC | `components/WidgetSafe.jsx` | `ref.current.innerHTML = '<strong>Loading…</strong>'` — constant string, no tainted source. `harvey-dom-innerhtml` fires only on `router.query`/`location`/`searchParams`. (Named `WidgetSafe.jsx`, not the spec's `Widget.jsx`, to avoid a basename collision with the `P-DOM-XSS-INNERHTML` positive — the same disambiguation B3 used for `xml-safe.js`.) |
+| N-HREF-INTERNAL | `components/NavLink.jsx` | `<Link href="/dashboard">` — `next/link`, constant string, not a native `<a>` and not request-derived. `harvey-href-js-url`'s sink is a native `<a href={...}>` from a tainted source; neither the element nor the source matches. |
+| N-SEARCHPARAMS-TEXT | `pages/search-results.js` | `<p>Results for: {router.query.q}</p>` — a React text child (JSX auto-escapes), never an `innerHTML`/`href`/`setAttribute`/`document.write` sink. None of the B4 rules match a plain text expression. |
+
+### B4 live result (2026-07-08, static: semgrep 1.164.0, no Docker)
+
+`pnpm validate:calibration`: **positives caught 45/45 static (17 at high/free-count), 1
+connected-tier N/A; negatives cleared 28/28 static; zero free-count false positives — GATE
+PASS.** The 6 new B4 positives all fire exactly once each, at their declared tier (2 at high:
+`.innerHTML`/`insertAdjacentHTML` and `document.write`; 4 at review: the DB-sourced DSIH variant,
+the `<a href>` scheme sink, the `window.location` open-URL sink, and `setAttribute`). The 3 new
+negatives clear with no finding at all (not even a review-tier hit): the constant `innerHTML`,
+the `next/link` internal route, and the text-rendered search param. No regression on the base,
+B1, or B3 batches. One tuning note during development: the fixture for `P-XSS-STORED-DSIH`
+originally destructured the DB row's HTML field as `.body` (matching the spec's `pages/comment.js`
+sketch), which accidentally also matched the pre-existing `harvey-dangerously-set-inner-html`
+rule's `$REQ.body` source pattern (a generic `<expr>.body` member-access match, not scoped to an
+actual request object) — the fixture was renamed to `.content` to isolate the new `-stored` rule
+and avoid over-crediting a DB-read source as a request-tainted `high` finding. `pnpm verify`
+(offline) is green: the scorecard logic over the expanded `CORPUS` is exercised in
+`calibration.test.ts`; the Semgrep rules themselves are proven by the live gate above.
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
@@ -409,3 +461,86 @@ false positives. `pnpm verify` (offline) is green via `tools/pii-classify.test.t
 calibration corpus" block (21/21 tests in the file, including the 3 new M10-specific cases) and the
 unchanged `calibration.test.ts` suite (11/11, `CORPUS` now includes the 6 M10 positives + 4
 negatives with no location collisions against the existing corpus).
+
+---
+
+## M8 (#72) — Test quality (StrykerJS mutation) corpus
+
+The M8 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
+§M8). Unlike M4/M5/M10, the calibration target had **no test suite at all** before this batch —
+M8 adds one, scoped entirely to `targets/calibration/test-quality/`, a small, deliberately
+isolated npm project (its own `package.json`, `vitest.config.ts`, `stryker.config.json`,
+`node_modules`). Isolated on purpose: `targets/calibration/package.json`'s own dependency tree
+can never `npm install` (`react-supabase-helpers` is a deliberately nonexistent slopsquat
+fixture for M1 — see that file's `description`), so a Stryker/vitest install at that level was
+never viable. `test-quality/` is a separate project boundary, not linked via npm workspaces, so
+it installs cleanly on its own.
+
+**Fixtures:**
+- `test-quality/discount.ts` — `applyDiscount(total, isMember)`, covered ONLY by
+  `discount.tautological.test.ts`, a single happy-path assertion (`applyDiscount(100, true) ===
+  80`) that never exercises the non-member branch, the negative-total guard, or the `<100`
+  member boundary. This is the planted weak test (M8-P-TAUTOLOGICAL).
+- `test-quality/authz.ts` — `canAccess(role, action)`, covered by `authz.strong.test.ts`, which
+  is exhaustive over the 2x2 role/action truth table (admin/member × read/delete), including the
+  denial path. This is the planted strong test (M8-N-STRONG).
+
+**Tool + invocation:** `npx stryker run` (Stryker 9.6.1, `@stryker-mutator/vitest-runner` 9.6.1,
+`coverageAnalysis: "perTest"`) from `targets/calibration/test-quality/`, or
+`pnpm mutation-scan targets/calibration/test-quality` from the repo root once Stryker is
+installed there (`src/cli/mutation-scan.ts`).
+
+### M8 positives — planted weak test (must leave a surviving mutant)
+
+| id | fixture | weakness class | expected Stryker result |
+|---|---|---|---|
+| M8-P-TAUTOLOGICAL | `test-quality/discount.ts` + `discount.tautological.test.ts` | happy-path-only / assertion-light (quality-extras.txt M8 category 5) | ≥1 mutant Survived/NoCoverage on `discount.ts` |
+
+### M8 negatives — planted strong test (must NOT be flagged)
+
+| id | fixture | why genuinely strong | must NOT happen |
+|---|---|---|---|
+| M8-N-STRONG | `test-quality/authz.ts` + `authz.strong.test.ts` | exhaustive over the 2x2 role/action truth table, denial path included | zero surviving mutants on `authz.ts` — must not land on the false-confidence list |
+
+### M8 live result (2026-07-08, live: Stryker 9.6.1, `@stryker-mutator/vitest-runner` 9.6.1, vitest 3.2.7, no Docker)
+
+`npx stryker run` against `targets/calibration/test-quality/` (`mutate:
+["discount.ts","authz.ts"]`, `coverageAnalysis: "perTest"`):
+
+- **`discount.ts` (weak test): 15 mutants — 9 Killed, 4 Survived, 2 NoCoverage → mutation score
+  60.0%.** Surviving: two `ConditionalExpression` mutants negating the guard/boundary conditions
+  (lines 4 and 5), one `EqualityOperator` mutant loosening the negative-total guard
+  (`total < 0` → `total <= 0`, line 4), one `ConditionalExpression` mutant on the `>= 100`
+  boundary (line 6). NoCoverage: a `StringLiteral` mutant on the error message (line 4, never
+  thrown) and an `ArithmeticOperator` mutant on the non-member discount math (line 7, branch
+  never exercised). **M8-P-TAUTOLOGICAL: caught — 6 surviving mutants prove the weak test's false
+  confidence.**
+- **`authz.ts` (strong test): 10 mutants — 10 Killed, 0 Survived, 0 NoCoverage → mutation score
+  100.0%.** Every `ConditionalExpression`, `EqualityOperator`, `BooleanLiteral`, and
+  `StringLiteral` mutant flips at least one of the four truth-table outcomes the test asserts.
+  **M8-N-STRONG: cleared — zero false positives on the false-confidence list.**
+- **Overall: 25 mutants — 19 Killed, 4 Survived, 2 NoCoverage → mutation score 76.0%**, matching
+  Stryker's own reported "All files" score-table row exactly (independent confirmation that
+  `src/mutation-scan.ts`'s `mutationScore()` formula agrees with Stryker's).
+
+**Gate:** mutant-level recall, per spec §M8(d) — "a survived mutant at a location is
+deterministic given the suite," so this is a real measure; it does **not** validate the
+qualitative tests-for-intent read (`docs/m8-test-quality.md` §4), which stays a documented manual
+method. `pnpm verify` (offline) is green — the real Stryker JSON capture above is recorded
+verbatim (trimmed to the `StrykerReport` shape) into `src/mutation-scan.test.ts`'s "M8
+calibration corpus — live Stryker capture" block, asserting the per-file mutation scores and
+surviving-mutant counts land exactly as this live run produced. This closes the
+`docs/m8-test-quality.md` "Deferred: live timed run against a real test suite" gap. Answer key:
+`src/scan/calibration/m8.entries.ts` (`module: "M8"`, spread into `CORPUS` in
+`src/scan/calibration.ts`) — like M10, these entries are not yet scored by `buildCoverageMatrix`
+(`summarizeMutationReport` returns a `MutationSummary`, not a `Finding[]`); a Finding-emitting
+adapter (spec §3b.3: `location = file:line`, `precisionTier: "high"` per surviving mutant) and a
+dedicated `pnpm validate:mutation-calibration` CLI (spec §M8(e) Layer 2) are documented
+follow-ups, not required for this batch's gate.
+
+**Root-suite isolation:** `vitest.config.ts` (repo root, new) excludes `targets/**` from the
+default test glob — without it, root `vitest run` picks up
+`targets/calibration/test-quality/*.test.ts` as if they were part of this repo's own suite (they
+happened to pass, since the weak test is weak in its *assertions*, not broken as a test — but
+running the target's own tests through the root suite was never the intent, and a future,
+deliberately-failing weak-test fixture would break `pnpm verify` on an unrelated branch).

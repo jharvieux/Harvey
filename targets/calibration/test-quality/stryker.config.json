@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-js/master/packages/api/schema/stryker-schema.json",
+  "_comment": "M8 calibration fixture (#72 §M8) — the calibration target's answer key for the mutation-scan module. discount.ts is covered only by a planted weak test (M8-P-TAUTOLOGICAL); authz.ts by a planted strong test (M8-N-STRONG).",
+  "mutate": ["discount.ts", "authz.ts"],
+  "testRunner": "vitest",
+  "coverageAnalysis": "perTest",
+  "reporters": ["json", "clear-text", "progress"],
+  "jsonReporter": {
+    "fileName": "reports/mutation/mutation.json"
+  },
+  "tempDirName": "stryker-tmp",
+  "concurrency": 2
+}

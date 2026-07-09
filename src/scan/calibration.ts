@@ -14,7 +14,9 @@
 import type { Finding, PrecisionTier } from "../findings.js";
 import { baseEntries } from "./calibration/base.entries.js";
 import { b3InjectionEntries } from "./calibration/b3-injection.entries.js";
+import { b4XssEntries } from "./calibration/b4-xss.entries.js";
 import { b6CryptoEntries } from "./calibration/b6-crypto.entries.js";
+import { m8Entries } from "./calibration/m8.entries.js";
 import { m10Entries } from "./calibration/m10.entries.js";
 import { m4m5Entries } from "./calibration/m4-m5.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
@@ -31,9 +33,11 @@ export const CORPUS: CorpusEntry[] = [
   ...baseEntries,
   ...secretsEntries,
   ...b3InjectionEntries,
+  ...b4XssEntries,
   ...b6CryptoEntries,
   ...m10Entries,
   ...m4m5Entries,
+  ...m8Entries,
 ];
 
 function haystack(f: Finding): string {
