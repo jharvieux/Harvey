@@ -14,6 +14,7 @@ import type { ModelClient } from "../../src/epic-builder/types.js";
 import type { Templates } from "../../src/epic-builder/session.js";
 import type { CoreDeps } from "./core.js";
 import { NoopTracker } from "./core.js";
+import { AnthropicModelClient } from "./model-anthropic.js";
 import { supabaseStore, type SupabaseLike } from "./storage.js";
 
 function dataRoot(): string {
@@ -30,9 +31,14 @@ function loadTemplates(): Templates {
 }
 
 // The model seam (design §5). Server-side only. Scaffold is the deterministic offline default; the
-// live Anthropic client (per docs/design/model-routing.md §6) is wired here behind EPIC_BUILDER_MODEL
-// + a server key — never in the browser. Live client implementation is deferred to #102.
+// live Anthropic client (per docs/design/model-routing.md §6, issue #102) activates when
+// EPIC_BUILDER_MODEL=anthropic and a server-side key is present — falls back to the scaffold
+// otherwise (missing key, unset/other EPIC_BUILDER_MODEL value). Never constructed from the browser.
 function selectModel(): ModelClient {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (process.env.EPIC_BUILDER_MODEL === "anthropic" && apiKey) {
+    return new AnthropicModelClient(apiKey);
+  }
   return new ScaffoldModelClient();
 }
 
