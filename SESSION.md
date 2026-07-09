@@ -2,7 +2,7 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-09 (corpus expansion, wave 2 complete)_
+_Last updated: 2026-07-09 (corpus expansion, all mechanical batches complete)_
 
 ## Active work: corpus expansion (#71 security → ~100, #72 cross-module)
 Built as per-batch PRs. Answer key is modular (`src/scan/calibration/<batch>.entries.ts` + one
@@ -11,12 +11,11 @@ Each batch validates against the calibration target via `pnpm validate:calibrati
 `pnpm verify` (offline). Batches can't fully parallelize — they share the `CORPUS` spread line
 and `GROUND-TRUTH.md`; the supervisor resolves those additive merges serially.
 
-**Done (merged):** #71 B1 secrets, B3 injection, B4 XSS, B5 headers/CORS, B6 crypto ·
-#72 M10 PII, M4+M5 dup/dead-code, M8 mutation. Gate: ~63 positives / 24 free-count / 39 negatives,
-PASS.
-**In flight (wave 3):** #71 B7 auth-heuristics · #71 B8 Supabase-connected · #72 M7 perf-advisors.
-B8/M7 are **connected tier** — built + tested OFFLINE (recorded advisor JSON); their LIVE advisor
-run is a deferred supervisor pass (needs Docker + `supabase start`).
+**Done (merged) — all mechanical batches:** #71 B1 secrets, B3 injection, B4 XSS, B5 headers/CORS,
+B6 crypto, B7 auth, B8 Supabase-connected (+ B2 CVE/supply-chain via #65/#66) · #72 M10 PII,
+M4+M5 dup/dead-code, M8 mutation, M7 perf-advisors. **Corpus: 99 positives + 62 negatives (161
+entries), 49 Semgrep rules; gate 72/72 static positives (24 high/free-count, 15 connected N/A) /
+47/47 negatives — PASS.**
 **Deferred:** #72 M3 hotspots (judgment-heavy ranking, and the `vitals --json` schema is
 undocumented — needs a real capture first) · #72 M6 simplification (LLM rubric, paid-only — a
 design note, not a gate).
