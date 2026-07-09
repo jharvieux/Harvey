@@ -75,6 +75,8 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
       value: severity === "Medium" ? 4 : severity === "Low" ? 3 : 2,
       ease: 4,
       safety: 4,
+      // jscpd's clone-vs-not decision is a text match, ~100% precise (issue #72 calibration).
+      precisionTier: "high",
     };
   });
 }
@@ -108,6 +110,9 @@ export function knipToFindings(report: KnipReport, fileLineCounts: Record<string
       value: 2,
       ease: 5,
       safety: 4,
+      // knip's dead-file detection is deterministic given its entry config — ~100%
+      // precise once the framework/dynamic-ref FP class is configured (issue #72).
+      precisionTier: "high",
     });
   }
 
@@ -130,6 +135,9 @@ export function knipToFindings(report: KnipReport, fileLineCounts: Record<string
       value: 2,
       ease: 4,
       safety: 4,
+      // knip's dead-export detection is deterministic given its entry config — ~100%
+      // precise once the framework/dynamic-ref FP class is configured (issue #72).
+      precisionTier: "high",
     });
   }
 

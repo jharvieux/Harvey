@@ -1,0 +1,6 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["dead/consumer.ts", "dead/dispatch.ts", "dead/index.ts"],
+  "project": ["dead/**/*.ts", "pages/dead-page.js"],
+  "tags": ["-lintignore"]
+}

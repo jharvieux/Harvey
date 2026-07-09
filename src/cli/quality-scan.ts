@@ -42,9 +42,11 @@ function runJscpd(dir: string): JscpdReport {
   const outDir = mkdtempSync(join(tmpdir(), "harvey-jscpd-"));
   // --threshold 100 overrides any client .jscpd.json so the scan never exits
   // non-zero on us — we want the raw report, not jscpd's own pass/fail gate.
+  // **/generated/** excludes legitimately-repeated generated code (M4-N-GENERATED,
+  // issue #72) — generated output isn't hand-maintained duplication.
   execFileSync(
     jscpdBin,
-    [dir, "--reporters", "json", "--output", outDir, "--threshold", "100", "--absolute", "--silent", "--noTips", "--ignore", "**/node_modules/**,**/dist/**,**/.next/**"],
+    [dir, "--reporters", "json", "--output", outDir, "--threshold", "100", "--absolute", "--silent", "--noTips", "--ignore", "**/node_modules/**,**/dist/**,**/.next/**,**/generated/**"],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
   const report = JSON.parse(readFileSync(join(outDir, "jscpd-report.json"), "utf8")) as JscpdReport;
