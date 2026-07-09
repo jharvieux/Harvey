@@ -412,6 +412,80 @@ file-sharing collision guard; the Semgrep rules themselves are proven by the liv
 
 ---
 
+## Batch B8 (#71) — Supabase connected config
+
+The connected-tier slice of the #71 corpus (spec `docs/design/spec-71-security-corpus.md`
+§"Batch 10 — Supabase project config"). Every row here is `expectedTier: "connected"`: it needs a
+**live** Supabase project (`get_advisors`, Management API config reads, `list_extensions`) to
+confirm. `buildCoverageMatrix` (`src/scan/calibration.ts`) scores every `connected` entry N/A —
+pass, regardless of what a static run produces — so this batch can never regress the free-count
+gate. **This PR was built and validated OFFLINE only**: fixtures + the calibration answer key +
+recorded-advisor-JSON parsing tests (mirroring how `supabase-advisors.test.ts` / `supabase.test.ts`
+already mock the Advisor/Management API output). **Live confirmation against a running project —
+actually starting the local stack or a hosted project and running `get_advisors` for real — is a
+deferred main-session pass with Docker,** not done here.
+
+Detection code for all seven advisor lints named below already existed before this batch:
+`parseAdvisorFindings` (`src/scan/supabase-advisors.ts`) maps ANY lint name through
+`CURATED_SEVERITY`, which already carried `rls_disabled_in_public`, `rls_enabled_no_policy`,
+`auth_users_exposed`, `security_definer_view`, `function_search_path_mutable`,
+`rls_references_user_metadata`, and `sensitive_columns_exposed`. Storage/auth-config/extension
+checks (`checkPublicBucketsWithNoPolicies`, `checkAuthConfig`, `checkDangerousExtensions` in
+`src/scan/supabase-config.ts`) were also already wired. So B8 adds fixtures + calibration rows +
+more recorded-JSON test cases, not new detection code — no lint needed extending.
+
+Fixtures: `supabase/migrations/20260709000004_b8_connected_advisors.sql` (schema-level lints) and
+`supabase/config.toml` (Auth config + declarative Storage buckets — commented and marked
+`BUG (PLANTED, connected/B8)` inline). `P-LEAKED-PW-OFF` (leaked-password/HIBP protection) has no
+local-fixture equivalent — it's a hosted-project-only Auth setting with no `config.toml` field, so
+it's confirmed purely via a live Management API config read; `checkAuthConfig` already handles it
+and is unit-tested against a recorded response.
+
+### B8 positives — planted connected-tier bugs (must be caught on a live advisor run)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-RLS-DISABLED `[exists, =#3]` | `supabase/migrations/…_rls.sql` (`audit_logs`) | Splinter `0013 rls_disabled_in_public` | connected |
+| P-RLS-ENABLED-NO-POLICY | `public.reports` | Splinter `rls_enabled_no_policy` — RLS on, zero policies, on a table meant to be tenant-readable (contrast the deny-all-by-design `N-RLS-DENY-ALL` negative) | connected |
+| P-AUTH-USERS-EXPOSED | `public.user_directory` | Splinter `auth_users_exposed` — a view selecting from `auth.users`, granted to `anon`/`authenticated` | connected |
+| P-SECDEF-VIEW | `public.tenant_totals` | Splinter `security_definer_view` — no `security_invoker = true`, runs as owner, bypasses `invoices` RLS | connected |
+| P-FN-SEARCH-PATH | `public.get_invoice_total` | Splinter `function_search_path_mutable` — no `set search_path` | connected |
+| P-RLS-USER-META | `public.internal_notes` | Splinter `rls_references_user_metadata` — policy trusts the self-editable `user_metadata` JWT claim | connected |
+| P-SENSITIVE-COLS | `public.support_tickets` (`customer_ssn`) | Splinter `sensitive_columns_exposed` — known-sensitive column name exposed via PostgREST | connected |
+| P-STORAGE-PUBLIC | `[storage.buckets.avatars]` (`config.toml`) | `checkPublicBucketsWithNoPolicies` — `public=true`, zero `storage.objects` policies scoped to it | connected |
+| P-LEAKED-PW-OFF | Auth config (live-only, no local fixture) | `checkAuthConfig` — `password_hibp_enabled=false` | connected |
+| P-EMAIL-CONFIRM-OFF | `[auth.email] enable_confirmations` (`config.toml`) | `checkAuthConfig` — email confirmation disabled | connected |
+| P-OTP-LONG-EXPIRY | `[auth.email] otp_expiry = 86400` (`config.toml`) | `checkAuthConfig` — OTP expiry past the 3600s baseline | connected |
+| P-OAUTH-REDIRECT-WILD | `[auth] additional_redirect_urls` (`config.toml`, `"*"`) | `checkAuthConfig` — wildcard redirect allowlist | connected |
+| P-PGNET-SSRF | `public.fetch_webhook_preview` (+ `pg_net` extension) | `checkDangerousExtensions` — `pg_net` enabled and callable via a `SECURITY DEFINER` RPC with a caller-supplied URL | connected |
+
+### B8 negatives — benign lookalikes (must NOT be flagged live)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-RLS-DENY-ALL `[exists]` | `public.service_state` | RLS on + zero policies = deny-all by design on a service-role-only table — reused unchanged as the `P-RLS-ENABLED-NO-POLICY` lookalike. |
+| N-DEFINER-SCOPED | `public.current_tenant_id` | `SECURITY DEFINER` + `set search_path = public` + scoped by `auth.uid()` — the correct pattern; contrasts `P-FN-SEARCH-PATH`. |
+| N-STORAGE-PRIVATE | `[storage.buckets.invoices-private]` (`config.toml`) | `public=false` — `checkPublicBucketsWithNoPolicies` filters on `public=true` first; contrasts `P-STORAGE-PUBLIC`. |
+
+### B8 offline result (2026-07-08, no Docker — live advisor confirmation deferred)
+
+No binary or live project was run for this batch. What WAS validated offline:
+`parseAdvisorFindings` was exercised against recorded advisor JSON fixtures covering all seven
+lint names above (`supabase-advisors.test.ts`), confirming the existing `CURATED_SEVERITY` map
+produces the expected severity for each; `checkAuthConfig` was exercised against the exact
+planted config shape (`otp_expiry: 86400`, a wildcard `uri_allow_list`) and `checkDangerousExtensions`
+against `pg_net` (`supabase-config.test.ts`). `pnpm validate:calibration` (static gate, run in this
+environment against the real installed binaries — semgrep, gitleaks, trufflehog, osv-scanner; no
+Docker/live DB involved): **positives caught 63/63 static (24 at high/free-count), 15
+connected-tier N/A; negatives cleared 39/39; zero free-count false positives — GATE PASS.** All 12
+new B8 positives and 2 new B8 negatives report **N/A — connected tier, not evaluated statically**,
+as designed — zero effect on the static free-count gate (the 63/63 and 39/39 totals and the 24
+high-tier count are unchanged from the pre-B8 baseline; only the connected-tier N/A count moved
+from 1 to 15). **Live confirmation — actually running `get_advisors` against a started local or
+hosted project — is a deferred main-session pass with Docker.**
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`

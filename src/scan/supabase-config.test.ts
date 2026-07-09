@@ -61,6 +61,20 @@ describe("checkAuthConfig", () => {
   });
 });
 
+describe("checkAuthConfig — Batch B8 planted config.toml shape", () => {
+  // Mirrors targets/calibration/supabase/config.toml (auth.email.otp_expiry=86400,
+  // auth.additional_redirect_urls includes "*") — see GROUND-TRUTH.md §"Batch B8". No live
+  // Management API config was read; this proves the parsing logic against the exact planted
+  // values offline.
+  it("flags the planted 24h OTP expiry and wildcard redirect allowlist together", () => {
+    const findings = checkAuthConfig({ mailer_autoconfirm: false, password_hibp_enabled: true, otp_expiry: 86400, uri_allow_list: "https://127.0.0.1:3000,*" });
+    const taxonomies = findings.map((f) => f.taxonomy);
+    expect(taxonomies).toContain("Auth config: long OTP expiry");
+    expect(taxonomies).toContain("Auth config: wildcard redirect allowlist");
+    expect(findings).toHaveLength(2);
+  });
+});
+
 describe("checkDangerousExtensions", () => {
   it("flags pg_net when installed", () => {
     const findings = checkDangerousExtensions([{ name: "pg_net", schema: "extensions", installed_version: "0.20.3" }]);
