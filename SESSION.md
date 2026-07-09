@@ -2,53 +2,56 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-09_
+_Last updated: 2026-07-09 (corpus expansion, wave 2 complete)_
 
-## In flight
-- **#71 B1 (secrets)** — building the first security-corpus batch **and** modularizing the gate
-  answer key (`src/scan/calibration.ts` → per-batch entry files) so later batches fan out in
-  parallel without conflicts. When it lands, launch the parallel wave below.
+## Active work: corpus expansion (#71 security → ~100, #72 cross-module)
+Built as per-batch PRs. Answer key is modular (`src/scan/calibration/<batch>.entries.ts` + one
+spread in `calibration.ts`); Semgrep rules are modular (`src/scan/rules/semgrep/<batch>.yml`).
+Each batch validates against the calibration target via `pnpm validate:calibration` (live) +
+`pnpm verify` (offline). Batches can't fully parallelize — they share the `CORPUS` spread line
+and `GROUND-TRUTH.md`; the supervisor resolves those additive merges serially.
 
-## Queued next (in order — #71 and #72 cannot run concurrently; they share the corpus + gate)
-1. **#71 security corpus → ~100** (spec: `docs/design/spec-71-security-corpus.md`). 8 batches:
-   B1 secrets (in flight) · B2 CVE/supply-chain (**already done** via #65/#66) · B3 injection ·
-   B4 XSS sinks · B5 headers/CORS · B6 crypto · B7 auth heuristics · B8 Supabase connected.
-   After B1's modular answer key lands, B3–B8 can run in parallel (each drops its own entry file).
-2. **#72 cross-module corpus/gate (M3–M10)** (spec: `docs/design/spec-72-crossmodule-corpus.md`).
-   Order: M10 → M4+M5 → M8 → M7 → M3 → M6. M7/M8/M3 need a live env. Sequence after #71.
-3. **#76 epic-builder web UI** (opus; design doc first) — closes the "onboarding site has no link
-   to the epic tool" gap; link from `intake-site` on completion.
+**Done (merged):** #71 B1 secrets, B3 injection, B4 XSS, B5 headers/CORS, B6 crypto ·
+#72 M10 PII, M4+M5 dup/dead-code, M8 mutation. Gate: ~63 positives / 24 free-count / 39 negatives,
+PASS.
+**In flight (wave 3):** #71 B7 auth-heuristics · #71 B8 Supabase-connected · #72 M7 perf-advisors.
+B8/M7 are **connected tier** — built + tested OFFLINE (recorded advisor JSON); their LIVE advisor
+run is a deferred supervisor pass (needs Docker + `supabase start`).
+**Deferred:** #72 M3 hotspots (judgment-heavy ranking, and the `vitals --json` schema is
+undocumented — needs a real capture first) · #72 M6 simplification (LLM rubric, paid-only — a
+design note, not a gate).
+
+## Owed: connected-tier live confirmation pass (supervisor, needs Docker)
+Once B8/M7 merge, do one live pass: `colima start` → `supabase start -x vector,analytics` +
+`supabase db reset` in `targets/calibration` → run the config + perf advisors against it and
+confirm the B8/M7 connected fixtures trip the advisors. (The earlier live run already confirmed
+`rls_disabled_in_public` catches calibration bug #3.)
 
 ## Locked product decisions (memory: `product-shape-decisions.md`)
-- Free count/grade = high-precision findings only + an M3 descriptive hotspot map. Review/
-  connected-tier classes are scanned but asserted only in the paid report after verification.
-- M3 hotspots: descriptive map free / deeper analysis paid. M6 simplification: paid-only.
-- Gate discipline (#61): no rule ships/counts unless it catches its planted positive AND clears
-  its benign negative in `targets/calibration`.
+Free count/grade = high-precision findings only + an M3 descriptive hotspot map. Review/connected
+tier scanned but asserted only in the paid report after verification. M6 paid-only. Gate discipline
+(#61): no rule ships/counts unless it catches its positive AND clears its benign negative.
 
 ## Operator / manual action items (not agent-executable)
-- **Vercel 404 fix:** set the `harvey` project Root Directory to `intake-site` (Settings → Build
-  & Deployment) and add `RESEND_API_KEY`. Fixes the onboarding-page 404 AND the `/api/intake`
-  form endpoint. (Alternative: ask the agent to deploy `intake-site` as its own production project.)
-- **#70 GitGuardian:** dashboard-side ignore for `targets/calibration/` so the fixture fake
-  secrets stop failing PR checks (the App ignores the committed `.gitguardian.yaml`; not a
-  required check, so it never blocks merges).
+- **Vercel 404:** set the `harvey` project Root Directory to `intake-site` + add `RESEND_API_KEY`
+  (fixes the onboarding-page 404 AND `/api/intake`). The page currently serves at `/intake-site/`.
+- **#70 GitGuardian:** dashboard ignore for `targets/calibration/` (fixture fake secrets; the App
+  ignores the committed `.gitguardian.yaml`; not a required check, never blocks merges).
 
 ## Open agent-doable follow-ups
-- **#73** OSV dedup — `next@14.2.35` now double-matches a curated CVE (sonnet).
-- **#54** wire `splinter.sql` into the local Supabase advisor path (sonnet; needs live DB to validate).
-- **#53** the runbook's LLM `/threat-model`→`/vuln-scan`→`/triage` pipeline is unverified (needs
-  the reference-harness skills — not available in the sandbox).
+- **#86** calibration gate matcher includes the env-dependent absolute checkout path — normalize
+  `location` to repo-relative before matching (sonnet).
+- **#76** epic-builder web UI (opus; design doc first) — closes the "onboarding site has no link to
+  the epic tool" gap.
+- **#73** OSV dedup (`next@14.2.35` double-matches a curated CVE). **#54** splinter local advisor
+  wiring (needs live DB). **#53** LLM `/threat-model`→`/vuln-scan`→`/triage` (needs reference-harness).
 
 ## Deferred / not agent-executable
-- #4 Tier-2 autonomous pipeline (gated on demand validation). #10–13 business/legal/GTM.
-- #2 epic (tracker). #14 ATC folder removal (targets the atc repo).
+#4 Tier-2 (gated on demand). #10–13 business/legal/GTM. #2 epic. #14 ATC folder removal (atc repo).
 
-## Resuming live validation (Docker is currently DOWN — colima stopped to free memory)
-1. `colima start`, then in `targets/calibration`: `supabase start -x vector,analytics`
-   (the `vector`/analytics container fails on colima's docker.sock mount) + `supabase db reset`.
-2. Seeded password logins fail on this stack ("Database error querying schema", gotrue quirk) —
-   mint persona JWTs from the local `JWT_SECRET` instead.
-3. Scanner binaries (`semgrep`/`gitleaks`/`trufflehog`/`osv-scanner`) are installed; no Docker
-   needed for the static/mechanical validation, only for the pen-test and Supabase-advisor tiers.
-- Live results so far are recorded in `docs/runbooks/dry-run-calibration.md` §8.
+## Resuming live validation (Docker currently DOWN — colima stopped)
+`colima start` → `supabase start -x vector,analytics` (vector fails on colima's docker.sock) +
+`supabase db reset` in `targets/calibration`. Seeded password logins fail (gotrue) → mint persona
+JWTs from `JWT_SECRET`. Scanner binaries (`semgrep`/`gitleaks`/`trufflehog`/`osv-scanner`) installed;
+no Docker needed for static/mechanical validation, only the pen-test + Supabase-advisor tiers.
+Live results recorded in `docs/runbooks/dry-run-calibration.md` §8.

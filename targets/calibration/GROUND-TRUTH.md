@@ -412,6 +412,80 @@ file-sharing collision guard; the Semgrep rules themselves are proven by the liv
 
 ---
 
+## Batch B8 (#71) — Supabase connected config
+
+The connected-tier slice of the #71 corpus (spec `docs/design/spec-71-security-corpus.md`
+§"Batch 10 — Supabase project config"). Every row here is `expectedTier: "connected"`: it needs a
+**live** Supabase project (`get_advisors`, Management API config reads, `list_extensions`) to
+confirm. `buildCoverageMatrix` (`src/scan/calibration.ts`) scores every `connected` entry N/A —
+pass, regardless of what a static run produces — so this batch can never regress the free-count
+gate. **This PR was built and validated OFFLINE only**: fixtures + the calibration answer key +
+recorded-advisor-JSON parsing tests (mirroring how `supabase-advisors.test.ts` / `supabase.test.ts`
+already mock the Advisor/Management API output). **Live confirmation against a running project —
+actually starting the local stack or a hosted project and running `get_advisors` for real — is a
+deferred main-session pass with Docker,** not done here.
+
+Detection code for all seven advisor lints named below already existed before this batch:
+`parseAdvisorFindings` (`src/scan/supabase-advisors.ts`) maps ANY lint name through
+`CURATED_SEVERITY`, which already carried `rls_disabled_in_public`, `rls_enabled_no_policy`,
+`auth_users_exposed`, `security_definer_view`, `function_search_path_mutable`,
+`rls_references_user_metadata`, and `sensitive_columns_exposed`. Storage/auth-config/extension
+checks (`checkPublicBucketsWithNoPolicies`, `checkAuthConfig`, `checkDangerousExtensions` in
+`src/scan/supabase-config.ts`) were also already wired. So B8 adds fixtures + calibration rows +
+more recorded-JSON test cases, not new detection code — no lint needed extending.
+
+Fixtures: `supabase/migrations/20260709000004_b8_connected_advisors.sql` (schema-level lints) and
+`supabase/config.toml` (Auth config + declarative Storage buckets — commented and marked
+`BUG (PLANTED, connected/B8)` inline). `P-LEAKED-PW-OFF` (leaked-password/HIBP protection) has no
+local-fixture equivalent — it's a hosted-project-only Auth setting with no `config.toml` field, so
+it's confirmed purely via a live Management API config read; `checkAuthConfig` already handles it
+and is unit-tested against a recorded response.
+
+### B8 positives — planted connected-tier bugs (must be caught on a live advisor run)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-RLS-DISABLED `[exists, =#3]` | `supabase/migrations/…_rls.sql` (`audit_logs`) | Splinter `0013 rls_disabled_in_public` | connected |
+| P-RLS-ENABLED-NO-POLICY | `public.reports` | Splinter `rls_enabled_no_policy` — RLS on, zero policies, on a table meant to be tenant-readable (contrast the deny-all-by-design `N-RLS-DENY-ALL` negative) | connected |
+| P-AUTH-USERS-EXPOSED | `public.user_directory` | Splinter `auth_users_exposed` — a view selecting from `auth.users`, granted to `anon`/`authenticated` | connected |
+| P-SECDEF-VIEW | `public.tenant_totals` | Splinter `security_definer_view` — no `security_invoker = true`, runs as owner, bypasses `invoices` RLS | connected |
+| P-FN-SEARCH-PATH | `public.get_invoice_total` | Splinter `function_search_path_mutable` — no `set search_path` | connected |
+| P-RLS-USER-META | `public.internal_notes` | Splinter `rls_references_user_metadata` — policy trusts the self-editable `user_metadata` JWT claim | connected |
+| P-SENSITIVE-COLS | `public.support_tickets` (`customer_ssn`) | Splinter `sensitive_columns_exposed` — known-sensitive column name exposed via PostgREST | connected |
+| P-STORAGE-PUBLIC | `[storage.buckets.avatars]` (`config.toml`) | `checkPublicBucketsWithNoPolicies` — `public=true`, zero `storage.objects` policies scoped to it | connected |
+| P-LEAKED-PW-OFF | Auth config (live-only, no local fixture) | `checkAuthConfig` — `password_hibp_enabled=false` | connected |
+| P-EMAIL-CONFIRM-OFF | `[auth.email] enable_confirmations` (`config.toml`) | `checkAuthConfig` — email confirmation disabled | connected |
+| P-OTP-LONG-EXPIRY | `[auth.email] otp_expiry = 86400` (`config.toml`) | `checkAuthConfig` — OTP expiry past the 3600s baseline | connected |
+| P-OAUTH-REDIRECT-WILD | `[auth] additional_redirect_urls` (`config.toml`, `"*"`) | `checkAuthConfig` — wildcard redirect allowlist | connected |
+| P-PGNET-SSRF | `public.fetch_webhook_preview` (+ `pg_net` extension) | `checkDangerousExtensions` — `pg_net` enabled and callable via a `SECURITY DEFINER` RPC with a caller-supplied URL | connected |
+
+### B8 negatives — benign lookalikes (must NOT be flagged live)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-RLS-DENY-ALL `[exists]` | `public.service_state` | RLS on + zero policies = deny-all by design on a service-role-only table — reused unchanged as the `P-RLS-ENABLED-NO-POLICY` lookalike. |
+| N-DEFINER-SCOPED | `public.current_tenant_id` | `SECURITY DEFINER` + `set search_path = public` + scoped by `auth.uid()` — the correct pattern; contrasts `P-FN-SEARCH-PATH`. |
+| N-STORAGE-PRIVATE | `[storage.buckets.invoices-private]` (`config.toml`) | `public=false` — `checkPublicBucketsWithNoPolicies` filters on `public=true` first; contrasts `P-STORAGE-PUBLIC`. |
+
+### B8 offline result (2026-07-08, no Docker — live advisor confirmation deferred)
+
+No binary or live project was run for this batch. What WAS validated offline:
+`parseAdvisorFindings` was exercised against recorded advisor JSON fixtures covering all seven
+lint names above (`supabase-advisors.test.ts`), confirming the existing `CURATED_SEVERITY` map
+produces the expected severity for each; `checkAuthConfig` was exercised against the exact
+planted config shape (`otp_expiry: 86400`, a wildcard `uri_allow_list`) and `checkDangerousExtensions`
+against `pg_net` (`supabase-config.test.ts`). `pnpm validate:calibration` (static gate, run in this
+environment against the real installed binaries — semgrep, gitleaks, trufflehog, osv-scanner; no
+Docker/live DB involved): **positives caught 63/63 static (24 at high/free-count), 15
+connected-tier N/A; negatives cleared 39/39; zero free-count false positives — GATE PASS.** All 12
+new B8 positives and 2 new B8 negatives report **N/A — connected tier, not evaluated statically**,
+as designed — zero effect on the static free-count gate (the 63/63 and 39/39 totals and the 24
+high-tier count are unchanged from the pre-B8 baseline; only the connected-tier N/A count moved
+from 1 to 15). **Live confirmation — actually running `get_advisors` against a started local or
+hosted project — is a deferred main-session pass with Docker.**
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
@@ -689,3 +763,63 @@ batches. `pnpm verify` (offline) is green: `src/scan/leftover-auth.test.ts` gain
 tests for the new rate-limit heuristic; the scorecard logic over the expanded `CORPUS` is
 exercised in `calibration.test.ts`; the Semgrep rules themselves (`semgrep --validate` clean, 49
 rules across the directory) are proven by the live gate above.
+
+---
+
+## M7 (#72) — Performance (Supabase advisors) corpus
+
+The M7 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
+§M7). **Connected tier** — like `P-RLS-DISABLED` in the base corpus, Splinter's performance
+lints (`unindexed_foreign_keys`, `auth_rls_initplan`, `unused_index`) only fire against a LIVE
+schema (`unused_index` additionally needs `pg_stat_user_indexes` usage history), so they can't be
+scored by a static run. Fixture: `supabase/migrations/20260708000004_perf_calibration.sql`
+(tables `perf_orders`, `perf_line_items`, `perf_shipments`, `perf_events`). Tool + invocation:
+`pnpm perf-scan <project-ref>` → `src/perf-scan.ts::parseAdvisorFindings`, already wired with
+curated `LINT_PROFILES` for all three rules (no scanner changes needed for this batch beyond
+tagging every emitted `Finding` `precisionTier: "high"` — advisor lints are schema-truth, ~100%
+precise once connected).
+
+Answer key: `src/scan/calibration/m7.entries.ts` (`module: "M7"`, `expectedTier: "connected"` on
+the 3 positives, spread into `CORPUS` in `src/scan/calibration.ts`). Excluded from
+`pnpm validate:calibration`'s `runMechanicalScan` gate by the same `module === undefined` filter
+as M8/M10 — the performance advisor isn't part of the mechanical/security scan. Bundle/Core Web
+Vitals (Lighthouse, `next build` first-load JS) stays documented-plan-only per
+`docs/m7-performance.md` §3 — no fixture built for it here, per spec.
+
+### M7 positives — planted advisor lints (connected tier — must be caught once a live pull is scored)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| M7-P-UNINDEXED-FK | `perf_line_items.order_id` (FK to `perf_orders.id`, no covering index) | Splinter `unindexed_foreign_keys` | connected |
+| M7-P-RLS-INITPLAN | `perf_orders_select_own` policy (`created_by = auth.uid()`, bare) | Splinter `auth_rls_initplan` | connected |
+| M7-P-UNUSED-INDEX | `idx_perf_orders_legacy_region` (no seeded/hot query touches it) | Splinter `unused_index` | connected |
+
+### M7 negatives — benign lookalikes (must NOT be flagged once a live pull is scored)
+
+| id | location | why benign |
+|---|---|---|
+| M7-N-INDEXED-FK | `perf_shipments.order_id` (FK to `perf_orders.id`, covered by `idx_perf_shipments_order_id`) | advisor must not raise `unindexed_foreign_keys` |
+| M7-N-WRAPPED-RLS | `perf_events_select_own` policy (`actor = (select auth.uid())`, wrapped) | advisor must not raise `auth_rls_initplan` |
+| M7-N-USED-INDEX | `idx_perf_orders_customer_email` (backs the seeded customer-email lookup) | advisor must not raise `unused_index` once the query is exercised live — removing it would be a false "unused" call |
+
+`M7-P-UNUSED-INDEX` and `M7-N-USED-INDEX` share a table (`perf_orders`) and rule name
+(`unused_index`) — `locationFor()` groups by table, not by index, so both entries match on the
+specific *index name* instead of the rule name: a genuinely-used index never generates a lint at
+all, so `idx_perf_orders_customer_email` can never collide with a real finding.
+
+### M7 offline result (2026-07-08, static — no live DB, `pnpm verify` only)
+
+`src/perf-scan.test.ts`'s "M7 calibration corpus — modeled advisor pull" block scores
+`parseAdvisorFindings` against a **modeled** advisor JSON (NOT a live capture — shaped from what
+a live Splinter pull over `20260708000004_perf_calibration.sql` should return) through
+`buildCoverageMatrix`: **all 3 planted positives attribute correctly at `high` precision (the
+matching logic resolves `location` + rule-name/index-name `match` keywords to the exact intended
+finding); all 3 negatives draw zero findings from the modeled report.** Since every
+`M7-P-*` entry is `expectedTier: "connected"`, `pnpm validate:calibration`'s live gate reports
+them **N/A**, not passing — the precision claim is only earned by the deferred live-branch run
+(SESSION.md "Owed: connected-tier live confirmation pass": `colima start` → `supabase start` →
+apply this migration on a throwaway branch → `get_advisors(performance)` → confirm the 3
+positives fire and the 3 negatives don't, then delete the branch). `pnpm verify` (offline) is
+green: `calibration.test.ts`'s generic `buildCoverageMatrix` tests already cover a connected-tier
+entry scoring N/A regardless of findings; the new `perf-scan.test.ts` block is this batch's
+Layer-1 gate, proving the shaping/matching logic ahead of that live run.
