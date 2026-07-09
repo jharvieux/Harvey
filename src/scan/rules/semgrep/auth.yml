@@ -1,0 +1,315 @@
+# Batch B7 — auth / access-control heuristics (#71, spec §"Batch 7 — Auth / access-control /
+# left-open"). Per-batch custom-rule file (see base.yml header for the directory convention).
+# Scheduled deliberately LAST in the #71 fan-out because it carries the HIGHEST negative-precision
+# risk in the whole corpus: a static tool cannot confirm an ownership check, a permission check, or
+# an auth guard living in middleware is correct — it can only see the shape "this mutation has no
+# guard call in this function." That is real signal, but it is NOT ~100% precise, so every rule in
+# this file is WARNING + MEDIUM confidence -> `review` tier, never `high`/free-count. Three rows
+# already ship ([exists], not duplicated here): P-DEBUG-ENDPOINT and P-TODO-AUTH (leftover-auth
+# greps, base.entries.ts) and P-SRV-KEY-CLIENT (harvey-service-role-in-client, base.yml).
+#
+# Overlap note (intentional, not a bug): harvey-route-noauth's "mutation with no auth-check call"
+# shape will also fire on some pre-existing fixtures planted for a DIFFERENT named bug (e.g.
+# pages/api/dev/seed.js, pages/api/admin/reset.js, pages/api/comments/create.js,
+# pages/api/counter/increment.js all genuinely lack an auth-check call too). That's correct,
+# review-tier-only overlap between two legitimately-true heuristics on the same code, not a
+# taxonomy error — see GROUND-TRUTH.md §B7 for the same reasoning applied to
+# harvey-missing-server-only and lib/supabaseAdmin.js.
+#
+# Exercised against targets/calibration by `pnpm validate:calibration`; see GROUND-TRUTH.md §B7.
+
+rules:
+  # A cookie/session-authed Server Action mutates data with no authority/permission check call
+  # anywhere in the function. Distinct from harvey-csrf-missing (app/actions.ts, headers.yml):
+  # CSRF is about the request's ORIGIN; this is about whether the caller is ALLOWED to perform the
+  # action at all. Gated on a fixed set of common authority-check call names — a real guard under
+  # a different name is a false negative (review tier, not a gate concern).
+  - id: harvey-server-action-noauth
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      This 'use server' Server Action mutates data with no authority/permission check
+      (assertPermission/requirePermission/requireRole) anywhere in the function. An Origin check
+      alone (see harvey-csrf-missing) proves the request is same-site, not that the caller is
+      authorized to perform this specific mutation.
+    patterns:
+      - pattern-inside: |
+          "use server";
+          ...
+      - pattern: |
+          async function $F(...) {
+            ...
+          }
+      - pattern-either:
+          - pattern-inside: |
+              async function $F(...) {
+                ...
+                $DB.from($T).insert(...)
+                ...
+              }
+          - pattern-inside: |
+              async function $F(...) {
+                ...
+                $DB.from($T).update(...)
+                ...
+              }
+          - pattern-inside: |
+              async function $F(...) {
+                ...
+                $DB.from($T).delete(...)
+                ...
+              }
+      - pattern-not-inside: |
+          async function $F(...) {
+            ...
+            assertPermission(...)
+            ...
+          }
+      - pattern-not-inside: |
+          async function $F(...) {
+            ...
+            requirePermission(...)
+            ...
+          }
+      - pattern-not-inside: |
+          async function $F(...) {
+            ...
+            requireRole(...)
+            ...
+          }
+
+  # A route handler (Pages Router `export default async function handler(req, res)` or an
+  # App Router route `export async function POST(req)`) mutates data with no auth-check call
+  # (session read / supabase.auth.getUser()) anywhere in the function. See the file header for
+  # the intentional overlap with other named bugs that share this shape.
+  - id: harvey-route-noauth
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      This route handler mutates data (insert/update/delete) with no auth-check call anywhere in
+      the function (no session read, no supabase.auth.getUser()). If the route is reachable
+      without a session, this is an unauthenticated write — confirm a guard exists elsewhere
+      (e.g. middleware) or add one here.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              export default async function $H($REQ, $RES) {
+                ...
+              }
+          - pattern: |
+              export async function POST($REQ) {
+                ...
+              }
+      - pattern-either:
+          - pattern-inside: |
+              export default async function $H($REQ, $RES) {
+                ...
+                $DB.from($T).insert(...)
+                ...
+              }
+          - pattern-inside: |
+              export default async function $H($REQ, $RES) {
+                ...
+                $DB.from($T).update(...)
+                ...
+              }
+          - pattern-inside: |
+              export default async function $H($REQ, $RES) {
+                ...
+                $DB.from($T).delete(...)
+                ...
+              }
+          - pattern-inside: |
+              export async function POST($REQ) {
+                ...
+                $DB.from($T).insert(...)
+                ...
+              }
+          - pattern-inside: |
+              export async function POST($REQ) {
+                ...
+                $DB.from($T).update(...)
+                ...
+              }
+          - pattern-inside: |
+              export async function POST($REQ) {
+                ...
+                $DB.from($T).delete(...)
+                ...
+              }
+      - pattern-not-inside: |
+          export default async function $H($REQ, $RES) {
+            ...
+            getServerSession(...)
+            ...
+          }
+      - pattern-not-inside: |
+          export default async function $H($REQ, $RES) {
+            ...
+            $SUP.auth.getUser(...)
+            ...
+          }
+      - pattern-not-inside: |
+          export async function POST($REQ) {
+            ...
+            getServerSession(...)
+            ...
+          }
+      - pattern-not-inside: |
+          export async function POST($REQ) {
+            ...
+            $SUP.auth.getUser(...)
+            ...
+          }
+
+  # IDOR/BOLA shape: an id from the request (req.query/req.params) is the SOLE predicate on a
+  # Supabase query — .eq('id', $ID) with nothing else chained. The sink is anchored to a full
+  # statement (a `const { ... } = await ...;` destructure) so it does NOT match when a second
+  # .eq() scopes the same query by owner/tenant (N-IDOR-SCOPED) — that additional call makes the
+  # statement's RHS a different, longer expression tree that this exact-shape pattern can't match.
+  - id: harvey-idor-param
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A request-controlled id (req.query/req.params) is the only predicate on this query — no
+      owner/tenant scoping (e.g. .eq('user_id', session.user.id)) in the same chain. Any caller
+      who can guess/enumerate another record's id can read or write it (IDOR/BOLA, OWASP API1).
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.params
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  const { $DATA } = await $C.from($T).select($S).eq("id", $ID);
+              - pattern: |
+                  const { $DATA, $ERR } = await $C.from($T).select($S).eq("id", $ID);
+              - pattern: |
+                  const { $DATA } = await $C.from($T).update($V).eq("id", $ID);
+          - focus-metavariable: $ID
+
+  # Mass assignment (OWASP API3/BOPLA): the entire request body is spread into an insert/update
+  # payload with no field allowlist. A picked/destructured object literal (N-MASS-ASSIGN-PICK) is
+  # a different (safe) shape — the spread operator on req.body is the specific signal here.
+  - id: harvey-mass-assignment
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      The entire request body is spread into an insert/update payload with no field allowlist —
+      mass assignment. A caller can set any column the table exposes (e.g. a role/is_admin/price
+      field never meant to be client-writable) by adding it to the JSON body. Destructure and
+      pass an explicit list of allowed fields instead of spreading req.body.
+    pattern-sources:
+      - pattern: req.body
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $C.from($T).insert({ ...$BODY, ... })
+              - pattern: $C.from($T).insert({ ...$BODY })
+              - pattern: $C.from($T).update({ ...$BODY, ... })
+              - pattern: $C.from($T).update({ ...$BODY })
+          - focus-metavariable: $BODY
+
+  # A full DB row (select('*')) is spread directly into a rendered component's props. In a Server
+  # Component (no "use client" in this file), every column on that row serializes across the
+  # Server -> Client Component boundary in the RSC payload, whether or not the target component
+  # actually renders every field. Low severity, review only: proving a specific sensitive field
+  # crosses the boundary needs cross-file knowledge this rule doesn't have (see spec §5).
+  - id: harvey-server-client-leak
+    languages: [typescript, javascript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Low
+    message: >
+      A full database row (select('*')) is spread directly into a rendered component's props —
+      the whole row serializes across the Server -> Client Component boundary in the RSC payload.
+      Map to an explicit DTO with only the fields the client needs before passing it down.
+    patterns:
+      - pattern: |
+          const { $DATA } = await $C.from($T).select("*").eq($COL, $ID);
+          ...
+          <$COMP {...$DATA} />
+      - pattern-not-inside: |
+          "use client";
+          ...
+
+  # A module reads a server secret from process.env (name matching SECRET/SERVICE_ROLE/API_KEY/
+  # a _TOKEN suffix, excluding NEXT_PUBLIC_-prefixed public vars) with no "import 'server-only'"
+  # guard. Nothing stops an accidental import graph from a Client Component pulling this module
+  # (and the secret) into the browser bundle. A "use client" module is excluded here — that's the
+  # more specific, already-covered case (harvey-service-role-in-client, base.yml).
+  - id: harvey-missing-server-only
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Low
+    message: >
+      This module reads a server secret from process.env but has no "import 'server-only'" guard
+      — nothing stops it from being imported into a Client Component by mistake, which would ship
+      the secret to the browser bundle. Add import "server-only" as the first line of the module.
+    patterns:
+      - pattern: process.env.$SECRET
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: (?i)^(?!NEXT_PUBLIC_).*(SECRET|SERVICE_ROLE|API_KEY|_TOKEN).*$
+      - pattern-not-inside: |
+          import "server-only";
+          ...
+      - pattern-not-inside: |
+          "use client";
+          ...
+
+  # An auth/rate-limit check fails OPEN on a backing-store error: the catch block returns
+  # allowed/true instead of failing closed. If the store (Redis/DB) is unreachable, every caller
+  # is treated as authorized/under-limit — an outage becomes an auth/rate-limit bypass.
+  - id: harvey-fail-open
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      On a backing-store error, this check fails OPEN (returns allowed/true) instead of failing
+      closed. If the store is unreachable, every caller is treated as authorized/under-limit —
+      an outage becomes an auth or rate-limit bypass. Return a deny/false default on error.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              try {
+                ...
+              } catch ($E) {
+                ...
+                return { allowed: true };
+                ...
+              }
+          - pattern: |
+              try {
+                ...
+              } catch ($E) {
+                ...
+                return true;
+                ...
+              }
