@@ -13,6 +13,7 @@
 
 import type { Finding, PrecisionTier } from "../findings.js";
 import { baseEntries } from "./calibration/base.entries.js";
+import { b3InjectionEntries } from "./calibration/b3-injection.entries.js";
 import { m10Entries } from "./calibration/m10.entries.js";
 import { m4m5Entries } from "./calibration/m4-m5.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
@@ -25,7 +26,13 @@ export type { CorpusEntry } from "./calibration/types.js";
 // one spread below — this keeps parallel batches conflict-free (a new batch touches only its own
 // file plus this single line). Positives extend GROUND-TRUTH.md's planted bugs; negatives are
 // the benign lookalikes from the FP catalog (docs/fp-rules.txt).
-export const CORPUS: CorpusEntry[] = [...baseEntries, ...secretsEntries, ...m10Entries, ...m4m5Entries];
+export const CORPUS: CorpusEntry[] = [
+  ...baseEntries,
+  ...secretsEntries,
+  ...b3InjectionEntries,
+  ...m10Entries,
+  ...m4m5Entries,
+];
 
 function haystack(f: Finding): string {
   return `${f.id} ${f.title} ${f.taxonomy} ${f.evidence} ${f.location}`.toLowerCase();

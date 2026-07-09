@@ -1,8 +1,13 @@
-# Custom Semgrep OSS rules for the Next.js/Supabase footgun taxonomy. Run alongside the
-# maintained registry packs (p/react, p/nextjs, p/owasp-top-ten, p/secrets, p/security-audit) —
-# see src/scan/semgrep.ts for the full invocation. Validated with
-# `semgrep --validate --config src/scan/rules/semgrep-nextjs-supabase.yml` and exercised against
-# targets/calibration by the calibration harness (src/scan/calibration.ts, `pnpm validate:calibration`).
+# Base custom Semgrep OSS rules for the Next.js/Supabase footgun taxonomy (the original
+# dangerouslySetInnerHTML / CORS / service-role-in-client / open-redirect / SSRF set).
+#
+# CONVENTION: custom rules live in a DIRECTORY (src/scan/rules/semgrep/) loaded as a whole by
+# src/scan/semgrep.ts. Each security batch adds its own `<batch>.yml` under this directory — no
+# shared rule file, so parallel batches stay conflict-free (a batch touches only its own file).
+# Run alongside the maintained registry packs (p/react, p/nextjs, p/owasp-top-ten, p/secrets,
+# p/security-audit) — see src/scan/semgrep.ts for the full invocation. Validate the whole set with
+# `semgrep --validate --config src/scan/rules/semgrep/` and exercise it against targets/calibration
+# via the calibration harness (src/scan/calibration.ts, `pnpm validate:calibration`).
 #
 # metadata.confidence + severity: ERROR feed the "high" precision-tier trust boundary in
 # src/scan/semgrep.ts (docs/design/mechanical-toolchain.md §2/§7) — only HIGH-confidence,

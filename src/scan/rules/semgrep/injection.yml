@@ -1,0 +1,311 @@
+# Batch B3 — injection & code-execution family (#71, spec §"Batch 1 — Injection & code-execution").
+# Per-batch custom-rule file (see base.yml header for the directory convention). Taint mode with
+# request sources (Pages-Router req.query/body/params + App-Router searchParams), mirroring the
+# base SQLi/XSS rules. Tiering follows the locked preamble: only ~100%-precision sinks are ERROR +
+# HIGH confidence (free count) — a raw-SQL-executor RPC, `exec`/`execSync` of a request string, and
+# `eval`/`new Function` of request input. The heuristic sinks (PostgREST string filters, recursive
+# merge, deserialize, XXE options, path traversal, zip-slip, SSTI, ReDoS, log forging) are
+# WARNING + MEDIUM → review tier, exactly as the spec quarantines them.
+#
+# Exercised against targets/calibration by `pnpm validate:calibration`; see GROUND-TRUTH.md §B3.
+
+rules:
+  # SQLi via a raw-SQL-executor RPC. The high-precision signal is the FUNCTION NAME: exec_sql /
+  # execute / run_sql style RPCs run a raw SQL string, so any request-tainted argument is a SQLi
+  # primitive. A normal parameterized RPC (supabase.rpc('total', { uid: req.query.uid })) passes
+  # the value as a bound argument and is NOT in this sink set — the safe shape N-RPC-PARAM models.
+  - id: harvey-sql-injection-rpc
+    languages: [javascript, typescript]
+    mode: taint
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Critical
+    message: >
+      Request input reaches a raw-SQL-executor RPC (exec_sql/execute/run_sql). The value is run as
+      SQL text, not a bound parameter — SQL injection. Use a parameterized RPC or bind arguments.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $C.rpc("exec_sql", $ARG)
+              - pattern: $C.rpc("execute_sql", $ARG)
+              - pattern: $C.rpc("exec", $ARG)
+              - pattern: $C.rpc("execute", $ARG)
+              - pattern: $C.rpc("run_sql", $ARG)
+              - pattern: $C.rpc("query", $ARG)
+          - focus-metavariable: $ARG
+
+  # OS command injection: request input reaches child_process exec/execSync, which spawn a shell
+  # and interpret the whole string. execFile/spawn with an argv array (N-CMD-SAFE) is not matched.
+  - id: harvey-command-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Critical
+    message: >
+      Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn
+      with an argument array and no shell, and validate the input against an allowlist.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: exec($CMD, ...)
+              - pattern: execSync($CMD, ...)
+              - pattern: child_process.exec($CMD, ...)
+              - pattern: child_process.execSync($CMD, ...)
+          - focus-metavariable: $CMD
+
+  # Code injection: request input reaches eval / new Function. JSON.parse (N-EVAL-JSON) is a data
+  # parser, not code evaluation, and is not matched.
+  - id: harvey-code-injection-eval
+    languages: [javascript, typescript]
+    mode: taint
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Critical
+    message: >
+      Request input reaches eval()/new Function() — arbitrary code execution. Parse the input as
+      data (e.g. JSON.parse) or dispatch against an allowlist; never evaluate untrusted strings.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: eval($C)
+              - pattern: new Function(..., $C)
+          - focus-metavariable: $C
+
+  # PostgREST filter injection: request input concatenated into a string .or()/.filter()/
+  # .textSearch() expression. Review — a string filter can be legitimate, and PostgREST scopes
+  # the blast radius to the selected table.
+  - id: harvey-postgrest-filter-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      Request input is interpolated into a PostgREST string filter (.or/.filter/.textSearch). An
+      attacker can inject extra filter clauses. Pass discrete column/operator/value arguments.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $C.or($X, ...)
+              - pattern: $C.filter($X, ...)
+              - pattern: $C.textSearch($X, ...)
+          - focus-metavariable: $X
+
+  # Prototype pollution: request body recursively merged into an object (lodash merge / defaultsDeep
+  # / a custom recursive merge). Object.assign (shallow, N-PROTO-SAFE) is not matched.
+  - id: harvey-prototype-pollution
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request body flows into a recursive merge — prototype pollution (a __proto__/constructor key
+      mutates Object.prototype). Validate keys, or merge only an explicit allowlist of fields.
+    pattern-sources:
+      - pattern: req.body
+      - pattern: req.query
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: merge($TARGET, $SRC, ...)
+              - pattern: mergeWith($TARGET, $SRC, ...)
+              - pattern: defaultsDeep($TARGET, $SRC, ...)
+              - pattern: $L.merge($TARGET, $SRC, ...)
+              - pattern: $L.defaultsDeep($TARGET, $SRC, ...)
+
+  # Unsafe deserialization: request input passed to node-serialize unserialize() (executes an
+  # embedded function body). Review — depends on the sink library being the exploitable one.
+  - id: harvey-unsafe-deserialization
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request input is deserialized with an unsafe unserialize() (node-serialize executes embedded
+      function bodies) — remote code execution. Use JSON.parse and validate the shape.
+    pattern-sources:
+      - pattern: req.body
+      - pattern: req.query
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: unserialize($X)
+              - pattern: $S.unserialize($X)
+          - focus-metavariable: $X
+
+  # XXE: an XML parser configured to resolve external entities (noent: true / resolveEntities).
+  # noent: false (N-XXE-SAFE) is the hardened setting and is not matched.
+  - id: harvey-xxe
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      An XML parser is configured to resolve external entities (noent/resolveEntities true) — XXE
+      (file read / SSRF via DOCTYPE entities). Disable entity resolution when parsing untrusted XML.
+    patterns:
+      - pattern-either:
+          - pattern: "{ ..., noent: true, ... }"
+          - pattern: "{ ..., resolveEntities: true, ... }"
+
+  # Path traversal: request input joined into a filesystem path reaching fs. path.basename
+  # (N-PATH-BASENAME) strips directory components and is registered as a sanitizer.
+  - id: harvey-path-traversal
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request input is joined into a filesystem path and read/written — path traversal
+      (../ escapes the intended directory). Sanitize with path.basename and confine to a base dir.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sanitizers:
+      - pattern: path.basename(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fs.readFile($P, ...)
+              - pattern: fs.readFileSync($P, ...)
+              - pattern: fs.createReadStream($P, ...)
+              - pattern: fs.writeFile($P, ...)
+              - pattern: fs.writeFileSync($P, ...)
+          - focus-metavariable: $P
+
+  # Zip-slip: an archive entry name joined into a write path with no containment check — a
+  # ../ entry escapes the extraction directory. Review — needs the extraction-loop context.
+  - id: harvey-zip-slip
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      An archive entry name is joined into a write path with no containment check — zip-slip
+      (a ../ entry writes outside the extraction dir). Resolve and verify the path stays under it.
+    patterns:
+      - pattern-either:
+          - pattern: fs.writeFileSync(path.join($D, $E.entryName), ...)
+          - pattern: fs.writeFile(path.join($D, $E.entryName), ...)
+          - pattern: fs.writeFileSync(path.join($D, $E.path), ...)
+          - pattern: fs.writeFile(path.join($D, $E.path), ...)
+
+  # Server-side template injection: request input compiled/rendered as a template. Review — the
+  # engine and whether the template is attacker-controlled determine exploitability.
+  - id: harvey-template-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request input is compiled/rendered as a server-side template (ejs/handlebars/pug) — SSTI,
+      which escalates to RCE on most engines. Treat user input as data, never as template source.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: ejs.render($X, ...)
+              - pattern: ejs.compile($X, ...)
+              - pattern: Handlebars.compile($X, ...)
+              - pattern: pug.render($X, ...)
+              - pattern: pug.compile($X, ...)
+          - focus-metavariable: $X
+
+  # ReDoS: a regex literal with a nested quantifier ((a+)+ style) — catastrophic backtracking on a
+  # crafted input. A linear regex with negated classes (N-REDOS-SAFE) has no nested group + does
+  # not match. metavariable-regex flags the nested-quantifier shape.
+  - id: harvey-redos
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      Regex with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on
+      adversarial input. Rewrite without nested quantifiers, or bound input length / use RE2.
+    patterns:
+      - pattern-either:
+          - pattern: new RegExp($RE, ...)
+          - pattern: new RegExp($RE)
+      - metavariable-regex:
+          metavariable: $RE
+          regex: (?s).*\([^)]*[+*][^)]*\)\s*[+*].*
+
+  # Log injection: request input written into a log line unescaped — an attacker can forge or split
+  # log records with CR/LF. Review — extremely common shape, low individual severity.
+  - id: harvey-log-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Low
+    message: >
+      Request input is written to a log line unsanitized — log forging/injection via CR/LF. Strip
+      newlines (or log structured fields) before writing user input to the log.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: console.log($X, ...)
+              - pattern: console.error($X, ...)
+              - pattern: console.info($X, ...)
+              - pattern: console.warn($X, ...)
+          - focus-metavariable: $X

@@ -182,6 +182,55 @@ scored. `pnpm verify` (offline) is green via recorded gitleaks output in `calibr
 
 ---
 
+## Batch B3 (#71) — injection & code-execution family
+
+The injection expansion batch (spec `docs/design/spec-71-security-corpus.md` §"Batch 1 — Injection
+& code-execution family"). Custom Semgrep taint rules in `src/scan/rules/semgrep/injection.yml`
+(the per-batch rule-file directory established by the Part-1 modularization). Tiering per the
+locked preamble: only ~100%-precision sinks are `high` (free count) — a raw-SQL-executor RPC,
+`exec`/`execSync` of a request string, and `eval`/`new Function` of request input. The heuristic
+sinks stay `review`. SQLi-via-template-literal (`P-SQLI-CONCAT` = planted bug #4) and its safe
+lookalike `N-PARAM-QUERY` already ship in the base corpus; the ReDoS-safe / static-fs negatives
+(`N-REDOS-SAFE`, `N-FS-STATIC`) too — B3 does not duplicate them.
+
+### B3 positives — planted injections (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-SQLI-RPC | `pages/api/report.js:10` | Semgrep `harvey-sql-injection-rpc` (taint: `req.query` → SQL string → `.rpc('exec_sql', …)`; sink gated on raw-SQL-executor RPC names) | high |
+| P-CMD-INJECTION | `pages/api/convert.js:8` | Semgrep `harvey-command-injection` (taint: `req.query` → `exec`/`execSync` string) | high |
+| P-EVAL-CODE-INJ | `pages/api/calc.js:6` | Semgrep `harvey-code-injection-eval` (taint: `req.body` → `eval`/`new Function`) | high |
+| P-POSTGREST-FILTER-INJ | `pages/api/find.js:12` | Semgrep `harvey-postgrest-filter-injection` (taint: `req.query` → string `.or()`) | review |
+| P-PROTO-POLLUTION | `lib/merge.js:8` | Semgrep `harvey-prototype-pollution` (taint: `req.body` → `lodash.merge`/`defaultsDeep`) | review |
+| P-INSECURE-DESERIALIZE | `pages/api/import.js:7` | Semgrep `harvey-unsafe-deserialization` (taint: `req.body` → `unserialize()`) | review |
+| P-XXE | `pages/api/xml.js:6` | Semgrep `harvey-xxe` (xml2js parse options `noent: true`) | review |
+| P-PATH-TRAVERSAL | `pages/api/file.js:11` | Semgrep `harvey-path-traversal` (taint: `req.query` → `path.join` → `fs`; `path.basename` sanitizer) | review |
+| P-ZIP-SLIP | `lib/unzip.js:11` | Semgrep `harvey-zip-slip` (`fs.writeFileSync(path.join(dir, entry.entryName), …)`, no containment) | review |
+| P-SSTI | `pages/api/render.js:7` | Semgrep `harvey-template-injection` (taint: `req.body` → `ejs.render`) | review |
+| P-REDOS | `lib/parse.js:4` | Semgrep `harvey-redos` (`new RegExp` with a nested-quantifier `metavariable-regex`) | review |
+| P-LOG-INJECTION | `pages/api/track.js:7` | Semgrep `harvey-log-injection` (taint: `req.query` → `console.log`) | review |
+
+### B3 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-CMD-SAFE | `lib/img.js` | `execFile('convert', [inputPath, …])` — argv array, no shell. `harvey-command-injection` fires only on `exec`/`execSync` of a string. |
+| N-EVAL-JSON | `lib/cfg.js` | `JSON.parse(req.body)` parses data, cannot execute. `harvey-code-injection-eval` fires only on `eval`/`new Function`. |
+| N-PROTO-SAFE | `lib/opts.js` | `Object.assign({}, DEFAULTS, {theme, pageSize})` — shallow, explicit fields, no recursive merge. |
+| N-XXE-SAFE | `lib/xml-safe.js` | xml2js parse with `noent: false` — external entities disabled. `harvey-xxe` fires only on `noent`/`resolveEntities` `true`. (Named `xml-safe.js`, not the spec's `lib/xml.js`, to avoid a basename collision with the `pages/api/xml.js` positive in the corpus location matcher.) |
+| N-PATH-BASENAME | `pages/api/dl.js` | `path.basename(req.query.f)` strips directory components before the join; `harvey-path-traversal` registers `path.basename` as a sanitizer. |
+| N-RPC-PARAM | `pages/api/rep.js` | `admin.rpc('report_total', { uid })` — a normal RPC with a bound argument (PostgREST parameterizes it); `harvey-sql-injection-rpc` fires only on raw-SQL-executor RPC names. |
+
+### B3 live result (2026-07-09, static binaries: semgrep 1.164.0, gitleaks 8.30.1, trufflehog 3.95.8, osv-scanner 2.3.8, no Docker)
+
+`pnpm validate:calibration`: **positives caught 39/39 static (15 at high/free-count), 1
+connected-tier N/A; negatives cleared 25/25; zero free-count false positives — GATE PASS.** The 12
+new B3 positives all fire (3 at high: raw-SQL-executor RPC, `exec` command injection, `eval` code
+injection; 9 at review: the heuristic sinks). The 6 new negatives clear with no free-count finding
+(the argv-array `execFile`, `JSON.parse`, shallow `Object.assign`, hardened `noent: false`,
+`path.basename` sanitizer, and parameterized RPC are each correctly ignored). No regression on the
+base or B1 batches. `pnpm verify` (offline) is green: the scorecard logic over the expanded CORPUS
+is exercised in `calibration.test.ts`; the Semgrep rules themselves are proven by the live gate.
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`

@@ -1,6 +1,6 @@
 // Next.js/web footguns via Semgrep OSS: dangerouslySetInnerHTML, permissive CORS,
-// service-role-in-client, open redirects (custom rules — src/scan/rules/semgrep-nextjs-
-// supabase.yml) layered on the registry security packs.
+// service-role-in-client, open redirects, injection family (custom rules — the directory
+// src/scan/rules/semgrep/, one file per security batch) layered on the registry security packs.
 //
 // Semgrep is an external CLI binary, not an npm dependency. Install: `pip install semgrep`
 // or `brew install semgrep` (https://semgrep.dev/docs/getting-started/). `--config p/*`
@@ -9,7 +9,7 @@
 // Invocation (maintained registry packs from mechanical-toolchain.md §2 + our custom rules):
 //   semgrep --config p/typescript --config p/react --config p/nextjs --config p/owasp-top-ten \
 //     --config p/secrets --config p/security-audit \
-//     --config src/scan/rules/semgrep-nextjs-supabase.yml --exclude node_modules --json <dir>
+//     --config src/scan/rules/semgrep/ --exclude node_modules --json <dir>
 //
 // Trust boundary: severity ERROR + metadata.confidence HIGH + not a `.audit.`-suffixed rule
 // is "high" precision (docs/design/mechanical-toolchain.md §2/§7) — the free count; everything
@@ -24,7 +24,9 @@ import { join } from "node:path";
 import type { Finding, Severity } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 
-const CUSTOM_RULES = new URL("./rules/semgrep-nextjs-supabase.yml", import.meta.url).pathname;
+// The whole custom-rule directory is loaded as one --config; each security batch adds its own
+// `<batch>.yml` here (no shared file → conflict-free parallel batches).
+const CUSTOM_RULES = new URL("./rules/semgrep/", import.meta.url).pathname;
 
 export interface SemgrepResult {
   check_id: string;
