@@ -64,6 +64,25 @@ describe("scoreEntry", () => {
     expect(row.pass).toBe(true);
     expect(row.detail).toContain("connected");
   });
+
+  it("does not let an environment-dependent checkout path leak a match keyword into the haystack (issue #86)", () => {
+    // Mirrors the real B6 corpus entry: match keyword "decode" against jwt.decode()-for-authz.
+    // The finding here is an UNRELATED header check on the same file, reported at an absolute
+    // path under a fake checkout root ("/home/decodeproj/...") that happens to contain "decode"
+    // as a substring. Scoring must not depend on where the repo was checked out — this must not
+    // be scored as catching the jwt-decode-noverify positive.
+    const e = entry({
+      id: "P-JWT-DECODE-NOVERIFY", kind: "positive", cls: "jwt.decode() used for an authz decision",
+      location: "middleware.ts", match: ["jwt-decode-noverify", "decode"], expectedTier: "review", note: "",
+    });
+    const unrelated = finding({
+      location: "/home/decodeproj/checkout/targets/calibration/middleware.ts:5",
+      title: "Missing X-Frame-Options", taxonomy: "missing security headers", precisionTier: "review",
+    });
+    const row = scoreEntry(e, [unrelated]);
+    expect(row.pass).toBe(false);
+    expect(row.caughtTier).toBeUndefined();
+  });
 });
 
 describe("Batch B1 secrets corpus (recorded gitleaks output → tier mapping)", () => {
