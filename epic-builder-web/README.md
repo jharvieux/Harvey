@@ -24,7 +24,8 @@ EPIC_BUILDER_PASSWORD=secret pnpm dev
 
 Open http://localhost:3000, sign in with the password, and walk the flow. The default model is the
 offline `ScaffoldModelClient` (deterministic skeleton drafts — no key needed); publishing needs the
-GitHub env vars below (or use **Dry run**, which needs none).
+GitHub env vars below (or use **Dry run**, which needs none). Set `EPIC_BUILDER_MODEL=anthropic` +
+`ANTHROPIC_API_KEY` to use the live model client instead (see below).
 
 ## Test
 
@@ -44,7 +45,7 @@ idempotent re-run without a live model, a live tracker, or a running server.
 | `EPIC_BUILDER_SESSION_SECRET` | HMAC key for the session cookie. |
 | `EPIC_BUILDER_DATA_DIR` | Where per-user workspaces are stored (default `./.data`). |
 | `GITHUB_TOKEN` / `GITHUB_OWNER` / `GITHUB_REPO` | Per-engagement publish target (real publish only). |
-| `EPIC_BUILDER_MODEL` + `ANTHROPIC_API_KEY` | Select the live model client (deferred — see design §5, §9). |
+| `EPIC_BUILDER_MODEL=anthropic` + `ANTHROPIC_API_KEY` | Selects the live Anthropic model client (`lib/model-anthropic.ts`, issue #102) in place of the scaffold. Standard tier calls use Haiku 4.5, flagship tier calls use Sonnet 5 (per `docs/design/model-routing.md` §6); the key must belong to a ZDR-eligible account and is read only server-side. Falls back to the scaffold if either var is missing. |
 
 Secrets are read only in server routes; none reach the browser.
 
@@ -62,6 +63,5 @@ vars above. Two caveats from the design doc:
 
 ## Not in the MVP (deferred, see design §9)
 
-Live Anthropic model client · Supabase storage + Supabase Auth multi-user · two-phase revision
-confirm · multi-round web clarify · per-engagement tracker tokens · the `intake-site` footer link
-(added once a deploy URL exists).
+Supabase storage + Supabase Auth multi-user · two-phase revision confirm · multi-round web clarify ·
+per-engagement tracker tokens · the `intake-site` footer link (added once a deploy URL exists).
