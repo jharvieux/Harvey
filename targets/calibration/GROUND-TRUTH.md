@@ -826,7 +826,7 @@ Layer-1 gate, proving the shaping/matching logic ahead of that live run.
 
 ---
 
-## M3 (#72) — Hotspot analysis (vitals) corpus — DESIGN + FIXTURE, NOT A LIVE GATE
+## M3 (#72) — Hotspot analysis (vitals) corpus — SCHEMA VERIFIED, OFFLINE GATE ONLY
 
 The M3 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
 §M3). **This is deliberately not the same shape as every other module's section below** — read
@@ -840,36 +840,39 @@ a **descriptive map**, not an asserted finding, and its gate is a **regression/o
 deterministic facts** — never a precision/recall percentage. Nothing in this section or in
 `src/scan/calibration/m3.entries.ts` should ever be read as "M3 precision = X%."
 
-**Why this is design + fixture, not a live gate:** before writing any code, `vitals` /
-`vitals_cli.py` were confirmed **not runnable in this environment** — no binary on `PATH`, no
-importable `vitals` python module (`vitals --version`, `vitals_cli.py --help`,
-`python3 -c "import vitals"` all fail; `find / -iname "*vitals*"` outside `node_modules` found
-nothing). Its `--json` schema is **not documented anywhere in this repo** — `docs/audit-modules.md`
-M3 only describes the *concepts* it reports, plus one real prior engagement's summary numbers
-(`report-template/findings.atc.json`'s F-13: "vitals: health 2.4, 41 changes/90d, co-changes with
-29 files" for `app/api/chat/route.ts`; 50 truck-factor-1 files; overall health 6.3/10), not field
-names or JSON shape. Building a live gate against an invented schema and presenting it as verified
-would be exactly the over-claim #61 exists to prevent, so this batch stops at: a real adapter +
-a real Layer-1 unit gate, run against a fixture built from that F-13 citation's field *concepts*
-and clearly labeled ASSUMED/UNVERIFIED, with the live schema capture tracked as a follow-up
-(**issue #94**).
+**Schema status (issue #94, resolved):** the original batch (#95) shipped against an ASSUMED
+schema because `vitals`/`vitals_cli.py` wasn't runnable in that sandbox. An operator has since run
+`vitals 0.2.0 report --json <path>` against a real repo and captured the live output shape. The
+real top-level report carries `hotspots` (`file_path`, `complexity_score`, `risk_score`,
+`churn_data.changes` plus a flat `changes`, `health`, `role`, `centrality`, `churn_label`,
+`coupling_strength`), a **separate top-level `coupling` array** (`file_a`/`file_b`/`co_changes`/
+`coupling_strength`/`total_a`/`total_b` — not nested per hotspot row), and a **separate top-level
+`knowledge_risk` array** (`file_path`/`truck_factor`/`author_count`/`authors` — truck-factor is
+not a boolean on hotspot rows), plus `repo_info`, `overall_health`, `file_health`, `provenance`,
+`files_analyzed`. `src/hotspot-scan.ts`'s `VitalsReport`/`VitalsHotspotRow` types and the
+`rankHotspots`/`topKFiles`/`couplingEdges`/`truckFactorOneFiles` functions were rewritten against
+this real shape; the ASSUMED/UNVERIFIED caveats in the file's header no longer apply.
 
 ### What was built
 
 - **`src/hotspot-scan.ts`** — the M3 adapter (`rankHotspots`, `topKFiles`, `truckFactorOneFiles`,
-  `couplingEdges`, `toFactFindings`). Its `VitalsHotspotRow`/`VitalsReport` types are the ASSUMED
-  schema; the file's header comment flags every assumed field name and cites F-13 as the only real
-  evidence available.
-- **`src/hotspot-scan.test.ts`** — the Layer-1 `pnpm verify` gate, scoring the adapter against a
-  hand-built fixture (`report`, 7 rows) shaped to plant every corpus fixture below.
+  `couplingEdges`, `toFactFindings`), now typed against the REAL, live-captured `vitals` schema
+  (`risk_score`-sorted rank, coupling and knowledge-risk read from their own top-level arrays).
+- **`src/__fixtures__/vitals-report.json`** — a synthetic `vitals` report (synthetic paths/values,
+  real field shape) used by `src/hotspot-scan.test.ts`. Plants every corpus fixture below.
+- **`src/hotspot-scan.test.ts`** — the Layer-1 `pnpm verify` gate, scoring the adapter against the
+  real-schema fixture above.
 - **`src/scan/calibration/m3.entries.ts`** — `module: "M3"` corpus entries for the two
   **deterministic boolean sub-signals only** (truck-factor-1, coupling edge) — never the rank.
   Spread into `CORPUS` in `src/scan/calibration.ts`; excluded from `pnpm validate:calibration`'s
   `runMechanicalScan` gate by the same `module === undefined` filter as M7/M8/M10.
-- No `pnpm validate:hotspots` / Layer 2 — there is no vitals binary to run it against. Tracked as
-  part of issue #94, along with the git-history fixture problem below.
+- No `pnpm validate:hotspots` / Layer 2 in this repo: the vitals plugin
+  (`~/.claude/plugins/.../vitals_cli.py report --json <path>`) isn't a repo dependency, so it stays
+  an operator-run command against a real checkout, not something `pnpm verify` can shell out to.
+  `pnpm verify` gates against the committed synthetic fixture instead. The git-history fixture
+  problem below is still open.
 
-### M3 fixtures (planted in `src/hotspot-scan.test.ts`'s `report`, not as static target files)
+### M3 fixtures (`src/__fixtures__/vitals-report.json`, not static target files)
 
 Unlike every other #72 module, M3's positives/negatives are **not files under
 `targets/calibration/`** — churn, coupling, and knowledge-risk are derived from git commit
@@ -878,36 +881,38 @@ there is no history to plant against it statically. The spec (§M3(e)) calls thi
 expensive fixture and offers two options for the real Layer 2: a build script that scaffolds a
 throwaway repo and replays a scripted, date/author-pinned `git commit` sequence
 (`targets/calibration-vitals/build-history.sh`), or a committed `git bundle`
-(`targets/calibration-vitals/history.bundle`) unpacked at gate time. Neither is built here — doing
-so before the real vitals schema is known would mean building a fixture for a tool whose input
-shape is still a guess. That choice is deferred to issue #94 alongside the schema capture.
+(`targets/calibration-vitals/history.bundle`) unpacked at gate time. Neither is built here — the
+JSON fixture now matches the real vitals output shape, but no git-history replay backs it. Tracked
+as a follow-up.
 
-| id | fixture row (in the assumed-schema `report`) | what it must produce | gate type |
+| id | fixture row (in `src/__fixtures__/vitals-report.json`) | what it must produce | gate type |
 |---|---|---|---|
-| M3-P-HOTSPOT | `core/checkout.ts` — high churn (38) and high complexity (61) → highest ROI (92) | ranks in the top-3 of `topKFiles` | rank regression (ordering assertion, not a `CorpusEntry`) |
-| M3-N-CHURN-TRIVIAL | `generated/schema.gen.ts` — the highest raw churn in the fixture (55) but trivial complexity (4) → low ROI (8) | must NOT rank in the top-3 despite the highest churn | rank regression (ordering assertion, not a `CorpusEntry`) |
-| M3-P-TRUCK1 | `core/billing.ts` — `truckFactor1: true`, sole author `alice` | `truckFactorOneFiles` includes it; `toFactFindings` emits a Knowledge-risk Finding | boolean fact (`CorpusEntry`, `module: "M3"`) |
-| M3-P-COUPLING | `core/a.ts` / `core/b.ts` — each lists the other in `coChanges` | `couplingEdges` returns one deduped edge; `toFactFindings` emits a Coupling Finding | boolean fact (`CorpusEntry`, `module: "M3"`) |
-| M3-N-MULTIAUTHOR | `core/reporting.ts` — `truckFactor1: false` (3 seeded authors) | must NOT be in `truckFactorOneFiles`; `toFactFindings` emits nothing for it | boolean fact (`CorpusEntry`, `module: "M3"`) |
+| M3-P-HOTSPOT | `core/checkout.ts` — high churn (38) and high complexity (61) → highest risk_score (92) | ranks in the top-3 of `topKFiles` | rank regression (ordering assertion, not a `CorpusEntry`) |
+| M3-N-CHURN-TRIVIAL | `generated/schema.gen.ts` — the highest raw churn in the fixture (55) but trivial complexity (4) → low risk_score (8) | must NOT rank in the top-3 despite the highest churn | rank regression (ordering assertion, not a `CorpusEntry`) |
+| M3-P-TRUCK1 | `core/billing.ts` — `knowledge_risk` row with `truck_factor: 1`, sole author `alice` | `truckFactorOneFiles` includes it; `toFactFindings` emits a Knowledge-risk Finding | boolean fact (`CorpusEntry`, `module: "M3"`) |
+| M3-P-COUPLING | `core/a.ts` / `core/b.ts` — one row in the top-level `coupling` array | `couplingEdges` returns one deduped edge; `toFactFindings` emits a Coupling Finding | boolean fact (`CorpusEntry`, `module: "M3"`) |
+| M3-N-MULTIAUTHOR | `core/reporting.ts` — `knowledge_risk` row with `truck_factor: 3` (3 seeded authors) | must NOT be in `truckFactorOneFiles`; `toFactFindings` emits nothing for it | boolean fact (`CorpusEntry`, `module: "M3"`) |
 
-`lib/stable.ts` (health 8.5, churn 3, complexity 5, ROI 5) rounds out the fixture as a boring,
-uncontested low-risk file — not itself a planted positive or negative.
+`lib/stable.ts` (health 8.5, churn 3, complexity 5, risk_score 5) rounds out the fixture as a
+boring, uncontested low-risk file — not itself a planted positive or negative.
 
-### M3 design result (2026-07-09, assumed schema, no live vitals run)
+### M3 result (2026-07-09, real schema, offline synthetic fixture)
 
 `src/hotspot-scan.test.ts` (8 tests, all passing in `pnpm verify`): the top-K ordering block
 confirms `core/checkout.ts` ranks in the top-3 and `generated/schema.gen.ts` does not, despite
-having the highest raw churn in the fixture (the ROI-weighted rank sinks it, same discipline as
-jscpd/knip's FP classes); the boolean-fact block confirms `truckFactorOneFiles`/`couplingEdges`
-resolve `core/billing.ts` and the `core/a.ts <> core/b.ts` edge, and that `toFactFindings` scores
-clean through `buildCoverageMatrix` against `m3Entries` — 2/2 positives caught, 1/1 negative
-cleared, zero free-count false positives. **None of this is a live measurement**: the fixture's
-field names and values are an educated guess grounded in `findings.atc.json`'s F-13, not a real
-`vitals_cli.py report --json` capture. The claim this batch supports is "regression-gated hotspot
-signals + reproducible ranking against an assumed schema" — never "M3 precision = X%," and not yet
-"validated against a live vitals run." Issue #94 tracks getting `vitals` runnable, capturing the
-real schema, reconciling `src/hotspot-scan.ts`'s types against it, and building the git-history
-fixture + `pnpm validate:hotspots` Layer 2.
+having the highest raw churn in the fixture (the risk_score-weighted rank sinks it, same
+discipline as jscpd/knip's FP classes); the boolean-fact block confirms
+`truckFactorOneFiles`/`couplingEdges` resolve `core/billing.ts` and the `core/a.ts <> core/b.ts`
+edge from the real schema's separate `knowledge_risk`/`coupling` arrays, and that `toFactFindings`
+scores clean through `buildCoverageMatrix` against `m3Entries` — 2/2 positives caught, 1/1
+negative cleared, zero free-count false positives. The schema is now **verified** from a live
+`vitals 0.2.0 report --json` capture (not an assumption), but the gate itself still runs offline
+against a committed synthetic fixture — `pnpm verify` has no vitals binary to shell out to. An
+operator can run the live Layer-2 command directly against a real checkout:
+`~/.claude/plugins/.../vitals_cli.py report --json <path>` (or `/vitals:scan`). The claim this
+batch supports is "regression-gated hotspot signals + reproducible ranking against the real,
+verified schema" — still never "M3 precision = X%." The git-history fixture (build script or
+`git bundle` for a real Layer-2 `pnpm validate:hotspots` gate) remains open.
 
 ---
 
