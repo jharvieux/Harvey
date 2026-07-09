@@ -43,7 +43,7 @@ describe("checkNextVersionCVEs", () => {
 });
 
 describe("parseOsvFindings", () => {
-  it("tags a curated advisory alias as high precision", () => {
+  it("drops an OSV hit whose alias matches an already-curated advisory (dedup)", () => {
     const result: OsvScanResult = {
       results: [
         {
@@ -57,8 +57,7 @@ describe("parseOsvFindings", () => {
         },
       ],
     };
-    const findings = parseOsvFindings(result);
-    expect(findings[0]?.precisionTier).toBe("high");
+    expect(parseOsvFindings(result)).toEqual([]);
   });
 
   it("tags a generic transitive-dep CVE as review precision", () => {
@@ -82,5 +81,58 @@ describe("parseOsvFindings", () => {
 
   it("degrades gracefully to no findings for a target with no lockfile (mechanical.ts's runOsvScanner returns {})", () => {
     expect(parseOsvFindings({})).toEqual([]);
+  });
+});
+
+describe("curated + OSV dedup (issue #73)", () => {
+  it("merges to exactly one finding when OSV independently resolves the same GHSA as a curated CVE", () => {
+    // Reproduces #73: committing a lockfile lets OSV-Scanner resolve next@14.2.35, which falls
+    // in both the curated WebSocket-SSRF range and OSV's own GHSA-c4j6-fc7j-m34r match.
+    const curated = checkNextVersionCVEs("14.2.35");
+    const osvResult: OsvScanResult = {
+      results: [
+        {
+          source: { path: "package-lock.json" },
+          packages: [
+            {
+              package: { name: "next", version: "14.2.35" },
+              vulnerabilities: [
+                { id: "GHSA-c4j6-fc7j-m34r", summary: "WebSocket-upgrade SSRF", severity: [{ type: "CVSS_V3", score: "8.6" }] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const merged = [...curated, ...parseOsvFindings(osvResult)];
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.id).toBe("DEP-CVE-2026-44578");
+  });
+
+  it("preserves two genuinely distinct CVEs on the same package", () => {
+    const osvResult: OsvScanResult = {
+      results: [
+        {
+          source: { path: "package-lock.json" },
+          packages: [
+            {
+              package: { name: "next", version: "14.2.35" },
+              vulnerabilities: [
+                // Curated advisory: deduped away by parseOsvFindings.
+                { id: "GHSA-c4j6-fc7j-m34r", summary: "WebSocket-upgrade SSRF", severity: [{ type: "CVSS_V3", score: "8.6" }] },
+                // Unrelated CVE on the same package: not curated, must survive.
+                { id: "GHSA-aaaa-bbbb-cccc", summary: "unrelated prototype pollution", severity: [{ type: "CVSS_V3", score: "6.1" }] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const curated = checkNextVersionCVEs("14.2.35");
+    const merged = [...curated, ...parseOsvFindings(osvResult)];
+    const ids = merged.map((f) => f.id);
+    expect(ids).toContain("DEP-CVE-2026-44578");
+    expect(ids).toContain("DEP-OSV-GHSA-aaaa-bbbb-cccc");
+    expect(merged).toHaveLength(2);
   });
 });

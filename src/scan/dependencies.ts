@@ -8,8 +8,10 @@
 // Invocation (from the target repo root):
 //   osv-scanner --format json --lockfile pnpm-lock.yaml    (or package-lock.json / yarn.lock)
 //
-// Trust boundary: a vulnerability whose id/alias is one of the curated CVEs below (or an exact
-// OSV match against them) is "high" precision. Every other OSV hit is "review" — a version
+// Trust boundary: a vulnerability whose id/alias is one of the curated CVEs below is already
+// reported by checkNextVersionCVEs with a hand-written exploitability narrative, so an OSV hit
+// against one of them is a duplicate of that finding and is dropped here (see
+// CURATED_ADVISORY_IDS / dedup in parseOsvFindings). Every other OSV hit is "review" — a version
 // match isn't proof of exploitability (deployment context, e.g. self-hosted vs. Vercel, matters).
 
 import type { Finding, Severity } from "../findings.js";
@@ -154,8 +156,13 @@ export interface OsvScanResult {
   }[];
 }
 
-// Advisory ids whose exploitability we've independently curated above — an OSV hit against
-// one of these is exact-match ground truth, not a generic transitive-dep flag.
+// Advisory ids whose exploitability we've independently curated above (checkNextVersionCVEs) —
+// the vuln identity (GHSA id, cross-referenced against OSV's id + aliases) that ties an OSV hit
+// back to its curated finding. An OSV hit matching one of these is the SAME underlying CVE as
+// the curated finding, not a distinct dependency issue, so parseOsvFindings drops it rather than
+// double-reporting: the curated finding is richer (specific fix guidance, deployment-context
+// impact) and stays the sole representative. This is a general rule keyed on advisory identity,
+// not a one-off for any single GHSA — extend this set whenever a new CVE is added above.
 const CURATED_ADVISORY_IDS = new Set(["GHSA-f82v-jwr5-mffw", "GHSA-9qr9-h5gf-34mp", "GHSA-c4j6-fc7j-m34r"]);
 
 function severityFromCvss(score: string | undefined): Severity {
@@ -179,6 +186,9 @@ export function parseOsvFindings(result: OsvScanResult): Finding[] {
         const id = vuln.id ?? "unknown-id";
         const ids = new Set([id, ...(vuln.aliases ?? [])]);
         const curated = [...ids].some((a) => CURATED_ADVISORY_IDS.has(a));
+        // Same underlying CVE as an already-curated checkNextVersionCVEs finding — drop the
+        // OSV duplicate rather than double-reporting the same vuln under two ids.
+        if (curated) continue;
         const cvssScore = vuln.severity?.find((s) => s.type === "CVSS_V3")?.score ?? vuln.severity?.[0]?.score;
         findings.push(
           mechanicalFinding({
@@ -191,7 +201,7 @@ export function parseOsvFindings(result: OsvScanResult): Finding[] {
             evidence: `OSV-Scanner matched ${id}${vuln.aliases?.length ? ` (aliases: ${vuln.aliases.join(", ")})` : ""} against ${name}@${version}.`,
             impact: vuln.summary ?? "Known vulnerability in a resolved dependency version.",
             fix: `Upgrade ${name} past the vulnerable range (see ${id}).`,
-            precisionTier: curated ? "high" : "review",
+            precisionTier: "review",
           }),
         );
       }
