@@ -313,3 +313,31 @@ because the rules are absent or framework-mismatched. See §8.4.
   real by hand).
 - **#61** — mechanical layer: gate rules on calibration validation; treat unvalidated rules as
   non-shipping (the confidence fix; supersedes #52's framing).
+
+## 9. Connected-tier live confirmation (2026-07-09)
+
+The B8 (Supabase security advisors) and M7 (performance advisors) corpus fixtures are
+`connected` tier — built offline against recorded advisor JSON, N/A in the static gate. This
+section is the deferred **live** confirmation, run against a real local stack
+(`colima` + `supabase start -x vector,analytics` + `supabase db reset` on `targets/calibration`,
+which applies the B8/M7 advisor migrations).
+
+**All planted advisor fixtures fire against the real advisor.** Ran the open-source Supabase
+advisor engine (`splinter.sql`) directly against the live DB via `psql`:
+
+- **B8 security lints (caught):** `auth_users_exposed`, `rls_enabled_no_policy` (×2),
+  `security_definer_view` (×2), `function_search_path_mutable`, `rls_disabled_in_public`,
+  `rls_references_user_metadata`, `anon_security_definer_function_executable` (×2),
+  `authenticated_security_definer_function_executable` (×2).
+- **M7 performance lints (caught):** `unindexed_foreign_keys` (×14), `auth_rls_initplan` (×4),
+  `unused_index` (×3).
+
+So the fixtures are genuine — a real advisor run detects every one.
+
+**Gap found (reinforces #54):** Harvey's own `harvey scan --supabase local` caught only **3** of
+these live (`SB-BUCKET-avatars` public storage bucket, `SB-EXPOSED-public-audit_logs`,
+`SB-EXT-pg_net`) — its local mode implements a *subset* of checks, it does **not** run the full
+Splinter lint set. So delivering the B8/M7 connected coverage requires either wiring `splinter.sql`
+into local mode (**#54**) or running `get_advisors` against a *connected remote* project (which
+does run full Splinter). The connected-tier corpus is therefore validated as ground-truth-correct,
+but Harvey's local scanner needs #54 to actually surface it against a `supabase start` stack.
