@@ -23,8 +23,14 @@ function arg(flag: string): string | undefined {
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const dir = arg("--dir") ?? join(repoRoot, "targets", "calibration");
 
+// CORPUS also carries modules with their own live pipeline outside runMechanicalScan (e.g.
+// M10's name/type classifier, fed from parsed migration SQL — see calibration/m10.entries.ts and
+// src/cli/dry-run.ts). Score only the mechanical-scan modules here so this gate isn't spuriously
+// broken by a module runMechanicalScan was never going to detect.
+const mechanicalCorpus = CORPUS.filter((e) => e.module === undefined);
+
 const findings = await runMechanicalScan({ dir });
-const matrix = buildCoverageMatrix(findings, CORPUS);
+const matrix = buildCoverageMatrix(findings, mechanicalCorpus);
 
 if (process.argv.includes("--json")) {
   console.log(JSON.stringify(matrix, null, 2));

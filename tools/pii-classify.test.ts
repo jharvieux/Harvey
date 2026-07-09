@@ -122,6 +122,51 @@ describe("buildDataMap — severity weighting", () => {
   });
 });
 
+describe("M10 calibration corpus (#72, spec §M10) — the planted answer key, run live", () => {
+  // The exact columns planted in targets/calibration/supabase/migrations/
+  // 20260708000003_pii_calibration.sql (table pii_calibration_fixture). Mirrors
+  // src/scan/calibration/m10.entries.ts's answer key 1:1 — this is Layer 1 (pnpm verify);
+  // src/cli/dry-run.ts's M10 phase is the live run over the parsed migration SQL.
+
+  it("classifies every M10 planted positive at high confidence", () => {
+    expect(classifyColumn("email", "text")).toEqual({ infotype: "EMAIL", category: "PII", confidence: "high" });
+    expect(classifyColumn("date_of_birth", "date")).toEqual({ infotype: "DOB", category: "PII", confidence: "high" });
+    expect(classifyColumn("customer_ssn", "text")).toEqual({ infotype: "US_SSN", category: "SENSITIVE_PII", confidence: "high" });
+    expect(classifyColumn("passport_number", "text")).toEqual({ infotype: "PASSPORT", category: "SENSITIVE_PII", confidence: "high" });
+    expect(classifyColumn("cvv", "text")).toEqual({ infotype: "CVV", category: "PCI", confidence: "high" });
+    expect(classifyColumn("card_last4", "text")).toEqual({ infotype: "CARD", category: "PCI", confidence: "high" });
+  });
+
+  it("clears every M10 named FP lookalike — none reach the free/high count", () => {
+    expect(classifyColumn("email_category", "text")).toBeNull();
+    expect(classifyColumn("awaiting_dob_reprompt", "boolean")).toBeNull();
+    expect(classifyColumn("vendor_health", "text")).toBeNull();
+    // Ambiguous NAME? is classified but only at low confidence — never asserted.
+    expect(classifyColumn("product_name", "text")).toEqual({ infotype: "NAME?", category: "PII", confidence: "low" });
+  });
+
+  it("aggregates the fixture table to Critical severity, driven by the lone CVV column", () => {
+    const columns = [
+      { table_name: "pii_calibration_fixture", column_name: "email", data_type: "text" },
+      { table_name: "pii_calibration_fixture", column_name: "date_of_birth", data_type: "date" },
+      { table_name: "pii_calibration_fixture", column_name: "customer_ssn", data_type: "text" },
+      { table_name: "pii_calibration_fixture", column_name: "passport_number", data_type: "text" },
+      { table_name: "pii_calibration_fixture", column_name: "cvv", data_type: "text" },
+      { table_name: "pii_calibration_fixture", column_name: "card_last4", data_type: "text" },
+      { table_name: "pii_calibration_fixture", column_name: "email_category", data_type: "text" },
+      { table_name: "pii_calibration_fixture", column_name: "awaiting_dob_reprompt", data_type: "boolean" },
+      { table_name: "pii_calibration_fixture", column_name: "vendor_health", data_type: "text" },
+      { table_name: "pii_calibration_fixture", column_name: "product_name", data_type: "text" },
+    ];
+    const map = buildDataMap(columns);
+    // 6 positives classified + the 1 low-confidence NAME? hit; the 3 excluded FPs contribute nothing.
+    expect(map.pii_calibration_fixture.columns).toHaveLength(7);
+    expect(map.pii_calibration_fixture.categories.sort()).toEqual(["PCI", "PII", "SENSITIVE_PII"]);
+    expect(map.pii_calibration_fixture.pci).toBe(true);
+    expect(map.pii_calibration_fixture.severity).toBe("Critical");
+  });
+});
+
 describe("classifyWithFallback — LLM semantic-pass hook", () => {
   it("returns the dictionary-only data map when no semantic classifier is supplied", async () => {
     const columns = [{ table_name: "users", column_name: "email", data_type: "text" }];

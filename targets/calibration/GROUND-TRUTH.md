@@ -244,3 +244,60 @@ benign-lookalike fixtures. `pnpm verify` (offline) is green — `quality-scan.te
 Layer-2 gate (issue #61 two-layer pattern). No dedicated `validate:quality-calibration` CLI exists
 yet — scoring above was run ad hoc against `buildCoverageMatrix`; adding that CLI (mirroring
 `src/cli/validate-calibration.ts`) is a tracked follow-up, not a regression.
+
+---
+
+## M10 (#72) — PII/PHI/PCI data classification corpus
+
+The first #72 cross-module batch (spec `docs/design/spec-72-crossmodule-corpus.md` §M10).
+Promotes `tools/pii-classify.mjs`'s own selftest — already a precision measure, with positives
+and the exact FP negatives baked in (`email_category`, `awaiting_dob_reprompt`, `vendor_health`)
+— into the shared corpus/gate format, backed by a schema fixture: `public.pii_calibration_fixture`
+in `supabase/migrations/20260708000003_pii_calibration.sql`. Column names/types only, never
+seeded with data anywhere in this repo — privacy-safe by construction. `classifyColumn` is pure
+name/type matching; no live DB is needed, so this is a **fully self-contained batch** (spec
+"Precision tier: high... Live-env: none").
+
+Answer key: `src/scan/calibration/m10.entries.ts` (`module: "M10"`, spread into `CORPUS` in
+`src/scan/calibration.ts`). These entries are **not** scored by `pnpm validate:calibration`
+(that gate's `runMechanicalScan` doesn't run the PII classifier) — `src/cli/validate-calibration.ts`
+filters `CORPUS` down to `module === undefined` before scoring, so M10 can't spuriously break the
+M1 live gate. M10's own live pipeline is `src/cli/dry-run.ts`'s M10 phase (parses migration SQL →
+`buildDataMap`); wiring that into a dedicated `pnpm validate:pii-calibration` CLI (spec §M10(e)
+Layer 2, marked optional) is a documented follow-up. Layer 1 — the answer key above plus the
+extended `tools/pii-classify.test.ts` "M10 calibration corpus" block — is the gate for this batch
+and runs in `pnpm verify`.
+
+### M10 positives — planted columns (must be classified, all high confidence)
+
+| id | column | classifier result |
+|---|---|---|
+| M10-P-EMAIL | `pii_calibration_fixture.email` | EMAIL / PII / high |
+| M10-P-DOB | `pii_calibration_fixture.date_of_birth` | DOB / PII / high |
+| M10-P-SSN | `pii_calibration_fixture.customer_ssn` | US_SSN / SENSITIVE_PII / high |
+| M10-P-PASSPORT | `pii_calibration_fixture.passport_number` | PASSPORT / SENSITIVE_PII / high |
+| M10-P-CVV | `pii_calibration_fixture.cvv` | CVV / PCI / high (severity-override → table scores Critical) |
+| M10-P-CARD | `pii_calibration_fixture.card_last4` | CARD / PCI / high |
+
+### M10 negatives — benign lookalikes (must NOT be flagged in the free/high count)
+
+| id | column | why benign / suppression |
+|---|---|---|
+| M10-N-EMAIL-CAT | `pii_calibration_fixture.email_category` | descriptor suffix — categorizes the concept, not the value; excluded, `classifyColumn` returns `null`. |
+| M10-N-DOB-FLAG | `pii_calibration_fixture.awaiting_dob_reprompt` (boolean) | boolean-flag naming (and boolean sql type); excluded, returns `null`. |
+| M10-N-VENDOR-HEALTH | `pii_calibration_fixture.vendor_health` | infra/system health, not medical health; excluded, returns `null`. |
+| M10-N-NAME-AMBIG | `pii_calibration_fixture.product_name` | ambiguous `NAME?` → classified but only at low confidence — never asserted in the free/high count. |
+
+### M10 live result (2026-07-08, static — no DB, no external binary)
+
+`tools/pii-classify.mjs`'s classifier run live against the parsed migration SQL
+(`pnpm exec tsx src/cli/dry-run.ts`'s M10 phase, reading
+`supabase/migrations/20260708000003_pii_calibration.sql`): **positives classified 6/6 (all at high
+confidence — EMAIL, DOB, US_SSN, PASSPORT, CVV, CARD); negatives cleared 4/4** (3 excluded outright
+by the exclusion pass, 1 — `product_name` — classified but held at low confidence, never asserted).
+`pii_calibration_fixture` aggregates to categories `["PCI","PII","SENSITIVE_PII"]`, severity
+**Critical** (driven by the lone CVV column's `INFOTYPE_POINT_OVERRIDES` weight). Zero free-count
+false positives. `pnpm verify` (offline) is green via `tools/pii-classify.test.ts`'s "M10
+calibration corpus" block (21/21 tests in the file, including the 3 new M10-specific cases) and the
+unchanged `calibration.test.ts` suite (11/11, `CORPUS` now includes the 6 M10 positives + 4
+negatives with no location collisions against the existing corpus).
