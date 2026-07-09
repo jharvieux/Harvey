@@ -55,6 +55,15 @@ create table public.notes (
   created_at timestamptz not null default now()
 );
 
+-- Service-role-only internal table (never granted to anon/authenticated). RLS is enabled
+-- with zero policies below (N-RLS-DENY-ALL) — deny-all by design, a benign true-negative.
+create table public.service_state (
+  id uuid primary key default gen_random_uuid(),
+  key text not null unique,
+  value jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
 -- Resolves the calling user's tenant from their profile row. Correct RLS
 -- policies below scope by this; the buggy ones ignore it.
 create or replace function public.current_tenant_id()

@@ -14,7 +14,7 @@ describe("parseTableNames", () => {
   it("finds every table in the calibration schema", () => {
     const tables = parseTableNames(schemaSql).map((t) => t.table);
     expect(tables.sort()).toEqual(
-      ["audit_logs", "counters", "documents", "invoices", "notes", "profiles", "tenants"].sort(),
+      ["audit_logs", "counters", "documents", "invoices", "notes", "profiles", "service_state", "tenants"].sort(),
     );
   });
 });
@@ -53,9 +53,11 @@ describe("parseRlsState", () => {
     expect(rest.every((t) => t.rlsEnabled)).toBe(true);
   });
 
-  it("finds no RLS-enabled table with zero policies (documents/invoices have wrong policies, not missing ones)", () => {
+  it("finds exactly service_state as RLS-enabled-with-zero-policies — the deliberate deny-all negative (N-RLS-DENY-ALL)", () => {
     const state = parseRlsState(schemaSql, rlsSql);
-    const noPolicyCandidates = state.filter((t) => t.rlsEnabled && !t.hasPolicy);
-    expect(noPolicyCandidates).toEqual([]);
+    const noPolicyCandidates = state.filter((t) => t.rlsEnabled && !t.hasPolicy).map((t) => t.table);
+    // documents/invoices have wrong policies (not missing ones); service_state is RLS-on with no
+    // policy on purpose (deny-all by design), a benign true-negative the scanner must not flag.
+    expect(noPolicyCandidates).toEqual(["service_state"]);
   });
 });
