@@ -117,12 +117,20 @@ enabled = true
 # The maximum file size allowed (e.g. "5MB", "500KB").
 file_size_limit = "50MiB"
 
-# Uncomment to configure local storage buckets
-# [storage.buckets.images]
-# public = false
-# file_size_limit = "50MiB"
-# allowed_mime_types = ["image/png", "image/jpeg"]
-# objects_path = "./images"
+# BUG (PLANTED, connected/B8) — P-STORAGE-PUBLIC: a public bucket with no storage.objects
+# policies scoped to it (none are created for "avatars" anywhere in supabase/migrations/).
+# Anyone can read every object, and with no write/delete policy either, likely those too —
+# matches checkPublicBucketsWithNoPolicies in src/scan/supabase-config.ts.
+[storage.buckets.avatars]
+public = true
+file_size_limit = "5MiB"
+allowed_mime_types = ["image/png", "image/jpeg"]
+
+# NEGATIVE (N-STORAGE-PRIVATE) — a private bucket clears checkPublicBucketsWithNoPolicies
+# regardless of policy count (public=false skips storage RLS bypass entirely).
+[storage.buckets.invoices-private]
+public = false
+file_size_limit = "5MiB"
 
 # Allow connections via S3 compatible clients
 [storage.s3_protocol]
@@ -160,7 +168,9 @@ site_url = "http://127.0.0.1:3000"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+# BUG (PLANTED, connected/B8) — P-OAUTH-REDIRECT-WILD: a bare wildcard accepts a post-auth
+# redirect to ANY host, enabling OAuth-token-theft via an attacker-controlled redirect target.
+additional_redirect_urls = ["https://127.0.0.1:3000", "*"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -222,7 +232,9 @@ enable_signup = true
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
-# If enabled, users need to confirm their email address before signing in.
+# BUG (PLANTED, connected/B8) — P-EMAIL-CONFIRM-OFF: if enabled, users need to confirm their
+# email address before signing in. Disabled here allows mass fake-account signup and
+# enumeration-free account-takeover setups (mailer_autoconfirm=true equivalent).
 enable_confirmations = false
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = false
@@ -230,8 +242,9 @@ secure_password_change = false
 max_frequency = "1s"
 # Number of characters used in the email OTP.
 otp_length = 6
-# Number of seconds before the email OTP expires (defaults to 1 hour).
-otp_expiry = 3600
+# BUG (PLANTED, connected/B8) — P-OTP-LONG-EXPIRY: 86400s (24h), far past the 3600s (1h) baseline
+# checkAuthConfig warns on — a long-lived OTP widens the interception/replay window.
+otp_expiry = 86400
 
 # Use a production-ready SMTP server
 # [auth.email.smtp]
