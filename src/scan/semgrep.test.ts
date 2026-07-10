@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkMissingCsp, parseSemgrepFindings, type SemgrepOutput } from "./semgrep.js";
+import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, type SemgrepOutput } from "./semgrep.js";
 
 describe("parseSemgrepFindings", () => {
   it("tags ERROR+HIGH-confidence non-audit rules as high precision", () => {
@@ -88,5 +88,47 @@ describe("checkMissingCsp", () => {
     withDir({ "readme.md": "hi" }, (dir) => {
       expect(checkMissingCsp(dir)).toEqual([]);
     });
+  });
+});
+
+describe("checkPublicDirSensitive", () => {
+  function withPublic(files: string[], fn: (dir: string) => void): void {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-public-"));
+    try {
+      for (const rel of files) {
+        const full = join(dir, "public", rel);
+        mkdirSync(full.slice(0, full.lastIndexOf("/")), { recursive: true });
+        writeFileSync(full, "x");
+      }
+      fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("flags sensitive files (.env*, SQL dumps, keys) served from public/ at high tier", () => {
+    withPublic([".env.production", "backup.sql", "certs/server.pem", "nested/id_rsa"], (dir) => {
+      const findings = checkPublicDirSensitive(dir);
+      expect(findings).toHaveLength(4);
+      expect(findings.every((f) => f.precisionTier === "high")).toBe(true);
+      expect(findings.map((f) => f.location).sort()).toEqual(
+        ["public/.env.production", "public/backup.sql", "public/certs/server.pem", "public/nested/id_rsa"].sort(),
+      );
+    });
+  });
+
+  it("does not flag benign web assets (favicon, fonts, robots, images)", () => {
+    withPublic(["favicon.ico", "fonts/inter.woff2", "robots.txt", "img/logo.png", "site.webmanifest"], (dir) => {
+      expect(checkPublicDirSensitive(dir)).toEqual([]);
+    });
+  });
+
+  it("returns nothing when there is no public/ directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-nopublic-"));
+    try {
+      expect(checkPublicDirSensitive(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
