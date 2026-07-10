@@ -18,10 +18,15 @@ number, coverage verdict, or finding below was estimated or invented.
 - **Coverage scorecard: 0 of 8 `GROUND-TRUTH.md` bugs caught, 5 missed by modules that ran, 3
   require a live environment.** This is the single most important number in this report — see
   §3.
-- Filed 5 gap issues (#52–#56): the biggest is that the LLM-driven `/threat-model` →
+- Filed 5 gap issues (#52–#56): the biggest was that the LLM-driven `/threat-model` →
   `/vuln-scan` → `/triage` pipeline the runbook centers on could not be verified in this
   environment at all (#53) — it's the mechanism that's supposed to catch what the mechanical
   scan misses.
+  **Update 2026-07-09: #53 is resolved.** The skills are present in this environment as
+  user-scope Claude Code skills, and a real run against `targets/calibration` caught **7 of
+  the 8** planted bugs (the 8th, OPEN-REDIRECT, is excluded by the pipeline's own built-in
+  rules, not missed by omission). See §10 for the full write-up — this is now the strongest
+  single result in this document.
 - Not run: anything needing Docker/a live DB/a running app (Supabase Advisors, M2 pentest, M7
   perf, M8 mutation testing) or the reference-harness LLM skills. Exact commands to complete
   those are in §5.
@@ -95,19 +100,21 @@ tested) against the real findings above. Full JSON: `dry-run/scorecard.json`.
 
 | # | Bug | Severity | Status | Why |
 |---|---|---|---|---|
-| 1 | RLS-USING-TRUE | Critical | requires-live-run | Needs a semantic RLS-policy-predicate read (the runbook's LLM `/vuln-scan`+`/triage` pass, or manual hand-verify) — no mechanical module evaluates policy semantics. Not run; see issue #53. |
-| 2 | RLS-AUTH-ROLE | Critical | requires-live-run | Same as #1. |
-| 3 | RLS-DISABLED | High | requires-live-run | The `rls_disabled_in_public` Supabase Advisor lint would catch this, but needs a live DB (`supabase start`, Docker) and, per issue #54, isn't actually wired into local-mode scanning yet even when Docker *is* available. |
-| 4 | SQLI-SERVICE | Critical | **missed** | Semgrep ran; no registry/custom rule matches raw-SQL-string-concat into a query. See issue #52. |
-| 5 | WEBHOOK-REPLAY | Medium | **missed** | Semgrep ran; no rule targets missing replay/nonce protection. |
-| 6 | COUNTER-RACE | Medium | **missed** | Semgrep ran; no rule targets non-atomic read-modify-write races. |
-| 7 | UPDATE-UNSCOPED | High | **missed** | Semgrep ran; no rule targets an unscoped service-role `.update()` call. |
-| 8 | OPEN-REDIRECT | Low | **missed** | Semgrep ran; the `harvey-open-redirect` custom rule exists but is written for the App-Router shape and doesn't match this Pages-Router zod-validated-URL shape. |
+| 1 | RLS-USING-TRUE | Critical | requires-live-run (superseded — see §10) | Needs a semantic RLS-policy-predicate read (the runbook's LLM `/vuln-scan`+`/triage` pass, or manual hand-verify) — no mechanical module evaluates policy semantics. Not run in this mechanical-only pass; **now run for real, caught — see §10.** |
+| 2 | RLS-AUTH-ROLE | Critical | requires-live-run (superseded — see §10) | Same as #1. **Now run for real, caught — see §10.** |
+| 3 | RLS-DISABLED | High | requires-live-run (superseded — see §10) | The `rls_disabled_in_public` Supabase Advisor lint would catch this, but needs a live DB (`supabase start`, Docker) and, per issue #54, isn't actually wired into local-mode scanning yet even when Docker *is* available. **The LLM pipeline route to this same bug has since been run for real and caught it — see §10.** |
+| 4 | SQLI-SERVICE | Critical | **missed by this layer** (LLM pipeline caught it — §10) | Semgrep ran; no registry/custom rule matches raw-SQL-string-concat into a query. See issue #52. |
+| 5 | WEBHOOK-REPLAY | Medium | **missed by this layer** (LLM pipeline caught it — §10) | Semgrep ran; no rule targets missing replay/nonce protection. |
+| 6 | COUNTER-RACE | Medium | **missed by this layer** (LLM pipeline caught it — §10) | Semgrep ran; no rule targets non-atomic read-modify-write races. |
+| 7 | UPDATE-UNSCOPED | High | **missed by this layer** (LLM pipeline caught it — §10) | Semgrep ran; no rule targets an unscoped service-role `.update()` call. |
+| 8 | OPEN-REDIRECT | Low | **missed** (still missed — §10) | Semgrep ran; the `harvey-open-redirect` custom rule exists but is written for the App-Router shape and doesn't match this Pages-Router zod-validated-URL shape. The LLM pipeline also doesn't catch this one, but for a different reason: both `/vuln-scan` and `/triage` have this bug class hardcoded into their own built-in exclusion lists — see §10. |
 
 Read plainly: **every mechanical module that could run in this sandbox, did run — and caught
-none of the planted bugs.** That's not a harness bug; it's an accurate measurement. The 5
-"missed" bugs are all classes no current rule targets (issue #52); the 3 "requires-live-run"
-bugs need either a live DB (issue #54) or the still-unverified LLM triage pipeline (issue #53).
+none of the planted bugs.** That's not a harness bug; it's an accurate measurement of *that
+layer alone*. The 5 "missed" bugs are all classes no current mechanical rule targets (issue
+#52); the 3 "requires-live-run" bugs needed either a live DB (issue #54, still open for the
+Advisor-lint route) or the LLM triage pipeline, which per §10 has since been run for real and
+independently catches 7 of these 8 bugs by semantic code reading rather than pattern matching.
 
 True negatives held: none of `notes`' RLS policy, `counters`' RLS policy, the webhook HMAC
 check, or `profiles`/`tenants`' self-scoped policies (`GROUND-TRUTH.md`'s intended
@@ -119,9 +126,9 @@ Filed as issues (non-trivial, per `CLAUDE.md`):
 
 - **#52** — mechanical toolchain has zero rule coverage for 5 of 8 calibration-target bug
   classes (the coverage-scorecard finding above, filed for tracking + a concrete fix list).
-- **#53** — runbook step 1's `anthropics/defending-code-reference-harness` skills
-  (`/threat-model`, `/vuln-scan`, `/triage`) were not available in this environment; the entire
-  LLM-driven semantic pass is unverified end-to-end.
+- **#53** — runbook step 1's reference-harness skills (`/threat-model`, `/vuln-scan`, `/triage`)
+  were not available/verified in this environment as of this pass; the entire LLM-driven semantic
+  pass was unverified end-to-end. **Resolved 2026-07-09** — see §10.
 - **#54** — runbook §2 promises `splinter.sql`-based local DB-advisor-equivalent coverage, but
   no such file exists in the repo and `src/scan/supabase.ts`'s local mode explicitly skips
   advisor lints (own header comment confirms it) — `rls_disabled_in_public` isn't actually
@@ -192,11 +199,10 @@ npm run dev   # http://localhost:3100
 out of scope for a calibration app whose purpose is planted bugs, not test coverage) —
 `pnpm mutation-scan <target-dir>`.
 
-**LLM `/threat-model` → `/vuln-scan` → `/triage` pass (issue #53):** once the
-`anthropics/defending-code-reference-harness` skills are confirmed installed/available, re-run
-runbook steps 3–5 against `targets/calibration` and update the scorecard above — this is the
+**LLM `/threat-model` → `/vuln-scan` → `/triage` pass (issue #53): done, see §10.** This was the
 highest-value remaining gap, since it's the mechanism expected to catch `RLS-USING-TRUE` and
-`RLS-AUTH-ROLE` (2 of the 3 Critical bugs) plus everything in §3's "missed" list.
+`RLS-AUTH-ROLE` (2 of the 3 Critical bugs) plus everything in §3's "missed" list — it now has a
+real, ground-truth-scored result.
 
 ## 6. Report render (findings.json → report)
 
@@ -341,3 +347,133 @@ Splinter lint set. So delivering the B8/M7 connected coverage requires either wi
 into local mode (**#54**) or running `get_advisors` against a *connected remote* project (which
 does run full Splinter). The connected-tier corpus is therefore validated as ground-truth-correct,
 but Harvey's local scanner needs #54 to actually surface it against a `supabase start` stack.
+
+## 10. LLM pipeline live confirmation (2026-07-09, issue #53)
+
+This section resolves issue #53: whether the runbook's `/threat-model` → `/vuln-scan` → `/triage`
+pipeline (`docs/tier1-runbook.md` steps 1, 3–5) is real, installed, and actually catches the
+cross-tenant/logic-bug classes the mechanical layer structurally cannot (§3's 5 "missed" + 3
+"requires-live-run" rows). It was run for real against `targets/calibration`.
+
+### 10.1 Install path — verified
+
+The skills (`customize`, `patch`, `quickstart`, `threat-model`, `triage`, `vuln-scan`) are present
+in this environment as **personal, user-scope Claude Code skills** at `~/.claude/skills/<name>/SKILL.md`
+(plus a shared `~/.claude/skills/_lib/checkpoint.py` helper) — **not** installed via the Claude Code
+plugin/marketplace system (absent from `~/.claude/plugins/installed_plugins.json` and every known
+marketplace). They are invoked directly, e.g. `/threat-model bootstrap <repo>`. The runbook's
+previous claim that they're installed "from `anthropics/defending-code-reference-harness`" could
+not be independently confirmed from anything on disk in this environment — no plugin manifest,
+marketplace record, or in-repo file references that exact repo name, though the skills' own content
+(canary-target and vuln-pipeline references inside `quickstart`) is consistent with that package.
+`docs/tier1-runbook.md` step 1 has been corrected to state the verified reality and flag this
+residual uncertainty rather than assert an unconfirmed install command.
+
+One real operational gotcha found while running them: the skills' own instructions invoke their
+checkpoint helper via the *relative* path `.claude/skills/_lib/checkpoint.py`, which assumes a
+project-local install. In this user-scope install, that path doesn't resolve from a repo's working
+directory — the absolute path (`~/.claude/skills/_lib/checkpoint.py`) is needed instead. Noted in
+the runbook.
+
+### 10.2 What ran
+
+All three stages ran for real against `targets/calibration` (scoped to `app/`, `pages/`, `lib/`,
+`components/`, `middleware.ts`, `supabase/` — excluding `dead/`, `dup/`, `simplify/`,
+`test-quality/`, which are separate M4/M5/M8 quality-module fixtures per the target's own `README.md`,
+not part of "the app"):
+
+1. **`/threat-model bootstrap`** — ran the full 5-stage pipeline (research swarm of 5 parallel
+   subagents: docs reader, surface mapper, infra reader, asset finder, history miner; synthesis;
+   threat clustering; STRIDE gap-fill; emit). Wrote `THREAT_MODEL.md` with 24 entry points and 18
+   threats. The swarm alone surfaced several of the ground-truth bugs directly (the RLS gaps, the
+   raw-SQL routes, the unscoped UPDATE) before `/vuln-scan` even ran, which is exactly the intended
+   effect of threat-modeling before scanning blind.
+2. **`/vuln-scan --extra docs/scan-extras.txt --no-score`** — scoped by the `THREAT_MODEL.md` from
+   step 1, fanned out to 10 focus-area subagents (RLS/PostgREST, raw SQL, service-role
+   scoping/IDOR, webhook replay, concurrency, XSS/redirect, middleware/CORS, server actions,
+   Postgres functions/views, secrets/supply-chain). `--no-score` (skips the skill's optional
+   per-finding confidence pass) was used as a disclosed adaptation given the scan surfaced 45 raw
+   candidates — well beyond the original 8-bug scope — to keep the run tractable; every finding
+   still reached `/triage` unfiltered. Wrote `VULN-FINDINGS.json`/`.md` (45 findings: 33 HIGH / 9
+   MEDIUM / 3 LOW, scanner-claimed severities).
+3. **`/triage --fp-rules docs/fp-rules.txt --auto`** — ran Phase 1 (ingest), Phase 2 (light dedupe),
+   Phase 3 (adversarial verification: one independent subagent per finding, reading source itself
+   and applying both the skill's 16 built-in exclusion rules and `docs/fp-rules.txt`'s org-specific
+   rules). **`--votes 1` instead of the skill's default 3** was used as a disclosed adaptation for
+   the same volume reason as above — a full 3-vote run remains available as a stricter follow-up.
+   Phase 4 (severity re-ranking) and Phase 5 (owner routing) were **not** run this pass — confirmed
+   findings keep the scanner's originally-claimed severity, unadjusted; re-ranking wasn't needed to
+   answer #53's catch/miss question. Wrote `TRIAGE.json`/`.md`: 33 confirmed true positives, 11
+   false positives, 1 duplicate.
+
+Pipeline output files (`THREAT_MODEL.md`, `VULN-FINDINGS.*`, `TRIAGE.*`) were generated inside
+`targets/calibration/` during the run and are **not committed** — they're run artifacts, same
+convention as `dry-run/` and `report-template/out/`.
+
+### 10.3 Ground-truth scorecard — the result
+
+**7 of the 8 planted bugs confirmed TRUE_POSITIVE**, each independently re-derived from source by
+a skeptical verifier (not just carried over from the scan stage's claim):
+
+| # | Bug | Severity | Status | Evidence |
+|---|---|---|---|---|
+| 1 | RLS-USING-TRUE | Critical | **caught** | `documents_select_all` policy is `USING (true)`, verified reachable via PostgREST with no compensating grant restriction |
+| 2 | RLS-AUTH-ROLE | Critical | **caught** | `invoices_select_authenticated` checks only `auth.role() = 'authenticated'`, no tenant predicate |
+| 3 | RLS-DISABLED | High | **caught** | no `ENABLE ROW LEVEL SECURITY` anywhere for `audit_logs` in any migration, confirmed by exhaustive grep |
+| 4 | SQLI-SERVICE | Critical | **caught** | `pages/api/search.js` string-concat SQLi confirmed (plus an independent second instance in `pages/api/report.js`'s `exec_sql` RPC) |
+| 5 | WEBHOOK-REPLAY | Medium | **caught** | HMAC check correct; verifier confirmed no nonce/timestamp/dedup exists anywhere in the path |
+| 6 | COUNTER-RACE | Medium | **caught** | verifier explicitly reasoned through "is this a realistic concurrent-request window or theoretical" (the pipeline's own exclusion rule 16 for theoretical-only races) and confirmed it's realistic |
+| 7 | UPDATE-UNSCOPED | High | **caught, with a nuance** | verifier confirmed the route uses the raw `pg.Pool` (`lib/db.js`), not PostgREST — so it is **not** protected by the PostgREST "UPDATE requires WHERE" guard that made this bug non-exploitable-as-planted in §8's live dynamic-pentest run (issue #59). The static/LLM read and the dynamic pen-test are both correct; they're reading different reachability paths to the same planted code. |
+| 8 | OPEN-REDIRECT | Low | **missed — by design, not by gap** | `pages/api/redirect.js` was explicitly seen by the `/vuln-scan` subagent scoped to that route, and explicitly *not* reported, because the skill's own built-in review brief hardcodes "open redirect" into its default DO-NOT-REPORT list — independent of `docs/scan-extras.txt`, which doesn't add an override. `/triage`'s own built-in verifier exclusion rule #12 separately classifies open redirect as a "low-impact nuisance" false positive, so it's excluded twice over. This is **not** a scanning gap the way the mechanical layer's misses are (§3) — it's a deliberate, hardcoded suppression shipped with the reference-harness skills themselves. If open-redirect coverage matters for an engagement, this pipeline as shipped won't surface it; use the kickoff questionnaire (runbook §3) or a manual check instead. |
+
+**Read plainly: the LLM pipeline is the strongest detection layer measured against this calibration
+target so far** — 7/8 vs. the mechanical layer's 0/8 (§3) and the dynamic pen-test's 5/8-with-correct-verdicts
+(§8.2). It found real bugs the mechanical scanner structurally cannot (RLS policy semantics, SQL
+injection via string concat, a webhook replay gap, a counter race, framework-specific CORS/auth
+issues) by reading and reasoning about source rather than pattern-matching, and it correctly
+distinguished true bugs from false positives 11 times without being told the answer key — including
+catching that a claimed CSRF finding is actually already mitigated by a Next.js framework default,
+that one Postgres view finding wasn't actually reachable given the deployment's grant configuration,
+and that a hardcoded AWS-shaped key was the deliberately-planted case rather than the AWS docs'
+well-known example key (`docs/aws-setup.md`).
+
+### 10.4 Beyond the original 8 — what else the pipeline surfaced
+
+`docs/scan-extras.txt`/`docs/fp-rules.txt` scope the pipeline for a real audit, and this calibration
+target's source tree also holds planted bugs from later batches (B1/B3/B4/B5/B6/B7/B8, tracked
+separately under issue #71/#72 for the *mechanical* scanner's coverage). Scanning the same
+directories inevitably surfaced some of those too — the LLM pipeline confirmed 33 true positives
+total, 25 beyond the original 8-bug list, including multiple independent service-role-key-exposure
+patterns, a middleware JWT-decode auth bypass paired with a reflected-origin CORS misconfiguration,
+an `eval()` remote-code-execution route, several IDOR/mass-assignment/missing-authorization routes,
+and cross-tenant issues in Postgres views/functions (`user_directory`, `internal_notes_admin_read`,
+`fetch_webhook_preview`'s SSRF). These are real findings but **out of this pass's scoring scope** —
+issue #53 was specifically about the 8-bug headline scorecard above; a fuller comparison against the
+B1–B8 batches' own ground-truth sections would be its own dedicated effort. Full detail:
+`targets/calibration/TRIAGE.json`/`.md` (not committed — see §10.2).
+
+One miss worth flagging honestly: `/triage`'s verifier dismissed `lib/admin.js`'s hardcoded
+service-role JWT as a false positive on "no importers found" (its dead-code exclusion rule), even
+though `GROUND-TRUTH.md` tags it a genuine planted secret-scanning positive. This looks like a real
+pipeline limitation, not a correct call: secret-scanning findings are presence-based (a leaked
+credential is a leak the moment it's committed, regardless of whether any code currently imports the
+file), not reachability-based like the injection/auth-bypass classes the exclusion rules were
+designed for. Worth a manual override in a real engagement if a secrets-scan finding gets dismissed
+this way; not filing a new issue for it since `docs/fp-rules.txt` is an operator-owned file and the
+fix (if any) belongs there, not in the pipeline's shipped defaults.
+
+### 10.5 Confidence read
+
+- **The threat-model → vuln-scan → triage pipeline is now verified end-to-end on one target with a
+  known answer key.** Treat its 7/8 result here as real signal, not a demo — every verdict came from
+  an independent subagent reading the actual source and citing file:line evidence, not from being
+  told the ground truth.
+- **Two structural blind spots are now documented, not just theorized:** open redirect is
+  hardcoded-excluded at both the scan and triage stages; race conditions and "unreferenced code"
+  secrets sit close to built-in exclusion rules that can (and in one case did) suppress a real
+  finding. `docs/tier1-runbook.md` now calls these out explicitly so an operator running a live
+  engagement knows to double-check them rather than trust the pipeline blindly.
+- **Next confidence step**, mirroring §8.4's note for the dynamic layer: run this same pipeline
+  against a real third-party Supabase/Next.js repo where the bugs are genuinely unknown, not a
+  calibration fixture with an answer key — that's the test that would validate generalization rather
+  than recall-on-a-known-set.
