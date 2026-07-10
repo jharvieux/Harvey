@@ -1,0 +1,12 @@
+{
+  "name": "supported-app-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "INERT calibration fixture (#71 B2). The benign lookalike counterpart to legacy-app: a standalone project root on a SUPPORTED `next`, a patched react-dom, a legitimate package that famously ships a postinstall build script (esbuild), and a committed lockfile. Nothing here must be flagged. NEVER installed.",
+  "dependencies": {
+    "next": "15.5.16",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "esbuild": "0.21.5"
+  }
+}

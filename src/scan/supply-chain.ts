@@ -184,7 +184,51 @@ export function checkInstallScripts(scripts: Record<string, string>): Finding[] 
   ];
 }
 
-export function checkLockfilePresence(projectDir: string): Finding[] {
+// `label` is the project-root path reported in the finding's location; it defaults to the real
+// `projectDir` (existsSync always runs against `projectDir`). A caller scanning a secondary
+// manifest from a scratch copy passes a stable relative label (e.g. "fixtures/legacy-app") so
+// the finding's location doesn't leak the throwaway scratch path.
+// Curated indicator-of-compromise feed: npm package NAMES that were published purely as
+// malware (credential/crypto stealers), not legitimate packages that had a single compromised
+// release. Keyed on name because these packages ARE the payload — any version is malicious — so
+// an exact name match is ground truth ("high"), unlike the edit-distance heuristic above. Sources
+// (public, historical): npm's 2017 "crossenv" typosquat takedown and the 2018 event-stream /
+// flatmap-stream incident. These are DATA ONLY — never fetched, installed, or vendored. Legit
+// packages that merely share a risky trait (e.g. a postinstall build script) are deliberately
+// absent, so a name like `esbuild` clears — the FP a "package has install scripts = malicious"
+// heuristic would throw.
+const KNOWN_MALICIOUS_PACKAGES = new Set([
+  "flatmap-stream", // event-stream incident (2018): crypto-wallet stealer, published solely as the payload.
+  "crossenv", // npm 2017 takedown: typosquat of cross-env, exfiltrated env vars on install.
+  "babelcli", // same 2017 campaign (typosquat of babel-cli).
+  "mssql-node", // same 2017 campaign.
+  "nodesqlite", // same 2017 campaign.
+  "node-fabric", // same 2017 campaign.
+]);
+
+export function checkKnownIoc(depNames: string[], manifestPath = "package.json"): Finding[] {
+  const findings: Finding[] = [];
+  for (const name of depNames) {
+    if (!KNOWN_MALICIOUS_PACKAGES.has(name)) continue;
+    findings.push(
+      mechanicalFinding({
+        id: `SUP-IOC-${name}`,
+        title: `Dependency "${name}" is a known-malicious package (IOC feed match)`,
+        severity: "Critical",
+        category: "Supply chain",
+        taxonomy: "Known-malicious dependency",
+        location: `${manifestPath} (${name})`,
+        evidence: `"${name}" matches a curated indicator-of-compromise feed of packages published as malware (credential/crypto stealers). Any version is malicious.`,
+        impact: "This package's install/runtime code exfiltrates secrets or wallet keys. Its presence in the manifest is a confirmed compromise, not a heuristic guess.",
+        fix: `Remove "${name}" immediately, rotate any secrets reachable from the build/runtime, and audit for the real package this was meant to be.`,
+        precisionTier: "high",
+      }),
+    );
+  }
+  return findings;
+}
+
+export function checkLockfilePresence(projectDir: string, label = projectDir): Finding[] {
   const lockfiles = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"];
   const present = lockfiles.some((f) => existsSync(join(projectDir, f)));
   if (present) return [];
@@ -195,7 +239,7 @@ export function checkLockfilePresence(projectDir: string): Finding[] {
       severity: "Medium",
       category: "Supply chain",
       taxonomy: "Missing lockfile",
-      location: projectDir,
+      location: label,
       evidence: `None of ${lockfiles.join(", ")} present.`,
       impact: "Every install can resolve different transitive versions — no reproducible, reviewable dependency tree.",
       fix: "Commit a lockfile and run installs with --frozen-lockfile / npm ci in CI.",

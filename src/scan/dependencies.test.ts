@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkNextVersionCVEs, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 
 describe("checkNextVersionCVEs", () => {
   it("flags CVE-2025-29927 for an unpatched 15.x below the fixed version", () => {
@@ -39,6 +39,52 @@ describe("checkNextVersionCVEs", () => {
   it("flags nothing extra for a current, fully-patched version", () => {
     const findings = checkNextVersionCVEs("15.5.16");
     expect(findings).toEqual([]);
+  });
+
+  it("EOL is the only finding for a major that sits at/above its curated fixes (12.3.5)", () => {
+    // The P-NEXT-EOL fixture version: EOL fires, but 12.3.5 isn't below any curated fixed version
+    // for major 12, and major 12 is outside the WS-SSRF / RSC ranges — so nothing else fires.
+    const ids = checkNextVersionCVEs("12.3.5").map((f) => f.id);
+    expect(ids).toEqual(["DEP-NEXT-EOL"]);
+  });
+
+  it("encodes the manifest path into the finding location", () => {
+    const finding = checkNextVersionCVEs("12.3.5", "fixtures/legacy-app/package.json")[0];
+    expect(finding?.location).toBe("fixtures/legacy-app/package.json (next)");
+  });
+});
+
+describe("checkKnownDependencyCVEs", () => {
+  it("flags minimist below the fix as a critical, free-count (high) finding", () => {
+    const findings = checkKnownDependencyCVEs({ minimist: "1.2.5" });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe("DEP-CVE-2021-44906");
+    expect(findings[0]?.severity).toBe("Critical");
+    expect(findings[0]?.precisionTier).toBe("high");
+  });
+
+  it("does not flag minimist once patched (1.2.6)", () => {
+    expect(checkKnownDependencyCVEs({ minimist: "1.2.6" })).toEqual([]);
+  });
+
+  it("flags a vulnerable react-dom at review tier (approximate range)", () => {
+    const findings = checkKnownDependencyCVEs({ "react-dom": "16.4.0" });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe("DEP-CVE-2018-6341");
+    expect(findings[0]?.precisionTier).toBe("review");
+  });
+
+  it("does not flag a supported react-dom (18.x) — the implicit negative", () => {
+    expect(checkKnownDependencyCVEs({ "react-dom": "^18.3.1" })).toEqual([]);
+  });
+
+  it("strips a caret/tilde range prefix before matching", () => {
+    expect(checkKnownDependencyCVEs({ minimist: "~1.2.5" })).toHaveLength(1);
+  });
+
+  it("encodes the manifest path and package name into the location", () => {
+    const finding = checkKnownDependencyCVEs({ minimist: "1.2.5" }, "fixtures/legacy-app/package.json")[0];
+    expect(finding?.location).toBe("fixtures/legacy-app/package.json (minimist)");
   });
 });
 

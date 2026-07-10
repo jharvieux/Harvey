@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkInstallScripts, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies } from "./supply-chain.js";
+import { checkInstallScripts, checkKnownIoc, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies } from "./supply-chain.js";
 
 describe("checkTyposquat", () => {
   it("flags a name one edit from a popular package", () => {
@@ -69,6 +69,25 @@ describe("checkInstallScripts", () => {
   });
 });
 
+describe("checkKnownIoc", () => {
+  it("flags a known-malicious package name at high precision", () => {
+    const findings = checkKnownIoc(["react", "flatmap-stream"]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe("SUP-IOC-flatmap-stream");
+    expect(findings[0]?.severity).toBe("Critical");
+    expect(findings[0]?.precisionTier).toBe("high");
+  });
+
+  it("does not flag a legitimate package that merely has a postinstall (esbuild)", () => {
+    expect(checkKnownIoc(["esbuild", "next", "react-dom"])).toEqual([]);
+  });
+
+  it("encodes the manifest path and package name into the location", () => {
+    const finding = checkKnownIoc(["flatmap-stream"], "fixtures/legacy-app/package.json")[0];
+    expect(finding?.location).toBe("fixtures/legacy-app/package.json (flatmap-stream)");
+  });
+});
+
 describe("checkLockfilePresence", () => {
   let dir: string;
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -76,6 +95,11 @@ describe("checkLockfilePresence", () => {
   it("flags a project directory with no lockfile", () => {
     dir = mkdtempSync(join(tmpdir(), "harvey-lockfile-"));
     expect(checkLockfilePresence(dir)).toHaveLength(1);
+  });
+
+  it("reports the caller's label as the location instead of the scratch path", () => {
+    dir = mkdtempSync(join(tmpdir(), "harvey-lockfile-"));
+    expect(checkLockfilePresence(dir, "fixtures/legacy-app")[0]?.location).toBe("fixtures/legacy-app");
   });
 
   it("does not flag a directory with pnpm-lock.yaml present", () => {

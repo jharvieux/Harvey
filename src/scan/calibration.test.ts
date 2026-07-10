@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 import { buildCoverageMatrix, CORPUS, scoreEntry, type CorpusEntry } from "./calibration.js";
+import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
+import { checkKnownIoc, checkLockfilePresence } from "./supply-chain.js";
 import type { Finding, PrecisionTier } from "../findings.js";
 
 // Recorded-output helper: a minimal Finding mirroring what the scan modules emit, so these
@@ -127,6 +133,62 @@ describe("Batch B1 secrets corpus (recorded gitleaks output → tier mapping)", 
     expect(m.positivesCaughtHigh).toBe(5);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
+  });
+});
+
+describe("Batch B2 deferred corpus (secondary manifest fixtures → real check output)", () => {
+  // Reconstructs what validate-calibration.ts's scanManifestFixtures produces for the two fixture
+  // app-roots by running the SAME detection functions offline (no binaries), then scores the seven
+  // #71-deferred entries. Faithful to the live run: legacy-app (vulnerable, no lockfile) and
+  // supported-app (clean, has a lockfile).
+  const emptyDir = mkdtempSync(join(tmpdir(), "harvey-fixture-legacy-"));
+  afterAll(() => rmSync(emptyDir, { recursive: true, force: true }));
+
+  const legacyLabel = "fixtures/legacy-app/package.json";
+  const legacyDeps = { next: "12.3.5", react: "16.4.0", "react-dom": "16.4.0", minimist: "1.2.5", "flatmap-stream": "0.1.1" };
+  const supportedLabel = "fixtures/supported-app/package.json";
+  const supportedDeps = { next: "15.5.16", react: "18.3.1", "react-dom": "18.3.1", esbuild: "0.21.5" };
+
+  const findings: Finding[] = [
+    // legacy-app: EOL next, vulnerable react-dom, critical minimist, IOC flatmap-stream, no lockfile.
+    ...checkNextVersionCVEs("12.3.5", legacyLabel),
+    ...checkKnownDependencyCVEs(legacyDeps, legacyLabel),
+    ...checkKnownIoc(Object.keys(legacyDeps), legacyLabel),
+    ...checkLockfilePresence(emptyDir, "fixtures/legacy-app"),
+    // supported-app: everything clean; a real lockfile means checkLockfilePresence stays silent.
+    ...checkNextVersionCVEs("15.5.16", supportedLabel),
+    ...checkKnownDependencyCVEs(supportedDeps, supportedLabel),
+    ...checkKnownIoc(Object.keys(supportedDeps), supportedLabel),
+  ];
+
+  const deferredIds = new Set([
+    "P-NEXT-EOL", "N-NEXT-SUPPORTED", "P-REACT-DOM-CVE",
+    "P-DEP-CVE-CRITICAL", "P-MISSING-LOCKFILE", "P-KNOWN-IOC-PKG", "N-POSTINSTALL-KNOWN",
+  ]);
+  const deferred = b2DepsEntries.filter((e) => deferredIds.has(e.id));
+
+  it("covers all seven #71-deferred classes", () => {
+    expect(deferred).toHaveLength(7);
+  });
+
+  it("catches every deferred positive at its declared tier and clears every deferred negative", () => {
+    for (const e of deferred) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe(e.expectedTier);
+      else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("lands minimist, the IOC package, and the missing lockfile in the free (high) count", () => {
+    const high = new Set(findings.filter((f) => f.precisionTier === "high").map((f) => f.id));
+    expect(high).toContain("DEP-CVE-2021-44906");
+    expect(high).toContain("SUP-IOC-flatmap-stream");
+    expect(high).toContain("SUP-NO-LOCKFILE");
+  });
+
+  it("draws nothing at all from the supported-app fixture", () => {
+    expect(findings.filter((f) => f.location.includes("supported-app"))).toEqual([]);
   });
 });
 

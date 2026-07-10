@@ -9,12 +9,12 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
-import { checkNextVersionCVEs, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { scanSecrets } from "./secrets.js";
 import { checkMissingCsp, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
-import { checkInstallScripts, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
+import { checkInstallScripts, checkKnownIoc, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
@@ -83,6 +83,8 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     if (pkg) {
       const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
       findings.push(...checkTyposquat(Object.keys(allDeps)));
+      findings.push(...checkKnownIoc(Object.keys(allDeps)));
+      findings.push(...checkKnownDependencyCVEs(allDeps));
       findings.push(...checkUnpinnedDependencies(allDeps));
       findings.push(...checkNonRegistryDependencies(allDeps));
       findings.push(...checkInstallScripts(pkg.scripts ?? {}));

@@ -1,0 +1,13 @@
+{
+  "name": "legacy-app-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "INERT calibration fixture (#71 B2). A standalone project root modelling manifest bugs that can't coexist with the main target's package.json: an EOL `next`, a vulnerable react-dom, a critical dependency CVE, a known-malicious (IOC) dependency, and NO lockfile. NEVER installed — flatmap-stream is a real historical malware package; these are declared as data only.",
+  "dependencies": {
+    "next": "12.3.5",
+    "react": "16.4.0",
+    "react-dom": "16.4.0",
+    "minimist": "1.2.5",
+    "flatmap-stream": "0.1.1"
+  }
+}
