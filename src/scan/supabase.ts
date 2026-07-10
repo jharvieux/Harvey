@@ -60,6 +60,7 @@ import {
   type EdgeFunctionSource,
   type ExtensionInfo,
   type GotrueInfo,
+  type RealtimeMessagesInfo,
   type StorageBucket,
   type TableInfo,
 } from "./supabase-config.js";
@@ -163,7 +164,8 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch): 
   findings.push(...checkPublicBucketsWithNoPolicies(buckets, bucketPolicyCounts(policyRows)));
 
   const realtime = await managementApiQuery<{ rlsEnabled: boolean }[]>(ref, REALTIME_MESSAGES_SQL, token, fetchImpl);
-  findings.push(...checkRealtimeAuthorization({ exists: realtime.length > 0, rlsEnabled: realtime[0]?.rlsEnabled ?? false }));
+  const realtimeInfo: RealtimeMessagesInfo = { exists: realtime.length > 0, rlsEnabled: realtime[0]?.rlsEnabled ?? false };
+  findings.push(...checkRealtimeAuthorization(realtimeInfo));
 
   const postgrest = await managementApiGet<PostgrestConfig>(`/projects/${ref}/postgrest`, token, fetchImpl);
   const exposedSchemas = parseExposedSchemas(postgrest);
