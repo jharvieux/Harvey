@@ -13,7 +13,7 @@ import { checkKnownDependencyCVEs, checkNextVersionCVEs, parseOsvFindings, type 
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { scanSecrets } from "./secrets.js";
-import { checkMissingCsp, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
+import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
 import { checkInstallScripts, checkKnownIoc, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
 
 interface PackageJson {
@@ -78,6 +78,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // Semgrep footguns + missing-CSP config check.
     findings.push(...parseSemgrepFindings(runSemgrep(scanDir)));
     findings.push(...checkMissingCsp(scanDir));
+    findings.push(...checkPublicDirSensitive(scanDir));
 
     // Supply chain.
     if (pkg) {

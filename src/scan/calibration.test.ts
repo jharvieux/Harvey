@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -7,10 +7,11 @@ import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
 import { b11CryptoEntries } from "./calibration/b11-crypto.entries.js";
+import { b12NextconfigEntries } from "./calibration/b12-nextconfig.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
-import { parseSemgrepFindings, type SemgrepResult } from "./semgrep.js";
+import { checkPublicDirSensitive, parseSemgrepFindings, type SemgrepResult } from "./semgrep.js";
 import { checkKnownIoc, checkLockfilePresence } from "./supply-chain.js";
 import type { Finding, PrecisionTier } from "../findings.js";
 
@@ -323,6 +324,73 @@ describe("Batch B11 crypto-API misuse corpus (recorded semgrep output → tier m
     expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(4);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
+  });
+});
+
+describe("Batch B12 next-config/client-surface corpus (recorded semgrep + public/ walk → tier mapping)", () => {
+  // Recorded findings mirroring the live `pnpm validate:calibration` run over targets/calibration,
+  // fed through the real semgrep.ts tier mapping (no binary invoked). Exercises the B12 additions:
+  // 5 ERROR+HIGH Semgrep rules (wildcard remotePatterns, productionBrowserSourceMaps, '*' Server
+  // Actions origin, excessive createSignedUrl TTL, '*' postMessage) + the checkPublicDirSensitive
+  // filesystem check (the 6th high), and 5 WARNING+MEDIUM heuristics (auth token in Web Storage, CDN
+  // script no SRI, ISR revalidate no secret, CRLF header injection, 'message' listener no origin).
+  // The eleven negative fixtures draw nothing, so they appear as no rows here.
+  const error = (id: string, path: string): SemgrepResult => ({
+    check_id: `src.scan.rules.semgrep.${id}`, path, start: { line: 8 },
+    extra: { severity: "ERROR", metadata: { confidence: "HIGH" }, message: `${id} matched` },
+  });
+  const warning = (id: string, path: string): SemgrepResult => ({
+    check_id: `src.scan.rules.semgrep.${id}`, path, start: { line: 9 },
+    extra: { severity: "WARNING", metadata: { confidence: "MEDIUM" }, message: `${id} matched` },
+  });
+  const semgrep: SemgrepResult[] = [
+    error("harvey-img-remotepatterns-wild", "config-variants/insecure.config.js"),
+    error("harvey-prod-sourcemaps", "config-variants/insecure.config.js"),
+    error("harvey-serveractions-origin-wild", "config-variants/insecure.config.js"),
+    error("harvey-signed-url-ttl", "lib/signed-url-ttl.js"),
+    error("harvey-postmessage-wildcard", "components/PostMessageWild.jsx"),
+    warning("harvey-token-in-webstorage", "lib/webstorage-token.js"),
+    warning("harvey-missing-sri", "components/CdnScript.jsx"),
+    warning("harvey-isr-revalidate-nosecret", "pages/api/isr-rebuild.js"),
+    warning("harvey-crlf-header-injection", "pages/api/download.js"),
+    warning("harvey-postmessage-no-origin", "components/MessageListener.jsx"),
+  ];
+
+  // The 6th high class is a filesystem fact, so exercise the REAL checkPublicDirSensitive against a
+  // temp public/ tree instead of a recorded semgrep row.
+  const pubDir = mkdtempSync(join(tmpdir(), "harvey-b12-public-"));
+  afterAll(() => rmSync(pubDir, { recursive: true, force: true }));
+  mkdirSync(join(pubDir, "public", "fonts"), { recursive: true });
+  writeFileSync(join(pubDir, "public", "backup.sql"), "-- inert");
+  writeFileSync(join(pubDir, "public", ".env.production"), "X=1");
+  writeFileSync(join(pubDir, "public", "favicon.ico"), "x");
+  writeFileSync(join(pubDir, "public", "fonts", "inter.woff2"), "x");
+
+  const findings = [...parseSemgrepFindings({ results: semgrep }), ...checkPublicDirSensitive(pubDir)];
+
+  it("catches every B12 positive at its declared tier and clears every B12 negative", () => {
+    for (const e of b12NextconfigEntries) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe(e.expectedTier);
+      else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("promotes only the exact config-parse / literal / filesystem sinks to the free count (6 high, 5 review)", () => {
+    const m = buildCoverageMatrix(findings, b12NextconfigEntries);
+    const positives = b12NextconfigEntries.filter((e) => e.kind === "positive");
+    expect(m.positivesCaught).toBe(positives.length);
+    expect(m.positivesCaughtHigh).toBe(6);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(5);
+    expect(m.negativesCleared).toBe(m.negativesTotal);
+    expect(m.ok).toBe(true);
+  });
+
+  it("the public/ walk flags only the sensitive files, not the benign assets", () => {
+    const pub = checkPublicDirSensitive(pubDir);
+    expect(pub.map((f) => f.location).sort()).toEqual(["public/.env.production", "public/backup.sql"]);
+    expect(pub.every((f) => f.precisionTier === "high")).toBe(true);
   });
 });
 

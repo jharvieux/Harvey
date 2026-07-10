@@ -828,6 +828,82 @@ whole-CORPUS synth-collision guard covers the new fixture locations.
 
 ---
 
+## Batch B12 (#71) — Next-config & client-surface misconfig
+
+The Next-config / client-surface expansion batch (spec `docs/design/corpus-roadmap-to-100.md` §3d).
+Answer key: `src/scan/calibration/b12-nextconfig.entries.ts`. Detection is split three ways: three
+exact config-object Semgrep rules plus two review-tier server rules **extend the existing
+`src/scan/rules/semgrep/headers.yml`**; four client-surface rules **extend
+`src/scan/rules/semgrep/xss.yml`**; and the one class Semgrep can't express — a sensitive file
+physically served from `public/` — is a **new filesystem check** (`checkPublicDirSensitive` in
+`src/scan/semgrep.ts`, wired into `runMechanicalScan`). Tiering per the locked preamble: only the
+exact config-parse / unambiguous-literal / filesystem sinks are `high` (free count); the heuristic /
+absence-of-X sinks stay `review`. All fixtures are inert source files.
+
+The three config classes share `config-variants/insecure.config.js` (positives) and
+`config-variants/hardened.config.js` (negatives) — a second next-config-shaped surface named off the
+`next.config.*` pattern so `checkMissingCsp` (which keys off exact filenames) never picks it up. Each
+class is disambiguated by its rule-id `match` keyword, exactly as B5's shared `next.config.js` routes
+are. `P-SIGNED-URL-TTL` is the numeric-literal-TTL lens (`createSignedUrl` expiry), distinct from
+B9's `P-SIGNED-URL-TOKEN-SRC` (a committed signed-URL token) — different file, different mechanism.
+
+### B12 positives — planted config/client-surface bugs (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-IMG-REMOTEPATTERNS-WILD | `config-variants/insecure.config.js:16` | Semgrep `harvey-img-remotepatterns-wild` (all-asterisks `hostname` inside a `remotePatterns` element) | high |
+| P-PROD-SOURCEMAPS | `config-variants/insecure.config.js:13` | Semgrep `harvey-prod-sourcemaps` (literal `productionBrowserSourceMaps: true`) | high |
+| P-SERVERACTIONS-ORIGIN-WILD | `config-variants/insecure.config.js:19` | Semgrep `harvey-serveractions-origin-wild` (bare `"*"` in `allowedOrigins`) | high |
+| P-PUBLIC-DIR-SENSITIVE | `public/backup.sql`, `public/.env.production` | `checkPublicDirSensitive` (filesystem walk of `public/`) | high |
+| P-SIGNED-URL-TTL | `lib/signed-url-ttl.js:11` | Semgrep `harvey-signed-url-ttl` (`createSignedUrl($P, $N)`, `$N > 604800`) | high |
+| P-POSTMESSAGE-WILDCARD | `components/PostMessageWild.jsx:6` | Semgrep `harvey-postmessage-wildcard` (literal `"*"` targetOrigin) | high |
+| P-TOKEN-IN-WEBSTORAGE | `lib/webstorage-token.js:6` | Semgrep `harvey-token-in-webstorage` (auth-token-named Web Storage key) | review |
+| P-MISSING-SRI | `components/CdnScript.jsx:6` | Semgrep `harvey-missing-sri` (external CDN `<script>` with no `integrity`) | review |
+| P-ISR-REVALIDATE-NOSECRET | `pages/api/isr-rebuild.js:8` | Semgrep `harvey-isr-revalidate-nosecret` (`res.revalidate` on a request path, no secret gate) | review |
+| P-CRLF-HEADER-INJ | `pages/api/download.js:7` | Semgrep `harvey-crlf-header-injection` (taint `req.query` → `res.setHeader` value) | review |
+| P-POSTMESSAGE-NO-ORIGIN | `components/MessageListener.jsx:9` | Semgrep `harvey-postmessage-no-origin` (`message` listener callback with no `.origin` check) | review |
+
+### B12 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-IMG-REMOTEPATTERNS-OK | `config-variants/hardened.config.js` | `hostname: 'images.example.com'` — an explicit host; the hostname regex (`^['"]?\*+['"]?$`) matches only all-asterisks. |
+| N-PROD-SOURCEMAPS-OFF | `config-variants/hardened.config.js` | `productionBrowserSourceMaps: false` (also the absent-key default); the rule matches only the literal `true`. |
+| N-SERVERACTIONS-ORIGIN-OK | `config-variants/hardened.config.js` | `allowedOrigins: ['app.example.com','admin.example.com']` — no bare `"*"` element to match. |
+| N-PUBLIC-DIR-BENIGN | `public/favicon.ico` | `favicon.ico`, `fonts/inter.woff2`, `robots.txt` are benign assets; none match `checkPublicDirSensitive`'s sensitive-name patterns. |
+| N-SIGNED-URL-TTL-OK | `lib/signed-url-ttl-ok.js` | `createSignedUrl(path, 300)` — a 5-min TTL; the `metavariable-comparison` fires only above 7 days. |
+| N-POSTMESSAGE-ORIGIN-OK | `components/PostMessageOrigin.jsx` | `postMessage(session, 'https://app.example.com')` — an explicit origin; `harvey-postmessage-wildcard` matches only `"*"`. |
+| N-WEBSTORAGE-CSRF | `lib/webstorage-csrf.js` | `localStorage.setItem('csrfToken', …)` — JS-readable by design; the key regex excludes `csrf`-prefixed keys. |
+| N-SRI-PRESENT | `components/CdnScriptSri.jsx` | the same CDN `<script>` with `integrity` + `crossOrigin`; `harvey-missing-sri` excludes any `<script>` carrying `integrity`. |
+| N-ISR-REVALIDATE-SECRET | `pages/api/isr-rebuild-secret.js` | handler compares `req.query.secret` against a server secret before revalidating; the `pattern-not-inside` excludes it. |
+| N-CRLF-SANITIZED | `pages/api/download-safe.js` | `req.query.name.replace(/[\r\n"]/g, "")` before `setHeader` — the CR/LF strip is the taint sanitizer. |
+| N-POSTMESSAGE-NO-ORIGIN-OK | `components/MessageListenerOrigin.jsx` | the listener checks `e.origin` before trusting `e.data`; `harvey-postmessage-no-origin` excludes any callback referencing `.origin`. |
+
+### B12 detection additions
+
+Six new rules in `src/scan/rules/semgrep/headers.yml` (`harvey-img-remotepatterns-wild`,
+`harvey-prod-sourcemaps`, `harvey-serveractions-origin-wild`, `harvey-signed-url-ttl` — all ERROR +
+HIGH → high; `harvey-crlf-header-injection`, `harvey-isr-revalidate-nosecret` — WARNING + MEDIUM →
+review) and four in `src/scan/rules/semgrep/xss.yml` (`harvey-postmessage-wildcard` — ERROR + HIGH →
+high; `harvey-token-in-webstorage`, `harvey-missing-sri`, `harvey-postmessage-no-origin` — WARNING +
+MEDIUM → review). One **new scanner** function, `checkPublicDirSensitive` (`src/scan/semgrep.ts`,
+wired into `runMechanicalScan`), covers `P-PUBLIC-DIR-SENSITIVE` — a filesystem-presence fact no
+Semgrep AST rule can express — with a focused unit test in `src/scan/semgrep.test.ts`. No class was
+dropped — all 11 §3d rows landed (6 high, 5 review).
+
+### B12 live result (2026-07-09, static binaries: semgrep 1.164.0, gitleaks 8.30.1, trufflehog 3.95.8, osv-scanner 2.3.8, no Docker)
+
+`pnpm validate:calibration`: **GATE PASS — zero free-count false positives; every high-tier rule
+fired on its positive.** All 11 B12 positives fire (6 at high: wildcard `remotePatterns`,
+`productionBrowserSourceMaps`, `'*'` Server-Actions origin, `createSignedUrl` TTL, `'*'` postMessage,
+sensitive file in `public/`; 5 at review: auth token in Web Storage, CDN `<script>` no SRI, ISR
+revalidate no secret, CRLF header injection, `message` listener no origin) and all 11 B12 negatives
+clear with no free-count finding. `pnpm verify` (offline) is green: `calibration.test.ts` gained a
+B12 recorded-semgrep + real-`checkPublicDirSensitive` block scoring all 22 entries, and
+`semgrep.test.ts` gained focused `checkPublicDirSensitive` unit tests.
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`

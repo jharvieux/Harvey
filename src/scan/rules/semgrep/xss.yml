@@ -175,3 +175,101 @@ rules:
               - pattern: $EL.setAttribute("href", $VAL)
               - pattern: $EL.setAttribute("src", $VAL)
           - focus-metavariable: $VAL
+
+  # ---- Batch B12 (#71) — Next-config & client-surface misconfig (client-surface half; the
+  # config/server-response half lives in headers.yml). See GROUND-TRUTH.md §B12. ----
+
+  # postMessage() with targetOrigin '*' broadcasts the message to whatever site currently frames the
+  # page — any origin can read it. When the payload is session/auth data this leaks it cross-origin.
+  # The literal "*" targetOrigin is unambiguous; an explicit origin does not match. HIGH → free count.
+  - id: harvey-postmessage-wildcard
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      postMessage() is called with targetOrigin '*' — the message is delivered to any site that
+      frames this page, leaking it cross-origin. Pass the exact expected origin as the second
+      argument instead of '*'.
+    patterns:
+      - pattern-either:
+          - pattern: $W.postMessage($DATA, "*")
+          - pattern: postMessage($DATA, "*")
+
+  # A window 'message' listener whose callback never inspects event.origin trusts data posted by ANY
+  # page (including a malicious frame/opener). The callback text carrying no `.origin` reference is
+  # the signal; an origin-checked callback is excluded. Review — a heuristic (the origin check could
+  # be a helper the callback calls). See N-POSTMESSAGE-NO-ORIGIN-OK.
+  - id: harvey-postmessage-no-origin
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A window 'message' event listener uses event.data with no event.origin check — any page can
+      post data into your app. Validate event.origin against an allowlist before trusting the
+      message.
+    patterns:
+      - pattern-either:
+          - pattern: $W.addEventListener("message", $CB)
+          - pattern: addEventListener("message", $CB)
+      - metavariable-regex:
+          metavariable: $CB
+          regex: (?s)^(?!.*\.origin).*$
+
+  # An app-issued auth/session token stashed in Web Storage (localStorage/sessionStorage) is readable
+  # by any injected script — one XSS exfiltrates a live session. Name-gated on the storage key: keys
+  # naming an auth/access/refresh/id/session token match; a 'csrf'-prefixed key (JS-readable by
+  # design) does not. Review — some 'token'-named values are legitimately client-readable. See
+  # N-WEBSTORAGE-CSRF.
+  - id: harvey-token-in-webstorage
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      An auth/session token is written to Web Storage (localStorage/sessionStorage), which is
+      readable by any injected script — an XSS can steal the session. Keep session tokens in an
+      HttpOnly cookie instead.
+    patterns:
+      - pattern-either:
+          - pattern: localStorage.setItem($K, $V)
+          - pattern: sessionStorage.setItem($K, $V)
+          - pattern: window.localStorage.setItem($K, $V)
+          - pattern: window.sessionStorage.setItem($K, $V)
+      - metavariable-regex:
+          metavariable: $K
+          regex: (?i)^['"]?(auth|access|refresh|id|jwt|bearer|session)[-_]?token
+
+  # A third-party CDN <script> loaded with no Subresource Integrity hash — if the CDN/URL is
+  # compromised, arbitrary script runs in this origin. External http(s) src with no integrity
+  # attribute matches; a first-party/relative src, or one carrying integrity, does not. Review —
+  # first-party scripts don't need SRI and some setups pin integrity elsewhere. See N-SRI-PRESENT.
+  - id: harvey-missing-sri
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A third-party CDN <script> is loaded with no Subresource Integrity (integrity=) hash — a
+      compromised CDN can serve arbitrary script into your origin. Add integrity="sha384-..." and
+      crossOrigin, or self-host the script.
+    patterns:
+      - pattern-either:
+          - pattern: <script src=$SRC></script>
+          - pattern: <script src=$SRC />
+      - metavariable-regex:
+          metavariable: $SRC
+          regex: (?i)^['"]?https?://
+      - pattern-not: <script src=$SRC integrity=$I></script>
+      - pattern-not: <script src=$SRC integrity=$I />
+      - pattern-not: <script src=$SRC integrity=$I crossOrigin=$C></script>
+      - pattern-not: <script src=$SRC integrity=$I crossOrigin=$C />

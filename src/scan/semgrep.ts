@@ -19,8 +19,8 @@
 // across next.config/middleware/vercel.json, not something a Semgrep AST pattern expresses.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import type { Finding, Severity } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 
@@ -99,6 +99,55 @@ export function checkMissingCsp(dir: string): Finding[] {
       precisionTier: "review",
     }),
   ];
+}
+
+// Sensitive files served from the public/ directory (B12, #71). Next.js serves everything under
+// public/ verbatim at the site root, so a committed .env / DB dump / private key / backup there is
+// world-readable — a config/secret leak a Semgrep AST rule can't express (it's a filesystem-presence
+// fact, not a code pattern). Fires `high`: the file is unambiguously sensitive AND unambiguously
+// web-served. Benign assets (favicon, fonts, images, robots.txt, manifests) don't match.
+const PUBLIC_SENSITIVE = [
+  /^\.env(\.|$)/i, // .env, .env.local, .env.production, ...
+  /\.(sql|pem|key|bak|sqlite|sqlite3|db|p12|pfx|keystore|kdbx)$/i,
+  /^(backup|dump|database|db[-_]?dump)\b/i,
+  /^id_(rsa|ed25519|ecdsa|dsa)$/i,
+  /\.(env|secrets?)\.(json|ya?ml)$/i,
+];
+
+function walkFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walkFiles(full));
+    else out.push(full);
+  }
+  return out;
+}
+
+export function checkPublicDirSensitive(dir: string): Finding[] {
+  const publicDir = join(dir, "public");
+  if (!existsSync(publicDir)) return [];
+  const findings: Finding[] = [];
+  for (const file of walkFiles(publicDir)) {
+    const base = file.slice(file.lastIndexOf("/") + 1);
+    if (!PUBLIC_SENSITIVE.some((re) => re.test(base))) continue;
+    const rel = relative(dir, file);
+    findings.push(
+      mechanicalFinding({
+        id: `SEM-PUBLIC-${findings.length + 1}`,
+        title: `Sensitive file served from public/: ${rel}`,
+        severity: "High",
+        category: "Next.js/web footgun",
+        taxonomy: "Sensitive file in public/ directory",
+        location: rel,
+        evidence: `${rel} sits under public/, which Next.js serves verbatim at /${rel.replace(/^public\//, "")}.`,
+        impact: "Anyone can download this file over the web — it may expose credentials, database contents, or private keys.",
+        fix: "Move the file out of public/ (into a server-only location or .gitignore), and rotate any secret it exposed.",
+        precisionTier: "high",
+      }),
+    );
+  }
+  return findings;
 }
 
 export function runSemgrep(dir: string): SemgrepOutput {

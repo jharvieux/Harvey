@@ -247,3 +247,139 @@ rules:
       - pattern-either:
           - pattern: process.env.NODE_ENV = "development"
           - pattern: process.env.NODE_ENV = 'development'
+
+  # ---- Batch B12 (#71) — Next-config & client-surface misconfig (config/server-response half;
+  # the client-surface half lives in xss.yml). See GROUND-TRUTH.md §B12. Verified directly against
+  # the config-variants/*.config.js and pages/api fixture pairs with `semgrep --config headers.yml`
+  # before wiring in. ----
+
+  # next/image with a wildcard remotePatterns hostname ('**' / '*') turns the built-in image
+  # optimizer into an open proxy: it will fetch and re-serve an image from ANY host an attacker
+  # names (SSRF to internal endpoints, using your bandwidth/IP as a fetch relay). The precise signal
+  # is an all-asterisks hostname literal inside a remotePatterns element; an explicit host or a
+  # bounded '*.example.com' subdomain wildcard does not match. HIGH → free count.
+  - id: harvey-img-remotepatterns-wild
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      next/image images.remotePatterns has a wildcard hostname ('**'/'*') — the image optimizer
+      will fetch and re-serve images from any host (SSRF / open image proxy). Pin remotePatterns to
+      an explicit host allowlist.
+    patterns:
+      - pattern-inside: "{ ..., remotePatterns: [...], ... }"
+      - pattern: "{ ..., hostname: $H, ... }"
+      - metavariable-regex:
+          metavariable: $H
+          regex: (?s)^['"]?\*+['"]?$
+      - focus-metavariable: $H
+
+  # productionBrowserSourceMaps: true ships the original, un-minified source (and often comments /
+  # internal paths / logic) to every browser as .map files. The safe value is false or absent. The
+  # literal `true` is an unambiguous, exact config match. HIGH → free count.
+  - id: harvey-prod-sourcemaps
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Medium
+    message: >
+      productionBrowserSourceMaps: true ships readable original source maps to every browser in
+      production, exposing your un-minified client source. Remove it (defaults to false) unless you
+      intentionally publish source maps.
+    patterns:
+      - pattern: "{ ..., productionBrowserSourceMaps: true, ... }"
+
+  # Server Actions allowedOrigins: ['*'] disables the origin allowlist that protects Server Action
+  # POSTs from cross-site invocation (CSRF). A bare '*' element is the unambiguous signal; an
+  # explicit host list does not match. HIGH → free count.
+  - id: harvey-serveractions-origin-wild
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      experimental.serverActions.allowedOrigins includes '*' — this disables the Server Actions
+      origin allowlist and lets any site invoke your Server Actions cross-origin (CSRF). List the
+      exact allowed origins instead.
+    patterns:
+      - pattern: "{ ..., allowedOrigins: [..., \"*\", ...], ... }"
+
+  # A Supabase Storage signed URL minted with an excessive numeric TTL (here: > 7 days). Signed URLs
+  # are meant to be short-lived; a multi-month/year expiry is effectively a permanent public link
+  # that survives any later access revocation. metavariable-comparison fires only on a literal
+  # second argument above the threshold; a short TTL (e.g. 300) does not match. HIGH → free count.
+  # Distinct from B9's P-SIGNED-URL-TOKEN-SRC (a committed signed-URL token, a gitleaks value match).
+  - id: harvey-signed-url-ttl
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Medium
+    message: >
+      createSignedUrl is called with an excessive expiry (> 7 days). A long-lived signed URL is
+      effectively a public link that outlives access revocation and leaks via logs/Referer/history.
+      Use a short TTL (seconds to minutes) sized to the actual use.
+    patterns:
+      - pattern: $X.createSignedUrl($P, $N)
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N > 604800
+
+  # CRLF / response-splitting: a request-controlled value flows into a response header value. A CR/LF
+  # in the value can inject extra headers or split the response. Taint from req.query/req.body/
+  # req.headers into a res.setHeader value; a .replace() that strips CR/LF is the sanitizer. Review —
+  # a heuristic (some frameworks already reject CR/LF in header values). See N-CRLF-SANITIZED.
+  - id: harvey-crlf-header-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A request-controlled value is written into a response header (res.setHeader) with no CR/LF
+      stripping — an attacker can inject additional headers or split the response (CRLF injection).
+      Strip CR/LF (or reject the value) before setting the header.
+    pattern-sources:
+      - pattern: $REQ.query.$K
+      - pattern: $REQ.query
+      - pattern: $REQ.body.$K
+      - pattern: $REQ.headers[$H]
+    pattern-sanitizers:
+      - pattern: $S.replace(...)
+    pattern-sinks:
+      - patterns:
+          - pattern: $RES.setHeader($NAME, $VAL)
+          - focus-metavariable: $VAL
+
+  # On-demand ISR: res.revalidate() rebuilds a request-controlled path with no shared-secret gate in
+  # the handler — anyone can force cache purges/rebuilds (stampede DoS, forced content refresh). The
+  # safe shape compares req.query.secret against a server secret first; any handler that references
+  # req.query.secret is excluded. Review — a heuristic (the secret check could live in shared
+  # middleware). See N-ISR-REVALIDATE-SECRET.
+  - id: harvey-isr-revalidate-nosecret
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      An on-demand ISR revalidation endpoint calls res.revalidate() on a request-controlled path
+      with no shared-secret check — anyone can force cache purges/rebuilds (DoS). Require a secret
+      token (compared against a server-side value) before revalidating.
+    patterns:
+      - pattern: $RES.revalidate($REQ.query.$P)
+      - pattern-not-inside: |
+          function $F(...) { ... if (<... $Q.query.secret ...>) {...} ... }
+      - pattern-not-inside: |
+          ($A, $B) => { ... if (<... $Q.query.secret ...>) {...} ... }
