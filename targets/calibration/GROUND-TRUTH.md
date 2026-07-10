@@ -1061,6 +1061,7 @@ incrementally, one issue per commit. Answer key: `src/scan/calibration/b15-nextj
 |---|---|---|---|
 | P-BOLA-BODY-OWNER | `pages/api/billing/invoice.js:14` | route scopes the query to `req.body.tenantId` (client-supplied) instead of the session's tenant id — object/function-level authz gap (BOLA/BFLA) | #131 |
 | P-MW-MATCHER-EXCLUDES-API | `middleware.ts` (`config.matcher`) | matcher `/((?!api\|_next/static\|_next/image\|favicon.ico).*)` excludes every `/api/*` path from the middleware entirely | #132 |
+| P-MW-SOLE-AUTHZ | `pages/api/admin/dashboard.js:11` | reads `admin_metrics` with no session/role check of its own — relies entirely on `middleware.ts`, no defense in depth | #133 |
 
 ### B15 negatives — benign lookalikes (must NOT be flagged in the free count; here also fully silent — no existing rule targets these shapes)
 
@@ -1068,12 +1069,19 @@ incrementally, one issue per commit. Answer key: `src/scan/calibration/b15-nextj
 |---|---|---|
 | N-BOLA-SESSION-OWNER | `pages/api/billing/invoice-safe.js` | query scoped to `session.user.tenantId`; `req.body.tenantId` is never read. |
 | N-MW-MATCHER-INCLUDES-API | `lib/middleware-matcher-safe.ts` | `config.matcher` has no `api` exclusion — `/api/*` still runs through the middleware auth check. |
+| N-MW-DEFENSE-IN-DEPTH | `pages/api/admin/dashboard-safe.js` | calls `getServerSession()` and checks the role itself before returning `admin_metrics`, in addition to middleware. |
+
+### B15 adjacency note
+
+`P-MW-SOLE-AUTHZ` is a `SELECT`, not an insert/update/delete, so the existing `harvey-route-noauth`
+mutation rule does not fire on `pages/api/admin/dashboard.js` — keeps this class isolated from the
+B7 route-noauth pair.
 
 ### B15 live result (2026-07-10, static binaries: semgrep, gitleaks, trufflehog, osv-scanner; no Docker)
 
-`pnpm validate:calibration` (after #131-#132): **GATE PASS.** Both negatives are fully silent (no
-finding at all) and both positives are non-fatal review-tier recall gaps (expected — no mechanical
-rule targets them). `pnpm verify` (offline) is green.
+`pnpm validate:calibration` (after #131-#133): **GATE PASS.** All negatives so far are fully silent
+(no finding at all) and all positives so far are non-fatal review-tier recall gaps (expected — no
+mechanical rule targets them). `pnpm verify` (offline) is green.
 
 ---
 
