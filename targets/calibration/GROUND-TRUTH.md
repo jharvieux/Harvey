@@ -142,6 +142,7 @@ for `P-HARDCODED-KEY`.
 | P-GH-TOKEN | `scripts/deploy.js:4` | gitleaks `github-pat` (`ghp_`; push protection did not block this fake; unverifiable → review) | review |
 | P-SENDGRID-KEY | `lib/email.js:4` | gitleaks `generic-api-key` (value defanged; `sendgrid-api-token` validated pre-commit) | review |
 | P-JWT-SIGNING-SECRET | `lib/auth.js:7` | gitleaks `generic-api-key` (high-entropy signing-secret literal to `jwt.sign`; heuristic → review) | review |
+| P-ENV-COMMITTED (#130) | `.env:9,13` | gitleaks `supabase-service-role-jwt` (decoded claim) + `harvey-db-uri-credentials` (MongoDB URI), both on a committed **bare** `.env` (not `.env.local`) carrying multiple live-shaped secrets at once | high |
 
 **Push-protection defang note.** GitHub push protection blocks committing a real-shape OpenAI /
 Stripe / AWS / SendGrid key. For those four, the committed literal is a pure high-entropy fake
@@ -161,13 +162,13 @@ firing rule differs. The `ghp_` GitHub PAT fake and all high-tier prefix/claim-b
 | N-STRIPE-TEST-KEY | `.env.local` (`sk_test_…`) | Test-mode key, no production risk. gitleaks `stripe-access-token` still pattern-matches it → review only (triaged out), never high. |
 | N-AWS-EXAMPLE-KEY | `docs/aws-setup.md` (`AKIAIOSFODNN7EXAMPLE`) | AWS-docs placeholder; gitleaks stopword-allowlists the `EXAMPLE` marker — `aws-access-token` stays silent. |
 | N-DB-URL-LOCAL | `README.md:53` (`postgres://postgres:postgres@127.0.0.1`) | Standard local Supabase dev string, not a committed credential. `harvey-db-uri-credentials` allowlists loopback hosts (`localhost`/`127.0.0.1`). |
+| N-ENV-EXAMPLE `[reused, also covers P-ENV-COMMITTED]` | `.env.example` | Documented placeholders, not secrets — already in the base corpus. Doubles as `P-ENV-COMMITTED`'s negative (a committed placeholder-only env file vs. the committed live-value `.env`) rather than duplicating a fixture; `P-ENV-COMMITTED`'s corpus entry uses the `.env:` location (colon included) specifically so it can't be cross-attributed a finding from `.env.example` or `.env.local`. |
 
-**Deferred to a later batch (spec §B1 rows not built here, tracked follow-ups):**
-`P-ENV-COMMITTED` (a committed `.env` with live values — overlaps `P-DB-URL-PASSWORD`, which
-already exercises a committed non-anon secret in `.env.local`); `P-SECRET-GIT-HISTORY` (a secret
-added+removed across commits — the TruffleHog git-history pass only runs against a repo **root**,
-not the `targets/calibration` subdirectory, so it can't be validated by this harness as-is;
-needs a dedicated single-repo history fixture).
+**The former "Deferred to a later batch" row is now resolved:** `P-SECRET-GIT-HISTORY` is
+resolved by #129 via a **dedicated validation path outside the CORPUS matrix above**, since
+TruffleHog's git-history pass needs a clonable repo root and `targets/calibration` is a
+subdirectory — see "Git-history secret gate (#129)" below. (`P-ENV-COMMITTED`, the B1 row's other
+former deferral, is now built above as #130.)
 
 ### B1 live result (2026-07-09, static binaries: gitleaks 8.30.1, trufflehog 3.95.8, no Docker)
 
@@ -179,6 +180,26 @@ the publishable key and loopback DB URI are gitleaks-allowlisted (silent), the A
 stopword-allowlisted (silent), and the test-mode Stripe key draws a review hit only (triaged out).
 TruffleHog contributes nothing (every planted key is a dead fake, `--only-verified`), exactly as
 scored. `pnpm verify` (offline) is green via recorded gitleaks output in `calibration.test.ts`.
+
+### Git-history secret gate (#129) — P-SECRET-GIT-HISTORY
+
+TruffleHog's git-history pass (`trufflehog git`) only works against a clonable repo **root**;
+`targets/calibration` is a subdirectory of this repo, so a fixture planted there is invisible to
+that pass the way a real client repo's history would be. Instead of trying to force the class into
+the subdirectory corpus, it gets its own validation path: `src/scan/git-history-secret-gate.ts`
+builds a throwaway git repo in a temp dir **at runtime** (deterministic, no network —
+`--no-verification` skips every live provider call, which a FAKE secret could never pass anyway),
+commits a fake GitHub PAT then removes it in the next commit (still recoverable from history), and
+commits+removes a benign non-secret value the same way. It's wired into `pnpm validate:calibration`
+(runs after the main coverage matrix, folded into the same exit code) rather than duplicated as a
+separate npm script — trufflehog is already a required binary for that command. Unit-tested
+offline in `src/scan/git-history-secret-gate.test.ts`: the pure scoring function against recorded
+TruffleHog output, and the fixture-building git plumbing itself (no trufflehog binary needed for
+that half).
+
+Live result (2026-07-10, trufflehog 3.95.9): `pnpm validate:calibration` — **P-SECRET-GIT-HISTORY
+caught (1 hit, detector Github, recovered from the "add integration token" commit after the file
+was removed at HEAD); N-GIT-HISTORY-BENIGN clear (0 hits on the benign add/remove) — GATE PASS.**
 
 ### Scan-scope guard (issue #101) — N-UNTRACKED-ENV
 
@@ -1043,18 +1064,76 @@ new `leftover-auth.test.ts` heuristic unit tests.
 
 ---
 
-## Batch B15 (#123) — semantic-tier Supabase policy/function-body fixtures (review tier, no mechanical detector)
+## Batch B15 (#123, issues #131-#136) — Next.js/Supabase authz-shape classes (semantic tier)
+
+Six classes from the roadmap's §4a excluded-tier backlog (`docs/design/corpus-roadmap-to-100.md`
+§4a "Semantic (LLM/whole-program — paid M-series)"): each needs request+identity context, matcher-
+vs-route-inventory reasoning, or control-flow reasoning a grep/AST rule can't do reliably, so none
+is mechanically detected — these are LLM/paid-tier (M-series) detection, never promoted into the
+free count. Unlike every other `review`-tier batch in this file (B9-B14), **no new scanner or rule
+was added**: this batch seeds the corpus/GROUND-TRUTH answer key with planted vulns + benign
+lookalikes so the paid-tier LLM pass has fixtures to be measured against later (tracked as a
+follow-up, per each issue's acceptance criteria — not a blocker for closing the fixture work). Built
+incrementally, one issue per commit. Answer key: `src/scan/calibration/b15-nextjs-authz.entries.ts`.
+
+### B15 positives — planted bugs (semantic tier; NOT expected to be caught by the offline mechanical gate)
+
+| id | location | class | issue |
+|---|---|---|---|
+| P-BOLA-BODY-OWNER | `pages/api/billing/invoice.js:14` | route scopes the query to `req.body.tenantId` (client-supplied) instead of the session's tenant id — object/function-level authz gap (BOLA/BFLA) | #131 |
+| P-MW-MATCHER-EXCLUDES-API | `middleware.ts` (`config.matcher`) | matcher `/((?!api\|_next/static\|_next/image\|favicon.ico).*)` excludes every `/api/*` path from the middleware entirely | #132 |
+| P-MW-SOLE-AUTHZ | `pages/api/admin/dashboard.js:11` | reads `admin_metrics` with no session/role check of its own — relies entirely on `middleware.ts`, no defense in depth | #133 |
+| P-DRAFTMODE-NO-SECRET | `pages/api/preview/enable.js:8` | `draftMode().enable()` runs unconditionally, no secret/token check | #134 |
+| P-HOST-HEADER-URL | `lib/reset-link.js:11` | password-reset link built from `headers().get("host")` — attacker-controlled, enables reset-link poisoning | #135 |
+| P-CLIENT-RENDER-AUTHZ | `app/admin/page.tsx:11` + `components/AdminDashboardClient.jsx:8` | server fetches the full admin dataset unconditionally; the only gate is the client component's `if (!isAdmin) return null` — data already shipped in the RSC payload | #136 |
+
+### B15 negatives — benign lookalikes (must NOT be flagged in the free count; here also fully silent — no existing rule targets these shapes)
+
+| id | location | why benign |
+|---|---|---|
+| N-BOLA-SESSION-OWNER | `pages/api/billing/invoice-safe.js` | query scoped to `session.user.tenantId`; `req.body.tenantId` is never read. |
+| N-MW-MATCHER-INCLUDES-API | `lib/middleware-matcher-safe.ts` | `config.matcher` has no `api` exclusion — `/api/*` still runs through the middleware auth check. |
+| N-MW-DEFENSE-IN-DEPTH | `pages/api/admin/dashboard-safe.js` | calls `getServerSession()` and checks the role itself before returning `admin_metrics`, in addition to middleware. |
+| N-DRAFTMODE-SECRET-CHECKED | `pages/api/preview/enable-safe.js` | validates `req.query.secret` against `process.env.PREVIEW_SECRET` before `draftMode().enable()` runs. |
+| N-HOST-HEADER-FIXED-ORIGIN | `lib/reset-link-safe.js` | builds the link from `process.env.NEXT_PUBLIC_SITE_URL`; `headers()`/Host is never read. |
+| N-SERVER-ROLE-CHECK | `app/admin/page-safe.tsx` | checks the role server-side and redirects BEFORE querying `admin_metrics` — the query never runs for a non-admin. |
+
+### B15 adjacency note
+
+`P-CLIENT-RENDER-AUTHZ` shares a theme with the existing `P-SERVER-CLIENT-LEAK`
+(`app/documents/detail-page.tsx`) but is a distinct shape: `harvey-server-client-leak` requires an
+exact `const { $DATA } = await $C.from($T).select("*").eq($COL, $ID);` + `<$COMP {...$DATA} />`
+spread; `app/admin/page.tsx` uses no `.eq()` chain and passes `metrics={data}` as a named prop, not
+a spread, so that rule stays silent on this fixture (verified live below). `P-MW-SOLE-AUTHZ` is a
+`SELECT`, not an insert/update/delete, so the existing `harvey-route-noauth` mutation rule does not
+fire on `pages/api/admin/dashboard.js` — keeps this class isolated from the B7 route-noauth pair.
+
+### B15 live result (2026-07-10, static binaries: semgrep, gitleaks, trufflehog, osv-scanner; no Docker)
+
+`pnpm validate:calibration`: **GATE PASS — zero free-count false positives; every high-tier rule
+fired on its positive.** All 6 B15 negatives are fully silent (no finding at all) and all 6 B15
+positives are reported as non-fatal review-tier recall gaps (expected — no mechanical rule targets
+them, including confirming `harvey-server-client-leak` stays silent on `app/admin/page.tsx`).
+Corpus totals after B15: **141/147 static positives caught (61 at high/free-count, 15 connected
+N/A); 115/115 static negatives cleared.** `pnpm verify` (offline) is green: 452 tests (no new tests
+were needed — `b15-nextjs-authz.entries.ts` is exercised by the existing whole-`CORPUS` tests in
+`calibration.test.ts`, which only assert entries are counted correctly, not caught, for entries
+with no matching rule).
+
+---
+
+## Batch B16 (#123) — semantic-tier Supabase policy/function-body fixtures (review tier, no mechanical detector)
 
 Three of the nine classes carved out in #123 (`docs/design/corpus-roadmap-to-100.md` §4a — the
 semantic/paid-M-series backlog explicitly excluded from the mechanical corpus). Answer key:
-`src/scan/calibration/b15-storage-secdef.entries.ts`. All three need policy-body or function-body
+`src/scan/calibration/b16-storage-secdef.entries.ts`. All three need policy-body or function-body
 reasoning that a structural grep can't do reliably: detection is left to the existing LLM
 high-recall pass (`/vuln-scan` + `/triage`), per #123 option (b) — **no new mechanical scanner is
 added here.** Every positive is `review` tier and is EXPECTED to miss `pnpm validate:calibration`
 (a non-fatal `reviewMisses` line); the gate's job is proving the negatives raise zero free-count
 false positives.
 
-### B15 positives — planted bugs (review tier; static miss by design, LLM pass covers detection)
+### B16 positives — planted bugs (review tier; static miss by design, LLM pass covers detection)
 
 | id | location | class | tier |
 |---|---|---|---|
@@ -1062,7 +1141,7 @@ false positives.
 | P-STORAGE-UPLOAD-CHECK-TRUE `[#138]` | same file (`user_files_insert_open`) | `storage.objects` INSERT policy `WITH CHECK (true)` — unrestricted upload to any bucket/path. Code-side is `P-UPLOAD-NO-LIMIT` (B14). | review |
 | P-SECDEF-PRIV-WRITE-NOAUTH `[#139]` | same file (`promote_to_admin`) | `security definer` function updates `profiles.role` with no check on the caller's identity — any authenticated caller can promote anyone to admin | review |
 
-### B15 negatives — benign lookalikes (must NOT be flagged in the free count)
+### B16 negatives — benign lookalikes (must NOT be flagged in the free count)
 
 | id | location | why benign |
 |---|---|---|
@@ -1070,7 +1149,7 @@ false positives.
 | N-STORAGE-UPLOAD-OWNERSHIP-MIME | same file (`user_files_insert_own`) | `WITH CHECK (... foldername ownership ... and mimetype = any (allowed list))` — ownership-scoped and mime-restricted, mirroring the bucket's `allowed_mime_types` (`config.toml`). No mechanical rule reads `storage.objects` bodies — trivially silent. |
 | N-SECDEF-PRIV-WRITE-AUTHCHECK | same file (`promote_to_admin_checked`) | the identical privileged write, gated by `where id = auth.uid() and role = 'admin'` on the CALLER's own row before the target row is touched. No mechanical rule reads `security definer` function bodies — trivially silent. |
 
-### B15 detection
+### B16 detection
 
 No new mechanical scanner. All three positives are documented, non-fatal `pnpm validate:calibration`
 review-tier misses (`reviewMisses`, `cli/validate-calibration.ts`) — detection is the existing LLM
@@ -1079,16 +1158,17 @@ are fully silent (no mechanical rule reads Supabase policy or `security definer`
 Six of the nine #123 classes (BOLA/BFLA, middleware matcher, middleware-sole-authz, draft-mode
 secret, host-header trust, client-render authz) remain out of scope for this fixture sweep.
 
-### B15 live result (2026-07-10, static binaries: semgrep, gitleaks, trufflehog, osv-scanner; no Docker)
+### B16 live result (2026-07-10, static binaries: semgrep, gitleaks, trufflehog, osv-scanner; no Docker)
 
 `pnpm validate:calibration`: **GATE PASS — zero free-count false positives; every high-tier rule
-fired on its positive.** All 3 B15 positives are documented, non-fatal review-tier misses (as
-designed — semantic/policy-body detection, no mechanical rule) and all 3 B15 negatives are fully
-silent. Corpus totals after B15: **141/144 static positives caught (61 at high/free-count, 15
-connected N/A; 3 documented review-tier misses — P-STORAGE-AUTH-NOT-OWNER,
-P-STORAGE-UPLOAD-CHECK-TRUE, P-SECDEF-PRIV-WRITE-NOAUTH), 112/112 static negatives cleared.**
-`pnpm verify` (offline) is green: 452 tests (no new detector, so no new test count — the B15
-answer key is scored purely via `buildCoverageMatrix`/`validate-calibration.ts`, no
+fired on its positive.** All 3 B16 positives are documented, non-fatal review-tier misses (as
+designed — semantic/policy-body detection, no mechanical rule) and all 3 B16 negatives are fully
+silent. Corpus totals after B16 (merged with B15 and the #150/#152 landings already on `main`):
+**142/151 static positives caught (62 at high/free-count, 15 connected N/A; 9 documented
+review-tier misses across B15+B16 — the 6 B15 Next.js/Supabase-authz classes plus
+P-STORAGE-AUTH-NOT-OWNER, P-STORAGE-UPLOAD-CHECK-TRUE, P-SECDEF-PRIV-WRITE-NOAUTH), 118/118 static
+negatives cleared.** `pnpm verify` (offline) is green (no new detector, so no new test count — the
+B16 answer key is scored purely via `buildCoverageMatrix`/`validate-calibration.ts`, no
 `calibration.test.ts` recorded-vector block).
 
 ---
@@ -1408,6 +1488,16 @@ signature — `verifyGitHubSignature`/`jwtVerify`/`verifyResendSignature` (x2)
 matches as well as `verifyJwt`) — this is the "genuinely public, signature-verified" category the
 issue's acceptance criteria names explicitly, distinct from the named-guard-helper class but
 covered by the same regex family. The ATC clone was scanned read-only; not modified.
+
+### #129/#130 close-out — B1 secrets deferred rows resolved
+
+`P-ENV-COMMITTED` (#130, see §B1 above) and `P-SECRET-GIT-HISTORY` (#129, see "Git-history secret
+gate" above) are both built, closing out B1's last two deferred rows. `pnpm validate:calibration`
+(2026-07-10, gitleaks 8.30.1, trufflehog 3.95.9, semgrep 1.164.0, osv-scanner 2.3.8, no Docker):
+**positives caught 142/142 static (62 at high/free-count, 15 connected-tier N/A); negatives
+cleared 109/109; zero free-count false positives; git-history secret gate PASS — GATE PASS.** No
+regression on any prior batch (high-tier count moved 61 → 62 for `P-ENV-COMMITTED`; the
+git-history gate is additive, outside the CORPUS matrix).
 
 ---
 

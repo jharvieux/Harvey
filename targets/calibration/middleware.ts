@@ -21,3 +21,13 @@ export function middleware(req: NextRequest) {
   res.headers.set("Access-Control-Allow-Credentials", "true");
   return res;
 }
+
+// PLANTED BUG (P-MW-MATCHER-EXCLUDES-API, #132): the negative-lookahead excludes any path
+// starting with "api" (as well as _next assets) from ever running this middleware — so
+// pages/api/admin/dashboard.js, which has no auth check of its own (see that file), is reachable
+// directly with no gate at all, even though this middleware looks like the app's auth layer.
+// Contrast lib/middleware-matcher-safe.ts (N-MW-MATCHER-INCLUDES-API), whose matcher has no "api"
+// exclusion.
+export const config = {
+  matcher: "/((?!api|_next/static|_next/image|favicon.ico).*)",
+};

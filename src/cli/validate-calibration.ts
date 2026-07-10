@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { buildCoverageMatrix, CORPUS, type MatrixRow } from "../scan/calibration.js";
 import type { Finding } from "../findings.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "../scan/dependencies.js";
+import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { checkKnownIoc, checkLockfilePresence } from "../scan/supply-chain.js";
 
@@ -97,10 +98,18 @@ console.log(
 console.log(`Negatives cleared: ${matrix.negativesCleared}/${matrix.negativesTotal} static`);
 if (reviewMisses.length) console.log(`Review-tier recall gaps (non-fatal, tracked): ${reviewMisses.map((r) => r.id).join(", ")}`);
 
-const gatePass = negFps.length === 0 && highMisses.length === 0;
+// P-SECRET-GIT-HISTORY (#129): a dedicated pass, not part of the matrix above — TruffleHog's
+// git-history scan needs a clonable repo ROOT, which targets/calibration (a subdirectory of
+// this repo) isn't. Builds its own throwaway git repo at runtime; see git-history-secret-gate.ts.
+console.log("\nGIT-HISTORY SECRET GATE (#129, dedicated throwaway-repo fixture):");
+const gitHistoryGate = runGitHistorySecretGate();
+console.log(`  ${gitHistoryGate.detail.replace(/\n/g, "\n  ")}`);
+
+const gatePass = negFps.length === 0 && highMisses.length === 0 && gitHistoryGate.pass;
 if (!gatePass) {
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives: ${negFps.map((r) => r.id).join(", ")}`);
   if (highMisses.length) console.log(`GATE FAIL — high-tier positives not caught: ${highMisses.map((r) => r.id).join(", ")}`);
+  if (!gitHistoryGate.pass) console.log("GATE FAIL — git-history secret gate (#129) did not pass, see detail above");
   process.exit(1);
 }
 console.log("\nGATE PASS — no free-count false positives; every high-tier rule fired on its positive.");
