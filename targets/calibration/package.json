@@ -14,6 +14,8 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
+    "expres": "1.0.0",
+    "left-pad": "git+https://github.com/left-pad/left-pad.git",
     "lodash": "4.17.11",
     "next": "^14.2.5",
     "pg": "^8.12.0",

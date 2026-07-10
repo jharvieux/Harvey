@@ -209,6 +209,76 @@ list (`node_modules`, `.claude/`, `.next`, `dist`, `build`, `coverage`, worktree
 
 ---
 
+## Batch B2 (#71) — framework-CVE + supply-chain manifest hygiene
+
+The framework-CVE / supply-chain expansion batch (spec `docs/design/spec-71-security-corpus.md`
+§"Batch 4 — Framework CVEs & dependency version hygiene" + §"Batch 5 — Supply chain / manifest
+hygiene"). Answer key: `src/scan/calibration/b2-deps.entries.ts`. Unlike the Semgrep batches (B3–B7),
+**most of this batch's detection code already existed** — it was the *corpus* that lagged: the live
+mechanical scan already produced these findings, but no gate row verified them. The base-batch dep
+rows already ship (`[exists]`, `base.entries.ts`) and are not duplicated: `P-NEXT-CVE-29927`,
+`P-NEXT-CVE-RSC`, `P-DEP-CVE`, `P-SLOPSQUAT`, `P-POSTINSTALL`, `N-DEV-DEP`.
+
+Tiering per the locked preamble: only the two deterministic-syntactic checks are `high` (free
+count) — the exact CVE version-range match (WS-SSRF) and the unpinned-range check. The OSV-backed
+cache-poisoning cluster, the offline edit-distance typosquat, and the non-registry-source check
+stay `review` (a version match / edit-distance / git-source presence is not proof of
+exploitability). One small new scanner ships with the batch: `checkNonRegistryDependencies`
+(`src/scan/supply-chain.ts`), a deterministic manifest parse mirroring `checkUnpinnedDependencies`.
+
+Fixtures added to `targets/calibration/package.json` (never installed — the manifest already can't
+`npm install` because of the `react-supabase-helpers` slopsquat fixture): `expres` (a **real**,
+published npm package one edit from `express`, so `checkSlopsquat`'s registry HEAD stays silent and
+only the offline typosquat check fires) and `left-pad` pinned to a `git+https` URL (also a real npm
+name, so slopsquat stays silent while `checkNonRegistryDependencies` fires).
+
+### B2 positives — framework-CVE + manifest bugs (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-NEXT-CVE-WS-SSRF | `package.json` (`next@^14.2.5`) | `checkNextVersionCVEs` — CVE-2026-44578 range (>=13.4.13 <15.5.16, GHSA-c4j6-fc7j-m34r, CVSS 8.6) | high |
+| P-UNPINNED-DEP | `package.json` (`^`-ranged deps) | `checkUnpinnedDependencies` — syntactic unpinned-range fact | high |
+| P-NEXT-CVE-CACHE | `package-lock.json` (`next@14.2.35`) | OSV-Scanner — May-2026 cache-poisoning advisories (e.g. GHSA-wfc6-r584-vfw7); `parseOsvFindings` tiers every non-curated hit review | review |
+| P-TYPOSQUAT | `package.json` (`expres`) | `checkTyposquat` — Levenshtein-1 from `express` (offline corpus match) | review |
+| P-NONREGISTRY-DEP | `package.json` (`left-pad@git+https…`) | `checkNonRegistryDependencies` (new) — git/url/file dependency source | review |
+
+### B2 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-DEP-PINNED | `package.json` (`lodash@4.17.11`) | Exact-pinned, registry-sourced — never appears in the SUP-UNPINNED or SUP-NON-REGISTRY evidence. The pinned-dep FP a naive "any dependency is unpinned" rule throws. Doubles as the registry-source negative for `P-NONREGISTRY-DEP`. Its OSV CVE finding lives at the lockfile location (not `package.json`), so it can't be mis-attributed here. |
+| N-SLOPSQUAT-REAL | `package.json` (`@supabase/supabase-js`) | A real, popular, scoped package (exact-match in the typosquat popular set; a 200 from the slopsquat registry HEAD) — the FP a name-shape heuristic throws on a legitimate scoped dep. Draws no slopsquat/typosquat finding. |
+
+### B2 deferred (spec §Batch 4/5 rows NOT built here — tracked on #71)
+
+- `P-NEXT-EOL` — `checkNextVersionCVEs` reads the single `next` version from the manifest; an EOL
+  fixture (`next < 14`) can't coexist with the `^14.2.5` that drives the 29927/RSC/WS-SSRF
+  positives. Needs a second, EOL-pinned manifest fixture.
+- `P-REACT-DOM-CVE` — needs a vulnerable `react-server-dom-*` resolved in the committed lockfile;
+  the target doesn't carry one and hand-editing the lockfile is fragile.
+- `P-DEP-CVE-CRITICAL` — `parseOsvFindings` tiers every non-curated OSV hit `review`; a `high`
+  free-count OSV finding needs a curated critical-CVE promotion path that doesn't exist yet.
+- `P-MISSING-LOCKFILE` — the target must keep its committed lockfile for `P-DEP-CVE`, so the
+  no-lockfile positive can't be planted in the same target.
+- `P-KNOWN-IOC-PKG` — no IoC-feed cross-check code exists yet (`checkKnownIoc` unimplemented).
+- `N-NEXT-SUPPORTED`, `N-POSTINSTALL-KNOWN` — the supported-next negative shares the manifest-version
+  conflict above; the known-legit-postinstall negative can't be modeled distinctly against the
+  single aggregate `checkInstallScripts` review finding.
+
+### B2 live result (2026-07-09, static binaries: semgrep 1.164.0, gitleaks 8.30.1, trufflehog 3.95.8, osv-scanner 2.3.8, no Docker)
+
+`pnpm validate:calibration`: **positives caught 77/77 static (25 at high/free-count), 15
+connected-tier N/A; negatives cleared 49/49; zero free-count false positives — GATE PASS.** The 5
+new B2 positives all fire (2 at high: the WS-SSRF version-range match and the unpinned-range check;
+3 at review: the OSV cache-poisoning cluster, the edit-distance typosquat, and the non-registry git
+source). The 2 new negatives clear with no free-count finding. No regression on the base or B1/B3–B8
+batches (high-tier count moved 23 → 25). `pnpm verify` (offline) is green: `supply-chain.test.ts`
+gained two unit tests for `checkNonRegistryDependencies`; the scorecard logic over the expanded
+`CORPUS` is exercised in `calibration.test.ts` (including its synth-collision guard); the live gate
+above proves the already-existing dep/CVE detections against their fixtures.
+
+---
+
 ## Batch B3 (#71) — injection & code-execution family
 
 The injection expansion batch (spec `docs/design/spec-71-security-corpus.md` §"Batch 1 — Injection

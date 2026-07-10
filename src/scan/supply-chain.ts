@@ -133,6 +133,32 @@ export function checkUnpinnedDependencies(deps: DependencyMap): Finding[] {
   ];
 }
 
+// A dependency range that resolves from somewhere other than the npm registry — a git/ssh/http
+// URL, a github: shorthand, or a file: path. Deterministic syntactic fact (the protocol prefix),
+// but whether it's a *problem* is a judgment (a private git dep can be intentional), and such a
+// source is unpinned-by-default with no registry integrity/provenance → "review" tier. The
+// vibe-code risk: an AI pastes `npm install some-git-url`, bypassing registry auditing entirely.
+const NON_REGISTRY_RANGE = /^(git\+|git:|git@|ssh:|https?:|file:|github:|gitlab:|bitbucket:)/i;
+
+export function checkNonRegistryDependencies(deps: DependencyMap): Finding[] {
+  const nonRegistry = Object.entries(deps).filter(([, range]) => NON_REGISTRY_RANGE.test(range.trim()));
+  if (nonRegistry.length === 0) return [];
+  return [
+    mechanicalFinding({
+      id: "SUP-NON-REGISTRY",
+      title: `${nonRegistry.length} dependencies resolve from a non-registry source (git/url/file)`,
+      severity: "Medium",
+      category: "Supply chain",
+      taxonomy: "Non-registry dependency source",
+      location: "package.json",
+      evidence: `Non-registry: ${nonRegistry.map(([n, r]) => `${n}@${r}`).join(", ")}.`,
+      impact: "A git/url/file dependency bypasses the npm registry's auditing and integrity checks and is unpinned by default — a compromised or rewritten upstream lands in installs without review.",
+      fix: "Prefer a registry-published, version-pinned dependency; if a git source is required, pin it to a commit SHA and vendor-review it.",
+      precisionTier: "review",
+    }),
+  ];
+}
+
 // Install-time lifecycle scripts (preinstall/install/postinstall) run arbitrary code on every
 // `npm install`, so a compromised or malicious dependency (or the project itself) uses them as
 // the execution foothold — the Shai-Hulud npm worm class. Presence is a deterministic fact but

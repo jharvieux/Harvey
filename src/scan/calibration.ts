@@ -13,6 +13,7 @@
 
 import type { Finding, PrecisionTier } from "../findings.js";
 import { baseEntries } from "./calibration/base.entries.js";
+import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b3InjectionEntries } from "./calibration/b3-injection.entries.js";
 import { b4XssEntries } from "./calibration/b4-xss.entries.js";
 import { b5HeadersEntries } from "./calibration/b5-headers.entries.js";
@@ -37,6 +38,7 @@ export type { CorpusEntry } from "./calibration/types.js";
 export const CORPUS: CorpusEntry[] = [
   ...baseEntries,
   ...secretsEntries,
+  ...b2DepsEntries,
   ...b3InjectionEntries,
   ...b4XssEntries,
   ...b5HeadersEntries,
