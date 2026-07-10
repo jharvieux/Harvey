@@ -2,45 +2,60 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-09 (issue-sweep: #53 verified+closed via PR #111; #71 B2 batch landed via PR #112)_
+_Last updated: 2026-07-10 (overnight #71 round-2: 6 corpus batches B9–B14 merged; corpus 140/140 positives, 61 high)_
 
-## Corpus expansion (#71 security, #72 cross-module) — all batches landed
-Answer key + Semgrep rules are per-batch modular
-(`src/scan/calibration/<batch>.entries.ts` + `src/scan/rules/semgrep/<batch>.yml`).
-**Gate after PR #112: 77/77 static positives (25 high/free-count) / 49/49 negatives — PASS.**
-- **#71 security:** B1 secrets, B3 injection, B4 XSS, B5 headers/CORS, B6 crypto, B7 auth,
-  B8 Supabase-connected. **B2 CVE/supply-chain landed for real in PR #112** (a prior session had
-  marked it done via #65/#66, but no gate rows existed): 7 classes gated incl. new typosquat +
-  non-registry-dep scanner. **Still open on #71:** 7 deferred B2 classes (P-NEXT-EOL, P-REACT-DOM-CVE,
-  P-DEP-CVE-CRITICAL, P-MISSING-LOCKFILE, P-KNOWN-IOC-PKG + 2 negatives — reasons in
-  `targets/calibration/GROUND-TRUTH.md` §B2) and the research-to-~100 class ranking.
-- **#72 cross-module:** M10 PII, M4+M5 dup/dead-code, M8 mutation, M7 perf-advisors (all precision-gated);
-  M3 hotspots (design+fixture, ordering-gate — live `vitals` capture deferred → **#94**);
-  M6 simplification (paid-only rubric-eval design note + labeled corpus, no precision gate).
-- **Connected-tier live-confirmed** (`docs/runbooks/dry-run-calibration.md` §9): every B8 security lint +
-  M7 perf lint fires against real Splinter on a live stack. Gap found: `harvey scan --supabase local`
-  runs a subset, not full Splinter → **#54** is what unlocks the connected coverage locally.
+## Corpus expansion (#71 security, #72 cross-module)
+Answer key + rules are per-batch modular (`src/scan/calibration/<batch>.entries.ts` +
+`src/scan/rules/semgrep/<batch>.yml` / scanner extensions). Each batch is one PR, self-contained,
+gated by `pnpm validate:calibration` (a class ships only if its positive is caught AND its benign
+negative cleared; only `high` classes feed the free count).
+
+**Gate after the overnight round-2 train: 140/140 static positives (61 high/free-count), 108/108
+negatives cleared, 15 connected-tier N/A — PASS.** (Was 77/77 / 25 high before this session.)
+
+- **#71 round 1 (built earlier):** B1 secrets, B2 CVE/supply-chain, B3 injection, B4 XSS,
+  B5 headers/CORS, B6 crypto, B7 auth, B8 Supabase-connected.
+- **#71 round 2 (merged 2026-07-10, PRs #116–#121):** the 5-lens research (OWASP, Next.js surface,
+  framework CVEs, Semgrep registry, Supabase) was deduped/ranked into
+  `docs/design/corpus-roadmap-to-100.md` (PR #114), then built out in six serial batches:
+  - **B9** secrets & config-secret breadth (12) · **B10** dependency-CVE & framework-version (10) ·
+    **B11** crypto-API misuse & JWT-verify options (9) · **B12** next-config & client-surface
+    misconfig (11) · **B13** Supabase static-config/edge + injection sinks (12) · **B14** app-logic
+    heuristics (5, review-tier).
+  - **Two new scanners:** `checkPublicDirSensitive` (walks `public/` for committed sensitive files,
+    B12) and `supabase-static.ts::checkMigrationRlsStatic` (parses committed migrations for
+    `CREATE TABLE` with no `ENABLE RLS` — moves `P-RLS-DISABLED` onto the static free tier, B13).
+  - Everything else extended existing scanners/rules. ~59 new mechanical classes total (~36 high,
+    ~23 review). One class dropped as a genuine B2 dup (minimist CVE).
+- **#71 now has essentially no mechanical backlog.** The 18 excluded-tier candidates (semantic /
+  connected / dynamic) in the roadmap §4 are correctly routed to the paid M-series, the connected
+  tier, and the #5 pen-test — NOT new mechanical batches. #71 can be closed or narrowed to "connected
+  P-REALTIME-NO-AUTHZ + the semantic/dynamic backlog" if you want a clean tracker.
+- **#72 cross-module:** M10 PII, M4+M5 dup/dead-code, M8 mutation, M7 perf-advisors (precision-gated);
+  M3 hotspots (design+fixture, live `vitals` capture deferred → **#94**); M6 simplification (paid-only).
 
 ## Open agent-doable follow-ups
-- **#71 remainder** — the 7 deferred B2 classes + the research-to-~100 ranking (see corpus section).
-- **Skills vendoring decision** (from #53, now closed): the reference-harness skills live user-global
-  at `~/.claude/skills/`. Open call: vendor them into the Harvey repo (version-controlled with the
-  venture, #14) vs. keep user-global.
+- **#71 close-out** — decide whether to close #71 (mechanical work done) or re-scope it to the
+  excluded-tier backlog in `docs/design/corpus-roadmap-to-100.md` §4.
+- **Skills vendoring decision** (from #53, closed): reference-harness skills live user-global at
+  `~/.claude/skills/`. Open call: vendor into the Harvey repo (#14) vs. keep user-global.
 
-DONE (merged): **#53 CLOSED via PR #111** — the `/threat-model → /vuln-scan → /triage` pipeline ran
-end-to-end against `targets/calibration` for real: **7/8 original planted bugs caught** (both RLS
-policy bugs + SQLi included); the open-redirect miss is the pipeline's own deliberate severity
-filter, documented in `docs/runbooks/dry-run-calibration.md` §10. Runbook step 1 now records the
-real install path. Also previously merged: #101 (scan scopes to git-tracked files), #102 (live
-Anthropic ModelClient), #103 (Supabase storage adapter + Auth). #54/#94/#86/#73/#76 also done.
+DONE (merged this session): **#53 CLOSED via PR #111** (pipeline verified end-to-end, 7/8 planted
+bugs caught; runbook install path corrected). #71 round-2 corpus via PRs #112, #114–#121. Earlier:
+#101/#102/#103, #54/#94/#86/#73/#76.
 
 ## Operator / manual action items (not agent-executable)
-- **Vercel 404:** set the `harvey` project Root Directory to `intake-site` + add `RESEND_API_KEY`
-  (fixes the onboarding-page 404 AND `/api/intake`). Page currently serves at `/intake-site/`.
-- **#70 GitGuardian:** appears RESOLVED — the check passed on PRs #111 and #112 (both touch or sit
-  atop calibration fixtures), so the dashboard ignore seems in effect. Confirm and close #70.
-  Side-check of the other repos (2026-07-09): no other repo needs a path exclusion; ATC's only
-  realistic-looking committed secret is a fake Svix doc-example `whsec_` in two resend webhook tests.
+- **#70 GitGuardian — one nuance found overnight:** the dashboard ignore for `targets/calibration/`
+  works, but every batch also lands FAKE secret-shaped strings in `src/scan/calibration.test.ts`
+  (recorded scanner-output test vectors, e.g. `npm_FAKE…`, `AIzaSyD0FAKE…`) which sit OUTSIDE the
+  ignored path. GitGuardian failed on PR #116 for exactly this (benign; `verify` is the only required
+  check, so it never blocked). Extend the GitGuardian ignore to `src/scan/calibration.test.ts` (or
+  mark those incidents), then confirm+close #70.
+- **Vercel 404 / preview-deploy fail:** still the `harvey` project Root Directory (set to
+  `intake-site`) + `RESEND_API_KEY`. PR #121's Vercel preview deploy failed for this same
+  project-level reason (not a code regression — `verify` was green); merged on the required check.
+- **Cross-repo GitGuardian (2026-07-09):** no other repo needs a path exclusion; ATC's only
+  realistic committed secret is a fake Svix doc-example `whsec_` in two resend webhook tests.
 
 ## Deferred / not agent-executable
 #4 Tier-2 (gated on demand). #10–13 business/legal/GTM. #2 epic. #14 ATC folder removal (atc repo).
@@ -48,7 +63,9 @@ Anthropic ModelClient), #103 (Supabase storage adapter + Auth). #54/#94/#86/#73/
 ## Locked product decisions (memory: `product-shape-decisions.md`)
 Free count/grade = high-precision findings only + M3 descriptive map. Review/connected tier scanned
 but asserted only in the paid report after verification. M6 paid-only. Gate discipline (#61): no rule
-ships/counts unless it catches its positive AND clears its benign negative.
+ships/counts unless it catches its positive AND clears its benign negative. **Credibility cap
+(`mechanical-toolchain.md` §7): a single wrong "Critical" is credibility-fatal — the 61 high classes
+were each gated exact/unambiguous; version-match ≠ exploitable, so the paid report still triages.**
 
 ## Resuming live validation (Docker down — colima stopped)
 `colima start` → `supabase start -x vector,analytics` + `supabase db reset` in `targets/calibration`.
