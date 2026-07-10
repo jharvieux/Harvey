@@ -164,11 +164,11 @@ firing rule differs. The `ghp_` GitHub PAT fake and all high-tier prefix/claim-b
 | N-DB-URL-LOCAL | `README.md:53` (`postgres://postgres:postgres@127.0.0.1`) | Standard local Supabase dev string, not a committed credential. `harvey-db-uri-credentials` allowlists loopback hosts (`localhost`/`127.0.0.1`). |
 | N-ENV-EXAMPLE `[reused, also covers P-ENV-COMMITTED]` | `.env.example` | Documented placeholders, not secrets — already in the base corpus. Doubles as `P-ENV-COMMITTED`'s negative (a committed placeholder-only env file vs. the committed live-value `.env`) rather than duplicating a fixture; `P-ENV-COMMITTED`'s corpus entry uses the `.env:` location (colon included) specifically so it can't be cross-attributed a finding from `.env.example` or `.env.local`. |
 
-**Deferred to a later batch (spec §B1 rows not built here, tracked follow-ups):**
-`P-SECRET-GIT-HISTORY` (a secret
-added+removed across commits — the TruffleHog git-history pass only runs against a repo **root**,
-not the `targets/calibration` subdirectory, so it can't be validated by this harness as-is;
-needs a dedicated single-repo history fixture).
+**The former "Deferred to a later batch" row is now resolved:** `P-SECRET-GIT-HISTORY` is
+resolved by #129 via a **dedicated validation path outside the CORPUS matrix above**, since
+TruffleHog's git-history pass needs a clonable repo root and `targets/calibration` is a
+subdirectory — see "Git-history secret gate (#129)" below. (`P-ENV-COMMITTED`, the B1 row's other
+former deferral, is now built above as #130.)
 
 ### B1 live result (2026-07-09, static binaries: gitleaks 8.30.1, trufflehog 3.95.8, no Docker)
 
@@ -180,6 +180,26 @@ the publishable key and loopback DB URI are gitleaks-allowlisted (silent), the A
 stopword-allowlisted (silent), and the test-mode Stripe key draws a review hit only (triaged out).
 TruffleHog contributes nothing (every planted key is a dead fake, `--only-verified`), exactly as
 scored. `pnpm verify` (offline) is green via recorded gitleaks output in `calibration.test.ts`.
+
+### Git-history secret gate (#129) — P-SECRET-GIT-HISTORY
+
+TruffleHog's git-history pass (`trufflehog git`) only works against a clonable repo **root**;
+`targets/calibration` is a subdirectory of this repo, so a fixture planted there is invisible to
+that pass the way a real client repo's history would be. Instead of trying to force the class into
+the subdirectory corpus, it gets its own validation path: `src/scan/git-history-secret-gate.ts`
+builds a throwaway git repo in a temp dir **at runtime** (deterministic, no network —
+`--no-verification` skips every live provider call, which a FAKE secret could never pass anyway),
+commits a fake GitHub PAT then removes it in the next commit (still recoverable from history), and
+commits+removes a benign non-secret value the same way. It's wired into `pnpm validate:calibration`
+(runs after the main coverage matrix, folded into the same exit code) rather than duplicated as a
+separate npm script — trufflehog is already a required binary for that command. Unit-tested
+offline in `src/scan/git-history-secret-gate.test.ts`: the pure scoring function against recorded
+TruffleHog output, and the fixture-building git plumbing itself (no trufflehog binary needed for
+that half).
+
+Live result (2026-07-10, trufflehog 3.95.9): `pnpm validate:calibration` — **P-SECRET-GIT-HISTORY
+caught (1 hit, detector Github, recovered from the "add integration token" commit after the file
+was removed at HEAD); N-GIT-HISTORY-BENIGN clear (0 hits on the benign add/remove) — GATE PASS.**
 
 ### Scan-scope guard (issue #101) — N-UNTRACKED-ENV
 
@@ -1359,6 +1379,16 @@ signature — `verifyGitHubSignature`/`jwtVerify`/`verifyResendSignature` (x2)
 matches as well as `verifyJwt`) — this is the "genuinely public, signature-verified" category the
 issue's acceptance criteria names explicitly, distinct from the named-guard-helper class but
 covered by the same regex family. The ATC clone was scanned read-only; not modified.
+
+### #129/#130 close-out — B1 secrets deferred rows resolved
+
+`P-ENV-COMMITTED` (#130, see §B1 above) and `P-SECRET-GIT-HISTORY` (#129, see "Git-history secret
+gate" above) are both built, closing out B1's last two deferred rows. `pnpm validate:calibration`
+(2026-07-10, gitleaks 8.30.1, trufflehog 3.95.9, semgrep 1.164.0, osv-scanner 2.3.8, no Docker):
+**positives caught 142/142 static (62 at high/free-count, 15 connected-tier N/A); negatives
+cleared 109/109; zero free-count false positives; git-history secret gate PASS — GATE PASS.** No
+regression on any prior batch (high-tier count moved 61 → 62 for `P-ENV-COMMITTED`; the
+git-history gate is additive, outside the CORPUS matrix).
 
 ---
 
