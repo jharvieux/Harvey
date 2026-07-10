@@ -18,3 +18,22 @@ create policy user_files_select_authenticated on storage.objects
 create policy user_files_select_own on storage.objects
   for select
   using (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- #138 — P-STORAGE-UPLOAD-CHECK-TRUE: an INSERT policy with no check at all. Any authenticated
+-- caller can upload to any bucket, any path — WITH CHECK(true) is a no-op guard. Code-side
+-- upload-limit absence is already covered by P-UPLOAD-NO-LIMIT (b14-applogic.entries.ts); this
+-- is the policy-body shape.
+create policy user_files_insert_open on storage.objects
+  for insert
+  with check (true);
+
+-- N-STORAGE-UPLOAD-OWNERSHIP-MIME — benign lookalike: ownership-scoped AND mime-type-restricted.
+-- Uploads are confined to the caller's own folder and to the bucket's allowed_mime_types
+-- (config.toml), mirrored here in the check expression. Contrast P-STORAGE-UPLOAD-CHECK-TRUE.
+create policy user_files_insert_own on storage.objects
+  for insert
+  with check (
+    bucket_id = 'user-files'
+    and (storage.foldername(name))[1] = auth.uid()::text
+    and (metadata ->> 'mimetype') = any (array['image/png', 'image/jpeg', 'application/pdf'])
+  );

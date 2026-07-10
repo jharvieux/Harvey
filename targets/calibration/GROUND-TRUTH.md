@@ -1059,12 +1059,14 @@ false positives.
 | id | location | class | tier |
 |---|---|---|---|
 | P-STORAGE-AUTH-NOT-OWNER `[#137]` | `supabase/migrations/20260710000001_b15_storage_secdef_semantic.sql` (`user_files_select_authenticated`) | `storage.objects` SELECT policy `USING (auth.role() = 'authenticated')` — checks login, not ownership | review |
+| P-STORAGE-UPLOAD-CHECK-TRUE `[#138]` | same file (`user_files_insert_open`) | `storage.objects` INSERT policy `WITH CHECK (true)` — unrestricted upload to any bucket/path. Code-side is `P-UPLOAD-NO-LIMIT` (B14). | review |
 
 ### B15 negatives — benign lookalikes (must NOT be flagged in the free count)
 
 | id | location | why benign |
 |---|---|---|
 | N-STORAGE-OWNERSHIP-SCOPED | same file (`user_files_select_own`) | `USING (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text)` — the standard one-folder-per-user ownership pattern. No mechanical rule reads `storage.objects` policy bodies at all — trivially silent. |
+| N-STORAGE-UPLOAD-OWNERSHIP-MIME | same file (`user_files_insert_own`) | `WITH CHECK (... foldername ownership ... and mimetype = any (allowed list))` — ownership-scoped and mime-restricted, mirroring the bucket's `allowed_mime_types` (`config.toml`). No mechanical rule reads `storage.objects` bodies — trivially silent. |
 
 ---
 
