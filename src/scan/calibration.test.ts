@@ -110,6 +110,11 @@ describe("Batch B1 secrets corpus (recorded gitleaks output → tier mapping)", 
     { RuleID: "private-key", File: "certs/key.pem", StartLine: 1, Match: "-----BEGIN PRIVATE KEY-----" },
     { RuleID: "supabase-service-role-jwt", File: "prebuilt-bundle/chunk.4f2a.js", StartLine: 7, Match: '"role":"service_role"' },
     { RuleID: "harvey-db-uri-credentials", File: ".env.local", StartLine: 19, Match: "postgres://appuser:pw@db.calibrationref01.supabase.co" },
+    // P-ENV-COMMITTED (#130): a committed bare .env carrying two live-shaped secrets at once —
+    // distinct from .env.local above (P-ENV-COMMITTED's corpus entry location " .env:" only
+    // matches a root file literally named ".env", not ".env.local"/".env.example"/"docker.env").
+    { RuleID: "supabase-service-role-jwt", File: ".env", StartLine: 9, Match: '"role":"service_role"' },
+    { RuleID: "harvey-db-uri-credentials", File: ".env", StartLine: 13, Match: "mongodb+srv://appuser:pw@cluster0.calibrationref01.mongodb.net" },
     // The 4 provider keys below are DEFANGED in the committed fixtures (real provider shapes trip
     // GitHub push protection), so the committed catch is generic-api-key with the provider word in
     // the var name; the match keyword resolves against that.
@@ -134,12 +139,12 @@ describe("Batch B1 secrets corpus (recorded gitleaks output → tier mapping)", 
     }
   });
 
-  it("promotes only the ~100%-precision rules to the free count (5 high, 6 review)", () => {
+  it("promotes only the ~100%-precision rules to the free count (6 high, 6 review)", () => {
     const m = buildCoverageMatrix(findings, secretsEntries);
     const positives = secretsEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
     expect(m.positivesCaughtHigh).toBe(positives.filter((e) => e.expectedTier === "high").length);
-    expect(m.positivesCaughtHigh).toBe(5);
+    expect(m.positivesCaughtHigh).toBe(6);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });

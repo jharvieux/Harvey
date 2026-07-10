@@ -20,6 +20,13 @@ export const secretsEntries: CorpusEntry[] = [
   { id: "P-GH-TOKEN", kind: "positive", cls: "Hardcoded GitHub PAT", location: "deploy.js", match: ["github", "ghp_"], expectedTier: "review", note: "ghp_ token in scripts/deploy.js (fake, valid-shape; push protection did not block it). gitleaks github-pat pattern; unverifiable → review." },
   { id: "P-SENDGRID-KEY", kind: "positive", cls: "Hardcoded SendGrid API token", location: "email.js", match: ["sendgrid"], expectedTier: "review", note: "SENDGRID_API_KEY literal in lib/email.js. VALUE DEFANGED (real SG.xxx.xxx trips push protection); committed catch is gitleaks generic-api-key, the sendgrid-api-token pattern validated pre-commit. Unverifiable → review." },
   { id: "P-JWT-SIGNING-SECRET", kind: "positive", cls: "Hardcoded JWT/session signing secret", location: "auth.js", match: ["generic-api-key"], expectedTier: "review", note: "High-entropy signing secret literal fed to jwt.sign in lib/auth.js (fake). gitleaks generic-api-key (literal-secret heuristic) → review; a provider-agnostic app secret." },
+  // #130: location uses ".env:" (trailing colon, gitleaks locations are "path:line") rather
+  // than bare ".env", so the substring match can't also credit findings from .env.local or
+  // .env.example (both have "." not ":" right after "env"). ".env:" alone would still
+  // substring-match "supabase/docker.env:N" (P-SB-DEFAULT-JWT-SECRET / N-SB-JWT-ROTATED), but
+  // that fixture's only findings are about a JWT SIGNING secret and never carry either match
+  // keyword below, so the required keyword match still isolates this entry (verified live).
+  { id: "P-ENV-COMMITTED", kind: "positive", cls: "Committed bare .env with multiple live-shaped secrets", location: ".env:", match: ["service_role", "harvey-db-uri-credentials"], expectedTier: "high", note: "A committed bare .env (not .env.local, and not gitignore-excluded — force-added like .env.local's B1 fixtures) carrying a decoded service_role JWT claim plus a second live-shaped DB URI in the same file. Distinct from P-DB-URL-PASSWORD (a single credential in .env.local): this proves the committed-.env-with-multiple-live-values shape. Its negative is N-ENV-EXAMPLE (.env.example, already in the base corpus) — reused rather than duplicated." },
 
   // --- NEGATIVES (must NOT be flagged in the free count) ---
   { id: "N-STRIPE-PK-PUBLISHABLE", kind: "negative", cls: "Stripe publishable key is public", location: ".env.local", match: ["publishable"], note: "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_... is public by design (like the anon key). gitleaks allowlist (pk_(live|test)_ regexTarget=line) suppresses every rule on the line — cleared, not flagged." },
