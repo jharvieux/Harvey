@@ -193,3 +193,179 @@ rules:
       - pattern-either:
           - pattern: "{ ..., rejectUnauthorized: false, ... }"
           - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+
+  # ---- Batch B11 (#71) — crypto-API misuse & JWT-verify options (roadmap §3c) ----
+
+  # createCipher/createDecipher (no explicit IV): the legacy API derives key+IV from the passphrase
+  # via a weak MD5-based KDF, so the IV is fixed for a given passphrase (IV reuse). Deprecated in
+  # Node for exactly this reason. Exact-API name match → high (createCipheriv/createDecipheriv, the
+  # correct IV-taking calls, are a different identifier and do not match).
+  - id: harvey-crypto-createcipher
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      crypto.createCipher()/createDecipher() derive the key and IV from the passphrase with a weak
+      KDF and reuse the IV for a given passphrase. Use createCipheriv()/createDecipheriv() with a
+      key and a freshly-random IV per encryption.
+    patterns:
+      - pattern-either:
+          - pattern: crypto.createCipher(...)
+          - pattern: crypto.createDecipher(...)
+
+  # crypto.pseudoRandomBytes(): an alias that does NOT draw from the CSPRNG — predictable output,
+  # unsafe for tokens/secrets/keys/IVs. Exact-API name match → high (randomBytes is a different
+  # identifier).
+  - id: harvey-crypto-pseudorandombytes
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      crypto.pseudoRandomBytes() is not cryptographically secure (it does not use the CSPRNG) and
+      its output is predictable. Use crypto.randomBytes() for any security-sensitive value.
+    patterns:
+      - pattern: crypto.pseudoRandomBytes(...)
+
+  # jwt.verify() with NO algorithms allowlist (2-argument form). With an asymmetric signing key an
+  # attacker can forge an HS256 token that HMACs the public key bytes and it verifies — RS256/HS256
+  # algorithm confusion. The 2-arg pattern is exact (a 3-arg verify with an options object does not
+  # match), so → high.
+  - id: harvey-jwt-verify-noalg
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      jwt.verify() is called with no `algorithms` allowlist. With an asymmetric key this enables the
+      RS256/HS256 algorithm-confusion bypass. Always pass { algorithms: ['<your-alg>'] }.
+    patterns:
+      - pattern-either:
+          - pattern: jwt.verify($T, $K)
+          - pattern: jsonwebtoken.verify($T, $K)
+
+  # jwt.verify(..., { ignoreExpiration: true }) — expired tokens are honoured, defeating token
+  # expiry/revocation. The explicit literal option is an unambiguous, ~100%-precision signal → high.
+  - id: harvey-jwt-ignore-exp
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      jwt.verify() is called with { ignoreExpiration: true } — expired tokens are accepted, so a
+      revoked/stale session token is honoured forever. Remove the option (expiry is enforced by default).
+    patterns:
+      - pattern-either:
+          - pattern: "jwt.verify($T, $K, { ..., ignoreExpiration: true, ... })"
+          - pattern: "jsonwebtoken.verify($T, $K, { ..., ignoreExpiration: true, ... })"
+
+  # Plaintext WebSocket URL (ws://): the connection — session token and all messages — travels
+  # unencrypted, open to on-path interception/tampering. The scheme literal is anchored to ws:// so
+  # the secure wss:// scheme does not match → high.
+  - id: harvey-insecure-ws-url
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      A WebSocket is opened over the plaintext ws:// scheme — traffic (including any auth token) is
+      unencrypted and tamperable by an on-path attacker. Use wss:// (TLS).
+    patterns:
+      - pattern: new WebSocket($URL, ...)
+      - metavariable-regex:
+          metavariable: $URL
+          regex: ^["']ws://
+
+  # AES-GCM decipher with no authTagLength option (3-argument form): the auth-tag length is not
+  # pinned, so a short/truncated tag is silently accepted, weakening GCM's integrity guarantee.
+  # Review — a 3-arg GCM decipher is a strong smell but the default (16) is often fine, so it needs
+  # human confirmation. The 4-arg options form (authTagLength set) does not match.
+  - id: harvey-gcm-no-authtaglength
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      AES-GCM createDecipheriv() is called with no authTagLength option, so the authentication-tag
+      length is not pinned and a truncated tag can be accepted. Pass { authTagLength: 16 }.
+    patterns:
+      - pattern: crypto.createDecipheriv($ALGO, $KEY, $IV)
+      - metavariable-regex:
+          metavariable: $ALGO
+          regex: (?i)^["'].*gcm
+
+  # AEAD (GCM/CCM/ChaCha20-Poly1305) decipher whose update() result is returned with no .final()
+  # call — for an authenticated cipher, .final() is what verifies the tag, so skipping it accepts a
+  # forged/tampered ciphertext. Review — the "returns update() directly" shape is heuristic (final()
+  # could live on another path a static rule can't see).
+  - id: harvey-aead-decipher-no-final
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      An AEAD decipher returns decipher.update() directly without calling decipher.final() — .final()
+      is what verifies the authentication tag, so a forged/tampered ciphertext is accepted. Always
+      call .final() and let it throw on a bad tag.
+    patterns:
+      - pattern: |
+          $D = crypto.createDecipheriv($ALGO, ...);
+          ...
+          return $D.update(...);
+      - metavariable-regex:
+          metavariable: $ALGO
+          regex: (?i)^["'].*(gcm|ccm|chacha20-poly1305|ocb)
+
+  # jwtDecode()/jwt_decode() (the client-side `jwt-decode` package): reads claims WITHOUT verifying
+  # the signature, and the result commonly drives a client render/authz gate — a forged token unlocks
+  # UI. Review — every jwtDecode() call is flagged heuristically (adjacent to harvey-jwt-decode-
+  # noverify, which covers the server-side jwt.decode()/jsonwebtoken.decode()).
+  - id: harvey-jwt-decode-render
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      jwtDecode() reads the token's claims WITHOUT verifying the signature. If a claim (e.g. `role`)
+      drives what the client renders or an authz gate, anyone can forge a token to unlock it. Base
+      authorization on a signature-verified server session, not a client-side decode.
+    patterns:
+      - pattern-either:
+          - pattern: jwtDecode(...)
+          - pattern: jwt_decode(...)
+
+  # createHmac() with a hardcoded string-literal key: anyone with source/bundle access can forge
+  # valid MACs. Review — a committed literal is a strong smell but can be a public/test constant, so
+  # it needs human confirmation (a key read from process.env / a secret manager does not match).
+  - id: harvey-hmac-hardcoded-key
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      crypto.createHmac() is keyed with a hardcoded string literal — anyone with source/bundle access
+      can forge valid signatures. Load the HMAC key from the environment / a secret manager.
+    patterns:
+      - pattern: crypto.createHmac($ALGO, $KEY)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: ^["'].+["']$
