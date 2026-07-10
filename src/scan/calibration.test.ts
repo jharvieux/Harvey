@@ -9,7 +9,9 @@ import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
 import { b11CryptoEntries } from "./calibration/b11-crypto.entries.js";
 import { b12NextconfigEntries } from "./calibration/b12-nextconfig.entries.js";
 import { b13SupaEntries } from "./calibration/b13-supa.entries.js";
+import { b14AppLogicEntries } from "./calibration/b14-applogic.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
+import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
 import { checkPublicDirSensitive, parseSemgrepFindings, type SemgrepResult } from "./semgrep.js";
@@ -474,6 +476,45 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     expect(rls).toHaveLength(1);
     expect(rls[0]!.evidence).toContain("public.audit_logs");
     expect(rls[0]!.precisionTier).toBe("high");
+  });
+});
+
+describe("Batch B14 app-logic heuristics corpus (real leftover-auth greps → tier mapping)", () => {
+  // leftover-auth is a pure in-process grep (no binary), so run the REAL classifyLeftoverAuth over
+  // the fixture contents that mirror targets/calibration — no recorded output needed. Each B14
+  // check emits a review-tier finding; the negatives draw nothing at all (true silence, not just
+  // "no free-count FP"). Mirrors the live `pnpm validate:calibration` run.
+  const fixtures: { path: string; content: string }[] = [
+    { path: "pages/api/promote.js", content: "if (req.headers[\"x-role\"] === \"admin\") { await admin.from(\"users\").update({ role: \"admin\" }).eq(\"id\", req.body.userId); }" },
+    { path: "pages/api/promote-safe.js", content: "const { data: { user } } = await admin.auth.getUser(t); if (user?.app_metadata?.role === \"admin\") { await admin.from(\"users\").update({ role: \"admin\" }); }" },
+    { path: "pages/api/checkout.js", content: "await stripe.paymentIntents.create({ amount: req.body.amount, currency: \"usd\" });" },
+    { path: "pages/api/checkout-safe.js", content: "await stripe.paymentIntents.create({ amount: product.price_cents * req.body.quantity, currency: \"usd\" });" },
+    { path: "pages/api/webhooks/inbound.js", content: "const event = req.body; await admin.from(\"subscriptions\").update({ status: event.status }).eq(\"customer_id\", event.customerId);" },
+    { path: "pages/api/webhooks/inbound-signed.js", content: "const event = stripe.webhooks.constructEvent(req.body, req.headers[\"stripe-signature\"], process.env.STRIPE_WEBHOOK_SECRET); await admin.from(\"subscriptions\").update({ status: event.data.object.status });" },
+    { path: "lib/audit-login.js", content: "export function auditLogin(email, password) { console.log(\"login attempt\", { email, password }); }" },
+    { path: "lib/audit-login-safe.js", content: "export function auditLogin(email, success) { console.log(\"login attempt\", { email, success }); }" },
+    { path: "pages/api/upload.js", content: "const buffer = Buffer.from(req.body); await admin.storage.from(\"uploads\").upload(req.query.name, buffer);" },
+    { path: "pages/api/upload-safe.js", content: "const ALLOWED_MIME = [\"image/png\"]; const length = Number(req.headers[\"content-length\"]); if (!ALLOWED_MIME.includes(ct) || length > MAX) return; await admin.storage.from(\"uploads\").upload(req.query.name, buffer, { contentType: ct });" },
+  ];
+  const findings = fixtures.flatMap((f) => classifyLeftoverAuth(f));
+
+  it("catches every B14 positive at review and leaves every B14 negative fully silent", () => {
+    for (const e of b14AppLogicEntries) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe("review");
+      else expect(row.reviewFlagged, `${e.id} must draw no finding at all`).toBe(false);
+    }
+  });
+
+  it("promotes none of the app-logic heuristics to the free count (0 high, 5 review)", () => {
+    const m = buildCoverageMatrix(findings, b14AppLogicEntries);
+    const positives = b14AppLogicEntries.filter((e) => e.kind === "positive");
+    expect(m.positivesCaught).toBe(positives.length);
+    expect(m.positivesCaughtHigh).toBe(0);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(5);
+    expect(m.negativesCleared).toBe(m.negativesTotal);
+    expect(m.ok).toBe(true);
   });
 });
 

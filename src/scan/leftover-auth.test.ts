@@ -67,4 +67,39 @@ describe("classifyLeftoverAuth", () => {
     const ids = findings.map((f) => f.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
+
+  // --- B14 app-logic heuristics (all review tier) ---
+  const has = (fs: ReturnType<typeof classifyLeftoverAuth>, tax: string) => fs.some((f) => f.taxonomy === tax);
+
+  it("flags an authz decision made from a client-controlled header, not a session role", () => {
+    expect(has(classifyLeftoverAuth({ path: "pages/api/p.js", content: "if (req.headers['x-role'] === 'admin') grant();" }), "Authz decision from client-controlled input")).toBe(true);
+    expect(has(classifyLeftoverAuth({ path: "pages/api/p.js", content: "if (user.app_metadata.role === 'admin') grant();" }), "Authz decision from client-controlled input")).toBe(false);
+  });
+
+  it("flags a payment amount taken from the request, not recomputed from the DB", () => {
+    expect(has(classifyLeftoverAuth({ path: "pages/api/c.js", content: "stripe.paymentIntents.create({ amount: req.body.amount });" }), "Client-supplied payment amount trusted by server")).toBe(true);
+    expect(has(classifyLeftoverAuth({ path: "pages/api/c.js", content: "stripe.paymentIntents.create({ amount: price * req.body.qty });" }), "Client-supplied payment amount trusted by server")).toBe(false);
+  });
+
+  it("flags a password/secret written to the console, not an outcome-only log", () => {
+    expect(has(classifyLeftoverAuth({ path: "lib/a.js", content: "console.log('login', { email, password });" }), "Sensitive value logged to console")).toBe(true);
+    expect(has(classifyLeftoverAuth({ path: "lib/a.js", content: "console.log('login', { email, success });" }), "Sensitive value logged to console")).toBe(false);
+  });
+
+  it("flags a storage upload with no size/MIME limit, and clears one that is guarded", () => {
+    expect(has(classifyLeftoverAuth({ path: "pages/api/u.js", content: "await sb.storage.from('x').upload(name, buf);" }), "Upload to storage with no size/MIME limit")).toBe(true);
+    expect(has(classifyLeftoverAuth({ path: "pages/api/u.js", content: "if (len > MAX_SIZE) return; await sb.storage.from('x').upload(name, buf, { contentType });" }), "Upload to storage with no size/MIME limit")).toBe(false);
+  });
+
+  it("flags a webhook route doing a privileged write with no signature check", () => {
+    expect(has(classifyLeftoverAuth({ path: "pages/api/webhooks/in.js", content: "await admin.from('t').update({ x: req.body.x });" }), "Inbound webhook with no signature verification")).toBe(true);
+  });
+
+  it("does not flag a webhook route that verifies an HMAC signature first", () => {
+    expect(has(classifyLeftoverAuth({ path: "pages/api/webhooks/in.js", content: "const e = stripe.webhooks.constructEvent(b, sig, secret); await admin.from('t').update({ x: 1 });" }), "Inbound webhook with no signature verification")).toBe(false);
+  });
+
+  it("does not flag a non-webhook admin-write route as a missing-signature webhook", () => {
+    expect(has(classifyLeftoverAuth({ path: "pages/api/settings/delete.js", content: "await admin.from('settings').delete().eq('key', req.body.key);" }), "Inbound webhook with no signature verification")).toBe(false);
+  });
 });
