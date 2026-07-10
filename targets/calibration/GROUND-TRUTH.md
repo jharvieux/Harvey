@@ -1043,6 +1043,38 @@ new `leftover-auth.test.ts` heuristic unit tests.
 
 ---
 
+## Batch B15 (#123, issues #131-#136) — Next.js/Supabase authz-shape classes (semantic tier)
+
+Six classes from the roadmap's §4a excluded-tier backlog (`docs/design/corpus-roadmap-to-100.md`
+§4a "Semantic (LLM/whole-program — paid M-series)"): each needs request+identity context, matcher-
+vs-route-inventory reasoning, or control-flow reasoning a grep/AST rule can't do reliably, so none
+is mechanically detected — these are LLM/paid-tier (M-series) detection, never promoted into the
+free count. Unlike every other `review`-tier batch in this file (B9-B14), **no new scanner or rule
+was added**: this batch seeds the corpus/GROUND-TRUTH answer key with planted vulns + benign
+lookalikes so the paid-tier LLM pass has fixtures to be measured against later (tracked as a
+follow-up, per each issue's acceptance criteria — not a blocker for closing the fixture work). Built
+incrementally, one issue per commit. Answer key: `src/scan/calibration/b15-nextjs-authz.entries.ts`.
+
+### B15 positives — planted bugs (semantic tier; NOT expected to be caught by the offline mechanical gate)
+
+| id | location | class | issue |
+|---|---|---|---|
+| P-BOLA-BODY-OWNER | `pages/api/billing/invoice.js:14` | route scopes the query to `req.body.tenantId` (client-supplied) instead of the session's tenant id — object/function-level authz gap (BOLA/BFLA) | #131 |
+
+### B15 negatives — benign lookalikes (must NOT be flagged in the free count; here also fully silent — no existing rule targets these shapes)
+
+| id | location | why benign |
+|---|---|---|
+| N-BOLA-SESSION-OWNER | `pages/api/billing/invoice-safe.js` | query scoped to `session.user.tenantId`; `req.body.tenantId` is never read. |
+
+### B15 live result (2026-07-10, static binaries: semgrep, gitleaks, trufflehog, osv-scanner; no Docker)
+
+`pnpm validate:calibration` (after #131): **GATE PASS.** N-BOLA-SESSION-OWNER is fully silent (no
+finding at all) and P-BOLA-BODY-OWNER is a non-fatal review-tier recall gap (expected — no
+mechanical rule targets it). `pnpm verify` (offline) is green.
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
