@@ -17,21 +17,58 @@
 
 ## 1. Runbook steps
 
-1. **Install the reference-harness skills** into the working environment:
-   `customize`, `vuln-scan`, `triage`, `threat-model`, `patch` (from
-   `anthropics/defending-code-reference-harness`). Set the model tier for the pass:
-   `export CLAUDE_CODE_SUBAGENT_MODEL=<model-id>` — see §6 for scan-vs-triage model choice.
+1. **Verify the reference-harness skills are available** — `customize`, `vuln-scan`, `triage`,
+   `threat-model`, `patch`. **Verified install path (2026-07-09):** in this environment they are
+   *not* installed via the Claude Code plugin/marketplace system — they live as personal,
+   user-scope skills at `~/.claude/skills/<name>/SKILL.md` (confirmed present: `customize`,
+   `patch`, `quickstart`, `threat-model`, `triage`, `vuln-scan`, plus a shared `~/.claude/skills/_lib/`
+   helper directory) and are invoked directly, e.g. `/threat-model bootstrap <repo>`. Before
+   relying on them, confirm with `ls ~/.claude/skills/` (or the project's own `.claude/skills/`, if
+   the operator's setup installs them per-project instead) — do not assume a specific install
+   command works until you've checked. **Could not independently confirm** the origin repo name
+   `anthropics/defending-code-reference-harness` from anything on disk in this environment (no
+   plugin manifest, marketplace record, or in-repo URL references it) — the skill content matches
+   that package's documented behavior (canary target, vuln-pipeline references in `quickstart`),
+   but if that repo is the real upstream source, the actual install mechanism (clone + copy/symlink
+   into `~/.claude/skills/` or a project's `.claude/skills/`) is unverified from this operator's
+   seat. Flag this uncertainty to whoever set up the environment rather than asserting a specific
+   install command.
+   **Known operational gotcha:** the skills' own instructions invoke a checkpoint helper via the
+   *relative* path `.claude/skills/_lib/checkpoint.py` (assuming a project-local install). In a
+   user-scope install like this one, that path does not resolve from a repo's working directory —
+   use the absolute path (`~/.claude/skills/_lib/checkpoint.py`) instead when running any of these
+   skills' Bash checkpoint calls.
+   Set the model tier for the pass: `export CLAUDE_CODE_SUBAGENT_MODEL=<model-id>` — see §6 for
+   scan-vs-triage model choice (this env var's effect was not independently verified either — see
+   `docs/runbooks/dry-run-calibration.md` §4).
 2. **Obtain the client repo, read-only.** Confirm scope explicitly before touching code: which
    apps/directories are in scope, which branch, and the commit SHA under review — record all three
    in the report's §0 cover section. Read-only access only; never request write access for a static
    pass.
 3. **`/threat-model bootstrap <repo>`** → establishes focus areas (tenancy model, auth provider,
    the surfaces that matter for *this* app) before the scan runs blind.
-4. **`/vuln-scan <repo>/src --extra docs/scan-extras.txt`** → raw findings
+4. **`/vuln-scan <repo's source root> --extra docs/scan-extras.txt`** → raw findings
    (`VULN-FINDINGS.{md,json}`). This is the high-recall pass — over-flagging here is fine and
-   expected; triage is what fixes it.
+   expected; triage is what fixes it. Use the app's actual source root, not literally `src` — plenty
+   of real Pages Router apps (and this runbook's own calibration target) have no `src/` directory at
+   all. Add `--no-score` on large scans to skip vuln-scan's own per-finding confidence pass if the
+   candidate count is high (dozens+) and time-boxed; every finding still reaches `/triage`
+   unfiltered either way. **Known blind spot, verified 2026-07-09:** `/vuln-scan`'s built-in review
+   brief hardcodes "open redirect" into its own DO-NOT-REPORT list, independent of
+   `docs/scan-extras.txt` — an open-redirect bug will not surface from this stage even if a
+   subagent's focus area covers the exact route, unless `scan-extras.txt` is changed to explicitly
+   override that default (it currently does not).
 5. **`/triage VULN-FINDINGS.json --fp-rules docs/fp-rules.txt`** → verified, deduped, re-ranked
-   findings. See §4 for the methodology this step runs.
+   findings. See §4 for the methodology this step runs. **Known blind spot, verified 2026-07-09:**
+   `/triage`'s own built-in verifier exclusion list separately (and redundantly) classifies open
+   redirect as a "low-impact nuisance" false positive, so even a finding that somehow survived step
+   4 would very likely still be dropped here. If open-redirect coverage matters for an engagement,
+   don't rely on this pipeline for it as shipped — flag it via the questionnaire (§3) or a manual
+   check instead. Race-condition findings (lost-update/TOCTOU classes) are also borderline: the
+   triage verifier has a built-in "theoretical-only race" exclusion rule, so a genuine
+   concurrent-request bug needs a concrete "two ordinary requests race" story in the finding to
+   survive — it did survive in the one live-verified case we have (a counter-increment race), but
+   treat it as a class worth a manual second look, not an automatic catch.
 6. **Map confirmed findings into `docs/audit-report-skeleton.md`**, ranked by blast radius.
    **Hand-verify every Critical/High before it ships** — the headline cross-tenant question
    ("can one tenant reach another tenant's data — yes/no, and how") must be answered with a repro,
@@ -191,7 +228,14 @@ actual choice and cost against the estimate for future pricing calibration.
 
 ### Deferred: live dry-run validation
 
-This runbook is written to be complete and copy-pasteable, but has **not** been executed end-to-end
-against a live sample repo as part of this change — that dry run (producing a real report from the
-skeleton against a public template or throwaway Supabase/Next.js repo, and recording actual
-per-stage token/$ cost for §7) is a manual follow-up, out of scope for this automated pass.
+**Update 2026-07-09 (issue #53):** step 1's install-path claim and steps 3-5's LLM pipeline
+(`/threat-model bootstrap` → `/vuln-scan --extra` → `/triage --fp-rules`) have now been run for
+real against `targets/calibration` and cross-checked against its `GROUND-TRUTH.md` answer key — see
+`docs/runbooks/dry-run-calibration.md` §10 for the full results (7 of 8 planted bugs caught,
+1 excluded by the pipeline's own built-in rules, not a coverage miss). The install-path correction
+and known-blind-spot notes above come directly from that run.
+
+Still deferred: this runbook has **not** been executed fully end-to-end producing a real client-shaped
+report from the skeleton (`docs/audit-report-skeleton.md`) against a throwaway Supabase/Next.js repo
+outside the calibration fixture, and per-stage token/$ cost (§7) has not yet been recorded from a real
+engagement-shaped run. Those remain a manual follow-up.

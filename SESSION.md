@@ -19,22 +19,15 @@ All mechanical batches merged. Answer key + Semgrep rules are per-batch modular
   runs a subset, not full Splinter → **#54** is what unlocks the connected coverage locally.
 
 ## Open agent-doable follow-ups
-- **#101** — zip/working-folder scan scoping (NOT a general blocker). A git clone / collaborator
-  invite (the primary path) carries only committed files, so gitignored `.env.local` / `.claude/worktrees/`
-  never appear — the noise seen against ATC was from scanning a local working checkout. The real case is
-  the runbook's **zip-export** option: a working-folder zip can carry `.env*`, `node_modules`, `.claude/`,
-  build output. Fix: prefer git-clone access; when a zip IS the target, normalize it (respect `.gitignore`
-  or an exclude list) before scanning. Git-history secret scanning still legitimately catches
-  committed-then-removed secrets in a clone.
-- **#102** epic-builder-web: live Anthropic ModelClient (seam present; MVP ships on scaffold). 
-- **#103** epic-builder-web: Supabase storage adapter + Supabase Auth (MVP is filesystem/single-instance).
-- **#53** the reference-harness `/threat-model`→`/vuln-scan`→`/triage` SKILLS aren't installed here;
-  pipeline verified via Harvey's own scanners against ATC instead. Installing the harness skills (or
-  keeping Harvey's own pipeline) is the remaining choice; #101 gates client-readiness either way.
+- **#53** — reference-harness skills (`vuln-scan`/`threat-model`/`triage`/`patch`/`customize`) now
+  INSTALLED to `~/.claude/skills/` (Apache-2.0). Load at session start → a fresh session can run the
+  full `/threat-model → /vuln-scan --extra docs/scan-extras.txt → /triage --fp-rules docs/fp-rules.txt`
+  pipeline against a **git clone** of a client repo. Open call: vendor them into the Harvey repo
+  (version-controlled with the venture, #14) vs. keep user-global.
 
-DONE this round (merged): #54 (Splinter wired into local scan), #94 (M3 adapter corrected to the real
-vitals schema, captured from a live ATC run), #86 (gate path-matcher), #73 (OSV dedup),
-#76 (epic-builder web UI MVP — internal tool, filesystem + scaffold model).
+DONE (merged): #101 (scan scopes to git-tracked files / zip exclude-list), #102 (live Anthropic
+ModelClient — sonnet-5 flagship / haiku-4.5 standard, behind the seam), #103 (Supabase storage
+adapter + Supabase Auth, RLS on both tables; hydrate-run-flush bridge). #54/#94/#86/#73/#76 also done.
 
 ## Operator / manual action items (not agent-executable)
 - **Vercel 404:** set the `harvey` project Root Directory to `intake-site` + add `RESEND_API_KEY`
