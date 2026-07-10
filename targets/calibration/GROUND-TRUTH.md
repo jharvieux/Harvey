@@ -1064,6 +1064,7 @@ incrementally, one issue per commit. Answer key: `src/scan/calibration/b15-nextj
 | P-MW-SOLE-AUTHZ | `pages/api/admin/dashboard.js:11` | reads `admin_metrics` with no session/role check of its own — relies entirely on `middleware.ts`, no defense in depth | #133 |
 | P-DRAFTMODE-NO-SECRET | `pages/api/preview/enable.js:8` | `draftMode().enable()` runs unconditionally, no secret/token check | #134 |
 | P-HOST-HEADER-URL | `lib/reset-link.js:11` | password-reset link built from `headers().get("host")` — attacker-controlled, enables reset-link poisoning | #135 |
+| P-CLIENT-RENDER-AUTHZ | `app/admin/page.tsx:11` + `components/AdminDashboardClient.jsx:8` | server fetches the full admin dataset unconditionally; the only gate is the client component's `if (!isAdmin) return null` — data already shipped in the RSC payload | #136 |
 
 ### B15 negatives — benign lookalikes (must NOT be flagged in the free count; here also fully silent — no existing rule targets these shapes)
 
@@ -1074,18 +1075,29 @@ incrementally, one issue per commit. Answer key: `src/scan/calibration/b15-nextj
 | N-MW-DEFENSE-IN-DEPTH | `pages/api/admin/dashboard-safe.js` | calls `getServerSession()` and checks the role itself before returning `admin_metrics`, in addition to middleware. |
 | N-DRAFTMODE-SECRET-CHECKED | `pages/api/preview/enable-safe.js` | validates `req.query.secret` against `process.env.PREVIEW_SECRET` before `draftMode().enable()` runs. |
 | N-HOST-HEADER-FIXED-ORIGIN | `lib/reset-link-safe.js` | builds the link from `process.env.NEXT_PUBLIC_SITE_URL`; `headers()`/Host is never read. |
+| N-SERVER-ROLE-CHECK | `app/admin/page-safe.tsx` | checks the role server-side and redirects BEFORE querying `admin_metrics` — the query never runs for a non-admin. |
 
 ### B15 adjacency note
 
-`P-MW-SOLE-AUTHZ` is a `SELECT`, not an insert/update/delete, so the existing `harvey-route-noauth`
-mutation rule does not fire on `pages/api/admin/dashboard.js` — keeps this class isolated from the
-B7 route-noauth pair.
+`P-CLIENT-RENDER-AUTHZ` shares a theme with the existing `P-SERVER-CLIENT-LEAK`
+(`app/documents/detail-page.tsx`) but is a distinct shape: `harvey-server-client-leak` requires an
+exact `const { $DATA } = await $C.from($T).select("*").eq($COL, $ID);` + `<$COMP {...$DATA} />`
+spread; `app/admin/page.tsx` uses no `.eq()` chain and passes `metrics={data}` as a named prop, not
+a spread, so that rule stays silent on this fixture (verified live below). `P-MW-SOLE-AUTHZ` is a
+`SELECT`, not an insert/update/delete, so the existing `harvey-route-noauth` mutation rule does not
+fire on `pages/api/admin/dashboard.js` — keeps this class isolated from the B7 route-noauth pair.
 
 ### B15 live result (2026-07-10, static binaries: semgrep, gitleaks, trufflehog, osv-scanner; no Docker)
 
-`pnpm validate:calibration` (after #131-#135): **GATE PASS.** All negatives so far are fully silent
-(no finding at all) and all positives so far are non-fatal review-tier recall gaps (expected — no
-mechanical rule targets them). `pnpm verify` (offline) is green.
+`pnpm validate:calibration`: **GATE PASS — zero free-count false positives; every high-tier rule
+fired on its positive.** All 6 B15 negatives are fully silent (no finding at all) and all 6 B15
+positives are reported as non-fatal review-tier recall gaps (expected — no mechanical rule targets
+them, including confirming `harvey-server-client-leak` stays silent on `app/admin/page.tsx`).
+Corpus totals after B15: **141/147 static positives caught (61 at high/free-count, 15 connected
+N/A); 115/115 static negatives cleared.** `pnpm verify` (offline) is green: 452 tests (no new tests
+were needed — `b15-nextjs-authz.entries.ts` is exercised by the existing whole-`CORPUS` tests in
+`calibration.test.ts`, which only assert entries are counted correctly, not caught, for entries
+with no matching rule).
 
 ---
 
