@@ -60,9 +60,14 @@ const RSC_RCE_FIXED_BY_MINOR: Record<string, string> = {
 // before reporting as a hard fact.
 const EOL_BELOW_MAJOR = 14;
 
-export function checkNextVersionCVEs(installedVersion: string): Finding[] {
+// `manifestPath` is the manifest's path relative to the scanned root ("package.json" for the
+// root manifest, "fixtures/<app>/package.json" for a secondary manifest), so a finding's
+// location identifies WHICH manifest it came from — needed once more than one manifest is
+// scanned (e.g. the calibration corpus's EOL/supported app fixtures).
+export function checkNextVersionCVEs(installedVersion: string, manifestPath = "package.json"): Finding[] {
   const findings: Finding[] = [];
   const [major, minor] = parseVersion(installedVersion);
+  const nextLocation = `${manifestPath} (next)`;
 
   const middlewareFix = MIDDLEWARE_BYPASS_FIXED_BY_MAJOR[major];
   if (middlewareFix && lt(installedVersion, middlewareFix)) {
@@ -73,7 +78,7 @@ export function checkNextVersionCVEs(installedVersion: string): Finding[] {
         severity: "Critical",
         category: "Dependency CVE",
         taxonomy: "Known-vulnerable dependency",
-        location: "package.json (next)",
+        location: nextLocation,
         evidence: `Installed next@${installedVersion} is below the fixed version ${middlewareFix} for the ${major}.x line. The x-middleware-subrequest header skips middleware entirely (GHSA-f82v-jwr5-mffw).`,
         impact: "If auth is enforced only in middleware.ts (the dominant pattern in vibe-coded apps) and the app is self-hosted (not Vercel, which is auto-patched), this is a full authorization bypass.",
         fix: `Upgrade next to >= ${middlewareFix}.`,
@@ -91,7 +96,7 @@ export function checkNextVersionCVEs(installedVersion: string): Finding[] {
         severity: "Critical",
         category: "Dependency CVE",
         taxonomy: "Known-vulnerable dependency",
-        location: "package.json (next)",
+        location: nextLocation,
         evidence: `Installed next@${installedVersion} is below the fixed version ${rscFix} for the ${major}.${minor} line (GHSA-9qr9-h5gf-34mp, CVSS 10, CISA KEV).`,
         impact: "Remote code execution via React Server Components; affects nearly every App Router app on the vulnerable range.",
         fix: `Upgrade next to >= ${rscFix} (and react-server-dom-* to the matching fixed release).`,
@@ -111,7 +116,7 @@ export function checkNextVersionCVEs(installedVersion: string): Finding[] {
         severity: "High",
         category: "Dependency CVE",
         taxonomy: "Known-vulnerable dependency",
-        location: "package.json (next)",
+        location: nextLocation,
         evidence: `Installed next@${installedVersion} falls in a vulnerable range for GHSA-c4j6-fc7j-m34r (CVSS 8.6).`,
         impact: "Framework-level SSRF via WebSocket upgrade handling; self-hosted Node deployments only.",
         fix: "Upgrade next to >= 15.5.16 (15.x line) or >= 16.2.5 (16.x line).",
@@ -128,7 +133,7 @@ export function checkNextVersionCVEs(installedVersion: string): Finding[] {
         severity: "Medium",
         category: "Dependency CVE",
         taxonomy: "EOL framework version",
-        location: "package.json (next)",
+        location: nextLocation,
         evidence: `Installed next major ${major} is below the ${EOL_BELOW_MAJOR}.x line still receiving security patches.`,
         impact: "No security patches for newly-discovered CVEs on this line; confirm current EOL status before treating as a hard commitment.",
         fix: `Upgrade to a supported next major (>= ${EOL_BELOW_MAJOR}).`,
@@ -137,6 +142,71 @@ export function checkNextVersionCVEs(installedVersion: string): Finding[] {
     );
   }
 
+  return findings;
+}
+
+// Curated exact-range checks for named non-Next dependency CVEs, kept independent of OSV for
+// the same reason as checkNextVersionCVEs: they read the DECLARED range from the manifest, so
+// they fire without a resolved lockfile and without OSV's DB, and they carry a hand-written
+// exploitability narrative. Each entry is a well-documented CVE with a clean affected range.
+// `tier` is "high" only when the affected range is crisp (a single "< fixed" boundary, no
+// backported-patch exceptions); an approximate range stays "review" per the free-count doctrine.
+interface CuratedDepCve {
+  name: string;
+  introduced?: string; // inclusive lower bound; omitted = all versions below `fixed`
+  fixed: string; // exclusive upper bound (first patched version)
+  id: string;
+  severity: Severity;
+  tier: "high" | "review";
+  summary: string;
+  fix: string;
+}
+
+const CURATED_DEP_CVES: CuratedDepCve[] = [
+  {
+    name: "minimist",
+    fixed: "1.2.6",
+    id: "CVE-2021-44906",
+    severity: "Critical",
+    tier: "high",
+    summary: "Prototype pollution (CVSS 9.8): a crafted argv key like `--__proto__.x` pollutes Object.prototype, corrupting every object in the process.",
+    fix: "Upgrade minimist to >= 1.2.6.",
+  },
+  {
+    name: "react-dom",
+    introduced: "16.0.0",
+    fixed: "16.4.2",
+    id: "CVE-2018-6341",
+    severity: "Medium",
+    tier: "review",
+    summary: "Cross-site scripting via ReactDOMServer when rendering an attacker-controlled attribute name. Range is approximate — the backported patch releases 16.0.1/16.1.2/16.2.1/16.3.3 sit inside the affected majors but are fixed, so this stays review-tier.",
+    fix: "Upgrade react-dom to >= 16.4.2 (or the backported patch for your minor line).",
+  },
+];
+
+export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestPath = "package.json"): Finding[] {
+  const findings: Finding[] = [];
+  for (const cve of CURATED_DEP_CVES) {
+    const declared = deps[cve.name];
+    if (!declared) continue;
+    const version = declared.replace(/^[\^~]/, "");
+    const inRange = (cve.introduced ? gte(version, cve.introduced) : true) && lt(version, cve.fixed);
+    if (!inRange) continue;
+    findings.push(
+      mechanicalFinding({
+        id: `DEP-${cve.id}`,
+        title: `${cve.name}@${version} vulnerable to ${cve.id}`,
+        severity: cve.severity,
+        category: "Dependency CVE",
+        taxonomy: "Known-vulnerable dependency",
+        location: `${manifestPath} (${cve.name})`,
+        evidence: `Declared ${cve.name}@${declared} falls in the ${cve.id} affected range (${cve.introduced ? `>= ${cve.introduced} ` : ""}< ${cve.fixed}).`,
+        impact: cve.summary,
+        fix: cve.fix,
+        precisionTier: cve.tier,
+      }),
+    );
+  }
   return findings;
 }
 

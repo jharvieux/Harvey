@@ -241,6 +241,11 @@ name, so slopsquat stays silent while `checkNonRegistryDependencies` fires).
 | P-NEXT-CVE-CACHE | `package-lock.json` (`next@14.2.35`) | OSV-Scanner — May-2026 cache-poisoning advisories (e.g. GHSA-wfc6-r584-vfw7); `parseOsvFindings` tiers every non-curated hit review | review |
 | P-TYPOSQUAT | `package.json` (`expres`) | `checkTyposquat` — Levenshtein-1 from `express` (offline corpus match) | review |
 | P-NONREGISTRY-DEP | `package.json` (`left-pad@git+https…`) | `checkNonRegistryDependencies` (new) — git/url/file dependency source | review |
+| P-NEXT-EOL | `fixtures/legacy-app/package.json` (`next@12.3.5`) | `checkNextVersionCVEs` — EOL major (< 14.x); 12.3.5 sits at/above every curated fix for its major, so EOL is the sole finding | review |
+| P-REACT-DOM-CVE | `fixtures/legacy-app/package.json` (`react-dom@16.4.0`) | `checkKnownDependencyCVEs` (new) — CVE-2018-6341 range (>=16.0.0 <16.4.2); approximate range (backported patches inside it) → review | review |
+| P-DEP-CVE-CRITICAL | `fixtures/legacy-app/package.json` (`minimist@1.2.5`) | `checkKnownDependencyCVEs` (new) — CVE-2021-44906 (< 1.2.6, CVSS 9.8); crisp single-boundary range → the curated critical-CVE promotion path OSV lacked | high |
+| P-MISSING-LOCKFILE | `fixtures/legacy-app` (no lockfile) | `checkLockfilePresence` — standalone project root shipping no lockfile | high |
+| P-KNOWN-IOC-PKG | `fixtures/legacy-app/package.json` (`flatmap-stream@0.1.1`) | `checkKnownIoc` (new) — curated IOC-feed name match (2018 event-stream malware); slopsquat not re-run on the fixture | high |
 
 ### B2 negatives — benign lookalikes (must NOT be flagged in the free count)
 
@@ -248,34 +253,55 @@ name, so slopsquat stays silent while `checkNonRegistryDependencies` fires).
 |---|---|---|
 | N-DEP-PINNED | `package.json` (`lodash@4.17.11`) | Exact-pinned, registry-sourced — never appears in the SUP-UNPINNED or SUP-NON-REGISTRY evidence. The pinned-dep FP a naive "any dependency is unpinned" rule throws. Doubles as the registry-source negative for `P-NONREGISTRY-DEP`. Its OSV CVE finding lives at the lockfile location (not `package.json`), so it can't be mis-attributed here. |
 | N-SLOPSQUAT-REAL | `package.json` (`@supabase/supabase-js`) | A real, popular, scoped package (exact-match in the typosquat popular set; a 200 from the slopsquat registry HEAD) — the FP a name-shape heuristic throws on a legitimate scoped dep. Draws no slopsquat/typosquat finding. |
+| N-NEXT-SUPPORTED | `fixtures/supported-app/package.json` (`next@15.5.16`) | A current, fully-patched Next version — `checkNextVersionCVEs` draws nothing (no EOL, no 29927/RSC/WS-SSRF). The supported-version half of the EOL pair, resolved by living in its own fixture root. |
+| N-POSTINSTALL-KNOWN | `fixtures/supported-app/package.json` (`esbuild@0.21.5`) | A hugely-popular package that famously runs a postinstall to fetch its native binary — exactly the trait a "has install scripts = suspicious" heuristic false-positives on. `checkKnownIoc` keys on the curated malware-name feed, not install-script presence, so esbuild clears. |
 
-### B2 deferred (spec §Batch 4/5 rows NOT built here — tracked on #71)
+### B2 manifest-layout decision (the deferred rows' single-manifest conflict, resolved)
 
-- `P-NEXT-EOL` — `checkNextVersionCVEs` reads the single `next` version from the manifest; an EOL
-  fixture (`next < 14`) can't coexist with the `^14.2.5` that drives the 29927/RSC/WS-SSRF
-  positives. Needs a second, EOL-pinned manifest fixture.
-- `P-REACT-DOM-CVE` — needs a vulnerable `react-server-dom-*` resolved in the committed lockfile;
-  the target doesn't carry one and hand-editing the lockfile is fragile.
-- `P-DEP-CVE-CRITICAL` — `parseOsvFindings` tiers every non-curated OSV hit `review`; a `high`
-  free-count OSV finding needs a curated critical-CVE promotion path that doesn't exist yet.
-- `P-MISSING-LOCKFILE` — the target must keep its committed lockfile for `P-DEP-CVE`, so the
-  no-lockfile positive can't be planted in the same target.
-- `P-KNOWN-IOC-PKG` — no IoC-feed cross-check code exists yet (`checkKnownIoc` unimplemented).
-- `N-NEXT-SUPPORTED`, `N-POSTINSTALL-KNOWN` — the supported-next negative shares the manifest-version
-  conflict above; the known-legit-postinstall negative can't be modeled distinctly against the
-  single aggregate `checkInstallScripts` review finding.
+The main target has ONE `package.json`, pinned `next@^14.2.5` to drive the CVE positives, and MUST
+keep its committed lockfile for `P-DEP-CVE`. Five deferred classes needed a manifest state that
+conflicts with that single root: an EOL `next`, a supported `next`, a vulnerable `react-dom`, a
+critical dependency CVE, and a project root that ships no lockfile. **Resolution:** two additional
+STANDALONE project-root fixtures under `targets/calibration/fixtures/` — `legacy-app/` (vulnerable:
+EOL next, vulnerable react-dom, critical minimist, IOC `flatmap-stream`, and NO lockfile) and
+`supported-app/` (clean: supported next, patched react-dom, a legit-postinstall package, WITH a
+committed lockfile). Each is its own root, not a monorepo sub-package — the main target's lockfile
+would otherwise "cover" a sub-package and suppress `P-MISSING-LOCKFILE`.
+
+The product scanner (`runMechanicalScan`) is unchanged: it still reads only the root manifest and
+runs `checkLockfilePresence` root-scoped, so no monorepo false-positive risk is introduced. The
+calibration runner (`src/cli/validate-calibration.ts`) additionally scans each fixture app-root with
+the OFFLINE manifest checks only (`checkNextVersionCVEs`, `checkKnownDependencyCVEs`,
+`checkKnownIoc`, `checkLockfilePresence`), each finding located by a stable `fixtures/<app>/…`
+label. The network/binary passes (slopsquat, OSV, Semgrep, gitleaks) are deliberately NOT re-run on
+the fixtures — those are already gated on the main target, and the classes here are all offline
+manifest facts. `flatmap-stream` is declared as DATA ONLY (never installed/fetched); the fixtures
+are never `npm install`-ed (no repo script or CI step installs `targets/calibration`).
+
+Two new detections ship as genuine product checks (wired into `runMechanicalScan`'s root pass too,
+where they stay silent on the clean root): `checkKnownDependencyCVEs` (curated non-Next CVE ranges,
+`src/scan/dependencies.ts`) and `checkKnownIoc` (curated malware-name feed, `src/scan/supply-chain.ts`).
 
 ### B2 live result (2026-07-09, static binaries: semgrep 1.164.0, gitleaks 8.30.1, trufflehog 3.95.8, osv-scanner 2.3.8, no Docker)
 
-`pnpm validate:calibration`: **positives caught 77/77 static (25 at high/free-count), 15
-connected-tier N/A; negatives cleared 49/49; zero free-count false positives — GATE PASS.** The 5
-new B2 positives all fire (2 at high: the WS-SSRF version-range match and the unpinned-range check;
-3 at review: the OSV cache-poisoning cluster, the edit-distance typosquat, and the non-registry git
-source). The 2 new negatives clear with no free-count finding. No regression on the base or B1/B3–B8
-batches (high-tier count moved 23 → 25). `pnpm verify` (offline) is green: `supply-chain.test.ts`
-gained two unit tests for `checkNonRegistryDependencies`; the scorecard logic over the expanded
-`CORPUS` is exercised in `calibration.test.ts` (including its synth-collision guard); the live gate
-above proves the already-existing dep/CVE detections against their fixtures.
+Original batch — `pnpm validate:calibration`: **positives caught 77/77 static (25 at
+high/free-count), 15 connected-tier N/A; negatives cleared 49/49; zero free-count false positives —
+GATE PASS.** The 5 original B2 positives all fire (2 at high: the WS-SSRF version-range match and the
+unpinned-range check; 3 at review: the OSV cache-poisoning cluster, the edit-distance typosquat, and
+the non-registry git source). `pnpm verify` (offline) is green: `supply-chain.test.ts` gained two
+unit tests for `checkNonRegistryDependencies`; the scorecard logic over the expanded `CORPUS` is
+exercised in `calibration.test.ts` (including its synth-collision guard).
+
+Deferred-rows follow-up (#71, secondary manifest fixtures) — `pnpm validate:calibration`:
+**positives caught 82/82 static (28 at high/free-count), 15 connected-tier N/A; negatives cleared
+51/51; zero free-count false positives — GATE PASS.** All 7 previously-deferred classes now land:
+`P-NEXT-EOL` and `P-REACT-DOM-CVE` at review; `P-DEP-CVE-CRITICAL`, `P-MISSING-LOCKFILE`, and
+`P-KNOWN-IOC-PKG` at high; `N-NEXT-SUPPORTED` and `N-POSTINSTALL-KNOWN` clear with no finding at all.
+No regression on any prior batch (high-tier count moved 25 → 28). `pnpm verify` (offline) is green:
+`dependencies.test.ts` gained tests for `checkKnownDependencyCVEs` (+ the manifest-path label and
+the 12.3.5 EOL-only case), `supply-chain.test.ts` for `checkKnownIoc` and the lockfile label, and
+`calibration.test.ts` gained a B2-deferred block that reconstructs the fixture findings from the
+real detection functions and scores all seven entries.
 
 ---
 
