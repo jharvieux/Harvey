@@ -398,6 +398,18 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# BUG (PLANTED, B13) — P-EDGEFN-VERIFY-JWT-OFF: a privileged Edge Function with JWT verification
+# turned off. verify_jwt = false makes the endpoint callable by anyone with the URL; a handler that
+# does service-role work behind it (issuing refunds) is then an unauthenticated privileged action.
+# harvey-edgefn-verify-jwt-off (verify_jwt = false in config.toml).
+[functions.admin-refund]
+verify_jwt = false
+
+# NEGATIVE (N-EDGEFN-VERIFY-JWT-ON) — the same shape with verify_jwt = true (the secure default).
+# The rule matches only `verify_jwt = false` — cleared.
+[functions.user-profile]
+verify_jwt = true
+
 [analytics]
 enabled = true
 port = 54327

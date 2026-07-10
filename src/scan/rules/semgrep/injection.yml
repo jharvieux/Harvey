@@ -309,3 +309,228 @@ rules:
               - pattern: console.info($X, ...)
               - pattern: console.warn($X, ...)
           - focus-metavariable: $X
+
+  # ---- Batch B13 (#71) — Supabase static-config/edge + injection-sink breadth. See
+  # docs/design/corpus-roadmap-to-100.md §3e and GROUND-TRUTH.md §B13. Two ERROR+HIGH structural
+  # rules (spawn shell:true, pg ssl:false to the pooler), one ERROR+HIGH client-surface rule
+  # (auth.admin in a Client Component), and the review-tier injection-sink family. ----
+
+  # child_process spawn/execFile with { shell: true } runs the command through /bin/sh, which
+  # re-parses the argv array as a shell string — the argv-array safety is gone and any interpolated
+  # value can inject shell metacharacters. The shell:true option is the unambiguous footgun. HIGH.
+  # (Distinct from harvey-command-injection above, which matches exec/execSync — this covers the
+  # spawn/execFile family the argv-array rules deliberately excluded.)
+  - id: harvey-spawn-shell-true
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Critical
+    message: >
+      spawn/execFile is called with { shell: true }, which runs the command through a shell and
+      re-parses the arguments — reintroducing command injection the argv array was preventing. Drop
+      shell: true and pass the binary + argv array directly.
+    patterns:
+      - pattern-either:
+          - pattern: "spawn($CMD, $ARGS, { ..., shell: true, ... })"
+          - pattern: "execFile($CMD, $ARGS, { ..., shell: true, ... })"
+          - pattern: "child_process.spawn($CMD, $ARGS, { ..., shell: true, ... })"
+          - pattern: "child_process.execFile($CMD, $ARGS, { ..., shell: true, ... })"
+
+  # A direct pg Pool to a Supabase pooler host with TLS disabled (ssl: false). The pooler is reached
+  # over the public internet, so turning off TLS exposes the connection and its credentials to a
+  # network attacker. Both signals in one Pool literal: the pooler host (pattern-regex over the same
+  # object) AND ssl: false. HIGH — an explicit `ssl: false` to a pooler host is unambiguous.
+  - id: harvey-pg-ssl-disabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      A pg Pool connects to a Supabase pooler host with ssl: false — the connection to the pooler
+      crosses the public internet unencrypted. Set ssl: { rejectUnauthorized: true } (or remove the
+      ssl:false override) so the pooler connection is TLS-verified.
+    patterns:
+      - pattern: "new Pool({ ..., ssl: false, ... })"
+      - pattern-regex: pooler\.supabase\.com
+
+  # auth.admin.* (the GoTrue admin API) is reachable from a Client Component ("use client"). The
+  # admin API requires the service-role key, so an admin surface that ships to the browser bundle
+  # exposes privileged user-management operations (and the key backing them). HIGH. Broader than
+  # harvey-service-role-in-client (base.yml, which keys off the SERVICE_ROLE_KEY env literal) — this
+  # fires on the admin call itself, however the client was constructed.
+  - id: harvey-auth-admin-in-client
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Critical
+    message: >
+      supabase.auth.admin.* (the service-role-only GoTrue admin API) is called inside a Client
+      Component ("use client"). The privileged admin client ships to the browser. Move all
+      auth.admin usage into a server-only route/action.
+    patterns:
+      - pattern: $C.auth.admin.$M(...)
+      - pattern-inside: |
+          "use client";
+          ...
+
+  # select("*") whose result is serialized into an API response (res.json / NextResponse.json). A
+  # star-select spreads every column — including PII the client never needed — into the payload.
+  # Review: proving a specific sensitive column is present needs schema knowledge this rule lacks.
+  - id: harvey-select-star-pii
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A select("*") result is returned directly in an API response — every column, including any
+      PII/sensitive fields, is serialized to the client. Project an explicit column list with only
+      the fields the response needs.
+    pattern-sources:
+      - pattern: $C.from($T).select("*")
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.json($X)
+              - pattern: NextResponse.json($X)
+          - focus-metavariable: $X
+
+  # A service-role cron handler with no caller-secret gate: a supabaseAdmin DB call reachable from a
+  # handler with no preflight `if` guard, so anyone who finds the URL can trigger the privileged job.
+  # The pattern-not-inside excludes any handler carrying a guard block (the CRON_SECRET check). Review.
+  - id: harvey-cron-no-secret
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A cron/background handler uses the service-role client (supabaseAdmin) with no CRON_SECRET
+      caller check — any anonymous request can trigger the privileged job. Compare a shared secret
+      (e.g. an Authorization bearer CRON_SECRET) before doing any work.
+    patterns:
+      - pattern-either:
+          - pattern: supabaseAdmin.from(...)
+          - pattern: supabaseAdmin.rpc(...)
+      - pattern-not-inside: |
+          function $H(...) { ... if (...) { ... } ... }
+
+  # require() with a request-tainted argument loads and executes an attacker-chosen module path.
+  # Review — dynamic require of a fixed/derived-but-safe path is common; taint from a request is the
+  # risky shape.
+  - id: harvey-dynamic-require
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      require() is called with request-controlled input — an attacker chooses which module is
+      loaded and executed. Map the input through an explicit allowlist to a fixed module path.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern: require($X)
+          - focus-metavariable: $X
+
+  # obj[userInput]() — a method dispatched by a request-controlled key with no allowlist. The caller
+  # can reach any property on the object, including inherited ones. Review — a checked/allowlisted
+  # dispatch is the common safe shape.
+  - id: harvey-dynamic-dispatch
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A method is dispatched by a request-controlled key (obj[req...]()) with no allowlist — the
+      caller can invoke any property on the object. Check the key against an explicit allowlist
+      before dispatch.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern: $OBJ[$IDX](...)
+          - focus-metavariable: $IDX
+
+  # A template engine compiled with autoescaping turned off (Handlebars noEscape / Mustache
+  # escape:false) renders every interpolation raw — any user data through the template is an XSS
+  # sink. Review — depends on whether user data actually flows through the template.
+  - id: harvey-template-autoescape-off
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      A template is compiled with HTML autoescaping disabled (noEscape / escape:false) — every
+      interpolation renders raw, so any user data through it is an XSS sink. Leave autoescaping on
+      and mark only known-safe values as raw.
+    patterns:
+      - pattern-either:
+          - pattern: "Handlebars.compile($T, { ..., noEscape: true, ... })"
+          - pattern: "$H.compile($T, { ..., noEscape: true, ... })"
+          - pattern: "Mustache.render($T, $D, $PART, { ..., escape: false, ... })"
+
+  # Request input interpolated into an HTML template literal handed to res.send — reflected XSS. The
+  # sink is a res.send() of a template literal carrying a tainted value. Review — a static rule can't
+  # confirm no escaping/sanitizer ran on the interpolated value.
+  - id: harvey-html-template-literal
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request input is interpolated into an HTML template literal and sent with res.send —
+      reflected XSS. Escape the value, or render through a template engine with autoescaping on.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: $REQ.nextUrl.searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern: $RES.send(`...`)
+
+  # A .replace() sanitizer with a STRING-literal needle only strips the first occurrence — an
+  # incomplete filter that leaves every later match intact. A /g regex needle (the real sanitizer)
+  # has no leading quote and does not match. Review — heuristic; some single-replace calls are fine.
+  - id: harvey-incomplete-sanitize
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A .replace() with a plain string needle replaces only the FIRST match, so this "sanitizer"
+      leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.
+    patterns:
+      - pattern: $S.replace($NEEDLE, $R)
+      - metavariable-regex:
+          metavariable: $NEEDLE
+          regex: ^['"](<|>|&|"|')['"]$

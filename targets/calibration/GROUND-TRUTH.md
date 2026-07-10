@@ -904,6 +904,88 @@ B12 recorded-semgrep + real-`checkPublicDirSensitive` block scoring all 22 entri
 
 ---
 
+## Batch B13 (#71) — Supabase static-config/edge + injection-sink breadth
+
+The Supabase static-config/edge + injection-sink expansion batch (roadmap
+`docs/design/corpus-roadmap-to-100.md` §3e). Answer key: `src/scan/calibration/b13-supa.entries.ts`.
+Detection is split three ways:
+
+1. **One new static scanner** — `checkMigrationRlsStatic` (`src/scan/supabase-static.ts`, wired into
+   `runMechanicalScan`). Parses committed `supabase/migrations/*.sql` for a `create table public.X`
+   that never gets `alter table public.X enable row level security` anywhere in the migration set.
+   This is the **static path for `P-RLS-DISABLED`**, which was connected-tier only (needed a live
+   Advisor). The roadmap §5 honesty flag class: it is `high` **only because** it clears the two
+   verified negatives — `service_state` (RLS enabled + zero policies, deny-all by design) and any
+   table whose RLS is enabled in a **later** migration file (`documents`, created in
+   `…0001_schema.sql`, enabled in `…0002_rls.sql`). The enable-check aggregates across all files and
+   ignores views, so on the real target it fires on exactly one table: `audit_logs`.
+2. **A small static config check** — `checkEdgeFunctionVerifyJwt` (same module): parses
+   `supabase/config.toml` for `[functions.X] verify_jwt = false`. `review`. (Semgrep generic-mode on
+   TOML was tried first and rejected — it produced garbage line mappings and phantom matches.)
+3. **Semgrep rules** extending `src/scan/rules/semgrep/injection.yml` — two ERROR+HIGH structural
+   rules, one ERROR+HIGH client-surface rule, and six WARNING+MEDIUM injection-sink heuristics.
+
+### B13 positives — planted bugs (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-RLS-MISSING-STATIC | `supabase/migrations/20260708000001_schema.sql:35` (`audit_logs`, absence) | `checkMigrationRlsStatic` (create-table with no enable-RLS anywhere) | high |
+| P-PG-SSL-DISABLED | `lib/pg-ssl-disabled.js:7` | Semgrep `harvey-pg-ssl-disabled` (`ssl: false` in a `Pool` literal + a `pooler.supabase.com` host) | high |
+| P-AUTH-ADMIN-CLIENT | `components/AdminUsersClient.jsx:10` | Semgrep `harvey-auth-admin-in-client` (`$C.auth.admin.$M(...)` inside a `"use client"` module) | high |
+| P-SPAWN-SHELL | `pages/api/thumbnail.js:7` | Semgrep `harvey-spawn-shell-true` (`spawn`/`execFile` with `{ shell: true }`) | high |
+| P-EDGEFN-VERIFY-JWT-OFF | `supabase/config.toml` (`[functions.admin-refund]`) | `checkEdgeFunctionVerifyJwt` (`verify_jwt = false` under a `[functions.X]` table) | review |
+| P-SELECT-STAR-PII | `pages/api/customers.js:10` | Semgrep `harvey-select-star-pii` (taint `select("*")` → `res.json`) | review |
+| P-CRON-NO-SECRET | `pages/api/cron/rollup.js:6` | Semgrep `harvey-cron-no-secret` (`supabaseAdmin` DB call in a handler with no `if` guard) | review |
+| P-DYNAMIC-REQUIRE | `pages/api/plugin.js:4` | Semgrep `harvey-dynamic-require` (taint `req.*` → `require`) | review |
+| P-DYNAMIC-DISPATCH | `pages/api/dispatch.js:10` | Semgrep `harvey-dynamic-dispatch` (taint `req.*` → `obj[$IDX](...)`) | review |
+| P-TEMPLATE-AUTOESCAPE-OFF | `lib/render-template.js:7` | Semgrep `harvey-template-autoescape-off` (`Handlebars.compile(…,{noEscape:true})`) | review |
+| P-HTML-TEMPLATE-LITERAL | `pages/api/greet.js:6` | Semgrep `harvey-html-template-literal` (taint `req.*` → `res.send` of a template literal) | review |
+| P-INCOMPLETE-SANITIZE | `lib/sanitize-bad.js:5` | Semgrep `harvey-incomplete-sanitize` (string-literal `.replace` needle) | review |
+
+### B13 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-RLS-DENY-ALL-STATIC | `…0001_schema.sql` (`service_state`) | RLS enabled in `…0002_rls.sql` with zero policies — deny-all by design; the check sees the ENABLE and stays silent. |
+| N-RLS-ENABLED-LATER | `…0001_schema.sql` (`documents`) | RLS enabled in the LATER `…0002_rls.sql`; the enable-check aggregates across all files — cleared. |
+| N-PG-SSL-OK | `lib/pg-ssl-ok.js` | `ssl: { rejectUnauthorized: true }` to the pooler; the rule matches only `ssl: false`. |
+| N-AUTH-ADMIN-SERVER | `lib/admin-users-server.js` | the same `auth.admin.*` in a server-only module (no `"use client"`) — the rule fires only inside a Client Component. |
+| N-SPAWN-NOSHELL | `pages/api/thumbnail-safe.js` | `execFile` with an argv array and no shell option; the rule requires `shell: true`. |
+| N-EDGEFN-VERIFY-JWT-ON | `supabase/config.toml` (`[functions.user-profile]`) | `verify_jwt = true`; the check matches only `= false`. |
+| N-SELECT-EXPLICIT | `pages/api/customers-safe.js` | `select("id,name,email")` — an explicit projection; the rule requires a `select("*")` source. |
+| N-CRON-SECRET | `pages/api/cron/rollup-secure.js` | a `CRON_SECRET` bearer check (an `if` guard) precedes the admin call; the `pattern-not-inside` excludes it. |
+| N-REQUIRE-FIXED | `lib/fixed-require.js` | `require("./helper")` — a fixed string, no request taint. |
+| N-DISPATCH-ALLOWLIST | `pages/api/dispatch-safe.js` | the action is checked against an allowlist and a fixed reference dispatched — no tainted key reaches a computed call. |
+| N-TEMPLATE-ESCAPED | `lib/render-template-safe.js` | `Handlebars.compile(tpl)` with default escaping — no `noEscape` option. |
+| N-HTML-PLAINTEXT | `pages/api/greet-safe.js` | `res.json({ name: req.query.name })` — no `res.send` HTML template literal. |
+| N-SANITIZE-GLOBAL | `lib/sanitize-ok.js` | `s.replace(/</g, "")` — a `/g` regex needle, not a string; the `metavariable-regex` requires a quoted string. |
+
+### B13 detection additions
+
+One **new module** `src/scan/supabase-static.ts` (two static checks read from committed files:
+`checkMigrationRlsStatic` — high; `checkEdgeFunctionVerifyJwt` — review), both wired into
+`runMechanicalScan` with focused unit tests in `src/scan/supabase-static.test.ts`. Nine new rules in
+`src/scan/rules/semgrep/injection.yml`: `harvey-spawn-shell-true`, `harvey-pg-ssl-disabled`,
+`harvey-auth-admin-in-client` (ERROR + HIGH → high); `harvey-select-star-pii`, `harvey-cron-no-secret`,
+`harvey-dynamic-require`, `harvey-dynamic-dispatch`, `harvey-template-autoescape-off`,
+`harvey-html-template-literal`, `harvey-incomplete-sanitize` (WARNING + MEDIUM → review). Adjacency:
+`P-SPAWN-SHELL` is disjoint from `harvey-command-injection` (exec/execSync); `P-AUTH-ADMIN-CLIENT`
+keys off the `auth.admin` call, not the `SERVICE_ROLE_KEY` env literal `harvey-service-role-in-client`
+(base.yml) matches; `P-RLS-MISSING-STATIC` is the static counterpart of the connected `P-RLS-DISABLED`
+(both coexist). **No class was dropped — all 12 §3e rows landed (4 high, 8 review).**
+
+### B13 live result (2026-07-09, static binaries: semgrep, gitleaks, trufflehog, osv-scanner; no Docker)
+
+`pnpm validate:calibration`: **GATE PASS — zero free-count false positives; every high-tier rule
+fired on its positive.** All 12 B13 positives fire (4 at high: static-migration RLS, pg `ssl:false`
+to a pooler, `auth.admin` in a Client Component, `spawn` `shell:true`; 8 at review) and all 13 B13
+negatives clear. Corpus totals after B13: **135/135 static positives caught (61 at high/free-count,
+15 connected N/A); 103/103 static negatives cleared.** `pnpm verify` (offline) is green: 443 tests,
+including the B13 recorded-semgrep + real-static-check block in `calibration.test.ts` and the
+`supabase-static.test.ts` unit tests.
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
