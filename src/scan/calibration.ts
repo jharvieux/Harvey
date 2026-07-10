@@ -27,6 +27,7 @@ import { b12NextconfigEntries } from "./calibration/b12-nextconfig.entries.js";
 import { b13SupaEntries } from "./calibration/b13-supa.entries.js";
 import { b14AppLogicEntries } from "./calibration/b14-applogic.entries.js";
 import { b15NextjsAuthzEntries } from "./calibration/b15-nextjs-authz.entries.js";
+import { b16StorageSecdefEntries } from "./calibration/b16-storage-secdef.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
 import { m7Entries } from "./calibration/m7.entries.js";
 import { m8Entries } from "./calibration/m8.entries.js";
@@ -59,6 +60,7 @@ export const CORPUS: CorpusEntry[] = [
   ...b13SupaEntries,
   ...b14AppLogicEntries,
   ...b15NextjsAuthzEntries,
+  ...b16StorageSecdefEntries,
   ...m10Entries,
   ...m4m5Entries,
   ...m8Entries,
