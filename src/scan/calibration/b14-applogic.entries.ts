@@ -1,0 +1,36 @@
+// Batch B14 (#71) — app-logic heuristics (roadmap `docs/design/corpus-roadmap-to-100.md` §3f).
+// The final #71 corpus batch. All five classes are absence-of-check / client-trust heuristics
+// with the HIGHEST negative-precision risk in the corpus (a grep can only see that a check's shape
+// is absent in THIS file, never that it isn't enforced in middleware/a wrapper it can't see), so
+// EVERY entry here is `review` tier — none feed the free count. Detection is five new greps in
+// src/scan/leftover-auth.ts (B14_CHECKS + the upload and webhook checks), each keyed to a stable
+// keyword carried in the finding id/evidence so the corpus can attribute it.
+//
+// Adjacency (kept from double-firing): P-SENSITIVE-CONSOLE-LOG sources the credential from a
+// function parameter, not req.*, so the taint rule harvey-log-injection (injection.yml, req.* →
+// console.*) stays silent and only the name-gated grep fires. P-WEBHOOK-NO-SIG is path-gated on
+// `webhook` AND absence of any signature hint, so it is disjoint from every other admin-write route
+// fixture (register/settings/seed do admin writes but aren't webhooks) and stays silent on the
+// existing pages/api/webhook.js, which HAS an HMAC check (the WEBHOOK-REPLAY shape: signed but no
+// anti-replay). P-UPLOAD-NO-LIMIT is the code-side of the policy-body class
+// supabase-storage-unrestricted-upload-policy (roadmap §4a, semantic tier).
+//
+// See GROUND-TRUTH.md §B14. Dropped: none — all 5 §3f rows landed.
+
+import type { CorpusEntry } from "./types.js";
+
+export const b14AppLogicEntries: CorpusEntry[] = [
+  // --- POSITIVES (must be caught, all review tier) ---
+  { id: "P-CLIENT-PRIV-HEADER", kind: "positive", cls: "authz decision from a client-controlled header/body/query", location: "pages/api/promote.js", match: ["client-priv-header"], expectedTier: "review", note: "if (req.headers['x-role'] === 'admin') gates an admin.from('users').update({ role }) in pages/api/promote.js — the client sets the header. leftover-auth B14_CHECKS client-priv-header grep (a privilege literal compared directly against a req header/body/query value) → review. The negative reads the role from admin.auth.getUser().app_metadata, no req.* operand — cleared." },
+  { id: "P-CLIENT-PAYMENT-AMOUNT", kind: "positive", cls: "server trusts a client-supplied payment amount", location: "pages/api/checkout.js", match: ["client-payment-amount"], expectedTier: "review", note: "stripe.paymentIntents.create({ amount: req.body.amount }) in pages/api/checkout.js — the charge amount comes straight from the request. leftover-auth client-payment-amount grep (`amount…: req.(body|query|params)`) → review. The negative recomputes amount from product.price_cents (a DB read) — `amount:` is not followed by req.*, cleared." },
+  { id: "P-WEBHOOK-NO-SIG", kind: "positive", cls: "inbound webhook handler with zero signature verification", location: "pages/api/webhooks/inbound.js", match: ["webhook-no-sig"], expectedTier: "review", note: "pages/api/webhooks/inbound.js does admin.from('subscriptions').update(...) on a `webhook`-path route with no HMAC/constructEvent/signature check anywhere. leftover-auth webhook-no-sig grep (webhook path + privileged write + no signature hint) → review. Distinct from WEBHOOK-REPLAY: the existing pages/api/webhook.js HAS an HMAC check (signed, but no anti-replay) so it stays silent. The negative (inbound-signed.js) calls stripe.webhooks.constructEvent before the write — cleared." },
+  { id: "P-SENSITIVE-CONSOLE-LOG", kind: "positive", cls: "password/token/secret logged to console", location: "lib/audit-login.js", match: ["sensitive-console-log"], expectedTier: "review", note: "console.log('login attempt', { email, password }) in lib/audit-login.js writes the plaintext password to the log. leftover-auth sensitive-console-log grep (console.* argument text carrying password/secret/token/api_key/…) → review. The credential is a function parameter, not req.*, so harvey-log-injection (injection.yml, req.* taint → console.*) stays silent — no double-fire. The negative logs { email, success } — no sensitive identifier, cleared." },
+  { id: "P-UPLOAD-NO-LIMIT", kind: "positive", cls: "upload endpoint, no size/MIME limit before the storage write", location: "pages/api/upload.js", match: ["upload-no-limit"], expectedTier: "review", note: "admin.storage.from('uploads').upload(req.query.name, buffer) in pages/api/upload.js with no size cap or MIME allowlist. leftover-auth upload-no-limit grep (a storage .upload() with no content-length/MIME hint in the file) → review. Code-side of the semantic-tier supabase-storage-unrestricted-upload-policy. The negative (upload-safe.js) checks content-length against MAX_SIZE and an ALLOWED_MIME allowlist before uploading — cleared." },
+
+  // --- NEGATIVES (must NOT be flagged in the free count; here also fully silent) ---
+  { id: "N-PRIV-FROM-SESSION", kind: "negative", cls: "role read from the verified session, not the request", location: "pages/api/promote-safe.js", match: ["client-priv-header"], note: "pages/api/promote-safe.js gates on admin.auth.getUser().app_metadata.role === 'admin' — the privilege literal is compared against a session value, not a req.* operand. leftover-auth client-priv-header requires a req header/body/query on the left of the comparison — no finding carries client-priv-header here. Cleared." },
+  { id: "N-PAYMENT-DB-PRICE", kind: "negative", cls: "payment amount recomputed from the DB price", location: "pages/api/checkout-safe.js", match: ["client-payment-amount"], note: "pages/api/checkout-safe.js sets amount: product.price_cents * req.body.quantity — `amount:` is followed by the DB price, not req.*. leftover-auth client-payment-amount requires `amount…: req.(body|query|params)` immediately — cleared." },
+  { id: "N-WEBHOOK-SIGNED", kind: "negative", cls: "inbound webhook verified with the provider signature", location: "pages/api/webhooks/inbound-signed.js", match: ["webhook-no-sig"], note: "pages/api/webhooks/inbound-signed.js calls stripe.webhooks.constructEvent(body, 'stripe-signature', WEBHOOK_SECRET) before the write. leftover-auth webhook-no-sig's signature-hint regex matches constructEvent/stripe-signature/webhook_secret — cleared." },
+  { id: "N-LOG-OUTCOME-ONLY", kind: "negative", cls: "login log with no credential", location: "lib/audit-login-safe.js", match: ["sensitive-console-log"], note: "lib/audit-login-safe.js logs { email, success } — no password/secret/token identifier in the console.* argument. leftover-auth sensitive-console-log doesn't match — cleared." },
+  { id: "N-UPLOAD-LIMITED", kind: "negative", cls: "upload guarded by a size cap and a MIME allowlist", location: "pages/api/upload-safe.js", match: ["upload-no-limit"], note: "pages/api/upload-safe.js checks content-length against MAX_SIZE and content-type against ALLOWED_MIME before .upload(). leftover-auth upload-no-limit's limit-hint regex matches content-length/mime/contentType — cleared." },
+];

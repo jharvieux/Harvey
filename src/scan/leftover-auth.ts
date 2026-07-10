@@ -31,6 +31,46 @@ const ROUTE_FILE = /(^|\/)(route\.(ts|tsx|js)|pages\/api\/.*\.(ts|tsx|js))$/;
 const AUTH_SENSITIVE_ROUTE = /(^|\/)(login|signin|sign-in|signup|sign-up|register|otp|reset-password|forgot-password)(\/|$|\.)/i;
 const RATE_LIMIT_HINT = /(rateLimit|ratelimit|Ratelimit|limiter\.)/;
 
+// B14 (#71): app-logic heuristics — all "review" tier (a grep can't prove the missing check
+// isn't enforced elsewhere, only that its shape is absent here). See
+// docs/design/corpus-roadmap-to-100.md §3f and GROUND-TRUTH.md §B14.
+const B14_CHECKS: { id: string; title: string; taxonomy: string; category: string; impact: string; fix: string; test: (f: SourceFile) => boolean }[] = [
+  {
+    id: "client-priv-header",
+    title: "authorization decision made from client-controlled input",
+    taxonomy: "Authz decision from client-controlled input",
+    category: "Broken access control",
+    impact: "A client can set the header/body/query value themselves and grant the privilege.",
+    fix: "Derive the role from the verified session (e.g. supabase.auth.getUser().app_metadata), never from the request.",
+    // A privilege literal (admin/owner/…) compared directly against a req header/body/query value.
+    test: (f) => /(req|request)\.(headers\s*\[[^\]]+\]|(body|query)\.\w+)\s*={2,3}\s*['"](admin|superadmin|super-admin|owner|root|staff)['"]/i.test(f.content),
+  },
+  {
+    id: "client-payment-amount",
+    title: "payment amount taken directly from the request",
+    taxonomy: "Client-supplied payment amount trusted by server",
+    category: "Business logic",
+    impact: "A client can set the charge amount themselves and pay an arbitrary (or zero) price.",
+    fix: "Recompute the amount server-side from the trusted DB price; the request should only name the product/quantity.",
+    test: (f) => /\bamount\w*\s*:\s*(req|request)\.(body|query|params)\b/i.test(f.content),
+  },
+  {
+    id: "sensitive-console-log",
+    title: "a password/secret/token is written to the console",
+    taxonomy: "Sensitive value logged to console",
+    category: "Sensitive data exposure",
+    impact: "The credential persists in log aggregation, CI output, and crash dumps.",
+    fix: "Log only non-sensitive identifiers and the outcome; never the credential itself.",
+    test: (f) => /console\.(log|error|info|warn|debug)\s*\([^)]*\b(password|passwd|pwd|secret|api[_-]?key|private[_-]?key|client[_-]?secret|credentials?)\b/i.test(f.content),
+  },
+];
+
+const UPLOAD_SINK = /storage\s*\.\s*from\s*\([^)]*\)\s*\.\s*upload\s*\(/;
+const UPLOAD_LIMIT_HINT = /content-?length|max[_-]?size|file[_-]?size|\.size\b|allowed[_-]?(types|mime)|mimetype|content-?type\s*[:=]|accept\s*:/i;
+const WEBHOOK_PATH = /webhook/i;
+const WEBHOOK_PRIVILEGED_WRITE = /\.(insert|update|delete|upsert|rpc)\s*\(|admin\.from|supabaseAdmin/i;
+const WEBHOOK_SIG_HINT = /createHmac|constructEvent|timingSafeEqual|verif\w*Signature|x-signature|stripe-signature|hub-signature|svix|webhook[_-]?secret/i;
+
 function slug(path: string): string {
   return path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
@@ -83,6 +123,58 @@ export function classifyLeftoverAuth(file: SourceFile): Finding[] {
         evidence: `Route path matches /login|signup|otp|reset-password/ and no rate-limiter call pattern was found in the file.`,
         impact: "An attacker can brute-force credentials/OTP codes with unlimited attempts.",
         fix: "Add a rate limiter (e.g. Upstash Ratelimit, a token-bucket middleware) in front of this route.",
+        precisionTier: "review",
+      }),
+    );
+  }
+  for (const c of B14_CHECKS) {
+    if (c.test(file)) {
+      findings.push(
+        mechanicalFinding({
+          id: `AUTH-${c.id}-${slug(file.path)}`,
+          title: `${file.path} — ${c.title}`,
+          severity: "High",
+          category: c.category,
+          taxonomy: c.taxonomy,
+          location: file.path,
+          evidence: `Heuristic "${c.id}" matched in ${file.path}.`,
+          impact: c.impact,
+          fix: c.fix,
+          precisionTier: "review",
+        }),
+      );
+    }
+  }
+  // Upload sink with no size/MIME limit in the same file.
+  if (UPLOAD_SINK.test(file.content) && !UPLOAD_LIMIT_HINT.test(file.content)) {
+    findings.push(
+      mechanicalFinding({
+        id: `AUTH-upload-no-limit-${slug(file.path)}`,
+        title: `${file.path} writes an upload to storage with no size/MIME limit`,
+        severity: "High",
+        category: "Broken access control",
+        taxonomy: "Upload to storage with no size/MIME limit",
+        location: file.path,
+        evidence: `Heuristic "upload-no-limit" matched a storage .upload() with no content-length/MIME guard in ${file.path}.`,
+        impact: "An attacker can store arbitrarily large or executable content, or exhaust the storage quota.",
+        fix: "Enforce a content-length cap and a MIME allowlist before the storage write.",
+        precisionTier: "review",
+      }),
+    );
+  }
+  // Inbound webhook route doing a privileged write with no signature-verification hint.
+  if (ROUTE_FILE.test(file.path) && WEBHOOK_PATH.test(file.path) && WEBHOOK_PRIVILEGED_WRITE.test(file.content) && !WEBHOOK_SIG_HINT.test(file.content)) {
+    findings.push(
+      mechanicalFinding({
+        id: `AUTH-webhook-no-sig-${slug(file.path)}`,
+        title: `${file.path} is an inbound webhook doing a privileged write with no signature verification`,
+        severity: "High",
+        category: "Broken access control",
+        taxonomy: "Inbound webhook with no signature verification",
+        location: file.path,
+        evidence: `Heuristic "webhook-no-sig" matched a webhook-path route with a privileged write and no HMAC/signature check in ${file.path}.`,
+        impact: "Anyone who finds the URL can forge events and drive the privileged side effect.",
+        fix: "Verify the provider signature (HMAC / constructEvent) against a shared secret before any write.",
         precisionTier: "review",
       }),
     );

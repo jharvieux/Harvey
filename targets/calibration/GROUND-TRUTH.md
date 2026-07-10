@@ -986,6 +986,63 @@ including the B13 recorded-semgrep + real-static-check block in `calibration.tes
 
 ---
 
+## Batch B14 (#71) — app-logic heuristics
+
+The final #71 corpus batch (roadmap `docs/design/corpus-roadmap-to-100.md` §3f). Answer key:
+`src/scan/calibration/b14-applogic.entries.ts`. Five app-logic / client-trust classes, all detected
+by five new greps in `src/scan/leftover-auth.ts` (`B14_CHECKS` plus the upload and webhook checks).
+Every class is **`review` tier** — these are absence-of-check / client-trust heuristics with the
+highest negative-precision risk in the corpus (a grep can only see that a check's shape is absent in
+*this* file, never that it isn't enforced in middleware or a wrapper it can't see), so none feed the
+free count.
+
+### B14 positives — planted bugs (must be caught, all `review` tier)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-CLIENT-PRIV-HEADER | `pages/api/promote.js:5` | leftover-auth `client-priv-header` (privilege literal compared directly against a `req` header/body/query value) | review |
+| P-CLIENT-PAYMENT-AMOUNT | `pages/api/checkout.js:9` | leftover-auth `client-payment-amount` (`amount…: req.(body\|query\|params)`) | review |
+| P-WEBHOOK-NO-SIG | `pages/api/webhooks/inbound.js:6` | leftover-auth `webhook-no-sig` (`webhook`-path route + privileged write + no signature hint) | review |
+| P-SENSITIVE-CONSOLE-LOG | `lib/audit-login.js:4` | leftover-auth `sensitive-console-log` (`console.*` argument carrying password/secret/token/api_key/…) | review |
+| P-UPLOAD-NO-LIMIT | `pages/api/upload.js:7` | leftover-auth `upload-no-limit` (a storage `.upload()` with no content-length/MIME hint in the file) | review |
+
+### B14 negatives — benign lookalikes (must NOT be flagged; here also fully silent)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-PRIV-FROM-SESSION | `pages/api/promote-safe.js` | the role is read from `getUser().app_metadata`, compared against a session value — no `req.*` operand on the comparison, so `client-priv-header` doesn't match. |
+| N-PAYMENT-DB-PRICE | `pages/api/checkout-safe.js` | `amount: product.price_cents * req.body.quantity` — `amount:` is followed by the DB price, not `req.*`. |
+| N-WEBHOOK-SIGNED | `pages/api/webhooks/inbound-signed.js` | `stripe.webhooks.constructEvent(...)` verifies the signature before the write; the signature-hint regex matches. |
+| N-LOG-OUTCOME-ONLY | `lib/audit-login-safe.js` | logs `{ email, success }` — no sensitive identifier in the `console.*` argument. |
+| N-UPLOAD-LIMITED | `pages/api/upload-safe.js` | a `content-length` cap and an `ALLOWED_MIME` allowlist precede `.upload()`; the limit-hint regex matches. |
+
+### B14 detection additions
+
+Five new greps in `src/scan/leftover-auth.ts`, all emitting `review`-tier findings with a stable
+keyword (`client-priv-header`, `client-payment-amount`, `sensitive-console-log`, `upload-no-limit`,
+`webhook-no-sig`) in the finding id/evidence for corpus attribution. Unit tests in
+`src/scan/leftover-auth.test.ts`; a recorded-vector block in `calibration.test.ts` runs the real
+`classifyLeftoverAuth` over the fixture shapes. **Adjacency:** `P-SENSITIVE-CONSOLE-LOG` sources the
+credential from a function parameter (not `req.*`), so the taint rule `harvey-log-injection`
+(`injection.yml`) stays silent and only the name-gated grep fires — no double-fire.
+`P-WEBHOOK-NO-SIG` is path-gated on `webhook` + absence of any signature hint, so it is disjoint from
+the other admin-write route fixtures (register/settings/seed aren't webhooks) and stays silent on the
+existing `pages/api/webhook.js`, which HAS an HMAC check (the WEBHOOK-REPLAY shape: signed, but no
+anti-replay). `P-UPLOAD-NO-LIMIT` is the code-side of the semantic-tier
+`supabase-storage-unrestricted-upload-policy` (roadmap §4a). **No class was dropped — all 5 §3f rows
+landed (0 high, 5 review).**
+
+### B14 live result (2026-07-10, static binaries: semgrep, gitleaks, trufflehog, osv-scanner; no Docker)
+
+`pnpm validate:calibration`: **GATE PASS — zero free-count false positives; every high-tier rule
+fired on its positive.** All 5 B14 positives fire at review and all 5 B14 negatives are fully silent
+(no finding at all). Corpus totals after B14: **140/140 static positives caught (61 at high/free-count,
+15 connected N/A); 108/108 static negatives cleared.** `pnpm verify` (offline) is green: 452 tests,
+including the B14 real-`classifyLeftoverAuth` recorded-vector block in `calibration.test.ts` and the
+new `leftover-auth.test.ts` heuristic unit tests.
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
