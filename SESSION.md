@@ -2,7 +2,7 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-10 (overnight #71 round-2: 6 corpus batches B9–B14 merged; corpus 140/140 positives, 61 high)_
+_Last updated: 2026-07-10 (post-#71: excluded-tier backlog filed #123–#125, #70 closed, ATC re-scan dogfood, route-noauth precision fix #126 merged)_
 
 ## Corpus expansion (#71 security, #72 cross-module)
 Answer key + rules are per-batch modular (`src/scan/calibration/<batch>.entries.ts` +
@@ -35,22 +35,40 @@ negatives cleared, 15 connected-tier N/A — PASS.** (Was 77/77 / 25 high before
   M3 hotspots (design+fixture, live `vitals` capture deferred → **#94**); M6 simplification (paid-only).
 
 ## Open agent-doable follow-ups
-- **#71 close-out** — decide whether to close #71 (mechanical work done) or re-scope it to the
-  excluded-tier backlog in `docs/design/corpus-roadmap-to-100.md` §4.
+- **#71 close-out** — mechanical work done. The excluded-tier backlog is now FILED as three issues:
+  **#123** (semantic → paid M-series), **#124** (connected → live Supabase advisor), **#125**
+  (dynamic → #5 pen-test). #71 can be closed or re-scoped to point at those.
+- **#123–#125** — the excluded-tier security classes from the #71 round-2 research, grouped by
+  detection mechanism (see `docs/design/corpus-roadmap-to-100.md` §4). Not yet started.
 - **Skills vendoring decision** (from #53, closed): reference-harness skills live user-global at
   `~/.claude/skills/`. Open call: vendor into the Harvey repo (#14) vs. keep user-global.
+
+## ATC dogfood re-scan (2026-07-10) — expanded corpus validated end-to-end
+Ran the full scan → LLM-triage → report pipeline against a git clone of jharvieux/ATC with the
+expanded corpus. **286 raw mechanical findings triaged to 4 real (all LOW/hardening); 0 Critical/
+High/Medium survived** — tenant isolation and per-route auth hold, matching the June self-audit.
+- Real items: `select('*')` PII over-selection (6 routes, the one useful new-detector signal, B13),
+  mutable CI action tags, a transitive `@opentelemetry/core` CVE, absent pnpm hardening opts.
+- The raw scan's 3 "Criticals" + 91 "Highs" were ALL false positives (fake test-token, trusted-CI
+  context, auth-via-unrecognized-guards). Strong proof of the thesis: value is in the triage gate.
+- **Fix shipped: #126/PR #127** — broadened `harvey-route-noauth` to recognize custom guard helpers
+  (`assertPlatformAdmin`/`assertPermission`/etc.). ATC route-noauth FPs **122 → 0**; locked into the
+  #61 gate with a fixture pair. Corpus now 141/141 positives, 109/109 negatives.
+- Report renderer takes raw `Finding[]` directly (same schema); render curated findings to a NEW
+  `findings.<name>.json` — never overwrite `report-template/findings.atc.json` (protected).
+- NOT run this pass: connected-tier live Supabase advisor (#124-adjacent, needs a live stack) and
+  the dynamic pen-test (#5).
 
 DONE (merged this session): **#53 CLOSED via PR #111** (pipeline verified end-to-end, 7/8 planted
 bugs caught; runbook install path corrected). #71 round-2 corpus via PRs #112, #114–#121. Earlier:
 #101/#102/#103, #54/#94/#86/#73/#76.
 
 ## Operator / manual action items (not agent-executable)
-- **#70 GitGuardian — one nuance found overnight:** the dashboard ignore for `targets/calibration/`
-  works, but every batch also lands FAKE secret-shaped strings in `src/scan/calibration.test.ts`
-  (recorded scanner-output test vectors, e.g. `npm_FAKE…`, `AIzaSyD0FAKE…`) which sit OUTSIDE the
-  ignored path. GitGuardian failed on PR #116 for exactly this (benign; `verify` is the only required
-  check, so it never blocked). Extend the GitGuardian ignore to `src/scan/calibration.test.ts` (or
-  mark those incidents), then confirm+close #70.
+- **#70 GitGuardian — CLOSED 2026-07-10.** The `targets/calibration/` dashboard ignore works.
+  Residual noted at close: FAKE secret-shaped test vectors in `src/scan/calibration.test.ts`
+  (`npm_FAKE…`, `AIzaSyD0FAKE…`) sit OUTSIDE the ignored path and can trip GitGuardian on future
+  batch PRs (benign; `verify` is the only required check). If it becomes annoying, add that one file
+  to the dashboard ignore.
 - **Vercel 404 / preview-deploy fail:** still the `harvey` project Root Directory (set to
   `intake-site`) + `RESEND_API_KEY`. PR #121's Vercel preview deploy failed for this same
   project-level reason (not a code regression — `verify` was green); merged on the required check.
