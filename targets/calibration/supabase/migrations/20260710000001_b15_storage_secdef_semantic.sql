@@ -37,3 +37,38 @@ create policy user_files_insert_own on storage.objects
     and (storage.foldername(name))[1] = auth.uid()::text
     and (metadata ->> 'mimetype') = any (array['image/png', 'image/jpeg', 'application/pdf'])
   );
+
+-- #139 — P-SECDEF-PRIV-WRITE-NOAUTH: a SECURITY DEFINER function that performs a privileged
+-- write (promoting a user to admin) with no check on who is calling. Granted to authenticated,
+-- so any signed-in user can promote any user — including themselves.
+create or replace function public.promote_to_admin(target_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.profiles set role = 'admin' where id = target_user_id;
+end;
+$$;
+
+grant execute on function public.promote_to_admin(uuid) to authenticated;
+
+-- N-SECDEF-PRIV-WRITE-AUTHCHECK — benign lookalike: the identical privileged write, but gated —
+-- the caller's OWN profile (looked up via `id = auth.uid()`) must already carry role = 'admin'
+-- before the target row can be promoted. Contrast P-SECDEF-PRIV-WRITE-NOAUTH above.
+create or replace function public.promote_to_admin_checked(target_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not exists (select 1 from public.profiles where id = auth.uid() and role = 'admin') then
+    raise exception 'not authorized';
+  end if;
+  update public.profiles set role = 'admin' where id = target_user_id;
+end;
+$$;
+
+grant execute on function public.promote_to_admin_checked(uuid) to authenticated;

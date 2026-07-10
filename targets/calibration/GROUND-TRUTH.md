@@ -1060,6 +1060,7 @@ false positives.
 |---|---|---|---|
 | P-STORAGE-AUTH-NOT-OWNER `[#137]` | `supabase/migrations/20260710000001_b15_storage_secdef_semantic.sql` (`user_files_select_authenticated`) | `storage.objects` SELECT policy `USING (auth.role() = 'authenticated')` — checks login, not ownership | review |
 | P-STORAGE-UPLOAD-CHECK-TRUE `[#138]` | same file (`user_files_insert_open`) | `storage.objects` INSERT policy `WITH CHECK (true)` — unrestricted upload to any bucket/path. Code-side is `P-UPLOAD-NO-LIMIT` (B14). | review |
+| P-SECDEF-PRIV-WRITE-NOAUTH `[#139]` | same file (`promote_to_admin`) | `security definer` function updates `profiles.role` with no check on the caller's identity — any authenticated caller can promote anyone to admin | review |
 
 ### B15 negatives — benign lookalikes (must NOT be flagged in the free count)
 
@@ -1067,6 +1068,28 @@ false positives.
 |---|---|---|
 | N-STORAGE-OWNERSHIP-SCOPED | same file (`user_files_select_own`) | `USING (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text)` — the standard one-folder-per-user ownership pattern. No mechanical rule reads `storage.objects` policy bodies at all — trivially silent. |
 | N-STORAGE-UPLOAD-OWNERSHIP-MIME | same file (`user_files_insert_own`) | `WITH CHECK (... foldername ownership ... and mimetype = any (allowed list))` — ownership-scoped and mime-restricted, mirroring the bucket's `allowed_mime_types` (`config.toml`). No mechanical rule reads `storage.objects` bodies — trivially silent. |
+| N-SECDEF-PRIV-WRITE-AUTHCHECK | same file (`promote_to_admin_checked`) | the identical privileged write, gated by `where id = auth.uid() and role = 'admin'` on the CALLER's own row before the target row is touched. No mechanical rule reads `security definer` function bodies — trivially silent. |
+
+### B15 detection
+
+No new mechanical scanner. All three positives are documented, non-fatal `pnpm validate:calibration`
+review-tier misses (`reviewMisses`, `cli/validate-calibration.ts`) — detection is the existing LLM
+`/vuln-scan` + `/triage` high-recall pass, per parent tracker #123 option (b). All three negatives
+are fully silent (no mechanical rule reads Supabase policy or `security definer` function bodies).
+Six of the nine #123 classes (BOLA/BFLA, middleware matcher, middleware-sole-authz, draft-mode
+secret, host-header trust, client-render authz) remain out of scope for this fixture sweep.
+
+### B15 live result (2026-07-10, static binaries: semgrep, gitleaks, trufflehog, osv-scanner; no Docker)
+
+`pnpm validate:calibration`: **GATE PASS — zero free-count false positives; every high-tier rule
+fired on its positive.** All 3 B15 positives are documented, non-fatal review-tier misses (as
+designed — semantic/policy-body detection, no mechanical rule) and all 3 B15 negatives are fully
+silent. Corpus totals after B15: **141/144 static positives caught (61 at high/free-count, 15
+connected N/A; 3 documented review-tier misses — P-STORAGE-AUTH-NOT-OWNER,
+P-STORAGE-UPLOAD-CHECK-TRUE, P-SECDEF-PRIV-WRITE-NOAUTH), 112/112 static negatives cleared.**
+`pnpm verify` (offline) is green: 452 tests (no new detector, so no new test count — the B15
+answer key is scored purely via `buildCoverageMatrix`/`validate-calibration.ts`, no
+`calibration.test.ts` recorded-vector block).
 
 ---
 
