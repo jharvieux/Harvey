@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { buildCoverageMatrix, CORPUS, scoreEntry, type CorpusEntry } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
+import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
@@ -235,6 +236,44 @@ describe("Batch B9 secrets corpus (recorded gitleaks + semgrep output → tier m
     expect(m.positivesCaughtHigh).toBe(8);
     expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(3);
     expect(m.ok).toBe(true);
+  });
+});
+
+describe("Batch B10 dependency-CVE corpus (secondary manifest fixtures → real check output)", () => {
+  // Reconstructs what validate-calibration.ts's scanManifestFixtures produces for the three B10
+  // fixture app-roots by running the SAME offline check functions (no binaries), then scores every
+  // B10 entry. Faithful to the live run: b10-vuln-deps (vulnerable), b10-nextauth-csrf (the isolated
+  // OAuth-CSRF next-auth version), b10-patched-deps (clean).
+  const vulnLabel = "fixtures/b10-vuln-deps/package.json";
+  const vulnDeps = { next: "16.0.5", "next-auth": "4.24.5", jsonwebtoken: "8.5.1", "follow-redirects": "1.15.4", axios: "1.7.2", undici: "5.7.0", cookie: "0.5.0", ws: "7.4.5", sharp: "0.31.3" };
+  const csrfLabel = "fixtures/b10-nextauth-csrf/package.json";
+  const csrfDeps = { "next-auth": "4.19.0" };
+  const patchedLabel = "fixtures/b10-patched-deps/package.json";
+  const patchedDeps = { next: "16.2.5", "next-auth": "4.24.12", jsonwebtoken: "9.0.2", "follow-redirects": "1.15.6", axios: "1.8.2", undici: "5.28.3", cookie: "0.7.0", ws: "7.4.6", sharp: "0.32.6" };
+
+  const findings: Finding[] = [
+    ...checkNextVersionCVEs(vulnDeps.next, vulnLabel),
+    ...checkKnownDependencyCVEs(vulnDeps, vulnLabel),
+    ...checkKnownDependencyCVEs(csrfDeps, csrfLabel),
+    ...checkNextVersionCVEs(patchedDeps.next, patchedLabel),
+    ...checkKnownDependencyCVEs(patchedDeps, patchedLabel),
+  ];
+
+  it("covers all ten B10 classes (10 positives) plus the patched negatives", () => {
+    expect(b10DepsEntries.filter((e) => e.kind === "positive")).toHaveLength(10);
+  });
+
+  it("catches every B10 positive at high and clears every B10 negative", () => {
+    for (const e of b10DepsEntries) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe("high");
+      else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("draws nothing at all from the patched fixture", () => {
+    expect(findings.filter((f) => f.location.includes("b10-patched-deps"))).toEqual([]);
   });
 });
 
