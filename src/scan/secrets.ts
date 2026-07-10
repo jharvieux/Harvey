@@ -32,6 +32,15 @@ const HIGH_PRECISION_GITLEAKS_RULES = new Set([
   "supabase-secret-key",
   "harvey-db-uri-credentials",
   "private-key",
+  // B9 (#71) additions — each is a dedicated-format prefix or a published constant whose match
+  // alone is ~100% precision: the unrotated self-hosted default JWT secret, non-DB URIs with
+  // inline creds, a hardcoded Authorization Bearer literal, an npm automation token (npm_ + 36),
+  // and a Slack incoming-webhook URL (hooks.slack.com/services/…).
+  "supabase-default-jwt-secret",
+  "harvey-uri-credentials",
+  "harvey-http-authorization-bearer",
+  "npm-access-token",
+  "slack-webhook-url",
 ]);
 
 export interface TruffleHogResult {

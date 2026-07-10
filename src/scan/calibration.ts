@@ -20,6 +20,7 @@ import { b5HeadersEntries } from "./calibration/b5-headers.entries.js";
 import { b6CryptoEntries } from "./calibration/b6-crypto.entries.js";
 import { b7AuthEntries } from "./calibration/b7-auth.entries.js";
 import { b8SupaEntries } from "./calibration/b8-supa.entries.js";
+import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
 import { m7Entries } from "./calibration/m7.entries.js";
 import { m8Entries } from "./calibration/m8.entries.js";
@@ -45,6 +46,7 @@ export const CORPUS: CorpusEntry[] = [
   ...b6CryptoEntries,
   ...b7AuthEntries,
   ...b8SupaEntries,
+  ...b9SecretsEntries,
   ...m10Entries,
   ...m4m5Entries,
   ...m8Entries,

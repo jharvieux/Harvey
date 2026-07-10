@@ -23,6 +23,44 @@ id = "supabase-secret-key"
 description = "Supabase new-format secret key (sb_secret_...)"
 regex = '''sb_secret_[A-Za-z0-9_]{20,}'''
 
+# The well-known DEFAULT self-hosted Supabase JWT secret, shipped verbatim in the docker-compose
+# template. It is public knowledge, so committing it unrotated makes every anon/service_role JWT
+# forgeable — a 100%-precision catch (the exact published string, nothing else matches it).
+[[rules]]
+id = "supabase-default-jwt-secret"
+description = "Self-hosted Supabase default JWT secret (unrotated docker default)"
+regex = '''your-super-secret-jwt-token-with-at-least-32-characters-long'''
+
+# Non-database service URI (smtp/ftp/http) with an inline password — the non-DB companion to
+# harvey-db-uri-credentials. The password char class excludes ${ } so env-interpolated URIs
+# (smtp://u:${PW}@h) don't match; loopback hosts are local-dev and allowlisted. Requires a 6+
+# char literal password to skip trivial "x:y@" fragments.
+[[rules]]
+id = "harvey-uri-credentials"
+description = "Non-database service URI with an inline password (smtp/ftp/http)"
+regex = '''(?i)(?:smtps?|ftps?|https?)://[a-z0-9._-]+:[^:@/\s'"{}$]{6,}@[a-z0-9._-]+'''
+[[rules.allowlists]]
+description = "Loopback hosts are local-dev creds, not committed secrets"
+regexTarget = "match"
+regexes = ['''@(?:localhost|127\.0\.0\.1)''']
+
+# Google API key (AIza… prefix). The default ruleset in this gitleaks version doesn't ship a
+# working AIza rule, so match it here. NOT in the high-precision set (secrets.ts) — a committed
+# AIza key can't be verified live and is over-reported by docs/examples, so it stays review.
+[[rules]]
+id = "harvey-gcp-api-key"
+description = "Google API key (AIza prefix)"
+regex = '''AIza[0-9A-Za-z\-_]{35}'''
+
+# A hardcoded HTTP Authorization Bearer token literal (e.g. an outbound DB-webhook call in a
+# committed SQL migration, or any source file). Requires a 24+ char literal after Bearer, so
+# `Bearer ${ENV}` interpolation and `Bearer ' || current_setting(...)` (runtime-sourced) don't
+# match — only a committed literal token does.
+[[rules]]
+id = "harvey-http-authorization-bearer"
+description = "Hardcoded HTTP Authorization Bearer token literal"
+regex = '''(?i)bearer\s+[a-z0-9_\-]{24,}'''
+
 # A committed database connection URI with an inline (non-placeholder) password. The scheme +
 # user:password@host shape is high-specificity; sample/placeholder URIs live in path-allowlisted
 # files (.env.example, *.sample). Requires a 6+ char password to skip trivial "x:y@" fragments.

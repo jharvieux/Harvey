@@ -609,6 +609,80 @@ hosted project — is a deferred main-session pass with Docker.**
 
 ---
 
+## Batch B9 (#71) — secrets & config-secret breadth
+
+The secrets/config-secret expansion batch (spec `docs/design/corpus-roadmap-to-100.md` §3a). Answer
+key: `src/scan/calibration/b9-secrets.entries.ts`. Extends the EXISTING secret scanners — no new
+scanner: custom gitleaks rules in `src/scan/rules/gitleaks-supabase.toml`, three structural Semgrep
+rules in `src/scan/rules/semgrep/secrets.yml`, and the high-precision rule set in `src/scan/secrets.ts`.
+All planted secret values are FAKE (valid-shape, inert). Tiering per the locked preamble: only
+~100%-precision detections are `high` (free count) — a dedicated-format prefix, a published constant,
+or a structural sink whose match alone is proof. Provider-key patterns that only live verification
+would confirm (the fake `AIza` key, the committed storage JWT) stay `review`, as does the
+secret-in-URL heuristic.
+
+### B9 positives — planted secrets/config-secrets (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-NEXTCONFIG-ENV-SECRET | `next.config.js` (`env:{SUPABASE_SERVICE_ROLE_KEY}`) | Semgrep `harvey-nextconfig-env-secret` (secret-named key whose value is a `process.env` read, scoped inside an `env` block) | high |
+| P-SB-DEFAULT-JWT-SECRET | `supabase/docker.env` (`JWT_SECRET=your-super-secret-jwt-token-…`) | gitleaks custom `supabase-default-jwt-secret` (exact published self-hosted default string) | high |
+| P-NPM-TOKEN-COMMITTED | `.npmrc` (`_authToken=npm_…`) | gitleaks default `npm-access-token`, promoted to high in `secrets.ts` (dedicated `npm_`+36 token format) | high |
+| P-GCP-SA-JSON | `secrets/gcp-service-account.json` | gitleaks `private-key` (the `-----BEGIN PRIVATE KEY-----` body of the service-account file) | high |
+| P-SLACK-WEBHOOK-URL | `lib/notify.js` | gitleaks default `slack-webhook-url`, promoted to high in `secrets.ts` (`hooks.slack.com/workflows/…`; the `/workflows/` path keeps the fixture inert to GitHub push protection's `/services/` incoming-webhook pattern) | high |
+| P-URI-CREDS-NONPG | `lib/mailer.js` (`smtp://user:pw@host`) | gitleaks custom `harvey-uri-credentials` (non-DB schemes; loopback + `${env}` excluded) | high |
+| P-EDGEFN-SECRET | `supabase/functions/send-email/index.ts` | Semgrep `harvey-edgefn-secret-fallback` (`Deno.env.get(...) ?? "literal"`) | high |
+| P-DB-WEBHOOK-SECRET-SQL | `supabase/migrations/20260709000005_b9_db_webhook.sql` | gitleaks custom `harvey-http-authorization-bearer` (24+ char literal after `Bearer`) | high |
+| P-GCP-API-KEY | `lib/maps.js` (`AIza…`) | gitleaks custom `harvey-gcp-api-key` (default ruleset ships no working AIza rule this version) | review |
+| P-SECRET-IN-URL | `lib/weather.js` (`?api_key=${KEY}`) | Semgrep `harvey-secret-in-url-param` (secret-bearing query param) | review |
+| P-SIGNED-URL-TOKEN-SRC | `lib/share.js` (`…/sign/…?token=eyJ…`) | gitleaks default `jwt` (payload decodes to a benign storage claim, not `service_role`) | review |
+
+### B9 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-NEXTCONFIG-ENV-BENIGN | `next.config.js` (`APP_VERSION`) | A non-secret build constant in the same `env` block — the rule's key-name regex doesn't match it. |
+| N-SB-JWT-ROTATED | `supabase/docker.env` (`ANON_JWT_SECRET=<random>`) | A rotated random secret is NOT the published default string; `supabase-default-jwt-secret` stays silent (a generic-api-key review hit only, triaged out). |
+| N-NPM-TOKEN-ENV | `.npmrc` (`${NPM_TOKEN}`) | Token sourced from the environment — no literal, `npm-access-token` matches nothing. |
+| N-GCP-SA-EXAMPLE | `secrets/gcp-service-account.json.example` | `<YOUR_PRIVATE_KEY>` placeholder, no PEM block — `private-key` silent; only a LOW-confidence semgrep review hit (triaged out). |
+| N-SLACK-WEBHOOK-PLACEHOLDER | `lib/notify.js` (`<WEBHOOK_TOKEN>`) | Angle-bracketed placeholder; `slack-webhook-url` needs a real 24-char token segment. |
+| N-URI-CREDS-ENV | `lib/mailer.js` (`${SMTP_PASSWORD}`) | Env-interpolated password; the rule's char class excludes `${ }`. |
+| N-EDGEFN-SECRET-THROWS | `supabase/functions/send-email-safe/index.ts` | Reads env and throws when absent — no string-literal fallback for the rule to match. |
+| N-DB-WEBHOOK-SECRET-SETTING | `…/20260709000005_b9_db_webhook.sql` | Header built from `current_setting(...)` — no committed literal after `Bearer`. |
+| N-GCP-KEY-ENV | `lib/maps.js` (`process.env.GOOGLE_MAPS_API_KEY`) | No `AIza` literal in source. |
+| N-SECRET-IN-HEADER | `lib/weather.js` (Authorization header) | Secret sent in a header, no secret-bearing query param — the URL regex doesn't match. |
+| N-SIGNED-URL-PLACEHOLDER | `lib/share.js` (`<SIGNED_URL_TOKEN>`) | Angle-bracketed placeholder, not a JWT. |
+| N-BCRYPT-HASH-SEED | `supabase/seed.sql` (`$2b$…`) | A bcrypt digest in seed data is a one-way hash of a throwaway dev password, not a secret — free-count FP guard. semgrep's `detected-bcrypt-hash` fires only at LOW confidence → review, triaged out; never high. |
+
+### B9 detection additions
+
+Custom gitleaks rules (`src/scan/rules/gitleaks-supabase.toml`): `supabase-default-jwt-secret`,
+`harvey-uri-credentials` (non-DB URI creds), `harvey-http-authorization-bearer`, `harvey-gcp-api-key`.
+Two gitleaks DEFAULT rules were promoted to the high-precision set in `src/scan/secrets.ts`
+(`npm-access-token`, `slack-webhook-url`) alongside the three new high custom rules. Structural
+Semgrep rules (`src/scan/rules/semgrep/secrets.yml`): `harvey-nextconfig-env-secret` and
+`harvey-edgefn-secret-fallback` (both ERROR + HIGH → high), `harvey-secret-in-url-param`
+(WARNING + MEDIUM → review). No product scanner module was added; `supabase-config.ts`'s
+live-input edge/webhook checks are unchanged (they run on a connected pull, not the static gate) —
+the edge-function/DB-webhook classes here are caught statically by the Semgrep/gitleaks passes that
+`validate-calibration.ts` actually runs. The Edge Function fixtures are inert source files, never
+deployed; the migration/seed SQL is data only, never applied to any database.
+
+### B9 live result (2026-07-09, static binaries: semgrep 1.164.0, gitleaks 8.30.1, trufflehog 3.95.8, osv-scanner 2.3.8, no Docker)
+
+`pnpm validate:calibration`: **positives caught 93/93 static (36 at high/free-count), 15
+connected-tier N/A; negatives cleared 63/63; zero free-count false positives — GATE PASS.** All 11
+B9 positives fire (8 at high: the next.config env-inlining, the default JWT secret, the npm token,
+the GCP service-account private key, the Slack webhook, the SMTP URI creds, the Edge Function
+literal fallback, the DB-webhook bearer literal; 3 at review: the fake AIza key, the secret-in-URL
+param, the committed storage JWT). All 12 B9 negatives clear (the high-tier count moved 28 → 36; no
+regression on any prior batch). `pnpm verify` (offline) is green: `calibration.test.ts` gained a B9
+recorded block that feeds recorded gitleaks + semgrep output through the real tier mapping and
+scores all B9 entries (8 high / 3 review), plus the whole-CORPUS synth collision guard covers the
+new locations.
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`

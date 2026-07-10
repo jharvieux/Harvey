@@ -69,3 +69,10 @@ insert into public.counters (tenant_id, name, value) values
 insert into public.notes (tenant_id, body) values
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'A private note'),
   ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'B private note');
+
+-- NEGATIVE (N-BCRYPT-HASH-SEED): a precomputed bcrypt password hash in seed data is NOT a
+-- committed secret — it is a one-way hash of a throwaway local-dev password, safe to commit.
+-- A secret scanner that flags a $2b$ bcrypt digest here is a free-count false positive. No
+-- gitleaks rule matches a bcrypt hash; it must stay cleared.
+insert into public.legacy_accounts (email, password_hash) values
+  ('seed-user@tenant-a.test', '$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy');
