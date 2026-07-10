@@ -211,6 +211,148 @@ export function checkEdgeFunctionSecrets(fns: EdgeFunctionSource[]): Finding[] {
     );
 }
 
+export interface RealtimeMessagesInfo {
+  exists: boolean; // false when the realtime schema / messages table isn't present at all
+  rlsEnabled: boolean;
+}
+
+// Realtime Authorization gates broadcast/presence through RLS policies on realtime.messages.
+// If RLS is disabled on that table, every subscriber with the anon key receives every channel's
+// messages regardless of channel privacy — the clear, DB-decidable misconfiguration. Whether an
+// app that *does* keep RLS on has actually marked its channels private is a client-code fact this
+// check can't see, so it only fires on the unambiguous RLS-off case and stays "review".
+export function checkRealtimeAuthorization(realtime: RealtimeMessagesInfo): Finding[] {
+  if (!realtime.exists || realtime.rlsEnabled) return [];
+  return [
+    mechanicalFinding({
+      id: "SB-REALTIME-NO-AUTHZ",
+      title: "Realtime messages table has RLS disabled — channels are unauthorized",
+      severity: "High",
+      category: "Supabase config",
+      taxonomy: "Realtime channel lacks authorization",
+      location: "realtime.messages",
+      evidence: "realtime.messages has row-level security disabled.",
+      impact: "Realtime Authorization is enforced by RLS on realtime.messages; with RLS off, any client holding the anon key can subscribe to broadcast/presence on any channel and receive other users' messages.",
+      fix: "Enable RLS on realtime.messages and add policies scoping channel access, and mark private channels with { config: { private: true } } on the client.",
+      precisionTier: "review",
+    }),
+  ];
+}
+
+// PostgREST auto-exposes the schemas listed in its db-schema config over the REST/GraphQL API.
+// The Supabase default is public + graphql_public; any additional schema is directly reachable
+// with the anon key, so a broader list than intended is an exposure. Whether the extra schema is
+// *meant* to be public is a judgment call → "review".
+const DEFAULT_EXPOSED_SCHEMAS = new Set(["public", "graphql_public"]);
+
+export function checkExposedSchemas(exposedSchemas: string[]): Finding[] {
+  return exposedSchemas
+    .map((s) => s.trim())
+    .filter((s) => s && !DEFAULT_EXPOSED_SCHEMAS.has(s))
+    .map((schema) =>
+      mechanicalFinding({
+        id: `SB-API-SCHEMA-${schema}`,
+        title: `Schema "${schema}" is exposed over the PostgREST API`,
+        severity: "Medium",
+        category: "Supabase config",
+        taxonomy: "PostgREST schema exposure wider than intended",
+        location: `exposed schema: ${schema}`,
+        evidence: `PostgREST db-schema config exposes "${schema}" beyond the public/graphql_public default.`,
+        impact: "Every table/function in the schema is reachable with the anon key (subject to grants/RLS) — an exposure surface that's easy to widen unintentionally.",
+        fix: "Remove the schema from the exposed API schemas unless it's deliberately public; keep internal data in an unexposed schema.",
+        precisionTier: "review",
+      }),
+    );
+}
+
+// pg_graphql serves a GraphQL API (with introspection) at the graphql_public schema. It's only
+// reachable if the extension is installed AND graphql_public is in the exposed schema list;
+// introspection then lets anyone enumerate the exposed graph. Both facts are read live.
+export function checkGraphqlIntrospection(pgGraphqlInstalled: boolean, exposedSchemas: string[]): Finding[] {
+  if (!pgGraphqlInstalled || !exposedSchemas.map((s) => s.trim()).includes("graphql_public")) return [];
+  return [
+    mechanicalFinding({
+      id: "SB-GRAPHQL-INTROSPECTION",
+      title: "pg_graphql API is exposed with introspection enabled",
+      severity: "Medium",
+      category: "Supabase config",
+      taxonomy: "pg_graphql introspection enabled in production",
+      location: "graphql_public",
+      evidence: "pg_graphql is installed and graphql_public is in the exposed API schemas.",
+      impact: "The GraphQL endpoint answers introspection queries, letting anyone with the anon key enumerate the full exposed schema graph — a reconnaissance aid for finding weakly-protected tables/functions.",
+      fix: "Disable the GraphQL API in production if unused, or remove graphql_public from the exposed schemas; introspection can't be selectively disabled while the endpoint is live.",
+      precisionTier: "review",
+    }),
+  ];
+}
+
+// Self-hosted GoTrue (Supabase Auth) version checks. Hosted Supabase auto-patches GoTrue, so
+// these only matter for self-hosted deployments — the finding text says so. Version comes from
+// the running auth server (GET {project}/auth/v1/health); providers from the auth config.
+export interface GotrueInfo {
+  version: string | null; // e.g. "v2.170.0" or "2.170.0"
+  appleEnabled?: boolean;
+  azureEnabled?: boolean;
+}
+
+// Compares dotted numeric versions ("2.170.0"). Returns -1 / 0 / 1. Non-numeric/short parts
+// are treated as 0 so "v2.170" ~ "2.170.0".
+export function compareVersions(a: string, b: string): number {
+  const pa = a.replace(/^v/, "").split(".");
+  const pb = b.replace(/^v/, "").split(".");
+  for (let i = 0; i < 3; i++) {
+    const na = Number(pa[i] ?? 0) || 0;
+    const nb = Number(pb[i] ?? 0) || 0;
+    if (na !== nb) return na < nb ? -1 : 1;
+  }
+  return 0;
+}
+
+export function checkGotrueVersion(gotrue: GotrueInfo): Finding[] {
+  const { version } = gotrue;
+  if (!version) return [];
+  const findings: Finding[] = [];
+
+  // GHSA-v36f-qvww-8w8m: OIDC issuer-verification bypass, fixed in 2.185.0, exploitable only
+  // with the Apple or Azure provider enabled (they share the affected id-token path).
+  if (compareVersions(version, "2.185.0") < 0 && (gotrue.appleEnabled || gotrue.azureEnabled)) {
+    findings.push(
+      mechanicalFinding({
+        id: "SB-GOTRUE-OIDC-BYPASS",
+        title: `Self-hosted GoTrue ${version} is vulnerable to OIDC issuer-verification bypass (GHSA-v36f-qvww-8w8m)`,
+        severity: "High",
+        category: "Supabase config",
+        taxonomy: "Self-hosted GoTrue OIDC issuer bypass",
+        location: `GoTrue ${version}`,
+        evidence: `Running GoTrue ${version} (< 2.185.0) with Apple/Azure OIDC enabled.`,
+        impact: "Applies to self-hosted Supabase Auth only. The issuer claim isn't verified, so a token from an attacker-controlled issuer can be accepted — account takeover via forged OIDC id-tokens.",
+        fix: "Upgrade self-hosted GoTrue to ≥ 2.185.0. (Hosted Supabase projects are already patched.)",
+        precisionTier: "review",
+      }),
+    );
+  }
+
+  // GHSA-3529-5m8x-rpv3: email-link poisoning via X-Forwarded-Host, affects 2.67.1–2.163.0.
+  if (compareVersions(version, "2.67.1") >= 0 && compareVersions(version, "2.163.0") <= 0) {
+    findings.push(
+      mechanicalFinding({
+        id: "SB-GOTRUE-HOST-POISON",
+        title: `Self-hosted GoTrue ${version} is vulnerable to email-link poisoning via X-Forwarded-Host (GHSA-3529-5m8x-rpv3)`,
+        severity: "High",
+        category: "Supabase config",
+        taxonomy: "Self-hosted GoTrue email-link poisoning",
+        location: `GoTrue ${version}`,
+        evidence: `Running GoTrue ${version} (in the affected 2.67.1–2.163.0 range).`,
+        impact: "Applies to self-hosted Supabase Auth only. A spoofed X-Forwarded-Host header poisons confirmation/reset links in outbound emails, redirecting the token to an attacker's host.",
+        fix: "Upgrade self-hosted GoTrue past 2.163.0 and constrain trusted proxy headers at the reverse proxy. (Hosted Supabase projects are already patched.)",
+        precisionTier: "review",
+      }),
+    );
+  }
+
+  return findings;
+}
+
 const SIGNATURE_CHECK_HINT = /(verifyWebhookSignature|constructEvent|x-webhook-signature|hmac|createHmac|timingSafeEqual)/i;
 
 export function checkUnsignedWebhookHandlers(fns: EdgeFunctionSource[]): Finding[] {

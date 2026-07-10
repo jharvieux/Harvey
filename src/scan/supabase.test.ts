@@ -8,6 +8,7 @@ import { mechanicalFinding } from "./common.js";
 vi.mock("postgres", () => ({
   default: vi.fn(() => ({
     unsafe: vi.fn(async (query: string) => {
+      if (query.includes("realtime")) return [{ rlsEnabled: true }];
       if (query.includes("pg_tables")) return [{ schema: "public", name: "widgets", rlsEnabled: false }];
       if (query.includes("pg_extension")) return [{ name: "pg_net", schema: "extensions", installed_version: "0.20.3" }];
       if (query.includes("storage.buckets")) return [{ id: "b1", name: "avatars", public: true }];
@@ -25,13 +26,17 @@ function mockFetch(responses: {
   extensions: unknown;
   buckets: unknown;
   policies: unknown;
+  realtime?: unknown;
+  postgrest?: unknown;
 }): typeof fetch {
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const u = url.toString();
     if (u.includes("/advisors/security")) return new Response(JSON.stringify(responses.advisors));
     if (u.includes("/config/auth")) return new Response(JSON.stringify(responses.authConfig));
+    if (u.includes("/postgrest")) return new Response(JSON.stringify(responses.postgrest ?? { db_schema: "public,graphql_public" }));
     if (u.includes("/database/query")) {
       const body = JSON.parse(String(init?.body ?? "{}")) as { query: string };
+      if (body.query.includes("realtime")) return new Response(JSON.stringify(responses.realtime ?? [{ rlsEnabled: true }]));
       if (body.query.includes("pg_tables")) return new Response(JSON.stringify(responses.tables));
       if (body.query.includes("pg_extension")) return new Response(JSON.stringify(responses.extensions));
       if (body.query.includes("storage.buckets")) return new Response(JSON.stringify(responses.buckets));
@@ -69,6 +74,41 @@ describe("runSupabaseScan", () => {
     expect(taxonomies).toContain("Dangerous extension enabled");
     expect(taxonomies).toContain("Public bucket with no policies");
     expect(findings.every((f) => f.mechanical)).toBe(true);
+  });
+
+  it("runs the connected-tier checks (realtime, exposed schema, pg_graphql) on a hosted scan", async () => {
+    const fetchImpl = mockFetch({
+      advisors: { lints: [] },
+      authConfig: {},
+      tables: [],
+      extensions: [{ name: "pg_graphql", schema: null, installed_version: "1.5.11" }],
+      buckets: [],
+      policies: [],
+      realtime: [{ rlsEnabled: false }],
+      postgrest: { db_schema: "public,graphql_public,internal" },
+    });
+    const taxonomies = (await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl })).map((f) => f.taxonomy);
+    expect(taxonomies).toContain("Realtime channel lacks authorization");
+    expect(taxonomies).toContain("PostgREST schema exposure wider than intended");
+    expect(taxonomies).toContain("pg_graphql introspection enabled in production");
+  });
+
+  it("probes a self-hosted GoTrue endpoint for the vulnerable-version classes", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      const u = url.toString();
+      if (u.endsWith("/health")) return new Response(JSON.stringify({ version: "v2.100.0" }));
+      if (u.endsWith("/settings")) return new Response(JSON.stringify({ external: { apple: true, azure: false } }));
+      if (u.includes("/advisors/security")) return new Response(JSON.stringify({ lints: [] }));
+      if (u.includes("/config/auth")) return new Response(JSON.stringify({}));
+      if (u.includes("/postgrest")) return new Response(JSON.stringify({ db_schema: "public" }));
+      if (u.includes("/database/query")) return new Response(JSON.stringify([]));
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+    const taxonomies = (
+      await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl, gotrueProbe: { authUrl: "https://self-hosted.example.com/auth/v1", anonKey: "anon" } })
+    ).map((f) => f.taxonomy);
+    expect(taxonomies).toContain("Self-hosted GoTrue OIDC issuer bypass"); // 2.100.0 < 2.185.0 with Apple enabled
+    expect(taxonomies).toContain("Self-hosted GoTrue email-link poisoning"); // within 2.67.1–2.163.0
   });
 
   it("propagates a Management API error instead of swallowing it", async () => {
