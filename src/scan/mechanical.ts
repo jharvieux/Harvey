@@ -14,7 +14,7 @@ import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { scanSecrets } from "./secrets.js";
 import { checkMissingCsp, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
-import { checkInstallScripts, checkLockfilePresence, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
+import { checkInstallScripts, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
@@ -84,6 +84,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
       findings.push(...checkTyposquat(Object.keys(allDeps)));
       findings.push(...checkUnpinnedDependencies(allDeps));
+      findings.push(...checkNonRegistryDependencies(allDeps));
       findings.push(...checkInstallScripts(pkg.scripts ?? {}));
       findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
     }

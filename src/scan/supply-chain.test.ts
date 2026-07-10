@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkInstallScripts, checkLockfilePresence, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies } from "./supply-chain.js";
+import { checkInstallScripts, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies } from "./supply-chain.js";
 
 describe("checkTyposquat", () => {
   it("flags a name one edit from a popular package", () => {
@@ -33,6 +33,26 @@ describe("checkUnpinnedDependencies", () => {
 
   it("returns no finding when every dependency is exactly pinned", () => {
     expect(checkUnpinnedDependencies({ react: "18.2.0", zod: "3.22.0" })).toEqual([]);
+  });
+});
+
+describe("checkNonRegistryDependencies", () => {
+  it("flags git/url/file dependency sources at review tier", () => {
+    const findings = checkNonRegistryDependencies({
+      "left-pad": "git+https://github.com/left-pad/left-pad.git",
+      local: "file:../local-pkg",
+      react: "^18.2.0",
+      zod: "3.22.0",
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.evidence).toContain("left-pad@git+https://github.com/left-pad/left-pad.git");
+    expect(findings[0]?.evidence).toContain("local@file:../local-pkg");
+    expect(findings[0]?.evidence).not.toContain("react@");
+    expect(findings[0]?.precisionTier).toBe("review");
+  });
+
+  it("does not flag registry semver ranges", () => {
+    expect(checkNonRegistryDependencies({ react: "^18.2.0", zod: "3.22.0", next: "~14.2.5" })).toEqual([]);
   });
 });
 
