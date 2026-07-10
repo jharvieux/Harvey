@@ -8,10 +8,12 @@ import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
 import { b11CryptoEntries } from "./calibration/b11-crypto.entries.js";
 import { b12NextconfigEntries } from "./calibration/b12-nextconfig.entries.js";
+import { b13SupaEntries } from "./calibration/b13-supa.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
 import { checkPublicDirSensitive, parseSemgrepFindings, type SemgrepResult } from "./semgrep.js";
+import { checkEdgeFunctionVerifyJwt, checkMigrationRlsStatic } from "./supabase-static.js";
 import { checkKnownIoc, checkLockfilePresence } from "./supply-chain.js";
 import type { Finding, PrecisionTier } from "../findings.js";
 
@@ -391,6 +393,87 @@ describe("Batch B12 next-config/client-surface corpus (recorded semgrep + public
     const pub = checkPublicDirSensitive(pubDir);
     expect(pub.map((f) => f.location).sort()).toEqual(["public/.env.production", "public/backup.sql"]);
     expect(pub.every((f) => f.precisionTier === "high")).toBe(true);
+  });
+});
+
+describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real static checks → tier mapping)", () => {
+  // Recorded findings mirroring the live `pnpm validate:calibration` run over targets/calibration,
+  // fed through the real semgrep.ts tier mapping (no binary invoked). Exercises the B13 additions:
+  // 3 ERROR+HIGH Semgrep rules (spawn shell:true, pg ssl:false to a pooler, auth.admin in a Client
+  // Component) + 7 WARNING+MEDIUM injection-sink heuristics, plus the two new static checks
+  // (checkMigrationRlsStatic — the honesty-flag HIGH class — and checkEdgeFunctionVerifyJwt) run
+  // for real against a temp supabase/ tree. The negative fixtures draw nothing, so no rows for them.
+  const error = (id: string, path: string): SemgrepResult => ({
+    check_id: `src.scan.rules.semgrep.${id}`, path, start: { line: 8 },
+    extra: { severity: "ERROR", metadata: { confidence: "HIGH" }, message: `${id} matched` },
+  });
+  const warning = (id: string, path: string): SemgrepResult => ({
+    check_id: `src.scan.rules.semgrep.${id}`, path, start: { line: 9 },
+    extra: { severity: "WARNING", metadata: { confidence: "MEDIUM" }, message: `${id} matched` },
+  });
+  const semgrep: SemgrepResult[] = [
+    error("harvey-spawn-shell-true", "pages/api/thumbnail.js"),
+    error("harvey-pg-ssl-disabled", "lib/pg-ssl-disabled.js"),
+    error("harvey-auth-admin-in-client", "components/AdminUsersClient.jsx"),
+    warning("harvey-select-star-pii", "pages/api/customers.js"),
+    warning("harvey-cron-no-secret", "pages/api/cron/rollup.js"),
+    warning("harvey-dynamic-require", "pages/api/plugin.js"),
+    warning("harvey-dynamic-dispatch", "pages/api/dispatch.js"),
+    warning("harvey-template-autoescape-off", "lib/render-template.js"),
+    warning("harvey-html-template-literal", "pages/api/greet.js"),
+    warning("harvey-incomplete-sanitize", "lib/sanitize-bad.js"),
+  ];
+
+  // The two new static checks are filesystem facts, so run the REAL functions against a temp
+  // supabase/ tree that mirrors the calibration target: audit_logs (RLS never enabled — positive),
+  // documents (enabled in a later file) and service_state (RLS on, zero policies) as the two
+  // negatives; a [functions.admin-refund] verify_jwt=false positive + a verify_jwt=true negative.
+  const supaDir = mkdtempSync(join(tmpdir(), "harvey-b13-supa-"));
+  afterAll(() => rmSync(supaDir, { recursive: true, force: true }));
+  mkdirSync(join(supaDir, "supabase", "migrations"), { recursive: true });
+  writeFileSync(
+    join(supaDir, "supabase", "migrations", "20260708000001_schema.sql"),
+    "create table public.audit_logs (id uuid primary key);\ncreate table public.documents (id uuid primary key);\ncreate table public.service_state (id uuid primary key);\n",
+  );
+  writeFileSync(
+    join(supaDir, "supabase", "migrations", "20260708000002_rls.sql"),
+    "alter table public.documents enable row level security;\nalter table public.service_state enable row level security;\n",
+  );
+  writeFileSync(
+    join(supaDir, "supabase", "config.toml"),
+    "[functions.admin-refund]\nverify_jwt = false\n\n[functions.user-profile]\nverify_jwt = true\n",
+  );
+
+  const findings = [
+    ...parseSemgrepFindings({ results: semgrep }),
+    ...checkMigrationRlsStatic(supaDir),
+    ...checkEdgeFunctionVerifyJwt(supaDir),
+  ];
+
+  it("catches every B13 positive at its declared tier and clears every B13 negative", () => {
+    for (const e of b13SupaEntries) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe(e.expectedTier);
+      else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("promotes only the exact static/structural sinks to the free count (4 high, 8 review)", () => {
+    const m = buildCoverageMatrix(findings, b13SupaEntries);
+    const positives = b13SupaEntries.filter((e) => e.kind === "positive");
+    expect(m.positivesCaught).toBe(positives.length);
+    expect(m.positivesCaughtHigh).toBe(4);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(8);
+    expect(m.negativesCleared).toBe(m.negativesTotal);
+    expect(m.ok).toBe(true);
+  });
+
+  it("the migration RLS check flags only audit_logs (clears the later-file-enabled and deny-all tables)", () => {
+    const rls = checkMigrationRlsStatic(supaDir);
+    expect(rls).toHaveLength(1);
+    expect(rls[0]!.evidence).toContain("public.audit_logs");
+    expect(rls[0]!.precisionTier).toBe("high");
   });
 });
 
