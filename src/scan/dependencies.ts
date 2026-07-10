@@ -125,6 +125,29 @@ export function checkNextVersionCVEs(installedVersion: string, manifestPath = "p
     );
   }
 
+  // Server Actions null-origin CSRF: an unauthenticated cross-site request whose Origin header is
+  // absent (null) bypasses the Server Actions origin check on next 16.0.1–16.1.6 (fixed 16.1.7).
+  // Crisp single-line range → high. Synthetic-timeline advisory, consistent with the repo's
+  // forward-dated next-16 CVEs (see CVE-2026-44578 above); tracked by descriptive id, not a minted
+  // CVE number. A 16.0.x–16.1.x version in this range also (correctly) trips the RSC/WS-SSRF ranges
+  // above — this is an additional, distinct finding, isolated in the corpus by its "null-origin" text.
+  if (gte(installedVersion, "16.0.1") && lt(installedVersion, "16.1.7")) {
+    findings.push(
+      mechanicalFinding({
+        id: "DEP-NEXT-NULLORIGIN-CSRF",
+        title: `next@${installedVersion} vulnerable to Server Actions null-origin CSRF`,
+        severity: "High",
+        category: "Dependency CVE",
+        taxonomy: "Known-vulnerable dependency",
+        location: nextLocation,
+        evidence: `Installed next@${installedVersion} falls in the Server Actions null-origin CSRF range (>=16.0.1 <16.1.7).`,
+        impact: "A cross-site request with an absent (null) Origin header bypasses the Server Actions origin check, letting an attacker invoke authenticated Server Actions cross-site (CSRF); self-hosted deployments only.",
+        fix: "Upgrade next to >= 16.1.7.",
+        precisionTier: "high",
+      }),
+    );
+  }
+
   if (major > 0 && major < EOL_BELOW_MAJOR) {
     findings.push(
       mechanicalFinding({
@@ -181,6 +204,105 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
     tier: "review",
     summary: "Cross-site scripting via ReactDOMServer when rendering an attacker-controlled attribute name. Range is approximate — the backported patch releases 16.0.1/16.1.2/16.2.1/16.3.3 sit inside the affected majors but are fixed, so this stays review-tier.",
     fix: "Upgrade react-dom to >= 16.4.2 (or the backported patch for your minor line).",
+  },
+  // --- Batch B10 (#71) — dependency-CVE breadth (docs/design/corpus-roadmap-to-100.md §3b). Each
+  // is a single crisp "< fixed" boundary (some scoped to a major line via `introduced` where older
+  // majors have their own fix, keeping the range unambiguous) → high. ---
+  {
+    name: "jsonwebtoken",
+    fixed: "9.0.0",
+    id: "CVE-2022-23540",
+    severity: "High",
+    tier: "high",
+    summary: "jwt.verify() with no `algorithms` option defaults to accepting `none` / a caller-controlled algorithm, allowing signature-verification bypass (GHSA-qwph-4952-7xr6). All versions below 9.0.0 are affected; 9.0.0 makes `algorithms` mandatory.",
+    fix: "Upgrade jsonwebtoken to >= 9.0.0 and pass an explicit `algorithms` allowlist to jwt.verify().",
+  },
+  {
+    name: "next-auth",
+    introduced: "4.0.0",
+    fixed: "4.20.1",
+    id: "CVE-2023-27490",
+    severity: "Medium",
+    tier: "high",
+    summary: "OAuth sign-in CSRF: a missing/replayed state check lets an attacker link a victim's session to the attacker's OAuth account (GHSA-7fmc-9xx9-wvgm). The 4.x line is affected below 4.20.1.",
+    fix: "Upgrade next-auth to >= 4.20.1.",
+  },
+  {
+    name: "next-auth",
+    introduced: "4.0.0",
+    fixed: "4.24.12",
+    id: "GHSA-5jpx-9hw9-2fx4",
+    severity: "Medium",
+    tier: "high",
+    summary: "Email-provider sign-in misdelivery: a crafted address like `\"e@attacker.com\"@victim.com` is mis-parsed and the magic-link email is delivered to the attacker's mailbox, an authentication bypass. The 4.x line is affected below 4.24.12.",
+    fix: "Upgrade next-auth to >= 4.24.12 (and nodemailer to >= 7.0.7).",
+  },
+  {
+    name: "follow-redirects",
+    fixed: "1.15.6",
+    id: "CVE-2024-28849",
+    severity: "Medium",
+    tier: "high",
+    summary: "The Proxy-Authorization header is not cleared on a cross-origin redirect, leaking proxy credentials to the redirect target. All versions below 1.15.6 are affected.",
+    fix: "Upgrade follow-redirects to >= 1.15.6.",
+  },
+  {
+    name: "axios",
+    introduced: "1.0.0",
+    fixed: "1.8.2",
+    id: "CVE-2025-27152",
+    severity: "High",
+    tier: "high",
+    summary: "An absolute request URL overrides a configured `baseURL`, so attacker-controlled input in the path leads to SSRF and credential leakage (GHSA-jr5f-v2jv-69x6). The 1.x line is affected below 1.8.2.",
+    fix: "Upgrade axios to >= 1.8.2.",
+  },
+  {
+    name: "undici",
+    introduced: "5.0.0",
+    fixed: "5.8.1",
+    id: "CVE-2022-35949",
+    severity: "High",
+    tier: "high",
+    summary: "SSRF via an absolute URL supplied on `pathname`: `undici.request` sends the request to the absolute host instead of resolving against the intended origin (GHSA-8qr4-xgw6-wmr3). The 5.x line is affected below the 5.8.x fix.",
+    fix: "Upgrade undici to >= 5.8.1.",
+  },
+  {
+    name: "undici",
+    introduced: "5.0.0",
+    fixed: "5.28.3",
+    id: "CVE-2024-24758",
+    severity: "Medium",
+    tier: "high",
+    summary: "The Proxy-Authorization header is not cleared on a cross-origin redirect, leaking proxy credentials to the redirect target (GHSA-3787-6prv-h9w3). The 5.x line is affected below 5.28.3.",
+    fix: "Upgrade undici to >= 5.28.3.",
+  },
+  {
+    name: "cookie",
+    fixed: "0.7.0",
+    id: "CVE-2024-47764",
+    severity: "Low",
+    tier: "high",
+    summary: "Out-of-bounds characters in a cookie name/path/domain let a caller inject additional cookie fields (field injection). All versions below 0.7.0 are affected.",
+    fix: "Upgrade cookie to >= 0.7.0.",
+  },
+  {
+    name: "ws",
+    introduced: "7.0.0",
+    fixed: "7.4.6",
+    id: "CVE-2021-32640",
+    severity: "High",
+    tier: "high",
+    summary: "ReDoS: a crafted `Sec-Websocket-Protocol` header value triggers catastrophic backtracking, stalling the server (GHSA-6fc8-4gx4-v693). The 7.x line is affected below 7.4.6.",
+    fix: "Upgrade ws to >= 7.4.6.",
+  },
+  {
+    name: "sharp",
+    fixed: "0.32.6",
+    id: "CVE-2023-4863",
+    severity: "High",
+    tier: "high",
+    summary: "The bundled libwebp (< 1.3.2) has a heap buffer overflow decoding a crafted WebP image, enabling RCE/DoS on image processing (GHSA-54xq-cgqr-rpm3). sharp below 0.32.6 ships the vulnerable libwebp.",
+    fix: "Upgrade sharp to >= 0.32.6 (bundles libwebp >= 1.3.2).",
   },
 ];
 

@@ -1,0 +1,17 @@
+{
+  "name": "b10-patched-deps-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "INERT calibration fixture (#71 B10). The benign patched-version counterpart to b10-vuln-deps: every package is pinned at/above its curated CVE fix boundary, so the curated checks in src/scan/dependencies.ts must draw NOTHING. next@16.2.5 is the fully-patched next-16 (above the null-origin fix AND the overlapping WS-SSRF <16.2.5 range); next-auth@4.24.12 clears both the OAuth-CSRF and email-misdelivery classes. Declared as DATA ONLY — NEVER installed. See GROUND-TRUTH.md §B10.",
+  "dependencies": {
+    "next": "16.2.5",
+    "next-auth": "4.24.12",
+    "jsonwebtoken": "9.0.2",
+    "follow-redirects": "1.15.6",
+    "axios": "1.8.2",
+    "undici": "5.28.3",
+    "cookie": "0.7.0",
+    "ws": "7.4.6",
+    "sharp": "0.32.6"
+  }
+}

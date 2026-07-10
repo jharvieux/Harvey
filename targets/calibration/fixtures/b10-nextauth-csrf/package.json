@@ -1,0 +1,9 @@
+{
+  "name": "b10-nextauth-csrf-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "INERT calibration fixture (#71 B10). Isolates the next-auth OAuth-CSRF class (CVE-2023-27490): next-auth@4.19.0 is below the 4.20.1 fix, so it fires that curated finding. It cannot share the b10-vuln-deps manifest (which declares next-auth@4.24.5 for the email-misdelivery class — one manifest, one next-auth). Declared as DATA ONLY — NEVER installed. See GROUND-TRUTH.md §B10.",
+  "dependencies": {
+    "next-auth": "4.19.0"
+  }
+}

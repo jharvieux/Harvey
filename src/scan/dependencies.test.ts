@@ -52,6 +52,23 @@ describe("checkNextVersionCVEs", () => {
     const finding = checkNextVersionCVEs("12.3.5", "fixtures/legacy-app/package.json")[0];
     expect(finding?.location).toBe("fixtures/legacy-app/package.json (next)");
   });
+
+  it("flags the Server Actions null-origin CSRF for the 16.0.1–16.1.6 range, at high", () => {
+    for (const v of ["16.0.1", "16.0.5", "16.1.6"]) {
+      const f = checkNextVersionCVEs(v).find((x) => x.id === "DEP-NEXT-NULLORIGIN-CSRF");
+      expect(f, v).toBeDefined();
+      expect(f?.precisionTier).toBe("high");
+    }
+  });
+
+  it("does not flag null-origin once patched (16.1.7) or above the WS-SSRF fix (16.2.5)", () => {
+    expect(checkNextVersionCVEs("16.1.7").map((f) => f.id)).not.toContain("DEP-NEXT-NULLORIGIN-CSRF");
+    expect(checkNextVersionCVEs("16.2.5").map((f) => f.id)).not.toContain("DEP-NEXT-NULLORIGIN-CSRF");
+  });
+
+  it("16.2.5 is the fully-clean patched next-16 (no null-origin, RSC, or WS-SSRF)", () => {
+    expect(checkNextVersionCVEs("16.2.5")).toEqual([]);
+  });
 });
 
 describe("checkKnownDependencyCVEs", () => {
@@ -85,6 +102,34 @@ describe("checkKnownDependencyCVEs", () => {
   it("encodes the manifest path and package name into the location", () => {
     const finding = checkKnownDependencyCVEs({ minimist: "1.2.5" }, "fixtures/legacy-app/package.json")[0];
     expect(finding?.location).toBe("fixtures/legacy-app/package.json (minimist)");
+  });
+
+  // Batch B10 (#71) — each crisp <fixed boundary fires high on the vulnerable pin and clears on the patch.
+  it.each([
+    ["jsonwebtoken", "8.5.1", "9.0.2", "DEP-CVE-2022-23540"],
+    ["next-auth", "4.19.0", "4.24.12", "DEP-CVE-2023-27490"],
+    ["next-auth", "4.24.5", "4.24.12", "DEP-GHSA-5jpx-9hw9-2fx4"],
+    ["follow-redirects", "1.15.4", "1.15.6", "DEP-CVE-2024-28849"],
+    ["axios", "1.7.2", "1.8.2", "DEP-CVE-2025-27152"],
+    ["cookie", "0.5.0", "0.7.0", "DEP-CVE-2024-47764"],
+    ["ws", "7.4.5", "7.4.6", "DEP-CVE-2021-32640"],
+    ["sharp", "0.31.3", "0.32.6", "DEP-CVE-2023-4863"],
+  ])("flags vulnerable %s@%s at high and clears the patched @%s", (name, vuln, patched, id) => {
+    const hit = checkKnownDependencyCVEs({ [name]: vuln }).find((f) => f.id === id);
+    expect(hit, `${name}@${vuln}`).toBeDefined();
+    expect(hit?.precisionTier).toBe("high");
+    expect(checkKnownDependencyCVEs({ [name]: patched }).map((f) => f.id)).not.toContain(id);
+  });
+
+  it("yields the two-CVE undici cluster on one vulnerable pin, both cleared by the patch", () => {
+    const vuln = checkKnownDependencyCVEs({ undici: "5.7.0" }).map((f) => f.id);
+    expect(vuln).toContain("DEP-CVE-2022-35949");
+    expect(vuln).toContain("DEP-CVE-2024-24758");
+    expect(checkKnownDependencyCVEs({ undici: "5.28.3" })).toEqual([]);
+  });
+
+  it("scopes the ws range to the 7.x line so a patched 6.x isn't mis-flagged for a 7.4.6 fix", () => {
+    expect(checkKnownDependencyCVEs({ ws: "6.2.2" }).map((f) => f.id)).not.toContain("DEP-CVE-2021-32640");
   });
 });
 

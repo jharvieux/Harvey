@@ -683,6 +683,79 @@ new locations.
 
 ---
 
+## Batch B10 (#71) — dependency-CVE & framework-version breadth
+
+The dependency-CVE expansion batch (spec `docs/design/corpus-roadmap-to-100.md` §3b). Answer key:
+`src/scan/calibration/b10-deps.entries.ts`. **Extends the curated offline CVE ranges — no new
+scanner:** one new row inside `checkNextVersionCVEs` (the Next Server Actions null-origin CSRF) and
+nine new entries in `CURATED_DEP_CVES` (`src/scan/dependencies.ts`). Every one is a crisp single
+`< fixed` boundary (some scoped to a major line via `introduced` where older majors carry their own
+fix), so all ten land `high`. Determinism is offline: these fire from the DECLARED manifest range via
+`checkNextVersionCVEs` / `checkKnownDependencyCVEs`, independent of OSV's DB — `pnpm verify` stays
+green with no network.
+
+Modelled with the B2 secondary-manifest mechanism: three STANDALONE fixture app-roots under
+`targets/calibration/fixtures/`, scanned offline by `validate-calibration.ts`'s `scanManifestFixtures`
+(the network/binary passes are NOT re-run — these are all offline manifest facts). All versions are
+declared as DATA ONLY and never installed.
+
+- `b10-vuln-deps/` — vulnerable pins (WITH an inert lockfile so `checkLockfilePresence` stays silent).
+- `b10-nextauth-csrf/` — the OAuth-CSRF `next-auth@4.19.0`, isolated in its own root because it
+  can't share `b10-vuln-deps`'s email-misdelivery `next-auth@4.24.5` (one manifest declares
+  `next-auth` once).
+- `b10-patched-deps/` — patched counterparts; must draw NOTHING.
+
+### B10 positives — vulnerable-version pins (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-NEXT-CVE-NULLORIGIN | `fixtures/b10-vuln-deps/package.json` (`next@16.0.5`) | `checkNextVersionCVEs` (new 5th row) — Server Actions null-origin CSRF (>=16.0.1 <16.1.7). 16.0.5 also (correctly) trips the RSC-RCE + WS-SSRF ranges; isolated by the `null-origin` keyword | high |
+| P-JSONWEBTOKEN-CVE | `fixtures/b10-vuln-deps/package.json` (`jsonwebtoken@8.5.1`) | `checkKnownDependencyCVEs` — CVE-2022-23540 (<9.0.0, `jwt.verify` alg-confusion, GHSA-qwph-4952-7xr6) | high |
+| P-NEXTAUTH-CSRF-CVE | `fixtures/b10-nextauth-csrf/package.json` (`next-auth@4.19.0`) | `checkKnownDependencyCVEs` — CVE-2023-27490 (4.x line <4.20.1, OAuth CSRF, GHSA-7fmc-9xx9-wvgm). Co-fires the email class; matched by CVE id | high |
+| P-NEXTAUTH-EMAIL-CVE | `fixtures/b10-vuln-deps/package.json` (`next-auth@4.24.5`) | `checkKnownDependencyCVEs` — GHSA-5jpx-9hw9-2fx4 (4.x line <4.24.12, email-signin misdelivery). 4.24.5 is above the CSRF fix, so it fires ONLY this class | high |
+| P-FOLLOW-REDIRECTS-CVE | `fixtures/b10-vuln-deps/package.json` (`follow-redirects@1.15.4`) | `checkKnownDependencyCVEs` — CVE-2024-28849 (<1.15.6, Proxy-Authorization not cleared on cross-origin redirect) | high |
+| P-AXIOS-SSRF-CVE | `fixtures/b10-vuln-deps/package.json` (`axios@1.7.2`) | `checkKnownDependencyCVEs` — CVE-2025-27152 (1.x line <1.8.2, absolute-URL baseURL SSRF, GHSA-jr5f-v2jv-69x6) | high |
+| P-UNDICI-CVE-CLUSTER | `fixtures/b10-vuln-deps/package.json` (`undici@5.7.0`) | `checkKnownDependencyCVEs` — TWO CVEs from one pin: CVE-2022-35949 (pathname SSRF, <5.8.1) + CVE-2024-24758 (Proxy-Auth cross-origin leak, <5.28.3) | high |
+| P-COOKIE-PKG-CVE | `fixtures/b10-vuln-deps/package.json` (`cookie@0.5.0`) | `checkKnownDependencyCVEs` — CVE-2024-47764 (<0.7.0, out-of-bounds chars → field injection) | high |
+| P-WS-REDOS-CVE | `fixtures/b10-vuln-deps/package.json` (`ws@7.4.5`) | `checkKnownDependencyCVEs` — CVE-2021-32640 (7.x line <7.4.6, `Sec-WebSocket-Protocol` ReDoS, GHSA-6fc8-4gx4-v693). Matched by CVE id (not `ws`, a substring of the co-firing next WS-SSRF finding) | high |
+| P-SHARP-LIBWEBP-CVE | `fixtures/b10-vuln-deps/package.json` (`sharp@0.31.3`) | `checkKnownDependencyCVEs` — CVE-2023-4863 (<0.32.6, bundled libwebp <1.3.2 heap overflow, GHSA-54xq-cgqr-rpm3) | high |
+
+### B10 negatives — patched-version pins (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-NEXT-NULLORIGIN-PATCHED | `fixtures/b10-patched-deps/package.json` (`next@16.2.5`) | Above the null-origin fix (16.1.7) AND the overlapping WS-SSRF range (<16.2.5), so `checkNextVersionCVEs` draws nothing — the truly-clean patched next-16. A bare 16.1.7 would still carry a WS-SSRF high, so 16.2.5 is the correct clean negative for the whole next-16 CVE set. |
+| N-JSONWEBTOKEN-PATCHED | `…/package.json` (`jsonwebtoken@9.0.2`) | At/above the 9.0.0 fix — outside the CVE-2022-23540 range. |
+| N-NEXTAUTH-PATCHED | `…/package.json` (`next-auth@4.24.12`) | At/above both fixes (4.20.1 OAuth-CSRF, 4.24.12 email) — clears both classes with one patched pin. |
+| N-FOLLOW-REDIRECTS-PATCHED | `…/package.json` (`follow-redirects@1.15.6`) | At the fix — outside CVE-2024-28849. |
+| N-AXIOS-PATCHED | `…/package.json` (`axios@1.8.2`) | At the fix — outside CVE-2025-27152. |
+| N-UNDICI-PATCHED | `…/package.json` (`undici@5.28.3`) | At/above both cluster fixes (5.8.1 SSRF, 5.28.3 header-leak) — clears the whole cluster. |
+| N-COOKIE-PATCHED | `…/package.json` (`cookie@0.7.0`) | At the fix — outside CVE-2024-47764. |
+| N-WS-PATCHED | `…/package.json` (`ws@7.4.6`) | At the fix — outside CVE-2021-32640. |
+| N-SHARP-PATCHED | `…/package.json` (`sharp@0.32.6`) | At the fix (bundles libwebp >= 1.3.2) — outside CVE-2023-4863. |
+
+### B10 dropped class — P-MINIMIST-PROTO-CVE (roadmap §3b, review)
+
+Dropped as **already covered**. It is the SAME CVE-2021-44906 / `minimist < 1.2.6` range already
+landed at `high` by B2's `P-DEP-CVE-CRITICAL` (`checkKnownDependencyCVEs`). Re-landing it would
+duplicate that exact finding; re-tiering minimist to `review` would regress the shipped high
+positive; and the dev-only-transitive "clears" half the roadmap notes (`N-DEV-DEP` guard) is already
+modelled by the existing `N-DEV-DEP` negative (`webpack@4.42.0`, dev-only, cleared). The curated
+check has no dev/prod distinction that would make this a distinct class, so it adds no coverage.
+
+### B10 live result (2026-07-09, static binaries: semgrep 1.164.0, gitleaks 8.30.1, trufflehog 3.95.8, osv-scanner 2.3.8, no Docker)
+
+`pnpm validate:calibration`: **GATE PASS — zero free-count false positives; every high-tier rule
+fired on its positive.** All 10 B10 positives land at high (the null-origin CSRF row; the eight
+single-CVE curated ranges; the two-CVE undici cluster from one pin) and all 9 B10 negatives clear
+(the patched fixture draws nothing at all). No regression on any prior batch. `pnpm verify` (offline)
+is green: `dependencies.test.ts` gained the null-origin range tests and a parametrized block over the
+nine new curated CVEs (+ the undici two-CVE cluster and the ws 7.x-scoping guard); `calibration.test.ts`
+gained a B10 block that reconstructs the fixture findings from the real check functions and scores all
+19 entries, and the whole-CORPUS synth-collision guard covers the new fixture locations.
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
