@@ -4,8 +4,13 @@ import {
   checkAutoExposedTables,
   checkDangerousExtensions,
   checkEdgeFunctionSecrets,
+  checkExposedSchemas,
+  checkGotrueVersion,
+  checkGraphqlIntrospection,
   checkPublicBucketsWithNoPolicies,
+  checkRealtimeAuthorization,
   checkUnsignedWebhookHandlers,
+  compareVersions,
 } from "./supabase-config.js";
 
 describe("checkPublicBucketsWithNoPolicies", () => {
@@ -100,6 +105,86 @@ describe("checkEdgeFunctionSecrets", () => {
   it("does not flag a function reading the secret from Deno.env", () => {
     const findings = checkEdgeFunctionSecrets([{ name: "sync", content: `const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");` }]);
     expect(findings).toEqual([]);
+  });
+});
+
+describe("checkRealtimeAuthorization", () => {
+  it("flags realtime.messages with RLS disabled", () => {
+    const findings = checkRealtimeAuthorization({ exists: true, rlsEnabled: false });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.taxonomy).toBe("Realtime channel lacks authorization");
+  });
+
+  // ATC-prod live state (2026-07-10): realtime.messages rls_enabled=true — the negative case.
+  it("does not flag realtime.messages with RLS enabled", () => {
+    expect(checkRealtimeAuthorization({ exists: true, rlsEnabled: true })).toEqual([]);
+  });
+
+  it("does not flag when the realtime.messages table is absent", () => {
+    expect(checkRealtimeAuthorization({ exists: false, rlsEnabled: false })).toEqual([]);
+  });
+});
+
+describe("checkExposedSchemas", () => {
+  it("flags a schema exposed beyond the public/graphql_public default", () => {
+    const findings = checkExposedSchemas(["public", "graphql_public", "internal"]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.location).toBe("exposed schema: internal");
+  });
+
+  it("does not flag the default schemas", () => {
+    expect(checkExposedSchemas(["public", "graphql_public"])).toEqual([]);
+  });
+});
+
+describe("checkGraphqlIntrospection", () => {
+  it("flags pg_graphql installed with graphql_public exposed", () => {
+    const findings = checkGraphqlIntrospection(true, ["public", "graphql_public"]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.taxonomy).toBe("pg_graphql introspection enabled in production");
+  });
+
+  // ATC-prod live state (2026-07-10): pg_graphql installed_version=null — the negative case.
+  it("does not flag when pg_graphql is not installed", () => {
+    expect(checkGraphqlIntrospection(false, ["public", "graphql_public"])).toEqual([]);
+  });
+
+  it("does not flag when graphql_public is not exposed", () => {
+    expect(checkGraphqlIntrospection(true, ["public"])).toEqual([]);
+  });
+});
+
+describe("compareVersions", () => {
+  it("orders numeric dotted versions and tolerates a v prefix / short parts", () => {
+    expect(compareVersions("2.160.0", "2.185.0")).toBe(-1);
+    expect(compareVersions("v2.185.0", "2.185.0")).toBe(0);
+    expect(compareVersions("2.200.0", "2.185.0")).toBe(1);
+    expect(compareVersions("2.170", "2.170.0")).toBe(0);
+  });
+});
+
+describe("checkGotrueVersion", () => {
+  it("flags the OIDC bypass on an old version with Apple/Azure enabled", () => {
+    const findings = checkGotrueVersion({ version: "2.170.0", appleEnabled: true });
+    expect(findings.map((f) => f.taxonomy)).toContain("Self-hosted GoTrue OIDC issuer bypass");
+  });
+
+  it("does not flag the OIDC bypass without Apple/Azure enabled", () => {
+    const findings = checkGotrueVersion({ version: "2.170.0", appleEnabled: false, azureEnabled: false });
+    expect(findings.map((f) => f.taxonomy)).not.toContain("Self-hosted GoTrue OIDC issuer bypass");
+  });
+
+  it("flags email-link poisoning inside the 2.67.1–2.163.0 range", () => {
+    const findings = checkGotrueVersion({ version: "2.100.0" });
+    expect(findings.map((f) => f.taxonomy)).toContain("Self-hosted GoTrue email-link poisoning");
+  });
+
+  it("does not flag a patched version", () => {
+    expect(checkGotrueVersion({ version: "2.185.0", appleEnabled: true })).toEqual([]);
+  });
+
+  it("returns nothing when the version is unknown", () => {
+    expect(checkGotrueVersion({ version: null, appleEnabled: true })).toEqual([]);
   });
 });
 
