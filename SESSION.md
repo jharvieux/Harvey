@@ -2,7 +2,7 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-10 (post-#71: excluded-tier backlog filed #123–#125, #70 closed, ATC re-scan dogfood, route-noauth precision fix #126 merged)_
+_Last updated: 2026-07-10 (issue-sweep: #123–#125 broken into per-class children #131–#148; sweep merged the secrets/git-history + review-tier authz/policy corpus (#129–#139, PRs #149/#151/#152); connected-tier #140–#144 built + live-validated against ATC (PR #150))_
 
 ## Corpus expansion (#71 security, #72 cross-module)
 Answer key + rules are per-batch modular (`src/scan/calibration/<batch>.entries.ts` +
@@ -10,8 +10,10 @@ Answer key + rules are per-batch modular (`src/scan/calibration/<batch>.entries.
 gated by `pnpm validate:calibration` (a class ships only if its positive is caught AND its benign
 negative cleared; only `high` classes feed the free count).
 
-**Gate after the overnight round-2 train: 140/140 static positives (61 high/free-count), 108/108
-negatives cleared, 15 connected-tier N/A — PASS.** (Was 77/77 / 25 high before this session.)
+**Gate after the 2026-07-10 sweep (secrets/git-history #129–#130 + review-tier authz/policy
+#131–#139 merged): 142/151 static positives (62 high/free-count), 118/118 negatives cleared, the
+review-tier authz/policy positives are documented offline-gate misses (LLM/paid-tier by design) —
+PASS.** Connected-tier #140–#144 add live detectors (N/A in the offline static gate).
 
 - **#71 round 1 (built earlier):** B1 secrets, B2 CVE/supply-chain, B3 injection, B4 XSS,
   B5 headers/CORS, B6 crypto, B7 auth, B8 Supabase-connected.
@@ -34,14 +36,30 @@ negatives cleared, 15 connected-tier N/A — PASS.** (Was 77/77 / 25 high before
 - **#72 cross-module:** M10 PII, M4+M5 dup/dead-code, M8 mutation, M7 perf-advisors (precision-gated);
   M3 hotspots (design+fixture, live `vitals` capture deferred → **#94**); M6 simplification (paid-only).
 
-## Open agent-doable follow-ups
-- **#71 close-out** — mechanical work done. The excluded-tier backlog is now FILED as three issues:
-  **#123** (semantic → paid M-series), **#124** (connected → live Supabase advisor), **#125**
-  (dynamic → #5 pen-test). #71 can be closed or re-scoped to point at those.
-- **#123–#125** — the excluded-tier security classes from the #71 round-2 research, grouped by
-  detection mechanism (see `docs/design/corpus-roadmap-to-100.md` §4). Not yet started.
+## Excluded-tier backlog (#123–#125) — broken into per-class children, partially landed
+The three trackers were split into 18 per-class child issues (#131–#148) and worked via issue-sweep:
+- **#123 semantic (review-tier)** → children **#131–#139**. All 9 MERGED as corpus fixture pairs
+  (B15 Next.js/app-logic authz #131–#136; **B16** storage-RLS/upload/SECURITY-DEFINER policy
+  #137–#139). Detection is the paid LLM `/vuln-scan`+`/triage` pass (option (b)); fixtures seeded +
+  benign negatives gate-cleared offline. #123 tracker can now be closed.
+- **#124 connected (live Supabase)** → children **#140–#144**, all MERGED (PR #150). Five detectors
+  in `src/scan/supabase-config.ts`: `checkRealtimeAuthorization`, `checkExposedSchemas`,
+  `checkGraphqlIntrospection`, `checkGotrueVersion` (×2 CVE ranges). #124 tracker can now be closed.
+- **#125 dynamic (running-app probes)** → children **#145–#148**, NOT started. Need the #5 pen-test
+  harness + a running app; **ATC is the live target** (see below). Supervised dynamic session, not a
+  worktree sweep.
 - **Skills vendoring decision** (from #53, closed): reference-harness skills live user-global at
   `~/.claude/skills/`. Open call: vendor into the Harvey repo (#14) vs. keep user-global.
+
+## ATC as live target — project topology (verified 2026-07-10)
+The connected/dynamic tiers can validate against ATC. MCP → project mapping:
+- **`supabase-main` = `mfaknjyqiwcjojukcnea` = atc-main, ATC PRODUCTION.** MCP applies ARE prod
+  applies — **read-only introspection only** (structured tools: `list_tables`/`list_extensions`/
+  `get_advisors`; no `execute_sql` exposed, a good fence). Connected-tier #140–#144 were validated
+  read-only here: pg_graphql not installed + realtime.messages RLS on (clean negatives), GoTrue
+  v2.192.0 w/ Azure enabled (patched — exercises #143's provider branch, no finding).
+- **`supabase-rag` = `jjznkprbotkqqnuvcost`** = ATC RAG project (has `execute_sql`).
+- **`supabase-aop` = `udsuxdoavlvosvbjwmud`** = the **AoP client** (Age of Piracy) — OFF-LIMITS, not ATC.
 
 ## ATC dogfood re-scan (2026-07-10) — expanded corpus validated end-to-end
 Ran the full scan → LLM-triage → report pipeline against a git clone of jharvieux/ATC with the
