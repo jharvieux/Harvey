@@ -1064,6 +1064,64 @@ new `leftover-auth.test.ts` heuristic unit tests.
 
 ---
 
+## Batch B15 (#123, issues #131-#136) — Next.js/Supabase authz-shape classes (semantic tier)
+
+Six classes from the roadmap's §4a excluded-tier backlog (`docs/design/corpus-roadmap-to-100.md`
+§4a "Semantic (LLM/whole-program — paid M-series)"): each needs request+identity context, matcher-
+vs-route-inventory reasoning, or control-flow reasoning a grep/AST rule can't do reliably, so none
+is mechanically detected — these are LLM/paid-tier (M-series) detection, never promoted into the
+free count. Unlike every other `review`-tier batch in this file (B9-B14), **no new scanner or rule
+was added**: this batch seeds the corpus/GROUND-TRUTH answer key with planted vulns + benign
+lookalikes so the paid-tier LLM pass has fixtures to be measured against later (tracked as a
+follow-up, per each issue's acceptance criteria — not a blocker for closing the fixture work). Built
+incrementally, one issue per commit. Answer key: `src/scan/calibration/b15-nextjs-authz.entries.ts`.
+
+### B15 positives — planted bugs (semantic tier; NOT expected to be caught by the offline mechanical gate)
+
+| id | location | class | issue |
+|---|---|---|---|
+| P-BOLA-BODY-OWNER | `pages/api/billing/invoice.js:14` | route scopes the query to `req.body.tenantId` (client-supplied) instead of the session's tenant id — object/function-level authz gap (BOLA/BFLA) | #131 |
+| P-MW-MATCHER-EXCLUDES-API | `middleware.ts` (`config.matcher`) | matcher `/((?!api\|_next/static\|_next/image\|favicon.ico).*)` excludes every `/api/*` path from the middleware entirely | #132 |
+| P-MW-SOLE-AUTHZ | `pages/api/admin/dashboard.js:11` | reads `admin_metrics` with no session/role check of its own — relies entirely on `middleware.ts`, no defense in depth | #133 |
+| P-DRAFTMODE-NO-SECRET | `pages/api/preview/enable.js:8` | `draftMode().enable()` runs unconditionally, no secret/token check | #134 |
+| P-HOST-HEADER-URL | `lib/reset-link.js:11` | password-reset link built from `headers().get("host")` — attacker-controlled, enables reset-link poisoning | #135 |
+| P-CLIENT-RENDER-AUTHZ | `app/admin/page.tsx:11` + `components/AdminDashboardClient.jsx:8` | server fetches the full admin dataset unconditionally; the only gate is the client component's `if (!isAdmin) return null` — data already shipped in the RSC payload | #136 |
+
+### B15 negatives — benign lookalikes (must NOT be flagged in the free count; here also fully silent — no existing rule targets these shapes)
+
+| id | location | why benign |
+|---|---|---|
+| N-BOLA-SESSION-OWNER | `pages/api/billing/invoice-safe.js` | query scoped to `session.user.tenantId`; `req.body.tenantId` is never read. |
+| N-MW-MATCHER-INCLUDES-API | `lib/middleware-matcher-safe.ts` | `config.matcher` has no `api` exclusion — `/api/*` still runs through the middleware auth check. |
+| N-MW-DEFENSE-IN-DEPTH | `pages/api/admin/dashboard-safe.js` | calls `getServerSession()` and checks the role itself before returning `admin_metrics`, in addition to middleware. |
+| N-DRAFTMODE-SECRET-CHECKED | `pages/api/preview/enable-safe.js` | validates `req.query.secret` against `process.env.PREVIEW_SECRET` before `draftMode().enable()` runs. |
+| N-HOST-HEADER-FIXED-ORIGIN | `lib/reset-link-safe.js` | builds the link from `process.env.NEXT_PUBLIC_SITE_URL`; `headers()`/Host is never read. |
+| N-SERVER-ROLE-CHECK | `app/admin/page-safe.tsx` | checks the role server-side and redirects BEFORE querying `admin_metrics` — the query never runs for a non-admin. |
+
+### B15 adjacency note
+
+`P-CLIENT-RENDER-AUTHZ` shares a theme with the existing `P-SERVER-CLIENT-LEAK`
+(`app/documents/detail-page.tsx`) but is a distinct shape: `harvey-server-client-leak` requires an
+exact `const { $DATA } = await $C.from($T).select("*").eq($COL, $ID);` + `<$COMP {...$DATA} />`
+spread; `app/admin/page.tsx` uses no `.eq()` chain and passes `metrics={data}` as a named prop, not
+a spread, so that rule stays silent on this fixture (verified live below). `P-MW-SOLE-AUTHZ` is a
+`SELECT`, not an insert/update/delete, so the existing `harvey-route-noauth` mutation rule does not
+fire on `pages/api/admin/dashboard.js` — keeps this class isolated from the B7 route-noauth pair.
+
+### B15 live result (2026-07-10, static binaries: semgrep, gitleaks, trufflehog, osv-scanner; no Docker)
+
+`pnpm validate:calibration`: **GATE PASS — zero free-count false positives; every high-tier rule
+fired on its positive.** All 6 B15 negatives are fully silent (no finding at all) and all 6 B15
+positives are reported as non-fatal review-tier recall gaps (expected — no mechanical rule targets
+them, including confirming `harvey-server-client-leak` stays silent on `app/admin/page.tsx`).
+Corpus totals after B15: **141/147 static positives caught (61 at high/free-count, 15 connected
+N/A); 115/115 static negatives cleared.** `pnpm verify` (offline) is green: 452 tests (no new tests
+were needed — `b15-nextjs-authz.entries.ts` is exercised by the existing whole-`CORPUS` tests in
+`calibration.test.ts`, which only assert entries are counted correctly, not caught, for entries
+with no matching rule).
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
