@@ -16,6 +16,27 @@
 # taxonomy error — see GROUND-TRUTH.md §B7 for the same reasoning applied to
 # harvey-missing-server-only and lib/supabaseAdmin.js.
 #
+# #126: harvey-route-noauth originally only recognized the stock getServerSession/
+# supabase.auth.getUser call names, so it false-positived on every route gated by a
+# NAMED CUSTOM GUARD HELPER instead (122/122 false on the ATC dogfood — assertPlatformAdmin,
+# assertPermission, authenticateUser, none of which the rule could see). A fixed name list
+# doesn't generalize (every codebase invents its own helper names), so the guard-not-inside
+# clause below is broadened to a GUARD_CALL_RE: any call whose name starts with a
+# gate verb (assert/require/ensure/authenticate/authorize/guard — these verbs are
+# guard-specific enough on their own) or contains a weaker generic verb (check/verify,
+# anywhere in the identifier, not just as a prefix — covers jwtVerify) together with an
+# auth-ish token (admin/permission/auth/session/tenant/role/access/user/login/signature/
+# jwt/webhook/hmac/token) anywhere else in the same identifier — covers the ATC dogfood's
+# webhook routes too (verifyGitHubSignature/verifyResendSignature/verifyWebhookSignature),
+# the "genuinely public but signature-verified" category the issue's acceptance criteria
+# names explicitly. This is a pattern-not-REGEX (text match over the
+# matched function's source), not an AST pattern-not-inside, because Semgrep's
+# metavariable-regex does not constrain which call a wildcard `$GUARD(...)` inside a
+# pattern-not-inside binds to (verified empirically — it suppresses ALL matches, guarded
+# or not). A helper name outside both buckets (e.g. `mustBeOwner()`) is still a false
+# negative here — same class of gap, just not the one evidenced on ATC; see #126 for the
+# `--auth-guards` per-engagement allowlist as a possible follow-up mitigation.
+#
 # Exercised against targets/calibration by `pnpm validate:calibration`; see GROUND-TRUTH.md §B7.
 
 rules:
@@ -169,6 +190,10 @@ rules:
             $SUP.auth.getUser(...)
             ...
           }
+      # #126: a custom-named guard helper call anywhere in the function — see file header.
+      # The weak-verb bucket (check/verify) uses lookaheads so the verb and the auth-ish
+      # token can appear in either order in the identifier (jwtVerify, verifyWebhookSignature).
+      - pattern-not-regex: (?i)\b((assert|require|ensure|authenticate|authorize|guard)[a-z0-9_]*|(?=[a-z0-9_]*(check|verify))[a-z0-9_]*(admin|permission|auth|session|tenant|role|access|user|login|signature|jwt|webhook|hmac|token)[a-z0-9_]*)\s*\(
 
   # IDOR/BOLA shape: an id from the request (req.query/req.params) is the SOLE predicate on a
   # Supabase query — .eq('id', $ID) with nothing else chained. The sink is anchored to a full
