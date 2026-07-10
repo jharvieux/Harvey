@@ -6,6 +6,7 @@ import { buildCoverageMatrix, CORPUS, scoreEntry, type CorpusEntry } from "./cal
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
+import { b11CryptoEntries } from "./calibration/b11-crypto.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
@@ -274,6 +275,54 @@ describe("Batch B10 dependency-CVE corpus (secondary manifest fixtures → real 
 
   it("draws nothing at all from the patched fixture", () => {
     expect(findings.filter((f) => f.location.includes("b10-patched-deps"))).toEqual([]);
+  });
+});
+
+describe("Batch B11 crypto-API misuse corpus (recorded semgrep output → tier mapping)", () => {
+  // Recorded semgrep findings mirroring the live `pnpm validate:calibration` run over
+  // targets/calibration, fed through the real semgrep.ts tier mapping (no binary invoked). Exercises
+  // the B11 crypto.yml additions: 5 ERROR+HIGH rules (no-IV createCipher, pseudoRandomBytes, 2-arg
+  // jwt.verify, ignoreExpiration, ws:// URL) and 4 WARNING+MEDIUM heuristics (GCM no authTagLength,
+  // AEAD no final(), client jwtDecode() render sink, hardcoded HMAC key). The seven negative
+  // fixtures draw nothing, so they appear as no rows here.
+  const error = (id: string, path: string): SemgrepResult => ({
+    check_id: `src.scan.rules.semgrep.${id}`, path, start: { line: 8 },
+    extra: { severity: "ERROR", metadata: { confidence: "HIGH" }, message: `${id} matched` },
+  });
+  const warning = (id: string, path: string): SemgrepResult => ({
+    check_id: `src.scan.rules.semgrep.${id}`, path, start: { line: 9 },
+    extra: { severity: "WARNING", metadata: { confidence: "MEDIUM" }, message: `${id} matched` },
+  });
+  const semgrep: SemgrepResult[] = [
+    error("harvey-crypto-createcipher", "lib/cipher-noiv.js"),
+    error("harvey-crypto-pseudorandombytes", "lib/pseudorandom.js"),
+    error("harvey-jwt-verify-noalg", "lib/jwt-verify-noalg.js"),
+    error("harvey-jwt-ignore-exp", "lib/jwt-ignore-exp.js"),
+    error("harvey-insecure-ws-url", "lib/ws-client.js"),
+    warning("harvey-gcm-no-authtaglength", "lib/gcm-notag.js"),
+    warning("harvey-aead-decipher-no-final", "lib/aead-nofinal.js"),
+    warning("harvey-jwt-decode-render", "components/RoleBadge.jsx"),
+    warning("harvey-hmac-hardcoded-key", "lib/sign.js"),
+  ];
+  const findings = parseSemgrepFindings({ results: semgrep });
+
+  it("catches every B11 positive at its declared tier and clears every B11 negative", () => {
+    for (const e of b11CryptoEntries) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe(e.expectedTier);
+      else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("promotes only the exact-API/literal rules to the free count (5 high, 4 review)", () => {
+    const m = buildCoverageMatrix(findings, b11CryptoEntries);
+    const positives = b11CryptoEntries.filter((e) => e.kind === "positive");
+    expect(m.positivesCaught).toBe(positives.length);
+    expect(m.positivesCaughtHigh).toBe(5);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(4);
+    expect(m.negativesCleared).toBe(m.negativesTotal);
+    expect(m.ok).toBe(true);
   });
 });
 

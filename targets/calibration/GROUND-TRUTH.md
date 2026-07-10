@@ -756,6 +756,78 @@ gained a B10 block that reconstructs the fixture findings from the real check fu
 
 ---
 
+## Batch B11 (#71) — crypto-API misuse & JWT-verify options
+
+The crypto-API / JWT-verify-options expansion batch (spec `docs/design/corpus-roadmap-to-100.md`
+§3c). Answer key: `src/scan/calibration/b11-crypto.entries.ts`. **Extends the EXISTING per-batch
+Semgrep rule file `src/scan/rules/semgrep/crypto.yml` — no new scanner.** Tiering per the locked
+preamble: only exact-API / unambiguous-literal sinks are `high` (free count) — the no-IV
+`createCipher`/`createDecipher` API, `crypto.pseudoRandomBytes()`, a 2-argument `jwt.verify()` with
+no `algorithms` allowlist, an explicit `{ ignoreExpiration: true }`, and a `ws://` WebSocket URL.
+The absence-of-X / heuristic sinks (a GCM decipher with no `authTagLength`, an AEAD decipher that
+returns `update()` with no `final()`, an unverified client-side `jwtDecode()` render sink, a
+hardcoded HMAC key literal) stay `review`. All fixtures are inert source files.
+
+Two adjacencies flagged in the spec were kept from double-firing: `harvey-jwt-decode-render` matches
+only the client `jwt-decode` package's `jwtDecode()`/`jwt_decode()` (the server-side `jwt.decode()`
+stays with B6's `harvey-jwt-decode-noverify`), and `harvey-hmac-hardcoded-key` fires on the
+`createHmac` literal-key SINK (the gitleaks `JWT_SIGNING_SECRET` rule catches the secret's
+declaration) — the existing `createHmac(..., process.env.WEBHOOK_SECRET)` in `pages/api/webhook.js`
+is env-keyed and stays silent.
+
+### B11 positives — planted crypto/JWT bugs (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-CIPHER-NO-IV | `lib/cipher-noiv.js:9` | Semgrep `harvey-crypto-createcipher` (`crypto.createCipher(...)` / `createDecipher(...)` — the no-IV API) | high |
+| P-PSEUDORANDOM-BYTES | `lib/pseudorandom.js:8` | Semgrep `harvey-crypto-pseudorandombytes` (`crypto.pseudoRandomBytes(...)`, a non-CSPRNG alias) | high |
+| P-JWT-VERIFY-NOALG | `lib/jwt-verify-noalg.js:8` | Semgrep `harvey-jwt-verify-noalg` (2-arg `jwt.verify($T, $K)` — no algorithms allowlist) | high |
+| P-JWT-IGNORE-EXP | `lib/jwt-ignore-exp.js:8` | Semgrep `harvey-jwt-ignore-exp` (literal `ignoreExpiration: true`) | high |
+| P-INSECURE-WS-URL | `lib/ws-client.js:6` | Semgrep `harvey-insecure-ws-url` (`new WebSocket($URL)`, `$URL` anchored to `^ws://`) | high |
+| P-GCM-NO-TAGLEN | `lib/gcm-notag.js:8` | Semgrep `harvey-gcm-no-authtaglength` (3-arg `createDecipheriv` with a `gcm` algo — no options object) | review |
+| P-AEAD-NO-FINAL | `lib/aead-nofinal.js:9` | Semgrep `harvey-aead-decipher-no-final` (returns `$D.update(...)` with no `$D.final()`; AEAD algo) | review |
+| P-JWT-DECODE-RENDER | `components/RoleBadge.jsx:11` | Semgrep `harvey-jwt-decode-render` (`jwtDecode()`/`jwt_decode()` — client `jwt-decode` package) | review |
+| P-HMAC-HARDCODED-KEY | `lib/sign.js:9` | Semgrep `harvey-hmac-hardcoded-key` (`createHmac($ALGO, $KEY)`, `$KEY` a string literal) | review |
+
+### B11 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign / suppression |
+|---|---|---|
+| N-CIPHER-IV-OK | `lib/cipher-iv.js` | `createCipheriv('aes-256-ctr', key, crypto.randomBytes(16))` — the correct IV-taking API; `harvey-crypto-createcipher` matches only `createCipher`/`createDecipher`, and `aes-256-ctr` is not a weak cipher. |
+| N-RANDOMBYTES-OK | `lib/randombytes.js` | `crypto.randomBytes(16)` — the CSPRNG; `harvey-crypto-pseudorandombytes` matches only the `pseudoRandomBytes` alias. |
+| N-JWT-VERIFY-ALGS | `lib/jwt-verify-checked.js` | `jwt.verify(t, KEY, { algorithms:['HS256'], issuer:'harvey' })` — the safe counterpart for BOTH verify-option classes: `harvey-jwt-verify-noalg` fires only on the 2-arg form, `harvey-jwt-ignore-exp` needs `ignoreExpiration: true` (absent). |
+| N-WSS-SECURE | `lib/ws-secure.js` | `new WebSocket('wss://…')` — `harvey-insecure-ws-url` is anchored to `^ws://`; the extra `s` of `wss://` doesn't match. |
+| N-GCM-TAGLEN-OK | `lib/gcm-tag.js` | `createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 })` + `setAuthTag` + `.final()` — the safe counterpart for BOTH AEAD classes: the 4-arg options form clears `harvey-gcm-no-authtaglength`, and the `.final()` call clears `harvey-aead-decipher-no-final`. |
+| N-JWTDECODE-SERVER | `components/RoleBadgeSafe.jsx` | `session.role` from a signature-verified server session prop — no `jwtDecode()` call for `harvey-jwt-decode-render` to match. |
+| N-HMAC-KEY-ENV | `lib/sign-env.js` | `createHmac('sha256', process.env.HMAC_SIGNING_KEY)` — `harvey-hmac-hardcoded-key`'s key regex matches a string literal only, not a `process.env` read. |
+
+### B11 detection additions
+
+Nine new rules in `src/scan/rules/semgrep/crypto.yml`: five ERROR + HIGH → high
+(`harvey-crypto-createcipher`, `harvey-crypto-pseudorandombytes`, `harvey-jwt-verify-noalg`,
+`harvey-jwt-ignore-exp`, `harvey-insecure-ws-url`) and four WARNING + MEDIUM → review
+(`harvey-gcm-no-authtaglength`, `harvey-aead-decipher-no-final`, `harvey-jwt-decode-render`,
+`harvey-hmac-hardcoded-key`). No product scanner module was added. No class was dropped — all nine
+§3c rows landed (the two flagged adjacencies were disambiguated rather than dropped).
+
+### B11 live result (2026-07-09, static binaries: semgrep 1.164.0, gitleaks 8.30.1, trufflehog 3.95.8, osv-scanner 2.3.8, no Docker)
+
+`pnpm validate:calibration`: **GATE PASS — zero free-count false positives; every high-tier rule
+fired on its positive.** All 9 B11 positives fire (5 at high: no-IV `createCipher`,
+`pseudoRandomBytes`, 2-arg `jwt.verify`, `ignoreExpiration:true`, `ws://` URL; 4 at review: GCM
+no-authTagLength, AEAD no-`final()`, client `jwtDecode()` render sink, hardcoded HMAC key) and all 7
+B11 negatives clear with no free-count finding. Whole-corpus totals: **positives caught 112/112
+static (51 at high/free-count, up 46 → 51), 15 connected-tier N/A; negatives cleared 79/79; zero
+free-count false positives.** No regression
+on any prior batch — in particular `harvey-jwt-verify-noalg`'s 2-arg pattern does not fire on the
+existing 3-arg `lib/jwt.js`/`lib/jwt-safe.js` verifies, and `harvey-hmac-hardcoded-key` stays silent
+on the env-keyed `createHmac` in `pages/api/webhook.js`. `pnpm verify` (offline) is green:
+`calibration.test.ts` gained a B11 recorded-semgrep block that feeds the recorded findings through
+the real tier mapping and scores all 16 entries (5 high / 4 review positives + 7 negatives), and the
+whole-CORPUS synth-collision guard covers the new fixture locations.
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
