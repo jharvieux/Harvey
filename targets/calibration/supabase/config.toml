@@ -132,6 +132,15 @@ allowed_mime_types = ["image/png", "image/jpeg"]
 public = false
 file_size_limit = "5MiB"
 
+# Dedicated bucket for the semantic/policy-body fixtures (B15, #123 — P-STORAGE-AUTH-NOT-OWNER /
+# P-STORAGE-UPLOAD-CHECK-TRUE, review tier). Access is entirely policy-gated in
+# supabase/migrations/, not by this bucket's public flag — kept separate from "avatars" so these
+# policy-body plants can't shift the live-Advisor P-STORAGE-PUBLIC/N-STORAGE-PRIVATE result above.
+[storage.buckets.user-files]
+public = false
+file_size_limit = "10MiB"
+allowed_mime_types = ["image/png", "image/jpeg", "application/pdf"]
+
 # Allow connections via S3 compatible clients
 [storage.s3_protocol]
 enabled = true

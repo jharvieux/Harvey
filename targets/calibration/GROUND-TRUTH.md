@@ -1043,6 +1043,31 @@ new `leftover-auth.test.ts` heuristic unit tests.
 
 ---
 
+## Batch B15 (#123) — semantic-tier Supabase policy/function-body fixtures (review tier, no mechanical detector)
+
+Three of the nine classes carved out in #123 (`docs/design/corpus-roadmap-to-100.md` §4a — the
+semantic/paid-M-series backlog explicitly excluded from the mechanical corpus). Answer key:
+`src/scan/calibration/b15-storage-secdef.entries.ts`. All three need policy-body or function-body
+reasoning that a structural grep can't do reliably: detection is left to the existing LLM
+high-recall pass (`/vuln-scan` + `/triage`), per #123 option (b) — **no new mechanical scanner is
+added here.** Every positive is `review` tier and is EXPECTED to miss `pnpm validate:calibration`
+(a non-fatal `reviewMisses` line); the gate's job is proving the negatives raise zero free-count
+false positives.
+
+### B15 positives — planted bugs (review tier; static miss by design, LLM pass covers detection)
+
+| id | location | class | tier |
+|---|---|---|---|
+| P-STORAGE-AUTH-NOT-OWNER `[#137]` | `supabase/migrations/20260710000001_b15_storage_secdef_semantic.sql` (`user_files_select_authenticated`) | `storage.objects` SELECT policy `USING (auth.role() = 'authenticated')` — checks login, not ownership | review |
+
+### B15 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why benign |
+|---|---|---|
+| N-STORAGE-OWNERSHIP-SCOPED | same file (`user_files_select_own`) | `USING (bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text)` — the standard one-folder-per-user ownership pattern. No mechanical rule reads `storage.objects` policy bodies at all — trivially silent. |
+
+---
+
 ## Batch M4+M5 (#72) — duplication (jscpd) + dead code (knip)
 
 The M4/M5 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
