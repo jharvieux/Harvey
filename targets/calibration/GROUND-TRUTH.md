@@ -1292,6 +1292,7 @@ fail it, and every rule in this batch is `review`.
 | P-MISSING-SERVER-ONLY | `lib/secret.js:5` | Semgrep `harvey-missing-server-only` (`process.env.INTERNAL_API_SECRET`, no `import "server-only"`, no `"use client"`) | review |
 | P-NO-RATE-LIMIT | `pages/api/auth/login.js:7` | `leftover-auth`'s new sensitive-auth-route + no-rate-limiter-hint check (`src/scan/leftover-auth.ts`) | review |
 | P-FAIL-OPEN | `lib/rate-limiter.js:4-11` | Semgrep `harvey-fail-open` (`catch` block returns `true` on a Redis error) | review |
+| P-ROUTE-NOAUTH-CUSTOM-VERB | `pages/api/permissions/purge.js:9` | Semgrep `harvey-route-noauth` (#126 regression guard: calls `scheduleCleanup()` — not a recognized guard verb — before deleting, no `getServerSession`/`supabase.auth.getUser()`) | review |
 
 ### B7 negatives — benign lookalikes (must NOT be flagged in the free count)
 
@@ -1305,6 +1306,7 @@ fail it, and every rule in this batch is `review`.
 | N-SERVER-ONLY-PRESENT | `lib/secret-safe.js` | Starts with `import "server-only";` — `harvey-missing-server-only`'s `pattern-not-inside` excludes it. |
 | N-RATE-LIMIT-PRESENT | `pages/api/auth/login-limited.js` | Calls `rateLimit(req)` and 429s before signing in — `leftover-auth`'s rate-limiter-hint regex matches the call. |
 | N-DEBUG-ROUTE-GUARDED | `pages/api/debug/status.js` | Sits under a `/debug` path segment but reads `getServerSession(req)` and 401s first — clears the *existing* `leftover-auth` sensitive-route heuristic's `AUTH_HINT` check. The operator-flagged case: "a debug route that IS auth-gated" — this is a regression guard on the pre-existing `P-DEBUG-ENDPOINT` heuristic, not a new rule. |
+| N-ROUTE-NOAUTH-CUSTOM-GUARD | `pages/api/permissions/revoke.js` | Calls `assertPermission(req, 'permissions:revoke')` before deleting — the exact ATC dogfood shape (`assertPlatformAdmin`/`assertPermission`/`authenticateUser`, 122 FPs, #126) `harvey-route-noauth` previously couldn't see. The broadened `pattern-not-regex` (any call whose name starts with `assert`/`require`/`ensure`/`authenticate`/`authorize`/`guard`, or `check`/`verify` combined with an auth-ish token) excludes it — cleared. |
 
 ### B7 live result (2026-07-08, static: semgrep 1.164.0, gitleaks 8.30.1, trufflehog 3.95.8, osv-scanner 2.3.8, no Docker)
 
@@ -1320,6 +1322,42 @@ batches. `pnpm verify` (offline) is green: `src/scan/leftover-auth.test.ts` gain
 tests for the new rate-limit heuristic; the scorecard logic over the expanded `CORPUS` is
 exercised in `calibration.test.ts`; the Semgrep rules themselves (`semgrep --validate` clean, 49
 rules across the directory) are proven by the live gate above.
+
+### Follow-up live result (2026-07-10, issue #126 — route-noauth custom guard helpers)
+
+The 2026-07-10 ATC re-scan (expanded #71 corpus) found `harvey-route-noauth` firing on **122**
+App Router routes, 0/122 real — every one gated by a NAMED CUSTOM GUARD HELPER
+(`assertPlatformAdmin`/`assertPlatformAdminArea`/`assertSuperadmin`, `assertPermission` (408 call
+sites), `authenticateUser`) the rule's fixed `getServerSession`/`supabase.auth.getUser`
+`pattern-not-inside` couldn't see. Fixed in `src/scan/rules/semgrep/auth.yml` by broadening
+`harvey-route-noauth`'s guard recognition to a `pattern-not-regex` over the matched function's
+source: any call whose name starts with a guard-specific verb (`assert`/`require`/`ensure`/
+`authenticate`/`authorize`/`guard`) or starts with a weaker generic verb (`check`/`verify`)
+*and* also carries an auth-ish token (`admin`/`permission`/`auth`/`session`/`tenant`/`role`/
+`access`/`user`/`login`) in the same identifier. A `metavariable-regex` constraint on a
+`$GUARD(...)` metavariable bound only inside `pattern-not-inside` was tried first and rejected —
+verified empirically (ad hoc semgrep run, not committed) that it suppresses ALL matches in the
+enclosing function regardless of which call the metavariable binds to, not just the guard call;
+`pattern-not-regex` is the mechanism that actually works. This stays a pure Semgrep, single-pass
+fix (no two-pass project-aware guard discovery) — still `review` tier, per file-header doctrine.
+
+New calibration pair: `P-ROUTE-NOAUTH-CUSTOM-VERB` (`pages/api/permissions/purge.js` — calls
+`scheduleCleanup()`, outside both guard buckets, no session read — must still be caught, proving
+the broadened regex doesn't over-suppress) and `N-ROUTE-NOAUTH-CUSTOM-GUARD`
+(`pages/api/permissions/revoke.js` — calls `assertPermission(...)` before the delete, the exact
+ATC shape — must clear). `pnpm validate:calibration`: **positives caught 141/141 static (61 at
+high/free-count, 15 connected-tier N/A); negatives cleared 109/109 — GATE PASS.** Both new B7
+entries pass; no regression on any other batch.
+
+Acceptance check against the real ATC corpus (read-only clone, not modified): a mechanical scan
+scoped to the ATC checkout, filtered to `harvey-route-noauth`/`route-noauth` findings, went from
+**122 before the fix to 0 after**. The residual 5 (all webhook routes verifying an inbound
+signature — `verifyGitHubSignature`/`jwtVerify`/`verifyResendSignature` (x2)
+/`verifyWebhookSignature`) cleared once the weak-verb bucket's token list was extended with
+`signature`/`jwt`/`webhook`/`hmac`/`token` and made order-independent (lookahead, so `jwtVerify`
+matches as well as `verifyJwt`) — this is the "genuinely public, signature-verified" category the
+issue's acceptance criteria names explicitly, distinct from the named-guard-helper class but
+covered by the same regex family. The ATC clone was scanned read-only; not modified.
 
 ---
 
