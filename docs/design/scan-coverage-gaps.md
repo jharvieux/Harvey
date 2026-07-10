@@ -2,6 +2,11 @@
 
 Status: v1 (researched 2026-07-01) · Related issues: #19 (architecture), #5 (M2 pen test), new mechanical-checks + config-audit issues.
 
+> **Corpus build-out (#71):** the first ~100-class corpus derived from these gaps is specified in
+> `docs/design/spec-71-security-corpus.md` (batches B1–B8, all built). The **round-2** expansion —
+> a deduped, ranked master list of the 5-lens research plus the next build batches (B9–B14) — lives
+> in `docs/design/corpus-roadmap-to-100.md`.
+
 Target audience: solo devs, small shops, and AI-assisted "vibe coders" on Next.js (App Router) + Supabase. This doc catalogs failure modes our current 10 modules + `scan-extras.txt` taxonomy **do not** cover. Each gap is tagged **MECHANICAL** (cheap/deterministic: grep/regex/AST/config-parse/version-check/advisor-API/secret-scanner) or **DEEP** (needs semantic/LLM/dynamic analysis).
 
 ## The structural finding
