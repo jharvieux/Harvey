@@ -1,6 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // The `env` block inlines each value into the CLIENT bundle at build time.
+  env: {
+    // TRUE NEGATIVE (N-NEXTCONFIG-ENV-BENIGN): a non-secret build constant is safe to inline.
+    APP_VERSION: process.env.APP_VERSION,
+    // PLANTED BUG (P-NEXTCONFIG-ENV-SECRET): a service-role secret mapped through `env` is
+    // inlined into browser-shipped JS — a full RLS-bypass key handed to every visitor. Semgrep
+    // harvey-nextconfig-env-secret matches a secret-named key in the env block → high.
+    SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  },
   // PLANTED BUGS (P-NO-HSTS / P-NO-FRAME-OPTIONS / P-NO-NOSNIFF): the default route sets one
   // unrelated header and omits Strict-Transport-Security, X-Frame-Options, and
   // X-Content-Type-Options entirely. harvey-missing-hsts / harvey-missing-frame-options /

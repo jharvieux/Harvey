@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildCoverageMatrix, CORPUS, scoreEntry, type CorpusEntry } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
+import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
+import { parseSemgrepFindings, type SemgrepResult } from "./semgrep.js";
 import { checkKnownIoc, checkLockfilePresence } from "./supply-chain.js";
 import type { Finding, PrecisionTier } from "../findings.js";
 
@@ -189,6 +191,50 @@ describe("Batch B2 deferred corpus (secondary manifest fixtures → real check o
 
   it("draws nothing at all from the supported-app fixture", () => {
     expect(findings.filter((f) => f.location.includes("supported-app"))).toEqual([]);
+  });
+});
+
+describe("Batch B9 secrets corpus (recorded gitleaks + semgrep output → tier mapping)", () => {
+  // Recorded findings mirroring the live `pnpm validate:calibration` run over targets/calibration,
+  // fed through the real secrets.ts / semgrep.ts tier mapping (no binary invoked). Exercises the
+  // B9 additions: the gitleaks rules promoted to high (supabase-default-jwt-secret,
+  // harvey-uri-credentials, harvey-http-authorization-bearer, npm-access-token, slack-webhook-url)
+  // and the two ERROR+HIGH structural Semgrep rules, plus the review-tier detections.
+  const gitleaks: GitleaksResult[] = [
+    { RuleID: "supabase-default-jwt-secret", File: "supabase/docker.env", StartLine: 7, Match: "your-super-secret-jwt-token-with-at-least-32-characters-long" },
+    { RuleID: "npm-access-token", File: ".npmrc", StartLine: 1, Match: "npm_FAKE0aB1cD2eF3gH4iJ5kL6mN7oP8qR9sT0u" },
+    { RuleID: "private-key", File: "secrets/gcp-service-account.json", StartLine: 5, Match: "-----BEGIN PRIVATE KEY-----" },
+    { RuleID: "slack-webhook-url", File: "lib/notify.js", StartLine: 6, Match: "https://hooks.slack.com/workflows/T0FAKE000/A0FAKE000/000000000000000000/FAKExXxXxXxXxXxX" },
+    { RuleID: "harvey-uri-credentials", File: "lib/mailer.js", StartLine: 4, Match: "smtp://mailer:S3ndM4ilPwZ9Qm2v@smtp.mailprovider.example.com" },
+    { RuleID: "harvey-http-authorization-bearer", File: "supabase/migrations/20260709000005_b9_db_webhook.sql", StartLine: 14, Match: "Bearer whsec_9f3Kd2mQ7pRs1TvWx8Yz0AbCd4Ef6GhJk" },
+    { RuleID: "harvey-gcp-api-key", File: "lib/maps.js", StartLine: 5, Match: "AIzaSyD0FAKEkeyNotReal000000000000abcde" },
+    { RuleID: "jwt", File: "lib/share.js", StartLine: 5, Match: "eyJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJyZXBvcnRzL3EzLnBkZiJ9.Kf3Zp7wV0nRtY8sLbUmEdHjGqAoIcPwZ1kY" },
+    // N-SB-JWT-ROTATED: the rotated random secret draws only a generic-api-key review hit.
+    { RuleID: "generic-api-key", File: "supabase/docker.env", StartLine: 12, Match: "ANON_JWT_SECRET=Rk7pQ2mZ9vXcW8sNdLhGfYtAe4Uo1Bx" },
+  ];
+  const semgrep: SemgrepResult[] = [
+    { check_id: "secrets.harvey-nextconfig-env-secret", path: "next.config.js", start: { line: 11 }, extra: { severity: "ERROR", metadata: { confidence: "HIGH" }, message: "secret-named key inlined via env" } },
+    { check_id: "secrets.harvey-edgefn-secret-fallback", path: "supabase/functions/send-email/index.ts", start: { line: 6 }, extra: { severity: "ERROR", metadata: { confidence: "HIGH" }, message: "hardcoded secret fallback" } },
+    { check_id: "secrets.harvey-secret-in-url-param", path: "lib/weather.js", start: { line: 5 }, extra: { severity: "WARNING", metadata: { confidence: "MEDIUM" }, message: "secret in URL query parameter" } },
+  ];
+  const findings = [...parseGitleaksFindings(gitleaks, "source"), ...parseSemgrepFindings({ results: semgrep })];
+
+  it("catches every B9 positive at its declared tier and clears every B9 negative", () => {
+    for (const e of b9SecretsEntries) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe(e.expectedTier);
+      else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("promotes only the ~100%-precision detections to the free count (8 high, 3 review)", () => {
+    const m = buildCoverageMatrix(findings, b9SecretsEntries);
+    const positives = b9SecretsEntries.filter((e) => e.kind === "positive");
+    expect(m.positivesCaught).toBe(positives.length);
+    expect(m.positivesCaughtHigh).toBe(8);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(3);
+    expect(m.ok).toBe(true);
   });
 });
 
