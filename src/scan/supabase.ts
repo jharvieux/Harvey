@@ -50,11 +50,16 @@ import {
   checkAutoExposedTables,
   checkDangerousExtensions,
   checkEdgeFunctionSecrets,
+  checkExposedSchemas,
+  checkGotrueVersion,
+  checkGraphqlIntrospection,
   checkPublicBucketsWithNoPolicies,
+  checkRealtimeAuthorization,
   checkUnsignedWebhookHandlers,
   type AuthConfig,
   type EdgeFunctionSource,
   type ExtensionInfo,
+  type GotrueInfo,
   type StorageBucket,
   type TableInfo,
 } from "./supabase-config.js";
@@ -66,7 +71,19 @@ const TABLES_SQL = `select schemaname as schema, tablename as name, rowsecurity 
 const EXTENSIONS_SQL = `select extname as name, extnamespace::regnamespace::text as schema, extversion as installed_version from pg_extension;`;
 const BUCKETS_SQL = `select id, name, public from storage.buckets;`;
 const BUCKET_POLICY_COUNTS_SQL = `select (regexp_match(qual, 'bucket_id = ''([^'']+)'''))[1] as bucket_id, count(*) from pg_policies where schemaname = 'storage' and tablename = 'objects' group by 1;`;
+const REALTIME_MESSAGES_SQL = `select rowsecurity as "rlsEnabled" from pg_tables where schemaname = 'realtime' and tablename = 'messages';`;
 
+// PostgREST config exposes the schema allow-list as `db_schema` (comma-separated). The GET
+// endpoint is documented but its response shape was NOT independently re-verified against the
+// live OpenAPI spec this session — confirm the `db_schema` key before the first real hosted run.
+interface PostgrestConfig {
+  db_schema?: string;
+}
+
+// GoTrue (Supabase Auth) exposes its running version at `{authUrl}/health` and its enabled
+// providers at `{authUrl}/settings`, both reachable with only the anon `apikey` header. Shapes
+// verified live 2026-07-10: health → {version:"v2.192.0",...}; settings → {external:{apple,azure,…}}.
+// Hosted Supabase auto-patches GoTrue, so this probe is primarily for self-hosted targets.
 interface SupabaseScanOptions {
   projectRef?: string; // required unless local
   local?: boolean;
@@ -74,6 +91,25 @@ interface SupabaseScanOptions {
   fetchImpl?: typeof fetch; // injection point for tests
   functionsDir?: string; // path to the client repo's supabase/functions directory, if scanning it
   splinterImpl?: (connectionString: string) => AdvisorsResponse; // injection point for tests, defaults to runSplinter
+  gotrueProbe?: { authUrl: string; anonKey: string }; // self-hosted GoTrue version/provider probe
+}
+
+function parseExposedSchemas(config: PostgrestConfig): string[] {
+  return (config.db_schema ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+async function probeGotrue(authUrl: string, anonKey: string, fetchImpl: typeof fetch): Promise<GotrueInfo> {
+  const base = authUrl.replace(/\/$/, "");
+  const headers = { apikey: anonKey };
+  const health = (await managementFetchJson(`${base}/health`, headers, fetchImpl)) as { version?: string };
+  const settings = (await managementFetchJson(`${base}/settings`, headers, fetchImpl)) as { external?: Record<string, boolean> };
+  return { version: health.version ?? null, appleEnabled: settings.external?.apple, azureEnabled: settings.external?.azure };
+}
+
+async function managementFetchJson(url: string, headers: Record<string, string>, fetchImpl: typeof fetch): Promise<unknown> {
+  const res = await fetchImpl(url, { headers });
+  if (!res.ok) throw new Error(`GET ${url} failed: ${res.status} ${res.statusText}`);
+  return res.json();
 }
 
 function readEdgeFunctionSources(functionsDir: string): EdgeFunctionSource[] {
@@ -126,6 +162,14 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch): 
   const policyRows = await managementApiQuery<{ bucket_id: string; count: number }[]>(ref, BUCKET_POLICY_COUNTS_SQL, token, fetchImpl);
   findings.push(...checkPublicBucketsWithNoPolicies(buckets, bucketPolicyCounts(policyRows)));
 
+  const realtime = await managementApiQuery<{ rlsEnabled: boolean }[]>(ref, REALTIME_MESSAGES_SQL, token, fetchImpl);
+  findings.push(...checkRealtimeAuthorization({ exists: realtime.length > 0, rlsEnabled: realtime[0]?.rlsEnabled ?? false }));
+
+  const postgrest = await managementApiGet<PostgrestConfig>(`/projects/${ref}/postgrest`, token, fetchImpl);
+  const exposedSchemas = parseExposedSchemas(postgrest);
+  const pgGraphqlInstalled = extensions.some((e) => e.name === "pg_graphql" && Boolean(e.installed_version));
+  findings.push(...checkExposedSchemas(exposedSchemas), ...checkGraphqlIntrospection(pgGraphqlInstalled, exposedSchemas));
+
   return findings;
 }
 
@@ -146,14 +190,18 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
     const extensions = (await sql.unsafe(EXTENSIONS_SQL)) as unknown as ExtensionInfo[];
     const buckets = (await sql.unsafe(BUCKETS_SQL)) as unknown as StorageBucket[];
     const policyRows = (await sql.unsafe(BUCKET_POLICY_COUNTS_SQL)) as unknown as { bucket_id: string; count: number }[];
+    const realtime = (await sql.unsafe(REALTIME_MESSAGES_SQL)) as unknown as { rlsEnabled: boolean }[];
 
     const splinterFindings = parseAdvisorFindings(splinterImpl(connectionString));
 
+    // Exposed-schema / pg_graphql breadth reads PostgREST's db-schema config, which isn't in
+    // Postgres — hosted-only. Local mode covers the realtime-authorization class (SQL-readable).
     return [
       ...splinterFindings,
       ...dedupeAutoExposed(splinterFindings, checkAutoExposedTables(tables)),
       ...checkDangerousExtensions(extensions),
       ...checkPublicBucketsWithNoPolicies(buckets, bucketPolicyCounts(policyRows)),
+      ...checkRealtimeAuthorization({ exists: realtime.length > 0, rlsEnabled: realtime[0]?.rlsEnabled ?? false }),
     ];
   } finally {
     await sql.end();
@@ -174,6 +222,10 @@ export async function runSupabaseScan(opts: SupabaseScanOptions): Promise<Findin
   if (opts.functionsDir) {
     const edgeFunctions = readEdgeFunctionSources(opts.functionsDir);
     findings.push(...checkEdgeFunctionSecrets(edgeFunctions), ...checkUnsignedWebhookHandlers(edgeFunctions));
+  }
+
+  if (opts.gotrueProbe) {
+    findings.push(...checkGotrueVersion(await probeGotrue(opts.gotrueProbe.authUrl, opts.gotrueProbe.anonKey, opts.fetchImpl ?? fetch)));
   }
 
   return findings;
