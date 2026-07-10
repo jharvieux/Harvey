@@ -142,6 +142,7 @@ for `P-HARDCODED-KEY`.
 | P-GH-TOKEN | `scripts/deploy.js:4` | gitleaks `github-pat` (`ghp_`; push protection did not block this fake; unverifiable → review) | review |
 | P-SENDGRID-KEY | `lib/email.js:4` | gitleaks `generic-api-key` (value defanged; `sendgrid-api-token` validated pre-commit) | review |
 | P-JWT-SIGNING-SECRET | `lib/auth.js:7` | gitleaks `generic-api-key` (high-entropy signing-secret literal to `jwt.sign`; heuristic → review) | review |
+| P-ENV-COMMITTED (#130) | `.env:9,13` | gitleaks `supabase-service-role-jwt` (decoded claim) + `harvey-db-uri-credentials` (MongoDB URI), both on a committed **bare** `.env` (not `.env.local`) carrying multiple live-shaped secrets at once | high |
 
 **Push-protection defang note.** GitHub push protection blocks committing a real-shape OpenAI /
 Stripe / AWS / SendGrid key. For those four, the committed literal is a pure high-entropy fake
@@ -161,10 +162,10 @@ firing rule differs. The `ghp_` GitHub PAT fake and all high-tier prefix/claim-b
 | N-STRIPE-TEST-KEY | `.env.local` (`sk_test_…`) | Test-mode key, no production risk. gitleaks `stripe-access-token` still pattern-matches it → review only (triaged out), never high. |
 | N-AWS-EXAMPLE-KEY | `docs/aws-setup.md` (`AKIAIOSFODNN7EXAMPLE`) | AWS-docs placeholder; gitleaks stopword-allowlists the `EXAMPLE` marker — `aws-access-token` stays silent. |
 | N-DB-URL-LOCAL | `README.md:53` (`postgres://postgres:postgres@127.0.0.1`) | Standard local Supabase dev string, not a committed credential. `harvey-db-uri-credentials` allowlists loopback hosts (`localhost`/`127.0.0.1`). |
+| N-ENV-EXAMPLE `[reused, also covers P-ENV-COMMITTED]` | `.env.example` | Documented placeholders, not secrets — already in the base corpus. Doubles as `P-ENV-COMMITTED`'s negative (a committed placeholder-only env file vs. the committed live-value `.env`) rather than duplicating a fixture; `P-ENV-COMMITTED`'s corpus entry uses the `.env:` location (colon included) specifically so it can't be cross-attributed a finding from `.env.example` or `.env.local`. |
 
 **Deferred to a later batch (spec §B1 rows not built here, tracked follow-ups):**
-`P-ENV-COMMITTED` (a committed `.env` with live values — overlaps `P-DB-URL-PASSWORD`, which
-already exercises a committed non-anon secret in `.env.local`); `P-SECRET-GIT-HISTORY` (a secret
+`P-SECRET-GIT-HISTORY` (a secret
 added+removed across commits — the TruffleHog git-history pass only runs against a repo **root**,
 not the `targets/calibration` subdirectory, so it can't be validated by this harness as-is;
 needs a dedicated single-repo history fixture).
