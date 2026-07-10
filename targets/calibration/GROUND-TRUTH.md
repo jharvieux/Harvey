@@ -1060,18 +1060,20 @@ incrementally, one issue per commit. Answer key: `src/scan/calibration/b15-nextj
 | id | location | class | issue |
 |---|---|---|---|
 | P-BOLA-BODY-OWNER | `pages/api/billing/invoice.js:14` | route scopes the query to `req.body.tenantId` (client-supplied) instead of the session's tenant id — object/function-level authz gap (BOLA/BFLA) | #131 |
+| P-MW-MATCHER-EXCLUDES-API | `middleware.ts` (`config.matcher`) | matcher `/((?!api\|_next/static\|_next/image\|favicon.ico).*)` excludes every `/api/*` path from the middleware entirely | #132 |
 
 ### B15 negatives — benign lookalikes (must NOT be flagged in the free count; here also fully silent — no existing rule targets these shapes)
 
 | id | location | why benign |
 |---|---|---|
 | N-BOLA-SESSION-OWNER | `pages/api/billing/invoice-safe.js` | query scoped to `session.user.tenantId`; `req.body.tenantId` is never read. |
+| N-MW-MATCHER-INCLUDES-API | `lib/middleware-matcher-safe.ts` | `config.matcher` has no `api` exclusion — `/api/*` still runs through the middleware auth check. |
 
 ### B15 live result (2026-07-10, static binaries: semgrep, gitleaks, trufflehog, osv-scanner; no Docker)
 
-`pnpm validate:calibration` (after #131): **GATE PASS.** N-BOLA-SESSION-OWNER is fully silent (no
-finding at all) and P-BOLA-BODY-OWNER is a non-fatal review-tier recall gap (expected — no
-mechanical rule targets it). `pnpm verify` (offline) is green.
+`pnpm validate:calibration` (after #131-#132): **GATE PASS.** Both negatives are fully silent (no
+finding at all) and both positives are non-fatal review-tier recall gaps (expected — no mechanical
+rule targets them). `pnpm verify` (offline) is green.
 
 ---
 
