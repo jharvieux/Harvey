@@ -2,7 +2,26 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-11 (slop detector + hardened tests PRs #188/#189; M9 doc #186 via PR #190; #162 CLOSED — validated live against ATC RAG + main)_
+_Last updated: 2026-07-11 (issue sweep: connected-tier DB checks #197/#198 via PR #202; review-tier passes #199/#200/#201 via PR #203 — 5 issues closed)_
+
+## Issue sweep 2026-07-11 (evening) — 2 batches merged, 5 issues closed
+
+The connected-tier DB-check gap review (#197–#201) is now delivered. All source-level, no supervised paths touched, no new deps.
+
+- **#197 + #198** (PR #202, sonnet) — two mechanical read-only SQL checks in `src/scan/supabase-config.ts`, wired into both scan paths in `supabase.ts`, following the `checkRealtimePublicationRls` (#196) pattern:
+  - `checkDefaultPrivilegesToClientRoles` + `checkColumnGrantsToClientRoles` — default-privilege / column-level grants to anon/authenticated. **Used `pg_attribute.attacl` instead of the issue-suggested `information_schema.role_column_grants`** (that view synthesizes a row per column for ordinary table-wide grants → would flood every Supabase project with FPs).
+  - `checkCronJobs` — pg_cron inventory, guarded N/A when the `cron` schema is absent. Flags superuser-run jobs, commands naming a SECURITY DEFINER function (name-match, not full body analysis), and secret-shaped literals.
+- **#199 + #200 + #201** (PR #203, opus) — three review-tier passes on a shared `src/review-tier.ts` harness. **KEY FINDING: there is no runtime LLM API in this repo** — "review tier" is the existing `precisionTier: "review"` where heuristic findings are surfaced for downstream adjudication (vuln-scan LLM pass / human triage). So these were built as review-tier heuristic surfacing (clear the provably-safe, surface the rest), matching the `definer-classifier`/`grant-classifier` pattern — **no `package.json` dependency added.** Reframes the issues' literal "LLM pass" ask; operator should confirm this satisfies intent, else a real inline LLM harness is a separate (supervised, needs-dep) decision.
+  - `src/rls-policy-review.ts` — #199 live `pg_policies` semantic review vs a tenancy model; `detect-deeper --tenant-key`.
+  - `src/definer-review.ts` — #200 caller-authorization body-read over non-ok definer verdicts.
+  - `src/pii-protection-review.ts` — #201 PII adequacy over M10 classification + exposure facts.
+
+Each pass has positive-fires / negative-clears fixtures. `pnpm verify` green on both PRs.
+
+### Still-open audit backlog (sweep-excluded — need live env, human, or design)
+- **Live-env:** #161 (seam probes live), #159 (NO-RATE-LIMIT vs deployed test app) — need a deployed target.
+- **Human/GTM/business:** #168 (responsible disclosure — outward comms), #10/#11/#12/#13 (free audits, LLC, posts, partnerships).
+- **Epic/deferred-design:** #2 (epic tracker), #4 (Tier 2 vuln-pipeline port — deferred until Tier 1 ships).
 
 ## #162 checkExposedSchemas — validated live, CLOSED (2026-07-11)
 
