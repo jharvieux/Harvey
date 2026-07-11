@@ -191,9 +191,15 @@ rules:
             ...
           }
       # #126: a custom-named guard helper call anywhere in the function — see file header.
-      # The weak-verb bucket (check/verify) uses lookaheads so the verb and the auth-ish
-      # token can appear in either order in the identifier (jwtVerify, verifyWebhookSignature).
-      - pattern-not-regex: (?i)\b((assert|require|ensure|authenticate|authorize|guard)[a-z0-9_]*|(?=[a-z0-9_]*(check|verify))[a-z0-9_]*(admin|permission|auth|session|tenant|role|access|user|login|signature|jwt|webhook|hmac|token)[a-z0-9_]*)\s*\(
+      # The weak-verb bucket (check/verify/with) uses lookaheads so the verb and the auth-ish
+      # token can appear in either order in the identifier (jwtVerify, verifyWebhookSignature,
+      # withPlatformAdminAudit). #171: "with" joined the weak-verb bucket (an audit/guard HOC
+      # wrapper called inline, e.g. withPlatformAdminAudit — the "Area"-suffixed assert variant,
+      # assertPlatformAdminArea, was already covered by the assert-prefix bucket). constantTimeEqual/
+      # timingSafeEqual are fixed names, not verb+token: a constant-time comparison against a
+      # server-held secret (an admin header-secret check) IS the auth check by convention, with no
+      # auth-ish token in the name for the weak-verb bucket to key off.
+      - pattern-not-regex: (?i)\b((assert|require|ensure|authenticate|authorize|guard)[a-z0-9_]*|(?=[a-z0-9_]*(check|verify|with))[a-z0-9_]*(admin|permission|auth|session|tenant|role|access|user|login|signature|jwt|webhook|hmac|token)[a-z0-9_]*|constantTimeEqual|timingSafeEqual)\s*\(
 
   # IDOR/BOLA shape: an id from the request (req.query/req.params) is the SOLE predicate on a
   # Supabase query — .eq('id', $ID) with nothing else chained. The sink is anchored to a full
