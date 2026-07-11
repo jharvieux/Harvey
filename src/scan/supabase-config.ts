@@ -239,6 +239,38 @@ export function checkRealtimeAuthorization(realtime: RealtimeMessagesInfo): Find
   ];
 }
 
+export interface PublishedTable {
+  schema: string;
+  name: string;
+  rlsEnabled: boolean;
+}
+
+// A table in the `supabase_realtime` publication has its row changes (INSERT/UPDATE/DELETE)
+// broadcast to Realtime subscribers via the legacy postgres_changes stream. Broadcast rows are
+// filtered by the subscriber's RLS at subscribe time — so a published table with RLS DISABLED
+// live-streams every row change to any client holding the anon key, regardless of tenant. This is
+// distinct from checkRealtimeAuthorization (which covers the newer realtime.messages model): a
+// table can be broadcast via the publication even when realtime.messages RLS is fine. Fires only
+// on the unambiguous RLS-off case, so "review".
+export function checkRealtimePublicationRls(published: PublishedTable[]): Finding[] {
+  return published
+    .filter((t) => !t.rlsEnabled)
+    .map((t) =>
+      mechanicalFinding({
+        id: `SB-REALTIME-PUB-${t.schema}-${t.name}`,
+        title: `Table ${t.schema}.${t.name} is broadcast by Realtime with RLS disabled`,
+        severity: "High",
+        category: "Supabase config",
+        taxonomy: "Realtime publication broadcasts an unprotected table",
+        location: `${t.schema}.${t.name}`,
+        evidence: `${t.schema}.${t.name} is in the supabase_realtime publication and has row-level security disabled.`,
+        impact: "Every INSERT/UPDATE/DELETE on this table is streamed to any client subscribed with the anon key — with RLS off there is no per-row filter, so all tenants' row changes are broadcast to everyone.",
+        fix: "Enable RLS with tenant-scoped policies on the table, or remove it from the supabase_realtime publication if it doesn't need live broadcast.",
+        precisionTier: "review",
+      }),
+    );
+}
+
 // PostgREST auto-exposes the schemas listed in its db-schema config over the REST/GraphQL API.
 // The Supabase default is public + graphql_public; any additional schema is directly reachable
 // with the anon key, so a broader list than intended is an exposure. Whether the extra schema is

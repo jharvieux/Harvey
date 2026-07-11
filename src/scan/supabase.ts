@@ -55,7 +55,9 @@ import {
   checkGraphqlIntrospection,
   checkPublicBucketsWithNoPolicies,
   checkRealtimeAuthorization,
+  checkRealtimePublicationRls,
   checkUnsignedWebhookHandlers,
+  type PublishedTable,
   type AuthConfig,
   type EdgeFunctionSource,
   type ExtensionInfo,
@@ -73,6 +75,7 @@ const EXTENSIONS_SQL = `select extname as name, extnamespace::regnamespace::text
 const BUCKETS_SQL = `select id, name, public from storage.buckets;`;
 const BUCKET_POLICY_COUNTS_SQL = `select (regexp_match(qual, 'bucket_id = ''([^'']+)'''))[1] as bucket_id, count(*) from pg_policies where schemaname = 'storage' and tablename = 'objects' group by 1;`;
 const REALTIME_MESSAGES_SQL = `select rowsecurity as "rlsEnabled" from pg_tables where schemaname = 'realtime' and tablename = 'messages';`;
+const REALTIME_PUBLICATION_SQL = `select pt.schemaname as schema, pt.tablename as name, c.relrowsecurity as "rlsEnabled" from pg_publication_tables pt join pg_namespace n on n.nspname = pt.schemaname join pg_class c on c.relname = pt.tablename and c.relnamespace = n.oid where pt.pubname = 'supabase_realtime';`;
 
 // PostgREST config exposes the schema allow-list as `db_schema` (comma-separated). The GET
 // endpoint is documented but its response shape was NOT independently re-verified against the
@@ -174,6 +177,9 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch): 
   const realtimeInfo: RealtimeMessagesInfo = { exists: realtime.length > 0, rlsEnabled: realtime[0]?.rlsEnabled ?? false };
   findings.push(...checkRealtimeAuthorization(realtimeInfo));
 
+  const published = await managementApiQuery<PublishedTable[]>(ref, REALTIME_PUBLICATION_SQL, token, fetchImpl);
+  findings.push(...checkRealtimePublicationRls(published));
+
   const postgrest = await managementApiGet<PostgrestConfig>(`/projects/${ref}/postgrest`, token, fetchImpl);
   const exposedSchemas = parseExposedSchemas(postgrest);
   const pgGraphqlInstalled = hasPgGraphql(extensions);
@@ -200,6 +206,7 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
     const buckets = (await sql.unsafe(BUCKETS_SQL)) as unknown as StorageBucket[];
     const policyRows = (await sql.unsafe(BUCKET_POLICY_COUNTS_SQL)) as unknown as { bucket_id: string; count: number }[];
     const realtime = (await sql.unsafe(REALTIME_MESSAGES_SQL)) as unknown as { rlsEnabled: boolean }[];
+    const published = (await sql.unsafe(REALTIME_PUBLICATION_SQL)) as unknown as PublishedTable[];
 
     const splinterFindings = parseAdvisorFindings(splinterImpl(connectionString));
 
@@ -211,6 +218,7 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
       ...checkDangerousExtensions(extensions),
       ...checkPublicBucketsWithNoPolicies(buckets, bucketPolicyCounts(policyRows)),
       ...checkRealtimeAuthorization({ exists: realtime.length > 0, rlsEnabled: realtime[0]?.rlsEnabled ?? false }),
+      ...checkRealtimePublicationRls(published),
     ];
   } finally {
     await sql.end();

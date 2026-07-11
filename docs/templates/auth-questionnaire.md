@@ -33,10 +33,14 @@ nothing is silently skipped.*
   mobile client).
 - **Backends and connection info — one set per distinct database/project.** For **each** backend
   (e.g. a primary Supabase project *and* a separate RAG/analytics project), we need: the project
-  URL, the anon/publishable key, a **read-only** Postgres connection string (SELECT-only), and —
-  only for the write-safe environment below — a service-role key and the JWT secret so we can mint
-  test identities. Provide these **per backend**; don't assume one set covers all of them (missing
-  one is how a whole backend goes untested).
+  URL, the anon/publishable key, a **read-only** Postgres connection string (SELECT-only), a
+  **Supabase Management API personal access token** (project-scoped), and — only for the write-safe
+  environment below — a service-role key and the JWT secret so we can mint test identities. Provide
+  these **per backend**; don't assume one set covers all of them (missing one is how a whole backend
+  goes untested). The Management API token is what lets us read the security/performance advisors,
+  the auth configuration, and the exposed-API-schema list — these are Supabase *platform config*, not
+  in the database, so a SQL connection alone can't see them; without the token those checks are
+  reported N/A rather than run.
 - **Which environment is safe for write/destructive testing?** Cross-tenant *write* probes and
   rate-limit loops mutate data, so they only run against a **non-production** target you designate.
   Tell us, per backend, which instance is write-safe — and if a backend is a single
