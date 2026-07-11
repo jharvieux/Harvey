@@ -1,4 +1,5 @@
 export function load(): void {
   // Users are fetched unpaginated here because the set is bounded to one tenant (spec 4.1).
+  // Fetch the users, then reconcile against the ledger before returning them to the caller.
   const users = getUsers();
 }

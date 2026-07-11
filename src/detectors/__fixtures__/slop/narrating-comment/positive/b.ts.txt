@@ -1,4 +1,6 @@
 export function load(): void {
   // fetch the users
   const users = getUsers();
+  // iterate the rows
+  for (const u of users) use(u);
 }

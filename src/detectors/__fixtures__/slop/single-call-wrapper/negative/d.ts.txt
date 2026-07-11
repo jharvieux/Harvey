@@ -6,3 +6,7 @@ export function getUserName(id: string) {
 export function getActiveUser(id: string) {
   return fetchUser(id, { activeOnly: true });
 }
+const ADMIN_ROLES = new Set<string>();
+export function isAdminRole(role: string): boolean {
+  return ADMIN_ROLES.has(role);
+}

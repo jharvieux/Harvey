@@ -1,5 +1,6 @@
 export function run(): void {
   // TODO(#412): handle the retry path once the queue lands
   // FIXME(@alice): flaky under load — tracked in #500
+  // TODO(bp23-queue): revisit when the queue ships
   doWork();
 }
