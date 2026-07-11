@@ -48,6 +48,25 @@ quoted.
      `information_schema.role_table_grants`) and confirm no write privileges
      are present. Do not verify by attempting a live write — inspect grants instead.
 
+4a. **Supabase Management API personal access token — one per backend
+   (required for the hosted connected tier).** A read-only SQL connection is
+   NOT sufficient for the whole connected tier: the security/performance
+   **advisors** (`/advisors/*`), the **auth config** (`/config/auth`), and the
+   **PostgREST exposed-schema list** (`/config/postgrest` → `db_schema`, the
+   input to `checkExposedSchemas`) are platform config that is not in the
+   database — they're reachable only through the Supabase Management API. Request
+   a **project-scoped** personal access token (Account → Access Tokens; scope to
+   the client's org/project where the plan allows) valid for the engagement
+   window. `src/scan/supabase.ts` (`--supabase <ref>`) uses it for every hosted
+   pull, including the SQL reads via `/database/query`.
+   - Without it, only the **local/direct-SQL** checks run (splinter advisors +
+     table/extension/RLS reads over the read-only connection string); the
+     exposed-schema, auth-config, and hosted-advisor checks cannot — record them
+     `na` with that reason rather than silently skipping.
+   - It's a powerful token (project admin surface); treat it with the same
+     expiring, view-limited handling as everything else here, and add it to the
+     revoke-at-close checklist below.
+
 5. **Write-safe environment credentials — per backend, optional.** Cross-tenant
    *write* probes and rate-limit loops mutate data, so they run only against a
    **non-production** instance the client designates as write-safe (questionnaire
@@ -122,6 +141,8 @@ report is delivered.
 
 - [ ] Ask the client to revoke or delete the fine-grained PAT (or confirm
       it has already expired)
+- [ ] Ask the client to revoke or delete the Supabase Management API access
+      token (Account → Access Tokens) for each backend
 - [ ] Ask the client to revoke or rotate the read-only DB role/connection
       string **for each backend** issued (main, RAG, …)
 - [ ] Ask the client to revoke the write-safe-instance service-role keys and
