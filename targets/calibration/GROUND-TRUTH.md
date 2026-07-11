@@ -20,10 +20,25 @@ Tenants: **A** = `aaaaaaaa-…`, **B** = `bbbbbbbb-…`. Users: `alice@tenant-a.
 | 7 | UPDATE-UNSCOPED | High | `pages/api/profile/update.js:11` | `pool.query("UPDATE public.profiles SET role = $1", [role])` with no `WHERE` clause, via the raw pg connection — bypasses both RLS and PostgREST's WHERE-clause guard | `POST /api/profile/update {"role":"admin"}` sets `role=admin` on every profile in every tenant. |
 | 8 | OPEN-REDIRECT | Low | `pages/api/redirect.js:9` | `z.string().url()` validates URL shape but not host (no allowlist) | `GET /api/redirect?url=https://evil.example/phish` issues a 302 to the attacker's host. |
 
+### Dynamic-tier probes (M2 verify replays, #145–#148)
+
+Rows 9–12 are **dynamic-tier** classes: they can only be confirmed by probing the running app,
+so they're M2 pen-test `verify` replays (`src/pentest/verify.ts`), not mechanical-scan findings.
+Each has a seeded positive route/RPC and a benign sibling the probe clears. They are NOT expected
+in the mechanical `validate:calibration` count (the app routes deliberately avoid mechanical
+triggers like `select('*')`; the `issue_refund` SECURITY DEFINER grant is review-tier, not free).
+
+| # | ID | Severity | Location | Bug | Exploit |
+|---|----|----------|----------|-----|---------|
+| 9 | SHADOW-API-VERSION | High | `pages/api/v1/export.js` | Deprecated v1 export route left live and unauthenticated after v2 replaced it | `GET /api/v1/export` returns every tenant's documents to anyone with the anon key; `/api/v2/export` requires a token (negative). |
+| 10 | NO-RATE-LIMIT | High | `pages/api/coupon/redeem.js` | High-value flow with no anti-automation cap / single-use check | POST the same coupon N× — all N succeed; `coupon/redeem-limited.js` rejects a re-used code with 429 (negative). |
+| 11 | CACHE-CROSS-USER | High | `pages/api/me/summary.js` | Per-user response served `Cache-Control: public` with no `Vary` on the auth token | A shared cache serves Tenant A's personalized summary to a later anon visitor; `pages/api/me/private.js` is `private, no-store` (negative). |
+| 12 | ANON-PRIVILEGED-RPC | Critical | `supabase/migrations/20260710000002_dynamic_probes.sql` (`issue_refund`) | `issue_refund` is SECURITY DEFINER, EXECUTE granted to `anon`, no `auth.uid()` check | `POST /rest/v1/rpc/issue_refund` with only the anon key executes a refund; `promote_admin` has EXECUTE revoked from anon (negative). |
+
 ## Severity coverage
 
-- **Critical:** #1, #2, #4
-- **High:** #3, #7
+- **Critical:** #1, #2, #4, #12
+- **High:** #3, #7, #9, #10, #11
 - **Medium:** #5, #6
 - **Low:** #8
 
