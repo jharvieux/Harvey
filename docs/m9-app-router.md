@@ -85,9 +85,11 @@ covers every field trusted from the client.
 
 ### Unsafe / missing cache config — MED, best-effort (`M9 — Unsafe/missing cache config`)
 
-**Detects:** a `page.tsx`/`layout.tsx`/`route.ts` file that runs a Supabase `.from(...).select(...)`
+**Detects:** a `page.tsx`/`layout.tsx` file that runs a Supabase `.from(...).select(...)`
 query with no cache signal (`unstable_cache`, `"use cache"`, or a `revalidate` reference) anywhere
-in the file.
+in the file. The check is suppressed if the file reads any dynamic API that forces rendering per-request
+(`cookies()`, `headers()`, `noStore()`, `unstable_noStore()`, or direct `searchParams` access) — such a
+route is dynamic by construction, so a missing cache config is expected and not flagged.
 
 **Detection method:** file-level text heuristic, deliberately light per the brief. It cannot tell
 cost-side "never cached" from isolation-side "cached without a per-key tag" — both failure modes
