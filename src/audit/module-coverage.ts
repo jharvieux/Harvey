@@ -30,11 +30,15 @@ export const AUDIT_MODULES: AuditModule[] = [
   { id: "M9", name: "Next.js App Router", tools: "scan-extras M9 + detectors", needs: "source", freeTier: true },
 ];
 
-type ModuleStatus = "ran" | "na" | "skipped";
+type ModuleStatus = "ran" | "partial" | "na" | "skipped";
 
 export interface ModuleRecord {
-  status: ModuleStatus; // "ran" = executed (even if the result was "no tests exist"); "na" = deliberately not applicable; "skipped" = left undone
-  note?: string; // required for "na" — why it doesn't apply (e.g. "no live DB in engagement scope")
+  // "ran" = ALL of the module's in-scope classes executed (even if a result was "no tests exist");
+  // "partial" = some classes ran but others didn't (e.g. M2's DB-level RLS ran but the app-route /
+  //   seam probes couldn't — no deployed test app) — REQUIRES a note listing what's missing and why;
+  // "na" = deliberately not applicable (requires a note); "skipped" = left undone.
+  status: ModuleStatus;
+  note?: string; // required for "na" AND "partial"
 }
 
 // Which environments the engagement actually has. A module whose `needs` isn't available is only
@@ -47,34 +51,43 @@ interface EngagementEnv {
 }
 
 interface ModuleCoverage {
-  complete: boolean;
+  complete: boolean; // true only when EVERY module is fully "ran" or "na" — a partial does NOT count
   ran: string[];
+  partial: { id: string; note: string }[]; // ran, but not all classes — a disclosed (not silent) gap
   na: { id: string; note: string }[];
-  gaps: string[]; // modules neither run nor validly marked na — the fail-loud set
+  gaps: string[]; // modules neither run nor validly accounted — the fail-loud set
 }
 
 export function assessModuleCoverage(records: Record<string, ModuleRecord>, env?: EngagementEnv): ModuleCoverage {
   const ran: string[] = [];
+  const partial: { id: string; note: string }[] = [];
   const na: { id: string; note: string }[] = [];
   const gaps: string[] = [];
   for (const mod of AUDIT_MODULES) {
     const rec = records[mod.id];
     if (rec?.status === "ran") {
       ran.push(mod.id);
+    } else if (rec?.status === "partial" && rec.note?.trim()) {
+      partial.push({ id: mod.id, note: rec.note.trim() });
     } else if (rec?.status === "na" && rec.note?.trim()) {
       na.push({ id: mod.id, note: rec.note.trim() });
     } else {
-      // Missing, "skipped", or "na" without a reason → a gap. Annotate the likely cause.
+      // Missing, "skipped", or partial/na without a reason → a gap. Annotate the likely cause.
       const envGated = env && ((mod.needs === "connected" && !env.connected) || (mod.needs === "dynamic" && !env.dynamic) || (mod.needs === "llm" && !env.llm));
       gaps.push(envGated ? `${mod.id} (needs ${mod.needs}: mark na with a reason)` : mod.id);
     }
   }
-  return { complete: gaps.length === 0, ran, na, gaps };
+  // A partial is disclosed, so it's not a silent gap — but the audit is NOT fully complete while any
+  // module is only partially run. "complete" means every module fully ran or is a reasoned na.
+  return { complete: gaps.length === 0 && partial.length === 0, ran, partial, na, gaps };
 }
 
+// Throws only on GAPS (silent omission / reasonless skip). A "partial" is an acknowledged, disclosed
+// incompleteness — it does not block delivery, but assess().complete is false so the report cannot
+// claim full coverage. Read the returned coverage to surface partials honestly.
 export function assertModuleCoverage(records: Record<string, ModuleRecord>, env?: EngagementEnv): void {
-  const { complete, gaps } = assessModuleCoverage(records, env);
-  if (!complete) {
-    throw new Error(`Incomplete audit-module coverage — ${gaps.length} module(s) unaccounted: ${gaps.join(", ")}. Every module must be run or marked na with a reason before delivery.`);
+  const { gaps } = assessModuleCoverage(records, env);
+  if (gaps.length) {
+    throw new Error(`Incomplete audit-module coverage — ${gaps.length} module(s) unaccounted: ${gaps.join(", ")}. Every module must be run, marked partial (with what's missing), or na (with a reason) before delivery.`);
   }
 }

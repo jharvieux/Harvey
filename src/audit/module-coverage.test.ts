@@ -54,6 +54,29 @@ describe("assessModuleCoverage", () => {
   });
 });
 
+describe("partial coverage (the M2 'no test app' case)", () => {
+  it("a partial module is disclosed, not a silent gap — but the audit is NOT complete", () => {
+    const rec = ranAll();
+    rec.M2 = { status: "partial", note: "DB-level RLS ran vs the test DB; app-route + seam probes not run — no deployed test app" };
+    const cov = assessModuleCoverage(rec);
+    expect(cov.complete).toBe(false); // a partial means not fully complete
+    expect(cov.partial).toContainEqual({ id: "M2", note: expect.stringContaining("no deployed test app") });
+    expect(cov.gaps).toEqual([]); // but it's disclosed, so not a gap
+  });
+
+  it("assertModuleCoverage does not throw on a disclosed partial (only on silent gaps)", () => {
+    const rec = ranAll();
+    rec.M2 = { status: "partial", note: "app-probe classes need a running app" };
+    expect(() => assertModuleCoverage(rec)).not.toThrow();
+  });
+
+  it("a partial WITHOUT a note is a gap (must say what's missing)", () => {
+    const rec = { ...ranAll(), M2: { status: "partial" as const } };
+    expect(assessModuleCoverage(rec).gaps).toContain("M2");
+    expect(() => assertModuleCoverage(rec)).toThrow(/M2/);
+  });
+});
+
 describe("assertModuleCoverage", () => {
   it("throws loud, naming the unaccounted modules", () => {
     const rec = ranAll();
