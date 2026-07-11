@@ -95,8 +95,15 @@ interface SupabaseScanOptions {
   gotrueProbe?: { authUrl: string; anonKey: string }; // self-hosted GoTrue version/provider probe
 }
 
-function parseExposedSchemas(config: PostgrestConfig): string[] {
+export function parseExposedSchemas(config: PostgrestConfig): string[] {
   return (config.db_schema ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+// The authoritative pg_graphql signal: it's in `pg_extension` (installed extensions only) WITH a
+// non-null version. Never infer this from an HTTP status — pg_graphql returns 200 with an error
+// body (`pg_graphql extension is not enabled`) when it's off, which reads as a false positive.
+export function hasPgGraphql(extensions: ExtensionInfo[]): boolean {
+  return extensions.some((e) => e.name === "pg_graphql" && Boolean(e.installed_version));
 }
 
 async function probeGotrue(authUrl: string, anonKey: string, fetchImpl: typeof fetch): Promise<GotrueInfo> {
@@ -169,7 +176,7 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch): 
 
   const postgrest = await managementApiGet<PostgrestConfig>(`/projects/${ref}/postgrest`, token, fetchImpl);
   const exposedSchemas = parseExposedSchemas(postgrest);
-  const pgGraphqlInstalled = extensions.some((e) => e.name === "pg_graphql" && Boolean(e.installed_version));
+  const pgGraphqlInstalled = hasPgGraphql(extensions);
   findings.push(...checkExposedSchemas(exposedSchemas), ...checkGraphqlIntrospection(pgGraphqlInstalled, exposedSchemas));
 
   return findings;

@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dedupeAutoExposed, runSupabaseScan } from "./supabase.js";
+import { dedupeAutoExposed, hasPgGraphql, parseExposedSchemas, runSupabaseScan } from "./supabase.js";
+import { checkGraphqlIntrospection } from "./supabase-config.js";
 import { mechanicalFinding } from "./common.js";
 
 vi.mock("postgres", () => ({
@@ -193,5 +194,47 @@ describe("dedupeAutoExposed", () => {
 
   it("keeps auto-exposed findings untouched when Splinter found nothing", () => {
     expect(dedupeAutoExposed([], [autoExposedHit, autoExposedOther])).toEqual([autoExposedHit, autoExposedOther]);
+  });
+});
+
+describe("hasPgGraphql (FP-safe pg_graphql derivation)", () => {
+  it("is false when pg_graphql is not among the installed extensions (the ATC case)", () => {
+    // pg_extension lists installed extensions only — pg_graphql absent = not enabled.
+    expect(hasPgGraphql([{ name: "pgcrypto", schema: "extensions", installed_version: "1.3" }])).toBe(false);
+    expect(hasPgGraphql([])).toBe(false);
+  });
+
+  it("is false when pg_graphql is listed but has no installed_version", () => {
+    // available-but-not-installed must NOT count as enabled.
+    expect(hasPgGraphql([{ name: "pg_graphql", schema: "graphql", installed_version: null as unknown as string }])).toBe(false);
+    expect(hasPgGraphql([{ name: "pg_graphql", schema: "graphql", installed_version: "" }])).toBe(false);
+  });
+
+  it("is true only when pg_graphql is installed with a version", () => {
+    expect(hasPgGraphql([{ name: "pg_graphql", schema: "graphql", installed_version: "1.5.9" }])).toBe(true);
+  });
+
+  it("end-to-end: the ATC scenario (graphql_public exposed but pg_graphql off) is CLEAN", () => {
+    // This is the exact false positive from the 2026-07-11 live run: graphql_public is in the
+    // exposed schema list, but pg_graphql isn't installed, so introspection must NOT be flagged.
+    const exposed = parseExposedSchemas({ db_schema: "public, graphql_public" });
+    const installed = hasPgGraphql([{ name: "pgcrypto", schema: "extensions", installed_version: "1.3" }]);
+    expect(exposed).toEqual(["public", "graphql_public"]);
+    expect(installed).toBe(false);
+    expect(checkGraphqlIntrospection(installed, exposed)).toEqual([]);
+  });
+
+  it("still fires when pg_graphql IS installed and graphql_public is exposed", () => {
+    const exposed = parseExposedSchemas({ db_schema: "public, graphql_public" });
+    const installed = hasPgGraphql([{ name: "pg_graphql", schema: "graphql", installed_version: "1.5.9" }]);
+    expect(checkGraphqlIntrospection(installed, exposed)).toHaveLength(1);
+  });
+});
+
+describe("parseExposedSchemas", () => {
+  it("splits, trims, and drops empties from the PostgREST db_schema config", () => {
+    expect(parseExposedSchemas({ db_schema: "public,  graphql_public , internal " })).toEqual(["public", "graphql_public", "internal"]);
+    expect(parseExposedSchemas({ db_schema: "" })).toEqual([]);
+    expect(parseExposedSchemas({})).toEqual([]);
   });
 });
