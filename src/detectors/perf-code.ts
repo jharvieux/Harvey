@@ -650,6 +650,99 @@ function detectHeavyClientImport(sources: Map<string, ts.SourceFile>, nextId: Ne
   return findings;
 }
 
+// --- C3. Heavy barrel imports on a Next version that can't optimize them [PERF] ---
+
+// Barrels whose NAMED imports Next.js auto-optimizes via optimizePackageImports since
+// 13.5 (modularizeImports before that). On older Next, a named import still loads the
+// whole barrel — hundreds of modules at dev/build and often shipped weight.
+// Subset of the documented default list that's plausibly in a Supabase/Next app.
+const AUTO_OPTIMIZED_BARRELS = new Set([
+  "lucide-react",
+  "date-fns",
+  "lodash-es",
+  "ramda",
+  "antd",
+  "react-icons",
+  "@headlessui/react",
+  "@heroicons/react",
+  "@mui/material",
+  "@mui/icons-material",
+  "recharts",
+  "react-bootstrap",
+  "@tabler/icons-react",
+  "rxjs",
+]);
+
+// Lowest `next` version across every package.json in the source set (a monorepo can pin
+// different versions per app — the worst one is the honest gate), as [major, minor].
+function lowestNextVersion(files: SourceInput[]): [number, number] | undefined {
+  let lowest: [number, number] | undefined;
+  for (const f of files) {
+    if (!/(^|\/)package\.json$/.test(f.path)) continue;
+    let deps: Record<string, string>;
+    try {
+      const pkg = JSON.parse(f.text) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+      deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    } catch {
+      continue;
+    }
+    const raw = deps.next?.replace(/^[\^~>=\s]+/, "");
+    const m = raw?.match(/^(\d+)\.(\d+)/);
+    if (!m) continue;
+    const v: [number, number] = [Number(m[1]), Number(m[2])];
+    if (!lowest || v[0] < lowest[0] || (v[0] === lowest[0] && v[1] < lowest[1])) lowest = v;
+  }
+  return lowest;
+}
+
+function configOptimizesPackage(files: SourceInput[], pkg: string): boolean {
+  return files.some(
+    (f) =>
+      /(^|\/)next\.config\.(js|mjs|cjs|ts)$/.test(f.path) &&
+      f.text.includes("optimizePackageImports") &&
+      f.text.includes(pkg),
+  );
+}
+
+function detectUnoptimizedBarrelImports(files: SourceInput[], sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const nextVersion = lowestNextVersion(files);
+  // No Next manifest found (unknown version) or new enough to auto-optimize → nothing to say.
+  if (!nextVersion || nextVersion[0] > 13 || (nextVersion[0] === 13 && nextVersion[1] >= 5)) return [];
+
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    const barrels = new Set<string>();
+    let firstStmt: ts.ImportDeclaration | undefined;
+    for (const stmt of sf.statements) {
+      if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+      const spec = stmt.moduleSpecifier.text;
+      if (!AUTO_OPTIMIZED_BARRELS.has(spec)) continue;
+      const named = stmt.importClause?.namedBindings && ts.isNamedImports(stmt.importClause.namedBindings);
+      if (!named || configOptimizesPackage(files, spec)) continue;
+      barrels.add(spec);
+      firstStmt ??= stmt;
+    }
+    if (!firstStmt) continue;
+    const list = [...barrels].join(", ");
+    findings.push(
+      makeFinding(nextId, {
+        title: `Barrel imports (${list}) on Next ${nextVersion[0]}.${nextVersion[1]} — below the 13.5 auto-optimization floor`,
+        severity: "Perf",
+        confidence: "Likely",
+        taxonomy: "M7 — Unoptimized barrel import",
+        location: loc(path, sf, firstStmt),
+        evidence: `\`${firstStmt.getText(sf).slice(0, 100)}\` — named imports from ${list} load the whole barrel on this Next version (optimizePackageImports ships defaults from 13.5, and this project's next.config doesn't add them).`,
+        impact: "The full barrel (often hundreds of modules) is resolved on every build/dev compile and can ship to the client whole — slow builds and heavier bundles.",
+        fix: "Upgrade Next to ≥ 13.5 (the default optimizePackageImports list covers these), or add the packages to `experimental.optimizePackageImports`, or import per-subpath.",
+        value: 3,
+        ease: 3,
+        safety: 4,
+      }),
+    );
+  }
+  return findings;
+}
+
 // --- D1. Manual Google Fonts stylesheet [LOW] ------------------------------------
 
 function detectManualFontLink(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
@@ -834,6 +927,7 @@ export function detectPerfCodeFindings(files: SourceInput[]): Finding[] {
     ...detectUnboundedSelect(sources, nextId),
     ...detectWholeLibraryImport(sources, nextId),
     ...detectHeavyClientImport(sources, nextId),
+    ...detectUnoptimizedBarrelImports(files, sources, nextId),
     ...detectManualFontLink(sources, nextId),
     ...detectMiddlewareFetch(sources, nextId),
     ...detectSyncIoInHandler(sources, nextId),
