@@ -12,13 +12,14 @@ exposed schemas — do it with the **service_role** key against `GET /rest/v1/` 
 correctly gated off that root; good hardening). So the runner can use service_role OR the Management
 API — no special token wiring needed after all.
 
-Results: **RAG** exposes `public, graphql_public` (default) and `pg_graphql` isn't installed →
-both `checkExposedSchemas` and `checkGraphqlIntrospection` clean. **main (prod)** exposes the same
-defaults (checkExposedSchemas clean) BUT `pg_graphql` is serving (`/graphql/v1` → 200) with
-`graphql_public` exposed → `checkGraphqlIntrospection` fires `SB-GRAPHQL-INTROSPECTION` (Medium) —
-default Supabase posture, RLS-gated, low priority. Both detectors validated live. Full detail in the
-#162 issue comments. Open ATC follow-up option: lock down main's public GraphQL introspection (their
-call, not filed).
+Results: **both RAG and main are clean** on both checks. Each exposes only `public, graphql_public`
+(Supabase default → `checkExposedSchemas` clean), and `pg_graphql` is **not enabled** on either
+(the `/graphql/v1` introspection query returns `pg_graphql extension is not enabled` for anon AND
+service_role), so `graphql_public` is inert → `checkGraphqlIntrospection` clean too. Detectors
+validated live with an honest all-clean result; no ATC finding. (Note: an interim SB-GRAPHQL-
+INTROSPECTION "finding" on main was MY false positive — I misread a GraphQL HTTP 200 error body as
+the extension serving; verified-before-file caught it. Lesson: for GraphQL, check the body, not the
+status code.) Full detail in the #162 comments.
 
 
 
