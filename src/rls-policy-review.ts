@@ -33,6 +33,9 @@ function refsWord(clause: string | null, word: string): boolean {
 interface PolicyReview {
   policy: string;
   reason: string;
+  cmd: string;
+  qual: string | null;
+  withCheck: string | null;
 }
 
 export function reviewPolicy(policy: LivePolicy, model: TenancyModel): PolicyReview | null {
@@ -42,11 +45,13 @@ export function reviewPolicy(policy: LivePolicy, model: TenancyModel): PolicyRev
   const checkKey = refsWord(policy.withCheck, key);
   const callerRef = (policy.qual != null && CALLER_REF.test(policy.qual)) || (policy.withCheck != null && CALLER_REF.test(policy.withCheck));
   const isWrite = WRITE_CMDS.has(policy.cmd.toUpperCase());
+  const raw = { cmd: policy.cmd, qual: policy.qual, withCheck: policy.withCheck };
 
   if (callerRef && !qualKey && !checkKey) {
     return {
       policy: name,
       reason: `Policy scopes by a caller-identity function but never references the tenant key "${key}" — it may isolate on the wrong column (per-user where per-tenant is required, or vice-versa).`,
+      ...raw,
     };
   }
 
@@ -54,6 +59,7 @@ export function reviewPolicy(policy: LivePolicy, model: TenancyModel): PolicyRev
     return {
       policy: name,
       reason: `USING constrains by the tenant key "${key}" but WITH CHECK does not — writes aren't tenant-constrained and may land rows in another tenant.`,
+      ...raw,
     };
   }
 
@@ -72,7 +78,7 @@ export function policyReviewFindings(policies: LivePolicy[], model: TenancyModel
         category: "Multi-tenant security",
         taxonomy: "M1 — Multi-tenant security",
         location: r.policy,
-        evidence: r.reason,
+        evidence: `${r.reason} Live clauses — ${r.cmd} USING: ${r.qual ?? "(none)"}; WITH CHECK: ${r.withCheck ?? "(none)"}.`,
         question: `Does this policy restrict every row it exposes/accepts to the caller's own tenant under the declared tenancy model (tenant key "${model.tenantKey}")?`,
         impact: "A policy that keys on the wrong column or under-constrains writes lets one tenant read or write another tenant's rows even though RLS is enabled.",
         fix: `Compare the tenant key "${model.tenantKey}" against the caller's verified tenant (e.g. a JWT claim) in both USING and WITH CHECK, and make WITH CHECK at least as strict as USING.`,
