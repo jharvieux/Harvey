@@ -30,27 +30,49 @@ quoted.
      repository list and permission set match exactly. Reject and ask for
      reissue if it's broader than requested.
 
-3. **Read-only Supabase connection string.**
-   - Request a Postgres role/connection scoped to `SELECT` only — no
-     `INSERT`/`UPDATE`/`DELETE`/DDL.
+3. **Target manifest — enumerate apps, backends, and seams first.** Once the
+   repo is cloned, build the target manifest (`discoverTargets`, `src/pentest/targets.ts`):
+   every workspace app, every distinct Supabase backend (by env-var
+   convention), and every inter-service seam (service URLs, webhook secrets,
+   service JWTs). Confirm the app inventory with the client (questionnaire §0)
+   and flag anything deployed from outside the repo. The manifest drives the
+   **completeness gate** — every enumerated app/backend/seam must have a
+   recorded test result at close, or the engagement is not complete.
+
+4. **Read-only Supabase connection string — one per backend.** A monorepo has
+   more than one database (ATC: a primary project + a separate RAG project);
+   request a set for **each** backend in the manifest, not one for the repo.
+   - Per backend: the project URL, anon/publishable key, and a Postgres
+     role/connection scoped to `SELECT` only — no `INSERT`/`UPDATE`/`DELETE`/DDL.
    - Verify before use: check the role's grants (`\du`, or query
-     `information_schema.role_table_grants`) and confirm no write
-     privileges are present. Do not verify by attempting a live write —
-     inspect grants instead.
+     `information_schema.role_table_grants`) and confirm no write privileges
+     are present. Do not verify by attempting a live write — inspect grants instead.
 
-4. **Staging environment credentials** — optional. Only requested if the
-   client has a staging environment for M2 dynamic testing; otherwise we
-   run those probes against a locally seeded stack instead, and no
-   additional credential is needed.
-   - Request credentials scoped to staging only, valid for the engagement
-     window.
-   - Verify the connection targets staging, not production (distinct
-     hostname/connection string), before running anything against it.
+5. **Write-safe environment credentials — per backend, optional.** Cross-tenant
+   *write* probes and rate-limit loops mutate data, so they run only against a
+   **non-production** instance the client designates as write-safe (questionnaire
+   §0). For each such instance, request a service-role key and the JWT secret
+   (needed to mint the "Tenant A" / "Tenant B" identities the RLS probes act as),
+   scoped to that instance and valid for the engagement window.
+   - Verify the connection targets the write-safe instance, not production
+     (distinct hostname/connection string / project ref), before running anything.
+   - A backend that is a single production-serving database with no test
+     instance stays **read-only** — no service-role/write step for it.
+   - If a backend has no write-safe instance at all, run its dynamic probes
+     against a locally seeded stack instead.
 
-5. **Auth questionnaire answers** (issue #31 doc when it lands, or the
-   intake-site form fields today — `intake-site/index.html`'s "Tenancy &
-   authentication" through "Context" sections). Should already be in hand
-   from intake; confirm nothing is blank before kickoff.
+6. **Inter-service seam details.** For each seam in the manifest: the internal
+   service URL and whether it's network-restricted or publicly reachable, the
+   service-to-service auth mechanism (shared JWT / mTLS / header secret), and how
+   each cross-service webhook verifies authenticity. Needed so the seam probes
+   (direct-service-call, service-JWT-verification, cross-service-webhook) target
+   real endpoints.
+
+7. **Auth questionnaire answers** (`docs/templates/auth-questionnaire.md`, or the
+   intake-site form fields — `intake-site/index.html`'s "Application & backend
+   topology" through "Context" sections). Should already be in hand from intake;
+   confirm nothing is blank before kickoff, including the §0 topology/connection
+   answers that steps 3–6 depend on.
 
 ### Where client secrets live during the engagement
 
@@ -72,9 +94,10 @@ quoted.
 - [ ] Ask the client to revoke or delete the fine-grained PAT (or confirm
       it has already expired)
 - [ ] Ask the client to revoke or rotate the read-only DB role/connection
-      string
-- [ ] Ask the client to revoke staging credentials, if any were issued (or
-      confirm engagement-window expiry)
+      string **for each backend** issued (main, RAG, …)
+- [ ] Ask the client to revoke the write-safe-instance service-role keys and
+      JWT secrets, per backend, if any were issued (or confirm engagement-window
+      expiry)
 - [ ] Remove repo collaborator access if it was granted directly (in
       addition to, or instead of, the PAT)
 
@@ -102,8 +125,8 @@ Hi <name>,
 Teardown for the <repo/org> engagement is complete as of <date>:
 
 - The fine-grained GitHub token has been [revoked by you / confirmed expired].
-- The read-only database connection has been [revoked by you / confirmed expired].
-- [Staging credentials have been revoked by you / confirmed expired. / N/A — no staging was used.]
+- The read-only database connection(s) for each backend have been [revoked by you / confirmed expired].
+- [Write-safe-instance service credentials have been revoked by you / confirmed expired. / N/A — none were issued.]
 - The local repository checkout and all scan artifacts on our side have been deleted.
 
 We retain the delivered report and a business record of the engagement

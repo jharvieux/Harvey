@@ -16,6 +16,37 @@ and reported as such, same as a confirmed gap. See `docs/tier1-runbook.md` §3.
 
 ---
 
+## 0. Application & backend topology (monorepo-aware)
+
+*Why: a customer repo is often several apps on several backends with trust boundaries between
+them — e.g. a Next.js `apps/main` + `apps/rag` + a browser `apps/extension`, each with its own
+Supabase project, plus service-to-service calls and cross-service webhooks. We enumerate this from
+your repo (workspace manifest, route trees, env-var names — the target-manifest step in
+`docs/runbooks/engagement-access.md`), and every enumerated app/backend/seam must have a recorded
+test result before the engagement is "complete" (the coverage gate fails loud on any that don't).
+Three things here can't be read from code and must come from you; the first is a confirmation so
+nothing is silently skipped.*
+
+- **Confirm the app/service inventory.** We'll show you the apps/services we found in your workspace
+  (each deployable app, plus client-only surfaces like a browser extension). Confirm it's complete
+  and flag anything deployed from *outside* this repo (a separate service, an edge/function set, a
+  mobile client).
+- **Backends and connection info — one set per distinct database/project.** For **each** backend
+  (e.g. a primary Supabase project *and* a separate RAG/analytics project), we need: the project
+  URL, the anon/publishable key, a **read-only** Postgres connection string (SELECT-only), and —
+  only for the write-safe environment below — a service-role key and the JWT secret so we can mint
+  test identities. Provide these **per backend**; don't assume one set covers all of them (missing
+  one is how a whole backend goes untested).
+- **Which environment is safe for write/destructive testing?** Cross-tenant *write* probes and
+  rate-limit loops mutate data, so they only run against a **non-production** target you designate.
+  Tell us, per backend, which instance is write-safe — and if a backend is a single
+  production-serving database with no test instance, say so and we keep it **read-only**.
+- **Inter-service trust boundaries (seams).** For each service-to-service link: what's the internal
+  service URL (network-restricted or publicly reachable?), how is the calling service authenticated
+  (a shared service JWT, mTLS, a header secret?), and how is each cross-service webhook's
+  authenticity verified? These seams fall between the per-app checks and are where
+  monorepo-specific bugs live.
+
 ## 1. Tenancy model intent
 
 *Why: the scan needs to know what "correct" tenant isolation looks like before it can find where
@@ -84,6 +115,9 @@ production, and needs the client's consent to put synthetic data there.*
   throwaway orgs, "Tenant A" / "Tenant B") in that environment so we can assert neither can reach
   the other's data? If staging shares infrastructure with anything sensitive (e.g. a shared
   payment-processor sandbox), say so — it changes what we're willing to seed there.
+- **Per backend:** the write-safe target is designated **per backend** in §0 — a multi-backend app
+  may have a write-safe test instance for one database and a read-only-only production database for
+  another. Write probes run only against the instances marked write-safe there.
 
 ## 6. Integrations and security surface
 
@@ -98,6 +132,11 @@ and knowing they exist up front means the scan brief actually looks for them.*
   batch job that touches every tenant's rows deliberately)?
 - Do you use edge functions (Vercel Edge, Supabase Edge Functions)? Do any of them bypass the
   normal request path's auth checks (e.g. a public edge function that calls a privileged API)?
+- **Inter-service seams (monorepo):** if your services call each other (see §0), how does the
+  receiving service authenticate the caller, and is each internal endpoint reachable only through
+  its fronting app or also directly? We probe these seams specifically — direct-service-call
+  (can the internal service be hit without the gateway?), service-JWT verification (is a forged
+  token rejected, or only decoded?), and cross-service webhook signatures.
 
 ## 7. Audit motivation and history
 
