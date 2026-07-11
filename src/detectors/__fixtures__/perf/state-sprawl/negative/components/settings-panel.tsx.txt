@@ -1,0 +1,9 @@
+"use client";
+import { useState } from "react";
+
+export function SettingsPanel() {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [saving, setSaving] = useState(false);
+  return <form>{name}{email}{String(saving)}</form>;
+}

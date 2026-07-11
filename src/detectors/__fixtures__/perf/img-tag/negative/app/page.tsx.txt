@@ -1,0 +1,9 @@
+import Image from "next/image";
+
+export default function HomePage() {
+  return (
+    <main>
+      <Image src="/hero.png" alt="Product hero" width={1200} height={600} priority />
+    </main>
+  );
+}

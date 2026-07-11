@@ -1,0 +1,8 @@
+import { readFileSync } from "node:fs";
+import { NextResponse } from "next/server";
+
+const TEMPLATE = readFileSync("./templates/export.csv", "utf8");
+
+export async function GET() {
+  return new NextResponse(TEMPLATE, { headers: { "content-type": "text/csv" } });
+}

@@ -1,0 +1,12 @@
+import { supabase } from "./db";
+
+interface User { id: string }
+
+export async function orderTotals(users: User[]) {
+  const totals: Record<string, number> = {};
+  for (const user of users) {
+    const { data } = await supabase.from("orders").select("id, amount").eq("user_id", user.id).limit(100);
+    totals[user.id] = (data ?? []).reduce((sum, o) => sum + o.amount, 0);
+  }
+  return totals;
+}

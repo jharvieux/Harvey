@@ -1,0 +1,8 @@
+export default function HomePage() {
+  return (
+    <main>
+      <img src="/hero.png" alt="Product hero" />
+      <img src="/team.jpg" alt="The team" />
+    </main>
+  );
+}

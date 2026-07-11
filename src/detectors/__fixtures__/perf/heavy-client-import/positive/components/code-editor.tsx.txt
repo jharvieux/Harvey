@@ -1,0 +1,11 @@
+"use client";
+import * as monaco from "monaco-editor";
+import { useEffect, useRef } from "react";
+
+export function CodeEditor({ value }: { value: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (ref.current) monaco.editor.create(ref.current, { value });
+  }, [value]);
+  return <div ref={ref} />;
+}

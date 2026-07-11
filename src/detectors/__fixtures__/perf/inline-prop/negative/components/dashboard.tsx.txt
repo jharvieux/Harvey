@@ -1,0 +1,14 @@
+"use client";
+import { Chart } from "./chart";
+
+const CHART_OPTIONS = { stacked: true, legend: false };
+const CHART_MARGINS = [8, 16, 8, 16];
+
+export function Dashboard({ points }: { points: number[] }) {
+  return (
+    <div style={{ padding: 8 }}>
+      <Chart options={CHART_OPTIONS} data={points} />
+      <Chart margins={CHART_MARGINS} data={points} />
+    </div>
+  );
+}

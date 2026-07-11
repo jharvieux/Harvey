@@ -11,9 +11,9 @@
 | Layer | Finds | Automated by | Manual / follow-up |
 |---|---|---|---|
 | **DB** | Unindexed FKs, unused/duplicate indexes, `auth_rls_initplan`, redundant permissive policies | `src/cli/perf-scan.ts` (`pnpm perf-scan`) — pulls the Supabase performance advisor and shapes it into `Finding[]` | Verify each fix against a test DB before recommending (index migrations, RLS rewrites) |
-| **API/data** | Over-fetching (`select("*")` with no column list), missing pagination (`.range()`/`.limit()`), missing caching, data-fetching waterfalls, accidental dynamic rendering | Not mechanically wired in this module — **overlaps with M9** (App Router boundary & rendering, `docs/scan-extras.txt`), which already documents fetch-waterfall / cache-config / dynamic-rendering / unbounded-route detectors. M7's job is to pull M9's performance-tagged findings into the §3b Performance rows below, not re-implement the detection | Over-fetch/pagination-specific greps (`.select("*")` without `.range(`/`.limit(`) are a manual/grep pass for now — see §2 |
-| **Client** | Bundle weight, Core Web Vitals (LCP/INP/CLS) | **Not implemented — documented plan only** (see §3). No new heavy dependency (`lighthouse` CLI) installed in this PR | Follow-up: wire `next build` output analysis + `lighthouse` CLI once a real client repo exists to run it against |
-| **Code** | Inefficient hot-loop algorithms (nested loops over unbounded collections, O(n²) patterns on request-hot paths) | Not mechanically detected — heuristic, human-judgment-heavy | Manual read during the M6 (`/simplify`, `docs/quality-extras.txt`) pass; flag under M7 rather than M6 when the concern is *speed* at scale rather than *maintainability* |
+| **API/data** | N+1 await-in-loop, unbounded `select("*")` (no `.range()`/`.limit()`), data-fetching waterfalls, accidental dynamic rendering, missing caching | **Wired (#170):** await-in-loop and unbounded-select are `src/detectors/perf-code.ts` (§2a). Waterfalls / cache-config / dynamic rendering stay with **M9** (`src/detectors/app-router.ts`) — M7's job is to pull M9's performance-tagged findings into the §3b rows, not re-implement them | Confirm unbounded-select candidates against table size (a 3-row config table is benign) |
+| **Client render/bundle** | React render waste (context value churn, inline literal props, index keys, raw `<img>`, sort-in-render, state sprawl), whole-library imports, heavy libs in client chunks, manual font links | **Wired (#170):** `src/detectors/perf-code.ts` (§2a), including the React Compiler downgrade gate | Bundle ground truth (shipped KB per route, duplicate chunks) still needs the `next build`/bundle-analyzer input — the [B] tier of #170, not yet wired. Core Web Vitals (`lighthouse`) remain documented-plan-only (§3) |
+| **Code hot-path** | Blocking sync I/O in request handlers, fetch-in-middleware, JSON deep-clones | **Wired (#170):** `src/detectors/perf-code.ts` (§2a) | Deeper algorithmic judgment (O(n²) over app-sized collections, "is this computation expensive") stays an [L] review-tier read during the M6 pass; flag under M7 when the concern is *speed* at scale rather than *maintainability* |
 
 ## 1. Running the DB advisor scan
 
@@ -60,21 +60,55 @@ and file I/O, mirroring the `src/quality-scan.ts` / `src/cli/quality-scan.ts` sp
   client project available yet). Confirm against current Supabase docs or a dashboard
   Network-tab capture before the first live engagement run; flag as a risk if the shape drifts.
 
-## 2. API/data static heuristics (documented method, not wired here)
+## 2. API/data overlap with M9
 
-Two sub-classes:
+Data-fetching waterfalls (independent sequential `await`s in a Server Component),
+missing/unsafe cache config, and accidental dynamic rendering are **M9's detectors**
+(`src/detectors/app-router.ts`, `docs/m9-app-router.md`). M7's report step is to pull their
+performance-tagged output into the §3b Performance table below (Layer = API/data) rather than
+duplicating the detection. The over-fetch/pagination class that used to be a documented grep
+here is now mechanical — see §2a's unbounded-select check.
 
-- **Already covered by M9** (`docs/scan-extras.txt` M9 section): data-fetching waterfalls
-  (independent sequential `await`s in a Server Component), missing/unsafe cache config, and
-  accidental dynamic rendering (`searchParams`/`headers()`/`cookies()` read high in the tree).
-  When M9's static detectors land, M7's report step is to pull their output into the §3b
-  Performance table below (Layer = API/data) rather than duplicating the detector.
-- **Not yet covered anywhere — over-fetching / missing pagination.** Method for a future pass:
-  grep Supabase query builder calls for `.select("*")` (or `.select()` with no column list)
-  paired with no `.range(`/`.limit(` on a table that isn't known-small, and for API routes that
-  return an array with no page/cursor param. Flag as candidates, not confirmed findings — the
-  same static-heuristic caveat as M9's detectors (confirm before reporting; a `select("*")` on a
-  3-row config table isn't a finding).
+## 2a. Code-level detectors — `src/detectors/perf-code.ts` (#170, [M] tier)
+
+`detectPerfCodeFindings(files: { path, text }[])` — same TypeScript-compiler-API conventions as
+the M9 detector (pass the project's full relevant `.ts`/`.tsx` set **plus** its
+`next.config.*`/babel config files; no new dependency). Emits `Finding[]` with taxonomy
+`M7 — …`, ids `M7C-01…`, `category: "Performance"`. Every class is gated by a
+positive-caught + benign-negative-cleared fixture pair in `src/detectors/__fixtures__/perf/`
+(`src/detectors/perf-code.test.ts`, enforced via `pnpm verify`) — the #61 calibration
+discipline, applied where these detectors live (they run outside `runMechanicalScan`, so the
+static-corpus gate doesn't see them).
+
+Classes (severity / confidence — see the detector for per-check evidence and limitations):
+
+| Class | Detects | Sev / Conf |
+|---|---|---|
+| Context value recreated every render | inline object/array/arrow as `<X.Provider value={…}>` | Perf / Likely |
+| Inline literal prop | object/array literal props on components (rolled up, one finding per file) | Low / Review |
+| Raw `<img>` | `<img>` instead of `next/image` (rolled up per file) | Perf / Likely |
+| Index as list key | `key={i}` bound to the `.map()` index parameter | Low / Likely |
+| Sort in render body | `.sort()`/`.toSorted()` directly inside JSX | Low / Review |
+| State sprawl | ≥ 8 `useState` hooks in one component | Low / Review |
+| Await in loop (N+1) | per-item independent `await` in a `for`/`for-of` (loop-carried-state and `for await` excluded) | Perf / Likely |
+| Unbounded select | `select("*")`/`select()` with no `.limit()`/`.range()`/`.single()` | Perf / Review |
+| Whole-library import | bare `lodash`/`moment`/`underscore`; namespace imports of known barrels | Perf / Likely |
+| Heavy import in client bundle | known-heavy lib (`monaco`, `three`, `xlsx`, …) statically imported in a `'use client'` file | Perf / Likely |
+| Manual font stylesheet | Google Fonts `<link rel="stylesheet">` instead of `next/font` | Low / Likely |
+| Fetch in middleware | `fetch()` inside `middleware.ts` (every-request hop) | Perf / Review |
+| Blocking sync I/O in request handler | `*Sync` fs/crypto/zlib/child_process calls inside a route-handler function (module-scope run-once reads exempt) | Perf / Likely |
+| JSON deep-clone | `JSON.parse(JSON.stringify(x))` | Low / Likely |
+
+**React Compiler gate:** when the target's `next.config`/babel config enables React Compiler,
+the manual-memo classes (context value, inline literal props) are auto-memoized at build time —
+they're downgraded to `Info` (visible, not counted as work) instead of crying wolf on a
+compiled codebase.
+
+**Not in this module (deliberate):** the [B] bundle-stats classes (shipped KB per route,
+duplicate chunks, server-only deps in client bundles — need a `next build`/bundle-analyzer
+JSON input) and the [L] review-tier judgment calls (virtualization, lazy-load selection,
+`'use client'` placed too high, Suspense boundaries) — see #170 for the full catalog and
+sequencing.
 
 ## 3. Client: bundle weight & Core Web Vitals (documented plan — deferred)
 
@@ -105,8 +139,9 @@ The skeleton's §3b Performance table is `Finding | Layer (DB/API/render/bundle)
 Effort` — map:
 
 - **Layer:** `DB` for every `M7-*` id from `pnpm perf-scan`; `API/data` for M9-sourced
-  waterfall/cache/dynamic-rendering findings and any manual over-fetch/pagination read; `bundle`
-  / `render` reserved for the deferred Web-Vitals/bundle pass (§3).
+  waterfall/cache/dynamic-rendering findings plus `M7C-*` await-in-loop / unbounded-select;
+  `render` for the `M7C-*` React classes; `bundle` for `M7C-*` import-weight classes (ground-truth
+  shipped-KB numbers still come from the deferred [B] bundle-stats pass, §3).
 - **Impact:** the `Finding.impact` field, as written by `parseAdvisorFindings` for DB rows.
 - **Fix:** the `Finding.fix` field.
 - **Effort:** derive from `ease` (1–2 → multi-day/week, 3 → ~a day, 4–5 → quick) — the skeleton's
@@ -133,9 +168,12 @@ single additive covering-index migration (BFTB 80 — cheap, safe, high value); 
 
 ### Deferred / scoped-out follow-ups
 
-- **Bundle/Web-Vitals (§3):** no `lighthouse` integration in this PR — needs a real client repo
-  and a decision on where it runs (staging vs. local) before it's worth the new dependency.
-- **API/data over-fetch/pagination heuristic (§2):** documented method only; not yet a grep
-  script. Low effort to add once M9's detector scaffolding exists, to share conventions.
+- **Bundle-stats input ([B] tier of #170):** shipped bundle size per route, duplicate modules
+  across chunks, server-only deps in client bundles — needs a `next build`/`@next/bundle-analyzer`
+  JSON artifact as an optional connected-ish input. Tracked on #170.
+- **[L] review-tier perf classes (#170):** virtualization, which components to lazy-load,
+  `'use client'` placed too high, missing Suspense/streaming boundaries — paid review pass only.
+- **Web Vitals (§3):** no `lighthouse` integration — needs a real client repo and a decision on
+  where it runs (staging vs. local) before it's worth the new dependency.
 - **`/advisors/performance` endpoint path:** inferred by analogy, not exercised live — verify on
   the first real engagement (§1).

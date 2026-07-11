@@ -1,0 +1,11 @@
+"use client";
+import { Chart } from "./chart";
+
+export function Dashboard({ points }: { points: number[] }) {
+  return (
+    <div>
+      <Chart options={{ stacked: true, legend: false }} data={points} />
+      <Chart margins={[8, 16, 8, 16]} data={points} />
+    </div>
+  );
+}

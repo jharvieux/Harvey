@@ -1,0 +1,11 @@
+interface Todo { id: string; label: string }
+
+export function TodoList({ todos }: { todos: Todo[] }) {
+  return (
+    <ul>
+      {todos.map((todo, i) => (
+        <li key={todo.id} data-position={i}>{todo.label}</li>
+      ))}
+    </ul>
+  );
+}
