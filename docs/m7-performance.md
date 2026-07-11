@@ -113,6 +113,7 @@ Classes (severity / confidence — see the detector for per-check evidence and l
 | Fetch in middleware | `fetch()` inside `middleware.ts` (every-request hop) | Perf / Review |
 | Blocking sync I/O in request handler | `*Sync` fs/crypto/zlib/child_process calls inside a route-handler function (module-scope run-once reads exempt) | Perf / Likely |
 | JSON deep-clone | `JSON.parse(JSON.stringify(x))` | Low / Likely |
+| Missing hook dependencies | `react-hooks/exhaustive-deps` run programmatically (`src/detectors/hook-deps.ts`, ids `M7H-*` — the upstream rule's analysis, adapted to `Finding[]`, rolled up per file) | Low / Likely |
 
 **React Compiler gate:** when the target's `next.config`/babel config enables React Compiler,
 the manual-memo classes (context value, inline literal props) are auto-memoized at build time —

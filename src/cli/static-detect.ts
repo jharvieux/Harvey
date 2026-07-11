@@ -13,6 +13,7 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import type { Finding } from "../findings.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
+import { detectHookDepFindings } from "../detectors/hook-deps.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import type { SourceInput } from "../detectors/common.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
@@ -57,7 +58,11 @@ try {
   const sources = loadSources(scanDir);
   console.log(`loaded ${sources.length} source files from ${targetDir}`);
 
-  const findings: Finding[] = [...detectAppRouterFindings(sources), ...detectPerfCodeFindings(sources)];
+  const findings: Finding[] = [
+    ...detectAppRouterFindings(sources),
+    ...detectPerfCodeFindings(sources),
+    ...detectHookDepFindings(sources),
+  ];
 
   const byTaxonomy = new Map<string, number>();
   for (const f of findings) byTaxonomy.set(f.taxonomy, (byTaxonomy.get(f.taxonomy) ?? 0) + 1);
