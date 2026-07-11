@@ -28,7 +28,7 @@ export function definerReviewFindings(fns: DefinerFunction[]): Finding[] {
         category: "Multi-tenant security",
         taxonomy: "M1 — Multi-tenant security",
         location: `${fn.schema}.${fn.name}`,
-        evidence: `Body performs a privileged write/grant with no auth.uid()/auth.jwt() check on the caller before it runs; granted to ${fn.exposedTo.join(", ")}.`,
+        evidence: `Body performs a privileged write/grant with no auth.uid()/auth.jwt() check on the caller before it runs; granted to ${fn.exposedTo.join(", ")}. Function body: ${fn.body.trim()}`,
         question: "Does the function verify the CALLER is authorized (owns the row, holds the required role, or is in the tenant) before this privileged write or grant?",
         impact: "A SECURITY DEFINER function runs with the owner's privileges — without a caller check, any exposed role can invoke it to escalate (e.g. self-promote to admin) or write outside its own tenant.",
         fix: "Add an explicit caller-authorization guard (verify auth.uid() owns the row or holds the required role) before the privileged write, or REVOKE EXECUTE from anon/authenticated.",

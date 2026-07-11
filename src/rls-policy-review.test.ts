@@ -57,4 +57,10 @@ describe("policyReviewFindings", () => {
     expect(findings.map((f) => f.location)).toEqual(["public.projects.projects_select", "public.invoices.invoices_write"]);
     expect(findings.every((f) => f.precisionTier === "review" && f.confidence === "Review")).toBe(true);
   });
+
+  it("carries the raw USING/WITH CHECK clauses into the evidence for offline adjudication", () => {
+    const [wrong, weak] = policyReviewFindings([wrongColumn, weakWithCheck], model);
+    expect(wrong?.evidence).toContain("auth.uid() = created_by");
+    expect(weak?.evidence).toContain("WITH CHECK: true");
+  });
 });

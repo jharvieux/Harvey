@@ -41,4 +41,9 @@ describe("definerReviewFindings", () => {
     expect(findings[0]?.precisionTier).toBe("review");
     expect(findings[0]?.confidence).toBe("Review");
   });
+
+  it("carries the raw function body into the evidence for offline adjudication", () => {
+    const findings = definerReviewFindings([promoteToAdmin]);
+    expect(findings[0]?.evidence).toContain("UPDATE public.profiles SET role = 'admin'");
+  });
 });
