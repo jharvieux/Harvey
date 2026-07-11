@@ -4,10 +4,12 @@
 // Supabase project. The classification logic itself is pure and unit-tested
 // without a DB connection; this file only gathers the structured input.
 //
-//   SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json] [--tenant-key <column>]
+//   SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json] [--tenant-key <column>] [--tenant-mode per-tenant|per-user]
 //
 // --tenant-key names the column that scopes a row to its tenant (the declared tenancy model);
 // with it, the live pg_policies bodies are semantically reviewed against that key (#199).
+// --tenant-mode per-user reviews a per-user app (ownership is auth.uid() keyed on any column, no
+// single tenant key) instead of the default per-tenant model (#206).
 //
 // --queried-tables points at a JSON array of "schema.table" strings — a static
 // grep of the client's own code for tables it queries directly (not via
@@ -147,7 +149,9 @@ export async function runDetectDeeper(
 async function main() {
   const dbUrl = process.env.SUPABASE_DB_URL;
   if (!dbUrl) {
-    console.error("usage: SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json] [--tenant-key <column>]");
+    console.error(
+      "usage: SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json] [--tenant-key <column>] [--tenant-mode per-tenant|per-user]",
+    );
     process.exit(2);
   }
 
@@ -157,7 +161,12 @@ async function main() {
     queriedTablesIdx >= 0 ? (JSON.parse(readFileSync(args[queriedTablesIdx + 1]!, "utf8")) as string[]) : [],
   );
   const tenantKeyIdx = args.indexOf("--tenant-key");
-  const tenancyModel = tenantKeyIdx >= 0 ? { tenantKey: args[tenantKeyIdx + 1]! } : undefined;
+  const tenantModeIdx = args.indexOf("--tenant-mode");
+  const tenantMode = tenantModeIdx >= 0 ? (args[tenantModeIdx + 1] as "per-tenant" | "per-user") : undefined;
+  const tenancyModel: TenancyModel | undefined =
+    tenantKeyIdx >= 0 || tenantMode === "per-user"
+      ? { tenantKey: tenantKeyIdx >= 0 ? args[tenantKeyIdx + 1]! : "", mode: tenantMode }
+      : undefined;
 
   const sql = postgres(dbUrl, { max: 1, idle_timeout: 5 }) as unknown as Sql;
   try {

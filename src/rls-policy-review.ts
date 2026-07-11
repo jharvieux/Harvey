@@ -19,8 +19,12 @@ export interface LivePolicy {
 
 export interface TenancyModel {
   // The column that scopes a row to its tenant (from the threat model / M10 tenant key), e.g.
-  // "tenant_id" or "org_id".
+  // "tenant_id" or "org_id". Unused in per-user mode.
   tenantKey: string;
+  // "per-tenant" (default): rows belong to a tenant identified by tenantKey. "per-user": rows are
+  // owned by the individual caller (auth.uid()) and may key on a different column per table, so a
+  // row bound to auth.uid() is the isolation boundary rather than a single tenant column (#206).
+  mode?: "per-tenant" | "per-user";
 }
 
 const CALLER_REF = /auth\.(uid|jwt|role)\s*\(\)|current_setting\s*\(/i;
@@ -28,6 +32,14 @@ const WRITE_CMDS = new Set(["INSERT", "UPDATE", "ALL"]);
 
 function refsWord(clause: string | null, word: string): boolean {
   return clause != null && new RegExp(`\\b${word}\\b`, "i").test(clause);
+}
+
+// A predicate binding a row column directly to the caller — `<col> = auth.uid()`, allowing a
+// `(select auth.uid())` wrapper or the reverse order. Genuine owner-level isolation.
+const OWNER_BINDING = /[\w.]+\s*=\s*\(?\s*(?:select\s+)?auth\.uid\s*\(\)|auth\.uid\s*\(\)\s*(?:as\s+\w+\s*)?\)?\s*=\s*[\w.]+/i;
+
+function ownerBound(clause: string | null): boolean {
+  return clause != null && OWNER_BINDING.test(clause);
 }
 
 interface PolicyReview {
@@ -40,12 +52,36 @@ interface PolicyReview {
 
 export function reviewPolicy(policy: LivePolicy, model: TenancyModel): PolicyReview | null {
   const name = `${policy.schema}.${policy.table}.${policy.name}`;
-  const key = model.tenantKey;
-  const qualKey = refsWord(policy.qual, key);
-  const checkKey = refsWord(policy.withCheck, key);
   const callerRef = (policy.qual != null && CALLER_REF.test(policy.qual)) || (policy.withCheck != null && CALLER_REF.test(policy.withCheck));
   const isWrite = WRITE_CMDS.has(policy.cmd.toUpperCase());
   const raw = { cmd: policy.cmd, qual: policy.qual, withCheck: policy.withCheck };
+
+  // Per-user apps isolate by the individual caller, keyed on different columns per table — there is
+  // no single tenant column. A row bound to auth.uid() IS the boundary; only an indirect/unscoped
+  // caller reference, or a write whose WITH CHECK drops the binding, is suspect (#206).
+  if ((model.mode ?? "per-tenant") === "per-user") {
+    const usingBound = ownerBound(policy.qual);
+    const checkBound = ownerBound(policy.withCheck);
+    if (callerRef && !usingBound && !checkBound) {
+      return {
+        policy: name,
+        reason: `Policy references the caller (auth.uid()/current_setting) but never binds a row column to auth.uid() — ownership is indirect or unscoped; confirm it restricts rows to the calling user.`,
+        ...raw,
+      };
+    }
+    if (isWrite && usingBound && policy.withCheck != null && !checkBound) {
+      return {
+        policy: name,
+        reason: `USING binds the row to auth.uid() but WITH CHECK does not — writes aren't owner-constrained and may create rows owned by another user.`,
+        ...raw,
+      };
+    }
+    return null;
+  }
+
+  const key = model.tenantKey;
+  const qualKey = refsWord(policy.qual, key);
+  const checkKey = refsWord(policy.withCheck, key);
 
   if (callerRef && !qualKey && !checkKey) {
     return {
