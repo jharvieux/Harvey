@@ -156,12 +156,12 @@
         <p>Scoped to the single repository under audit: <code>contents: read</code>. If you purchase fix delivery, additionally <code>pull_requests: write</code> so fixes arrive as PRs you review. Nothing broader.</p>
       </li>
       <li>
-        <h3>3. A read-only database connection</h3>
-        <p>A read-only Supabase connection string. It drives the data-classification pass (what PII/PHI/payment data actually lives where) and database configuration checks. Read-only is verified before use.</p>
+        <h3>3. Read-only database connections — one per backend</h3>
+        <p>A read-only Supabase connection string for <em>each</em> database your app uses. Many apps have more than one (e.g. a primary project plus a separate analytics/RAG project) — we test every backend, not just the main one. Read-only is verified before use.</p>
       </li>
       <li>
-        <h3>4. A staging environment <span class="hint">(optional)</span></h3>
-        <p>For dynamic penetration testing of tenant isolation. If you don't have one, we run those probes against a locally seeded copy of your stack instead. We never test against production.</p>
+        <h3>4. A write-safe test environment <span class="hint">(optional)</span></h3>
+        <p>For dynamic penetration testing of tenant isolation — including write probes. You tell us, per backend, which non-production instance is safe to write to; anything without one we keep read-only. If you have none, we run those probes against a locally seeded copy instead. We never test against production.</p>
       </li>
       <li>
         <h3>5. Fifteen minutes of answers</h3>
@@ -205,6 +205,17 @@
         <label>Production URL <span class="hint">(if public)</span><input type="url" name="app_url" placeholder="https://app.example.com"></label>
         <label>Where is it hosted?<input type="text" name="hosting" placeholder="Vercel, AWS, self-hosted…"></label>
         <label>What does the app do, in a sentence or two?<textarea name="description"></textarea></label>
+        <label>Is this a monorepo with multiple apps/services?
+          <select name="monorepo">
+            <option value="">Select…</option>
+            <option>No — a single app</option>
+            <option>Yes — multiple apps/services in one repo</option>
+            <option>Not sure</option>
+          </select>
+        </label>
+        <label>If yes, list the apps/services <span class="hint">(e.g. web app, RAG service, browser extension)</span><textarea name="apps_list"></textarea></label>
+        <label>How many distinct databases / Supabase projects does it use? <span class="hint">(we ask for read-only access to each)</span><input type="text" name="backend_count" placeholder="e.g. 2 — a main project and a RAG project"></label>
+        <label>Do your services call each other or send webhooks between themselves? <span class="hint">(internal service APIs, service-to-service auth, cross-service webhooks — we probe these seams)</span><textarea name="service_seams"></textarea></label>
       </fieldset>
 
       <fieldset>
