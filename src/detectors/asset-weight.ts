@@ -15,7 +15,7 @@ const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|tiff?|svg)$/i;
 const MEDIA_EXT = /\.(mp4|webm|mov|avi|mp3|wav|flac|ogg)$/i;
 const EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out)$/;
 
-export interface AssetWeightOptions {
+interface AssetWeightOptions {
   /** Flag images larger than this (bytes). Default 500 KB — well past "should be optimized/CDN'd". */
   imageThresholdBytes?: number;
   /** Flag audio/video larger than this (bytes). Default 5 MB. */
