@@ -80,6 +80,21 @@ positive-caught + benign-negative-cleared fixture pair in `src/detectors/__fixtu
 discipline, applied where these detectors live (they run outside `runMechanicalScan`, so the
 static-corpus gate doesn't see them).
 
+**Engagement run** (also runs the M9 detectors — this CLI is the entry point for both):
+
+```bash
+pnpm detect-static <target-dir> --out findings.static.json
+```
+
+**Precision guards from the ATC dogfood run (2026-07-10, 1,130 files — raw 204 → 139 findings):**
+render-once contexts (email templates by `emails/` path or `@react-email`/`@react-pdf` import,
+where re-render classes don't apply and email clients *require* raw `<img>`) are skipped
+entirely; files carrying an explicit `eslint-disable @next/next/no-img-element` are treated as
+already adjudicated; `select("*", { head: true })` count-only queries aren't unbounded reads;
+chunked-batch loops (`i += BATCH_SIZE`) are the *fix* for N+1, not the bug; and await-in-loop
+rolls up to one finding per file, tiered `Likely` on the request path (`app/`/`pages/`) vs
+`Review` off it (workers/jobs — job runtime, not user-facing latency).
+
 Classes (severity / confidence — see the detector for per-check evidence and limitations):
 
 | Class | Detects | Sev / Conf |

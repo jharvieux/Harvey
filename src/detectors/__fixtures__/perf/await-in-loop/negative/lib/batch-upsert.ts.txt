@@ -1,0 +1,9 @@
+import { supabase } from "./db";
+
+const BATCH_SIZE = 500;
+
+export async function upsertRows(rows: { id: string; value: number }[]) {
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    await supabase.from("metrics").upsert(rows.slice(i, i + BATCH_SIZE));
+  }
+}

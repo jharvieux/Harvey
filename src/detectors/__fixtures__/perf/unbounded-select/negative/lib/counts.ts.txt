@@ -1,0 +1,10 @@
+import { supabase } from "./db";
+
+export async function activeUserCount(tenantId: string) {
+  const { count } = await supabase
+    .from("users")
+    .select("*", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .is("deleted_at", null);
+  return count ?? 0;
+}

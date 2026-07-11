@@ -112,13 +112,17 @@ describe("state sprawl", () => {
 
 describe("await in loop (N+1)", () => {
   const TAX = "M7 — Await in loop (N+1)";
-  it("flags a per-item independent await inside a for-of", () => {
+  it("flags per-item independent awaits, one rolled-up finding per file, tiered by request path", () => {
     const hits = byTaxonomy("await-in-loop/positive", TAX);
-    expect(hits).toHaveLength(1);
-    expect(hits[0]).toMatchObject({ severity: "Perf", confidence: "Likely" });
-    expect(hits[0]?.location).toContain("lib/order-totals.ts");
+    expect(hits).toHaveLength(2);
+    const onRoute = hits.find((h) => h.location.includes("app/api/enrich/route.ts"));
+    const inLib = hits.find((h) => h.location.includes("lib/order-totals.ts"));
+    // Request-path N+1 is user-facing latency; worker/lib N+1 is job runtime — different tiers.
+    expect(onRoute).toMatchObject({ severity: "Perf", confidence: "Likely" });
+    expect(inLib).toMatchObject({ severity: "Perf", confidence: "Review" });
+    expect(inLib?.evidence).toContain("off the request path");
   });
-  it("does not flag a loop whose iterations depend on the previous result", () => {
+  it("does not flag loop-carried dependencies or chunked-batch loops (i += BATCH_SIZE)", () => {
     expect(byTaxonomy("await-in-loop/negative", TAX)).toHaveLength(0);
   });
 });
@@ -130,7 +134,7 @@ describe("unbounded select", () => {
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({ severity: "Perf", confidence: "Review" });
   });
-  it("does not flag paginated column-projected reads or .single() lookups", () => {
+  it("does not flag paginated reads, .single() lookups, or count-only head:true queries", () => {
     expect(byTaxonomy("unbounded-select/negative", TAX)).toHaveLength(0);
   });
 });
@@ -205,6 +209,15 @@ describe("JSON deep-clone", () => {
   });
   it("does not flag structuredClone", () => {
     expect(byTaxonomy("json-clone/negative", TAX)).toHaveLength(0);
+  });
+});
+
+describe("render-once contexts (emails / PDF documents)", () => {
+  it("suppresses every React re-render class in email templates and @react-pdf documents", () => {
+    // ATC dogfood: email clients REQUIRE raw <img>, and index keys can't cause remounts in
+    // something rendered exactly once — flagging them there is crying wolf.
+    const findings = detectPerfCodeFindings(loadFixtureDir("render-once/negative"));
+    expect(findings).toHaveLength(0);
   });
 });
 
