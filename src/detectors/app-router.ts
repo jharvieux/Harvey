@@ -300,10 +300,22 @@ function detectUnsafeCacheConfig(sources: Map<string, ts.SourceFile>, nextId: Ne
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     if (leadingDirective(sf) !== undefined) continue;
-    if (!/\/(page|layout|route)\.tsx?$/.test(path)) continue;
+    // page/layout only — these are what the Full Route Cache actually treats
+    // as static/ISR candidates, and the fix text (unstable_cache/"use cache")
+    // is the real remediation for them. Route Handlers (route.ts) use a
+    // different caching surface (route segment config / Cache-Control) and,
+    // on the ATC dogfood, were 225 of 230 hits here — almost all admin or
+    // mutation endpoints that were never cache candidates (#181).
+    if (!/\/(page|layout)\.tsx?$/.test(path)) continue;
     const text = sf.text;
     if (!(/\.from\(\s*["'`]/.test(text) && /\.select\(/.test(text))) continue;
     if (CACHE_SIGNAL_PATTERN.test(text)) continue;
+    // Reading a dynamic API (cookies()/headers()/searchParams/...) makes the
+    // route dynamic by construction — "no cache config" is expected there,
+    // not a smell. detectAccidentalDynamicRendering already flags the read
+    // itself; don't also flag the file for lacking a cache config it can't
+    // meaningfully have.
+    if (readsDynamicApi(sf)) continue;
 
     findings.push(
       makeFinding(nextId, {
@@ -458,6 +470,21 @@ function findDynamicApiCall(sf: ts.SourceFile): ts.CallExpression | undefined {
   };
   visit(sf);
   return hit;
+}
+
+// True if the file reads any API that forces dynamic rendering by itself
+// (cookies()/headers()/noStore()/unstable_noStore(), or a top-level
+// `searchParams` read) — same primitives detectAccidentalDynamicRendering
+// flags below. Shared so detectUnsafeCacheConfig doesn't also flag a route
+// that's dynamic by construction for lacking a cache config it can't have.
+function readsDynamicApi(sf: ts.SourceFile): boolean {
+  if (findDynamicApiCall(sf)) return true;
+  const defaultFn = findDefaultExportFunction(sf);
+  if (!defaultFn) return false;
+  const spName = findSearchParamsParamName(defaultFn);
+  if (!spName) return false;
+  const body = defaultFn.body;
+  return !!body && isReadDirectly(body, sf, spName);
 }
 
 function detectAccidentalDynamicRendering(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
