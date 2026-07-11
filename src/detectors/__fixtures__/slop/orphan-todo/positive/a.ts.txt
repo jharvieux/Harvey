@@ -1,4 +1,6 @@
 export function run(): void {
   // TODO: handle the retry path
-  doWork();
+  // XXX this rounding is fragile
+  // HACK work around the upstream API bug
+  doWork(); // needs auth (TODO) before launch
 }
