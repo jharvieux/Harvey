@@ -29,7 +29,7 @@ const bftbColor = (s) => {
   const light = Math.round(47 - 7 * t);        // deepen toward red at the top
   return `hsl(${hue}, 88%, ${light}%)`;
 };
-const CONF = { Confirmed: "#15803d", Likely: "#ca8a04", Review: "#3b7ea1", "N/A": "#94a3b8" };
+const CONF = { Confirmed: "#2563eb", Likely: "#ca8a04", Review: "#3b7ea1", "N/A": "#94a3b8" };
 const esc = (s) => String(s ?? "").replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[m]);
 
 // SVG arc helper (degrees; 0 = +x axis, sweeps clockwise in screen coords).
@@ -87,7 +87,7 @@ function findingCard(f) {
       <span class="badge bftb" style="background:${bftbColor(s)}">BFTB ${s}</span>
       <span class="badge" style="background:${CONF[f.confidence] ?? "#94a3b8"}">${esc(f.confidence ?? "—")}</span>
     </div>
-    <div class="finding-meta">${esc(f.taxonomy)} · <code>${esc(f.location)}</code> · <span class="status">${esc(f.status)}</span>
+    <div class="finding-meta">${esc(f.category)} · ${esc(f.taxonomy)} · <code>${esc(f.location)}</code> · <span class="status">${esc(f.status)}</span>
       · <span class="vesc">V${f.value}·E${f.ease}·S${f.safety}</span></div>
     <div class="kv"><b>Evidence</b> ${esc(f.evidence)}</div>
     <div class="kv"><b>Impact</b> ${esc(f.impact)}</div>
@@ -109,9 +109,8 @@ function buildHtml(data) {
   const action = [...f]
     .filter((x) => (x._bftb > 75 || ["Critical", "High"].includes(x.severity)) && !/^Completed/.test(x.status))
     .sort((a, b) => (sevRank(b) - sevRank(a)) || (b._bftb - a._bftb));
-  const byCat = {};
-  for (const x of f) (byCat[x.category] ||= []).push(x);
-  for (const k in byCat) byCat[k].sort((a, b) => b._bftb - a._bftb);
+  // Findings lead with the most critical (severity desc), BFTB as the tiebreak.
+  const sorted = [...f].sort((a, b) => (sevRank(b) - sevRank(a)) || (b._bftb - a._bftb));
 
   const legend = Object.entries(counts).sort((a, b) => SEV[a[0]].o - SEV[b[0]].o)
     .map(([s, n]) => `<span class="leg"><i style="background:${SEV[s].c}"></i>${s} ${n}</span>`).join("");
@@ -202,7 +201,7 @@ function buildHtml(data) {
     <div class="kv"><b>Tooling</b> ${esc(m.methodology)}</div>
     <div class="kv"><b>Out of scope</b> ${esc(m.outOfScope)}</div>
     <h2>Findings</h2>
-    ${Object.entries(byCat).map(([cat, items]) => `<div class="cat">${esc(cat)}</div>${items.map(findingCard).join("")}`).join("")}
+    ${sorted.map(findingCard).join("")}
     ${na.length ? `<h2>Checked &amp; ruled out (not applicable)</h2>
     <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Items a checklist would flag, suppressed by the applicability gate (relevant to this app's auth model / architecture). Shown for transparency.</div>
     ${na.map((x) => `<div class="na"><span class="fid">${esc(x.id)}</span> <b>${esc(x.title)}</b> — ${esc(x.note ?? "Not applicable in context.")}</div>`).join("")}` : ""}
