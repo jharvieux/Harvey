@@ -1,0 +1,4 @@
+// Names are formatted last-first for the legal export only (spec 8.2); UI uses formatName.
+export function formatLegalName(first: string, last: string): string {
+  return `${last}, ${first}`;
+}

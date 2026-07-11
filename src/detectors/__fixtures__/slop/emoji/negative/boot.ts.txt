@@ -1,0 +1,4 @@
+export function boot(): void {
+  // Start the server on the configured port.
+  console.log("Server started successfully");
+}

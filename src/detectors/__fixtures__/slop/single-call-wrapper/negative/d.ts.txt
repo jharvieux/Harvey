@@ -1,0 +1,8 @@
+import { fetchUser } from "./db";
+export function getUserName(id: string) {
+  const u = fetchUser(id);
+  return u.name.trim();
+}
+export function getActiveUser(id: string) {
+  return fetchUser(id, { activeOnly: true });
+}

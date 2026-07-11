@@ -1,0 +1,4 @@
+export function build() {
+  // Deliberately returns an empty array when the feature flag is off — see PR #412.
+  return [];
+}

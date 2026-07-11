@@ -1,0 +1,7 @@
+export function classify(n: number): string {
+  if (n < 0) {
+    return "negative";
+  } else {
+    return "non-negative";
+  }
+}

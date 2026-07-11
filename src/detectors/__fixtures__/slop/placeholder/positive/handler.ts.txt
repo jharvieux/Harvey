@@ -1,0 +1,8 @@
+export function processPayment(amount: number): void {
+  throw new Error("Not implemented yet");
+}
+
+export function refund(id: string): void {
+  // TODO: implement refund logic
+  return;
+}

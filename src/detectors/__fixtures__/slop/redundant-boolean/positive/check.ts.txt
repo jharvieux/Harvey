@@ -1,0 +1,6 @@
+export function isActive(user: { active: boolean }): boolean {
+  return user.active ? true : false;
+}
+export function isBlocked(user: { blocked: boolean }): boolean {
+  return user.blocked ? true : false;
+}
