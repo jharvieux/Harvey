@@ -2,25 +2,33 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-10 (…then M7 code-level perf detectors, phase 1 of #170 → PR #173 merged)_
+_Last updated: 2026-07-10 (…then #170 fully delivered — M7 code/build/review layers, PRs #173/#175/#176/#177/#178, issue CLOSED; bundle-analyzer depth → #179)_
 
-## M7 code layer (#170) — phase 1 merged (PR #173), issue stays open
+## M7 code-level performance (#170) — DELIVERED, issue closed
 
-M7 Performance is no longer DB-advisor-only: `src/detectors/perf-code.ts`
-(`detectPerfCodeFindings`, ids `M7C-*`) covers 14 mechanical [M] classes on source alone —
-React render waste (ctx-value churn, inline literal props, raw `<img>`, index keys,
-sort-in-JSX, state sprawl), N+1 await-in-loop, unbounded `select('*')`, whole-library +
-heavy-client imports, manual font links, middleware fetch, sync I/O in route handlers, JSON
-deep-clone — each gated by a positive+negative fixture pair (`__fixtures__/perf/`, via
-`pnpm verify`). React Compiler config downgrades the manual-memo classes to Info. Coverage
-gate: M7 `needs: "source"` now; a no-DB engagement records M7 **partial** (code ran, advisor
-n/a), and M7 is `freeTier: true` per the issue's free-count mandate. Runbook:
-`docs/m7-performance.md` §2a.
+M7 is now three layers (was: DB advisor only). Runbook: `docs/m7-performance.md` §2a/§2b/§6.
 
-**Queued on #170 (sequenced in the issue comment):** 1) [B] bundle-stats input
-(`next build`/`@next/bundle-analyzer` JSON), 2) deferred [M] classes (hook-deps via eslint
-runner, `optimizePackageImports` config check, committed-asset size walk), 3) [L] classes fold
-into the paid review-pass brief.
+- **[M] mechanical, 17 classes**, each fixture-gated via `pnpm verify`: 14 AST classes in
+  `src/detectors/perf-code.ts` (`M7C-*`, incl. React Compiler downgrade gate + version-gated
+  barrel check), the `react-hooks/exhaustive-deps` adapter (`src/detectors/hook-deps.ts`,
+  `M7H-*`, new devDep `eslint-plugin-react-hooks`), and the oversized-asset walk
+  (`src/detectors/asset-weight.ts`, `M7A-*`, runtime-generated test fixtures).
+- **[B] build tier** (`src/detectors/bundle-stats.ts`, `M7B-*`): measured gzipped first-load
+  JS per route (webpack builds) + shared baseline; **Turbopack builds (Next 16 default) emit
+  no per-route manifest** — baseline still measured, gap disclosed as Info (`M7B-03`).
+  Remaining depth (duplicate chunks, dep attribution, Turbopack per-route via
+  `@next/bundle-analyzer` stats) → **#179**.
+- **[L] review checklist**: `docs/m7-performance.md` §6 — seven judgment-call classes as
+  auditor questions, worked in the paid review pass.
+- **Engagement entry point:** `pnpm detect-static <target> [--build <.next>]` — first CLI
+  that runs the M9 + M7 detector sets over a real target (auto-detects `apps/*/.next`).
+- **ATC calibration:** raw 204 → 139 after fixing 4 dogfood-exposed FP shapes (render-once
+  email/PDF templates, eslint-adjudicated `<img>`, `head:true` count-only selects,
+  chunked-batch loops); N+1 tiered request-path (Likely) vs background (Review). Full ATC
+  static-detect run: 450 findings / 13 classes (M9's 230 cache-config best-effort rows
+  dominate — that check's noisiness is pre-existing M9 territory, not touched here).
+- **Coverage gate:** M7 `needs: "source"`, `freeTier: true`; no-DB engagement → M7
+  **partial** (code ran, advisor n/a), never silently skipped.
 
 ## Pen-test kit (M2 / #5) — target-adaptive, monorepo-aware
 The dynamic tier evolved from hardcoded calibration paths to discovering the system under test:
