@@ -29,7 +29,12 @@ const bftbColor = (s) => {
   const light = Math.round(47 - 7 * t);        // deepen toward red at the top
   return `hsl(${hue}, 88%, ${light}%)`;
 };
-const CONF = { Confirmed: "#2563eb", Likely: "#ca8a04", Review: "#3b7ea1", "N/A": "#94a3b8" };
+const CONF = { Confirmed: "#2563eb", Likely: "#ca8a04", Review: "#facc15", "N/A": "#94a3b8" };
+// Pick a legible text color for a badge background (dark ink on light fills like the Review yellow).
+const readableOn = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  return (0.299 * (n >> 16 & 255) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255)) > 150 ? "#1f2937" : "#fff";
+};
 const esc = (s) => String(s ?? "").replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[m]);
 
 // SVG arc helper (degrees; 0 = +x axis, sweeps clockwise in screen coords).
@@ -85,7 +90,7 @@ function findingCard(f) {
       <span class="ftitle">${esc(f.title)}</span>
       <span class="badge" style="background:${sc}">${esc(f.severity)}</span>
       <span class="badge bftb" style="background:${bftbColor(s)}">BFTB ${s}</span>
-      <span class="badge" style="background:${CONF[f.confidence] ?? "#94a3b8"}">${esc(f.confidence ?? "—")}</span>
+      <span class="badge" style="background:${CONF[f.confidence] ?? "#94a3b8"};color:${readableOn(CONF[f.confidence] ?? "#94a3b8")}">${esc(f.confidence ?? "—")}</span>
     </div>
     <div class="finding-meta">${esc(f.category)} · ${esc(f.taxonomy)} · <code>${esc(f.location)}</code> · <span class="status">${esc(f.status)}</span>
       · <span class="vesc">V${f.value}·E${f.ease}·S${f.safety}</span></div>
