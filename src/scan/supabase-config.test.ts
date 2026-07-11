@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   checkAuthConfig,
   checkAutoExposedTables,
+  checkColumnGrantsToClientRoles,
+  checkCronJobs,
   checkDangerousExtensions,
+  checkDefaultPrivilegesToClientRoles,
   checkEdgeFunctionSecrets,
   checkExposedSchemas,
   checkGotrueVersion,
@@ -12,6 +15,7 @@ import {
   checkRealtimePublicationRls,
   checkUnsignedWebhookHandlers,
   compareVersions,
+  type CronJob,
 } from "./supabase-config.js";
 
 describe("checkPublicBucketsWithNoPolicies", () => {
@@ -151,6 +155,42 @@ describe("checkRealtimePublicationRls", () => {
   });
 });
 
+describe("checkDefaultPrivilegesToClientRoles", () => {
+  it("flags a default ACL granting future tables in a schema to anon", () => {
+    const findings = checkDefaultPrivilegesToClientRoles([
+      { schema: "public", role: "anon", objectType: "table", privileges: ["INSERT", "SELECT"] },
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      taxonomy: "Default privileges grant future objects to client role",
+      precisionTier: "review",
+      location: "schema public: default privileges for anon",
+    });
+  });
+
+  it("does not flag when there are no default ACLs granting to anon/authenticated", () => {
+    expect(checkDefaultPrivilegesToClientRoles([])).toEqual([]);
+  });
+});
+
+describe("checkColumnGrantsToClientRoles", () => {
+  it("flags an explicit column-level grant to authenticated", () => {
+    const findings = checkColumnGrantsToClientRoles([
+      { schema: "public", tableName: "profiles", columnName: "ssn", role: "authenticated", privilegeType: "SELECT" },
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      taxonomy: "Column-level grant to client role outside RLS model",
+      location: "public.profiles.ssn",
+      precisionTier: "review",
+    });
+  });
+
+  it("does not flag when there are no column-level grants to anon/authenticated", () => {
+    expect(checkColumnGrantsToClientRoles([])).toEqual([]);
+  });
+});
+
 describe("checkExposedSchemas", () => {
   it("flags a schema exposed beyond the public/graphql_public default", () => {
     const findings = checkExposedSchemas(["public", "graphql_public", "internal"]);
@@ -211,6 +251,52 @@ describe("checkGotrueVersion", () => {
 
   it("returns nothing when the version is unknown", () => {
     expect(checkGotrueVersion({ version: null, appleEnabled: true })).toEqual([]);
+  });
+});
+
+describe("checkCronJobs", () => {
+  const baseJob: CronJob = {
+    jobid: 1,
+    schedule: "*/5 * * * *",
+    command: "select public.rollup_daily_stats();",
+    nodename: "localhost",
+    database: "postgres",
+    username: "postgres",
+    active: true,
+    isSuperuser: false,
+  };
+
+  it("flags a job running as a superuser role", () => {
+    const findings = checkCronJobs([{ ...baseJob, isSuperuser: true }]);
+    expect(findings.map((f) => f.taxonomy)).toContain("pg_cron job runs as a superuser role");
+  });
+
+  it("does not flag a job running as a non-superuser role", () => {
+    expect(checkCronJobs([baseJob]).map((f) => f.taxonomy)).not.toContain("pg_cron job runs as a superuser role");
+  });
+
+  it("flags a job whose command calls a known SECURITY DEFINER function", () => {
+    const findings = checkCronJobs([baseJob], ["rollup_daily_stats"]);
+    expect(findings.map((f) => f.taxonomy)).toContain("pg_cron job calls a SECURITY DEFINER function");
+  });
+
+  it("does not flag when the command calls no known SECURITY DEFINER function", () => {
+    const findings = checkCronJobs([baseJob], ["some_other_function"]);
+    expect(findings.map((f) => f.taxonomy)).not.toContain("pg_cron job calls a SECURITY DEFINER function");
+  });
+
+  it("flags a command embedding a JWT-shaped secret literal", () => {
+    const job = { ...baseJob, command: `select net.http_post('https://api.example.com', headers := '{"Authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.abcdefghijklmnop.signaturepart"}');` };
+    const findings = checkCronJobs([job]);
+    expect(findings.map((f) => f.taxonomy)).toContain("pg_cron job embeds a secret-shaped literal");
+  });
+
+  it("does not flag a plain command with no secret-shaped literal", () => {
+    expect(checkCronJobs([baseJob]).map((f) => f.taxonomy)).not.toContain("pg_cron job embeds a secret-shaped literal");
+  });
+
+  it("returns no findings for a job with no privileged/definer/secret signal", () => {
+    expect(checkCronJobs([baseJob])).toEqual([]);
   });
 });
 
