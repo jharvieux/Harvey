@@ -9,6 +9,7 @@ import {
   checkGraphqlIntrospection,
   checkPublicBucketsWithNoPolicies,
   checkRealtimeAuthorization,
+  checkRealtimePublicationRls,
   checkUnsignedWebhookHandlers,
   compareVersions,
 } from "./supabase-config.js";
@@ -122,6 +123,31 @@ describe("checkRealtimeAuthorization", () => {
 
   it("does not flag when the realtime.messages table is absent", () => {
     expect(checkRealtimeAuthorization({ exists: false, rlsEnabled: false })).toEqual([]);
+  });
+});
+
+describe("checkRealtimePublicationRls", () => {
+  it("flags a published table with RLS disabled", () => {
+    const findings = checkRealtimePublicationRls([{ schema: "public", name: "orders", rlsEnabled: false }]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ severity: "High", taxonomy: "Realtime publication broadcasts an unprotected table", location: "public.orders" });
+  });
+
+  it("does not flag a published table with RLS enabled", () => {
+    expect(checkRealtimePublicationRls([{ schema: "public", name: "orders", rlsEnabled: true }])).toEqual([]);
+  });
+
+  it("flags each unprotected published table and skips the protected ones", () => {
+    const findings = checkRealtimePublicationRls([
+      { schema: "public", name: "orders", rlsEnabled: false },
+      { schema: "public", name: "messages", rlsEnabled: true },
+      { schema: "public", name: "events", rlsEnabled: false },
+    ]);
+    expect(findings.map((f) => f.location)).toEqual(["public.orders", "public.events"]);
+  });
+
+  it("does not flag when the publication has no tables", () => {
+    expect(checkRealtimePublicationRls([])).toEqual([]);
   });
 });
 
