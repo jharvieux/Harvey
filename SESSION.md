@@ -2,7 +2,25 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-10 (excluded-tier backlog #123–#125 fully delivered + all trackers CLOSED; then hardened the dynamic tier via real ATC testing → route discovery (PR #156), monorepo target enumeration + completeness gate + seam probes + intake update (PR #157))_
+_Last updated: 2026-07-10 (…then M7 code-level perf detectors, phase 1 of #170 → PR #173 merged)_
+
+## M7 code layer (#170) — phase 1 merged (PR #173), issue stays open
+
+M7 Performance is no longer DB-advisor-only: `src/detectors/perf-code.ts`
+(`detectPerfCodeFindings`, ids `M7C-*`) covers 14 mechanical [M] classes on source alone —
+React render waste (ctx-value churn, inline literal props, raw `<img>`, index keys,
+sort-in-JSX, state sprawl), N+1 await-in-loop, unbounded `select('*')`, whole-library +
+heavy-client imports, manual font links, middleware fetch, sync I/O in route handlers, JSON
+deep-clone — each gated by a positive+negative fixture pair (`__fixtures__/perf/`, via
+`pnpm verify`). React Compiler config downgrades the manual-memo classes to Info. Coverage
+gate: M7 `needs: "source"` now; a no-DB engagement records M7 **partial** (code ran, advisor
+n/a), and M7 is `freeTier: true` per the issue's free-count mandate. Runbook:
+`docs/m7-performance.md` §2a.
+
+**Queued on #170 (sequenced in the issue comment):** 1) [B] bundle-stats input
+(`next build`/`@next/bundle-analyzer` JSON), 2) deferred [M] classes (hook-deps via eslint
+runner, `optimizePackageImports` config check, committed-asset size walk), 3) [L] classes fold
+into the paid review-pass brief.
 
 ## Pen-test kit (M2 / #5) — target-adaptive, monorepo-aware
 The dynamic tier evolved from hardcoded calibration paths to discovering the system under test:
