@@ -30,6 +30,7 @@
     "@eslint/js": "^9.30.0",
     "@types/node": "^24.0.0",
     "eslint": "^9.30.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "jscpd": "^4.0.5",
     "knip": "^5.61.0",
     "playwright": "^1.53.0",
