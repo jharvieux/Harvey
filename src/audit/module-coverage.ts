@@ -16,8 +16,11 @@ interface AuditModule {
 }
 
 // The canonical 9 modules (docs/audit-modules.md / epic #2). `needs` lets the gate tell a
-// legitimate environment-gated skip (e.g. M7 with no live DB in scope) from a silent omission —
-// but even a legitimate skip must be RECORDED as "na" with a reason, never just left out.
+// legitimate environment-gated skip (e.g. M2 with no running app in scope) from a silent
+// omission — but even a legitimate skip must be RECORDED as "na" with a reason, never just
+// left out. `needs` is the MINIMUM environment: M7 runs its code-level detectors on source
+// alone (#170); without a live DB its advisor layer is missing, so it records "partial",
+// not "na".
 export const AUDIT_MODULES: AuditModule[] = [
   { id: "M1", name: "Multi-tenant security", tools: "D-091 guards + scan-extras + Supabase security advisor + Semgrep", needs: "source", freeTier: true },
   { id: "M2", name: "Local pen test (dynamic)", tools: "seeded target + probe kit (src/pentest)", needs: "dynamic", freeTier: false },
@@ -25,7 +28,7 @@ export const AUDIT_MODULES: AuditModule[] = [
   { id: "M4", name: "Duplication", tools: "jscpd", needs: "source", freeTier: true },
   { id: "M5", name: "Slop / dead code", tools: "knip", needs: "source", freeTier: false },
   { id: "M6", name: "Simplification / reuse", tools: "/simplify + quality-extras (LLM)", needs: "llm", freeTier: false },
-  { id: "M7", name: "Performance", tools: "Supabase performance advisor", needs: "connected", freeTier: false },
+  { id: "M7", name: "Performance", tools: "code-level perf detectors (src/detectors/perf-code.ts) + Supabase performance advisor (connected)", needs: "source", freeTier: true },
   { id: "M8", name: "Test quality", tools: "Stryker mutation testing", needs: "source", freeTier: true },
   { id: "M9", name: "Next.js App Router", tools: "scan-extras M9 + detectors", needs: "source", freeTier: true },
 ];

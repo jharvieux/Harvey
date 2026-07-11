@@ -1,0 +1,15 @@
+"use client";
+import { useMemo } from "react";
+
+interface Row { id: string; score: number }
+
+export function Leaderboard({ rows }: { rows: Row[] }) {
+  const sorted = useMemo(() => [...rows].sort((a, b) => b.score - a.score), [rows]);
+  return (
+    <ol>
+      {sorted.map((r) => (
+        <li key={r.id}>{r.score}</li>
+      ))}
+    </ol>
+  );
+}

@@ -1,0 +1,7 @@
+import groupBy from "lodash/groupBy";
+import { format, parseISO } from "date-fns";
+
+export function summarize(rows: { created: string; amount: number }[]) {
+  const grouped = groupBy(rows, (r) => format(parseISO(r.created), "yyyy-MM"));
+  return grouped;
+}

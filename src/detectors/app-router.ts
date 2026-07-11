@@ -10,12 +10,9 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
+import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 
-export interface SourceInput {
-  /** Repo-relative path, e.g. "app/dashboard/page.tsx". Used for import resolution and location. */
-  path: string;
-  text: string;
-}
+export type { SourceInput } from "./common.js";
 
 const AUTH_PATTERN =
   /auth\.(uid|getUser|getSession)|getServerSession|getCurrentUser|requireAuth|requireUser|requireSession|assertPermission|assertAuthorized|checkAuth|verifySession|auth\(\)/i;
@@ -24,51 +21,6 @@ const MUTATION_PATTERN = /\.(insert|update|upsert|delete|rpc)\s*\(/;
 const SECRET_ENV_PATTERN = /process\.env\.(?!NEXT_PUBLIC_)[A-Z0-9_]*(SERVICE_ROLE|SECRET|PRIVATE_KEY|API_KEY|TOKEN)[A-Z0-9_]*/;
 const DYNAMIC_API_PATTERN = /^(headers|cookies|noStore|unstable_noStore)$/;
 const CACHE_SIGNAL_PATTERN = /unstable_cache|["']use cache["']|\brevalidate\s*[:=]/;
-
-type NextId = () => string;
-
-function isTsxPath(path: string): boolean {
-  return path.endsWith(".tsx") || path.endsWith(".jsx");
-}
-
-function parse(path: string, text: string): ts.SourceFile {
-  return ts.createSourceFile(
-    path,
-    text,
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ true,
-    isTsxPath(path) ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
-}
-
-function leadingDirective(sf: ts.SourceFile): "use client" | "use server" | undefined {
-  const first = sf.statements[0];
-  if (first && ts.isExpressionStatement(first) && ts.isStringLiteral(first.expression)) {
-    if (first.expression.text === "use client") return "use client";
-    if (first.expression.text === "use server") return "use server";
-  }
-  return undefined;
-}
-
-function lineOf(sf: ts.SourceFile, node: ts.Node): number {
-  return sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
-}
-
-function loc(path: string, sf: ts.SourceFile, node: ts.Node): string {
-  return `${path}:${lineOf(sf, node)}`;
-}
-
-// Walks a call chain (e.g. `supabase.from("x").select("y").single()`) and
-// collects the method names invoked, innermost first.
-function callChainNames(node: ts.Expression): string[] {
-  const names: string[] = [];
-  let cur: ts.Expression = node;
-  while (ts.isCallExpression(cur) && ts.isPropertyAccessExpression(cur.expression)) {
-    names.push(cur.expression.name.text);
-    cur = cur.expression.expression;
-  }
-  return names;
-}
 
 function isDbQueryChain(node: ts.Expression): boolean {
   const names = callChainNames(node);

@@ -1,0 +1,11 @@
+interface Row { id: string; score: number }
+
+export function Leaderboard({ rows }: { rows: Row[] }) {
+  return (
+    <ol>
+      {rows.sort((a, b) => b.score - a.score).map((r) => (
+        <li key={r.id}>{r.score}</li>
+      ))}
+    </ol>
+  );
+}

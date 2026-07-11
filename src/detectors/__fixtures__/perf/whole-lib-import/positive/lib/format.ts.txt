@@ -1,0 +1,7 @@
+import _ from "lodash";
+import moment from "moment";
+
+export function summarize(rows: { created: string; amount: number }[]) {
+  const grouped = _.groupBy(rows, (r) => moment(r.created).format("YYYY-MM"));
+  return _.mapValues(grouped, (g) => _.sumBy(g, "amount"));
+}

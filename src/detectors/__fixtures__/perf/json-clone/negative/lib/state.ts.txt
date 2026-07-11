@@ -1,0 +1,5 @@
+export function withDefaults(config: Record<string, unknown>) {
+  const copy = structuredClone(config);
+  copy.updatedAt = "now";
+  return copy;
+}

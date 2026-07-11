@@ -1,0 +1,9 @@
+import { runStep, type StepResult } from "./steps";
+
+export async function runPipeline(steps: string[]) {
+  let prev: StepResult | null = null;
+  for (const step of steps) {
+    prev = await runStep(step, prev);
+  }
+  return prev;
+}

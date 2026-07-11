@@ -18,28 +18,28 @@ describe("assessModuleCoverage", () => {
 
   it("counts an explicit na-with-reason as accounted", () => {
     const rec = ranAll();
-    rec.M7 = { status: "na", note: "no live database in engagement scope" };
+    rec.M6 = { status: "na", note: "simplification LLM pass not purchased this round" };
     const cov = assessModuleCoverage(rec);
     expect(cov.complete).toBe(true);
-    expect(cov.na).toContainEqual({ id: "M7", note: "no live database in engagement scope" });
+    expect(cov.na).toContainEqual({ id: "M6", note: "simplification LLM pass not purchased this round" });
   });
 
   it("rejects na without a reason, and a bare skipped, as gaps", () => {
-    const noReason = { ...ranAll(), M7: { status: "na" as const } };
-    expect(assessModuleCoverage(noReason).gaps).toContain("M7");
+    const noReason = { ...ranAll(), M2: { status: "na" as const } };
+    expect(assessModuleCoverage(noReason).gaps).toContain("M2");
     const skipped = { ...ranAll(), M6: { status: "skipped" as const } };
     expect(assessModuleCoverage(skipped).gaps).toContain("M6");
   });
 
   it("annotates an environment-gated gap with what it needs", () => {
     const rec = ranAll();
-    delete rec.M7; // M7 needs connected
-    const cov = assessModuleCoverage(rec, { connected: false, dynamic: false, llm: true });
-    expect(cov.gaps.find((g) => g.startsWith("M7"))).toMatch(/needs connected/);
+    delete rec.M2; // M2 needs dynamic
+    const cov = assessModuleCoverage(rec, { connected: true, dynamic: false, llm: true });
+    expect(cov.gaps.find((g) => g.startsWith("M2"))).toMatch(/needs dynamic/);
   });
 
-  it("models the LaunchMVP source-only run: incomplete until the M2/M6/M7 skips are recorded", () => {
-    // What actually ran this session: security + M3/M4/M5/M8/M9 over source.
+  it("models a source-only run: M7's code layer runs, its DB-advisor layer is a disclosed partial (#170)", () => {
+    // Security + M3/M4/M5/M8/M9 over source; M7's code-level detectors also run on source.
     const rec: Record<string, ModuleRecord> = {
       M1: { status: "ran" }, M3: { status: "ran" }, M4: { status: "ran" },
       M5: { status: "ran" }, M8: { status: "ran" }, M9: { status: "ran" },
@@ -48,9 +48,13 @@ describe("assessModuleCoverage", () => {
     expect(assessModuleCoverage(rec, env).complete).toBe(false); // M2, M6, M7 unaccounted
 
     rec.M2 = { status: "na", note: "no running app / self-hosted clone in scope" };
-    rec.M7 = { status: "na", note: "no live database in scope (connected tier)" };
+    rec.M7 = { status: "partial", note: "code-level detectors ran; DB performance advisor n/a — no live database in scope" };
     rec.M6 = { status: "na", note: "simplification LLM pass not purchased this round" };
-    expect(assessModuleCoverage(rec, env).complete).toBe(true);
+    const cov = assessModuleCoverage(rec, env);
+    expect(cov.gaps).toEqual([]); // everything is accounted for…
+    expect(cov.complete).toBe(false); // …but the report cannot claim full coverage while M7 is partial
+    expect(cov.partial).toContainEqual({ id: "M7", note: expect.stringContaining("no live database") });
+    expect(() => assertModuleCoverage(rec, env)).not.toThrow();
   });
 });
 

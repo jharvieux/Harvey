@@ -1,0 +1,15 @@
+import { supabase } from "./db";
+
+export async function listMessages(conversationId: string, page: number) {
+  const { data } = await supabase
+    .from("messages")
+    .select("id, body, created_at")
+    .eq("conversation_id", conversationId)
+    .range(page * 50, page * 50 + 49);
+  return data ?? [];
+}
+
+export async function getConversation(id: string) {
+  const { data } = await supabase.from("conversations").select("*").eq("id", id).single();
+  return data;
+}

@@ -1,0 +1,6 @@
+import { supabase } from "./db";
+
+export async function listMessages(conversationId: string) {
+  const { data } = await supabase.from("messages").select("*").eq("conversation_id", conversationId);
+  return data ?? [];
+}
