@@ -1,0 +1,7 @@
+/**
+ * @param userId Auth user id (NOT the tenant row id) — RLS keys on this.
+ * @param name Trimmed display name; empty string clears it.
+ */
+export function setName(userId: string, name: string): void {
+  save(userId, name.trim());
+}

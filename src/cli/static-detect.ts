@@ -24,6 +24,7 @@ import { scanAssetWeight } from "../detectors/asset-weight.js";
 import { parseBundleAnalyzerStats, parseBundleStats } from "../detectors/bundle-stats.js";
 import { detectHookDepFindings } from "../detectors/hook-deps.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
+import { detectSlopFindings } from "../detectors/slop.js";
 import type { SourceInput } from "../detectors/common.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
 
@@ -94,6 +95,7 @@ try {
     ...detectAppRouterFindings(sources),
     ...detectPerfCodeFindings(sources),
     ...detectHookDepFindings(sources),
+    ...detectSlopFindings(sources),
     ...scanAssetWeight(scanDir), // scoped copy = committed files only
     ...buildDirs.flatMap((b) => parseBundleStats(b)),
     ...statsPaths.flatMap((p) => parseBundleAnalyzerStats(p)),

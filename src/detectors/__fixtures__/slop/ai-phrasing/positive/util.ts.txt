@@ -1,0 +1,4 @@
+// This function is responsible for formatting the user's display name.
+export function formatName(first: string, last: string): string {
+  return `${first} ${last}`;
+}

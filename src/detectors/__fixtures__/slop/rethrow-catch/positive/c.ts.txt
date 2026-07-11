@@ -1,0 +1,7 @@
+export async function save(): Promise<void> {
+  try {
+    await write();
+  } catch (err) {
+    throw err;
+  }
+}

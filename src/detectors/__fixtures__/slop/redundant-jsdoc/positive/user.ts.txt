@@ -1,0 +1,7 @@
+/**
+ * @param userId The user id
+ * @param name The name
+ */
+export function setName(userId: string, name: string): void {
+  save(userId, name);
+}

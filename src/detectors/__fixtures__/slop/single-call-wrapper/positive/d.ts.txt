@@ -1,0 +1,4 @@
+import { fetchUser } from "./db";
+export function getUser(id: string) {
+  return fetchUser(id);
+}

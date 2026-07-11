@@ -1,0 +1,15 @@
+export function classify(n: number): string {
+  if (n < 0) {
+    return "negative";
+  }
+  return "non-negative";
+}
+export function pick(flag: boolean): string {
+  let out;
+  if (flag) {
+    out = "a";
+  } else {
+    out = "b";
+  }
+  return out;
+}

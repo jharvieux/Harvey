@@ -1,0 +1,6 @@
+export function isActive(user: { active: boolean }): boolean {
+  return user.active;
+}
+export function label(v: boolean): string {
+  return v ? "on" : "off";
+}

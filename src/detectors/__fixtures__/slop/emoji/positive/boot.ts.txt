@@ -1,0 +1,4 @@
+export function boot(): void {
+  // 🚀 Kick off the server
+  console.log("Server started successfully ✅");
+}

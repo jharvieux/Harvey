@@ -11,7 +11,7 @@
 | Module | Tool | Automated by | Manual step |
 |---|---|---|---|
 | M4 Duplication | jscpd | `src/cli/quality-scan.ts` (`pnpm quality-scan`) | Pick consolidation approach per cluster |
-| M5 Slop / dead code | knip + `quality-extras.txt` checklist | `src/cli/quality-scan.ts` for dead exports/files; the rest (narrating comments, single-use helpers, stub-shaped code) is a manual read against `quality-extras.txt` | Manual read for the anti-pattern classes knip can't see |
+| M5 Slop / dead code | knip + `src/detectors/slop.ts` + `quality-extras.txt` checklist | `src/cli/quality-scan.ts` for dead exports/files; **`detectSlopFindings` (`src/detectors/slop.ts`, ids `SLOP-*`, run via `pnpm detect-static`)** now mechanizes 11 AI-slop classes — see §5; the residue (judgment-heavy simplification) stays a manual read against `quality-extras.txt` | Manual read for the classes neither knip nor the slop detector can see |
 | M6 Simplification / reuse | `/simplify` + `quality-extras.txt` | Not mechanically detectable — `/simplify` review | Fully manual, brief-driven |
 
 ## 1. Running the scan (M4 + M5)
@@ -112,3 +112,29 @@ before it can run at all).
 Verified against fixture repos with real jscpd/knip output during development (see the wiring
 code's tests), but not yet run end-to-end against a full third-party sample repo to produce a real
 §3b section — that dry run is a manual follow-up, out of scope for this automated pass.
+
+## 5. Mechanical AI-slop detectors — `src/detectors/slop.ts`
+
+`detectSlopFindings(files)` runs 11 AI-slop classes over TS/TSX source (taxonomy `M5 — …`,
+ids `SLOP-*`, category Maintainability), run via `pnpm detect-static`. Each class is gated by a
+positive+negative fixture pair (`src/detectors/__fixtures__/slop/`, `slop.test.ts`) — the #61
+discipline. Two provenance groups:
+
+**Ported from ATC's `scripts/slop-check.ts`** (which only runs on ATC's own diffs; these now run
+on any target's whole source): Orphan TODO (marker with no owner/issue ref), Narrating comment
+(verb-first comment restating the next line), Rethrow catch (`catch (e) { throw e }`), Single-call
+wrapper (an exported function whose body is `return freeFn(sameParams)` — bare-identifier callee
+only, so meaningful `.has()`/`.includes()` predicates aren't flagged).
+
+**Additional researched classes:** Placeholder stub (`throw new Error("not implemented")`,
+`// TODO: implement`), Elision placeholder (`// ... existing code ...` — ellipsis-adjacent or a
+short standalone marker, never a phrase embedded in prose), AI comment phrasing (tutorial voice:
+"this function is responsible for", "as you can see"), Redundant boolean (`cond ? true : false`
+only — the `=== true` comparison form is type-dependent and deliberately not flagged), Else after
+return, Decorative emoji (colourful pictographs + ✅❌❗ in comments/logs; excludes functional
+`⚠`/`↗`/`✓`), Redundant JSDoc (`@param userId The user id`).
+
+**FP calibration (dogfood 2026-07-11):** tuned against Harvey's own source (→ 2 findings) and ATC's
+1,127 files (→ 12, all defensible). Confidence tiers: high-signal structural classes are `Likely`;
+the comment-style classes (narrating, AI phrasing, emoji, JSDoc, wrapper) are `Review`. Findings
+map into §3b Slop / dead code (M5) alongside the knip `M5-*` output.
