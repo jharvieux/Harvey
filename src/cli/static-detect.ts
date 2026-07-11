@@ -3,17 +3,21 @@
 // the merged Finding[]. This is the engagement entry point for both detector sets (they
 // take in-memory sources, so tests never needed a CLI; audits do).
 //
-//   pnpm detect-static <target-dir> [--out findings.static.json]
+//   pnpm detect-static <target-dir> [--out findings.static.json] [--build <path-to-.next>]...
+//
+// `--build` points at a `next build` artifact for the [B] bundle tier (repeatable for
+// monorepos); with no flag, <target>/.next and <target>/apps/*/.next are auto-detected.
 //
 // Thin untested I/O wrapper per the repo convention — the detectors themselves are the
 // tested pure transforms. Test/story/fixture files are excluded: perf and boundary findings
 // in test code aren't audit findings.
 
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import type { Finding } from "../findings.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { scanAssetWeight } from "../detectors/asset-weight.js";
+import { parseBundleStats } from "../detectors/bundle-stats.js";
 import { detectHookDepFindings } from "../detectors/hook-deps.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import type { SourceInput } from "../detectors/common.js";
@@ -59,12 +63,32 @@ try {
   const sources = loadSources(scanDir);
   console.log(`loaded ${sources.length} source files from ${targetDir}`);
 
+  // Bundle tier: explicit --build flags, or auto-detected .next dirs (root + apps/*).
+  // Build artifacts live in the REAL target dir — they're gitignored, so the scoped copy
+  // never contains them.
+  const buildDirs = args.flatMap((a, i) => {
+    const next = args[i + 1];
+    return a === "--build" && next ? [resolve(next)] : [];
+  });
+  if (buildDirs.length === 0) {
+    const candidates = [join(targetDir, ".next")];
+    const appsDir = join(targetDir, "apps");
+    if (existsSync(appsDir)) {
+      for (const app of readdirSync(appsDir)) candidates.push(join(appsDir, app, ".next"));
+    }
+    buildDirs.push(...candidates.filter((c) => existsSync(join(c, "build-manifest.json"))));
+  }
+
   const findings: Finding[] = [
     ...detectAppRouterFindings(sources),
     ...detectPerfCodeFindings(sources),
     ...detectHookDepFindings(sources),
     ...scanAssetWeight(scanDir), // scoped copy = committed files only
+    ...buildDirs.flatMap((b) => parseBundleStats(b)),
   ];
+  if (buildDirs.length === 0) {
+    console.log("bundle tier: no next build artifact found (pass --build <path-to-.next>) — [B] findings skipped");
+  }
 
   const byTaxonomy = new Map<string, number>();
   for (const f of findings) byTaxonomy.set(f.taxonomy, (byTaxonomy.get(f.taxonomy) ?? 0) + 1);
