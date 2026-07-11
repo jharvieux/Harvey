@@ -2,17 +2,23 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-11 (slop detector + hardened tests PRs #188/#189; M9 doc #186 via PR #190; #162 live-run finding recorded below)_
+_Last updated: 2026-07-11 (slop detector + hardened tests PRs #188/#189; M9 doc #186 via PR #190; #162 CLOSED — validated live against ATC RAG + main)_
 
-## #162 checkExposedSchemas — connected-tier wiring requirement (live-run 2026-07-11)
+## #162 checkExposedSchemas — validated live, CLOSED (2026-07-11)
 
-Ran the check against ATC RAG (live). Key finding for whoever wires the connected tier: the
-exposed-PostgREST-schema list is **platform config, not DB-readable**. `pgrst.db_schemas` GUC is
-null outside a request context; the `authenticator` role config doesn't carry it; and the anon-key
-REST OpenAPI root (`GET /rest/v1/`) is **service_role-gated** on ATC (good hardening — anon can't
-introspect). So the runner must read `db_schema` from the **Management API** (`/config/postgrest`)
-with a project access token, or use the service_role key. MCP/SQL/anon is insufficient. #162 left
-open pending that token (operator/access step). Full detail in the issue comment.
+Ran the connected-tier check against both ATC live projects. **Enumeration method that works:** a
+PostgREST request with a bogus `Accept-Profile` returns `PGRST106` whose hint lists the exact
+exposed schemas — do it with the **service_role** key against `GET /rest/v1/` (the anon key is
+correctly gated off that root; good hardening). So the runner can use service_role OR the Management
+API — no special token wiring needed after all.
+
+Results: **RAG** exposes `public, graphql_public` (default) and `pg_graphql` isn't installed →
+both `checkExposedSchemas` and `checkGraphqlIntrospection` clean. **main (prod)** exposes the same
+defaults (checkExposedSchemas clean) BUT `pg_graphql` is serving (`/graphql/v1` → 200) with
+`graphql_public` exposed → `checkGraphqlIntrospection` fires `SB-GRAPHQL-INTROSPECTION` (Medium) —
+default Supabase posture, RLS-gated, low priority. Both detectors validated live. Full detail in the
+#162 issue comments. Open ATC follow-up option: lock down main's public GraphQL introspection (their
+call, not filed).
 
 
 
