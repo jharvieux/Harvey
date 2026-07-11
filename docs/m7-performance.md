@@ -12,7 +12,7 @@
 |---|---|---|---|
 | **DB** | Unindexed FKs, unused/duplicate indexes, `auth_rls_initplan`, redundant permissive policies | `src/cli/perf-scan.ts` (`pnpm perf-scan`) — pulls the Supabase performance advisor and shapes it into `Finding[]` | Verify each fix against a test DB before recommending (index migrations, RLS rewrites) |
 | **API/data** | N+1 await-in-loop, unbounded `select("*")` (no `.range()`/`.limit()`), data-fetching waterfalls, accidental dynamic rendering, missing caching | **Wired (#170):** await-in-loop and unbounded-select are `src/detectors/perf-code.ts` (§2a). Waterfalls / cache-config / dynamic rendering stay with **M9** (`src/detectors/app-router.ts`) — M7's job is to pull M9's performance-tagged findings into the §3b rows, not re-implement them | Confirm unbounded-select candidates against table size (a 3-row config table is benign) |
-| **Client render/bundle** | React render waste (context value churn, inline literal props, index keys, raw `<img>`, sort-in-render, state sprawl), whole-library imports, heavy libs in client chunks, manual font links | **Wired (#170):** `src/detectors/perf-code.ts` (§2a), including the React Compiler downgrade gate | Bundle ground truth (shipped KB per route, duplicate chunks) still needs the `next build`/bundle-analyzer input — the [B] tier of #170, not yet wired. Core Web Vitals (`lighthouse`) remain documented-plan-only (§3) |
+| **Client render/bundle** | React render waste (context value churn, inline literal props, index keys, raw `<img>`, sort-in-render, state sprawl), whole-library imports, heavy libs in client chunks, manual font links; **measured first-load JS per route / shared baseline** from a `next build` artifact | **Wired (#170):** `src/detectors/perf-code.ts` (§2a) incl. the React Compiler downgrade gate; bundle ground truth via `src/detectors/bundle-stats.ts` (§2b, ids `M7B-*`) | Turbopack builds (Next 16 default) carry no per-route manifest — the shared baseline is still measured and the attribution gap is emitted as an Info finding; per-route numbers need a bundle-analyzer re-build. Core Web Vitals (`lighthouse`) remain documented-plan-only (§3) |
 | **Code hot-path** | Blocking sync I/O in request handlers, fetch-in-middleware, JSON deep-clones | **Wired (#170):** `src/detectors/perf-code.ts` (§2a) | Deeper algorithmic judgment (O(n²) over app-sized collections, "is this computation expensive") stays an [L] review-tier read during the M6 pass; flag under M7 when the concern is *speed* at scale rather than *maintainability* |
 
 ## 1. Running the DB advisor scan
@@ -122,11 +122,30 @@ the manual-memo classes (context value, inline literal props) are auto-memoized 
 they're downgraded to `Info` (visible, not counted as work) instead of crying wolf on a
 compiled codebase.
 
-**Not in this module (deliberate):** the [B] bundle-stats classes (shipped KB per route,
-duplicate chunks, server-only deps in client bundles — need a `next build`/bundle-analyzer
-JSON input) and the [L] review-tier judgment calls (virtualization, lazy-load selection,
-`'use client'` placed too high, Suspense boundaries) — see #170 for the full catalog and
-sequencing.
+**Not in this module (deliberate):** the [B] bundle-stats classes live in §2b's separate
+build-input module, and the [L] review-tier judgment calls (virtualization, lazy-load
+selection, `'use client'` placed too high, Suspense boundaries) are the §6 review-pass
+checklist — see #170 for the catalog history.
+
+## 2b. Bundle ground truth — `src/detectors/bundle-stats.ts` (#170, [B] tier)
+
+`parseBundleStats(buildDir)` consumes a real `next build` artifact (the `.next` directory —
+the client runs the build, or grants repo access and we run it; same trust class as the
+connected DB advisor). Metric: **gzipped first-load JS**, the same number `next build`
+prints. `pnpm detect-static` picks the artifact up automatically (`<target>/.next`,
+`<target>/apps/*/.next`) or via `--build <path>`, repeatable for monorepos.
+
+- **Webpack builds** (Next ≤ 15 default): full per-route measurement from
+  `app-build-manifest.json`/`build-manifest.json`. Findings: `M7B-01` routes over the
+  250 KB first-load budget (worst-first, `Confirmed` — measured, not inferred) and `M7B-02`
+  shared baseline over 150 KB (the floor every route pays).
+- **Turbopack builds** (Next 16 default; verified against a fresh ATC build 2026-07-10):
+  no per-route manifest exists. The shared baseline is still measured (`M7B-02`), and the
+  per-route gap is **disclosed** as an Info finding (`M7B-03`) instead of silently skipped —
+  the fix is a bundle-analyzer re-build.
+- **Still deferred on #170:** duplicate-modules-across-chunks and which-dependency-ships-
+  where — those need webpack stats (`@next/bundle-analyzer`), an artifact the intake can
+  request but the manifest parse can't derive.
 
 ## 3. Client: bundle weight & Core Web Vitals (documented plan — deferred)
 
@@ -182,15 +201,40 @@ single additive covering-index migration (BFTB 80 — cheap, safe, high value); 
   `pnpm perf-scan` in `package.json`. Not unit tested (network I/O), matching the existing split
   in this codebase between tested pure transforms and untested thin I/O wrappers.
 
+## 6. Review-pass perf checklist ([L] tier, #170)
+
+The judgment calls no mechanical detector can decide — worked during the paid LLM/review
+pass (the same pass as M6/quality-extras), findings filed under M7 in §3b. For each item the
+mechanical output is the *starting map*: the M7C/M7B findings say where the cost is, the
+review pass says what the right structure would be.
+
+- **Virtualization:** a list rendering app-scale collections (hundreds+ rows, no
+  windowing) — is it user-visible jank, and is `react-window`-style virtualization or
+  pagination the right fix here?
+- **Lazy-load selection:** of the heavy-client-import candidates (M7C) and the heaviest
+  routes (M7B), *which* components should actually move behind `next/dynamic` — is the
+  feature behind a click, a tab, a modal? (Never lazy-load the LCP element.)
+- **`'use client'` altitude:** could this client boundary sit lower in the tree (or the
+  page stay a Server Component with a client leaf)? Look for layouts/pages marked
+  `'use client'` whose interactivity is one widget deep.
+- **Suspense/streaming boundaries:** slow data fetches with no `loading.tsx`/`<Suspense>`
+  above them — should the shell stream while this blocks, or is the fetch fast enough not
+  to matter?
+- **Expensive compute in render:** the "is this computation actually expensive" judgment on
+  render-body work the AST can't price (per-row derivations, large reduce chains) — check
+  input sizes before recommending memoization.
+- **Unbounded in-memory caches:** module-scope `Map`/object caches with no eviction on the
+  server — real leak or bounded-by-domain?
+- **PPR / Cache Components adoption (Next 15/16):** would partial prerendering meaningfully
+  change the dynamic routes' profile, or is the app too session-bound for it to matter?
+
 ---
 
 ### Deferred / scoped-out follow-ups
 
-- **Bundle-stats input ([B] tier of #170):** shipped bundle size per route, duplicate modules
-  across chunks, server-only deps in client bundles — needs a `next build`/`@next/bundle-analyzer`
-  JSON artifact as an optional connected-ish input. Tracked on #170.
-- **[L] review-tier perf classes (#170):** virtualization, which components to lazy-load,
-  `'use client'` placed too high, missing Suspense/streaming boundaries — paid review pass only.
+- **Bundle-analyzer depth ([B] tier remainder, #170):** duplicate modules across chunks,
+  server-only deps in client bundles, and per-route numbers on Turbopack builds — need an
+  `@next/bundle-analyzer` stats artifact on top of §2b's manifest parse. Tracked on #170.
 - **Web Vitals (§3):** no `lighthouse` integration — needs a real client repo and a decision on
   where it runs (staging vs. local) before it's worth the new dependency.
 - **`/advisors/performance` endpoint path:** inferred by analogy, not exercised live — verify on
