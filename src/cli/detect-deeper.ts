@@ -1,9 +1,13 @@
 // Live-query wrapper for the M1 DETECT DEEPER classifiers (definer-classifier.ts,
-// grant-classifier.ts). Read-only against a CLIENT's database — never Harvey's own
+// grant-classifier.ts) and the connected-tier review passes (definer-review.ts,
+// rls-policy-review.ts). Read-only against a CLIENT's database — never Harvey's own
 // Supabase project. The classification logic itself is pure and unit-tested
 // without a DB connection; this file only gathers the structured input.
 //
-//   SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json]
+//   SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json] [--tenant-key <column>]
+//
+// --tenant-key names the column that scopes a row to its tenant (the declared tenancy model);
+// with it, the live pg_policies bodies are semantically reviewed against that key (#199).
 //
 // --queried-tables points at a JSON array of "schema.table" strings — a static
 // grep of the client's own code for tables it queries directly (not via
@@ -26,6 +30,8 @@ import {
   type NoPolicyTable,
   type TableVerdict,
 } from "../grant-classifier.js";
+import { definerReviewFindings } from "../definer-review.js";
+import { policyReviewFindings, type LivePolicy, type TenancyModel } from "../rls-policy-review.js";
 
 const DEFINER_FUNCTIONS_QUERY = `
   select
@@ -59,6 +65,12 @@ const GRANTS_QUERY = `
   from information_schema.role_table_grants
   where table_schema = $1 and table_name = $2
     and grantee in ('anon', 'authenticated', 'service_role')
+`;
+
+const POLICIES_QUERY = `
+  select schemaname as schema, tablename as table, policyname as name, cmd, qual, with_check
+  from pg_policies
+  where schemaname not in ('pg_catalog', 'information_schema')
 `;
 
 // pg_get_functiondef returns the full CREATE statement; the classifier only
@@ -105,21 +117,37 @@ async function fetchNoPolicyTables(sql: Sql, queriedTables: Set<string>): Promis
   return result;
 }
 
+async function fetchPolicies(sql: Sql): Promise<LivePolicy[]> {
+  const rows = await sql.unsafe<{
+    schema: string;
+    table: string;
+    name: string;
+    cmd: string;
+    qual: string | null;
+    with_check: string | null;
+  }>(POLICIES_QUERY);
+  return rows.map((r) => ({ schema: r.schema, table: r.table, name: r.name, cmd: r.cmd, qual: r.qual, withCheck: r.with_check }));
+}
+
 export async function runDetectDeeper(
   sql: Sql,
   queriedTables: Set<string> = new Set(),
+  tenancyModel?: TenancyModel,
 ): Promise<{ definer: DefinerVerdict[]; grants: TableVerdict[]; findings: Finding[] }> {
   const [functions, tables] = await Promise.all([fetchDefinerFunctions(sql), fetchNoPolicyTables(sql, queriedTables)]);
   const definer = classifyDefinerFunctions(functions);
   const grants = classifyNoPolicyTables(tables);
-  const findings = [...definerFindings(definer), ...grantFindings(grants)];
+  // Route the non-ok definer verdicts (flag/ambiguous) through the caller-authorization body-read.
+  const reviewable = functions.filter((_, i) => definer[i]!.verdict !== "ok");
+  const findings = [...definerFindings(definer), ...grantFindings(grants), ...definerReviewFindings(reviewable)];
+  if (tenancyModel) findings.push(...policyReviewFindings(await fetchPolicies(sql), tenancyModel));
   return { definer, grants, findings };
 }
 
 async function main() {
   const dbUrl = process.env.SUPABASE_DB_URL;
   if (!dbUrl) {
-    console.error("usage: SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json]");
+    console.error("usage: SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json] [--tenant-key <column>]");
     process.exit(2);
   }
 
@@ -128,10 +156,12 @@ async function main() {
   const queriedTables = new Set<string>(
     queriedTablesIdx >= 0 ? (JSON.parse(readFileSync(args[queriedTablesIdx + 1]!, "utf8")) as string[]) : [],
   );
+  const tenantKeyIdx = args.indexOf("--tenant-key");
+  const tenancyModel = tenantKeyIdx >= 0 ? { tenantKey: args[tenantKeyIdx + 1]! } : undefined;
 
   const sql = postgres(dbUrl, { max: 1, idle_timeout: 5 }) as unknown as Sql;
   try {
-    const { definer, grants, findings } = await runDetectDeeper(sql, queriedTables);
+    const { definer, grants, findings } = await runDetectDeeper(sql, queriedTables, tenancyModel);
 
     const okCount = definer.filter((v) => v.verdict === "ok").length + grants.filter((v) => v.verdict === "ok").length;
     const ambiguousCount =
