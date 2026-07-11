@@ -1,0 +1,15 @@
+import { cookies } from "next/headers";
+import { supabase } from "../../lib/db";
+
+export default async function DashboardPage() {
+  const session = cookies().get("session");
+  const { data: teams } = await supabase.from("teams").select("id, name").eq("owner_id", session?.value);
+
+  return (
+    <ul>
+      {teams?.map((team) => (
+        <li key={team.id}>{team.name}</li>
+      ))}
+    </ul>
+  );
+}

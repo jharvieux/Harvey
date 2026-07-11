@@ -120,6 +120,13 @@ describe("unsafe/missing cache config (MED, best-effort)", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("cache-config/negative"));
     expect(taxonomies(findings)).not.toContain("M9 — Unsafe/missing cache config");
   });
+
+  it("does not flag a page that reads cookies() and queries the DB — dynamic by construction, no cache config expected", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("cache-config/negative-dynamic-route"));
+    expect(taxonomies(findings)).not.toContain("M9 — Unsafe/missing cache config");
+    // still correctly flagged as dynamic rendering — that's the real signal here
+    expect(taxonomies(findings)).toContain("M9 — Accidental dynamic rendering");
+  });
 });
 
 describe("data-fetching waterfalls (MED, best-effort)", () => {
