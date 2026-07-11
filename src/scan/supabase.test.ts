@@ -14,6 +14,11 @@ vi.mock("postgres", () => ({
       if (query.includes("pg_extension")) return [{ name: "pg_net", schema: "extensions", installed_version: "0.20.3" }];
       if (query.includes("storage.buckets")) return [{ id: "b1", name: "avatars", public: true }];
       if (query.includes("pg_policies")) return [];
+      if (query.includes("pg_default_acl")) return [];
+      if (query.includes("pg_attribute")) return [];
+      if (query.includes("nspname = 'cron'")) return [{ exists: false }];
+      if (query.includes("cron.job")) return [];
+      if (query.includes("prosecdef")) return [];
       return [];
     }),
     end: vi.fn(async () => {}),
@@ -29,6 +34,11 @@ function mockFetch(responses: {
   policies: unknown;
   realtime?: unknown;
   postgrest?: unknown;
+  defaultAcl?: unknown;
+  columnGrants?: unknown;
+  cronSchemaExists?: boolean;
+  cronJobs?: unknown;
+  definerFunctions?: unknown;
 }): typeof fetch {
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const u = url.toString();
@@ -42,6 +52,11 @@ function mockFetch(responses: {
       if (body.query.includes("pg_extension")) return new Response(JSON.stringify(responses.extensions));
       if (body.query.includes("storage.buckets")) return new Response(JSON.stringify(responses.buckets));
       if (body.query.includes("pg_policies")) return new Response(JSON.stringify(responses.policies));
+      if (body.query.includes("pg_default_acl")) return new Response(JSON.stringify(responses.defaultAcl ?? []));
+      if (body.query.includes("pg_attribute")) return new Response(JSON.stringify(responses.columnGrants ?? []));
+      if (body.query.includes("nspname = 'cron'")) return new Response(JSON.stringify([{ exists: responses.cronSchemaExists ?? false }]));
+      if (body.query.includes("cron.job")) return new Response(JSON.stringify(responses.cronJobs ?? []));
+      if (body.query.includes("prosecdef")) return new Response(JSON.stringify(responses.definerFunctions ?? []));
     }
     return new Response("not found", { status: 404 });
   }) as unknown as typeof fetch;
@@ -115,6 +130,37 @@ describe("runSupabaseScan", () => {
   it("propagates a Management API error instead of swallowing it", async () => {
     const fetchImpl = vi.fn(async () => new Response("forbidden", { status: 403 })) as unknown as typeof fetch;
     await expect(runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl })).rejects.toThrow(/403/);
+  });
+
+  describe("pg_cron wiring", () => {
+    it("does not query cron.job and reports no pg_cron findings when the cron schema is absent (N/A)", async () => {
+      const fetchImpl = mockFetch({
+        advisors: { lints: [] },
+        authConfig: {},
+        tables: [],
+        extensions: [],
+        buckets: [],
+        policies: [],
+        cronSchemaExists: false,
+      });
+      const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl });
+      expect(findings.some((f) => f.taxonomy.startsWith("pg_cron"))).toBe(false);
+    });
+
+    it("flags a superuser-run cron job when the cron schema is present", async () => {
+      const fetchImpl = mockFetch({
+        advisors: { lints: [] },
+        authConfig: {},
+        tables: [],
+        extensions: [],
+        buckets: [],
+        policies: [],
+        cronSchemaExists: true,
+        cronJobs: [{ jobid: 1, schedule: "* * * * *", command: "select 1;", nodename: "localhost", database: "postgres", username: "postgres", active: true, isSuperuser: true }],
+      });
+      const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl });
+      expect(findings.map((f) => f.taxonomy)).toContain("pg_cron job runs as a superuser role");
+    });
   });
 
   describe("functionsDir", () => {
