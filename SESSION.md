@@ -2,7 +2,19 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-11 (issue-sweep: 6 issues closed via PRs #182–#185; scanner FP precision + M9 cache-config tightening + bundle-analyzer depth + pentest client-surface)_
+_Last updated: 2026-07-11 (slop detector + hardened tests PRs #188/#189; M9 doc #186 via PR #190; #162 live-run finding recorded below)_
+
+## #162 checkExposedSchemas — connected-tier wiring requirement (live-run 2026-07-11)
+
+Ran the check against ATC RAG (live). Key finding for whoever wires the connected tier: the
+exposed-PostgREST-schema list is **platform config, not DB-readable**. `pgrst.db_schemas` GUC is
+null outside a request context; the `authenticator` role config doesn't carry it; and the anon-key
+REST OpenAPI root (`GET /rest/v1/`) is **service_role-gated** on ATC (good hardening — anon can't
+introspect). So the runner must read `db_schema` from the **Management API** (`/config/postgrest`)
+with a project access token, or use the service_role key. MCP/SQL/anon is insufficient. #162 left
+open pending that token (operator/access step). Full detail in the issue comment.
+
+
 
 ## Issue sweep 2026-07-11 — 4 batches merged, 6 issues closed
 
