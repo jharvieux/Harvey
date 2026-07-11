@@ -164,6 +164,23 @@ describe("heavy import in client bundle", () => {
   });
 });
 
+describe("unoptimized barrel import (Next < 13.5)", () => {
+  const TAX = "M7 — Unoptimized barrel import";
+  it("flags named barrel imports when the lowest Next version in the tree predates auto-optimization", () => {
+    const hits = byTaxonomy("unopt-barrel/positive", TAX);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("lucide-react");
+    expect(hits[0]?.title).toContain("date-fns");
+    expect(hits[0]?.title).toContain("13.4");
+  });
+  it("does not flag on Next ≥ 13.5 (auto-optimized)", () => {
+    expect(byTaxonomy("unopt-barrel/negative", TAX)).toHaveLength(0);
+  });
+  it("does not flag when next.config lists the packages in optimizePackageImports", () => {
+    expect(byTaxonomy("unopt-barrel/negative-config", TAX)).toHaveLength(0);
+  });
+});
+
 describe("manual font stylesheet", () => {
   const TAX = "M7 — Manual font stylesheet";
   it("flags a Google Fonts <link rel=stylesheet>", () => {

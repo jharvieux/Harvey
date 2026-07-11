@@ -1,0 +1,12 @@
+import { Camera, Mail } from "lucide-react";
+import { format } from "date-fns";
+
+export function Toolbar({ ts }: { ts: string }) {
+  return (
+    <div>
+      <Camera />
+      <Mail />
+      <span>{format(new Date(ts), "PP")}</span>
+    </div>
+  );
+}

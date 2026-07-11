@@ -13,6 +13,7 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import type { Finding } from "../findings.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
+import { scanAssetWeight } from "../detectors/asset-weight.js";
 import { detectHookDepFindings } from "../detectors/hook-deps.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import type { SourceInput } from "../detectors/common.js";
@@ -29,7 +30,7 @@ if (!targetArg) {
 }
 
 const SOURCE_FILE = /\.(ts|tsx|jsx|mjs)$/;
-const CONFIG_FILE = /^(next\.config\.(js|mjs|cjs|ts)|\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs))$/;
+const CONFIG_FILE = /^(next\.config\.(js|mjs|cjs|ts)|\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs)|package\.json)$/;
 const EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out)$/;
 const NON_PRODUCT = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)(__tests__|__mocks__|__fixtures__|__snapshots__)\/|\.stories\./;
 
@@ -62,6 +63,7 @@ try {
     ...detectAppRouterFindings(sources),
     ...detectPerfCodeFindings(sources),
     ...detectHookDepFindings(sources),
+    ...scanAssetWeight(scanDir), // scoped copy = committed files only
   ];
 
   const byTaxonomy = new Map<string, number>();

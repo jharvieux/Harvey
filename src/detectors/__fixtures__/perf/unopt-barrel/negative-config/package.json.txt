@@ -1,0 +1,8 @@
+{
+  "name": "configured-app",
+  "dependencies": {
+    "next": "^13.4.0",
+    "lucide-react": "^0.300.0",
+    "date-fns": "^3.0.0"
+  }
+}

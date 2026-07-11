@@ -114,6 +114,8 @@ Classes (severity / confidence — see the detector for per-check evidence and l
 | Blocking sync I/O in request handler | `*Sync` fs/crypto/zlib/child_process calls inside a route-handler function (module-scope run-once reads exempt) | Perf / Likely |
 | JSON deep-clone | `JSON.parse(JSON.stringify(x))` | Low / Likely |
 | Missing hook dependencies | `react-hooks/exhaustive-deps` run programmatically (`src/detectors/hook-deps.ts`, ids `M7H-*` — the upstream rule's analysis, adapted to `Finding[]`, rolled up per file) | Low / Likely |
+| Unoptimized barrel import | named imports from known-heavy barrels (`lucide-react`, `@mui/material`, …) on Next < 13.5 with no `optimizePackageImports` — version-gated so modern Next (auto-optimized) is never flagged | Perf / Likely |
+| Oversized committed images / media | filesystem walk (`src/detectors/asset-weight.ts`, ids `M7A-*`): images > 500 KB, media > 5 MB, grouped worst-first into one finding per class | Perf / Review |
 
 **React Compiler gate:** when the target's `next.config`/babel config enables React Compiler,
 the manual-memo classes (context value, inline literal props) are auto-memoized at build time —
