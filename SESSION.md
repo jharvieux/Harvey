@@ -2,7 +2,39 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-10 (…then #170 fully delivered — M7 code/build/review layers, PRs #173/#175/#176/#177/#178, issue CLOSED; bundle-analyzer depth → #179)_
+_Last updated: 2026-07-11 (issue-sweep: 6 issues closed via PRs #182–#185; scanner FP precision + M9 cache-config tightening + bundle-analyzer depth + pentest client-surface)_
+
+## Issue sweep 2026-07-11 — 4 batches merged, 6 issues closed
+
+All source-level/repo-local. Detail:
+- **#163/#164/#171** (PR #184) — scanner false-positive precision: `harvey-edgefn-secret-fallback`
+  now requires a secret-shaped fallback literal (URLs/env clear); `harvey-auth-admin-in-client`
+  requires an admin/service-role-shaped client id (anon clears); `harvey-route-noauth` guard
+  regex gained the `with*Audit` + `constantTimeEqual`/`timingSafeEqual` buckets. Calibration
+  gate PASS.
+- **#181** (PR #185) — M9 cache-config check tightened: suppress when the file reads a dynamic
+  API (`cookies`/`headers`/`noStore`/`searchParams`), scope to page/layout only (drop `route.ts`).
+  **ATC: 230 → 3 for that taxonomy, 450 → 223 total** via `pnpm detect-static`. Left
+  `docs/m9-app-router.md` stale (supervised) → tracked in **#186**.
+- **#179** (PR #182) — `parseBundleAnalyzerStats(statsPath)` adds M7B-04/05/06 (duplicate
+  modules, dep attribution, Turbopack per-route) via a `--stats` flag; synthetic stats fixture,
+  no `@next/bundle-analyzer` dep installed (package.json supervised). Stats-JSON shape is
+  **unverified against a live analyzer run** — confirm on first real use.
+- **#160** (PR #183) — `src/pentest/client-surface.ts`: `surveyClientSurface(app)` scans a
+  client-only app (browser extension) source for manifest permissions, backend URLs, embedded
+  secrets; `clientSurfaceTestedId` closes the `assertComplete` gap. CLI `--mode=surface`.
+
+**Follow-ups opened this sweep:** #186 (M9 doc refresh, human/docs), #181 was itself opened
+first then swept. Still-open audit backlog below.
+
+### Sweep-excluded (still open — need live env or human)
+- **Live-env:** #162 (checkExposedSchemas vs live project), #161 (seam probes live), #159
+  (NO-RATE-LIMIT vs deployed test app) — all need a running/deployed target.
+- **Human/GTM/business:** #168 (responsible disclosure — outward comms), #10/#11/#12/#13
+  (free audits, LLC, posts, partnerships).
+- **Epic/deferred-design:** #2 (epic tracker), #4 (Tier 2 vuln-pipeline port — deferred until
+  Tier 1 ships).
+- **Docs:** #186 (M9 runbook stale after #181).
 
 ## M7 code-level performance (#170) — DELIVERED, issue closed
 
