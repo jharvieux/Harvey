@@ -20,7 +20,15 @@ const SEV = {
   Watch: { c: "#475569", o: 6 },
 };
 const bftb = (f) => Math.round((f.value * f.ease * f.safety) / 125 * 100);
-const bftbColor = (s) => (s >= 75 ? "#15803d" : s >= 40 ? "#ca8a04" : s >= 20 ? "#b45309" : "#9ca3af");
+// Priority heat: highest bang-for-the-buck = deep red (fix first), sliding continuously through
+// orange to amber as the score drops. Never green — green reads as "all clear", and every BFTB
+// row is something to fix. Continuous hue, not discrete buckets.
+const bftbColor = (s) => {
+  const t = Math.max(0, Math.min(1, s / 100)); // 1 = top priority
+  const hue = Math.round(45 - 45 * t);         // 45 (amber) → 0 (red)
+  const light = Math.round(47 - 7 * t);        // deepen toward red at the top
+  return `hsl(${hue}, 88%, ${light}%)`;
+};
 const CONF = { Confirmed: "#15803d", Likely: "#ca8a04", Review: "#3b7ea1", "N/A": "#94a3b8" };
 const esc = (s) => String(s ?? "").replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[m]);
 
