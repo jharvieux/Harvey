@@ -1,0 +1,17 @@
+const STEPS = ["Verify your email", "Set up your profile", "Invite your team"];
+
+export function WelcomeEmail({ name, logoUrl }: { name: string; logoUrl: string }) {
+  return (
+    <html>
+      <body style={{ fontFamily: "sans-serif" }}>
+        <img src={logoUrl} alt="Logo" width="120" />
+        <p>Welcome, {name}!</p>
+        <ol>
+          {STEPS.map((step, i) => (
+            <li key={i}>{step}</li>
+          ))}
+        </ol>
+      </body>
+    </html>
+  );
+}

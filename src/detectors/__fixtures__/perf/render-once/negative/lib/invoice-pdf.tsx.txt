@@ -1,0 +1,16 @@
+import { Document, Page, Text, View } from "@react-pdf/renderer";
+
+export function InvoicePdf({ lines }: { lines: { label: string; amount: number }[] }) {
+  return (
+    <Document>
+      <Page>
+        {lines.map((line, i) => (
+          <View key={i} style={{ flexDirection: "row" }}>
+            <Text>{line.label}</Text>
+            <Text>{line.amount}</Text>
+          </View>
+        ))}
+      </Page>
+    </Document>
+  );
+}

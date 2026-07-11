@@ -38,6 +38,20 @@ function makeFinding(
   return { id: nextId(), status: "Open", category: "Performance", ...input };
 }
 
+// Render-once contexts — email templates and PDF documents render exactly once per send/
+// export, so the React re-render classes don't apply (and email clients REQUIRE raw <img>).
+// Signals (ATC dogfood, 2026-07-10): an @react-email/@react-pdf import, or an emails/ path
+// segment (plain-JSX templates rendered via renderToStaticMarkup carry no import marker).
+const RENDER_ONCE_IMPORT = /^@react-(email|pdf)(\/|$)/;
+const RENDER_ONCE_PATH = /(^|\/)emails?\//;
+
+function isRenderOnce(path: string, sf: ts.SourceFile): boolean {
+  if (RENDER_ONCE_PATH.test(path)) return true;
+  return sf.statements.some(
+    (s) => ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier) && RENDER_ONCE_IMPORT.test(s.moduleSpecifier.text),
+  );
+}
+
 // A JSX tag that renders a component (not a DOM element): capitalized or member access.
 function isComponentTag(tagText: string): boolean {
   return /^[A-Z]/.test(tagText) || tagText.includes(".");
@@ -83,6 +97,7 @@ const COMPILER_NOTE =
 function detectContextValueLiteral(sources: Map<string, ts.SourceFile>, nextId: NextId, compilerOn: boolean): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
+    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
     forEachJsxElement(sf, (el) => {
       const tagText = el.tagName.getText(sf);
       if (!isContextTag(tagText)) return;
@@ -117,6 +132,7 @@ function detectContextValueLiteral(sources: Map<string, ts.SourceFile>, nextId: 
 function detectInlinePropLiterals(sources: Map<string, ts.SourceFile>, nextId: NextId, compilerOn: boolean): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
+    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
     const hits: { attr: ts.JsxAttribute; tagText: string }[] = [];
     forEachJsxElement(sf, (el) => {
       const tagText = el.tagName.getText(sf);
@@ -156,6 +172,8 @@ function detectInlinePropLiterals(sources: Map<string, ts.SourceFile>, nextId: N
 function detectRawImgElement(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
+    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
+    if (sf.text.includes("@next/next/no-img-element")) continue; // the codebase already adjudicated its <img>s via an explicit eslint-disable
     const hits: (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] = [];
     forEachJsxElement(sf, (el) => {
       if (el.tagName.getText(sf) === "img") hits.push(el);
@@ -186,6 +204,7 @@ function detectRawImgElement(sources: Map<string, ts.SourceFile>, nextId: NextId
 function detectIndexAsKey(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
+    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
     const visit = (node: ts.Node) => {
       if (
         ts.isCallExpression(node) &&
@@ -237,6 +256,7 @@ function detectIndexAsKey(sources: Map<string, ts.SourceFile>, nextId: NextId): 
 function detectSortInJsx(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
+    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
     const visit = (node: ts.Node) => {
       if (ts.isJsxExpression(node) && node.expression) {
         let hit: ts.CallExpression | undefined;
@@ -286,6 +306,7 @@ const STATE_SPRAWL_THRESHOLD = 8;
 function detectStateSprawl(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
+    if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
     const checkComponent = (name: string, fn: ts.Node) => {
       let count = 0;
       const countStates = (n: ts.Node) => {
@@ -392,42 +413,60 @@ function collectAwaits(body: ts.Node): ts.AwaitExpression[] {
   return awaits;
 }
 
+// A chunked-batch loop (`for (let i = 0; …; i += BATCH_SIZE)`) is the FIX for N+1, not the
+// bug — the step deliberately trades round-trips for statement size (ATC dogfood FP shape).
+function isBatchChunkLoop(stmt: ts.ForStatement): boolean {
+  const inc = stmt.incrementor;
+  if (!inc || !ts.isBinaryExpression(inc) || inc.operatorToken.kind !== ts.SyntaxKind.PlusEqualsToken) return false;
+  return !(ts.isNumericLiteral(inc.right) && inc.right.text === "1");
+}
+
+// User-facing request path (routes, pages, actions) vs background/batch (workers, jobs,
+// scripts, lib helpers only jobs call). Both are real costs, but only the former is
+// user-visible latency — the confidence tier and impact wording reflect that.
+const REQUEST_PATH = /(^|\/)(app|pages)\//;
+
 function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
+    const hits: ts.AwaitExpression[] = [];
     const visit = (node: ts.Node) => {
       if (ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isForStatement(node)) {
-        if (ts.isForOfStatement(node) && node.awaitModifier) {
-          // `for await … of` consumes an async stream — sequential by design.
-        } else {
+        const streaming = ts.isForOfStatement(node) && node.awaitModifier; // `for await … of` is sequential by design
+        const chunked = ts.isForStatement(node) && isBatchChunkLoop(node);
+        if (!streaming && !chunked) {
           const loopVars = loopBindingNames(node);
           const assigned = collectAssignedNames(node.statement);
           const awaits = collectAwaits(node.statement);
           // The N+1 signature: a per-item await (references the loop binding) whose input
           // doesn't depend on state carried across iterations.
           const perItem = awaits.find((a) => referencesAny(a.expression, loopVars) && !referencesAny(a.expression, assigned));
-          if (perItem) {
-            findings.push(
-              makeFinding(nextId, {
-                title: "Per-item await inside a loop — serial N+1 round-trips",
-                severity: "Perf",
-                confidence: "Likely",
-                taxonomy: "M7 — Await in loop (N+1)",
-                location: loc(path, sf, perItem),
-                evidence: `\`${perItem.getText(sf).slice(0, 100)}\` runs once per iteration and each iteration's input is independent of the previous one — n items cost n serial round-trips.`,
-                impact: "Latency scales linearly with collection size (100 rows ≈ 100 sequential network/DB round-trips on this path).",
-                fix: "Batch into one query (`.in(…)` / a join / an RPC) or run iterations concurrently with `Promise.all` (bounded if n can be large).",
-                value: 4,
-                ease: 4,
-                safety: 4,
-              }),
-            );
-          }
+          if (perItem) hits.push(perItem);
         }
       }
       ts.forEachChild(node, visit);
     };
     visit(sf);
+    const first = hits[0];
+    if (!first) continue;
+    const onRequestPath = REQUEST_PATH.test(path);
+    findings.push(
+      makeFinding(nextId, {
+        title: `Per-item await inside a loop — serial N+1 round-trips (${hits.length} loop${hits.length === 1 ? "" : "s"} in ${path})`,
+        severity: "Perf",
+        confidence: onRequestPath ? "Likely" : "Review",
+        taxonomy: "M7 — Await in loop (N+1)",
+        location: loc(path, sf, first),
+        evidence: `\`${first.getText(sf).slice(0, 100)}\`${hits.length > 1 ? ` (first of ${hits.length} such loops in this file)` : ""} runs once per iteration and each iteration's input is independent of the previous one — n items cost n serial round-trips.${onRequestPath ? "" : " This file is off the request path (worker/job/script), so the cost is job runtime and DB load rather than user-facing latency."}`,
+        impact: onRequestPath
+          ? "Latency scales linearly with collection size (100 rows ≈ 100 sequential network/DB round-trips on this path)."
+          : "Job/batch runtime and DB load scale linearly with collection size; long-running workers hold connections and delay downstream steps.",
+        fix: "Batch into one query (`.in(…)` / a join / an RPC) or run iterations concurrently with `Promise.all` (bounded if n can be large).",
+        value: onRequestPath ? 4 : 3,
+        ease: 4,
+        safety: 4,
+      }),
+    );
   }
   return findings;
 }
@@ -445,7 +484,7 @@ function detectUnboundedSelect(sources: Map<string, ts.SourceFile>, nextId: Next
         const names = callChainNames(node);
         if (names.includes("from") && names.includes("select") && !names.some((n) => CHAIN_BOUNDS.has(n))) {
           const selectArg = findSelectArg(node);
-          if (selectArg === undefined || selectArg === "*") {
+          if ((selectArg === undefined || selectArg === "*") && !isCountOnlySelect(node)) {
             findings.push(
               makeFinding(nextId, {
                 title: "Unbounded `select('*')` — whole table/partition fetched",
@@ -469,6 +508,29 @@ function detectUnboundedSelect(sources: Map<string, ts.SourceFile>, nextId: Next
     visit(sf);
   }
   return findings;
+}
+
+// `select("*", { count: "exact", head: true })` fetches ZERO rows — it's a count query,
+// not an unbounded read (ATC dogfood: half the raw hits were this shape).
+function isCountOnlySelect(chainRoot: ts.CallExpression): boolean {
+  let cur: ts.Expression = chainRoot;
+  while (ts.isCallExpression(cur) && ts.isPropertyAccessExpression(cur.expression)) {
+    if (cur.expression.name.text === "select") {
+      const opts = cur.arguments[1];
+      if (opts && ts.isObjectLiteralExpression(opts)) {
+        return opts.properties.some(
+          (p) =>
+            ts.isPropertyAssignment(p) &&
+            ts.isIdentifier(p.name) &&
+            p.name.text === "head" &&
+            p.initializer.kind === ts.SyntaxKind.TrueKeyword,
+        );
+      }
+      return false;
+    }
+    cur = cur.expression.expression;
+  }
+  return false;
 }
 
 // First argument of the `.select(…)` link in the chain: its string text, or undefined if
