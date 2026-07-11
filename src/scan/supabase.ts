@@ -49,6 +49,7 @@ import {
   checkAuthConfig,
   checkAutoExposedTables,
   checkColumnGrantsToClientRoles,
+  checkCronJobs,
   checkDangerousExtensions,
   checkDefaultPrivilegesToClientRoles,
   checkEdgeFunctionSecrets,
@@ -60,6 +61,7 @@ import {
   checkRealtimePublicationRls,
   checkUnsignedWebhookHandlers,
   type ColumnGrant,
+  type CronJob,
   type DefaultAclGrant,
   type PublishedTable,
   type AuthConfig,
@@ -82,6 +84,9 @@ const REALTIME_MESSAGES_SQL = `select rowsecurity as "rlsEnabled" from pg_tables
 const REALTIME_PUBLICATION_SQL = `select pt.schemaname as schema, pt.tablename as name, c.relrowsecurity as "rlsEnabled" from pg_publication_tables pt join pg_namespace n on n.nspname = pt.schemaname join pg_class c on c.relname = pt.tablename and c.relnamespace = n.oid where pt.pubname = 'supabase_realtime';`;
 const DEFAULT_ACL_SQL = `select n.nspname as schema, r.rolname as role, case d.defaclobjtype when 'r' then 'table' when 'f' then 'function' when 'S' then 'sequence' else d.defaclobjtype::text end as "objectType", array_agg(distinct a.privilege_type order by a.privilege_type) as privileges from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace cross join lateral aclexplode(d.defaclacl) a join pg_roles r on r.oid = a.grantee where r.rolname in ('anon', 'authenticated') group by 1, 2, 3;`;
 const COLUMN_GRANTS_SQL = `select n.nspname as schema, c.relname as "tableName", a.attname as "columnName", r.rolname as role, x.privilege_type as "privilegeType" from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace cross join lateral aclexplode(a.attacl) x join pg_roles r on r.oid = x.grantee where a.attacl is not null and r.rolname in ('anon', 'authenticated');`;
+const CRON_SCHEMA_EXISTS_SQL = `select exists (select 1 from pg_namespace where nspname = 'cron') as exists;`;
+const CRON_JOBS_SQL = `select j.jobid, j.schedule, j.command, j.nodename, j.database, j.username, j.active, coalesce(r.rolsuper, false) as "isSuperuser" from cron.job j left join pg_roles r on r.rolname = j.username;`;
+const DEFINER_FUNCTION_NAMES_SQL = `select p.proname as name from pg_proc p where p.prosecdef = true;`;
 
 // PostgREST config exposes the schema allow-list as `db_schema` (comma-separated). The GET
 // endpoint is documented but its response shape was NOT independently re-verified against the
@@ -192,6 +197,13 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch): 
   const columnGrants = await managementApiQuery<ColumnGrant[]>(ref, COLUMN_GRANTS_SQL, token, fetchImpl);
   findings.push(...checkColumnGrantsToClientRoles(columnGrants));
 
+  const cronSchemaExists = await managementApiQuery<{ exists: boolean }[]>(ref, CRON_SCHEMA_EXISTS_SQL, token, fetchImpl);
+  if (cronSchemaExists[0]?.exists) {
+    const cronJobs = await managementApiQuery<CronJob[]>(ref, CRON_JOBS_SQL, token, fetchImpl);
+    const definerFunctions = await managementApiQuery<{ name: string }[]>(ref, DEFINER_FUNCTION_NAMES_SQL, token, fetchImpl);
+    findings.push(...checkCronJobs(cronJobs, definerFunctions.map((f) => f.name)));
+  }
+
   const postgrest = await managementApiGet<PostgrestConfig>(`/projects/${ref}/postgrest`, token, fetchImpl);
   const exposedSchemas = parseExposedSchemas(postgrest);
   const pgGraphqlInstalled = hasPgGraphql(extensions);
@@ -222,6 +234,14 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
     const defaultAclGrants = (await sql.unsafe(DEFAULT_ACL_SQL)) as unknown as DefaultAclGrant[];
     const columnGrants = (await sql.unsafe(COLUMN_GRANTS_SQL)) as unknown as ColumnGrant[];
 
+    const cronSchemaExists = ((await sql.unsafe(CRON_SCHEMA_EXISTS_SQL)) as unknown as { exists: boolean }[])[0]?.exists ?? false;
+    const cronFindings = cronSchemaExists
+      ? checkCronJobs(
+          (await sql.unsafe(CRON_JOBS_SQL)) as unknown as CronJob[],
+          ((await sql.unsafe(DEFINER_FUNCTION_NAMES_SQL)) as unknown as { name: string }[]).map((f) => f.name),
+        )
+      : [];
+
     const splinterFindings = parseAdvisorFindings(splinterImpl(connectionString));
 
     // Exposed-schema / pg_graphql breadth reads PostgREST's db-schema config, which isn't in
@@ -235,6 +255,7 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
       ...checkRealtimePublicationRls(published),
       ...checkDefaultPrivilegesToClientRoles(defaultAclGrants),
       ...checkColumnGrantsToClientRoles(columnGrants),
+      ...cronFindings,
     ];
   } finally {
     await sql.end();

@@ -464,3 +464,83 @@ export function checkUnsignedWebhookHandlers(fns: EdgeFunctionSource[]): Finding
       }),
     );
 }
+
+export interface CronJob {
+  jobid: number;
+  schedule: string;
+  command: string;
+  nodename: string;
+  database: string;
+  username: string;
+  active: boolean;
+  isSuperuser: boolean;
+}
+
+const SECRET_LITERAL_HINT = /(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|sk_[A-Za-z0-9]{16,}|['"][A-Za-z0-9+/]{32,}={0,2}['"])/;
+
+// definerFunctionNames: unqualified names of SECURITY DEFINER functions in the target DB
+// (pg_proc.prosecdef = true), used to flag a cron command that calls one. This is a
+// name-matching cross-reference rather than running the full body classifier in
+// src/definer-classifier.ts (which needs argNames/exposedTo/body from a separate live query
+// only wired into the detect-deeper.ts pipeline) — matching the called function's name against
+// the known-SECURITY-DEFINER set is enough signal for a review-tier finding without pulling
+// that pipeline into this scan path.
+export function checkCronJobs(jobs: CronJob[], definerFunctionNames: string[] = []): Finding[] {
+  return jobs.flatMap((job) => {
+    const findings: Finding[] = [];
+
+    if (job.isSuperuser) {
+      findings.push(
+        mechanicalFinding({
+          id: `SB-CRON-SUPERUSER-${job.jobid}`,
+          title: `pg_cron job ${job.jobid} runs as superuser role "${job.username}"`,
+          severity: "Medium",
+          category: "Supabase config",
+          taxonomy: "pg_cron job runs as a superuser role",
+          location: `cron.job ${job.jobid} (${job.schedule})`,
+          evidence: `cron.job row ${job.jobid} runs as "${job.username}" (superuser) on schedule "${job.schedule}".`,
+          impact: "A scheduled job running with superuser privilege is an unreviewed, unattended surface — any command in it executes with full database privilege on every run.",
+          fix: "Run scheduled jobs as a least-privilege role scoped to what the job needs, not a superuser role.",
+          precisionTier: "review",
+        }),
+      );
+    }
+
+    const calledDefiner = definerFunctionNames.find((name) => new RegExp(`\\b${name}\\s*\\(`, "i").test(job.command));
+    if (calledDefiner) {
+      findings.push(
+        mechanicalFinding({
+          id: `SB-CRON-DEFINER-${job.jobid}`,
+          title: `pg_cron job ${job.jobid} calls SECURITY DEFINER function "${calledDefiner}"`,
+          severity: "Medium",
+          category: "Supabase config",
+          taxonomy: "pg_cron job calls a SECURITY DEFINER function",
+          location: `cron.job ${job.jobid} (${job.schedule})`,
+          evidence: `cron.job row ${job.jobid} command references SECURITY DEFINER function "${calledDefiner}": ${job.command}`,
+          impact: "The job's privilege combines with whatever the SECURITY DEFINER function does internally — confirm the function's body doesn't do more than the scheduled task requires.",
+          fix: "Review the called function's body for scope beyond the scheduled task, and confirm it isn't also EXECUTE-granted to anon/authenticated for unrelated reasons.",
+          precisionTier: "review",
+        }),
+      );
+    }
+
+    if (SECRET_LITERAL_HINT.test(job.command)) {
+      findings.push(
+        mechanicalFinding({
+          id: `SB-CRON-SECRET-${job.jobid}`,
+          title: `pg_cron job ${job.jobid} command may embed a secret literal`,
+          severity: "High",
+          category: "Supabase config",
+          taxonomy: "pg_cron job embeds a secret-shaped literal",
+          location: `cron.job ${job.jobid} (${job.schedule})`,
+          evidence: `cron.job row ${job.jobid} command matches a secret-shaped literal pattern (JWT/API-key/long base64 token).`,
+          impact: "cron.job commands are stored in plaintext in the job table and readable by anyone able to query cron.job — an embedded secret there is exposed to any such reader.",
+          fix: "Move the secret to Vault or an environment/config source read at execution time instead of a literal in the scheduled command.",
+          precisionTier: "review",
+        }),
+      );
+    }
+
+    return findings;
+  });
+}
