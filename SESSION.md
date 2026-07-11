@@ -2,7 +2,41 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-10 (excluded-tier backlog #123–#125 fully delivered + all three trackers CLOSED: 18 per-class children #131–#148 across secrets/git-history #129–#130, review-tier authz/policy #131–#139, connected-tier #140–#144 (live-validated vs ATC), dynamic pen-test probes #145–#148)_
+_Last updated: 2026-07-10 (excluded-tier backlog #123–#125 fully delivered + all trackers CLOSED; then hardened the dynamic tier via real ATC testing → route discovery (PR #156), monorepo target enumeration + completeness gate + seam probes + intake update (PR #157))_
+
+## Pen-test kit (M2 / #5) — target-adaptive, monorepo-aware
+The dynamic tier evolved from hardcoded calibration paths to discovering the system under test:
+- **Route discovery** (`src/pentest/discovery.ts`, PR #156): walks a target's Next.js tree →
+  `TargetProfile` (versioned / high-value / public-cache routes, privileged RPCs, seams). The four
+  dynamic probes (#145–#148) iterate discovered candidates; a class with no candidate self-reports
+  **not-applicable** (the honest result), not a hardcoded-path miss.
+- **Monorepo enumeration + completeness gate** (`src/pentest/targets.ts`, PR #157):
+  `discoverTargets(repoRoot, envVarNames)` → manifest of **apps** (workspace globs, classified),
+  **backends** (distinct Supabase projects by env-var convention; `TEST` = write-safe instance),
+  **seams** (service URLs, cross-service webhooks, service JWTs). `assertComplete` FAILS LOUD on any
+  enumerated-but-untested target — coverage is now mechanical, not a judgment call (this is what the
+  RAG-backend omission exposed).
+- **Seam probes** (`src/pentest/verify.ts`, PR #157): DIRECT-SERVICE-CALL, SERVICE-JWT-UNVERIFIED
+  (forged `alg:none` token), CROSS-SERVICE-WEBHOOK — the trust boundaries between per-app checks.
+- **Intake updated to match** (PR #157): `docs/templates/auth-questionnaire.md` §0 (app/backend
+  topology, per-backend connection info, write-safe-env designation, seams),
+  `docs/runbooks/engagement-access.md` (manifest step, per-backend creds, seam details),
+  `intake-site/index.html` (per-backend DB card + monorepo/apps/backends/seams fields). The three
+  stay in sync; the questionnaire is source of truth.
+
+**ATC live-test results (2026-07-10, read/write against TEST, read-only against prod):** tenant
+isolation HOLDS on read AND write — attacker (tenant `f5665f08` owner) sees 129 own messages / 0
+victim; cross-tenant reassign → `new row violates RLS`, delete → 0 (all rollback). ATC RLS keys on
+`users.auth_user_id = auth.uid()` via `auth_user_can_access_conversation` (SECURITY DEFINER). Anon
+denied on every sensitive table (401/42501) on both **main** and **rag**. Route discovery over ATC:
+289 routes → 0 versioned, 0 public-cache, 10 high-value → SHADOW-API/CACHE-CROSS-USER correctly N/A.
+See [[atc-supabase-topology]] for the MCP→project map (main = prod, rag = single prod-serving DB,
+aop = off-limits client).
+
+**Open dynamic-tier gap:** NO-RATE-LIMIT loop never run end-to-end — needs the ATC **test app
+deployed** (not just the test DB) and careful scoping (its 10 candidate flows include payout/
+checkout/Stripe-test paths). The apps/extension surface and the live seam probes against ATC are
+also not yet exercised (enumerated, not tested — the completeness gate would flag them).
 
 ## Corpus expansion (#71 security, #72 cross-module)
 Answer key + rules are per-batch modular (`src/scan/calibration/<batch>.entries.ts` +
