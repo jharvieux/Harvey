@@ -4,9 +4,13 @@
 // take in-memory sources, so tests never needed a CLI; audits do).
 //
 //   pnpm detect-static <target-dir> [--out findings.static.json] [--build <path-to-.next>]...
+//     [--stats <path-to-bundle-analyzer-stats.json>]...
 //
 // `--build` points at a `next build` artifact for the [B] bundle tier (repeatable for
 // monorepos); with no flag, <target>/.next and <target>/apps/*/.next are auto-detected.
+// `--stats` points at a webpack/bundle-analyzer stats JSON (repeatable) for the [B] depth
+// tier — duplicate-modules-across-chunks, dependency attribution, and per-route first-load
+// on Turbopack builds; optional, no auto-detection (the artifact isn't part of `.next`).
 //
 // Thin untested I/O wrapper per the repo convention — the detectors themselves are the
 // tested pure transforms. Test/story/fixture files are excluded: perf and boundary findings
@@ -17,7 +21,7 @@ import { join, relative, resolve, sep } from "node:path";
 import type { Finding } from "../findings.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { scanAssetWeight } from "../detectors/asset-weight.js";
-import { parseBundleStats } from "../detectors/bundle-stats.js";
+import { parseBundleAnalyzerStats, parseBundleStats } from "../detectors/bundle-stats.js";
 import { detectHookDepFindings } from "../detectors/hook-deps.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import type { SourceInput } from "../detectors/common.js";
@@ -79,15 +83,26 @@ try {
     buildDirs.push(...candidates.filter((c) => existsSync(join(c, "build-manifest.json"))));
   }
 
+  // Stats tier: explicit --stats flags only — the artifact isn't part of `.next` so there's
+  // nothing to auto-detect it from.
+  const statsPaths = args.flatMap((a, i) => {
+    const next = args[i + 1];
+    return a === "--stats" && next ? [resolve(next)] : [];
+  });
+
   const findings: Finding[] = [
     ...detectAppRouterFindings(sources),
     ...detectPerfCodeFindings(sources),
     ...detectHookDepFindings(sources),
     ...scanAssetWeight(scanDir), // scoped copy = committed files only
     ...buildDirs.flatMap((b) => parseBundleStats(b)),
+    ...statsPaths.flatMap((p) => parseBundleAnalyzerStats(p)),
   ];
   if (buildDirs.length === 0) {
     console.log("bundle tier: no next build artifact found (pass --build <path-to-.next>) — [B] findings skipped");
+  }
+  if (statsPaths.length === 0) {
+    console.log("bundle-analyzer tier: no --stats path provided — M7B-04/05/06 findings skipped");
   }
 
   const byTaxonomy = new Map<string, number>();

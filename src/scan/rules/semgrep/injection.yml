@@ -361,7 +361,12 @@ rules:
   # admin API requires the service-role key, so an admin surface that ships to the browser bundle
   # exposes privileged user-management operations (and the key backing them). HIGH. Broader than
   # harvey-service-role-in-client (base.yml, which keys off the SERVICE_ROLE_KEY env literal) — this
-  # fires on the admin call itself, however the client was constructed.
+  # fires on the admin call itself, however the client was constructed. Scoped to a client whose
+  # binding NAME reads as service-role/admin ($C matches /admin|service/i) — the premise is a
+  # service-role client shipping to the browser; the plain anon client (bound as `supabase`) can't
+  # ship a privileged key it never holds, and the call is a runtime no-op there, not a key leak
+  # (#164). No cross-file taint in OSS Semgrep, so the identifier is the available signal — matches
+  # this repo's naming convention (`supabaseAdmin` for positives, `supabase` for the anon client).
   - id: harvey-auth-admin-in-client
     languages: [javascript, typescript]
     severity: ERROR
@@ -371,13 +376,16 @@ rules:
       harveySeverity: Critical
     message: >
       supabase.auth.admin.* (the service-role-only GoTrue admin API) is called inside a Client
-      Component ("use client"). The privileged admin client ships to the browser. Move all
-      auth.admin usage into a server-only route/action.
+      Component ("use client") on what looks like the service-role client. The privileged admin
+      client ships to the browser. Move all auth.admin usage into a server-only route/action.
     patterns:
       - pattern: $C.auth.admin.$M(...)
       - pattern-inside: |
           "use client";
           ...
+      - metavariable-regex:
+          metavariable: $C
+          regex: (?i).*(admin|service).*
 
   # select("*") whose result is serialized into an API response (res.json / NextResponse.json). A
   # star-select spreads every column — including PII the client never needed — into the payload.

@@ -8,10 +8,12 @@ import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { parseBundleStats } from "./bundle-stats.js";
+import { parseBundleAnalyzerStats, parseBundleStats } from "./bundle-stats.js";
 
 let webpackDir: string;
 let turboDir: string;
+let statsPath: string;
+let statsDir: string;
 
 beforeAll(() => {
   // Webpack layout: shared framework chunk (100 KB) + heavy route chunk (300 KB) + light (5 KB).
@@ -39,11 +41,38 @@ beforeAll(() => {
     JSON.stringify({ pages: { "/_app": [] }, rootMainFiles: ["static/chunks/main.js"] }),
   );
   writeFileSync(join(turboDir, "app-path-routes-manifest.json"), JSON.stringify({ "/page": "/", "/api/health/route": "/api/health" }));
+
+  // Synthetic webpack-stats JSON (#179): the shape @next/bundle-analyzer's `generateStatsFile`
+  // writes (webpack Stats.toJson()) — no real analyzer run, since installing the dependency
+  // is out of scope (package.json is supervised).
+  statsDir = mkdtempSync(join(tmpdir(), "harvey-bundle-stats-"));
+  statsPath = join(statsDir, "client-stats.json");
+  writeFileSync(
+    statsPath,
+    JSON.stringify({
+      modules: [
+        // duplicated into two chunks, over the 1 KB floor → M7B-04
+        { identifier: "/repo/node_modules/lodash/lodash.js", size: 50 * 1024, chunks: ["dashboard", "about"] },
+        // duplicated but under the floor → filtered out of M7B-04
+        { identifier: "/repo/node_modules/tiny-pkg/index.js", size: 500, chunks: ["dashboard", "about"] },
+        // pnpm-nested identifier; two modules from the same package sum past the dep budget → M7B-05
+        { identifier: "/repo/node_modules/.pnpm/heavy-chart-lib@2.0.0/node_modules/heavy-chart-lib/index.js", size: 120 * 1024, chunks: ["dashboard"] },
+        { identifier: "/repo/node_modules/heavy-chart-lib/utils.js", size: 60 * 1024, chunks: ["dashboard"] },
+        // app source, not a dependency — excluded from M7B-05
+        { identifier: "/repo/src/app/dashboard/page.tsx", size: 5 * 1024, chunks: ["dashboard"] },
+      ],
+      namedChunkGroups: {
+        "app/dashboard/page": { assets: [{ name: "dashboard.js", size: 900 * 1024 }] },
+        "app/about/page": { assets: [{ name: "about.js", size: 100 * 1024 }] },
+      },
+    }),
+  );
 });
 
 afterAll(() => {
   rmSync(webpackDir, { recursive: true, force: true });
   rmSync(turboDir, { recursive: true, force: true });
+  rmSync(statsDir, { recursive: true, force: true });
 });
 
 describe("webpack-layout builds (per-route manifests)", () => {
@@ -88,5 +117,33 @@ describe("no build artifact", () => {
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }
+  });
+});
+
+describe("bundle-analyzer stats JSON (#179)", () => {
+  it("flags modules duplicated across chunks above the per-module floor", () => {
+    const findings = parseBundleAnalyzerStats(statsPath);
+    const dup = findings.find((f) => f.taxonomy === "M7 — Duplicate modules across chunks");
+    expect(dup).toMatchObject({ id: "M7B-04", confidence: "Confirmed", severity: "Perf" });
+    expect(dup?.evidence).toContain("lodash.js");
+    expect(dup?.evidence).not.toContain("tiny-pkg"); // below the 1 KB floor
+  });
+
+  it("attributes shipped weight to npm packages, summing across resolved module copies", () => {
+    const findings = parseBundleAnalyzerStats(statsPath);
+    const dep = findings.find((f) => f.taxonomy === "M7 — Dependency attribution over budget");
+    expect(dep).toMatchObject({ id: "M7B-05", confidence: "Confirmed", location: "heavy-chart-lib" });
+    expect(dep?.evidence).toContain("heavy-chart-lib (180 KB)"); // 120 KB + 60 KB, pnpm-nested identifier resolved
+  });
+
+  it("measures per-route first-load from namedChunkGroups — the Turbopack gap closer", () => {
+    const findings = parseBundleAnalyzerStats(statsPath, { routeBudgetBytes: 750 * 1024 });
+    const route = findings.find((f) => f.taxonomy === "M7 — First-load JS over budget (bundle-analyzer stats)");
+    expect(route).toMatchObject({ id: "M7B-06", confidence: "Confirmed", location: "/dashboard" });
+    expect(route?.evidence).not.toContain("/about"); // under budget
+  });
+
+  it("returns nothing for a missing or unparsable stats file", () => {
+    expect(parseBundleAnalyzerStats(join(statsDir, "does-not-exist.json"))).toHaveLength(0);
   });
 });
