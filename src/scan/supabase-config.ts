@@ -385,6 +385,65 @@ export function checkGotrueVersion(gotrue: GotrueInfo): Finding[] {
   return findings;
 }
 
+export interface DefaultAclGrant {
+  schema: string;
+  role: string;
+  objectType: string; // decoded from pg_default_acl.defaclobjtype: "table" | "function" | "sequence" | ...
+  privileges: string[];
+}
+
+// ALTER DEFAULT PRIVILEGES ... GRANT ... TO anon/authenticated auto-grants every future
+// object created in that schema, not just what exists today — a time-bomb the RLS-on-current-
+// tables checks above can't see. A deliberate public grant (e.g. a public read API) can be
+// legitimate, so this stays "review" rather than "high".
+export function checkDefaultPrivilegesToClientRoles(grants: DefaultAclGrant[]): Finding[] {
+  return grants.map((g) =>
+    mechanicalFinding({
+      id: `SB-DEFAULT-ACL-${g.schema}-${g.role}-${g.objectType}`,
+      title: `Default privileges auto-grant future ${g.objectType}s in schema "${g.schema}" to ${g.role}`,
+      severity: "Medium",
+      category: "Supabase config",
+      taxonomy: "Default privileges grant future objects to client role",
+      location: `schema ${g.schema}: default privileges for ${g.role}`,
+      evidence: `ALTER DEFAULT PRIVILEGES in schema "${g.schema}" grants ${g.privileges.join(", ")} on future ${g.objectType}s to role "${g.role}".`,
+      impact: `Every new ${g.objectType} created in "${g.schema}" is automatically reachable by ${g.role} with no explicit review — a table added in a later migration is exposed before anyone adds RLS.`,
+      fix: `Confirm the default grant is intentional; otherwise ALTER DEFAULT PRIVILEGES IN SCHEMA ${g.schema} REVOKE ${g.privileges.join(", ")} ON ${g.objectType === "table" ? "TABLES" : `${g.objectType.toUpperCase()}S`} FROM ${g.role}, and grant per-object as needed.`,
+      precisionTier: "review",
+    }),
+  );
+}
+
+export interface ColumnGrant {
+  schema: string;
+  tableName: string;
+  columnName: string;
+  role: string;
+  privilegeType: string;
+}
+
+// Explicit column-level GRANTs (GRANT SELECT (col) ON table TO role) live in pg_attribute.attacl,
+// separate from the table-wide ACL in pg_class.relacl. information_schema.role_column_grants was
+// considered instead (per the issue brief) but it also surfaces every column of a table that only
+// has a table-wide grant — which is Supabase's default anon/authenticated grant shape relying on
+// RLS — so querying it directly would flood every project with false positives. attacl is only
+// populated by an actual column-level grant, which is what "sits outside the table-RLS model".
+export function checkColumnGrantsToClientRoles(grants: ColumnGrant[]): Finding[] {
+  return grants.map((g) =>
+    mechanicalFinding({
+      id: `SB-COLUMN-GRANT-${g.schema}-${g.tableName}-${g.columnName}-${g.role}`,
+      title: `Column-level grant on ${g.schema}.${g.tableName}.${g.columnName} to ${g.role} sits outside RLS`,
+      severity: "Medium",
+      category: "Supabase config",
+      taxonomy: "Column-level grant to client role outside RLS model",
+      location: `${g.schema}.${g.tableName}.${g.columnName}`,
+      evidence: `${g.privilegeType} on column ${g.schema}.${g.tableName}.${g.columnName} is granted directly to role "${g.role}".`,
+      impact: "Column-level GRANTs are enforced independently of row-level security — this exposes the column on every row the role's table-level privilege reaches, regardless of RLS policy intent.",
+      fix: "Confirm the column grant is deliberate; otherwise REVOKE it and rely on RLS policies (or a view) to control column-level exposure.",
+      precisionTier: "review",
+    }),
+  );
+}
+
 const SIGNATURE_CHECK_HINT = /(verifyWebhookSignature|constructEvent|x-webhook-signature|hmac|createHmac|timingSafeEqual)/i;
 
 export function checkUnsignedWebhookHandlers(fns: EdgeFunctionSource[]): Finding[] {

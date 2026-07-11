@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   checkAuthConfig,
   checkAutoExposedTables,
+  checkColumnGrantsToClientRoles,
   checkDangerousExtensions,
+  checkDefaultPrivilegesToClientRoles,
   checkEdgeFunctionSecrets,
   checkExposedSchemas,
   checkGotrueVersion,
@@ -148,6 +150,42 @@ describe("checkRealtimePublicationRls", () => {
 
   it("does not flag when the publication has no tables", () => {
     expect(checkRealtimePublicationRls([])).toEqual([]);
+  });
+});
+
+describe("checkDefaultPrivilegesToClientRoles", () => {
+  it("flags a default ACL granting future tables in a schema to anon", () => {
+    const findings = checkDefaultPrivilegesToClientRoles([
+      { schema: "public", role: "anon", objectType: "table", privileges: ["INSERT", "SELECT"] },
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      taxonomy: "Default privileges grant future objects to client role",
+      precisionTier: "review",
+      location: "schema public: default privileges for anon",
+    });
+  });
+
+  it("does not flag when there are no default ACLs granting to anon/authenticated", () => {
+    expect(checkDefaultPrivilegesToClientRoles([])).toEqual([]);
+  });
+});
+
+describe("checkColumnGrantsToClientRoles", () => {
+  it("flags an explicit column-level grant to authenticated", () => {
+    const findings = checkColumnGrantsToClientRoles([
+      { schema: "public", tableName: "profiles", columnName: "ssn", role: "authenticated", privilegeType: "SELECT" },
+    ]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      taxonomy: "Column-level grant to client role outside RLS model",
+      location: "public.profiles.ssn",
+      precisionTier: "review",
+    });
+  });
+
+  it("does not flag when there are no column-level grants to anon/authenticated", () => {
+    expect(checkColumnGrantsToClientRoles([])).toEqual([]);
   });
 });
 

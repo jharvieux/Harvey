@@ -14,6 +14,8 @@ vi.mock("postgres", () => ({
       if (query.includes("pg_extension")) return [{ name: "pg_net", schema: "extensions", installed_version: "0.20.3" }];
       if (query.includes("storage.buckets")) return [{ id: "b1", name: "avatars", public: true }];
       if (query.includes("pg_policies")) return [];
+      if (query.includes("pg_default_acl")) return [];
+      if (query.includes("pg_attribute")) return [];
       return [];
     }),
     end: vi.fn(async () => {}),
@@ -29,6 +31,8 @@ function mockFetch(responses: {
   policies: unknown;
   realtime?: unknown;
   postgrest?: unknown;
+  defaultAcl?: unknown;
+  columnGrants?: unknown;
 }): typeof fetch {
   return vi.fn(async (url: string | URL, init?: RequestInit) => {
     const u = url.toString();
@@ -42,6 +46,8 @@ function mockFetch(responses: {
       if (body.query.includes("pg_extension")) return new Response(JSON.stringify(responses.extensions));
       if (body.query.includes("storage.buckets")) return new Response(JSON.stringify(responses.buckets));
       if (body.query.includes("pg_policies")) return new Response(JSON.stringify(responses.policies));
+      if (body.query.includes("pg_default_acl")) return new Response(JSON.stringify(responses.defaultAcl ?? []));
+      if (body.query.includes("pg_attribute")) return new Response(JSON.stringify(responses.columnGrants ?? []));
     }
     return new Response("not found", { status: 404 });
   }) as unknown as typeof fetch;

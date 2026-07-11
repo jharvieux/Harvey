@@ -48,7 +48,9 @@ import { runSplinter } from "./supabase-splinter.js";
 import {
   checkAuthConfig,
   checkAutoExposedTables,
+  checkColumnGrantsToClientRoles,
   checkDangerousExtensions,
+  checkDefaultPrivilegesToClientRoles,
   checkEdgeFunctionSecrets,
   checkExposedSchemas,
   checkGotrueVersion,
@@ -57,6 +59,8 @@ import {
   checkRealtimeAuthorization,
   checkRealtimePublicationRls,
   checkUnsignedWebhookHandlers,
+  type ColumnGrant,
+  type DefaultAclGrant,
   type PublishedTable,
   type AuthConfig,
   type EdgeFunctionSource,
@@ -76,6 +80,8 @@ const BUCKETS_SQL = `select id, name, public from storage.buckets;`;
 const BUCKET_POLICY_COUNTS_SQL = `select (regexp_match(qual, 'bucket_id = ''([^'']+)'''))[1] as bucket_id, count(*) from pg_policies where schemaname = 'storage' and tablename = 'objects' group by 1;`;
 const REALTIME_MESSAGES_SQL = `select rowsecurity as "rlsEnabled" from pg_tables where schemaname = 'realtime' and tablename = 'messages';`;
 const REALTIME_PUBLICATION_SQL = `select pt.schemaname as schema, pt.tablename as name, c.relrowsecurity as "rlsEnabled" from pg_publication_tables pt join pg_namespace n on n.nspname = pt.schemaname join pg_class c on c.relname = pt.tablename and c.relnamespace = n.oid where pt.pubname = 'supabase_realtime';`;
+const DEFAULT_ACL_SQL = `select n.nspname as schema, r.rolname as role, case d.defaclobjtype when 'r' then 'table' when 'f' then 'function' when 'S' then 'sequence' else d.defaclobjtype::text end as "objectType", array_agg(distinct a.privilege_type order by a.privilege_type) as privileges from pg_default_acl d join pg_namespace n on n.oid = d.defaclnamespace cross join lateral aclexplode(d.defaclacl) a join pg_roles r on r.oid = a.grantee where r.rolname in ('anon', 'authenticated') group by 1, 2, 3;`;
+const COLUMN_GRANTS_SQL = `select n.nspname as schema, c.relname as "tableName", a.attname as "columnName", r.rolname as role, x.privilege_type as "privilegeType" from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace cross join lateral aclexplode(a.attacl) x join pg_roles r on r.oid = x.grantee where a.attacl is not null and r.rolname in ('anon', 'authenticated');`;
 
 // PostgREST config exposes the schema allow-list as `db_schema` (comma-separated). The GET
 // endpoint is documented but its response shape was NOT independently re-verified against the
@@ -180,6 +186,12 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch): 
   const published = await managementApiQuery<PublishedTable[]>(ref, REALTIME_PUBLICATION_SQL, token, fetchImpl);
   findings.push(...checkRealtimePublicationRls(published));
 
+  const defaultAclGrants = await managementApiQuery<DefaultAclGrant[]>(ref, DEFAULT_ACL_SQL, token, fetchImpl);
+  findings.push(...checkDefaultPrivilegesToClientRoles(defaultAclGrants));
+
+  const columnGrants = await managementApiQuery<ColumnGrant[]>(ref, COLUMN_GRANTS_SQL, token, fetchImpl);
+  findings.push(...checkColumnGrantsToClientRoles(columnGrants));
+
   const postgrest = await managementApiGet<PostgrestConfig>(`/projects/${ref}/postgrest`, token, fetchImpl);
   const exposedSchemas = parseExposedSchemas(postgrest);
   const pgGraphqlInstalled = hasPgGraphql(extensions);
@@ -207,6 +219,8 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
     const policyRows = (await sql.unsafe(BUCKET_POLICY_COUNTS_SQL)) as unknown as { bucket_id: string; count: number }[];
     const realtime = (await sql.unsafe(REALTIME_MESSAGES_SQL)) as unknown as { rlsEnabled: boolean }[];
     const published = (await sql.unsafe(REALTIME_PUBLICATION_SQL)) as unknown as PublishedTable[];
+    const defaultAclGrants = (await sql.unsafe(DEFAULT_ACL_SQL)) as unknown as DefaultAclGrant[];
+    const columnGrants = (await sql.unsafe(COLUMN_GRANTS_SQL)) as unknown as ColumnGrant[];
 
     const splinterFindings = parseAdvisorFindings(splinterImpl(connectionString));
 
@@ -219,6 +233,8 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
       ...checkPublicBucketsWithNoPolicies(buckets, bucketPolicyCounts(policyRows)),
       ...checkRealtimeAuthorization({ exists: realtime.length > 0, rlsEnabled: realtime[0]?.rlsEnabled ?? false }),
       ...checkRealtimePublicationRls(published),
+      ...checkDefaultPrivilegesToClientRoles(defaultAclGrants),
+      ...checkColumnGrantsToClientRoles(columnGrants),
     ];
   } finally {
     await sql.end();
