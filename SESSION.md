@@ -2,7 +2,7 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-10 (issue-sweep: #123–#125 broken into per-class children #131–#148; sweep merged the secrets/git-history + review-tier authz/policy corpus (#129–#139, PRs #149/#151/#152); connected-tier #140–#144 built + live-validated against ATC (PR #150))_
+_Last updated: 2026-07-10 (excluded-tier backlog #123–#125 fully delivered + all three trackers CLOSED: 18 per-class children #131–#148 across secrets/git-history #129–#130, review-tier authz/policy #131–#139, connected-tier #140–#144 (live-validated vs ATC), dynamic pen-test probes #145–#148)_
 
 ## Corpus expansion (#71 security, #72 cross-module)
 Answer key + rules are per-batch modular (`src/scan/calibration/<batch>.entries.ts` +
@@ -36,18 +36,20 @@ PASS.** Connected-tier #140–#144 add live detectors (N/A in the offline static
 - **#72 cross-module:** M10 PII, M4+M5 dup/dead-code, M8 mutation, M7 perf-advisors (precision-gated);
   M3 hotspots (design+fixture, live `vitals` capture deferred → **#94**); M6 simplification (paid-only).
 
-## Excluded-tier backlog (#123–#125) — broken into per-class children, partially landed
-The three trackers were split into 18 per-class child issues (#131–#148) and worked via issue-sweep:
-- **#123 semantic (review-tier)** → children **#131–#139**. All 9 MERGED as corpus fixture pairs
+## Excluded-tier backlog (#123–#125) — DONE, all three trackers CLOSED
+The three trackers were split into 18 per-class child issues (#131–#148) and fully delivered:
+- **#123 semantic (review-tier)** → children **#131–#139**, all MERGED as corpus fixture pairs
   (B15 Next.js/app-logic authz #131–#136; **B16** storage-RLS/upload/SECURITY-DEFINER policy
   #137–#139). Detection is the paid LLM `/vuln-scan`+`/triage` pass (option (b)); fixtures seeded +
-  benign negatives gate-cleared offline. #123 tracker can now be closed.
+  benign negatives gate-cleared offline.
 - **#124 connected (live Supabase)** → children **#140–#144**, all MERGED (PR #150). Five detectors
   in `src/scan/supabase-config.ts`: `checkRealtimeAuthorization`, `checkExposedSchemas`,
-  `checkGraphqlIntrospection`, `checkGotrueVersion` (×2 CVE ranges). #124 tracker can now be closed.
-- **#125 dynamic (running-app probes)** → children **#145–#148**, NOT started. Need the #5 pen-test
-  harness + a running app; **ATC is the live target** (see below). Supervised dynamic session, not a
-  worktree sweep.
+  `checkGraphqlIntrospection`, `checkGotrueVersion` (×2 CVE ranges). Live-validated read-only vs ATC.
+- **#125 dynamic (running-app probes)** → children **#145–#148**, all MERGED (PR #154). Four
+  verify-mode replays in the #5 pen-test kit (`src/pentest/verify.ts`): SHADOW-API-VERSION,
+  NO-RATE-LIMIT, CACHE-CROSS-USER, ANON-PRIVILEGED-RPC — each with a seeded positive route/RPC on
+  the calibration target (GROUND-TRUTH rows 9–12) + a benign sibling the probe clears. Write probes
+  gated behind `allowDestructive`. A live ATC run is the optional supervised outcome-confirmation.
 - **Skills vendoring decision** (from #53, closed): reference-harness skills live user-global at
   `~/.claude/skills/`. Open call: vendor into the Harvey repo (#14) vs. keep user-global.
 
