@@ -2,7 +2,21 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-11 (issue sweep: connected-tier DB checks #197/#198 via PR #202; review-tier passes #199/#200/#201 via PR #203 — 5 issues closed)_
+_Last updated: 2026-07-11 (connected-tier review passes hardened live: raw-body export #205, per-user tenancy mode #206/PR#207; free/connected tier docs PR#208; AoP approved for read-only scanning)_
+
+## Connected-tier review passes — live dry-run + hardening (2026-07-11, late)
+
+Ran the #199/#200 review passes live against real targets. **NB on connection method:** the in-session dry-run used the Supabase MCP `execute_sql` as a stand-in only — the production path is `detect-deeper` with a direct read-only `SUPABASE_DB_URL`, **not** MCP (MCP is dogfood/agent-only; see `docs/runbooks/connected-access-hardening.md`).
+
+- **ATC RAG backend (`jjznkprbotkqqnuvcost`): clean.** All 6 SECURITY DEFINER fns ruled out by the classifier (service_role-only / vault); the one multi-tenant policy (`rag_media_assets`, tenant_id-scoped) correctly cleared.
+- **AoP (`udsuxdoavlvosvbjwmud`, Age of Piracy client): 2 RLS items, both false positives** — `profiles` policies keyed on `id = auth.uid()`. Motivated #206.
+- **#205** (merged) — review-tier findings now embed the raw USING/WITH CHECK clauses (#199) and function body (#200) in `evidence`, so a supervised session can adjudicate offline for **any** target (not just MCP-connected ones).
+- **#206 → PR #207** (merged, closes #206) — added a **per-user tenancy mode** to `rls-policy-review.ts` (`detect-deeper --tenant-mode per-user`): a row bound to `auth.uid()` counts as valid ownership; only indirect/unscoped caller refs or writes that drop the binding flag. Default stays per-tenant → multi-tenant behavior unchanged. Closes the AoP FP class. **Follow-up:** add per-user calibration-corpus fixtures under `src/scan/calibration/`; optional per-table ownership map (#206 option 2).
+- **AoP is now operator-approved for read-only scanning** (was flagged off-limits) — topology memory updated. Read-only discipline still applies.
+- **Tier docs (PR #208):** `docs/free-tier-scope.md` (source-only free scan — no credentials, ~8/9 modules deliver from source incl. the M1 wedge, indicators-not-verdicts framing) + `docs/runbooks/connected-access-hardening.md` (least-privilege customer-DB access ladder). The access doc is a draft to **fold into `docs/runbooks/engagement-access.md` + the intake questionnaire**.
+
+### OPEN DECISION — real inline LLM adjudication pass
+The #199/#200/#201 passes are review-tier **heuristic** surfacing, not real model calls (there is no LLM API in the repo). A real inline adjudicator needs: the Anthropic SDK (`@anthropic-ai/sdk` — touches `package.json`, supervised → needs operator sign-off), an API key at scan time, a model choice (rec: Opus 4.8 + structured output + injection-safe prompt), and calibration before any precision claim. **Short-term bridge (works today, no build):** run the review-tier findings through a supervised Claude Code session on the operator's plan — it adjudicates from the exported evidence (raw bodies via #205) and the verdicts double as calibration data for the eventual automated pass.
 
 ## Issue sweep 2026-07-11 (evening) — 2 batches merged, 5 issues closed
 
