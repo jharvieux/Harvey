@@ -14,8 +14,16 @@
 //   alone — that gap is DISCLOSED as an Info finding, not silently skipped (the fail-loud
 //   doctrine), and needs @next/bundle-analyzer as the follow-up input.
 //
-// Deliberately not here: duplicate-modules-across-chunks and which-dependency-ships-where —
-// webpack-stats territory (@next/bundle-analyzer), still deferred on #170.
+// [B] depth tier (#179) — duplicate-modules-across-chunks, dependency attribution, and
+// per-route first-load on Turbopack builds all need the @next/bundle-analyzer / webpack-stats
+// JSON (a separate artifact from `.next` — `generateStatsFile: true` writes it via
+// webpack-bundle-analyzer, standard webpack Stats.toJson() shape: `modules[]` with
+// `identifier`/`name`/`size`/`chunks[]`, `namedChunkGroups{}` with `assets[]`). UNVERIFIED
+// against a live @next/bundle-analyzer run — package.json is a supervised path for this repo,
+// so the shape below is built from webpack's documented stats format, not a real sample.
+// Sizes in this JSON are parsed (pre-gzip) bytes; there's no gzip step over already-emitted
+// JSON, so the budgets here are independently calibrated on uncompressed bytes and are NOT
+// directly comparable to the gzip-based M7B-01/02 budgets above.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -177,5 +185,173 @@ export function parseBundleStats(buildDir: string, options?: BundleStatsOptions)
     });
   }
   if (sharedBytes > sharedBudget) findings.push(baselineFinding(shared, sharedBytes, sharedBudget));
+  return findings;
+}
+
+// --- bundle-analyzer stats JSON tier (#179) ---------------------------------------------
+
+interface StatsModule {
+  name?: string;
+  identifier?: string;
+  size: number;
+  chunks?: (string | number)[];
+}
+
+interface StatsChunkGroup {
+  assets?: { name: string; size: number }[];
+}
+
+interface WebpackBundleStats {
+  modules?: StatsModule[];
+  namedChunkGroups?: Record<string, StatsChunkGroup>;
+}
+
+interface BundleAnalyzerOptions {
+  /** Per-route first-load JS budget, parsed (pre-gzip) bytes. Default ~750 KB (rule-of-thumb
+   *  3x the gzip route budget for JS text — not a verified compression ratio). */
+  routeBudgetBytes?: number;
+  /** Minimum per-module size (bytes) before a chunk-duplicate is worth flagging. Default 1 KB. */
+  dupModuleFloorBytes?: number;
+  /** Minimum summed per-package size (bytes) before a dependency is worth flagging. Default 100 KB. */
+  depBudgetBytes?: number;
+}
+
+function moduleLabel(m: StatsModule): string {
+  return m.name ?? m.identifier ?? "(unknown module)";
+}
+
+// pnpm nests the resolved package under node_modules/.pnpm/<pkg>@ver/node_modules/<pkg>/... —
+// the LAST node_modules/<pkg> segment in the identifier is the one that actually ships.
+function packageOf(m: StatsModule): string | undefined {
+  const id = m.identifier ?? m.name ?? "";
+  const matches = [...id.matchAll(/node_modules\/(@[^/]+\/[^/]+|[^/]+)/g)];
+  return matches.at(-1)?.[1];
+}
+
+function duplicateModulesFinding(modules: StatsModule[], floorBytes: number): Finding | undefined {
+  const dups = modules
+    .filter((m) => (m.chunks?.length ?? 0) > 1 && m.size > floorBytes)
+    .map((m) => ({ label: moduleLabel(m), size: m.size, copies: m.chunks!.length, wasted: m.size * (m.chunks!.length - 1) }))
+    .sort((a, b) => b.wasted - a.wasted);
+  if (!dups.length) return undefined;
+
+  const shown = dups.slice(0, INSTANCE_CAP);
+  const worst = shown[0]!;
+  const totalWasted = dups.reduce((sum, d) => sum + d.wasted, 0);
+  return {
+    id: "M7B-04",
+    status: "Open",
+    category: "Performance",
+    title: `${dups.length} module${dups.length === 1 ? "" : "s"} duplicated across chunks (~${kb(totalWasted)} wasted, worst: ${worst.label})`,
+    severity: "Perf",
+    confidence: "Confirmed",
+    taxonomy: "M7 — Duplicate modules across chunks",
+    location: worst.label,
+    evidence:
+      `Worst-first (module, copies, size each, bytes wasted beyond the first copy): ` +
+      shown.map((d) => `${d.label} (${d.copies}×, ${kb(d.size)} each, ${kb(d.wasted)} wasted)`).join(", ") +
+      (dups.length > shown.length ? ` … and ${dups.length - shown.length} more` : ""),
+    impact: "Each duplicate copy re-ships and re-parses the same code on every route that pulls it in, instead of loading it once from a shared chunk — a code-splitting boundary problem, not a source-level one.",
+    fix: "Pull these modules into a shared chunk (webpack `splitChunks` cache groups, or a shared layout-level import) so every route references one copy instead of bundling its own.",
+    value: 3,
+    ease: 3,
+    safety: 4,
+  };
+}
+
+function dependencyAttributionFinding(modules: StatsModule[], depBudgetBytes: number): Finding | undefined {
+  const totals = new Map<string, number>();
+  for (const m of modules) {
+    const pkg = packageOf(m);
+    if (pkg) totals.set(pkg, (totals.get(pkg) ?? 0) + m.size);
+  }
+  const ranked = [...totals.entries()]
+    .map(([pkg, bytes]) => ({ pkg, bytes }))
+    .filter((d) => d.bytes > depBudgetBytes)
+    .sort((a, b) => b.bytes - a.bytes);
+  if (!ranked.length) return undefined;
+
+  const shown = ranked.slice(0, INSTANCE_CAP);
+  const worst = shown[0]!;
+  return {
+    id: "M7B-05",
+    status: "Open",
+    category: "Performance",
+    title: `${ranked.length} dependenc${ranked.length === 1 ? "y" : "ies"} over ${kb(depBudgetBytes)} of shipped module weight (worst: ${worst.pkg}, ${kb(worst.bytes)})`,
+    severity: "Perf",
+    confidence: "Confirmed",
+    taxonomy: "M7 — Dependency attribution over budget",
+    location: worst.pkg,
+    evidence:
+      `Worst-first, summed module size per npm package across analyzed chunks: ` +
+      shown.map((d) => `${d.pkg} (${kb(d.bytes)})`).join(", ") +
+      (ranked.length > shown.length ? ` … and ${ranked.length - shown.length} more` : ""),
+    impact: "Attributes shipped weight to specific packages — including a server-only dependency that has leaked into a client chunk, which shows up here as unexpected client-side weight tied to its name.",
+    fix: "Confirm each package's client-side presence is intentional; swap for a lighter alternative, lazy-load it behind the route/component that needs it, or exclude it from the client bundle if it's server-only.",
+    value: 4,
+    ease: 3,
+    safety: 4,
+  };
+}
+
+// Next.js webpack entry names look like "app/dashboard/page" / "pages/dashboard" — strip the
+// entry-type prefix so routeLabel's "/page" | "/route" suffix stripping lands on a real route.
+function statsRouteLabel(entryName: string): string {
+  return routeLabel(`/${entryName.replace(/^(app|pages)\//, "")}`);
+}
+
+function statsRouteAttributionFinding(groups: Record<string, StatsChunkGroup>, routeBudget: number): Finding | undefined {
+  const weights = Object.entries(groups)
+    .map(([name, g]) => ({ route: statsRouteLabel(name), bytes: (g.assets ?? []).reduce((sum, a) => sum + a.size, 0) }))
+    .filter((w) => w.bytes > routeBudget)
+    .sort((a, b) => b.bytes - a.bytes);
+  if (!weights.length) return undefined;
+
+  const shown = weights.slice(0, INSTANCE_CAP);
+  const worst = shown[0]!;
+  return {
+    id: "M7B-06",
+    status: "Open",
+    category: "Performance",
+    title: `${weights.length} route${weights.length === 1 ? "" : "s"} over the ${kb(routeBudget)} first-load JS budget per bundle-analyzer stats (worst: ${kb(worst.bytes)})`,
+    severity: "Perf",
+    confidence: "Confirmed",
+    taxonomy: "M7 — First-load JS over budget (bundle-analyzer stats)",
+    location: worst.route,
+    evidence:
+      `Parsed (pre-gzip) first-load JS per route from the stats JSON's chunk groups, worst-first: ` +
+      shown.map((w) => `${w.route} (${kb(w.bytes)})`).join(", ") +
+      (weights.length > shown.length ? ` … and ${weights.length - shown.length} more` : ""),
+    impact: "On Turbopack builds this is the only per-route attribution available — no app-build-manifest.json exists to derive it from the primary build artifact (see M7B-03).",
+    fix: "Split the heaviest routes with `next/dynamic`; cross-check against the M7B-04/M7B-05 findings for which duplicated modules or dependencies are driving the weight.",
+    value: 4,
+    ease: 3,
+    safety: 4,
+  };
+}
+
+// `statsPath` points at a webpack/bundle-analyzer stats JSON (e.g. `.next/analyze/client.json`
+// from `@next/bundle-analyzer`'s `generateStatsFile: true`) — a separate, optional input from
+// the `.next` build directory `parseBundleStats` reads above. Closes three gaps that manifest
+// parsing can't: duplicate modules across chunks, per-package dependency attribution, and
+// per-route first-load on Turbopack builds (which emit no app-build-manifest.json).
+export function parseBundleAnalyzerStats(statsPath: string, options?: BundleAnalyzerOptions): Finding[] {
+  const stats = readJson<WebpackBundleStats>(statsPath);
+  if (!stats) return [];
+
+  const routeBudget = options?.routeBudgetBytes ?? 750 * 1024;
+  const dupFloor = options?.dupModuleFloorBytes ?? 1024;
+  const depBudget = options?.depBudgetBytes ?? 100 * 1024;
+
+  const modules = stats.modules ?? [];
+  const groups = stats.namedChunkGroups ?? {};
+
+  const findings: Finding[] = [];
+  const dup = duplicateModulesFinding(modules, dupFloor);
+  if (dup) findings.push(dup);
+  const dep = dependencyAttributionFinding(modules, depBudget);
+  if (dep) findings.push(dep);
+  const route = statsRouteAttributionFinding(groups, routeBudget);
+  if (route) findings.push(route);
   return findings;
 }
