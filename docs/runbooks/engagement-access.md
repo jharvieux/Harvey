@@ -87,6 +87,25 @@ quoted.
   architecture.md §3) holds findings, reports, logs, and scan artifacts.
   Secrets are never part of that tree.
 
+## Delivery gate — module coverage (before the report ships)
+
+The audit is a 9-module product (M1–M9, `docs/audit-modules.md`). A delivery is only complete
+when **every** module is accounted for — run, or explicitly marked not-applicable with a reason.
+This is enforced mechanically by `assertModuleCoverage` (`src/audit/module-coverage.ts`), the same
+completeness discipline the target gate applies to apps/backends/seams. Record each module before
+delivery:
+
+- **ran** — executed. "No tests exist" is a *ran* result (it's the M8 finding), not a skip.
+- **na** — deliberately not applicable, **with a reason** (e.g. M7 performance / M2 dynamic when no
+  live DB or running app is in engagement scope). A bare skip or a reasonless `na` is a **gap** and
+  the gate throws, naming the module. Environment-gated modules (`needs: connected/dynamic/llm`) are
+  the common `na` cases — but the decision must be recorded, never silently omitted.
+
+The gap this guards against is real: a source-only run legitimately can't do M7 (needs the live DB)
+or M2 (needs a running app), but M3/M4/M5/M8/M9 all run on source and must not be dropped by
+accident. Fill the coverage record as each module runs; the gate is the last check before the
+report is delivered.
+
 ## Teardown (engagement close)
 
 ### Revoke / ask-revoke checklist
