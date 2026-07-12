@@ -1,0 +1,15 @@
+import { getServerSession } from "next-auth";
+import { supabase } from "../../lib/db";
+
+export default async function DashboardPage() {
+  const session = await getServerSession();
+  const { data: teams } = await supabase.from("teams").select("id, name").eq("owner_id", session?.user?.id);
+
+  return (
+    <ul>
+      {teams?.map((team) => (
+        <li key={team.id}>{team.name}</li>
+      ))}
+    </ul>
+  );
+}

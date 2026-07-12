@@ -21,6 +21,26 @@ const MUTATION_PATTERN = /\.(insert|update|upsert|delete|rpc)\s*\(/;
 const SECRET_ENV_PATTERN = /process\.env\.(?!NEXT_PUBLIC_)[A-Z0-9_]*(SERVICE_ROLE|SECRET|PRIVATE_KEY|API_KEY|TOKEN)[A-Z0-9_]*/;
 const DYNAMIC_API_PATTERN = /^(headers|cookies|noStore|unstable_noStore)$/;
 const CACHE_SIGNAL_PATTERN = /unstable_cache|["']use cache["']|\brevalidate\s*[:=]/;
+// A page under one of these route segments is auth/token-gated by construction (login, invite
+// accept, password reset, OAuth callback, …) — always per-request, never a static/ISR candidate,
+// so "no cache config" there is expected, not a smell (extends the #181 tightening).
+const AUTH_OR_TOKEN_ROUTE_SEGMENT = /(^|\/)(login|signin|sign-in|signup|sign-up|register|reset-password|forgot-password|verify|invite|magic-link|callback|auth)(\/|$|\.)/i;
+
+// App Router convention directory ("app/"); Pages Router ("pages/", excluding pages/api which
+// coexists with App Router in hybrid apps). A project with ANY app/ file is treated as (at
+// least partially) App Router — only a project with pages/ and NO app/ at all is Pages-only.
+const APP_DIR_PATTERN = /(^|\/)app\//;
+const PAGES_DIR_PATTERN = /(^|\/)pages\/(?!api\/)/;
+
+// True when the source set has no `app/` directory but does have a `pages/` one — a Pages
+// Router project, where App-Router-only checks (server-only guard, RSC leak, App Router
+// rendering/caching primitives) don't apply and are guaranteed false positives if run anyway
+// (#231: `server-only` fired on boxyhq/saas-starter-kit, a pure Pages Router app, where
+// non-NEXT_PUBLIC_ env vars are already stripped from the client bundle by Next's build —
+// the guard is moot there, not missing).
+function isPagesRouterOnly(files: SourceInput[]): boolean {
+  return !files.some((f) => APP_DIR_PATTERN.test(f.path)) && files.some((f) => PAGES_DIR_PATTERN.test(f.path));
+}
 
 function isDbQueryChain(node: ts.Expression): boolean {
   const names = callChainNames(node);
@@ -185,14 +205,53 @@ function findSecretEnvAccess(sf: ts.SourceFile): ts.Node | undefined {
   return hit;
 }
 
-function detectMissingServerOnly(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+// Whether some 'use client' file, following relative imports transitively, actually reaches
+// `targetPath` — the real bundling risk the server-only guard defends against. #231: every
+// raw hit in the 6-repo triage was already shielded by the next/headers barrier or the 'use
+// server' boundary because nothing imported the module from client code at all; only a real
+// import path from a Client Component makes the missing guard an actual finding.
+function hasRealClientImportPath(targetPath: string, importGraph: ReadonlyMap<string, string[]>, clientPaths: ReadonlySet<string>): boolean {
+  const visited = new Set<string>();
+  const queue = [...clientPaths];
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    if (cur === undefined || visited.has(cur)) continue;
+    if (cur === targetPath) return true;
+    visited.add(cur);
+    queue.push(...(importGraph.get(cur) ?? []));
+  }
+  return false;
+}
+
+function buildImportGraph(sources: Map<string, ts.SourceFile>, allPaths: Set<string>): Map<string, string[]> {
+  const graph = new Map<string, string[]>();
+  for (const [path, sf] of sources) {
+    const edges: string[] = [];
+    for (const stmt of sf.statements) {
+      if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+      const resolved = resolveRelativeImport(path, stmt.moduleSpecifier.text, allPaths);
+      if (resolved) edges.push(resolved);
+    }
+    graph.set(path, edges);
+  }
+  return graph;
+}
+
+function detectMissingServerOnly(sources: Map<string, ts.SourceFile>, nextId: NextId, pagesRouterOnly: boolean): Finding[] {
+  if (pagesRouterOnly) return []; // App-Router-only check (see isPagesRouterOnly)
+
   const findings: Finding[] = [];
+  const allPaths = new Set(sources.keys());
+  const clientPaths = new Set([...sources].filter(([, sf]) => leadingDirective(sf) === "use client").map(([p]) => p));
+  const importGraph = buildImportGraph(sources, allPaths);
+
   for (const [path, sf] of sources) {
     if (leadingDirective(sf) !== undefined) continue; // 'use client' can't hold secrets like this meaningfully; 'use server' modules are already server-exclusive by the Next compiler
     if (SERVER_ONLY_EXEMPT_PATTERN.test(path)) continue; // route handlers / middleware are already server-exclusive by Next.js routing convention
     if (hasServerOnlyImport(sf)) continue;
     const secretNode = findSecretEnvAccess(sf);
     if (!secretNode) continue;
+    if (!hasRealClientImportPath(path, importGraph, clientPaths)) continue; // nothing on the client side imports this module — no bundling risk to guard against
 
     findings.push(
       makeFinding(nextId, {
@@ -259,7 +318,10 @@ function detectServerActionAuthAndValidation(sources: Map<string, ts.SourceFile>
             severity: "High",
             confidence: "Likely",
             category: "Security",
-            taxonomy: "M9 — Server Action missing auth",
+            // Routed to the M1 authorization/client-input-trust class (#221), not scored as
+            // M9 rendering — a Server Action with no auth check is a broken-function-level-authz
+            // finding, the same class as the other three instances #221 catalogs.
+            taxonomy: "M1 — Server Action missing authorization check",
             location: loc(path, sf, action.node),
             evidence: `\`${action.name}\` is a Server Action ('use server') that calls insert/update/upsert/delete/rpc with no session/authority check found in its body.`,
             impact: "Server Actions are public POST endpoints — invocable directly with a crafted request regardless of which page normally calls them. Anyone can trigger this mutation.",
@@ -316,6 +378,11 @@ function detectUnsafeCacheConfig(sources: Map<string, ts.SourceFile>, nextId: Ne
     // itself; don't also flag the file for lacking a cache config it can't
     // meaningfully have.
     if (readsDynamicApi(sf)) continue;
+    // #231: every real-world hit here was an auth page, a theme cookie, or a token-gated
+    // viewer — legitimately per-request, never a static/ISR candidate. Suppress when the page
+    // itself checks the caller's session/auth, or sits on a login/reset/invite/callback route.
+    if (AUTH_PATTERN.test(text)) continue;
+    if (AUTH_OR_TOKEN_ROUTE_SEGMENT.test(path)) continue;
 
     findings.push(
       makeFinding(nextId, {
@@ -552,12 +619,13 @@ function detectAccidentalDynamicRendering(sources: Map<string, ts.SourceFile>, n
  */
 export function detectAppRouterFindings(files: SourceInput[]): Finding[] {
   const sources = new Map(files.map((f) => [f.path, parse(f.path, f.text)]));
+  const pagesRouterOnly = isPagesRouterOnly(files);
   let n = 0;
   const nextId: NextId = () => `M9-${String(++n).padStart(2, "0")}`;
 
   return [
     ...detectServerClientLeak(sources, nextId),
-    ...detectMissingServerOnly(sources, nextId),
+    ...detectMissingServerOnly(sources, nextId, pagesRouterOnly),
     ...detectServerActionAuthAndValidation(sources, nextId),
     ...detectUnsafeCacheConfig(sources, nextId),
     ...detectDataFetchingWaterfalls(sources, nextId),
