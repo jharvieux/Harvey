@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { mutationScore, summarizeMutationReport, toReportRows, type StrykerMutant, type StrykerReport } from "./mutation-scan.js";
+import {
+  detectNoTestSuite,
+  mutationScore,
+  noTestSuiteFinding,
+  noTestSuiteModuleRecord,
+  summarizeMutationReport,
+  toReportRows,
+  type StrykerMutant,
+  type StrykerReport,
+} from "./mutation-scan.js";
 
 // Shaped from the documented mutation-testing-elements JSON schema Stryker's json reporter
 // emits (schemaVersion "1") — not captured from a live Stryker run (deferred, see
@@ -172,5 +181,51 @@ describe("M8 calibration corpus — live Stryker capture (#72 §M8)", () => {
     const summary = summarizeMutationReport(m8Report);
     // 19 killed / 25 valid = 76.0% — matches Stryker's own "All files" score-table row.
     expect(summary.overall).toMatchObject({ totalMutants: 25, killed: 19, survived: 4, noCoverage: 2, mutationScore: 76 });
+  });
+});
+
+// #224: supabase-multi-tenant-starter had no test script, no test-runner dep, and no Stryker
+// config, so StrykerJS simply couldn't run — the CLI needs to detect that and report it as a
+// finding instead of erroring out un-runnable.
+describe("detectNoTestSuite", () => {
+  it("reports missing when there's no package.json, no runner dep, and no Stryker config", () => {
+    const result = detectNoTestSuite(undefined, false);
+    expect(result.missing).toBe(true);
+    expect(result.reason).toContain("no package.json found");
+  });
+
+  it("reports missing when scripts.test is only the npm-init placeholder and no runner dep/Stryker config exists", () => {
+    const result = detectNoTestSuite({ scripts: { test: 'echo "Error: no test specified" && exit 1' } }, false);
+    expect(result.missing).toBe(true);
+    expect(result.reason).toContain("npm-init placeholder");
+  });
+
+  it("is not missing once a real test script is present", () => {
+    const result = detectNoTestSuite({ scripts: { test: "vitest run" }, devDependencies: { vitest: "^3.0.0" } }, false);
+    expect(result.missing).toBe(false);
+  });
+
+  it("is not missing when a known test-runner dependency is present even without a wired test script", () => {
+    const result = detectNoTestSuite({ devDependencies: { jest: "^29.0.0" } }, false);
+    expect(result.missing).toBe(false);
+  });
+
+  it("is not missing when a Stryker config already exists, even with no test script/dep detected", () => {
+    const result = detectNoTestSuite(undefined, true);
+    expect(result.missing).toBe(false);
+  });
+});
+
+describe("noTestSuiteFinding / noTestSuiteModuleRecord", () => {
+  it("emits a High-severity M8 finding carrying the detection reason", () => {
+    const finding = noTestSuiteFinding("no package.json found; no known test-runner dependency; no stryker.conf.* found");
+    expect(finding).toMatchObject({ severity: "High", confidence: "Confirmed", taxonomy: "M8 — No automated test suite" });
+    expect(finding.evidence).toContain("no package.json found");
+  });
+
+  it("marks the M8 coverage record partial rather than a silent gap", () => {
+    const record = noTestSuiteModuleRecord("no package.json found");
+    expect(record).toMatchObject({ status: "partial" });
+    expect(record.note).toContain("no package.json found");
   });
 });

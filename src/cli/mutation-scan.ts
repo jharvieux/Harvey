@@ -27,7 +27,15 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { summarizeMutationReport, toReportRows, type StrykerReport } from "../mutation-scan.js";
+import {
+  detectNoTestSuite,
+  noTestSuiteFinding,
+  noTestSuiteModuleRecord,
+  summarizeMutationReport,
+  toReportRows,
+  type PackageJsonForTestDetection,
+  type StrykerReport,
+} from "../mutation-scan.js";
 
 const args = process.argv.slice(2);
 
@@ -62,6 +70,41 @@ function warnIfNotPerTest(cfgPath: string): void {
     }
   } catch {
     console.error(`⚠ could not read ${cfgPath} to verify coverageAnalysis`);
+  }
+}
+
+const STRYKER_CONFIG_NAMES = ["stryker.conf.json", "stryker.conf.js", "stryker.conf.mjs", "stryker.conf.cjs", "stryker.config.json", "stryker.config.js", "stryker.config.mjs", "stryker.config.cjs"];
+
+function readTargetPackageJson(): PackageJsonForTestDetection | undefined {
+  const pkgPath = join(targetDir, "package.json");
+  if (!existsSync(pkgPath)) return undefined;
+  try {
+    return JSON.parse(readFileSync(pkgPath, "utf8")) as PackageJsonForTestDetection;
+  } catch {
+    return undefined;
+  }
+}
+
+// #224: no test script / no known test-runner dep / no Stryker config means Stryker literally
+// can't run here — that's itself a High-severity M8 finding (zero automated coverage on a
+// codebase in an audit's scope), not a wrapper failure. Report it and mark M8 coverage partial
+// instead of falling through to runStryker()'s "binary not found"-shaped error.
+if (!reportPath) {
+  const hasStrykerConfig = configPath ? existsSync(resolve(configPath)) : STRYKER_CONFIG_NAMES.some((f) => existsSync(join(targetDir, f)));
+  const { missing, reason } = detectNoTestSuite(readTargetPackageJson(), hasStrykerConfig);
+  if (missing) {
+    const why = reason ?? "no automated test suite detected";
+    console.error(`✗ ${targetDir}: no automated test suite detected (${why}) — mutation testing has nothing to run against.`);
+    console.error(`M8 coverage: partial (no test suite) — emitting the "no automated test suite" finding instead.`);
+    const output = { finding: noTestSuiteFinding(why), moduleRecord: noTestSuiteModuleRecord(why) };
+    const json = JSON.stringify(output, null, 2);
+    if (outPath) {
+      writeFileSync(outPath, json + "\n");
+      console.error(`wrote M8 finding to ${outPath}`);
+    } else {
+      console.log(json);
+    }
+    process.exit(0);
   }
 }
 
