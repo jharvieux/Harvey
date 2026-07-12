@@ -43,6 +43,20 @@ const HIGH_PRECISION_GITLEAKS_RULES = new Set([
   "slack-webhook-url",
 ]);
 
+// Rule IDs used purely as internal correlation markers (gitleaks-supabase.toml) — never a
+// user-facing finding on their own. See parseGitleaksFindings below.
+const CORRELATION_MARKER_RULES = new Set(["supabase-demo-key-marker", "harvey-test-idp-marker"]);
+
+// Per-rule "why it matters" text for high-precision hits. Only supabase-service-role-jwt's claim
+// is actually about a decoded JWT role — every other high-precision rule (private-key,
+// sb_secret_, DB URIs, …) was previously getting that same JWT-specific sentence (#211).
+const HIGH_PRECISION_IMPACT: Partial<Record<string, string>> = {
+  "supabase-service-role-jwt": "Decoded JWT role claim confirms this is a service-role key — full database bypass of RLS.",
+};
+const DEFAULT_HIGH_IMPACT = "An unambiguous committed credential; treat it as live until proven otherwise.";
+
+const CI_WORKFLOW_PATH = /(^|\/)\.github\/workflows\//;
+
 export interface TruffleHogResult {
   DetectorName?: string;
   Verified?: boolean;
@@ -94,24 +108,43 @@ export function parseTruffleHogFindings(results: TruffleHogResult[], scope: stri
     );
 }
 
+// Known-public/test-credential recognizer (#225, generalizing #210 + #211). gitleaks decodes JWT
+// bodies and reports each rule match independently, so a demo/test credential and the marker that
+// identifies it as such land as separate GitleaksResult entries sharing a file (and often a line):
+//   - a high-precision hit sharing a file+line with the decoded "supabase-demo" iss claim is the
+//     well-known local-dev demo key (public by design, ships with every `supabase start`) —
+//     dropped entirely, same as the anon key allowlist above (#210).
+//   - a `private-key` hit sharing a FILE with a test/example SAML IdP marker, inside a CI
+//     workflow, is a test-fixture keypair — down-ranked to review instead of dropped, since a
+//     private key still deserves a human look (#211).
 export function parseGitleaksFindings(results: GitleaksResult[], scope: string): Finding[] {
-  return results.map((r, i) => {
-    const high = HIGH_PRECISION_GITLEAKS_RULES.has(r.RuleID);
-    return mechanicalFinding({
-      id: `SEC-GL-${scope}-${i + 1}`,
-      title: `${r.Description ?? r.RuleID} (${r.RuleID})`,
-      severity: high ? "Critical" : "High",
-      category: "Secret exposure",
-      taxonomy: high ? "Committed credential" : "Possible committed credential",
-      location: `[${scope}] ${r.File}${r.StartLine ? `:${r.StartLine}` : ""}${r.Commit ? ` (commit ${r.Commit.slice(0, 12)})` : ""}`,
-      evidence: `gitleaks rule "${r.RuleID}" matched: ${r.Match ?? r.Secret ?? "(match redacted)"}.`,
-      impact: high
-        ? "Decoded JWT role claim confirms this is a service-role key — full database bypass of RLS."
-        : "Pattern match on a potential secret; confirm before treating as a live credential.",
-      fix: "Rotate the credential if live, remove from source/history, and add to .gitignore.",
-      precisionTier: high ? "high" : "review",
+  const demoKeyLocations = new Set(
+    results.filter((r) => r.RuleID === "supabase-demo-key-marker").map((r) => `${r.File}:${r.StartLine ?? 0}`),
+  );
+  const testIdpFiles = new Set(results.filter((r) => r.RuleID === "harvey-test-idp-marker").map((r) => r.File));
+
+  return results
+    .filter((r) => !CORRELATION_MARKER_RULES.has(r.RuleID))
+    .filter((r) => !demoKeyLocations.has(`${r.File}:${r.StartLine ?? 0}`))
+    .map((r, i) => {
+      const testIdpPrivateKey = r.RuleID === "private-key" && CI_WORKFLOW_PATH.test(r.File) && testIdpFiles.has(r.File);
+      const high = HIGH_PRECISION_GITLEAKS_RULES.has(r.RuleID) && !testIdpPrivateKey;
+      const evidence = `gitleaks rule "${r.RuleID}" matched: ${r.Match ?? r.Secret ?? "(match redacted)"}.`;
+      return mechanicalFinding({
+        id: `SEC-GL-${scope}-${i + 1}`,
+        title: `${r.Description ?? r.RuleID} (${r.RuleID})`,
+        severity: high ? "Critical" : "High",
+        category: "Secret exposure",
+        taxonomy: high ? "Committed credential" : "Possible committed credential",
+        location: `[${scope}] ${r.File}${r.StartLine ? `:${r.StartLine}` : ""}${r.Commit ? ` (commit ${r.Commit.slice(0, 12)})` : ""}`,
+        evidence: testIdpPrivateKey
+          ? `${evidence} Down-ranked from Critical: this file also carries a test/example SAML IdP marker (ENTITY_ID / *.example.com) in a CI workflow — treat as a test fixture, confirm before escalating.`
+          : evidence,
+        impact: high ? (HIGH_PRECISION_IMPACT[r.RuleID] ?? DEFAULT_HIGH_IMPACT) : "Pattern match on a potential secret; confirm before treating as a live credential.",
+        fix: "Rotate the credential if live, remove from source/history, and add to .gitignore.",
+        precisionTier: high ? "high" : "review",
+      });
     });
-  });
 }
 
 function runJson<T>(bin: string, args: string[]): T[] {

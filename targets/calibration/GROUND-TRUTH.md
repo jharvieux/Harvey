@@ -1708,3 +1708,34 @@ it names and which of the 2 negatives it correctly spares is a documented follow
 same way M3's live-git and M7's live-branch confirmations are: build the fixture first, run and
 record the live result later. Whatever that run produces, report it as **"reviewer agreed N/4
 positives, M/2 negatives"** — never as an "M6 precision" percentage.
+
+## Known-public/test-credential recognizer (issues #210, #211, #225)
+
+A live public-repo scan (2026-07-12) surfaced two credibility-fatal secret-scanner FPs: the fixed
+Supabase local-dev demo key (`iss:"supabase-demo"`, ships with every `supabase start`) flagged as
+Critical (#210), and a SAML integration-test private key committed in a CI workflow alongside
+`*.example.com`/`ENTITY_ID` markers, also flagged as Critical (#211, which also had a mismatched
+`risk`/impact string copied from the JWT rule). #225 generalized both into one recognizer instead
+of two one-offs: two internal gitleaks correlation-marker rules
+(`supabase-demo-key-marker`, `harvey-test-idp-marker` — see `src/scan/rules/gitleaks-supabase.toml`)
+that are never themselves surfaced as findings, consumed by `parseGitleaksFindings` in
+`src/scan/secrets.ts` to clear or down-rank the credential they sit beside. Per-rule impact text
+(`HIGH_PRECISION_IMPACT`) replaces the one-size-fits-all JWT sentence, fixing #211's bug at the
+same time.
+
+Fixtures: the demo key pair in `supabase/seed.sql` (service_role decodes to a co-located
+`supabase-service-role-jwt` hit, cleared) and as a Bearer literal in `scripts/checks.mjs`
+(clears `harvey-http-authorization-bearer` — the "anon-key equivalent" FP class); the SAML test
+keypair in `.github/workflows/saml-integration-test.yml` (down-ranks `private-key` from Critical
+to Review, not cleared — still worth a look). The real, non-demo positives (`P-SRV-ROLE-JWT-SRC`
+at `lib/admin.js`, `P-PRIVATE-KEY` at `certs/key.pem`) carry no marker and are unaffected.
+
+### Live result (2026-07-12, gitleaks 8.30.1, trufflehog 3.95.9)
+
+All 4 new negatives clear (`N-SB-DEMO-KEY-SVC`, `N-SB-DEMO-KEY-ANON`, `N-SB-DEMO-KEY-BEARER`
+fully cleared; `N-SAML-TEST-PRIVATE-KEY` clears from the free count at review, not silently
+dropped), and both regression positives (`P-SRV-ROLE-JWT-SRC`, `P-PRIVATE-KEY`) still fire at
+high — no change to the existing high-tier count. `pnpm verify` (offline) is green:
+`secrets.test.ts` gained pure-function coverage of the clear/down-rank/impact-text logic and
+`calibration.test.ts` scores the new fixtures against recorded gitleaks output with no binary
+invoked.

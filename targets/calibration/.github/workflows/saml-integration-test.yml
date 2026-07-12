@@ -1,0 +1,19 @@
+# N-SAML-TEST-PRIVATE-KEY (NEGATIVE — must NOT be flagged at Critical/free-count, review-tier is
+# fine): a base64 PEM private key committed inline in a CI workflow, alongside test/example SAML
+# IdP markers (ENTITY_ID, a *.example.com entity URL) — the shape of a SAML integration-test
+# keypair (e.g. SAML Jackson's test fixtures), not a live credential (#211). The default gitleaks
+# `private-key` rule still matches the decoded PEM block (it's an unambiguous key shape); the
+# internal harvey-test-idp-marker correlation (same file) down-ranks it from Critical to Review
+# instead of clearing it outright — still worth a human look. PEM body is FAKE.
+name: saml-integration-test
+
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      ENTITY_ID: https://saml.example.com/entityid
+      PRIVATE_KEY: "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUZBS0VmYWtlMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAKWm1GcldXdGxlV0p2WkhsdWIzUmhjbVZoYkhCeWFYWmhkR1ZyWlhsbVlXdGxabUZyWldaaGEyVm1ZV3RsWm1GclpRPT0KLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQ=="
+    steps:
+      - run: echo "run SAML Jackson integration tests"
