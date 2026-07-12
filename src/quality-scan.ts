@@ -86,6 +86,32 @@ export function duplicationSummary(report: JscpdReport): { percentage: number; d
   return { percentage: t.percentage, duplicatedLines: t.duplicatedLines, totalLines: t.lines };
 }
 
+// #223: knip throws (rather than reporting) when it can't resolve a target's config/plugin
+// imports — most often because the target's own node_modules isn't installed. M4 (jscpd) has no
+// such dependency, so a knip failure shouldn't cost the engagement its duplication findings too.
+// The CLI catches the throw and substitutes this disclosure finding for the M5-* findings
+// knipToFindings would otherwise have produced — a visible partial, not a silent skip, matching
+// the coverage gap disclosure pattern already used for M7's Turbopack bundle-manifest gap
+// (src/detectors/bundle-stats.ts, id M7B-03).
+export function knipUnavailableFinding(reason: string): Finding {
+  return {
+    id: "M5-00",
+    title: "M5 dead-code scan (knip) did not run",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Maintainability",
+    taxonomy: "M5 — Slop / dead code",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `knip failed to run: ${reason}`,
+    impact: "Dead-code coverage for this engagement is incomplete for this pass — a disclosed coverage gap, not a finding of zero dead code.",
+    fix: "Install the target repo's dependencies (npm/pnpm/yarn install) so knip can resolve its config and plugin imports, then re-run `pnpm quality-scan`.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
+}
+
 // fileLineCounts is caller-supplied (read from disk) so this stays a pure,
 // testable transform — and so the reported line count is measured, not guessed.
 export function knipToFindings(report: KnipReport, fileLineCounts: Record<string, number> = {}): Finding[] {

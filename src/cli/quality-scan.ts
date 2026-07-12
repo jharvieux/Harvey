@@ -16,6 +16,7 @@ import {
   duplicationSummary,
   jscpdToFindings,
   knipToFindings,
+  knipUnavailableFinding,
   type JscpdReport,
   type KnipReport,
 } from "../quality-scan.js";
@@ -78,23 +79,43 @@ function lineCount(dir: string, relPath: string): number | undefined {
 }
 
 const jscpdReport = runJscpd(targetDir);
-const knipReport = runKnip(targetDir);
 
-const fileLineCounts: Record<string, number> = {};
-for (const file of knipReport.files) {
-  const n = lineCount(targetDir, file);
-  if (n !== undefined) fileLineCounts[file] = n;
+// #223: M4 has no dependency on M5 — a knip failure (most commonly the target's own
+// node_modules isn't installed, so it can't resolve config/plugin imports) must not cost the
+// engagement its jscpd findings too. Caught here so main flow always has a duplication result.
+let knipReport: KnipReport | undefined;
+let knipFailure: string | undefined;
+try {
+  knipReport = runKnip(targetDir);
+} catch (err) {
+  knipFailure = err instanceof Error ? err.message : String(err);
+  console.error(`⚠ knip failed — M5 dead-code coverage skipped for this run: ${knipFailure}`);
 }
 
-const findings: Finding[] = [...jscpdToFindings(jscpdReport), ...knipToFindings(knipReport, fileLineCounts)];
+const fileLineCounts: Record<string, number> = {};
+if (knipReport) {
+  for (const file of knipReport.files) {
+    const n = lineCount(targetDir, file);
+    if (n !== undefined) fileLineCounts[file] = n;
+  }
+}
+
+const findings: Finding[] = [
+  ...jscpdToFindings(jscpdReport),
+  ...(knipReport ? knipToFindings(knipReport, fileLineCounts) : [knipUnavailableFinding(knipFailure ?? "unknown error")]),
+];
 
 const dup = duplicationSummary(jscpdReport);
 console.error(
   `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s)`,
 );
-console.error(
-  `M5 dead code: ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports`,
-);
+if (knipReport) {
+  console.error(
+    `M5 dead code: ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports`,
+  );
+} else {
+  console.error("M5 dead code: skipped (knip failed — see warning above)");
+}
 
 const json = JSON.stringify(findings, null, 2);
 if (outPath) {

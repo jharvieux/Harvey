@@ -3,6 +3,7 @@ import {
   duplicationSummary,
   jscpdToFindings,
   knipToFindings,
+  knipUnavailableFinding,
   type JscpdReport,
   type KnipReport,
 } from "./quality-scan.js";
@@ -116,5 +117,18 @@ describe("knipToFindings", () => {
   it("tags every finding at the high precision tier (issue #72 calibration)", () => {
     const findings = knipToFindings(knipReport);
     expect(findings.every((f) => f.precisionTier === "high")).toBe(true);
+  });
+});
+
+// #223: a knip failure (e.g. target's node_modules isn't installed) must not crash the whole
+// quality-scan and drop M4's jscpd findings — the CLI substitutes this disclosure finding instead.
+describe("knipUnavailableFinding", () => {
+  it("discloses the M5 coverage gap without claiming zero dead code", () => {
+    const finding = knipUnavailableFinding("Cannot find module 'vitest/config'");
+    expect(finding.severity).toBe("Info");
+    expect(finding.confidence).toBe("N/A");
+    expect(finding.taxonomy).toContain("M5");
+    expect(finding.evidence).toContain("Cannot find module 'vitest/config'");
+    expect(finding.impact).toContain("incomplete");
   });
 });
