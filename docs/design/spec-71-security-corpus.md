@@ -77,6 +77,8 @@ Legend: **Tier** = `high` (free count) / `review` (triage) / `connected` (live D
 
 Detection: gitleaks provider patterns / TruffleHog verification / custom regex; `high` **only** for verified secrets or high-specificity provider patterns; unverifiable "valid-shape but dead" keys are `review` (matches how `P-HARDCODED-KEY` is already scored).
 
+Known-public / test credentials that these patterns would otherwise mis-fire on are handled by a maintained **known-public/test-credential recognizer** (built #210/#211/#225): internal gitleaks correlation-marker rules — never surfaced as findings themselves — that clear the Supabase local-dev demo `service_role` key (decoded `iss:"supabase-demo"`, previously a false Critical) and down-rank a CI/test SAML `private-key` in `*.example.com` context to `review`. The genuine positives (`P-SRV-ROLE-JWT-SRC`, `P-PRIVATE-KEY`) still fire at `high`; the paired negatives (demo-key + SAML-test-key lookalikes) live in `src/scan/calibration/known-public-creds.entries.ts` and gate the recognizer per #61.
+
 | id | class | CWE / OWASP | fixture sketch | detection mechanism | tier | source |
 |---|---|---|---|---|---|---|
 | P-NEXTPUBLIC-SECRET `[exists]` | Secret mis-prefixed `NEXT_PUBLIC_` | CWE-200 / A05 | `.env.local` — `NEXT_PUBLIC_STRIPE_SECRET_KEY=sk_live_…` | custom `supabase-next-public-secret-leak` regex + gitleaks | review | [Supabase keys](https://supabase.com/docs/guides/getting-started/api-keys) |
