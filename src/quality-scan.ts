@@ -42,16 +42,53 @@ export interface KnipReport {
 
 const FRAGMENT_PREVIEW_LEN = 240;
 
+// #232: paths jscpd should never treat as hand-maintained duplication, on top of the standard
+// build/dep dirs — the three FP-triage classes an evidenced 6-repo calibration sweep named:
+// generated code (including Supabase's two common CLI-generated-types filenames), vendored
+// fork-mirror directories, and demo/mock-labeled files or directories. Starting list from that
+// evidence; extend as new FP shapes surface.
+export const JSCPD_IGNORE_GLOBS = [
+  "**/node_modules/**",
+  "**/dist/**",
+  "**/.next/**",
+  "**/generated/**",
+  "**/*.gen.ts",
+  "**/database.types.ts",
+  "**/types_db.ts",
+  "**/vendor/**",
+  "**/patches/**",
+  "**/*demo*/**",
+  "**/*-demo-*.*",
+];
+
 function severityForClone(lines: number): Finding["severity"] {
   if (lines >= 50) return "Medium";
   if (lines >= 15) return "Low";
   return "Info";
 }
 
+// #232: jscpd matching a file against itself is how it reports internally-repetitive DATA (SVG
+// icon-path tables, enum/lookup literal blocks) — not cross-file logic duplication a client could
+// "extract into a shared module" (the M4 fix text). Excluded from scoring, not just re-labeled,
+// since the fix recommendation genuinely doesn't apply to it.
+function isCrossFileClone(dup: JscpdDuplicate): boolean {
+  return dup.firstFile.name !== dup.secondFile.name;
+}
+
+// jscpd's own default gate (minLines 5 / minTokens 50) still lets through clusters the #232
+// triage named explicitly as noise: shared import headers, tiny boilerplate overlaps. This raises
+// the bar for what counts as real duplicated logic vs. incidental short overlap — a judgment
+// call, not a measured constant; revisit if it starts hiding genuine small-but-real clones.
+const MIN_SIGNIFICANT_LINES = 10;
+
+function isSignificantClone(dup: JscpdDuplicate): boolean {
+  return isCrossFileClone(dup) && dup.lines >= MIN_SIGNIFICANT_LINES;
+}
+
 // jscpd's json reporter always writes duplicates in discovery order, not
 // worst-first, so re-sort by duplicated lines to surface the worst clusters.
 export function jscpdToFindings(report: JscpdReport): Finding[] {
-  const worst = [...report.duplicates].sort((a, b) => b.lines - a.lines);
+  const worst = report.duplicates.filter(isSignificantClone).sort((a, b) => b.lines - a.lines);
 
   return worst.map((dup, i): Finding => {
     const severity = severityForClone(dup.lines);
@@ -81,9 +118,16 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
   });
 }
 
+// #232: jscpd's own statistics.total counts every raw clone it found, including the self-file
+// and sub-threshold clusters jscpdToFindings now excludes — recompute so the reported percentage
+// matches what the findings above actually claim. Reimplements jscpd's own
+// Statistic.calculatePercentage (round(cloned/total*10000)/100, verified against
+// @jscpd/core's source) rather than guessing a formula.
 export function duplicationSummary(report: JscpdReport): { percentage: number; duplicatedLines: number; totalLines: number } {
-  const t = report.statistics.total;
-  return { percentage: t.percentage, duplicatedLines: t.duplicatedLines, totalLines: t.lines };
+  const totalLines = report.statistics.total.lines;
+  const duplicatedLines = report.duplicates.filter(isSignificantClone).reduce((sum, d) => sum + d.lines, 0);
+  const percentage = totalLines ? Math.round((10000 * duplicatedLines) / totalLines) / 100 : 0;
+  return { percentage, duplicatedLines, totalLines };
 }
 
 // #223: knip throws (rather than reporting) when it can't resolve a target's config/plugin

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   duplicationSummary,
+  JSCPD_IGNORE_GLOBS,
   jscpdToFindings,
   knipToFindings,
   knipUnavailableFinding,
@@ -8,9 +9,10 @@ import {
   type KnipReport,
 } from "./quality-scan.js";
 
-// Fixtures shaped from real `jscpd --reporters json` / `knip --reporter json`
-// output (captured against a throwaway two-file clone and a dead-export fixture),
-// not hand-guessed — jscpd's json reporter emits duplicates out of size order.
+// Base two entries shaped from real `jscpd --reporters json` output (captured against a
+// throwaway two-file clone) — jscpd's json reporter emits duplicates out of size order. The
+// self-clone and tiny-header entries below are hand-built negative fixtures standing in for the
+// #232 FP shapes (icon-table self-repetition, shared import headers), not captured tool output.
 const jscpdReport: JscpdReport = {
   statistics: { total: { percentage: 12.5, duplicatedLines: 40, lines: 320 } },
   duplicates: [
@@ -29,6 +31,26 @@ const jscpdReport: JscpdReport = {
       fragment: "x".repeat(300),
       firstFile: { name: "src/big1.ts", start: 5, end: 65 },
       secondFile: { name: "src/big2.ts", start: 10, end: 70 },
+    },
+    // #232: same file both sides — jscpd flagging icons.tsx's own repeated SVG path literals
+    // against itself, not cross-file logic duplication a client could extract.
+    {
+      format: "typescript",
+      lines: 40,
+      tokens: 500,
+      fragment: "<path d=\"M10 10L20 20\" />".repeat(10),
+      firstFile: { name: "src/icons.tsx", start: 1, end: 40 },
+      secondFile: { name: "src/icons.tsx", start: 50, end: 90 },
+    },
+    // #232: a 6-line shared import header — real cross-file overlap, but under
+    // MIN_SIGNIFICANT_LINES, not worth a maintainability finding on its own.
+    {
+      format: "typescript",
+      lines: 6,
+      tokens: 80,
+      fragment: "import { a } from \"./a\";\nimport { b } from \"./b\";",
+      firstFile: { name: "src/c.ts", start: 1, end: 6 },
+      secondFile: { name: "src/d.ts", start: 1, end: 6 },
     },
   ],
 };
@@ -61,11 +83,34 @@ describe("jscpdToFindings", () => {
     const findings = jscpdToFindings(jscpdReport);
     expect(findings.every((f) => f.precisionTier === "high")).toBe(true);
   });
+
+  it("excludes same-file clones — self-repeated data, not extractable cross-file logic (#232)", () => {
+    const findings = jscpdToFindings(jscpdReport);
+    expect(findings.some((f) => f.location.includes("icons.tsx"))).toBe(false);
+  });
+
+  it("excludes clusters under the significant-lines gate — e.g. a shared import header (#232)", () => {
+    const findings = jscpdToFindings(jscpdReport);
+    expect(findings.some((f) => f.location.includes("src/c.ts"))).toBe(false);
+  });
 });
 
 describe("duplicationSummary", () => {
-  it("passes through the report's overall percentage for the narrative section", () => {
-    expect(duplicationSummary(jscpdReport).percentage).toBe(12.5);
+  it("recomputes the percentage from only significant clusters, excluding self-file and sub-threshold noise (#232)", () => {
+    // Only the 11-line and 60-line cross-file clusters count; the self-file (40) and tiny (6)
+    // ones are excluded. round(10000 * 71/320) / 100 = 22.19 — jscpd's own percentage formula.
+    const summary = duplicationSummary(jscpdReport);
+    expect(summary.duplicatedLines).toBe(71);
+    expect(summary.percentage).toBe(22.19);
+  });
+});
+
+describe("JSCPD_IGNORE_GLOBS", () => {
+  it("excludes the #232-evidenced generated/vendored/demo FP shapes on top of the standard build dirs", () => {
+    expect(JSCPD_IGNORE_GLOBS).toEqual(expect.arrayContaining(["**/node_modules/**", "**/dist/**", "**/.next/**", "**/generated/**"]));
+    expect(JSCPD_IGNORE_GLOBS.some((g) => g.includes("database.types.ts"))).toBe(true);
+    expect(JSCPD_IGNORE_GLOBS.some((g) => g.includes("vendor"))).toBe(true);
+    expect(JSCPD_IGNORE_GLOBS.some((g) => g.includes("demo"))).toBe(true);
   });
 });
 
