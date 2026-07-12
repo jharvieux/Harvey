@@ -36,7 +36,6 @@ const RULES = [
   [/(^|_)(iban|account_number|routing|swift)(_|$)/, "BANK_ACCT", "PCI", "medium"],
   [/(stripe_customer|payment_method|payment_intent)/, "PAYMENT_REF", "PCI", "medium"],
   [/(wallet_address|crypto_address|btc_address|eth_address)/, "CRYPTO_WALLET", "SENSITIVE_PII", "medium"],
-  [/(tax_id|(^|_)ein(_|$)|(^|_)vat(_|$)|(^|_)nino(_|$))/, "TAX_ID", "SENSITIVE_PII", "medium"],
   // --- General PII (Presidio-style) ---
   [/(^|_)(ip|ip_address)(_|$)/, "IP", "PII", "medium"],
   [/(first_name|last_name|full_name|surname|given_name|middle_name)/, "NAME", "PII", "medium"],
@@ -50,6 +49,20 @@ const RULES = [
   [/(^|_)(nationality|citizenship)(_|$)/, "NATIONALITY", "SENSITIVE_PII", "medium"],
   [/(health|diagnosis|medical|patient|prescription|(^|_)icd(_|$))/, "HEALTH", "PHI", "high"],
   [/(^|_)name(_|$)/, "NAME?", "PII", "low"], // ambiguous: product/display name — review
+  // #233: widened to also catch `tax_number` (`vat_id` was already covered by the `vat`
+  // alternative below since it's word-bounded, not literal `tax_id`/`vat`).
+  [/(tax_id|tax_number|(^|_)ein(_|$)|(^|_)vat(_|$)|(^|_)nino(_|$))/, "TAX_ID", "SENSITIVE_PII", "medium"],
+  // --- Stored credentials/secrets — not PII/PHI/PCI, but its own data-exposure class: a
+  // plaintext credential sitting in an app table (readable by any row-level query that isn't
+  // locked down) is the M10 headline finding, not the contact PII next to it (ATC dogfood:
+  // plaintext `ai_api_key`/`smtp_pass` in `organisations`, readable by any org member via normal
+  // RLS). Deliberately narrow: no bare `token` alternative, so single-use capability tokens
+  // (invite/share/reset/verify links) never reach these — see the capability-token exclusion
+  // below for the one shape that still needs an explicit guard (`password_reset_token`, which
+  // contains "password").
+  [/(api_?key|client_secret|private_?key|encryption_?key|secret_?key)/, "API_KEY", "SECRET", "high"],
+  [/(smtp_pass|(^|_)password(_|$)|(^|_)passwd(_|$))/, "STORED_PASSWORD", "SECRET", "high"],
+  [/(access_?token|refresh_?token|auth_?token|session_?token)/, "AUTH_TOKEN", "SECRET", "high"],
 ];
 
 // Every rule above over-matches on real schemas (validated on ATC — see docs/audit-modules.md
@@ -64,34 +77,75 @@ const INFRA_HEALTH_PATTERN =
 // address_type). Tradeoff: this would also swallow a genuine "blood_type" PHI column if one were
 // ever added to the dictionary — none currently is, but flagging the tradeoff for future tuning.
 const DESCRIPTOR_SUFFIX_PATTERN = /_(category|type|kind|class)$/;
+// #233: an entity's own display name on a table that IS that entity (organizations.name,
+// tenants.company_name) is the org's name, not a person's — the NAME/NAME? rules can't tell
+// "whose name" a bare `name` column holds without the table it lives on.
+const ORG_ENTITY_TABLE_PATTERN = /(^|_)(organi[sz]ations?|orgs?|tenants?|companies|company|workspaces?|teams?)$/;
+const NAME_INFOTYPES = new Set(["NAME", "NAME?"]);
+// #233: a capability token (invite/share/reset/verify/magic-link) is a single-use authorization
+// artifact, not a stored long-lived credential — `password_reset_token` would otherwise match
+// STORED_PASSWORD via its "password" substring.
+const CAPABILITY_TOKEN_VERB_PATTERN = /(invite|invitation|share|reset|verif|confirm|magic_?link)/;
+const CAPABILITY_TOKEN_NOUN_PATTERN = /(token|code|link)/;
+const SECRET_INFOTYPES = new Set(["API_KEY", "STORED_PASSWORD", "AUTH_TOKEN"]);
 
-function exclusionReason(column, sqlType) {
+function exclusionReason(column, sqlType, infotype, tableName) {
   if (sqlType && String(sqlType).toLowerCase() === "boolean") {
     return "sql type is boolean — PII/PHI/PCI values aren't booleans, this is a flag referencing the concept";
   }
   if (BOOLEAN_FLAG_NAME_PATTERN.test(column)) return "boolean-flag naming, not a data value";
   if (INFRA_HEALTH_PATTERN.test(column)) return "infra/system health-check naming, not medical health data";
   if (DESCRIPTOR_SUFFIX_PATTERN.test(column)) return "descriptor suffix — categorizes the concept, isn't the value";
+  if (NAME_INFOTYPES.has(infotype) && tableName && ORG_ENTITY_TABLE_PATTERN.test(String(tableName).toLowerCase())) {
+    return "entity display name on an org/tenant/company table — not personal PII";
+  }
+  if (SECRET_INFOTYPES.has(infotype) && CAPABILITY_TOKEN_VERB_PATTERN.test(column) && CAPABILITY_TOKEN_NOUN_PATTERN.test(column)) {
+    return "capability token/link (invite/share/reset/verify) — a single-use authorization artifact, not a stored credential";
+  }
   return null;
 }
 
+// #233: a bare `number` column only reads as PHONE with table context (a `phone`/`contact`/
+// `sms`/`call` table) — on its own it's as likely an order/tracking/account number, so this
+// stays out of the name-only RULES dictionary and only fires with that context, at medium
+// (review) confidence rather than the high confidence a `phone_number`-named column gets.
+const BARE_NUMBER_COLUMN_PATTERN = /^number$/;
+const PHONE_CONTEXT_TABLE_PATTERN = /(phone|contact|sms|call|dial)/;
+
+// #233: an opaquely-named column (`value`/`data`/`payload`) on a table that IS a credential/
+// config store (BoxyHQ SAML/SSO's `jackson_store.value`) holds an encrypted secret blob a
+// name-only matcher otherwise skips entirely — table context is the only signal available.
+const OPAQUE_STORE_TABLE_PATTERN = /(_store|_config|_secrets?|_credentials?)$/;
+const OPAQUE_STORE_COLUMN_PATTERN = /^(value|data|payload|blob|secret|config)$/;
+
 /**
- * @typedef {{infotype: string, category: "PII"|"SENSITIVE_PII"|"PHI"|"PCI", confidence: "high"|"medium"|"low"}} ClassifyResult
+ * @typedef {{infotype: string, category: "PII"|"SENSITIVE_PII"|"PHI"|"PCI"|"SECRET", confidence: "high"|"medium"|"low"}} ClassifyResult
  */
 
 /**
- * Classify a single column by name (and, optionally, its SQL type for the exclusion pass).
- * Never inspects data — name/type only. Returns null for no match or an excluded false positive.
+ * Classify a single column by name (and, optionally, its SQL type for the exclusion pass and
+ * its table name for the handful of checks that need table context to disambiguate). Never
+ * inspects data — name/type/table only. Returns null for no match or an excluded false positive.
  * @param {string} column
  * @param {string} [sqlType] e.g. information_schema.columns.data_type
+ * @param {string} [tableName] e.g. information_schema.columns.table_name
  * @returns {ClassifyResult|null}
  */
-export function classifyColumn(column, sqlType) {
+export function classifyColumn(column, sqlType, tableName) {
   const c = String(column).toLowerCase();
   for (const [pattern, infotype, category, confidence] of RULES) {
     if (!pattern.test(c)) continue;
-    if (exclusionReason(c, sqlType)) return null;
+    if (exclusionReason(c, sqlType, infotype, tableName)) return null;
     return { infotype, category, confidence };
+  }
+  if (tableName) {
+    const t = String(tableName).toLowerCase();
+    if (BARE_NUMBER_COLUMN_PATTERN.test(c) && PHONE_CONTEXT_TABLE_PATTERN.test(t)) {
+      return { infotype: "PHONE", category: "PII", confidence: "medium" };
+    }
+    if (OPAQUE_STORE_COLUMN_PATTERN.test(c) && OPAQUE_STORE_TABLE_PATTERN.test(t)) {
+      return { infotype: "OPAQUE_ENCRYPTED_STORE", category: "SECRET", confidence: "medium" };
+    }
   }
   return null;
 }
@@ -100,7 +154,7 @@ export function classifyColumn(column, sqlType) {
 // WHAT was exposed, not just THAT something was exposed. Category base points, scaled by match
 // confidence, summed per distinct infotype on a table. CVV is overridden — PCI-DSS forbids
 // storing it post-auth at all, so its presence alone should read Critical.
-const CATEGORY_POINTS = { PII: 1, SENSITIVE_PII: 4, PHI: 6, PCI: 6 };
+const CATEGORY_POINTS = { PII: 1, SENSITIVE_PII: 4, PHI: 6, PCI: 6, SECRET: 6 };
 const CONFIDENCE_WEIGHT = { high: 1, medium: 0.6, low: 0.3 };
 const INFOTYPE_POINT_OVERRIDES = { CVV: 12 };
 
@@ -129,7 +183,7 @@ function scoreToSeverity(score) {
  * @param {{table_name: string, column_name: string, data_type?: string}[]} columns
  * @param {(col: {table_name: string, column_name: string, data_type?: string}) => ClassifyResult|null} [resolve]
  */
-export function buildDataMap(columns, resolve = (col) => classifyColumn(col.column_name, col.data_type)) {
+export function buildDataMap(columns, resolve = (col) => classifyColumn(col.column_name, col.data_type, col.table_name)) {
   const byTable = new Map();
   for (const col of columns) {
     const hit = resolve(col);
@@ -152,6 +206,7 @@ export function buildDataMap(columns, resolve = (col) => classifyColumn(col.colu
       severity: scoreToSeverity(score),
       phi: infotypes.some((h) => h.category === "PHI"),
       pci: infotypes.some((h) => h.category === "PCI"),
+      secret: infotypes.some((h) => h.category === "SECRET"),
     };
   }
   return map;
@@ -172,19 +227,22 @@ export function buildDataMap(columns, resolve = (col) => classifyColumn(col.colu
 export async function classifyWithFallback(columns, semanticClassifier) {
   if (!semanticClassifier) return buildDataMap(columns);
   const unresolved = columns
-    .filter((col) => !classifyColumn(col.column_name, col.data_type))
+    .filter((col) => !classifyColumn(col.column_name, col.data_type, col.table_name))
     .map((col) => ({ table_name: col.table_name, column_name: col.column_name }));
   if (unresolved.length === 0) return buildDataMap(columns);
 
   const semanticHits = await semanticClassifier(unresolved);
   return buildDataMap(columns, (col) => {
-    const dictHit = classifyColumn(col.column_name, col.data_type);
+    const dictHit = classifyColumn(col.column_name, col.data_type, col.table_name);
     if (dictHit) return dictHit;
     const semanticHit = semanticHits.get(`${col.table_name}.${col.column_name}`);
     return semanticHit ? { ...semanticHit, source: "semantic" } : null;
   });
 }
 
+// Each case is [column, expectedCategory (null = no match), expectedConfidence, sqlType,
+// tableName] — sqlType/tableName are only needed by the exclusion/table-context checks below
+// and default to undefined when omitted.
 function selftest() {
   const cases = [
     ["email", "PII", "high"],
@@ -202,12 +260,34 @@ function selftest() {
     ["email_category", null, null],
     ["awaiting_dob_reprompt", null, null],
     ["vendor_health", null, null],
+    // #233: tax-ID under-matching
+    ["tax_number", "SENSITIVE_PII", "medium"],
+    ["vat_id", "SENSITIVE_PII", "medium"],
+    // #233: stored credentials/secrets — the ATC dogfood must-not-miss case
+    ["ai_api_key", "SECRET", "high"],
+    ["smtp_pass", "SECRET", "high"],
+    ["access_token", "SECRET", "high"],
+    // #233: capability tokens are NOT stored credentials
+    ["password_reset_token", null, null, undefined],
+    ["invite_token", null, null],
+    ["share_token", null, null],
+    // #233: org/tenant/company entity-name suppression (table context required)
+    ["name", "PII", "low", undefined, "profiles"], // ambiguous elsewhere — still NAME?
+    ["name", null, null, undefined, "organizations"],
+    ["company_name", null, null, undefined, "tenants"],
+    // #233: bare `number` only reads as phone with table context
+    ["number", null, null, undefined, "orders"],
+    ["number", "PII", "medium", undefined, "contact_numbers"],
+    // #233: opaquely-named encrypted secret store (BoxyHQ jackson_store.value)
+    ["value", null, null, undefined, "widgets"],
+    ["value", "SECRET", "medium", undefined, "jackson_store"],
   ];
   let ok = 0;
-  for (const [col, cat, conf] of cases) {
-    const r = classifyColumn(col);
+  for (const [col, cat, conf, sqlType, tableName] of cases) {
+    const r = classifyColumn(col, sqlType, tableName);
     const pass = cat === null ? r === null : r && r.category === cat && r.confidence === conf;
-    console.log(`${pass ? "PASS" : "FAIL"}  ${col} → ${r ? r.category + "/" + r.confidence : "none"}`);
+    const label = tableName ? `${tableName}.${col}` : col;
+    console.log(`${pass ? "PASS" : "FAIL"}  ${label} → ${r ? r.category + "/" + r.confidence : "none"}`);
     if (pass) ok++;
   }
   console.log(`\n${ok}/${cases.length} passed`);

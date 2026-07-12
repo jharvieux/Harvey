@@ -4,7 +4,7 @@
 
 export interface ClassifyResult {
   infotype: string;
-  category: "PII" | "SENSITIVE_PII" | "PHI" | "PCI";
+  category: "PII" | "SENSITIVE_PII" | "PHI" | "PCI" | "SECRET";
   confidence: "high" | "medium" | "low";
 }
 
@@ -22,9 +22,10 @@ export interface TableDataMapEntry {
   severity: "Critical" | "High" | "Medium" | "Low" | "Info";
   phi: boolean;
   pci: boolean;
+  secret: boolean;
 }
 
-export function classifyColumn(column: string, sqlType?: string): ClassifyResult | null;
+export function classifyColumn(column: string, sqlType?: string, tableName?: string): ClassifyResult | null;
 export function buildDataMap(
   columns: ColumnInfo[],
   resolve?: (col: ColumnInfo) => ClassifyResult | null,
