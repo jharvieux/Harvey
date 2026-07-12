@@ -95,25 +95,41 @@ chunked-batch loops (`i += BATCH_SIZE`) are the *fix* for N+1, not the bug; and 
 rolls up to one finding per file, tiered `Likely` on the request path (`app/`/`pages/`) vs
 `Review` off it (workers/jobs — job runtime, not user-facing latency).
 
+**Precision guards from the 6-repo calibration triage (#230, ~10% precision on the raw output —
+~154 raw → ~16 real):** `react-hooks/exhaustive-deps` (M7H) is downgraded to an Info-severity style
+note, not scored as a Perf finding — every raw hit was the rule firing on an effect already keyed
+to a primitive id, not a proven stale-closure/refetch bug. Also suppressed as noise with no real
+refactor behind it: array-index keys on hardcoded/literal lists that never reorder/insert/delete
+(Footer/FAQ/Stepper-style); inline object/array props that are framer-motion animation props
+(`animate`/`initial`/`exit`/`transition`/`variants` — value-diffed by the library regardless of
+reference identity), inline `style` objects, or arrays built entirely from live i18n `t(...)` calls;
+`<img>` on `data:`/`blob:` one-shot sources (MFA QR codes, blob previews) `next/image` can't
+optimize anyway; and a `<Context.Provider value={…}>` whose Context isn't created in the project's
+own sources (a shadcn/ui or other library-owned Provider — the app doesn't own its memoization).
+The one real signal that survived triage — unbounded `select("*")` on a growable request-path
+list — is kept; `.in('id', [...])` lookups and `.insert()`/`.upsert()` echoed through `.select()`
+are now treated as bounded (a specific-row lookup or the mutated rows, not a table scan), not
+flagged.
+
 Classes (severity / confidence — see the detector for per-check evidence and limitations):
 
 | Class | Detects | Sev / Conf |
 |---|---|---|
-| Context value recreated every render | inline object/array/arrow as `<X.Provider value={…}>` | Perf / Likely |
-| Inline literal prop | object/array literal props on components (rolled up, one finding per file) | Low / Review |
-| Raw `<img>` | `<img>` instead of `next/image` (rolled up per file) | Perf / Likely |
-| Index as list key | `key={i}` bound to the `.map()` index parameter | Low / Likely |
+| Context value recreated every render | inline object/array/arrow as `<X.Provider value={…}>` (only when the Context is created in the project's own sources, not a library/shadcn primitive) | Perf / Likely |
+| Inline literal prop | object/array literal props on components, rolled up one finding per file (excludes framer-motion animation props, inline `style` objects, and i18n `t(...)`-built arrays) | Low / Review |
+| Raw `<img>` | `<img>` instead of `next/image`, rolled up per file (excludes `data:`/`blob:` one-shot sources) | Perf / Likely |
+| Index as list key | `key={i}` bound to the `.map()` index parameter (excludes hardcoded/literal lists that never reorder/insert/delete) | Low / Likely |
 | Sort in render body | `.sort()`/`.toSorted()` directly inside JSX | Low / Review |
 | State sprawl | ≥ 8 `useState` hooks in one component | Low / Review |
 | Await in loop (N+1) | per-item independent `await` in a `for`/`for-of` (loop-carried-state and `for await` excluded) | Perf / Likely |
-| Unbounded select | `select("*")`/`select()` with no `.limit()`/`.range()`/`.single()` | Perf / Review |
+| Unbounded select | `select("*")`/`select()` with no `.limit()`/`.range()`/`.single()` (`.in()` id lookups and post-`.insert()`/`.upsert()` `.select()` echoes are treated as bounded, not scans) | Perf / Review |
 | Whole-library import | bare `lodash`/`moment`/`underscore`; namespace imports of known barrels | Perf / Likely |
 | Heavy import in client bundle | known-heavy lib (`monaco`, `three`, `xlsx`, …) statically imported in a `'use client'` file | Perf / Likely |
 | Manual font stylesheet | Google Fonts `<link rel="stylesheet">` instead of `next/font` | Low / Likely |
 | Fetch in middleware | `fetch()` inside `middleware.ts` (every-request hop) | Perf / Review |
 | Blocking sync I/O in request handler | `*Sync` fs/crypto/zlib/child_process calls inside a route-handler function (module-scope run-once reads exempt) | Perf / Likely |
 | JSON deep-clone | `JSON.parse(JSON.stringify(x))` | Low / Likely |
-| Missing hook dependencies | `react-hooks/exhaustive-deps` run programmatically (`src/detectors/hook-deps.ts`, ids `M7H-*` — the upstream rule's analysis, adapted to `Finding[]`, rolled up per file) | Low / Likely |
+| Missing hook dependencies | `react-hooks/exhaustive-deps` run programmatically (`src/detectors/hook-deps.ts`, ids `M7H-*` — the upstream rule's analysis, adapted to `Finding[]`, rolled up per file) — **style-only per #230, not scored as a Perf finding** | Info / Likely |
 | Unoptimized barrel import | named imports from known-heavy barrels (`lucide-react`, `@mui/material`, …) on Next < 13.5 with no `optimizePackageImports` — version-gated so modern Next (auto-optimized) is never flagged | Perf / Likely |
 | Oversized committed images / media | filesystem walk (`src/detectors/asset-weight.ts`, ids `M7A-*`): images > 500 KB, media > 5 MB, grouped worst-first into one finding per class | Perf / Review |
 
