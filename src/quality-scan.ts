@@ -156,6 +156,19 @@ export function knipUnavailableFinding(reason: string): Finding {
   };
 }
 
+// #226: dead code sitting in auth/guard/middleware/security paths is a different signal than
+// routine slop — jharvieux/atc's cross-tenant Critical was preceded by exactly this (a guard
+// helper written and never wired in, while the app leaned on broken RLS instead). Tokenizes on
+// path separators, punctuation, and camelCase boundaries so it catches `AuthGuard.tsx` /
+// `useAuthMiddleware.ts` as well as `lib/security/guards.ts`, without the false hits a loose
+// substring match would produce (e.g. "author"/"authors" containing "auth").
+const SECURITY_PATH_KEYWORDS = new Set(["auth", "guard", "guards", "middleware", "security"]);
+
+function touchesSecurityPath(path: string): boolean {
+  const tokens = path.split(/[^a-zA-Z0-9]+|(?<=[a-z0-9])(?=[A-Z])/).map((t) => t.toLowerCase());
+  return tokens.some((t) => SECURITY_PATH_KEYWORDS.has(t));
+}
+
 // fileLineCounts is caller-supplied (read from disk) so this stays a pure,
 // testable transform — and so the reported line count is measured, not guessed.
 export function knipToFindings(report: KnipReport, fileLineCounts: Record<string, number> = {}): Finding[] {
@@ -165,19 +178,23 @@ export function knipToFindings(report: KnipReport, fileLineCounts: Record<string
   for (const file of report.files) {
     n += 1;
     const lines = fileLineCounts[file];
+    const securityPath = touchesSecurityPath(file);
+    const unreferenced = lines === undefined ? "Entire file is unreferenced." : `Entire file (${lines} lines) is unreferenced.`;
     findings.push({
       id: `M5-${String(n).padStart(2, "0")}`,
-      title: `Unused file: ${file}`,
-      severity: "Low",
+      title: securityPath ? `Unused security-relevant file: ${file}` : `Unused file: ${file}`,
+      severity: securityPath ? "Medium" : "Low",
       confidence: "Confirmed",
       category: "Maintainability",
       taxonomy: "M5 — Slop / dead code",
       location: file,
       status: "Open",
       evidence: "knip: file is never imported from any entry point.",
-      impact: lines === undefined ? "Entire file is unreferenced." : `Entire file (${lines} lines) is unreferenced.`,
+      impact: securityPath
+        ? `${unreferenced} Sits in an auth/guard/security path — confirm where authorization is actually enforced before assuming this is dead weight (cross-check against the M1 authorization review).`
+        : unreferenced,
       fix: "Delete the file (confirm it isn't a planned/unwired entry point first).",
-      value: 2,
+      value: securityPath ? 4 : 2,
       ease: 5,
       safety: 4,
       // knip's dead-file detection is deterministic given its entry config — ~100%
@@ -190,19 +207,23 @@ export function knipToFindings(report: KnipReport, fileLineCounts: Record<string
     const deadExports = [...issue.exports, ...issue.types].map((e) => e.name);
     if (deadExports.length === 0) continue;
     n += 1;
+    const securityPath = touchesSecurityPath(issue.file);
+    const partialImpact = `${deadExports.length} unused export${deadExports.length === 1 ? "" : "s"} — exact line reduction needs a manual look (knip reports the declaration, not its body size).`;
     findings.push({
       id: `M5-${String(n).padStart(2, "0")}`,
-      title: `Unused exports in ${issue.file}`,
-      severity: "Low",
+      title: securityPath ? `Unused exports in security-relevant file: ${issue.file}` : `Unused exports in ${issue.file}`,
+      severity: securityPath ? "Medium" : "Low",
       confidence: "Confirmed",
       category: "Maintainability",
       taxonomy: "M5 — Slop / dead code",
       location: issue.file,
       status: "Open",
       evidence: `knip: unreferenced export(s) ${deadExports.join(", ")}.`,
-      impact: `${deadExports.length} unused export${deadExports.length === 1 ? "" : "s"} — exact line reduction needs a manual look (knip reports the declaration, not its body size).`,
+      impact: securityPath
+        ? `${partialImpact} Defined but never called in an auth/guard/security path — confirm where authz is actually enforced before dismissing as dead weight (cross-check against the M1 authorization review).`
+        : partialImpact,
       fix: "Delete the unused exports, or inline them if they're only used internally.",
-      value: 2,
+      value: securityPath ? 4 : 2,
       ease: 4,
       safety: 4,
       // knip's dead-export detection is deterministic given its entry config — ~100%

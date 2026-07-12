@@ -165,6 +165,49 @@ describe("knipToFindings", () => {
   });
 });
 
+// #226: dead code in auth/guard/security paths is a stronger signal than routine slop — the
+// atc cross-tenant Critical was preceded by exactly this shape (a guard helper written and never
+// wired in). Not shaped from a captured knip run; hand-built to cover the elevation paths.
+const securityKnipReport: KnipReport = {
+  files: ["src/middleware/AuthGuard.tsx", "src/blog/authors.ts"],
+  issues: [
+    {
+      file: "lib/security/guards.ts",
+      exports: [{ name: "requireTenantMatch", line: 3 }],
+      types: [],
+    },
+  ],
+};
+
+describe("knipToFindings — security-path elevation (#226)", () => {
+  it("elevates unused exports in a security-relevant file above routine Low and cross-links the authz review", () => {
+    const findings = knipToFindings(securityKnipReport);
+    const guard = findings.find((f) => f.location === "lib/security/guards.ts");
+    expect(guard?.severity).toBe("Medium");
+    expect(guard?.impact).toContain("authz");
+    expect(guard?.impact).toContain("M1 authorization review");
+  });
+
+  it("elevates a fully-unused file in an auth/guard path, including camelCase/PascalCase names", () => {
+    const findings = knipToFindings(securityKnipReport, { "src/middleware/AuthGuard.tsx": 40 });
+    const authGuard = findings.find((f) => f.location === "src/middleware/AuthGuard.tsx");
+    expect(authGuard?.severity).toBe("Medium");
+    expect(authGuard?.impact).toContain("authorization is actually enforced");
+  });
+
+  it("does not false-positive elevate a file that merely contains 'auth' as a substring (authors.ts)", () => {
+    const findings = knipToFindings(securityKnipReport);
+    const authors = findings.find((f) => f.location === "src/blog/authors.ts");
+    expect(authors?.severity).toBe("Low");
+  });
+
+  it("leaves routine (non-security-path) unused exports at Low, unchanged", () => {
+    const findings = knipToFindings(knipReport);
+    const mixed = findings.find((f) => f.location === "src/mixed.ts");
+    expect(mixed?.severity).toBe("Low");
+  });
+});
+
 // #223: a knip failure (e.g. target's node_modules isn't installed) must not crash the whole
 // quality-scan and drop M4's jscpd findings — the CLI substitutes this disclosure finding instead.
 describe("knipUnavailableFinding", () => {
