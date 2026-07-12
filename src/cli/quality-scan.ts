@@ -14,8 +14,10 @@ import { fileURLToPath } from "node:url";
 import type { Finding } from "../findings.js";
 import {
   duplicationSummary,
+  JSCPD_IGNORE_GLOBS,
   jscpdToFindings,
   knipToFindings,
+  knipUnavailableFinding,
   type JscpdReport,
   type KnipReport,
 } from "../quality-scan.js";
@@ -42,11 +44,11 @@ function runJscpd(dir: string): JscpdReport {
   const outDir = mkdtempSync(join(tmpdir(), "harvey-jscpd-"));
   // --threshold 100 overrides any client .jscpd.json so the scan never exits
   // non-zero on us — we want the raw report, not jscpd's own pass/fail gate.
-  // **/generated/** excludes legitimately-repeated generated code (M4-N-GENERATED,
-  // issue #72) — generated output isn't hand-maintained duplication.
+  // JSCPD_IGNORE_GLOBS excludes generated/vendored/demo paths (M4-N-GENERATED, issue #72;
+  // extended per #232) that aren't hand-maintained duplication.
   execFileSync(
     jscpdBin,
-    [dir, "--reporters", "json", "--output", outDir, "--threshold", "100", "--absolute", "--silent", "--noTips", "--ignore", "**/node_modules/**,**/dist/**,**/.next/**,**/generated/**"],
+    [dir, "--reporters", "json", "--output", outDir, "--threshold", "100", "--absolute", "--silent", "--noTips", "--ignore", JSCPD_IGNORE_GLOBS.join(",")],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
   const report = JSON.parse(readFileSync(join(outDir, "jscpd-report.json"), "utf8")) as JscpdReport;
@@ -78,23 +80,43 @@ function lineCount(dir: string, relPath: string): number | undefined {
 }
 
 const jscpdReport = runJscpd(targetDir);
-const knipReport = runKnip(targetDir);
 
-const fileLineCounts: Record<string, number> = {};
-for (const file of knipReport.files) {
-  const n = lineCount(targetDir, file);
-  if (n !== undefined) fileLineCounts[file] = n;
+// #223: M4 has no dependency on M5 — a knip failure (most commonly the target's own
+// node_modules isn't installed, so it can't resolve config/plugin imports) must not cost the
+// engagement its jscpd findings too. Caught here so main flow always has a duplication result.
+let knipReport: KnipReport | undefined;
+let knipFailure: string | undefined;
+try {
+  knipReport = runKnip(targetDir);
+} catch (err) {
+  knipFailure = err instanceof Error ? err.message : String(err);
+  console.error(`⚠ knip failed — M5 dead-code coverage skipped for this run: ${knipFailure}`);
 }
 
-const findings: Finding[] = [...jscpdToFindings(jscpdReport), ...knipToFindings(knipReport, fileLineCounts)];
+const fileLineCounts: Record<string, number> = {};
+if (knipReport) {
+  for (const file of knipReport.files) {
+    const n = lineCount(targetDir, file);
+    if (n !== undefined) fileLineCounts[file] = n;
+  }
+}
+
+const findings: Finding[] = [
+  ...jscpdToFindings(jscpdReport),
+  ...(knipReport ? knipToFindings(knipReport, fileLineCounts) : [knipUnavailableFinding(knipFailure ?? "unknown error")]),
+];
 
 const dup = duplicationSummary(jscpdReport);
 console.error(
   `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s)`,
 );
-console.error(
-  `M5 dead code: ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports`,
-);
+if (knipReport) {
+  console.error(
+    `M5 dead code: ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports`,
+  );
+} else {
+  console.error("M5 dead code: skipped (knip failed — see warning above)");
+}
 
 const json = JSON.stringify(findings, null, 2);
 if (outPath) {
