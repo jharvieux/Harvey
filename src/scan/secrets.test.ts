@@ -50,4 +50,58 @@ describe("parseGitleaksFindings", () => {
     const bundle = parseGitleaksFindings(results, "bundle");
     expect(source[0]?.id).not.toBe(bundle[0]?.id);
   });
+
+  it("gives private-key its own impact text, not the JWT-specific sentence (#211)", () => {
+    const results: GitleaksResult[] = [{ RuleID: "private-key", File: "certs/key.pem", StartLine: 1 }];
+    const findings = parseGitleaksFindings(results, "source");
+    expect(findings[0]?.impact).not.toContain("Decoded JWT role claim");
+  });
+
+  it("clears a high-precision hit co-located with the decoded supabase-demo iss claim (#210)", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "supabase-service-role-jwt", File: "supabase/seed.sql", StartLine: 2, Match: '"role":"service_role"' },
+      { RuleID: "supabase-demo-key-marker", File: "supabase/seed.sql", StartLine: 2, Match: '"iss":"supabase-demo"' },
+    ];
+    const findings = parseGitleaksFindings(results, "source");
+    expect(findings).toHaveLength(0);
+  });
+
+  it("still flags a real (non-demo) service-role JWT with no demo marker present", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "supabase-service-role-jwt", File: "lib/admin.js", StartLine: 8, Match: '"role":"service_role"' },
+    ];
+    const findings = parseGitleaksFindings(results, "source");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.precisionTier).toBe("high");
+  });
+
+  it("down-ranks a private-key hit sharing a CI workflow file with a test IdP marker, but doesn't drop it (#211)", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "private-key", File: ".github/workflows/main.yml", StartLine: 12 },
+      { RuleID: "harvey-test-idp-marker", File: ".github/workflows/main.yml", StartLine: 3, Match: "ENTITY_ID" },
+    ];
+    const findings = parseGitleaksFindings(results, "source");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.precisionTier).toBe("review");
+    expect(findings[0]?.severity).toBe("High");
+    expect(findings[0]?.evidence).toContain("Down-ranked from Critical");
+  });
+
+  it("leaves a private-key hit outside a CI workflow at high, even with a test IdP marker elsewhere", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "private-key", File: "certs/key.pem", StartLine: 1 },
+      { RuleID: "harvey-test-idp-marker", File: "certs/key.pem", StartLine: 1, Match: "ENTITY_ID" },
+    ];
+    const findings = parseGitleaksFindings(results, "source");
+    expect(findings[0]?.precisionTier).toBe("high");
+  });
+
+  it("never surfaces the internal correlation marker rules as findings themselves", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "supabase-demo-key-marker", File: "supabase/seed.sql", StartLine: 2 },
+      { RuleID: "harvey-test-idp-marker", File: ".github/workflows/main.yml", StartLine: 3 },
+    ];
+    const findings = parseGitleaksFindings(results, "source");
+    expect(findings).toHaveLength(0);
+  });
 });
