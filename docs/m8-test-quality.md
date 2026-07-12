@@ -63,6 +63,18 @@ pnpm mutation-scan <client-repo-path> \
   `coverageAnalysis` is `"perTest"` and warns to stderr if not (it can't inspect `.mjs`/`.cjs`
   configs statically — check those by hand).
 
+**No test suite at all (#224):** if the target has no real `scripts.test` (missing, or still
+npm/pnpm init's `"Error: no test specified"` placeholder), no known test-runner dependency
+(vitest/jest/mocha/ava/tape/jasmine/karma/cypress/`@japa/runner`/uvu/tap, or a `--test` script),
+and no `stryker.conf.*`/`stryker.config.*` file, `pnpm mutation-scan` doesn't error out with a
+"binary not found"-shaped failure — it detects the no-test-suite case
+(`src/mutation-scan.ts`'s `detectNoTestSuite`) up front and instead writes `{ finding,
+moduleRecord }`: a single High-severity `M8-00` finding ("No automated test suite — mutation
+coverage undefined") plus a `{ status: "partial", note }` module record, then exits 0. That is the
+M8 report content for that target — a security-critical codebase with zero automated regression
+coverage is itself the finding, not a reason the scan failed to run. This shape replaces the usual
+`{ summary, reportRows }` output (§2) for that run; the CLI still honors `--out` for it.
+
 **Report path assumption (flagged, not asserted as fact):** Stryker's `json` reporter writes to
 `reports/mutation/mutation.json` relative to the repo root by default. This is accurate for
 recent Stryker versions at time of writing but **is not version-pinned here** — if the installed
@@ -194,8 +206,10 @@ overall), the per-module rows above (mutation score per module), and the top of
 
 - `src/mutation-scan.ts` — pure transforms: `mutationScore`, `summarizeMutationReport`,
   `toReportRows`, plus the `StrykerReport`/`StrykerMutant` types (the
-  mutation-testing-elements JSON schema). Tested against synthetic fixtures shaped from
-  Stryker's documented schema (`src/mutation-scan.test.ts`).
+  mutation-testing-elements JSON schema). Also `detectNoTestSuite`/`noTestSuiteFinding`/
+  `noTestSuiteModuleRecord` — the #224 no-test-suite detection and finding/module-record shaping.
+  Tested against synthetic fixtures shaped from Stryker's documented schema
+  (`src/mutation-scan.test.ts`).
 - `src/cli/mutation-scan.ts` — the CLI: invokes `stryker run` against a target repo (or reads an
   already-written report via `--report`), calls the pure transforms, and writes/prints the
   merged summary. Registered as `pnpm mutation-scan` in `package.json`.
@@ -207,8 +221,11 @@ overall), the per-module rows above (mutation score per module), and the top of
 This pass built and tested the wrapper's JSON-shaping logic against synthetic fixtures shaped
 from Stryker's published schema — **it did not run Stryker live** against a real client repo or
 `targets/calibration/` (that target doesn't yet have its own test suite or Stryker config, and a
-live run is explicitly out of scope for this automated batch per the sweep instructions). Before
-this module is used on a real engagement:
+live run is explicitly out of scope for this automated batch per the sweep instructions). Running
+`pnpm mutation-scan` against `targets/calibration/` as-is today would only exercise the #224
+no-test-suite path (it would emit `M8-00`, not a real mutation report) — still useful as a live
+check of that path, but not a substitute for step 1 below. Before this module is used on a real
+engagement:
 
 1. Add a minimal test suite + `stryker.conf.json` (`coverageAnalysis: "perTest"`) to
    `targets/calibration/` (or another sample repo with tests).

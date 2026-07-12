@@ -26,12 +26,25 @@ into `Finding[]` (`src/findings.ts` shape): `src/cli/quality-scan.ts` wraps the 
 `src/quality-scan.ts` (`jscpdToFindings`, `knipToFindings`, `duplicationSummary`).
 
 - **M4 ids:** `M4-01`, `M4-02`, … — one per clone cluster, worst (most duplicated lines) first.
-  Severity scales with cluster size: ≥50 duplicated lines → Medium, ≥15 → Low, else Info.
+  Severity scales with cluster size: ≥50 duplicated lines → Medium, ≥15 → Low, else Info. Clusters
+  are gated on being cross-file (a file matched against itself — e.g. an SVG icon-path table
+  repeating internally — is repetitive data, not a refactor candidate) and ≥10 significant lines
+  (`MIN_SIGNIFICANT_LINES` in `src/quality-scan.ts`); the reported dup% (`duplicationSummary()`) is
+  recomputed from that same significant-clusters set, not jscpd's raw total, so the headline number
+  and the findings agree.
 - **M5 ids:** `M5-01`, `M5-02`, … — one per fully-unused file (knip's top-level `files`) and one
   per file with unreferenced exports/types (knip's `issues`). Fully-dead files report a measured
   line count (the CLI reads the file); partial dead-export findings deliberately do **not** claim
   a precise line-reduction number — knip reports the declaration, not the body size, and asserting
-  one would be a guess, not a fact.
+  one would be a guess, not a fact. A file or export whose path touches auth/guard/middleware/
+  security (tokenized on separators and camelCase boundaries, so `AuthGuard.tsx` and
+  `useAuthMiddleware.ts` match but "authors" doesn't) elevates from Low to Medium and cross-links
+  the M1 authorization review — dead code in that class of path preceded a real cross-tenant
+  Critical in a past engagement (a guard helper written and never wired in). If knip itself fails
+  to run (most commonly the target's own `node_modules` isn't installed, so it can't resolve
+  config/plugin imports), M4's jscpd output still ships and M5 substitutes a single `M5-00`
+  Info-severity "M5 dead-code scan (knip) did not run" finding — a disclosed coverage gap, not a
+  crash or a silent skip.
 - Requires: the client repo has a `package.json` (knip) and no crashing tsconfig. If the client
   repo has no `knip.json`, knip falls back to its own zero-config heuristics — expect a noisier
   first pass that needs more triage; if it's noisy enough to be unusable, add a minimal
@@ -39,12 +52,16 @@ into `Finding[]` (`src/findings.ts` shape): `src/cli/quality-scan.ts` wraps the 
   the raw zero-config output.
 - `jscpd` is run with `--threshold 100` (so a client's own strict `.jscpd.json` threshold can't
   fail the scan — we want the raw report, not jscpd's own pass/fail gate) and excludes
-  `node_modules`, `dist`, `.next`.
+  `node_modules`, `dist`, `.next`, plus generated/vendored/demo paths (`JSCPD_IGNORE_GLOBS` in
+  `src/quality-scan.ts`: generated Supabase types `database.types.ts`/`types_db.ts`, `*.gen.ts`,
+  `generated/`, `vendor/`, `patches/`, `*demo*` files/dirs) — a 6-repo calibration sweep found
+  these inflating dup% in most repos triaged without being hand-maintained duplication.
 
-**Prerequisite check before running:** confirm the target path doesn't include generated/vendored
-code the client didn't author (build output, `node_modules` if `.gitignore` is missing it,
-committed lockfiles) — jscpd and knip will happily report duplication/dead-code noise on code that
-was never meant to be hand-maintained.
+**Prerequisite check before running:** jscpd auto-excludes the common generated/vendored/demo
+shapes above; still confirm the target path doesn't include other build output or vendored code
+the client didn't author (`node_modules` if `.gitignore` is missing it, committed lockfiles) —
+both tools will happily report duplication/dead-code noise on code that slips past the exclusions
+and was never meant to be hand-maintained.
 
 ### Triage the mechanical output
 
@@ -78,7 +95,9 @@ adjust confidence/severity after triage if the mechanical default doesn't match 
   Files are unambiguous deletes (pending a "is this a planned entry point" check); unused-export
   findings are per-file so the client can review each list of dead names together. State the line
   reduction only where it's measured (whole files); for partial dead exports, say so plainly rather
-  than estimating.
+  than estimating. Auth/guard/security-path findings (elevated to Medium) belong alongside the M1
+  authorization review, not just this list — cross-link them. If M5 didn't run this pass (`M5-00`),
+  state that plainly as a disclosed coverage gap rather than implying zero dead code.
 - **§3b Simplification / reuse (M6):** this module has no mechanical detector — it's the
   `/simplify` skill applied whole-repo against `docs/quality-extras.txt`'s SIMPLIFICATION section
   (hand-rolled primitives, hand-rolled versions of an already-in-the-dependency-tree library,
