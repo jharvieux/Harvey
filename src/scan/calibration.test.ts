@@ -10,6 +10,7 @@ import { b11CryptoEntries } from "./calibration/b11-crypto.entries.js";
 import { b12NextconfigEntries } from "./calibration/b12-nextconfig.entries.js";
 import { b13SupaEntries } from "./calibration/b13-supa.entries.js";
 import { b14AppLogicEntries } from "./calibration/b14-applogic.entries.js";
+import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
 import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
@@ -147,6 +148,48 @@ describe("Batch B1 secrets corpus (recorded gitleaks output → tier mapping)", 
     expect(m.positivesCaughtHigh).toBe(6);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
+  });
+});
+
+describe("Known-public/test-credential recognizer corpus (#225, recorded gitleaks output → tier mapping)", () => {
+  // Recorded gitleaks findings mirroring the live `pnpm validate:calibration` run over
+  // targets/calibration: each demo/test credential co-located with its internal correlation
+  // marker (see gitleaks-supabase.toml), plus the genuine non-demo positives for regression.
+  const gitleaks: GitleaksResult[] = [
+    // #210 — the Supabase local-dev demo key, decoded and marked at the same file+line.
+    { RuleID: "supabase-service-role-jwt", File: "supabase/seed.sql", StartLine: 89, Match: '"role":"service_role"' },
+    { RuleID: "supabase-demo-key-marker", File: "supabase/seed.sql", StartLine: 89, Match: '"iss":"supabase-demo"' },
+    { RuleID: "supabase-demo-key-marker", File: "supabase/seed.sql", StartLine: 91, Match: '"iss":"supabase-demo"' },
+    { RuleID: "harvey-http-authorization-bearer", File: "scripts/checks.mjs", StartLine: 12, Match: "Bearer eyJhbGci…" },
+    { RuleID: "supabase-service-role-jwt", File: "scripts/checks.mjs", StartLine: 12, Match: '"role":"service_role"' },
+    { RuleID: "supabase-demo-key-marker", File: "scripts/checks.mjs", StartLine: 12, Match: '"iss":"supabase-demo"' },
+    // Regression: the real, non-demo service-role key must still fire at high with no marker present.
+    { RuleID: "supabase-service-role-jwt", File: "lib/admin.js", StartLine: 9, Match: '"role":"service_role"' },
+    // #211 — a test/example SAML private key in a CI workflow, marked in the same file.
+    { RuleID: "private-key", File: ".github/workflows/saml-integration-test.yml", StartLine: 17, Match: "-----BEGIN PRIVATE KEY-----" },
+    { RuleID: "harvey-test-idp-marker", File: ".github/workflows/saml-integration-test.yml", StartLine: 3, Match: "ENTITY_ID" },
+    // Regression: the real, non-demo private key must still fire at high with no marker present.
+    { RuleID: "private-key", File: "certs/key.pem", StartLine: 1, Match: "-----BEGIN PRIVATE KEY-----" },
+  ];
+  const findings = parseGitleaksFindings(gitleaks, "source");
+
+  it("clears the demo key (#210), down-ranks the SAML test key (#211), and leaves the real positives at high", () => {
+    for (const e of [...knownPublicCredsEntries, ...secretsEntries.filter((e) => e.id === "P-SRV-ROLE-JWT-SRC")]) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe(e.expectedTier);
+      else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("down-ranks the SAML test key to review rather than dropping it silently", () => {
+    const saml = scoreEntry(knownPublicCredsEntries.find((e) => e.id === "N-SAML-TEST-PRIVATE-KEY")!, findings);
+    expect(saml.reviewFlagged).toBe(true);
+  });
+
+  it("still flags the genuine private key at certs/key.pem at high (no marker present there)", () => {
+    const real = findings.find((f) => f.location.includes("certs/key.pem"));
+    expect(real?.precisionTier).toBe("high");
   });
 });
 

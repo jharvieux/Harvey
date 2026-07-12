@@ -76,3 +76,16 @@ insert into public.notes (tenant_id, body) values
 -- gitleaks rule matches a bcrypt hash; it must stay cleared.
 insert into public.legacy_accounts (email, password_hash) values
   ('seed-user@tenant-a.test', '$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy');
+
+-- N-SB-DEMO-KEY-SVC / N-SB-DEMO-KEY-ANON (NEGATIVE — must NOT be flagged in the free count): the
+-- fixed public Supabase local-dev demo keys, as shipped verbatim by `supabase start` and
+-- published in Supabase's own docs (#210). Modeled on the real published demo key's shape
+-- (decoded iss claim "supabase-demo"); the signature segment here is a fake placeholder like
+-- every other planted token in this corpus. gitleaks decodes both and the internal
+-- supabase-demo-key-marker rule clears any high-precision hit (service_role claim) co-located
+-- with them — see the P-SRV-ROLE-JWT-SRC positive (lib/admin.js) for the real, non-demo key
+-- that must still fire.
+-- service_role:
+--   eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_FAKE
+-- anon:
+--   eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_FAKE

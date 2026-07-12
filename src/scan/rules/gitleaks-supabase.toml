@@ -13,6 +13,27 @@ id = "supabase-service-role-jwt"
 description = "Supabase service_role JWT (decoded role claim)"
 regex = '''"role"\s*:\s*"service_role"'''
 
+# Internal correlation markers, consumed by the known-public/test-credential recognizer in
+# secrets.ts (#225, generalizing #210 + #211) — neither is ever surfaced as a finding on its own.
+#
+# The fixed Supabase local-dev demo key ships verbatim with every `supabase start` and is
+# published in Supabase's own docs; its decoded JWT body has a distinctive iss claim regardless
+# of role (anon or service_role). Matching that claim lets secrets.ts clear any high-precision hit
+# co-located (same file+line) with it — the demo key is not a secret (#210).
+[[rules]]
+id = "supabase-demo-key-marker"
+description = "Supabase local-dev demo key marker (decoded iss claim) — internal correlation only"
+regex = '''"iss"\s*:\s*"supabase-demo"'''
+
+# A committed private key sitting next to test/example SAML IdP context (ENTITY_ID, a
+# *.example.com entity/ACS URL) is the shape of a SAML integration-test fixture, not a live
+# credential. Matching that context lets secrets.ts down-rank a `private-key` hit in the same CI
+# workflow file from Critical to Review — still surfaced, not credibility-fatal (#211).
+[[rules]]
+id = "harvey-test-idp-marker"
+description = "Test/example SAML IdP marker (ENTITY_ID or *.example.com) — internal correlation only"
+regex = '''(?i)(?:ENTITY_ID|https?://[a-z0-9.-]+\.example\.com)'''
+
 [[rules]]
 id = "supabase-next-public-secret-leak"
 description = "NEXT_PUBLIC_ env var whose name implies a secret/key/token/service credential"
