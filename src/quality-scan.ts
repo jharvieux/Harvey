@@ -42,16 +42,53 @@ export interface KnipReport {
 
 const FRAGMENT_PREVIEW_LEN = 240;
 
+// #232: paths jscpd should never treat as hand-maintained duplication, on top of the standard
+// build/dep dirs — the three FP-triage classes an evidenced 6-repo calibration sweep named:
+// generated code (including Supabase's two common CLI-generated-types filenames), vendored
+// fork-mirror directories, and demo/mock-labeled files or directories. Starting list from that
+// evidence; extend as new FP shapes surface.
+export const JSCPD_IGNORE_GLOBS = [
+  "**/node_modules/**",
+  "**/dist/**",
+  "**/.next/**",
+  "**/generated/**",
+  "**/*.gen.ts",
+  "**/database.types.ts",
+  "**/types_db.ts",
+  "**/vendor/**",
+  "**/patches/**",
+  "**/*demo*/**",
+  "**/*-demo-*.*",
+];
+
 function severityForClone(lines: number): Finding["severity"] {
   if (lines >= 50) return "Medium";
   if (lines >= 15) return "Low";
   return "Info";
 }
 
+// #232: jscpd matching a file against itself is how it reports internally-repetitive DATA (SVG
+// icon-path tables, enum/lookup literal blocks) — not cross-file logic duplication a client could
+// "extract into a shared module" (the M4 fix text). Excluded from scoring, not just re-labeled,
+// since the fix recommendation genuinely doesn't apply to it.
+function isCrossFileClone(dup: JscpdDuplicate): boolean {
+  return dup.firstFile.name !== dup.secondFile.name;
+}
+
+// jscpd's own default gate (minLines 5 / minTokens 50) still lets through clusters the #232
+// triage named explicitly as noise: shared import headers, tiny boilerplate overlaps. This raises
+// the bar for what counts as real duplicated logic vs. incidental short overlap — a judgment
+// call, not a measured constant; revisit if it starts hiding genuine small-but-real clones.
+const MIN_SIGNIFICANT_LINES = 10;
+
+function isSignificantClone(dup: JscpdDuplicate): boolean {
+  return isCrossFileClone(dup) && dup.lines >= MIN_SIGNIFICANT_LINES;
+}
+
 // jscpd's json reporter always writes duplicates in discovery order, not
 // worst-first, so re-sort by duplicated lines to surface the worst clusters.
 export function jscpdToFindings(report: JscpdReport): Finding[] {
-  const worst = [...report.duplicates].sort((a, b) => b.lines - a.lines);
+  const worst = report.duplicates.filter(isSignificantClone).sort((a, b) => b.lines - a.lines);
 
   return worst.map((dup, i): Finding => {
     const severity = severityForClone(dup.lines);
@@ -81,9 +118,55 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
   });
 }
 
+// #232: jscpd's own statistics.total counts every raw clone it found, including the self-file
+// and sub-threshold clusters jscpdToFindings now excludes — recompute so the reported percentage
+// matches what the findings above actually claim. Reimplements jscpd's own
+// Statistic.calculatePercentage (round(cloned/total*10000)/100, verified against
+// @jscpd/core's source) rather than guessing a formula.
 export function duplicationSummary(report: JscpdReport): { percentage: number; duplicatedLines: number; totalLines: number } {
-  const t = report.statistics.total;
-  return { percentage: t.percentage, duplicatedLines: t.duplicatedLines, totalLines: t.lines };
+  const totalLines = report.statistics.total.lines;
+  const duplicatedLines = report.duplicates.filter(isSignificantClone).reduce((sum, d) => sum + d.lines, 0);
+  const percentage = totalLines ? Math.round((10000 * duplicatedLines) / totalLines) / 100 : 0;
+  return { percentage, duplicatedLines, totalLines };
+}
+
+// #223: knip throws (rather than reporting) when it can't resolve a target's config/plugin
+// imports — most often because the target's own node_modules isn't installed. M4 (jscpd) has no
+// such dependency, so a knip failure shouldn't cost the engagement its duplication findings too.
+// The CLI catches the throw and substitutes this disclosure finding for the M5-* findings
+// knipToFindings would otherwise have produced — a visible partial, not a silent skip, matching
+// the coverage gap disclosure pattern already used for M7's Turbopack bundle-manifest gap
+// (src/detectors/bundle-stats.ts, id M7B-03).
+export function knipUnavailableFinding(reason: string): Finding {
+  return {
+    id: "M5-00",
+    title: "M5 dead-code scan (knip) did not run",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Maintainability",
+    taxonomy: "M5 — Slop / dead code",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `knip failed to run: ${reason}`,
+    impact: "Dead-code coverage for this engagement is incomplete for this pass — a disclosed coverage gap, not a finding of zero dead code.",
+    fix: "Install the target repo's dependencies (npm/pnpm/yarn install) so knip can resolve its config and plugin imports, then re-run `pnpm quality-scan`.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
+}
+
+// #226: dead code sitting in auth/guard/middleware/security paths is a different signal than
+// routine slop — jharvieux/atc's cross-tenant Critical was preceded by exactly this (a guard
+// helper written and never wired in, while the app leaned on broken RLS instead). Tokenizes on
+// path separators, punctuation, and camelCase boundaries so it catches `AuthGuard.tsx` /
+// `useAuthMiddleware.ts` as well as `lib/security/guards.ts`, without the false hits a loose
+// substring match would produce (e.g. "author"/"authors" containing "auth").
+const SECURITY_PATH_KEYWORDS = new Set(["auth", "guard", "guards", "middleware", "security"]);
+
+function touchesSecurityPath(path: string): boolean {
+  const tokens = path.split(/[^a-zA-Z0-9]+|(?<=[a-z0-9])(?=[A-Z])/).map((t) => t.toLowerCase());
+  return tokens.some((t) => SECURITY_PATH_KEYWORDS.has(t));
 }
 
 // fileLineCounts is caller-supplied (read from disk) so this stays a pure,
@@ -95,19 +178,23 @@ export function knipToFindings(report: KnipReport, fileLineCounts: Record<string
   for (const file of report.files) {
     n += 1;
     const lines = fileLineCounts[file];
+    const securityPath = touchesSecurityPath(file);
+    const unreferenced = lines === undefined ? "Entire file is unreferenced." : `Entire file (${lines} lines) is unreferenced.`;
     findings.push({
       id: `M5-${String(n).padStart(2, "0")}`,
-      title: `Unused file: ${file}`,
-      severity: "Low",
+      title: securityPath ? `Unused security-relevant file: ${file}` : `Unused file: ${file}`,
+      severity: securityPath ? "Medium" : "Low",
       confidence: "Confirmed",
       category: "Maintainability",
       taxonomy: "M5 — Slop / dead code",
       location: file,
       status: "Open",
       evidence: "knip: file is never imported from any entry point.",
-      impact: lines === undefined ? "Entire file is unreferenced." : `Entire file (${lines} lines) is unreferenced.`,
+      impact: securityPath
+        ? `${unreferenced} Sits in an auth/guard/security path — confirm where authorization is actually enforced before assuming this is dead weight (cross-check against the M1 authorization review).`
+        : unreferenced,
       fix: "Delete the file (confirm it isn't a planned/unwired entry point first).",
-      value: 2,
+      value: securityPath ? 4 : 2,
       ease: 5,
       safety: 4,
       // knip's dead-file detection is deterministic given its entry config — ~100%
@@ -120,19 +207,23 @@ export function knipToFindings(report: KnipReport, fileLineCounts: Record<string
     const deadExports = [...issue.exports, ...issue.types].map((e) => e.name);
     if (deadExports.length === 0) continue;
     n += 1;
+    const securityPath = touchesSecurityPath(issue.file);
+    const partialImpact = `${deadExports.length} unused export${deadExports.length === 1 ? "" : "s"} — exact line reduction needs a manual look (knip reports the declaration, not its body size).`;
     findings.push({
       id: `M5-${String(n).padStart(2, "0")}`,
-      title: `Unused exports in ${issue.file}`,
-      severity: "Low",
+      title: securityPath ? `Unused exports in security-relevant file: ${issue.file}` : `Unused exports in ${issue.file}`,
+      severity: securityPath ? "Medium" : "Low",
       confidence: "Confirmed",
       category: "Maintainability",
       taxonomy: "M5 — Slop / dead code",
       location: issue.file,
       status: "Open",
       evidence: `knip: unreferenced export(s) ${deadExports.join(", ")}.`,
-      impact: `${deadExports.length} unused export${deadExports.length === 1 ? "" : "s"} — exact line reduction needs a manual look (knip reports the declaration, not its body size).`,
+      impact: securityPath
+        ? `${partialImpact} Defined but never called in an auth/guard/security path — confirm where authz is actually enforced before dismissing as dead weight (cross-check against the M1 authorization review).`
+        : partialImpact,
       fix: "Delete the unused exports, or inline them if they're only used internally.",
-      value: 2,
+      value: securityPath ? 4 : 2,
       ease: 4,
       safety: 4,
       // knip's dead-export detection is deterministic given its entry config — ~100%
