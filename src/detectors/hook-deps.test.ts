@@ -28,10 +28,10 @@ function loadFixtureDir(relDir: string): SourceInput[] {
 }
 
 describe("missing hook dependencies (react-hooks/exhaustive-deps adapter)", () => {
-  it("flags a useEffect reading a prop with an empty dependency array", () => {
+  it("flags a useEffect reading a prop with an empty dependency array, as an Info-severity style note (#230 — not counted as a Perf finding)", () => {
     const hits = detectHookDepFindings(loadFixtureDir("hook-deps/positive"));
     expect(hits).toHaveLength(1);
-    expect(hits[0]).toMatchObject({ severity: "Low", confidence: "Likely", taxonomy: "M7 — Missing hook dependencies" });
+    expect(hits[0]).toMatchObject({ severity: "Info", confidence: "Likely", taxonomy: "M7 — Missing hook dependencies" });
     expect(hits[0]?.evidence).toContain("userId");
     expect(hits[0]?.location).toBe("components/profile.tsx:10"); // the rule anchors at the dep-array line
   });

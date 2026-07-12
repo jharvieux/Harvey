@@ -1,0 +1,8 @@
+"use client";
+import { useTranslations } from "next-intl";
+import { DataGrid } from "./data-grid";
+
+export function Table({ rows }: { rows: unknown[] }) {
+  const t = useTranslations();
+  return <DataGrid cols={[t("name"), t("email"), t("role")]} rows={rows} />;
+}

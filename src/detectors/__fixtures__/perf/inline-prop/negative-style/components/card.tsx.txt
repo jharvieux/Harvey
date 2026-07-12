@@ -1,0 +1,6 @@
+"use client";
+import { Panel } from "./panel";
+
+export function Card({ points }: { points: number[] }) {
+  return <Panel style={{ padding: 8, margin: 4 }} data={points} />;
+}

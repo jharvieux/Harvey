@@ -1,0 +1,8 @@
+"use client";
+import { TooltipContext } from "some-ui-kit";
+import { useState } from "react";
+
+export function TooltipWrapper({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return <TooltipContext.Provider value={{ open, setOpen }}>{children}</TooltipContext.Provider>;
+}
