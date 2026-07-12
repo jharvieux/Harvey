@@ -1,0 +1,8 @@
+"use client";
+
+import { createAdminClient } from "../lib/admin-client";
+
+export function AdminWidget() {
+  const client = createAdminClient();
+  return <div>{client.key}</div>;
+}

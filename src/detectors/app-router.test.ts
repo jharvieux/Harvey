@@ -51,7 +51,9 @@ describe("server → client data leak", () => {
 });
 
 describe("missing server-only guard", () => {
-  it("flags a module reading a service-role/secret env var with no 'server-only' import", () => {
+  it("flags a module reading a service-role/secret env var with no 'server-only' import, when a real client-import path reaches it", () => {
+    // #231: the positive fixture now includes a 'use client' component that actually imports
+    // the module — the missing guard only matters once there's a real bundling risk.
     const findings = detectAppRouterFindings(loadFixtureDir("missing-server-only/positive"));
     const hits = findings.filter((f) => f.taxonomy === "M9 — Missing server-only guard");
 
@@ -59,28 +61,38 @@ describe("missing server-only guard", () => {
     expect(hits[0]).toMatchObject({ severity: "High", category: "Security", location: "lib/admin-client.ts:1" });
   });
 
-  it("does not flag a module once it imports 'server-only', a route handler touching the same secret, or a module with no secret access", () => {
-    // negative/ covers three distinct non-findings: the guard present, the
+  it("does not flag a module once it imports 'server-only', a route handler touching the same secret, a module with no secret access, or a secret access no client code imports", () => {
+    // negative/ covers four distinct non-findings: the guard present, the
     // route-handler exemption (server-exclusive by Next.js routing convention),
-    // and a module that never touches a secret at all.
+    // a module that never touches a secret at all, and (#231) a secret-touching
+    // module nothing on the client side ever imports.
     const findings = detectAppRouterFindings(loadFixtureDir("missing-server-only/negative"));
+    expect(findings.filter((f) => f.taxonomy === "M9 — Missing server-only guard")).toHaveLength(0);
+  });
+
+  it("does not flag on a Pages Router project — App-Router-only checks don't apply there (#231)", () => {
+    // Pathological but decisive: a stray 'use client' marker inside a pages/-only tree (no
+    // app/ dir anywhere) would otherwise satisfy the real-client-import-path gate above — the
+    // Pages Router short-circuit is what actually suppresses it here.
+    const findings = detectAppRouterFindings(loadFixtureDir("missing-server-only/negative-pages-router-only"));
     expect(findings.filter((f) => f.taxonomy === "M9 — Missing server-only guard")).toHaveLength(0);
   });
 });
 
 describe("Server Action missing auth", () => {
-  it("flags a 'use server' action that mutates data with no auth check", () => {
+  it("flags a 'use server' action that mutates data with no auth check, routed to the M1 authorization class (#221) rather than M9 rendering", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("server-action-auth/positive"));
-    const hits = findings.filter((f) => f.taxonomy === "M9 — Server Action missing auth");
+    const hits = findings.filter((f) => f.taxonomy === "M1 — Server Action missing authorization check");
 
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({ severity: "High", category: "Security" });
     expect(hits[0]?.title).toContain("deleteAccount");
+    expect(taxonomies(findings)).not.toContain("M9 — Server Action missing auth");
   });
 
   it("does not flag the same action once it checks the caller's session before mutating", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("server-action-auth/negative"));
-    expect(taxonomies(findings)).not.toContain("M9 — Server Action missing auth");
+    expect(taxonomies(findings)).not.toContain("M1 — Server Action missing authorization check");
   });
 });
 
@@ -126,6 +138,16 @@ describe("unsafe/missing cache config (MED, best-effort)", () => {
     expect(taxonomies(findings)).not.toContain("M9 — Unsafe/missing cache config");
     // still correctly flagged as dynamic rendering — that's the real signal here
     expect(taxonomies(findings)).toContain("M9 — Accidental dynamic rendering");
+  });
+
+  it("does not flag an auth-gated page that checks the caller's session before querying (#231)", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("cache-config/negative-auth-page"));
+    expect(taxonomies(findings)).not.toContain("M9 — Unsafe/missing cache config");
+  });
+
+  it("does not flag a token-gated route (reset-password, invite, callback, ...) even with no explicit auth check in the file (#231)", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("cache-config/negative-token-route"));
+    expect(taxonomies(findings)).not.toContain("M9 — Unsafe/missing cache config");
   });
 });
 

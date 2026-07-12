@@ -1,0 +1,7 @@
+import { supabase } from "../../lib/db";
+
+export default async function ResetPasswordPage({ params }: { params: { token: string } }) {
+  const { data: resetRequests } = await supabase.from("password_resets").select("id, expires_at").eq("token", params.token);
+
+  return <p>{resetRequests?.length ? "Valid link" : "Invalid or expired link"}</p>;
+}

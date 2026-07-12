@@ -10,6 +10,7 @@
 // score — each is a mutant the suite did not prove itself against.
 
 import { dirname } from "node:path";
+import type { Finding } from "./findings.js";
 
 export type MutantStatus =
   | "Killed"
@@ -176,4 +177,56 @@ export function toReportRows(summary: MutationSummary): ReportRow[] {
       hotspotSurvivingCount: forModule.filter((s) => s.hotspot).length,
     };
   });
+}
+
+// #224: a target with no test script, no known test-runner dependency, and no Stryker config
+// can't run Stryker at all — src/cli/mutation-scan.ts used to have nothing to do but error out.
+// That absence is itself a finding (a security-critical codebase with zero automated regression
+// coverage), so the CLI checks this before invoking Stryker and reports it instead of failing.
+export interface PackageJsonForTestDetection {
+  scripts?: Record<string, string>;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+}
+
+const KNOWN_TEST_RUNNER_DEPS = ["vitest", "jest", "mocha", "ava", "tape", "jasmine", "karma", "cypress", "@japa/runner", "uvu", "tap"];
+// npm/pnpm init's default placeholder — present but not a real test suite.
+const PLACEHOLDER_TEST_SCRIPT = /Error: no test specified/;
+
+export function detectNoTestSuite(pkg: PackageJsonForTestDetection | undefined, hasStrykerConfig: boolean): { missing: boolean; reason?: string } {
+  const testScript = pkg?.scripts?.test;
+  const hasRealTestScript = !!testScript && !PLACEHOLDER_TEST_SCRIPT.test(testScript);
+  const deps = { ...pkg?.dependencies, ...pkg?.devDependencies };
+  const hasRunnerDep = KNOWN_TEST_RUNNER_DEPS.some((d) => d in deps) || (testScript?.includes("--test") ?? false);
+  if (hasRealTestScript || hasRunnerDep || hasStrykerConfig) return { missing: false };
+
+  const reason = [
+    pkg ? (testScript ? `"scripts.test" is the npm-init placeholder ("${testScript}")` : `no "scripts.test" in package.json`) : "no package.json found",
+    "no known test-runner dependency (vitest/jest/mocha/ava/...)",
+    "no stryker.conf.* found",
+  ].join("; ");
+  return { missing: true, reason };
+}
+
+export function noTestSuiteFinding(reason: string): Finding {
+  return {
+    id: "M8-00",
+    status: "Open",
+    category: "Test quality",
+    title: "No automated test suite — mutation coverage undefined",
+    severity: "High",
+    confidence: "Confirmed",
+    taxonomy: "M8 — No automated test suite",
+    location: "package.json",
+    evidence: `${reason}.`,
+    impact: "Zero automated regression coverage on a codebase in scope for a security/quality audit — mutation testing (or any other coverage metric) has nothing to measure.",
+    fix: "Add a test suite (start with the auth, tenant-isolation, and money-critical paths), then wire Stryker so mutation testing can measure it.",
+    value: 5,
+    ease: 2,
+    safety: 5,
+  };
+}
+
+export function noTestSuiteModuleRecord(reason: string): { status: "partial"; note: string } {
+  return { status: "partial", note: `No automated test suite found (${reason}) — mutation scan could not run.` };
 }

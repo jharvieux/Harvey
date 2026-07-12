@@ -1,0 +1,9 @@
+"use client";
+
+export function MfaQrDialog({ qrPngBase64 }: { qrPngBase64: string }) {
+  return (
+    <dialog open>
+      <img src={`data:image/png;base64,${qrPngBase64}`} alt="Scan with your authenticator app" />
+    </dialog>
+  );
+}

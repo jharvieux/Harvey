@@ -94,6 +94,35 @@ const COMPILER_NOTE =
 
 // --- A1. Context value recreated every render [PERF] ------------------------
 
+// Whether `contextName`'s Context object is actually created (`createContext(...)`) somewhere
+// in this project's own scanned sources — as opposed to a shadcn/ui or other library primitive
+// whose Provider the app merely re-exports/wraps. The app doesn't own that context's
+// memoization; flagging it is noise the app can't act on (#230 dogfood FP).
+function isLocallyDefinedContext(contextName: string, sources: Map<string, ts.SourceFile>): boolean {
+  for (const sf of sources.values()) {
+    let found = false;
+    const visit = (n: ts.Node) => {
+      if (found) return;
+      if (
+        ts.isVariableDeclaration(n) &&
+        ts.isIdentifier(n.name) &&
+        n.name.text === contextName &&
+        n.initializer &&
+        ts.isCallExpression(n.initializer) &&
+        ts.isIdentifier(n.initializer.expression) &&
+        n.initializer.expression.text === "createContext"
+      ) {
+        found = true;
+        return;
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    if (found) return true;
+  }
+  return false;
+}
+
 function detectContextValueLiteral(sources: Map<string, ts.SourceFile>, nextId: NextId, compilerOn: boolean): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
@@ -101,6 +130,7 @@ function detectContextValueLiteral(sources: Map<string, ts.SourceFile>, nextId: 
     forEachJsxElement(sf, (el) => {
       const tagText = el.tagName.getText(sf);
       if (!isContextTag(tagText)) return;
+      if (!isLocallyDefinedContext(tagText.replace(/\.Provider$/, ""), sources)) return; // a library/shadcn-owned context, not app state to memoize
       for (const attr of el.attributes.properties) {
         if (!ts.isJsxAttribute(attr) || attr.name.getText(sf) !== "value") continue;
         const expr = jsxAttrExpression(attr);
@@ -129,6 +159,26 @@ function detectContextValueLiteral(sources: Map<string, ts.SourceFile>, nextId: 
 
 // --- A2. Inline object/array literal props [LOW] — one per file --------------
 
+// framer-motion components (`<motion.div>`, or the `m.div` shorthand) take animation props
+// (animate/initial/exit/transition/variants) that are idiomatically inline object literals —
+// the library diffs by value every render regardless of reference identity, so there's no
+// memoization win to chase here (#230 dogfood FP).
+const FRAMER_MOTION_TAG = /^(motion|m)\./;
+
+// An array built entirely from i18n translation calls (`[t("a"), t("b")]` /
+// `[i18n.t("a")]`) — a fresh array each render is unavoidable since the strings themselves
+// are looked up live; there's nothing stable to hoist (#230 dogfood FP: `cols={[t(...)]}`).
+function isTranslationCallArray(expr: ts.Expression): boolean {
+  if (!ts.isArrayLiteralExpression(expr) || expr.elements.length === 0) return false;
+  return expr.elements.every((el) => {
+    if (!ts.isCallExpression(el)) return false;
+    const callee = el.expression;
+    if (ts.isIdentifier(callee)) return callee.text === "t";
+    if (ts.isPropertyAccessExpression(callee)) return callee.name.text === "t";
+    return false;
+  });
+}
+
 function detectInlinePropLiterals(sources: Map<string, ts.SourceFile>, nextId: NextId, compilerOn: boolean): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
@@ -137,10 +187,14 @@ function detectInlinePropLiterals(sources: Map<string, ts.SourceFile>, nextId: N
     forEachJsxElement(sf, (el) => {
       const tagText = el.tagName.getText(sf);
       if (!isComponentTag(tagText)) return; // DOM elements don't re-render as components
+      if (FRAMER_MOTION_TAG.test(tagText)) return; // animation props are idiomatically inline — no memoization win
       for (const attr of el.attributes.properties) {
         if (!ts.isJsxAttribute(attr)) continue;
-        if (isContextTag(tagText) && attr.name.getText(sf) === "value") continue; // A1 owns that shape
+        const attrName = attr.name.getText(sf);
+        if (isContextTag(tagText) && attrName === "value") continue; // A1 owns that shape
+        if (attrName === "style") continue; // inline style objects are idiomatic and near-zero cost to recreate
         const expr = jsxAttrExpression(attr);
+        if (expr && isTranslationCallArray(expr)) continue; // built from live i18n lookups — nothing stable to hoist
         if (expr && (ts.isObjectLiteralExpression(expr) || ts.isArrayLiteralExpression(expr))) {
           hits.push({ attr, tagText });
         }
@@ -169,6 +223,30 @@ function detectInlinePropLiterals(sources: Map<string, ts.SourceFile>, nextId: N
 
 // --- A3. Raw <img> instead of next/image [PERF] — one per file ---------------
 
+// A `src` that's a data:/blob: URI (or `URL.createObjectURL(...)`) — a client-generated,
+// one-shot image (MFA QR code in a dialog, an authenticated in-memory blob preview) that
+// `next/image` can't optimize anyway since there's no remote URL for it to fetch/resize
+// (#230 dogfood FP).
+const ONE_SHOT_IMG_SRC = /^(data|blob):/;
+
+function isOneShotImgSrc(el: ts.JsxOpeningElement | ts.JsxSelfClosingElement, sf: ts.SourceFile): boolean {
+  for (const attr of el.attributes.properties) {
+    if (!ts.isJsxAttribute(attr) || attr.name.getText(sf) !== "src") continue;
+    const expr = jsxAttrExpression(attr);
+    if (!expr) continue;
+    if (ts.isStringLiteralLike(expr) && ONE_SHOT_IMG_SRC.test(expr.text)) return true;
+    if (ts.isTemplateExpression(expr) && ONE_SHOT_IMG_SRC.test(expr.head.text)) return true;
+    if (
+      ts.isCallExpression(expr) &&
+      ts.isPropertyAccessExpression(expr.expression) &&
+      expr.expression.name.text === "createObjectURL"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function detectRawImgElement(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
@@ -176,7 +254,7 @@ function detectRawImgElement(sources: Map<string, ts.SourceFile>, nextId: NextId
     if (sf.text.includes("@next/next/no-img-element")) continue; // the codebase already adjudicated its <img>s via an explicit eslint-disable
     const hits: (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] = [];
     forEachJsxElement(sf, (el) => {
-      if (el.tagName.getText(sf) === "img") hits.push(el);
+      if (el.tagName.getText(sf) === "img" && !isOneShotImgSrc(el, sf)) hits.push(el);
     });
     const first = hits[0];
     if (!first) continue;
@@ -201,6 +279,35 @@ function detectRawImgElement(sources: Map<string, ts.SourceFile>, nextId: NextId
 
 // --- A4. Array index used as list key [LOW] ----------------------------------
 
+// #230: a hardcoded `const NAV_LINKS = [...]` (or an inline array literal) never reorders,
+// inserts, or deletes at runtime — the whole failure mode index-as-key guards against can't
+// happen. ATC dogfood: every raw hit in this shape was a Footer/FAQ/Stepper-style static list.
+function isStaticListSource(sf: ts.SourceFile, source: ts.Expression): boolean {
+  if (ts.isArrayLiteralExpression(source)) return true;
+  if (!ts.isIdentifier(source)) return false;
+  const name = source.text;
+  let isStatic = false;
+  const visit = (n: ts.Node) => {
+    if (isStatic) return;
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === name &&
+      n.initializer &&
+      ts.isArrayLiteralExpression(n.initializer) &&
+      n.parent &&
+      ts.isVariableDeclarationList(n.parent) &&
+      (n.parent.flags & ts.NodeFlags.Const) !== 0
+    ) {
+      isStatic = true;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return isStatic;
+}
+
 function detectIndexAsKey(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
@@ -209,7 +316,8 @@ function detectIndexAsKey(sources: Map<string, ts.SourceFile>, nextId: NextId): 
       if (
         ts.isCallExpression(node) &&
         ts.isPropertyAccessExpression(node.expression) &&
-        node.expression.name.text === "map"
+        node.expression.name.text === "map" &&
+        !isStaticListSource(sf, node.expression.expression) // a hardcoded/literal list — reorder/insert/delete can't happen
       ) {
         const cb = node.arguments[0];
         if (cb && (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb))) {
@@ -473,7 +581,10 @@ function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId):
 
 // --- B2. Unbounded select — no limit/pagination [PERF] --------------------------
 
-const CHAIN_BOUNDS = new Set(["limit", "range", "single", "maybeSingle", "csv"]);
+// #230: `.in('id', [...])` bounds the result to the (finite) id list passed in — a specific-row
+// lookup, not a table scan; `.insert(...)`/`.upsert(...)` before `.select()` bounds the result
+// to the mutated rows, not the whole table. Both were raw hits mislabeled as unbounded scans.
+const CHAIN_BOUNDS = new Set(["limit", "range", "single", "maybeSingle", "csv", "in", "insert", "upsert"]);
 
 function detectUnboundedSelect(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];

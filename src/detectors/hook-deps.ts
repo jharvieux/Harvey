@@ -1,12 +1,16 @@
 // M7 (code layer, #170) — missing React hook dependencies, via the battle-tested
 // react-hooks/exhaustive-deps rule run programmatically (ESLint Linter API, no config files,
-// no shelling out). A missing dep is both a correctness smell (stale closure) and a perf one
-// (the effect/memo re-runs against stale inputs or is recreated to compensate); the #170
-// catalog files it under render perf, so findings land in §3b alongside the other M7C classes.
+// no shelling out). The #170 catalog files it under render perf, so findings land in §3b
+// alongside the other M7C classes.
 //
 // Deliberately NOT a re-implementation: the upstream rule's dependency analysis is years of
 // hardened edge cases. We only adapt its messages into Finding[] (rolled up per file, like
 // the other high-count classes).
+//
+// #230: a 6-repo triage found ~0 real stale-closure/refetch bugs among 31 raw hits — every one
+// was the rule firing on an effect already keyed to a primitive id (its actual dependency
+// behavior was fine; the rule just wants the literal name in the array too). Reported as an
+// Info-severity style note, not a Perf finding — visible in the report but not counted as work.
 
 import { Linter } from "eslint";
 import reactHooks from "eslint-plugin-react-hooks";
@@ -55,16 +59,15 @@ export function detectHookDepFindings(files: SourceInput[]): Finding[] {
       id: `M7H-${String(++n).padStart(2, "0")}`,
       status: "Open",
       category: "Performance",
-      title: `Hook dependency-list problems (${hits.length}× in ${file.path})`,
-      severity: "Low",
+      title: `Hook dependency-list style note (${hits.length}× in ${file.path})`,
+      severity: "Info",
       confidence: "Likely",
       taxonomy: "M7 — Missing hook dependencies",
       location: `${file.path}:${first.line}`,
-      evidence: `react-hooks/exhaustive-deps: ${first.message}${hits.length > 1 ? ` (first of ${hits.length} in this file)` : ""}`,
-      impact:
-        "Effects/memos run against stale values (subtle wrong-data bugs) or are compensated with over-broad deps that re-run every render — both waste renders and hide state bugs.",
+      evidence: `react-hooks/exhaustive-deps: ${first.message}${hits.length > 1 ? ` (first of ${hits.length} in this file)` : ""} — a lint-style signal, not confirmed as a stale-closure or refetch bug.`,
+      impact: "Usually benign (the rule wants the literal name added even when the effect's actual behavior is already correct); confirm before treating as a real stale-closure/refetch bug.",
       fix: "Apply the rule's suggested dependency list; if a dep changes every render, stabilize it (useMemo/useCallback) instead of omitting it.",
-      value: 2,
+      value: 1,
       ease: 4,
       safety: 4,
     });

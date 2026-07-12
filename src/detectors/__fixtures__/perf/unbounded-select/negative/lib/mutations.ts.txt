@@ -1,0 +1,11 @@
+import { supabase } from "./db";
+
+export async function getMessagesByIds(ids: string[]) {
+  const { data } = await supabase.from("messages").select("*").in("id", ids);
+  return data ?? [];
+}
+
+export async function createMessage(conversationId: string, body: string) {
+  const { data } = await supabase.from("messages").insert({ conversation_id: conversationId, body }).select();
+  return data;
+}

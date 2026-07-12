@@ -77,6 +77,65 @@ describe("classifyColumn — false-positive discipline (issue #17 acceptance cas
   });
 });
 
+describe("classifyColumn — stored credentials / secrets (#233)", () => {
+  it("classifies API keys and stored passwords as SECRET at high confidence — the ATC dogfood must-not-miss case", () => {
+    expect(classifyColumn("ai_api_key")).toEqual({ infotype: "API_KEY", category: "SECRET", confidence: "high" });
+    expect(classifyColumn("smtp_pass")).toEqual({ infotype: "STORED_PASSWORD", category: "SECRET", confidence: "high" });
+    expect(classifyColumn("account_password")).not.toBeNull();
+  });
+
+  it("classifies long-lived auth/session tokens as SECRET", () => {
+    expect(classifyColumn("access_token")).toEqual({ infotype: "AUTH_TOKEN", category: "SECRET", confidence: "high" });
+    expect(classifyColumn("session_token").category).toBe("SECRET");
+  });
+
+  it("does not classify a single-use capability token (invite/share/reset/verify) as a stored credential", () => {
+    expect(classifyColumn("invite_token")).toBeNull();
+    expect(classifyColumn("share_token")).toBeNull();
+    // password_reset_token (and the reverse word order) would otherwise match STORED_PASSWORD
+    // via its "password" substring — the capability-token exclusion is what keeps them out.
+    expect(classifyColumn("password_reset_token")).toBeNull();
+    expect(classifyColumn("reset_password_token")).toBeNull();
+  });
+});
+
+describe("classifyColumn — org/tenant/company entity-name suppression (#233, table context)", () => {
+  it("does not classify a bare `name`/`company_name` column as personal PII on an org/tenant/company table", () => {
+    expect(classifyColumn("name", undefined, "organizations")).toBeNull();
+    expect(classifyColumn("name", undefined, "tenants")).toBeNull();
+    expect(classifyColumn("company_name", undefined, "companies")).toBeNull();
+  });
+
+  it("still flags the same ambiguous `name` column at low confidence when the table isn't an org/tenant/company entity", () => {
+    expect(classifyColumn("name", undefined, "profiles")).toEqual({ infotype: "NAME?", category: "PII", confidence: "low" });
+    // no table context at all — still the pre-existing ambiguous behavior
+    expect(classifyColumn("name")).toEqual({ infotype: "NAME?", category: "PII", confidence: "low" });
+  });
+});
+
+describe("classifyColumn — table-context-only detections (#233)", () => {
+  it("classifies a bare `number` column as PHONE only with phone/contact/sms table context, at medium confidence", () => {
+    expect(classifyColumn("number", undefined, "contact_numbers")).toEqual({ infotype: "PHONE", category: "PII", confidence: "medium" });
+    expect(classifyColumn("number", undefined, "orders")).toBeNull();
+    expect(classifyColumn("number")).toBeNull();
+  });
+
+  it("classifies an opaquely-named value/data/payload column as an encrypted secret store only on a *_store/*_config table", () => {
+    // BoxyHQ SAML/SSO's jackson_store.value — a name-based matcher skips a column called "value".
+    expect(classifyColumn("value", undefined, "jackson_store")).toEqual({
+      infotype: "OPAQUE_ENCRYPTED_STORE",
+      category: "SECRET",
+      confidence: "medium",
+    });
+    expect(classifyColumn("value", undefined, "widgets")).toBeNull();
+  });
+
+  it("adds tax_number to the existing tax-ID rule (vat_id was already covered)", () => {
+    expect(classifyColumn("tax_number").category).toBe("SENSITIVE_PII");
+    expect(classifyColumn("vat_id").category).toBe("SENSITIVE_PII");
+  });
+});
+
 describe("buildDataMap — severity weighting", () => {
   it("weights a table by what combination of data it exposes", () => {
     const columns = [
@@ -109,6 +168,20 @@ describe("buildDataMap — severity weighting", () => {
   it("treats a stored CVV as critical by itself — PCI-DSS forbids storing it post-auth", () => {
     const map = buildDataMap([{ table_name: "payments", column_name: "cvv", data_type: "text" }]);
     expect(map.payments.severity).toBe("Critical");
+  });
+
+  it("flags a table storing a plaintext API key + password as Critical, above a lone contact-PII table — the ATC dogfood headline case", () => {
+    // organisations.ai_api_key + organisations.smtp_pass, readable by any org member via RLS.
+    const map = buildDataMap([
+      { table_name: "organisations", column_name: "ai_api_key", data_type: "text" },
+      { table_name: "organisations", column_name: "smtp_pass", data_type: "text" },
+      { table_name: "organisations", column_name: "name", data_type: "text" }, // suppressed: entity name, not personal PII
+      { table_name: "contacts", column_name: "email", data_type: "text" },
+    ]);
+    expect(map.organisations.secret).toBe(true);
+    expect(map.organisations.severity).toBe("Critical");
+    expect(map.organisations.columns.map((c) => c.column)).not.toContain("name");
+    expect(map.organisations.severityScore).toBeGreaterThan(map.contacts.severityScore);
   });
 
   it("excludes false-positive columns from the data map entirely", () => {

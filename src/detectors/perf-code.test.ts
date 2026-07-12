@@ -45,6 +45,9 @@ describe("context value recreated every render", () => {
   it("does not flag a useMemo-stabilized value", () => {
     expect(byTaxonomy("ctx-value/negative", TAX)).toHaveLength(0);
   });
+  it("does not flag a Provider whose Context isn't created in this project's own sources (a library/shadcn primitive, #230)", () => {
+    expect(byTaxonomy("ctx-value/negative-library-context", TAX)).toHaveLength(0);
+  });
 });
 
 describe("inline literal props", () => {
@@ -57,6 +60,15 @@ describe("inline literal props", () => {
   });
   it("does not flag hoisted constants or style objects on DOM elements", () => {
     expect(byTaxonomy("inline-prop/negative", TAX)).toHaveLength(0);
+  });
+  it("does not flag framer-motion animation props (animate/initial/transition) — the library diffs by value, not reference (#230)", () => {
+    expect(byTaxonomy("inline-prop/negative-framer-motion", TAX)).toHaveLength(0);
+  });
+  it("does not flag an inline `style` object prop — idiomatic and near-zero cost (#230)", () => {
+    expect(byTaxonomy("inline-prop/negative-style", TAX)).toHaveLength(0);
+  });
+  it("does not flag an array built entirely from live i18n t(...) calls (#230)", () => {
+    expect(byTaxonomy("inline-prop/negative-i18n-array", TAX)).toHaveLength(0);
   });
 });
 
@@ -71,6 +83,9 @@ describe("raw <img> instead of next/image", () => {
   it("does not flag next/image usage", () => {
     expect(byTaxonomy("img-tag/negative", TAX)).toHaveLength(0);
   });
+  it("does not flag a data:/blob: one-shot image (MFA QR in a dialog, an authenticated blob preview) — next/image can't optimize a URI with no remote fetch anyway (#230)", () => {
+    expect(byTaxonomy("img-tag/negative-one-shot", TAX)).toHaveLength(0);
+  });
 });
 
 describe("index as list key", () => {
@@ -82,6 +97,9 @@ describe("index as list key", () => {
   });
   it("does not flag a stable-id key even when the index is used elsewhere", () => {
     expect(byTaxonomy("index-key/negative", TAX)).toHaveLength(0);
+  });
+  it("does not flag a hardcoded const array literal (Footer/FAQ/Stepper-style static list) — it never reorders/inserts/deletes (#230)", () => {
+    expect(byTaxonomy("index-key/negative-static-list", TAX)).toHaveLength(0);
   });
 });
 
@@ -134,7 +152,7 @@ describe("unbounded select", () => {
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({ severity: "Perf", confidence: "Review" });
   });
-  it("does not flag paginated reads, .single() lookups, or count-only head:true queries", () => {
+  it("does not flag paginated reads, .single() lookups, count-only head:true queries, a bounded `.in('id', [...])` lookup, or an `.insert(...).select()` mutation echo (#230)", () => {
     expect(byTaxonomy("unbounded-select/negative", TAX)).toHaveLength(0);
   });
 });
