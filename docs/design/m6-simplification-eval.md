@@ -107,13 +107,14 @@ to reason about the *why*, not just pattern-match "this shape looks reusable").
 Full answer key with reasoning: `targets/calibration/GROUND-TRUTH.md` §"M6 (#72) — Simplification
 / reuse rubric-eval corpus".
 
-## 5. Why M6 is paid-only
+## 5. Why M6's verdict is paid
 
-Per the spec's locked preamble (item 2): "M6 simplification is paid-only (LLM opinion; no
-false-positive-safe automated free version). Principle: factual/descriptive & FP-safe can be
-free; asserted judgments cannot."
+> **Revised 2026-07-15** (operator, #267). This section previously read "Why M6 is paid-only" and
+> concluded that M6 had no free form at all. The reasoning below is unchanged and still holds —
+> only its scope narrowed: it explains why the **verdict** is paid, not why the module is. See
+> §5.1 for the free indicator tier.
 
-M6's output is inherently an opinion, not a fact a stranger can independently verify from the
+M6's *verdict* is inherently an opinion, not a fact a stranger can independently verify from the
 report alone the way "this file is duplicated 52 lines" (M4) or "this file is never imported"
 (M5) can. Asserting "your `debounce` implementation should be replaced" to a client who hasn't
 engaged us yet — with no human sign-off, on code the model may be reading with insufficient
@@ -124,12 +125,51 @@ failure mode the whole free/paid split exists to avoid (`docs/design/spec-72-cro
 preamble item 1: heuristic/judgment classes are scanned but not asserted free, only after
 triage + human sign-off in the paid report).
 
-So M6, like the deeper M3 coupling/knowledge-risk analysis, is **paid-only**: the LLM review runs,
-but its output goes through human review before it reaches a client, same as any other
+So M6's verdict, like the deeper M3 coupling/knowledge-risk analysis, is **paid**: the LLM review
+runs, but its output goes through human review before it reaches a client, same as any other
 `review`-tier finding — except M6 has no tier at all in the precision-gate sense, because there is
 no mechanical baseline to triage against. The rubric-agreement eval in this document is how we
 keep confidence that the reviewer is still doing its job as the prompt/brief/model evolves — it is
 an internal quality bar for the paid deliverable, not a metric we show a client.
+
+### 5.1 The free indicator tier (2026-07-15)
+
+Operator ruling: *"Free tier can list items that look hand rolled and say they may be worth
+investigating. Paid tier triages and says what each one should be replaced with."*
+
+This **applies** the locked principle rather than excepting it. Split the claim in two:
+
+| claim | example | tier |
+|---|---|---|
+| a shape is present | "`id.ts` builds an id from `Math.random()`; this looks hand-rolled and may be worth investigating" | **free** — descriptive, reader-checkable, hedged |
+| what it warrants | "replace it with `crypto.randomUUID()`" | **paid** — the asserted judgment §5 is about |
+
+Why this defuses the FP problem rather than ignoring it: under the free wording, `depdrop.ts`
+(M6-N-DEPDROP) is **not a false positive**. It genuinely is a hand-rolled throttle; its `// WHY:`
+comment is precisely what an investigation surfaces, in seconds. The free tier was honest and the
+reader resolved it. Only the flat assertion "replace this with lodash `throttle`" is *wrong* on
+that file — and that assertion is paid.
+
+**Consequence for detector design (#267):** the graduation bar "a pattern only ships if its
+negative is mechanically distinguishable" **relaxes at the free indicator tier** — free isn't
+ruling on the negative. It still binds at the paid tier, where the replacement is named.
+
+**What binds the free tier:**
+
+1. **Non-grading** (#213/#227). M6 indicators must not move the grade — same treatment as the
+   source-tier RLS/authz indicators. M6 now takes that identical form: a non-grading
+   "verify in deep scan" section. One framing across two modules, not a special case.
+2. **The hedged wording is load-bearing.** "Looks hand-rolled / may be worth investigating" is
+   what keeps this on the free side of the principle. Copy that drifts to "should be replaced"
+   re-asserts the judgment and voids the split.
+3. **Volume replaces FP as the risk.** Forty "may be worth investigating" items read as padding
+   and bury the real signal. That is a presentation problem (cap / group / density rule), not a
+   detection one — decide it before wiring.
+4. **Tone.** Hedging buys latitude, not immunity: an indicator on something obviously justified
+   still reads as the tool not understanding the codebase.
+
+The eval in §3 is unaffected — it assesses the reviewer's rubric agreement, which is the paid
+pass's quality bar either way.
 
 ## 6. Sources
 

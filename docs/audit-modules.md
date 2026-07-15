@@ -80,6 +80,11 @@ A full audit is 7 modules. Each lists what it finds, the method, the tool/skill 
 - **Report:** maintainability recommendations — each "reinvented wheel" with the suggested
   library/primitive to replace it, and the over-abstractions to collapse. This is the "lower your ongoing
   maintenance + onboarding cost" pitch, which lands even with clients who don't think they have a security problem.
+- **Tier (operator ruling 2026-07-15, #267):** free lists mechanically-recognisable hand-rolled shapes as
+  **non-grading indicators** — "this looks hand-rolled; may be worth investigating," never naming a replacement.
+  **Paid triages each and names the replacement** (the report line above). The hedged free wording is
+  load-bearing: naming the replacement IS the asserted judgment. Same free/paid form as the M1 source-tier
+  RLS/authz indicators. The free tier does not ship until the #267 detectors exist.
 
 ## M7 — Performance tuning
 - **Finds:** the slow paths and the cost they impose — N+1 / unindexed foreign-key queries, missing or unused

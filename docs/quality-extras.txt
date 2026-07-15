@@ -19,6 +19,12 @@
   an arg that resolves to one value (worse than no arg).
 
 ## SIMPLIFICATION / REUSE / "DON'T REINVENT THE WHEEL" (M6) — flag for replacement
+#
+# TIER SPLIT (operator ruling 2026-07-15, #267): the classes below are the PAID brief — triage each
+# candidate and name its concrete replacement. The FREE tier may list mechanically-recognisable
+# hand-rolled shapes as non-grading indicators only, worded "this looks hand-rolled; may be worth
+# investigating" — never naming a replacement, never moving the grade. Deciding WHAT to replace a
+# thing with is the asserted judgment, and it is paid. The hedged wording is load-bearing.
 
 - HAND-ROLLED PRIMITIVES — a bespoke implementation of something the language/stdlib/framework already
   provides: date math, deep-clone/equal, debounce/throttle, retry/backoff, UUID, query-string parsing,
