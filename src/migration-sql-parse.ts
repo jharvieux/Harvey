@@ -49,25 +49,45 @@ const SQL_TYPES = [
   "uuid", "text", "timestamptz", "timestamp", "integer", "bigint", "boolean",
   "numeric", "jsonb", "json", "date", "smallint", "varchar", "real", "double precision",
 ];
-const COLUMN_LINE = new RegExp(`^\\s*(\\w+)\\s+(${SQL_TYPES.join("|")})\\b`, "i");
-const CREATE_TABLE = /create table\s+(?:if not exists\s+)?(?:(\w+)\.)?(\w+)\s*\(([\s\S]*?)\n\s*\);/gi;
+
+// #299: Prisma-generated migrations (prisma/migrations/**/migration.sql) double-quote every
+// identifier ("Account", "userId") — Postgres's standard quoting, which makes them case-sensitive
+// and lets them contain characters a bare \w+ can't. IDENT matches either shape: group 1 is a
+// quoted identifier's raw (still-escaped) text, group 2 is a bare one. identText below is what
+// resolves a capture pair to the real name — never read group 1 or 2 directly.
+const IDENT = `(?:"((?:[^"]|"")*)"|(\\w+))`;
+// A double `""` inside a quoted identifier is Postgres's escape for a literal `"` (SQL standard,
+// same rule as '' inside a string literal) — unescape it, and never touch case: quoted identifiers
+// are case-sensitive by design, unlike bare ones which Postgres folds to lowercase itself.
+function identText(quoted: string | undefined, bare: string | undefined): string {
+  return quoted !== undefined ? quoted.replace(/""/g, '"') : bare!;
+}
+
+const COLUMN_LINE = new RegExp(`^\\s*${IDENT}\\s+(${SQL_TYPES.join("|")})\\b`, "i");
+const CREATE_TABLE = new RegExp(
+  `create table\\s+(?:if not exists\\s+)?(?:${IDENT}\\.)?${IDENT}\\s*\\(([\\s\\S]*?)\\n\\s*\\);`,
+  "gi",
+);
 
 export function parseColumns(sql: string): ParsedColumn[] {
   sql = stripLineComments(sql);
   const out: ParsedColumn[] = [];
   for (const m of sql.matchAll(CREATE_TABLE)) {
-    const table = m[2]!;
-    const body = m[3]!;
+    const table = identText(m[3], m[4]);
+    const body = m[5]!;
     for (const line of body.split("\n")) {
       const cm = COLUMN_LINE.exec(line);
-      if (cm) out.push({ table_name: table, column_name: cm[1]!, data_type: cm[2]!.toLowerCase() });
+      if (cm) out.push({ table_name: table, column_name: identText(cm[1], cm[2]), data_type: cm[3]!.toLowerCase() });
     }
   }
   return out;
 }
 
 export function parseTableNames(sql: string): { schema: string; table: string }[] {
-  return [...stripLineComments(sql).matchAll(CREATE_TABLE)].map((m) => ({ schema: m[1] ?? "public", table: m[2]! }));
+  return [...stripLineComments(sql).matchAll(CREATE_TABLE)].map((m) => ({
+    schema: m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public",
+    table: identText(m[3], m[4]),
+  }));
 }
 
 const DEFINER_FUNCTION =
