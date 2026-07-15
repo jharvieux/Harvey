@@ -30,10 +30,39 @@ function parseVersion(v: string): [number, number, number] {
   return [Number(m[1]), Number(m[2]), Number(m[3])];
 }
 
+// Semver §9/§11 prerelease ordering: 5.0.0-beta.2 < 5.0.0-beta.10 < 5.0.0. Needed because a curated
+// range can bound a prerelease line (next-auth's 5.0.0-beta.x, #271) — comparing on the numeric
+// triple alone collapses every beta to 5.0.0, which would make such a range silently un-matchable.
+function prerelease(v: string): string[] {
+  const m = /^v?\d+\.\d+\.\d+(?:-([0-9A-Za-z.-]+))?/.exec(v);
+  return m?.[1] ? m[1].split(".") : [];
+}
+
+function cmpPrerelease(a: string[], b: string[]): number {
+  // A version with no prerelease outranks one that has it: 5.0.0 > 5.0.0-beta.30.
+  if (a.length === 0 && b.length === 0) return 0;
+  if (a.length === 0) return 1;
+  if (b.length === 0) return -1;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i];
+    const y = b[i];
+    // A longer identifier list outranks its own prefix: beta.1 > beta.
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const xNum = /^\d+$/.test(x);
+    const yNum = /^\d+$/.test(y);
+    // Numeric identifiers compare numerically and always rank below alphanumeric ones.
+    if (xNum !== yNum) return xNum ? -1 : 1;
+    const d = xNum ? Number(x) - Number(y) : x < y ? -1 : x > y ? 1 : 0;
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
 function cmp(a: string, b: string): number {
   const [a1, a2, a3] = parseVersion(a);
   const [b1, b2, b3] = parseVersion(b);
-  return a1 - b1 || a2 - b2 || a3 - b3;
+  return a1 - b1 || a2 - b2 || a3 - b3 || cmpPrerelease(prerelease(a), prerelease(b));
 }
 
 const lt = (a: string, b: string): boolean => cmp(a, b) < 0;
@@ -186,10 +215,18 @@ export function checkNextVersionCVEs(installedVersion: string, manifestPath = "p
 // exploitability narrative. Each entry is a well-documented CVE with a clean affected range.
 // `tier` is "high" only when the affected range is crisp (a single "< fixed" boundary, no
 // backported-patch exceptions); an approximate range stays "review" per the free-count doctrine.
-interface CuratedDepCve {
-  name: string;
+interface CuratedRange {
   introduced?: string; // inclusive lower bound; omitted = all versions below `fixed`
   fixed: string; // exclusive upper bound (first patched version)
+}
+
+interface CuratedDepCve {
+  name: string;
+  // Every affected range OSV lists for this package, transcribed exactly. An advisory often has
+  // more than one (a maintained line and an old line each get their own fix), and the ranges are
+  // disjoint, so at most one matches a given version. Modelling only the newest line under-flags
+  // the others; flattening them into one span over-flags the patched versions between them (#271).
+  ranges: CuratedRange[];
   id: string;
   severity: Severity;
   tier: "high" | "review";
@@ -203,18 +240,19 @@ interface CuratedDepCve {
 const CURATED_DEP_CVES: CuratedDepCve[] = [
   {
     name: "minimist",
-    fixed: "1.2.6",
+    // Two disjoint lines, each with its own fix. 0.2.4 patched the 0.x line and is NOT vulnerable —
+    // an unbounded "< 1.2.6" both missed 0.x below 0.2.4 and mis-flagged the patched 0.2.4 (#271).
+    ranges: [{ fixed: "0.2.4" }, { introduced: "1.0.0", fixed: "1.2.6" }],
     id: "CVE-2021-44906",
     severity: "Critical",
     tier: "high",
     summary: "Prototype pollution (CVSS 9.8): a crafted argv key like `--__proto__.x` pollutes Object.prototype, corrupting every object in the process.",
-    fix: "Upgrade minimist to >= 1.2.6.",
+    fix: "Upgrade minimist to >= 1.2.6 (or >= 0.2.4 on the 0.x line).",
     source: "https://osv.dev/vulnerability/GHSA-xvch-5gv4-984h",
   },
   {
     name: "react-dom",
-    introduced: "16.0.0",
-    fixed: "16.4.2",
+    ranges: [{ introduced: "16.0.0", fixed: "16.4.2" }],
     id: "CVE-2018-6341",
     severity: "Medium",
     tier: "review",
@@ -227,7 +265,7 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
   // majors have their own fix, keeping the range unambiguous) → high. ---
   {
     name: "jsonwebtoken",
-    fixed: "9.0.0",
+    ranges: [{ fixed: "9.0.0" }],
     id: "CVE-2022-23540",
     severity: "High",
     tier: "high",
@@ -237,29 +275,30 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
   },
   {
     name: "next-auth",
-    introduced: "4.0.0",
-    fixed: "4.20.1",
+    // OSV lists one unbounded range — every version below 4.20.1, not just the 4.x line (#271).
+    ranges: [{ fixed: "4.20.1" }],
     id: "CVE-2023-27490",
     severity: "Medium",
     tier: "high",
-    summary: "OAuth sign-in CSRF: a missing/replayed state check lets an attacker link a victim's session to the attacker's OAuth account (GHSA-7r7x-4c4q-c4qf). The 4.x line is affected below 4.20.1.",
+    summary: "OAuth sign-in CSRF: a missing/replayed state check lets an attacker link a victim's session to the attacker's OAuth account (GHSA-7r7x-4c4q-c4qf). Every version below 4.20.1 is affected.",
     fix: "Upgrade next-auth to >= 4.20.1.",
     source: "https://osv.dev/vulnerability/GHSA-7r7x-4c4q-c4qf",
   },
   {
     name: "next-auth",
-    introduced: "4.0.0",
-    fixed: "4.24.12",
+    // The v5 beta line carries its own fix, so it is a second range rather than a widened first one:
+    // a released 4.24.12+ must stay clean even though 5.0.0-beta.29 is still vulnerable (#271).
+    ranges: [{ fixed: "4.24.12" }, { introduced: "5.0.0-beta.0", fixed: "5.0.0-beta.30" }],
     id: "GHSA-5jpx-9hw9-2fx4",
     severity: "Medium",
     tier: "high",
-    summary: "Email-provider sign-in misdelivery: a crafted address like `\"e@attacker.com\"@victim.com` is mis-parsed and the magic-link email is delivered to the attacker's mailbox, an authentication bypass. The 4.x line is affected below 4.24.12.",
-    fix: "Upgrade next-auth to >= 4.24.12 (and nodemailer to >= 7.0.7).",
+    summary: "Email-provider sign-in misdelivery: a crafted address like `\"e@attacker.com\"@victim.com` is mis-parsed and the magic-link email is delivered to the attacker's mailbox, an authentication bypass. Affects every version below 4.24.12 and the 5.0.0-beta line below beta.30.",
+    fix: "Upgrade next-auth to >= 4.24.12 (or >= 5.0.0-beta.30 on the v5 beta line), and nodemailer to >= 7.0.7.",
     source: "https://osv.dev/vulnerability/GHSA-5jpx-9hw9-2fx4",
   },
   {
     name: "follow-redirects",
-    fixed: "1.15.6",
+    ranges: [{ fixed: "1.15.6" }],
     id: "CVE-2024-28849",
     severity: "Medium",
     tier: "high",
@@ -269,8 +308,8 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
   },
   {
     name: "axios",
-    introduced: "1.0.0",
-    fixed: "1.8.2",
+    // OSV also lists an older 0.x line fixed at 0.30.0; scoped to 1.x here as before, tracked separately.
+    ranges: [{ introduced: "1.0.0", fixed: "1.8.2" }],
     id: "CVE-2025-27152",
     severity: "High",
     tier: "high",
@@ -280,29 +319,29 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
   },
   {
     name: "undici",
-    introduced: "5.0.0",
-    fixed: "5.8.2",
+    // One unbounded range below 5.8.2 — no 6.x range, unlike CVE-2024-24758 below (#271).
+    ranges: [{ fixed: "5.8.2" }],
     id: "CVE-2022-35949",
     severity: "High",
     tier: "high",
-    summary: "SSRF via an absolute URL supplied on `pathname`: `undici.request` sends the request to the absolute host instead of resolving against the intended origin (GHSA-8qr4-xgw6-wmr3). The 5.x line is affected below the 5.8.2 fix.",
+    summary: "SSRF via an absolute URL supplied on `pathname`: `undici.request` sends the request to the absolute host instead of resolving against the intended origin (GHSA-8qr4-xgw6-wmr3). Every version below 5.8.2 is affected.",
     fix: "Upgrade undici to >= 5.8.2.",
     source: "https://osv.dev/vulnerability/GHSA-8qr4-xgw6-wmr3",
   },
   {
     name: "undici",
-    introduced: "5.0.0",
-    fixed: "5.28.3",
+    // The 6.x line has its own fix, so a patched 5.28.3 must not be swept up by the 6.6.1 boundary.
+    ranges: [{ fixed: "5.28.3" }, { introduced: "6.0.0", fixed: "6.6.1" }],
     id: "CVE-2024-24758",
     severity: "Medium",
     tier: "high",
-    summary: "The Proxy-Authorization header is not cleared on a cross-origin redirect, leaking proxy credentials to the redirect target (GHSA-3787-6prv-h9w3). The 5.x line is affected below 5.28.3.",
-    fix: "Upgrade undici to >= 5.28.3.",
+    summary: "The Proxy-Authorization header is not cleared on a cross-origin redirect, leaking proxy credentials to the redirect target (GHSA-3787-6prv-h9w3). Affects every version below 5.28.3 and the 6.x line below 6.6.1.",
+    fix: "Upgrade undici to >= 5.28.3 (or >= 6.6.1 on the 6.x line).",
     source: "https://osv.dev/vulnerability/GHSA-3787-6prv-h9w3",
   },
   {
     name: "cookie",
-    fixed: "0.7.0",
+    ranges: [{ fixed: "0.7.0" }],
     id: "CVE-2024-47764",
     severity: "Low",
     tier: "high",
@@ -312,8 +351,8 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
   },
   {
     name: "ws",
-    introduced: "7.0.0",
-    fixed: "7.4.6",
+    // OSV also lists 6.x (fixed 6.2.2) and 5.x (fixed 5.2.3); scoped to 7.x here as before, tracked separately.
+    ranges: [{ introduced: "7.0.0", fixed: "7.4.6" }],
     id: "CVE-2021-32640",
     severity: "High",
     tier: "high",
@@ -323,7 +362,7 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
   },
   {
     name: "sharp",
-    fixed: "0.32.6",
+    ranges: [{ fixed: "0.32.6" }],
     id: "CVE-2023-4863",
     severity: "High",
     tier: "high",
@@ -341,10 +380,10 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
 // The verified fact is the FIXED boundary, deliberately not the whole range. It is the boundary
 // every check here actually branches on, and it is what #212 caught: the fabricated "14.2 fixed in
 // 14.2.35" row asserted a fix version the advisory has never listed. The `introduced` edges are
-// intentionally NOT asserted — several curated ranges are knowingly coarser or narrower than OSV's
-// (react-dom's is approximate and review-tiered for that reason; the next-auth/undici rows scope to
-// one major line), and a narrower range under-flags rather than fabricating a vulnerability. See
-// #271 for the coverage gaps that scoping leaves.
+// still NOT asserted: react-dom's range stays knowingly approximate (review-tiered for that
+// reason), and axios/ws stay scoped to one major line while OSV lists older ones too — both
+// under-flag rather than fabricate. #271 closed the next-auth/undici/minimist gaps by transcribing
+// every OSV range for those entries; a multi-range row restates one claim per line.
 export interface CuratedClaim {
   advisory: string; // OSV id to query (GHSA preferred — the record CVE ids alias to)
   pkg: string;
@@ -368,12 +407,16 @@ export const CURATED_CLAIMS: CuratedClaim[] = [
   { advisory: "GHSA-mq59-m269-xvcx", pkg: "next", fixed: "16.1.7", note: "CVE-2026-27978 Server Actions null-origin CSRF" },
   { advisory: "GHSA-c4j6-fc7j-m34r", pkg: "next", fixed: "15.5.16", note: "CVE-2026-44578 WebSocket-upgrade SSRF, 13.4-15.5 line" },
   { advisory: "GHSA-c4j6-fc7j-m34r", pkg: "next", fixed: "16.2.5", note: "CVE-2026-44578 WebSocket-upgrade SSRF, 16.x line" },
-  ...CURATED_DEP_CVES.map((c) => ({
-    advisory: /^GHSA-/.test(c.id) ? c.id : c.source.replace(/^.*\/vulnerability\//, ""),
-    pkg: c.name,
-    fixed: c.fixed,
-    note: `${c.id} — ${c.name}`,
-  })),
+  // One claim per range: a multi-range advisory asserts a fix boundary per line, and each must be
+  // verified against OSV independently — restating only the first would leave the rest unchecked.
+  ...CURATED_DEP_CVES.flatMap((c) =>
+    c.ranges.map((r) => ({
+      advisory: /^GHSA-/.test(c.id) ? c.id : c.source.replace(/^.*\/vulnerability\//, ""),
+      pkg: c.name,
+      fixed: r.fixed,
+      note: `${c.id} — ${c.name} (fixed ${r.fixed})`,
+    })),
+  ),
 ];
 
 export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestPath = "package.json"): Finding[] {
@@ -382,8 +425,9 @@ export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestP
     const declared = deps[cve.name];
     if (!declared) continue;
     const version = declared.replace(/^[\^~]/, "");
-    const inRange = (cve.introduced ? gte(version, cve.introduced) : true) && lt(version, cve.fixed);
-    if (!inRange) continue;
+    // The ranges are disjoint, so at most one matches — the matching one names the fix to cite.
+    const hit = cve.ranges.find((r) => (r.introduced ? gte(version, r.introduced) : true) && lt(version, r.fixed));
+    if (!hit) continue;
     findings.push(
       mechanicalFinding({
         id: `DEP-${cve.id}`,
@@ -392,7 +436,7 @@ export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestP
         category: "Dependency CVE",
         taxonomy: "Known-vulnerable dependency",
         location: `${manifestPath} (${cve.name})`,
-        evidence: `Declared ${cve.name}@${declared} falls in the ${cve.id} affected range (${cve.introduced ? `>= ${cve.introduced} ` : ""}< ${cve.fixed}), per ${cve.source}.`,
+        evidence: `Declared ${cve.name}@${declared} falls in the ${cve.id} affected range (${hit.introduced ? `>= ${hit.introduced} ` : ""}< ${hit.fixed}), per ${cve.source}.`,
         impact: cve.summary,
         fix: cve.fix,
         precisionTier: cve.tier,

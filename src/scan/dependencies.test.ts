@@ -21,6 +21,15 @@ describe("CURATED_CLAIMS (the OSV-verifiable restatement of the curated corpus)"
     expect(rsc.filter((c) => c.fixed.startsWith("14."))).toEqual([]);
   });
 
+  // #271: a multi-range entry asserts a fix per line. Restating only one would leave the other
+  // boundary hardcoded but never re-verified against OSV — the gap that let #212 ship.
+  it("restates every range of a multi-range advisory, so no boundary goes unverified", () => {
+    const fixesFor = (advisory: string, pkg: string) => CURATED_CLAIMS.filter((c) => c.advisory === advisory && c.pkg === pkg).map((c) => c.fixed);
+    expect(fixesFor("GHSA-xvch-5gv4-984h", "minimist")).toEqual(expect.arrayContaining(["0.2.4", "1.2.6"]));
+    expect(fixesFor("GHSA-5jpx-9hw9-2fx4", "next-auth")).toEqual(expect.arrayContaining(["4.24.12", "5.0.0-beta.30"]));
+    expect(fixesFor("GHSA-3787-6prv-h9w3", "undici")).toEqual(expect.arrayContaining(["5.28.3", "6.6.1"]));
+  });
+
   it("restates every curated Next.js fix boundary, so none goes unverified", () => {
     const nextFixes = CURATED_CLAIMS.filter((c) => c.pkg === "next").map((c) => c.fixed);
     // The middleware-bypass table's four lines plus the seven RSC minors.
@@ -113,6 +122,23 @@ describe("checkNextVersionCVEs", () => {
   });
 });
 
+// The prerelease comparator (#271) is only reachable through the curated ranges, but it decides
+// whether a beta pin is flagged at all — so the semver §11 rules it rests on get asserted directly
+// via the one curated entry that bounds a prerelease line (next-auth's 5.0.0-beta range).
+describe("prerelease version ordering", () => {
+  const vulnerable = (v: string) => checkKnownDependencyCVEs({ "next-auth": v }).some((f) => f.id === "DEP-GHSA-5jpx-9hw9-2fx4");
+
+  it("orders numeric prerelease identifiers numerically, not as strings", () => {
+    // The string compare that "beta.9" > "beta.30" would produce puts beta.9 outside the range.
+    expect(vulnerable("5.0.0-beta.9"), "5.0.0-beta.9 < 5.0.0-beta.30").toBe(true);
+    expect(vulnerable("5.0.0-beta.100"), "5.0.0-beta.100 > 5.0.0-beta.30").toBe(false);
+  });
+
+  it("ranks a release above its own prereleases, keeping a stable 5.0.0 out of the beta range", () => {
+    expect(vulnerable("5.0.0")).toBe(false);
+  });
+});
+
 describe("checkKnownDependencyCVEs", () => {
   it("flags minimist below the fix as a critical, free-count (high) finding", () => {
     const findings = checkKnownDependencyCVEs({ minimist: "1.2.5" });
@@ -124,6 +150,19 @@ describe("checkKnownDependencyCVEs", () => {
 
   it("does not flag minimist once patched (1.2.6)", () => {
     expect(checkKnownDependencyCVEs({ minimist: "1.2.6" })).toEqual([]);
+  });
+
+  // #271: GHSA-xvch-5gv4-984h has two disjoint ranges — 0.x below 0.2.4 and 1.x below 1.2.6. The
+  // old unbounded "< 1.2.6" got BOTH edges wrong: it missed 0.x entirely (under-flag) and, once
+  // widened naively, would call the patched 0.2.4 vulnerable (the #212 fabrication shape).
+  it.each([
+    ["0.0.8", true],
+    ["0.2.3", true],
+    ["0.2.4", false], // the 0.x line's own fix — vulnerable only BELOW it
+    ["1.0.0", true],
+  ])("matches OSV's two minimist ranges: 0.x %s vulnerable=%s", (version, vulnerable) => {
+    const ids = checkKnownDependencyCVEs({ minimist: version }).map((f) => f.id);
+    expect(ids.includes("DEP-CVE-2021-44906"), `minimist@${version}`).toBe(vulnerable);
   });
 
   it("flags a vulnerable react-dom at review tier (approximate range)", () => {
@@ -185,6 +224,45 @@ describe("checkKnownDependencyCVEs", () => {
 
   it("scopes the ws range to the 7.x line so a patched 6.x isn't mis-flagged for a 7.4.6 fix", () => {
     expect(checkKnownDependencyCVEs({ ws: "6.2.2" }).map((f) => f.id)).not.toContain("DEP-CVE-2021-32640");
+  });
+
+  // #271: both advisories list an unbounded range, so a pre-4.x next-auth is affected too — the
+  // old `introduced: "4.0.0"` scoping silently missed it.
+  it("flags a next-auth below the 4.x line, which OSV's unbounded range covers", () => {
+    const ids = checkKnownDependencyCVEs({ "next-auth": "3.29.0" }).map((f) => f.id);
+    expect(ids).toContain("DEP-CVE-2023-27490");
+    expect(ids).toContain("DEP-GHSA-5jpx-9hw9-2fx4");
+  });
+
+  // #271: GHSA-5jpx also affects the v5 beta line below beta.30. This needs prerelease-aware
+  // comparison — on a numeric-triple-only compare every 5.0.0-beta.x collapses to 5.0.0 and the
+  // range can never match.
+  it.each([
+    ["5.0.0-beta.0", true],
+    ["5.0.0-beta.29", true],
+    ["5.0.0-beta.30", false], // the beta line's own fix
+    ["5.0.0-beta.31", false],
+  ])("tracks the next-auth 5.0.0-beta line: %s vulnerable=%s", (version, vulnerable) => {
+    const ids = checkKnownDependencyCVEs({ "next-auth": version }).map((f) => f.id);
+    expect(ids.includes("DEP-GHSA-5jpx-9hw9-2fx4"), `next-auth@${version}`).toBe(vulnerable);
+  });
+
+  // #271: the two undici CVEs diverge above 5.x — CVE-2024-24758 has a 6.x range (fixed 6.6.1),
+  // CVE-2022-35949 does NOT. Asserting a 6.x range for both would fabricate a finding on 6.x.
+  it.each([
+    ["6.6.0", true],
+    ["6.6.1", false],
+  ])("flags undici 6.x for the proxy-auth leak only: %s vulnerable=%s", (version, vulnerable) => {
+    const ids = checkKnownDependencyCVEs({ undici: version }).map((f) => f.id);
+    expect(ids.includes("DEP-CVE-2024-24758"), `undici@${version}`).toBe(vulnerable);
+    expect(ids, `undici@${version} is outside CVE-2022-35949's range (< 5.8.2)`).not.toContain("DEP-CVE-2022-35949");
+  });
+
+  // The evidence must cite the range that actually matched, not the entry's first one — a 6.x
+  // finding citing "< 5.28.3" would be self-contradicting to the client reading the report.
+  it("cites the specific matched range in the evidence for a multi-range entry", () => {
+    const finding = checkKnownDependencyCVEs({ undici: "6.6.0" }).find((f) => f.id === "DEP-CVE-2024-24758");
+    expect(finding?.evidence).toContain(">= 6.0.0 < 6.6.1");
   });
 });
 
