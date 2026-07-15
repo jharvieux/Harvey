@@ -6,12 +6,24 @@
 // privacy-safe and only needs a read-only connection (or a static schema description with the
 // same {table_name, column_name, data_type} shape as information_schema.columns).
 //
-//   node pii-classify.mjs --selftest
-//   SUPABASE_DB_URL=... node pii-classify.mjs            # inventory a live DB (read-only)
+//   pnpm pii-classify --selftest
+//   SUPABASE_DB_URL=... pnpm pii-classify                    # inventory a live DB (read-only)
+//   pnpm pii-classify --schema supabase/migrations           # static schema, no DB needed (#250)
+//
+// The --schema path parses `CREATE TABLE` columns straight out of migration SQL (a directory of
+// *.sql files, or a single .sql file) via src/migration-sql-parse.ts's parseColumns — the same
+// under-extract-rather-than-mis-extract parser the M1 detect-deeper classifiers use — so this
+// runs the identical classifier over source-only engagements instead of needing a live DB.
+// Requires `tsx` (the `pnpm pii-classify` script) rather than plain `node`, since it imports a
+// TypeScript source file directly.
 //
 // FP discipline: a name-only dictionary over-matches on its own (see exclusionReason below) —
 // every hit goes through an exclusion pass before it's returned, and ambiguous names get "low"
 // confidence rather than an assertion, so they're flagged for review, not treated as fact.
+
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { parseColumns } from "../src/migration-sql-parse.js";
 
 const RULES = [
   // --- HIPAA PHI identifiers / GDPR contact & identity PII ---
@@ -294,13 +306,7 @@ function selftest() {
   process.exit(ok === cases.length ? 0 : 1);
 }
 
-async function inventory() {
-  const { default: postgres } = await import("postgres");
-  const sql = postgres(process.env.SUPABASE_DB_URL, { max: 1, idle_timeout: 5 });
-  const cols =
-    await sql`SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, ordinal_position`;
-  await sql.end();
-
+function report(cols) {
   const dataMap = buildDataMap(cols);
   const tables = Object.keys(dataMap);
   const hitCount = tables.reduce((n, t) => n + dataMap[t].columns.length, 0);
@@ -315,7 +321,57 @@ async function inventory() {
   }
 }
 
+async function inventory() {
+  const { default: postgres } = await import("postgres");
+  const sql = postgres(process.env.SUPABASE_DB_URL, { max: 1, idle_timeout: 5 });
+  const cols =
+    await sql`SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, ordinal_position`;
+  await sql.end();
+  report(cols);
+}
+
+/**
+ * Classifies every column declared in migration SQL text (`CREATE TABLE` statements) via
+ * src/migration-sql-parse.ts's parseColumns, so M10 can run on source alone (#250) instead of
+ * needing SUPABASE_DB_URL. Same under-extract-rather-than-mis-extract philosophy as that parser:
+ * a formatting shape it doesn't recognize yields fewer columns, never a wrong one.
+ * @param {string} sql concatenated migration SQL (one or more files)
+ * @returns {{columns: {table_name: string, column_name: string, data_type?: string}[], dataMap: ReturnType<typeof buildDataMap>}}
+ */
+export function classifyMigrationSql(sql) {
+  const columns = parseColumns(sql);
+  return { columns, dataMap: buildDataMap(columns) };
+}
+
+// Reads every *.sql file in `target` (sorted, so migrations apply in filename order) if it's a
+// directory, or `target` itself if it's a single .sql file — the same shape src/cli/dry-run.ts's
+// readMigrations uses for supabase/migrations/.
+function readSchemaSql(target) {
+  const st = statSync(target);
+  if (st.isFile()) return readFileSync(target, "utf8");
+  return readdirSync(target)
+    .filter((f) => f.endsWith(".sql"))
+    .sort()
+    .map((f) => readFileSync(join(target, f), "utf8"))
+    .join("\n\n");
+}
+
+function classifyFromSchema() {
+  const target = process.argv[process.argv.indexOf("--schema") + 1];
+  if (!target || !existsSync(target)) {
+    console.error(`Usage: pii-classify --schema <path to a supabase/migrations dir or a single .sql file>${target ? ` — ${target} does not exist` : ""}`);
+    process.exit(1);
+  }
+  const { columns } = classifyMigrationSql(readSchemaSql(target));
+  if (columns.length === 0) {
+    console.error(`No \`create table\` columns found via ${target} — check the path (expects supabase/migrations/*.sql shape).`);
+    process.exit(1);
+  }
+  report(columns);
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   if (process.argv.includes("--selftest")) selftest();
+  else if (process.argv.includes("--schema")) classifyFromSchema();
   else inventory();
 }

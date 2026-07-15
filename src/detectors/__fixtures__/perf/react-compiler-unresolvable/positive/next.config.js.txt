@@ -1,0 +1,10 @@
+const ENABLE_REACT_COMPILER = process.env.ENABLE_REACT_COMPILER === "true";
+
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  experimental: {
+    reactCompiler: ENABLE_REACT_COMPILER,
+  },
+};
+
+module.exports = nextConfig;

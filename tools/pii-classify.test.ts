@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDataMap, classifyColumn, classifyWithFallback } from "./pii-classify.mjs";
+import { buildDataMap, classifyColumn, classifyMigrationSql, classifyWithFallback } from "./pii-classify.mjs";
 
 describe("classifyColumn — true positives across the taxonomy", () => {
   it("matches HIPAA/GDPR contact & identity PII at high confidence", () => {
@@ -237,6 +237,41 @@ describe("M10 calibration corpus (#72, spec §M10) — the planted answer key, r
     expect(map.pii_calibration_fixture.categories.sort()).toEqual(["PCI", "PII", "SENSITIVE_PII"]);
     expect(map.pii_calibration_fixture.pci).toBe(true);
     expect(map.pii_calibration_fixture.severity).toBe("Critical");
+  });
+});
+
+describe("classifyMigrationSql — static-schema entry point (#250)", () => {
+  // No SUPABASE_DB_URL and no live DB — runs the same classifier over migration SQL text via
+  // src/migration-sql-parse.ts's parseColumns, so M10 can join the source-only tier.
+  it("parses CREATE TABLE columns out of migration SQL and classifies them", () => {
+    const sql = `
+      create table public.profiles (
+        id uuid primary key,
+        email text not null,
+        date_of_birth date,
+        display_name text
+      );
+    `;
+    const { columns, dataMap } = classifyMigrationSql(sql);
+    expect(columns.map((c) => c.column_name).sort()).toEqual(["date_of_birth", "display_name", "email", "id"]);
+    expect(dataMap.profiles.infotypes.sort()).toEqual(["DOB", "EMAIL", "NAME?"]);
+    expect(dataMap.profiles.columns.map((c) => c.column)).not.toContain("id");
+  });
+
+  it("returns no columns for SQL with no CREATE TABLE statements — surfaced by the CLI as a usage error, not a silent empty scan", () => {
+    const { columns, dataMap } = classifyMigrationSql("-- just a comment, no schema here\n");
+    expect(columns).toHaveLength(0);
+    expect(dataMap).toEqual({});
+  });
+
+  it("classifies a stored secret across multiple migration files concatenated together", () => {
+    const sql = [
+      "create table public.organisations (\n  id uuid primary key,\n  ai_api_key text\n);",
+      "create table public.contacts (\n  id uuid primary key,\n  email text\n);",
+    ].join("\n\n");
+    const { dataMap } = classifyMigrationSql(sql);
+    expect(dataMap.organisations.secret).toBe(true);
+    expect(dataMap.contacts.categories).toEqual(["PII"]);
   });
 });
 

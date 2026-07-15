@@ -269,6 +269,17 @@ describe("React Compiler gate", () => {
     const hits = byTaxonomy("ctx-value/positive", "M7 — Context value recreated every render");
     expect(hits[0]?.severity).toBe("Perf");
   });
+  it("surfaces (never silently assumes false) a variable/env-derived reactCompiler flag, e.g. saas-lite's `reactCompiler: ENABLE_REACT_COMPILER` (#249)", () => {
+    const files = loadFixtureDir("react-compiler-unresolvable/positive");
+    expect(reactCompilerEnabled(files)).toBe(false); // can't prove it's on — gating stays conservative (#248 is out of scope)
+    const hits = byTaxonomy("react-compiler-unresolvable/positive", "M7 — React Compiler flag unresolvable");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.severity).toBe("Watch");
+    expect(hits[0]?.evidence).toContain("ENABLE_REACT_COMPILER");
+  });
+  it("does not flag an explicit literal `reactCompiler: false`", () => {
+    expect(byTaxonomy("react-compiler-unresolvable/negative", "M7 — React Compiler flag unresolvable")).toHaveLength(0);
+  });
 });
 
 describe("finding shape", () => {

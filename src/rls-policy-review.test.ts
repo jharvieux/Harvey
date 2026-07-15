@@ -146,6 +146,52 @@ describe("reviewPolicy — per-user mode", () => {
   });
 });
 
+// WITH CHECK (true) on a write policy (#256). The b16 P-STORAGE-UPLOAD-CHECK-TRUE shape: no USING
+// at all, so every pre-existing rule (which keys off USING) let it through in both modes.
+describe("reviewPolicy — WITH CHECK (true)", () => {
+  const insertCheckTrue: LivePolicy = {
+    schema: "storage",
+    table: "objects",
+    name: "user_files_insert_open",
+    cmd: "INSERT",
+    qual: null,
+    withCheck: "true",
+  };
+
+  it("flags a no-USING INSERT policy with WITH CHECK (true) in per-user mode", () => {
+    expect(reviewPolicy(insertCheckTrue, perUser)?.reason).toContain('WITH CHECK is "true"');
+  });
+
+  it("flags the same policy on a tenant-scoped table", () => {
+    expect(reviewPolicy(insertCheckTrue, model)?.reason).toContain('WITH CHECK is "true"');
+  });
+
+  it("clears an INSERT policy whose WITH CHECK actually constrains the row", () => {
+    // The benign twin: same shape, same lack of USING (INSERT policies cannot have one — Postgres
+    // rejects it), but the check binds the row to the caller's own folder.
+    const insertOwn: LivePolicy = {
+      schema: "storage",
+      table: "objects",
+      name: "user_files_insert_own",
+      cmd: "INSERT",
+      qual: null,
+      withCheck: "bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text",
+    };
+    expect(reviewPolicy(insertOwn, perUser)).toBeNull();
+  });
+
+  it("clears a SELECT/DELETE policy — WITH CHECK is write-only, so `true` there is not this defect", () => {
+    const readOnly: LivePolicy = { schema: "public", table: "notes", name: "notes_read", cmd: "SELECT", qual: "tenant_id = current_tenant()", withCheck: null };
+    expect(reviewPolicy(readOnly, model)).toBeNull();
+  });
+
+  it("keeps the weaker-than-USING wording when USING is scoped and the check is `true`", () => {
+    // Both rules match this policy; the pre-existing one names the defect more precisely, so it
+    // must stay ahead of the new fallthrough.
+    expect(reviewPolicy(weakWithCheck, model)?.reason).toContain("WITH CHECK does not");
+  });
+});
+
 describe("policyReviewFindings", () => {
   it("emits review-tier findings only for the semantically-suspect policies", () => {
     const findings = policyReviewFindings([wrongColumn, weakWithCheck, tenantScoped], model);

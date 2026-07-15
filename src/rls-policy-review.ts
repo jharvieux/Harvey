@@ -30,6 +30,10 @@ export interface TenancyModel {
 const CALLER_REF = /auth\.(uid|jwt|role)\s*\(\)|current_setting\s*\(/i;
 const WRITE_CMDS = new Set(["INSERT", "UPDATE", "ALL"]);
 
+// A WITH CHECK that admits every row — `with check (true)`, allowing parens/whitespace. Postgres
+// normalises the live clause to "true", and migration text is nearly always as literal.
+const CHECK_TRUE = /^\s*\(*\s*true\s*\)*\s*$/i;
+
 function refsWord(clause: string | null, word: string): boolean {
   return clause != null && new RegExp(`\\b${word}\\b`, "i").test(clause);
 }
@@ -50,6 +54,24 @@ interface PolicyReview {
   cmd: string;
   qual: string | null;
   withCheck: string | null;
+}
+
+// `WITH CHECK (true)` on a write policy accepts ANY row the caller submits, whatever the tenancy
+// model — so this runs in both modes (#256). It is the b16 P-STORAGE-UPLOAD-CHECK-TRUE shape, and
+// crucially it needs no USING to be reachable: the mode rules above only fire when USING or the
+// check references the tenant key / binds the owner, so a no-USING policy fell through clean.
+//
+// Deliberately last in each mode: a policy whose USING *is* scoped but whose check is `true` is
+// already reported by the weaker-than-USING rules, whose wording names that specific defect.
+function checkTrueReview(policy: LivePolicy, name: string, isWrite: boolean): PolicyReview | null {
+  if (!isWrite || policy.withCheck === null || !CHECK_TRUE.test(policy.withCheck)) return null;
+  return {
+    policy: name,
+    reason: `WITH CHECK is "true" — the policy accepts any row the caller submits, so writes are not constrained to the caller's own tenant or rows.`,
+    cmd: policy.cmd,
+    qual: policy.qual,
+    withCheck: policy.withCheck,
+  };
 }
 
 export function reviewPolicy(policy: LivePolicy, model: TenancyModel): PolicyReview | null {
@@ -78,7 +100,7 @@ export function reviewPolicy(policy: LivePolicy, model: TenancyModel): PolicyRev
         ...raw,
       };
     }
-    return null;
+    return checkTrueReview(policy, name, isWrite);
   }
 
   const key = model.tenantKey;
@@ -101,7 +123,7 @@ export function reviewPolicy(policy: LivePolicy, model: TenancyModel): PolicyRev
     };
   }
 
-  return null;
+  return checkTrueReview(policy, name, isWrite);
 }
 
 export function policyReviewFindings(policies: LivePolicy[], model: TenancyModel): Finding[] {

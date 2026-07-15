@@ -23,6 +23,7 @@
     "perf-scan": "tsx src/cli/perf-scan.ts",
     "detect-static": "tsx src/cli/static-detect.ts",
     "quick-scan": "tsx src/cli/quick-scan.ts",
+    "pii-classify": "tsx tools/pii-classify.mjs",
     "epic": "tsx src/cli/epic.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip"
   },
