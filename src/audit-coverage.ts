@@ -88,7 +88,7 @@ export interface ModuleCoverage {
 // Which environments the engagement actually has. Optional: when supplied, a gap is annotated with
 // the environment it was missing, which turns "we didn't have a live DB" into a recorded decision
 // instead of an unexplained hole. It never excuses the gap — the caller still must record a reason.
-export interface EngagementEnv {
+interface EngagementEnv {
   connected: boolean; // a live/read-only database was provided
   dynamic: boolean; // a running app / self-hosted clone is available for probing
   llm: boolean; // the paid LLM tier is in scope

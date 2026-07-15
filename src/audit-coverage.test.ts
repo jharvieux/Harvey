@@ -24,7 +24,11 @@ const allTen = (): ModuleCoverage[] => AUDIT_MODULES.map(ran);
 // only one of them is written down.
 const documentedModules = (): string[] => {
   const doc = readFileSync(fileURLToPath(new URL("../docs/audit-modules.md", import.meta.url)), "utf8");
-  return [...doc.matchAll(/^\|\s*(M\d+)\s*\|/gm)].map((m) => m[1]);
+  const ids = [...doc.matchAll(/^\|\s*(M\d+)\s*\|/gm)].map((m) => m[1]).filter((id): id is string => id !== undefined);
+  // A doc whose table stopped parsing would make every assertion below vacuously true — the exact
+  // "true by construction" failure (#275) this test exists to break.
+  if (ids.length === 0) throw new Error("parsed no modules from docs/audit-modules.md — the table's shape changed");
+  return ids;
 };
 
 describe("the module enumeration itself (#275)", () => {
