@@ -137,7 +137,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     disclosureIssue: 217,
     modules: {
       M4: { counted: 6, total: 6, note: "0.35% (11/3167 lines), 6 clusters — smallest target; the sweep's 2.95% was the pre-#232 denominator." },
-      M5: M5_NEEDS_INSTALL,
+      // The one target small enough (13 deps) to `npm install` cheaply, so M5 DID run here.
+      M5: { counted: 1, total: 1, note: "Ran (target `npm install --ignore-scripts` succeeded): 0 unused files, 2 unused exports rolled into one M5-01 finding. REAL, and security-weighted — `lib/security/guards.ts` exports requireTenantAccess/requireTenantAdmin and NOTHING calls them, on the same repo whose self-join Critical (#217) is a missing-authz bug. #226's security cross-link firing on real code: the dead guard IS the vulnerability's fingerprint." },
       M7: { counted: 0, total: 0, note: "MEASURED zero — a 3.1k-line repo with no perf surface. A useful floor: any M7 finding appearing here is almost certainly a new over-match." },
       M8: { counted: 0, total: 0, note: "One hand-rolled `test/rls.test.mjs` run via `node --test`, no *.test.ts/spec files and no Stryker config — mutation-scan cannot run; #224's zero-coverage finding is the expected M8 output." },
       M9: { counted: 3, total: 3, note: "2 'Accidental dynamic rendering' + 1 'Data-fetching waterfall'." },
@@ -178,7 +179,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
   },
 ];
 
-export interface DriftRow {
+interface DriftRow {
   slug: string;
   module: string;
   expected: number;

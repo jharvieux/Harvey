@@ -45,12 +45,14 @@ describe("external corpus manifest", () => {
     }
   });
 
-  it("keeps M5 unrun across every target — none is vendored with the deps knip needs", () => {
-    // If this ever fails, someone recorded an M5 count without the target's `npm install`; that
-    // number would be a knip-failed artifact, not a dead-code measurement (#223).
-    for (const t of EXTERNAL_CORPUS) {
+  it("records M5 as unrun wherever the target's deps were not installed", () => {
+    // knip without the target's `npm install` yields a knip-FAILED artifact, not a dead-code
+    // measurement (#223) — so every target except the one small enough to install must be
+    // not-run, never a zero that would read as "no dead code".
+    for (const t of EXTERNAL_CORPUS.filter((x) => x.slug !== "multi-tenant-starter")) {
       expect(isNotRun(t.modules.M5!), t.slug).toBe(true);
     }
+    expect(isNotRun(target("multi-tenant-starter").modules.M5!)).toBe(false);
   });
 });
 
@@ -93,6 +95,13 @@ describe("scoreExternalBaseline", () => {
 
   it("skips not-run modules instead of scoring them 0 against a baseline", () => {
     expect(scoreExternalBaseline(target("proposit"), []).map((r) => r.module)).not.toContain("M5");
+  });
+
+  it("scores M5 on the one target whose deps were installed", () => {
+    // The dead tenant-authz guard (#226's security cross-link on real code). If this detection
+    // stops firing, a quality module lost a finding that corroborates a Critical.
+    const rows = scoreExternalBaseline(target("multi-tenant-starter"), [finding("M5 — Slop / dead code", "Low")]);
+    expect(rows.find((r) => r.module === "M5")).toMatchObject({ pass: true, actual: 1 });
   });
 });
 
