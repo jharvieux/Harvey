@@ -96,7 +96,7 @@ The eval had never been executed since the corpus landed 2026-07-09 (#72). First
 | run | date | reviewer | positives flagged | negatives spared | verdict |
 |---|---|---|---|---|---|
 | 1 | 2026-07-15 | Claude Opus 4.8, M6 brief (`docs/quality-extras.txt` §SIMPLIFICATION) as the prompt, no other context | 4/4 | 2/2 | **contaminated — do not treat as a pass** |
-| 2 | 2026-07-15 | Claude Opus 4.8, M6 brief as the prompt, against the de-labelled corpus | 4/4 | **1/2** | **usable baseline** — one negative flagged (`framework-adapter.ts`); see §3.2 |
+| 2 | 2026-07-15 | Claude Opus 4.8, M6 brief as the prompt, against the de-labelled corpus | 4/4 | **1/2** | **usable baseline** — one negative flagged (`framework-adapter.ts`), correctly: the fixture was defective, rebuilt in #290. Scored 1/2 against the key it ran against, not re-scored; see §3.2 |
 
 **Procedure followed.** The reviewer read the M6 brief, then the six fixture files, wrote up
 what it would flag, and only then opened `targets/calibration/GROUND-TRUTH.md` to score. Answer
@@ -143,8 +143,10 @@ outside #265's "run the eval" scope, and the fix has a real design choice in it)
   label, it is the fixture's actual discriminator, the in-code signal §2 names as separating a
   deliberate dep-drop from a genuine positive. Deleting it would delete the test. The line to
   cut is the `— BENIGN (M6-N-DEPDROP)` header above it, not the `// WHY:` rationale below.
-  Same for `framework-adapter.ts`: the `getServerSideProps` shape stays and must be inferable
-  from the code; the "rubric must NOT flag this one" header goes.
+  Same for `framework-adapter.ts`: the framework-contract shape stays and must be inferable
+  from the code; the "rubric must NOT flag this one" header goes. (Run 2 then showed that
+  fixture's shape was *not* in fact inferable from the code — it was only asserted in the header
+  being stripped. Rebuilt in #290; see §3.2.)
 - Re-run and record as run 2. Only run 2 is a usable baseline.
 
 Until then this table has one row and no trustworthy datum in it. That is a more honest state
@@ -196,16 +198,20 @@ in place.
 
 **Consequences (not fixed here — this run reports, it does not redesign the corpus):**
 
-1. `M6-N-FRAMEWORK` does not currently test what §4 claims. Either the fixture must become a real
-   framework contract whose shape is genuinely mandated *and inferable from the code* (a provider
-   interface a library actually calls, an abstract base a framework requires), or the label must
-   flip to a positive and the corpus loses its second negative. Filed as a follow-up.
+1. `M6-N-FRAMEWORK` did not test what §4 claims. **Resolved 2026-07-15 (#290): rebuilt, not
+   relabeled.** The fixture now implements `SupportedStorage` (a `@supabase/supabase-js` type this
+   target already depends on) and hands the instance to `createClient`'s `auth.storage` option — a
+   provider interface the library actually calls, with the method names and `string | null` return
+   fixed by the library's own type rather than asserted in a comment. The negative survives on
+   code-evident grounds and the corpus keeps two. Rationale and the verified type signature:
+   `GROUND-TRUTH.md` §"M6-N-FRAMEWORK rebuild".
 2. Scoring stays **1/2 negatives** for this run. It is not re-scored to 2/2 on the theory that the
    reviewer was "actually right" — the eval measures agreement with the recorded key, and the key
    is what is now in doubt. Reporting 2/2 here would be exactly the rationalized pass §3.1 warns
    against.
-3. The one genuinely-load-bearing negative left is `depdrop.ts`, and the reviewer got it right on
-   the code alone. A single negative is a thin FP test; restoring a second real one is the open work.
+3. At the time of this run the one genuinely-load-bearing negative was `depdrop.ts`, and the
+   reviewer got it right on the code alone. #290's rebuild restored the second, so run 3 faces two
+   real negatives. Run 3 has not been executed — there is no datum against the corrected key yet.
 
 **Caveats on this datum.** The reviewer also volunteered two out-of-scope routings (the
 `Math.random()` id as an M1 concern if used as a token; a vulnerable `lodash` pin) — correct
@@ -227,7 +233,7 @@ to reason about the *why*, not just pattern-match "this shape looks reusable").
 | M6-P-UUID | `id.ts` | hand-rolled random-id string builder | yes — name `crypto.randomUUID()` |
 | M6-P-OVERABSTRACT | `manager.ts` | single-implementation `interface` + factory wrapping one concrete class | yes — collapse to the concrete code |
 | M6-N-DEPDROP | `depdrop.ts` | small reimplementation, `// WHY:` comment records a deliberate heavy-dep tradeoff | no |
-| M6-N-FRAMEWORK | `framework-adapter.ts` | interface + factory shaped like `manager.ts`, but mandated by a Next.js `getServerSideProps`-style framework contract | no |
+| M6-N-FRAMEWORK | `framework-adapter.ts` | single-implementation class shaped like `manager.ts`, but `implements SupportedStorage` (a `@supabase/supabase-js` type) and is passed to `createClient`'s `auth.storage` — the library calls it; rebuilt 2026-07-15 (#290) | no |
 
 Full answer key with reasoning: `targets/calibration/GROUND-TRUTH.md` §"M6 (#72) — Simplification
 / reuse rubric-eval corpus".
