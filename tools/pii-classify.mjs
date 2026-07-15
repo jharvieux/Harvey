@@ -343,13 +343,17 @@ export function classifyMigrationSql(sql) {
   return { columns, dataMap: buildDataMap(columns) };
 }
 
-// Reads every *.sql file in `target` (sorted, so migrations apply in filename order) if it's a
+// Reads every *.sql file under `target` (sorted, so migrations apply in filename order) if it's a
 // directory, or `target` itself if it's a single .sql file — the same shape src/cli/dry-run.ts's
-// readMigrations uses for supabase/migrations/.
+// readMigrations uses for supabase/migrations/. Recursive (#299): Prisma's migration.sql files
+// live one directory deeper than Supabase's (prisma/migrations/<timestamp_name>/migration.sql,
+// not supabase/migrations/<timestamp>.sql flat) — a non-recursive readdir silently finds nothing
+// there and a Prisma target reads as "no schema input" instead of "found 0 columns", which is a
+// different, worse failure than the parser under-extracting.
 function readSchemaSql(target) {
   const st = statSync(target);
   if (st.isFile()) return readFileSync(target, "utf8");
-  return readdirSync(target)
+  return readdirSync(target, { recursive: true })
     .filter((f) => f.endsWith(".sql"))
     .sort()
     .map((f) => readFileSync(join(target, f), "utf8"))

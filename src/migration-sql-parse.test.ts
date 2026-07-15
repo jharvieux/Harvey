@@ -34,6 +34,93 @@ describe("parseColumns", () => {
   });
 });
 
+// #299: Prisma-generated migrations (prisma/migrations/**/migration.sql, not Supabase's own
+// supabase/migrations) double-quote every identifier. Verified 2026-07-15 against boxyhq's real
+// prisma/migrations/20230625203909_init/migration.sql — the fixture below is that file's actual
+// "Account"/"userId" CreateTable statement, not a synthetic approximation, so this test fails
+// loudly if a future regex change regresses the exact shape that motivated the fix.
+const QUOTED_ACCOUNT_TABLE = `
+-- CreateTable
+CREATE TABLE "Account" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "provider" TEXT NOT NULL,
+    "expires_at" INTEGER,
+
+    CONSTRAINT "Account_pkey" PRIMARY KEY ("id")
+);
+`;
+// The same table shape, unquoted — the regression guard the acceptance criteria asks for: the
+// pre-#299 path must keep working unchanged.
+const UNQUOTED_ACCOUNT_TABLE = `
+create table account (
+    id text not null,
+    user_id text not null,
+    provider text not null,
+    expires_at integer
+);
+`;
+
+describe("parseColumns — quoted vs unquoted identifiers (#299)", () => {
+  it("reads a double-quoted Prisma table/column pair, preserving camelCase", () => {
+    const cols = parseColumns(QUOTED_ACCOUNT_TABLE);
+    expect(cols.map((c) => c.column_name)).toEqual(["id", "userId", "provider", "expires_at"]);
+    expect(cols.find((c) => c.column_name === "userId")).toMatchObject({ table_name: "Account", data_type: "text" });
+  });
+
+  it("still reads the equivalent unquoted table — no regression to the pre-#299 path", () => {
+    const cols = parseColumns(UNQUOTED_ACCOUNT_TABLE);
+    expect(cols.map((c) => c.column_name)).toEqual(["id", "user_id", "provider", "expires_at"]);
+    expect(cols.find((c) => c.column_name === "user_id")).toMatchObject({ table_name: "account", data_type: "text" });
+  });
+
+  it("does not lowercase a quoted identifier the way Postgres folds a bare one", () => {
+    const cols = parseColumns(QUOTED_ACCOUNT_TABLE);
+    expect(cols.some((c) => c.column_name === "userid")).toBe(false);
+  });
+
+  it("unescapes a doubled double-quote inside a quoted identifier (SQL's \"\" escape)", () => {
+    const cols = parseColumns('create table "weird" (\n    "na""me" text not null\n);');
+    expect(cols).toEqual([{ table_name: "weird", column_name: 'na"me', data_type: "text" }]);
+  });
+
+  it("reads a schema-qualified quoted table name", () => {
+    const cols = parseColumns('create table "public"."Team" (\n    "id" text not null\n);');
+    expect(cols).toEqual([{ table_name: "Team", column_name: "id", data_type: "text" }]);
+  });
+
+  it("parses boxyhq's real jackson_store.value column — the must-not-miss encrypted-secret case (#299/#279)", () => {
+    // jackson_store is IF NOT EXISTS and lowercase/unquoted-shaped despite still being
+    // double-quoted by Prisma ("jackson_store", "value") — confirms the fix isn't camelCase-only.
+    const cols = parseColumns(`
+CREATE TABLE IF NOT EXISTS "jackson_store" (
+    "key" VARCHAR(1500) NOT NULL,
+    "value" TEXT NOT NULL,
+    "namespace" VARCHAR(64),
+
+    CONSTRAINT "_jackson_store_key" PRIMARY KEY ("key")
+);
+`);
+    expect(cols.find((c) => c.column_name === "value")).toMatchObject({ table_name: "jackson_store", data_type: "text" });
+  });
+});
+
+describe("parseTableNames — quoted vs unquoted identifiers (#299)", () => {
+  it("finds a double-quoted table name", () => {
+    expect(parseTableNames(QUOTED_ACCOUNT_TABLE)).toEqual([{ schema: "public", table: "Account" }]);
+  });
+
+  it("still finds the equivalent unquoted table name", () => {
+    expect(parseTableNames(UNQUOTED_ACCOUNT_TABLE)).toEqual([{ schema: "public", table: "account" }]);
+  });
+
+  it("resolves a quoted schema qualifier instead of defaulting to public", () => {
+    expect(parseTableNames('create table "tenant_a"."widgets" (\n    id text not null\n);')).toEqual([
+      { schema: "tenant_a", table: "widgets" },
+    ]);
+  });
+});
+
 describe("parseDefinerFunctions", () => {
   it("finds current_tenant_id as a SECURITY DEFINER function with the caller-scoping body", () => {
     const fns = parseDefinerFunctions(schemaSql);
