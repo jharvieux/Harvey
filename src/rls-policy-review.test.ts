@@ -192,6 +192,60 @@ describe("reviewPolicy — WITH CHECK (true)", () => {
   });
 });
 
+// USING (true) on a read — the RLS-USING-TRUE plant (GROUND-TRUTH row 1). The read-side mirror of
+// checkTrueReview above, which bailed on reads at its first line and left this Critical uncaught.
+describe("reviewPolicy — USING (true)", () => {
+  const selectUsingTrue: LivePolicy = {
+    schema: "public",
+    table: "documents",
+    name: "documents_select_all",
+    cmd: "SELECT",
+    qual: "true",
+    withCheck: null,
+  };
+
+  it("flags a SELECT policy with USING (true) on a tenant-scoped table", () => {
+    expect(reviewPolicy(selectUsingTrue, model)?.reason).toContain('USING is "true"');
+  });
+
+  it("names the read consequence, not a generic one", () => {
+    // The finding has to say what an operator loses: every tenant's rows, to anyone with the key.
+    expect(reviewPolicy(selectUsingTrue, model)?.reason).toContain("reads every tenant's rows");
+  });
+
+  // THE point of the rule's scope. `USING (true)` is unambiguous about its effect and silent about
+  // its intent: a published catalog is world-readable on purpose. The table's own schema is the
+  // only static fact that separates the two, so a table with no tenant column is left alone.
+  it("clears USING (true) on a table with no tenant column — the intentional public catalog", () => {
+    const publicCatalog: LivePolicy = { schema: "public", table: "plans", name: "plans_select_public", cmd: "SELECT", qual: "true", withCheck: null };
+    expect(reviewPolicy(publicCatalog, perUser)).toBeNull();
+  });
+
+  it("clears a tenant-scoped read — the rule keys off the clause, not the command", () => {
+    const scopedRead: LivePolicy = { schema: "public", table: "reports", name: "reports_select_own_tenant", cmd: "SELECT", qual: "tenant_id = current_tenant()", withCheck: null };
+    expect(reviewPolicy(scopedRead, model)).toBeNull();
+  });
+
+  it("does not widen into 'USING looks weak' — a scoped USING the rule cannot judge is left to the semantic tier", () => {
+    // A read scoped by a column the reviewer has no opinion on. Only a literal `true` is
+    // mechanical; anything else is the semantic tier's call and must not be manufactured here.
+    const opaqueScope: LivePolicy = { schema: "public", table: "documents", name: "documents_select_shared", cmd: "SELECT", qual: "tenant_id = current_tenant() or is_shared = true", withCheck: null };
+    expect(reviewPolicy(opaqueScope, model)).toBeNull();
+  });
+
+  it("flags UPDATE/DELETE, whose USING also gates which rows the caller reaches", () => {
+    const deleteAny: LivePolicy = { schema: "public", table: "documents", name: "documents_delete_any", cmd: "DELETE", qual: "true", withCheck: null };
+    expect(reviewPolicy(deleteAny, model)?.reason).toContain("can DELETE any tenant's rows");
+  });
+
+  it("keeps the weaker-than-USING wording ahead of the new rule when both match", () => {
+    // An ALL policy with USING (true) and WITH CHECK (true) matches both rules; the write-side one
+    // is ordered first, matching the ordering contract the surrounding rules already document.
+    const allOpen: LivePolicy = { schema: "public", table: "documents", name: "documents_all_open", cmd: "ALL", qual: "true", withCheck: "true" };
+    expect(reviewPolicy(allOpen, model)?.reason).toContain('WITH CHECK is "true"');
+  });
+});
+
 describe("policyReviewFindings", () => {
   it("emits review-tier findings only for the semantically-suspect policies", () => {
     const findings = policyReviewFindings([wrongColumn, weakWithCheck, tenantScoped], model);
