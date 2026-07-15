@@ -1,33 +1,33 @@
 {
   "summary": {
-    "caught": 2,
+    "caught": 4,
     "missed": 3,
-    "requires-live-run": 3
+    "requires-live-run": 1
   },
   "bugs": [
     {
       "id": "RLS-USING-TRUE",
       "severity": "Critical",
       "location": "supabase/migrations/20260708000002_rls.sql:31-32",
-      "expectedModule": "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ evaluates policy semantics",
+      "expectedModule": "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ reviews a USING (true) read policy",
       "status": "requires-live-run",
-      "note": "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ evaluates policy semantics did not execute in this pass — no caught/missed verdict possible."
+      "note": "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ reviews a USING (true) read policy did not execute in this pass — no caught/missed verdict possible."
     },
     {
       "id": "RLS-AUTH-ROLE",
       "severity": "Critical",
       "location": "supabase/migrations/20260708000002_rls.sql:38-39",
-      "expectedModule": "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ evaluates policy semantics",
-      "status": "requires-live-run",
-      "note": "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ evaluates policy semantics did not execute in this pass — no caught/missed verdict possible."
+      "expectedModule": "checkMigrationPolicySemantics (src/scan/supabase-static.ts, #220) ran inside runMechanicalScan and reviewed invoices_select_authenticated's predicate at the planted line",
+      "status": "caught",
+      "note": "Matched by finding \"M1 — Multi-tenant security\" at supabase/migrations/20260708000002_rls.sql:38 (public.invoices.invoices_select_authenticated)."
     },
     {
       "id": "RLS-DISABLED",
       "severity": "High",
       "location": "supabase/migrations/20260708000002_rls.sql:41-43",
-      "expectedModule": "Supabase Advisor lint rls_disabled_in_public (src/scan/supabase-advisors.ts) — requires a live DB via `supabase start` (Docker) or the hosted Management API",
-      "status": "requires-live-run",
-      "note": "Supabase Advisor lint rls_disabled_in_public (src/scan/supabase-advisors.ts) — requires a live DB via `supabase start` (Docker) or the hosted Management API did not execute in this pass — no caught/missed verdict possible."
+      "expectedModule": "checkMigrationRlsStatic (src/scan/supabase-static.ts) ran inside runMechanicalScan and proved audit_logs never gets RLS enabled in ANY migration",
+      "status": "caught",
+      "note": "Matched by finding \"Migration table without RLS (static)\" at supabase/migrations/20260708000001_schema.sql:35."
     },
     {
       "id": "SQLI-SERVICE",
@@ -65,7 +65,7 @@
       "id": "OPEN-REDIRECT",
       "severity": "Low",
       "location": "pages/api/redirect.js:9",
-      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) and the harvey-open-redirect custom rule (src/scan/rules/semgrep-nextjs-supabase.yml) matched at redirect.js",
+      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) and the harvey-open-redirect custom rule (src/scan/rules/semgrep/base.yml) matched at redirect.js",
       "status": "caught",
       "note": "Matched by finding \"src.scan.rules.semgrep.harvey-open-redirect\" at pages/api/redirect.js:18."
     }
