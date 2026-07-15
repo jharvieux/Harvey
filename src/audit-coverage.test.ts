@@ -177,6 +177,9 @@ describe("assertAuditComplete", () => {
 // while each individual record is correct. These pin the distinction: a well-reasoned excuse must
 // NOT be able to launder "never executed once" into routine.
 describe("never-run modules (#266)", () => {
+  // #284: these two facts are now DERIVED from audit-execution-log.json (the log has no M6 entry
+  // and does have an M10 one) rather than hand-curated here. The ledger's own derivation is pinned
+  // in audit-execution-log.test.ts; these assert the gate still reads the alarm it depends on.
   it("M6 is in the never-executed ledger — the module absorbed as a routine excuse", () => {
     expect(MODULES_NEVER_EXECUTED.has("M6")).toBe(true);
   });

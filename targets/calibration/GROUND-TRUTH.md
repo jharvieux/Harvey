@@ -16,8 +16,8 @@ Tenants: **A** = `aaaaaaaa-…`, **B** = `bbbbbbbb-…`. Users: `alice@tenant-a.
 | 3 | RLS-DISABLED | High | `supabase/migrations/20260708000002_rls.sql:41-43` (absence — `audit_logs` never gets `enable row level security`) | RLS is never enabled on `audit_logs` | Anyone with the anon key reads all tenants' audit trails via PostgREST. |
 | 4 | SQLI-SERVICE | Critical | `pages/api/search.js:9` | Untrusted `q` concatenated into raw SQL run on the service DB connection | `GET /api/search?q=' UNION SELECT id, email, encrypted_password FROM auth.users --` exfiltrates password hashes. |
 | 5 | WEBHOOK-REPLAY | Medium | `pages/api/webhook.js:20-24` | HMAC signature verified, but no timestamp/nonce check | Capture one valid signed request and POST it repeatedly; each replay re-inserts the side-effect (audit row) forever. |
-| 6 | COUNTER-RACE | Medium | `pages/api/counter/increment.js:11-31` | Non-atomic read-modify-write on `counters.value` | Fire N concurrent `POST /api/counter/increment`; final value is < N because increments interleave and are lost. |
-| 7 | UPDATE-UNSCOPED | High | `pages/api/profile/update.js:11` | `pool.query("UPDATE public.profiles SET role = $1", [role])` with no `WHERE` clause, via the raw pg connection — bypasses both RLS and PostgREST's WHERE-clause guard | `POST /api/profile/update {"role":"admin"}` sets `role=admin` on every profile in every tenant. |
+| 6 | COUNTER-RACE | Medium | `pages/api/counter/increment.js:11-26` | Non-atomic read-modify-write on `counters.value` | Fire N concurrent `POST /api/counter/increment`; final value is < N because increments interleave and are lost. |
+| 7 | UPDATE-UNSCOPED | High | `pages/api/profile/update.js:12` | `pool.query("UPDATE public.profiles SET role = $1", [role])` with no `WHERE` clause, via the raw pg connection — bypasses both RLS and PostgREST's WHERE-clause guard | `POST /api/profile/update {"role":"admin"}` sets `role=admin` on every profile in every tenant. |
 | 8 | OPEN-REDIRECT | Low | `pages/api/redirect.js:9` | `z.string().url()` validates URL shape but not host (no allowlist) | `GET /api/redirect?url=https://evil.example/phish` issues a 302 to the attacker's host. |
 
 ### Dynamic-tier probes (M2 verify replays, #145–#148)
@@ -1699,14 +1699,14 @@ tradeoff comment, a framework contract) rather than pattern-match on shape alone
 | id | location | why benign |
 |---|---|---|
 | M6-N-DEPDROP | `simplify/depdrop.ts` | a small hand-rolled `throttle`, shaped like `debounce.ts`, but carries a `// WHY:` comment recording a deliberate tradeoff (drop a heavy dep for an 8-line function) — `quality-extras.txt` "FALSE POSITIVES": note the tradeoff, don't flag as a defect. |
-| M6-N-FRAMEWORK | `simplify/framework-adapter.ts` | an interface + factory shaped like `manager.ts`'s over-abstraction, but the shape is mandated by a Next.js `getServerSideProps`-style framework contract, not gratuitous — `quality-extras.txt` "FALSE POSITIVES": an abstraction mandated by a framework/library contract. **⚠️ UNDER REVIEW (run 2, 2026-07-15):** the framework contract this row claims is not demonstrated by the code. Next.js dispatches `getServerSideProps` as a module-level export and never calls a class method, so as written this may be a genuine over-abstraction wearing framework vocabulary — i.e. a positive mislabeled as a negative. Do not count it as a settled negative until the fixture is rebuilt around a contract a framework really imposes (or the label flips). See `docs/design/m6-simplification-eval.md` §3.2. |
+| M6-N-FRAMEWORK | `simplify/framework-adapter.ts` | a single-implementation class shaped like `manager.ts`'s over-abstraction, but the shape is imposed by a library contract the code itself demonstrates: `CookieSessionStorage implements SupportedStorage`, the type `@supabase/supabase-js` re-exports from `@supabase/auth-js`, and the instance is passed to `createClient`'s `auth.storage` option — so auth-js really does call `getItem`/`setItem`/`removeItem` on it. The `getItem → string \| null` signature and the `isServer` flag are the library's, not the author's; collapsing the class would break the option's type. `quality-extras.txt` "FALSE POSITIVES": an abstraction mandated by a framework/library contract. **Rebuilt 2026-07-15 (#290)** — see "M6-N-FRAMEWORK rebuild" below. |
 
 ### M6 eval status
 
 **The fixtures are de-labelled as of 2026-07-15 (#265 follow-up).** The verdict headers that named
 each file's own expected outcome now live here in this answer key and nowhere else — this section
 and the tables above are the labels. The eval scores by file path, so nothing needs an in-file id.
-`depdrop.ts`'s `// WHY:` block and `framework-adapter.ts`'s `getServerSideProps` shape were kept:
+`depdrop.ts`'s `// WHY:` block and `framework-adapter.ts`'s library-contract shape are kept:
 they are the fixtures' discriminators (the content the rubric must reason about), not labels.
 
 **Run 1 (2026-07-15, #265) — contaminated, not a usable baseline.** 4/4 positives, 2/2 negatives,
@@ -1716,11 +1716,51 @@ headers scores 6/6, so the run cannot distinguish rubric application from label-
 **Run 2 (2026-07-15) — first run against the de-labelled corpus: 4/4 positives, 1/2 negatives.**
 The reviewer (a fresh, uncontaminated context) flagged `framework-adapter.ts` (M6-N-FRAMEWORK),
 arguing Next.js dispatches `getServerSideProps` as a module-level export and never invokes a class
-method — so the shape is not a framework contract and the interface is a genuine single-implementation
-over-abstraction. **That argument looks correct**, which means M6-N-FRAMEWORK's benign status rested
-on its header comment asserting a contract the code does not actually demonstrate. Treat this row as
-**under review — a suspected fixture defect, not a settled negative** (see the note on it above).
+method — so the shape was not a framework contract and the interface was a genuine
+single-implementation over-abstraction. **That argument was correct** (#290): the fixture's benign
+status rested on a header comment asserting a contract the code never demonstrated.
 `depdrop.ts` was spared on the `// WHY:` comment alone, which is the negative behaving as designed.
+
+**Run 2 stays scored 1/2 against the key it ran against.** It is not retroactively re-scored to 2/2
+now that the fixture is fixed: the run happened against the old file, and the reviewer's flag was the
+right call on that code. The rebuild below changes what a *future* run faces, not what run 2 measured.
+Run 3 is the first datum against the corrected key, and there is no run 3 yet.
+
+### M6-N-FRAMEWORK rebuild (2026-07-15, #290)
+
+**Decision: rebuilt, not relabeled** — a real, code-evident library contract exists, so the negative
+survives and the corpus keeps two.
+
+The old fixture declared a `PageDataAdapter` interface with a `getServerSideProps` *method*. Next.js's
+actual contract is a module-level `export async function getServerSideProps(ctx)` from a page file —
+it has no mechanism to discover or call a class method (`pages/dead-page.js` in this same target uses
+the real module-level form). Nothing imported the class; the framework could never reach it. The
+"contract" existed only in the stripped header comment, so the row was pinning nothing.
+
+The rebuild uses `SupportedStorage` from `@supabase/auth-js` (re-exported by `@supabase/supabase-js`,
+which this target already depends on — verified against the installed 2.108.1 types:
+`export type SupportedStorage = PromisifyMethods<Pick<Storage, 'getItem'|'setItem'|'removeItem'>> &
+{ isServer?: boolean }`). Why this one is a genuine negative and the old one wasn't:
+
+- **The library really calls it.** The instance is passed to `createClient({ auth: { storage } })`;
+  auth-js invokes `getItem`/`setItem`/`removeItem` on it to persist sessions. The old class had no caller.
+- **The shape is not the author's choice.** The three method names, the `string | null` return, and
+  `isServer` are all fixed by `SupportedStorage`. A reviewer proposing "collapse this to a plain
+  object/function" would produce code that no longer type-checks against the `storage` option.
+- **The evidence is in the code, not a comment.** `implements SupportedStorage` + the `createClient`
+  call site are the discriminator, inferable with no prose asserting anything — the bar #282 set and
+  the bar `depdrop.ts` already meets with its `// WHY:` block.
+
+It stays paired 1:1 with `manager.ts` by shape (single-implementation class, one construction site):
+the reviewer still must distinguish "single implementation because it's gratuitous" from "single
+implementation because a library's type says so."
+
+**Known limitation, deliberate.** `targets/calibration` is never `npm install`ed (its `package.json`
+says so — `react-supabase-helpers` is a slopsquat fixture), so the `SupportedStorage` import does not
+resolve locally and the contract is not machine-checked here. It is checked by reading, against the
+real published types cited above. This is the same footing as every other fixture in this target,
+none of which compile; an M6 reviewer reads source, it does not typecheck. If the corpus ever gains a
+real install, this fixture should typecheck as-is.
 
 Full write-up: `docs/design/m6-simplification-eval.md` §3.1 (run 1) and §3.2 (run 2). Whatever a run
 produces, report it as **"reviewer agreed N/4 positives, M/2 negatives"** — never as an "M6

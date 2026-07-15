@@ -117,6 +117,15 @@ export function parseTruffleHogFindings(results: TruffleHogResult[], scope: stri
 //   - a `private-key` hit sharing a FILE with a test/example SAML IdP marker, inside a CI
 //     workflow, is a test-fixture keypair — down-ranked to review instead of dropped, since a
 //     private key still deserves a human look (#211).
+// gitleaks scans files concurrently and reports matches in whatever order its workers finish,
+// so two runs over the same target can return the same finding set in different order — and
+// since ids below are assigned positionally (SEC-GL-<scope>-N), that reshuffles ids across
+// identical findings (#302). Sort into a stable order — file, line, rule, match — before the
+// id-assigning map so reruns produce identical ids for the same finding.
+function gitleaksSortKey(r: GitleaksResult): string {
+  return `${r.File} ${String(r.StartLine ?? 0).padStart(10, "0")} ${r.RuleID} ${r.Match ?? r.Secret ?? ""}`;
+}
+
 export function parseGitleaksFindings(results: GitleaksResult[], scope: string): Finding[] {
   const demoKeyLocations = new Set(
     results.filter((r) => r.RuleID === "supabase-demo-key-marker").map((r) => `${r.File}:${r.StartLine ?? 0}`),
@@ -126,6 +135,7 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
   return results
     .filter((r) => !CORRELATION_MARKER_RULES.has(r.RuleID))
     .filter((r) => !demoKeyLocations.has(`${r.File}:${r.StartLine ?? 0}`))
+    .sort((a, b) => gitleaksSortKey(a).localeCompare(gitleaksSortKey(b)))
     .map((r, i) => {
       const testIdpPrivateKey = r.RuleID === "private-key" && CI_WORKFLOW_PATH.test(r.File) && testIdpFiles.has(r.File);
       const high = HIGH_PRECISION_GITLEAKS_RULES.has(r.RuleID) && !testIdpPrivateKey;

@@ -1,0 +1,56 @@
+[
+  {
+    "module": "M1",
+    "firstRan": "2026-07-08",
+    "target": "targets/calibration",
+    "evidence": "Live scanner run: mechanical scan (6 findings) + detect-deeper grant/definer classifiers — docs/runbooks/dry-run-calibration.md §3, artifact dry-run/findings.json"
+  },
+  {
+    "module": "M2",
+    "firstRan": "2026-07-08",
+    "target": "targets/calibration",
+    "evidence": "Live dynamic pen-test on a local colima+Supabase stack: explore mode caught planted bugs #1/#2/#3 (cross-tenant reads), verify proved #8 — calibration-live-validation memory"
+  },
+  {
+    "module": "M3",
+    "firstRan": "2026-06-27",
+    "target": "jharvieux/atc",
+    "evidence": "ATC self-audit: vitals hotspot pass over 914 files / 987 commits, health 6.3/10, top hotspot app/api/chat/route.ts — docs/example-report-atc.md §1, §2"
+  },
+  {
+    "module": "M4",
+    "firstRan": "2026-07-08",
+    "target": "targets/calibration",
+    "evidence": "pnpm quality-scan (jscpd duplication), 1291 ms, 0 findings (correct for the target) — docs/runbooks/dry-run-calibration.md §3, artifact dry-run/quality-findings.json"
+  },
+  {
+    "module": "M5",
+    "firstRan": "2026-07-08",
+    "target": "targets/calibration",
+    "evidence": "pnpm quality-scan (knip dead code), run against the same target, 0 findings — docs/runbooks/dry-run-calibration.md §3, artifact dry-run/quality-findings.json"
+  },
+  {
+    "module": "M7",
+    "firstRan": "2026-06-27",
+    "target": "jharvieux/atc",
+    "evidence": "ATC self-audit: Supabase performance advisors + code-tier detectors, 4 perf findings — docs/example-report-atc.md §2, §3"
+  },
+  {
+    "module": "M8",
+    "firstRan": "2026-06-27",
+    "target": "jharvieux/atc",
+    "evidence": "ATC self-audit: Stryker mutation run surfaced a survived mutant on commission state-machine money logic — docs/example-report-atc.md §3 'Test quality (Stryker)'"
+  },
+  {
+    "module": "M9",
+    "firstRan": "2026-06-27",
+    "target": "jharvieux/atc",
+    "evidence": "ATC self-audit: M9 static detectors (server-only, fetch-waterfalls, dynamic-rendering, client-data-leak) over the App Router surface — docs/example-report-atc.md §2"
+  },
+  {
+    "module": "M10",
+    "firstRan": "2026-07-08",
+    "target": "targets/calibration",
+    "evidence": "PII/PHI/PCI data map from parsed migration columns: 3 tables with hits, 31 columns classified — docs/runbooks/dry-run-calibration.md §3, artifact dry-run/pii-data-map.json"
+  }
+]

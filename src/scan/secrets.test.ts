@@ -96,6 +96,22 @@ describe("parseGitleaksFindings", () => {
     expect(findings[0]?.precisionTier).toBe("high");
   });
 
+  it("assigns the same ids to the same findings regardless of input order (#302)", () => {
+    const a: GitleaksResult = { RuleID: "generic-api-key", File: "lib/a.ts", StartLine: 1, Match: "apikey=aaa" };
+    const b: GitleaksResult = { RuleID: "generic-api-key", File: "lib/b.ts", StartLine: 2, Match: "apikey=bbb" };
+    const c: GitleaksResult = { RuleID: "private-key", File: "certs/key.pem", StartLine: 1 };
+
+    const byId = (findings: ReturnType<typeof parseGitleaksFindings>) =>
+      new Map(findings.map((f) => [f.location, f.id]));
+
+    const run1 = byId(parseGitleaksFindings([a, b, c], "source"));
+    const run2 = byId(parseGitleaksFindings([c, a, b], "source"));
+    const run3 = byId(parseGitleaksFindings([b, c, a], "source"));
+
+    expect(run2).toEqual(run1);
+    expect(run3).toEqual(run1);
+  });
+
   it("never surfaces the internal correlation marker rules as findings themselves", () => {
     const results: GitleaksResult[] = [
       { RuleID: "supabase-demo-key-marker", File: "supabase/seed.sql", StartLine: 2 },

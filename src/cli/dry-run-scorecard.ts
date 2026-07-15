@@ -93,7 +93,7 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     id: "OPEN-REDIRECT",
     severity: "Low",
     location: "pages/api/redirect.js:9",
-    expectedModule: "Semgrep ran (src/scan/semgrep.ts) and the harvey-open-redirect custom rule (src/scan/rules/semgrep-nextjs-supabase.yml) matched at redirect.js",
+    expectedModule: "Semgrep ran (src/scan/semgrep.ts) and the harvey-open-redirect custom rule (src/scan/rules/semgrep/base.yml) matched at redirect.js",
     moduleRan: true,
     matches: at(/redirect\.js/, /open.?redirect/i),
   },
