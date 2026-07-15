@@ -25,6 +25,7 @@
     "detect-static": "tsx src/cli/static-detect.ts",
     "quick-scan": "tsx src/cli/quick-scan.ts",
     "simplify-scan": "tsx src/cli/simplify-scan.ts",
+    "corpus-drift": "tsx src/cli/corpus-drift.ts",
     "pii-classify": "tsx tools/pii-classify.mjs",
     "epic": "tsx src/cli/epic.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip"

@@ -1,0 +1,67 @@
+# Layer 2 for the external-repo regression corpus (#222/#263). Clones the six PUBLIC targets at
+# their pinned commits, re-runs the source-tier modules, and scores the result against the
+# recorded baselines.
+#
+# Why this is NOT part of `pnpm verify` (the required per-PR check): it needs network to clone six
+# repos and external binaries (semgrep/trufflehog/osv-scanner) to run the mechanical tier. `verify`
+# stays deterministic and offline so it's fast and never flakes on someone else's infrastructure;
+# Layer 1 (src/scan/external-corpus.test.ts) covers the scorers there.
+#
+# Scheduled, not per-PR: the targets are frozen at a commit, so nothing changes between runs except
+# OUR scanners. Weekly catches a precision regression within days of it landing, without paying the
+# clone-and-scan cost on every PR. workflow_dispatch is for checking a scanner change on demand,
+# and pull_request runs it when the corpus or its scorer is itself edited.
+#
+# On failure: the job names the module and target that drifted. A drift is EITHER an intended
+# precision fix — rebaseline that target in src/scan/external-corpus.ts with the measured note —
+# OR a regression, which is a scanner bug to fix. It is never something to silence.
+
+name: corpus-drift
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Mondays 07:00 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/scan/external-corpus.ts"
+      - "src/cli/corpus-drift.ts"
+      - ".github/workflows/corpus-drift.yml"
+
+# A scheduled drift check has no reason to run twice concurrently, and a re-dispatch means the
+# newer run is the interesting one.
+concurrency:
+  group: corpus-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: clone pinned commits + score baselines
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # jscpd/knip are this repo's own devDependencies, so the scored modules (M4/M5/M7/M8/M9) need
+      # no external binaries — only the clone network access.
+      - name: Score the corpus against its baselines
+        run: pnpm corpus-drift --json corpus-drift.json
+
+      # The scorecard is the artifact worth keeping on a failure: it's the per-module, per-target
+      # table showing exactly what moved.
+      - name: Upload drift scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-drift-scorecard
+          path: corpus-drift.json
+          if-no-files-found: warn

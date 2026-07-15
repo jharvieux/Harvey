@@ -4,8 +4,9 @@
 //   - pin the M10 classifier against the REAL column names from the swept repos — the module has
 //     no static-schema CLI path, so this is where its #233 behavior on real code is gated.
 // Layer 2 (clone each pinned commit, re-run detect-static/quality-scan, score against the
-// baselines) needs network + binaries; it is the deferred supervisor pass, same shape as the M7
-// live-advisor split in m7.entries.ts.
+// baselines) needs network + binaries, so it is NOT here: it is `pnpm corpus-drift`, scheduled in
+// .github/workflows/corpus-drift.yml (#263). These two layers are complementary — Layer 1 proves
+// the scorers fail on movement without cloning anything, Layer 2 supplies the real movement.
 
 import { describe, expect, it } from "vitest";
 import { classifyColumn } from "../../tools/pii-classify.mjs";
@@ -45,14 +46,16 @@ describe("external corpus manifest", () => {
     }
   });
 
-  it("records M5 as unrun wherever the target's deps were not installed", () => {
+  it("records M5 as unrun on every target where knip could not resolve the config", () => {
     // knip without the target's `npm install` yields a knip-FAILED artifact, not a dead-code
-    // measurement (#223) — so every target except the one small enough to install must be
-    // not-run, never a zero that would read as "no dead code".
-    for (const t of EXTERNAL_CORPUS.filter((x) => x.slug !== "multi-tenant-starter")) {
+    // measurement (#223) — recorded not-run, never a zero that would read as "no dead code".
+    // Which targets those are is MEASURED, not assumed: #263's first real Layer 2 run found knip
+    // resolves two of them without any install, so the rule is "wherever it actually failed".
+    const scored = EXTERNAL_CORPUS.filter((t) => !isNotRun(t.modules.M5!)).map((t) => t.slug);
+    expect(scored.sort()).toEqual(["multi-tenant-starter", "subscription-payments"]);
+    for (const t of EXTERNAL_CORPUS.filter((x) => !scored.includes(x.slug))) {
       expect(isNotRun(t.modules.M5!), t.slug).toBe(true);
     }
-    expect(isNotRun(target("multi-tenant-starter").modules.M5!)).toBe(false);
   });
 });
 
@@ -97,11 +100,16 @@ describe("scoreExternalBaseline", () => {
     expect(scoreExternalBaseline(target("proposit"), []).map((r) => r.module)).not.toContain("M5");
   });
 
-  it("scores M5 on the one target whose deps were installed", () => {
-    // The dead tenant-authz guard (#226's security cross-link on real code). If this detection
-    // stops firing, a quality module lost a finding that corroborates a Critical.
-    const rows = scoreExternalBaseline(target("multi-tenant-starter"), [finding("M5 — Slop / dead code", "Low")]);
-    expect(rows.find((r) => r.module === "M5")).toMatchObject({ pass: true, actual: 1 });
+  it("scores M5 where knip ran, and catches the dead tenant-authz guard going missing", () => {
+    // multi-tenant-starter's two knip findings, one of which is #226's security cross-link on real
+    // code: `lib/security/guards.ts` exports tenant-authz guards nothing calls, on the repo whose
+    // #217 Critical IS a missing-authz bug. If that detection stops firing, a quality module lost
+    // the finding that corroborates a Critical — so the baseline must fail, not shrug.
+    const dead = (): Finding => finding("M5 — Slop / dead code", "Low");
+    expect(scoreExternalBaseline(target("multi-tenant-starter"), [dead(), dead()]).find((r) => r.module === "M5"))
+      .toMatchObject({ pass: true, actual: 2 });
+    expect(scoreExternalBaseline(target("multi-tenant-starter"), [dead()]).find((r) => r.module === "M5"))
+      .toMatchObject({ pass: false, drift: -1 });
   });
 });
 
