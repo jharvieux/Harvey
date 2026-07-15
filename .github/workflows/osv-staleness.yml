@@ -1,0 +1,61 @@
+# Re-verifies the curated CVE corpus against OSV (#247). Deliberately NOT part of `pnpm verify`:
+# it needs network, and verify must stay deterministic and offline. Drift arrives on the advisory's
+# timeline (a revision, a rejection) rather than on a commit, so this runs on a schedule and opens
+# an issue when a hardcoded fact no longer matches upstream.
+name: OSV staleness
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Mondays 07:00 UTC
+  workflow_dispatch:
+
+jobs:
+  osv-staleness:
+    name: osv-staleness
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: check
+        run: pnpm osv-staleness 2>&1 | tee osv-staleness.log
+      - name: Open an issue on drift
+        if: failure() && steps.check.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const log = fs.readFileSync('osv-staleness.log', 'utf8');
+            const title = 'Curated CVE corpus has drifted from OSV';
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'audit-service',
+            });
+            const body = [
+              'The scheduled OSV staleness check (#247) found a curated advisory claim that no longer matches OSV.',
+              'Each one is a fact this scanner asserts to clients — see #212 for what a fabricated CVE cost.',
+              '',
+              '```',
+              log.slice(-4000),
+              '```',
+              '',
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            ].join('\n');
+            const dupe = existing.find((i) => i.title === title);
+            if (dupe) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: dupe.number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['audit-service', 'opus'],
+              });
+            }
