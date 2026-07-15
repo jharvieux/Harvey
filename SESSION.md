@@ -2,9 +2,35 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-15 (sweep #4: 11 issues across PRs #305–#318, all merged. **#229's orchestrator finally LANDED — CLAUDE.md's "known gap" is closed and its text is now stale (#313).** Disclosure still BLOCKED on #245.)_
+_Last updated: 2026-07-15 (sweep #4 + a measurement audit: 15 PRs #305–#346 merged, 34 issues filed. **#229's orchestrator LANDED** (its text is now stale — #313). **The engagement path was then audited by execution and has the same disease the internal scorecard had — see below; #349 is the one a client sees.** Disclosure still BLOCKED on #245.)_
 
-## Issue-sweep #4 (2026-07-15, latest) — the coverage gap closes, and measurement corrects three assumptions
+## ⚠️ START HERE (2026-07-15, end of session) — what the engagement path actually does
+
+**Read `#349` before any client engagement.** An execution-based audit of `run-audit.ts` → `audit-coverage.ts` → `report-template/` found:
+
+1. **#349 (client-facing, worst).** The coverage ledger has **NO path into the report**. `grep` for any coverage symbol across `report-template/` returns nothing. The only disclosure is `meta.outOfScope` — **a hand-typed string**, i.e. the hand-kept ledger #284 abolished, reintroduced at the last mile. **A module that never ran reaches the client as silence, and silence reads as clean.** Until this lands, fixing the probes just makes an accurate ledger nobody reads.
+2. **#350.** Nine of ten probes equate `exit 0` with `ran`, and the tools deliberately exit 0 when they scan nothing. **Proven:** M5 records `ran` while its own tool prints *"M5 dead-code scan (knip) did not run"* (and per #223 that is the COMMON case); M8 records `ran` while its runner returns `status: partial, "mutation scan could not run"`; M9 records `ran` against an empty dir having loaded 0 files. **In two, the tool hands the probe a correct verdict and the probe discards it.**
+3. **#351.** M6's never-run alarm — documented as *"deliberately unsatisfiable by reason-writing"* — is cleared by `--llm` printing source **no reviewer ever read**. Banked evidence = the command line. M6 has no measurement of any kind (#267).
+4. **#352.** `assertComplete` (M2 target coverage) is **unwired** — only tests call it, while CLAUDE.md and `audit-coverage.ts` both describe it as an active gate.
+
+**The orchestrator's architecture HELD under attack** (8 attempts failed: no forgeable ledger, missing runner throws pre-run, crashed probe can't launder into `requires-live-run`). #229 was built right. **The disease is in the probes' definition of evidence, and at the last mile.**
+
+## The through-line of this whole session — one defect class, ~10 instances
+
+**A recorded claim about our own capability, drifting from reality, failing silently, in the direction of a confident-looking number.** #321 is the systemic version and is now the most-referenced issue in the backlog.
+
+Instances found in one day: boxyhq's M10 not-run reason (fixed by #299) · #300's issue body asserting a Playwright blocker that never existed · two stale b16 entries (#264) · the scorecard's stale mappings (#332) · stale AGAIN minutes after #337 (#340) · 4 planted bugs invisible to the scorecard (#345) · GROUND-TRUTH line 57 vs its own contents (#348) · `assertComplete` described as active but unwired (#352) · M5/M8/M9's `ran` (#350) · "needs an LLM" labels nobody re-checked (#354).
+
+**And I reproduced it five times while documenting it** — see "Supervisor errors" below. The rule now in memory: **run the thing that measures it; never let a stored number become an argument's premise.**
+
+## Calibration — the real numbers (measured 2026-07-15, never quote from memory)
+
+- **`pnpm exec tsx src/cli/validate-calibration.ts` → 147/153 positives, 131/131 negatives, GATE PASS.** The 6 uncaught are all `expectedTier: "review"` — deliberate LLM-tier splits.
+- **⚠️ That number is ~85% M1 and covers EIGHT modules, not ten (#341).** M1 ~130 · M10 6 · M4-M5 4 · M7 3 · M3 2 · **M8 1** · **M9-authz 1** · **M2 0** · **M6 0**. M2 (needs a live stack) and M6 (paid LLM packet) have **no fixtures and are structurally ungateable** — defensible individually, but **"147/153 GATE PASS" is a security-gate number wearing a ten-module label.**
+- **`dry-run/scorecard.json` → 12 bugs: 5 caught / 3 missed / 4 requires-live-run.** Internal only — **it never touches an external app** (verified: `GROUND_TRUTH_BUGS` is hardcoded to our fixtures; `corpus-drift.ts` uses `scoreExternalBaseline`; `run-audit.ts` never references it).
+- **THREE measurement surfaces, not one** (#339): the gated 153-corpus (rule fires on shape) · the dry-run (pipeline catches bug, with exploitability) · the external corpus of 6 real repos (holds on code we didn't write). They cannot collapse — self-authored fixtures **structurally cannot** measure real-world precision (#326's lesson).
+
+## Issue-sweep #4 (2026-07-15) — the coverage gap closes, and measurement corrects three assumptions
 
 Operator grant: **#290 + #300** (i.e. `targets/calibration/**`, `docs/design/m6-simplification-eval.md`, `.github/workflows/**`) — pulled in at the gate, verbatim _"include 290 and 300"_. Mid-sweep the operator also asked for the GitGuardian fix and chose the exclusion **+** the redaction issue.
 
@@ -35,9 +61,18 @@ The old fixture's benign status rested entirely on a comment #282 stripped — i
 ### A fourth instance of the theme, from #264 — and the lesson generalizes
 Two of #264's nine were **stale**: fixed by #220/#256 after filing, with the b16 note *already saying so* while the issue still listed them uncaught. Nobody re-checked. This is **#321's class again** (a recorded reason outliving its truth) — but in the *answer key*, not the manifest, which is worse: a stale "documented static miss" note is indistinguishable from a real tier boundary, and it hides a rule that already works. **A recorded gap is a claim about the world, and this repo has now been wrong about one four times in one sweep** (boxyhq M10, #300's Playwright blocker, the two b16 storage entries).
 
-### Supervisor errors worth recording
-1. **#264 was approved at the gate and I never dispatched it.** I tracked batch state in prose instead of updating the ledger after each change — exactly what the ledger exists to prevent. Caught only at wrap-up reconciliation (the check working, but it shouldn't have needed to) and dispatched late. **Rule: update the ledger on every state change, before writing the prose update.**
-2. **I based this file's first sweep-#4 edit on the operator's uncommitted working copy**, reading sweep #2/#3 sections that are not on `origin/main` (which still sat at 2026-07-11). No work was lost — the branch was cut from `origin/main` — but this is the *exact* trap recorded in sweep #3's notes above. **The rule already existed and I broke it anyway: verify against `origin/main`, never a working copy.** Note for the operator: your local SESSION.md still carries uncommitted sweep #2/#3 sections that have never landed on `main`.
+### Supervisor errors worth recording — five, all caught by the operator
+1. **#264 was approved at the gate and I never dispatched it.** I tracked batch state in prose instead of updating the ledger after each change. Caught only at wrap-up reconciliation. **Rule: update the ledger on every state change, before writing the prose update.**
+2. **I based this file's first sweep-#4 edit on the operator's uncommitted working copy** — the *exact* trap recorded in sweep #3's notes above. No work lost (the branch was cut from `origin/main`). **Note: the operator's local SESSION.md carries uncommitted sweep #2/#3 sections that have never landed on `main`.**
+3. **"Mechanical is 0/8."** Quoted from a 2026-07-08 memory predating the entire rule corpus; I built #311's whole argument on it. Real: 4/8 on that fixture (5 now), **147/153 on the actual gate**. #311's premise corrected twice.
+4. **"Two answer keys."** There are **three** measurement surfaces (#339).
+5. **"The corpus spans all ten modules."** It covers **eight** — no M2/M6 fixtures exist. I inferred "ten" from seeing six module entry files without checking for the two absent ones (#341).
+6. **Filed #344 without checking the backlog** — #267 already covered it, better. Closed as duplicate.
+
+Every one was inference dressed as measurement, each checkable in under a minute. Memory `never-quote-capability-numbers` records the commands. **A supervisor who guesses its own numbers has no standing to sell a product that tells clients what is true about their code.**
+
+### Follow-up filing — a wrap-up check that isn't reliable
+34 issues filed (#307–#357). Reconciling against every executor's `follow_ups` + the audit's findings **and** its `unverified` list found **three unfiled**: #355 (`dry-run.ts`'s non-recursive `readMigrations` — reported by the scan-299 executor and **missed at that sweep's wrap-up**), #356 (M2's half of the flags-as-facts defect; #311 only covered M1), #357 (the audit's unverified list). **This was a reconciliation, not a proof** — anything an executor noticed but didn't report was never visible. #355 existing shows the wrap-up check misses things; it surfaced only because the operator asked.
 
 ### Operator decisions this sweep surfaced (all NEW, all yours)
 - **#311** — M1 reads `ran` off the mechanical layer alone while only *claiming* the semantic/live layers are in scope. Mechanical is **0/8** on planted bugs; the LLM pipeline is **7/8**. The lead module of the wedge carrying the runner's weakest claim. Permanently `partial`, or make the semantic pass leave a checkable artifact?
@@ -116,13 +151,15 @@ Run 1 scored **4/4 + 2/2 and was VOIDED as contaminated**: every fixture's line 
 - **#252** M8 "harness present but suite absent" (proposit: `vitest run` + exactly 1 test file → counted:1, when #224's zero-coverage finding is arguably more honest).
 - **#257** static RLS residual FP (own-row policy on a table that also carries `tenant_id`) — may not be decidable from static SQL alone; the #206 boundary.
 
-### Next-up queue (revised 2026-07-15, after sweep #4)
-1. **#245** — still the only thing blocking all 7 disclosure threads. Unchanged and unstarted across **four** sweeps; it is judgment about what to tell third parties, not a code task.
-2. **#313** — CLAUDE.md's known-gap paragraph is now **wrong** (the #229 runner shipped). It is the file that defines how the repo works and how every dispatched agent behaves; stale text there caused a whole class of confusion in sweep #3. Human-owned → yours.
-3. **#311 / #308 / #319** — the three honesty decisions this sweep surfaced. Each is a claim the product makes to a paying client: what M1's `ran` means, whether findings carry live secrets, what a mutation score asserts.
-4. **#283** run M6 against a real target — still the only thing that clears its gate. **#324** (run 3 vs the corrected corpus) should come first: M6 currently has no trustworthy negative datum, so an engagement run would have nothing to calibrate its FP behavior against.
-5. **#326** — validate #221's detector against proposit. The finding is live and review-tier now; its precision is unmeasured until this runs.
-6. **#320** (triage proposit's 85 M5-knip findings — measured, not verified) · **#321** (not-run reasons never re-tested — the systemic one) · **#307/#327/#322** (parser/scoring/scope gaps).
+### Next-up queue (revised 2026-07-15, END of session — the audit reordered this)
+1. **#349 — the only defect a paying client sees.** The coverage ledger never reaches the report; `meta.outOfScope` is hand-typed. **Nothing else in the engagement path matters until this lands** — fixing probes only produces an accurate ledger nobody reads. **Do not run a paid engagement before deciding this.**
+2. **#350 / #351 / #356** — probes accept `exit 0` as evidence; M6's alarm is defeated by a flag; M1/M2 read flags as facts. #350 and #351 are the ones that bank a false `ran` **permanently** via `--record`.
+3. **#245** — still the only thing blocking all 7 disclosure threads. Unstarted across **four** sweeps; judgment about what to tell third parties, not a code task.
+4. **#313** — CLAUDE.md's known-gap paragraph is now **wrong** (the #229 runner shipped) and #352 adds a second stale claim (`assertComplete` described as an active gate). It is the file every dispatched agent reads; stale text there caused a whole class of confusion in sweep #3. Human-owned → yours.
+5. **The honesty decisions** — **#311** (what M1's `ran` means) · **#308** (findings carry live client secrets into a rendered report) · **#319** (what a mutation score asserts) · **#341** (a blended `147/153` implying uniform ten-module coverage) · **#342** (`caught` flattening review-tier surfacing).
+6. **#353 / #354 — operator-directed: can we catch these mechanically without FPs?** #353: the 3 never-covered planted bugs (**UPDATE-UNSCOPED looks most tractable** — a raw UPDATE with no WHERE is a textual fact). #354: the 6 review-tier gaps — **at least 2 look mechanical, not semantic** (`P-MW-MATCHER-EXCLUDES-API` is a string literal; `P-DRAFTMODE-NO-SECRET`'s own note looks wrong). Most of #354's negatives **already exist**; #353's must be built. Precedent for both: **#333** — the discriminator wasn't in the code shape at all.
+7. **#339 / #321** — the structural fixes. One gated key per question; make stale reasons impossible rather than guarded after the fact.
+8. **#283/#324** (M6 has no measured basis at all — #267 is the parent) · **#326** (#221's detector precision unmeasured) · **#320** · **#307/#322/#327**.
 
 ### Open decisions (operator-owned — agents were explicitly told not to guess these)
 **Pre-existing:** #248 M7 compiler-gating · #252 M8 harness-vs-suite (hit again in #300 — saas-lite's E2E-only suite is exactly this ambiguity; recorded with a reason rather than decided) · #255 curated severity vs advisory · #257 static RLS own-row/tenant_id boundary · #267 the top-100 AI-hand-rolled corpus (HELD for a later sweep).
