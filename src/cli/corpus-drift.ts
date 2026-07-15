@@ -21,8 +21,9 @@
 //
 // Modules scored here are the source-only tier: M4/M5 (quality-scan), M7/M9 (detect-static), M8
 // (mutation-scan, only where the absence of a suite IS the finding), M10 (classifyMigrationSql
-// over the target's own cloned SQL migrations, #279 — targets with no schemaPath in the manifest,
-// e.g. boxyhq's unparseable Prisma migrations, are skipped here and stay not-run in the manifest).
+// over the target's own cloned SQL migrations, #279 — a target with no schemaPath in the manifest
+// is skipped here and stays not-run. #299 closed the one target that used to hit this: boxyhq's
+// Prisma migrations parse fine now that parseColumns/parseTableNames read quoted identifiers.).
 // Anything a target can't run is recorded not-run WITH THE REASON in the manifest and skipped by
 // the scorer — never scored 0.
 
@@ -142,8 +143,10 @@ function runMutationScan(dir: string, cfg: M8CorpusConfig): { mutationScore: num
 
 // #279: every *.sql file under `dir`, sorted so migrations apply in filename order — the same
 // shape tools/pii-classify.mjs's own (private) readSchemaSql uses for its --schema CLI path.
+// Recursive (#299): a Prisma schemaPath (prisma/migrations/<name>/migration.sql) is one directory
+// deeper than a Supabase one (supabase/migrations/<timestamp>.sql flat) — see readSchemaSql's note.
 function readMigrationSql(dir: string): string {
-  return readdirSync(dir)
+  return readdirSync(dir, { recursive: true, encoding: "utf8" })
     .filter((f) => f.endsWith(".sql"))
     .sort()
     .map((f) => readFileSync(join(dir, f), "utf8"))

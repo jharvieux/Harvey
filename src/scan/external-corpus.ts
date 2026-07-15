@@ -81,9 +81,9 @@ export interface ExternalTarget {
   securityVerdict: string;
   disclosureIssue?: number;
   // #279: clone-relative path to the target's SQL migrations, for corpus-drift.ts to feed
-  // classifyMigrationSql. Undefined means "no schema input this classifier can read" — boxyhq's
-  // Prisma migration.sql exists but every identifier is double-quoted ("Account", "userId"),
-  // which parseColumns's unquoted-\w+ regex does not extract (measured: 0 columns parsed).
+  // classifyMigrationSql. Undefined means "no schema input this classifier can read". #299 closed
+  // the one target this used to name (boxyhq's double-quoted Prisma migration.sql) by extending
+  // parseColumns/parseTableNames to read quoted identifiers — every corpus target now has one.
   schemaPath?: string;
   // #278: quality-scan's knip pass (dead code) and detect-static's slop pass (style) both emitted
   // `M5 —` findings that used to be merged into one scored module, double-counting M5 (subscription-
@@ -136,20 +136,6 @@ const M8_DOCKER_PER_MUTANT: ModuleNotRun = {
 
 const M8_E2E_ONLY_SUITE: ModuleNotRun = {
   reason: "Measured 2026-07-15: this target's `turbo test` orchestrates apps/e2e, whose 3 specs are ALL Playwright E2E (account/auth/password-reset) needing a built app, a browser and a live Supabase stack. There is no unit suite to mutate — so unlike boxyhq (whose jest config ignores its E2E dir and scores fine), scoping a Stryker config here has nothing to point at. This is the 'harness present but suite absent' shape #252 is still deciding the rule for: recorded not-run with the reason, NOT #224's zero-coverage finding, because a `test` script does exist and inventing the policy here would pre-empt that open decision.",
-};
-
-// #279: the Layer 2 clone-and-score pass this file's header describes now exists (#263), and
-// tools/pii-classify.mjs has had a static-schema CLI path since #250 — so the blocker the old
-// M10_NEEDS_SCHEMA_INPUT reason named is gone for every target with parseable SQL migrations.
-// boxyhq is the one real exception: its migrations are Prisma-generated with every identifier
-// double-quoted ("Account", "userId"), which parseColumns's unquoted-\w+ column/table regexes
-// don't match at all — verified 2026-07-15 by running parseColumns against boxyhq's cloned
-// prisma/migrations/**/migration.sql: 0 columns parsed. Not a missing schema input (the .sql
-// files exist), a parser limitation on this target's SQL dialect — recorded not-run for that
-// reason, and boxyhq's must-not-miss column (jackson_store.value) stays pinned directly against
-// classifyColumn in external-corpus.test.ts, same as before.
-const M10_PRISMA_UNPARSEABLE: ModuleNotRun = {
-  reason: "boxyhq's migrations are Prisma-generated (prisma/migrations/**/migration.sql, not supabase/migrations) with every table/column identifier double-quoted (\"Account\", \"userId\"). src/migration-sql-parse.ts's parseColumns matches unquoted \\w+ identifiers only, by design (CLAUDE.md: under-extract rather than mis-extract) — verified 2026-07-15 it parses 0 columns from this target's real migration.sql. A parser-dialect gap, not a missing schema input; jackson_store.value is pinned directly against classifyColumn in external-corpus.test.ts instead.",
 };
 
 // #279: shapes a schema-only PII/PHI/PCI classification pass into Finding[] so
@@ -228,6 +214,10 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     securityVerdict: "1 Medium (team billing authz enforced only in UI), 1 Low (invite path bypasses the admins-cant-create-owners guard)",
     disclosureIssue: 216,
     m8: M8_CORPUS_CONFIGS.boxyhq,
+    // #299: Prisma migrations, not supabase/migrations — nested one level deeper
+    // (prisma/migrations/<name>/migration.sql) than Supabase's flat layout, which is why
+    // corpus-drift.ts's readMigrationSql had to read recursively too, not just this parser.
+    schemaPath: "prisma/migrations",
     modules: {
       M4: { counted: 39, total: 66, note: "4.93% (1148/23283 lines), 90 raw clusters -> 66 cross-file findings, 39 counted (fixed #263: the 90 was jscpd's cluster count). Per #232 the real signal is the API-handler envelope (a `createHandler` extraction candidate), lower severity than proposit's. Re-measured 2026-07-15 WITH deps installed (#251): unchanged." },
       "M5-knip": { counted: 12, total: 12, note: "#251: measured 2026-07-15 after `npm install --legacy-peer-deps` in the clone — 5 unused files + 7 files with unused exports. Modest for a 23k-line repo, matching this target's reputation as the corpus's best-maintained one (it is also the M8 upper reference point). Worth watching as an FP guard: a jump here on a well-kept repo is more likely a knip/config change than new dead code." },
@@ -238,7 +228,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       // test FILES (8) but its jest suite is ONE unit spec; the other 7 are Playwright E2E.
       M8: { mutationScore: 20, killed: 7, valid: 35, note: "#300: MEASURED 2026-07-15 — 20% (7/35 valid mutants) on lib/server-common.ts, the file boxyhq's one jest unit spec (__tests__/lib/server-common.spec.ts) covers. 2 survived, 26 NoCoverage: the spec exercises generateToken but leaves most of the file's exports untouched. #277 predicted the Playwright specs would block this and they do NOT — the target's jest.config.js already sets testPathIgnorePatterns: ['<rootDir>/tests/e2e'], so jest never loads them; the prediction was never tested against the config. Note this reverses the manifest's 'best-tested target' framing: most test files, LOWEST measured mutation score in the corpus (proposit's thin suite scores 100 on what it covers). Test-file count was never test quality — which is #263's lesson restated." },
       M9: { counted: 0, total: 0, note: "MEASURED zero, and it is the #231 fix working: this is a PAGES Router app, where the App-Router-only checks must not fire at all. Pre-#231 it drew a bogus server-only hit. Any non-zero M9 here is a straight regression of that fix." },
-      M10: M10_PRISMA_UNPARSEABLE,
+      M10: { counted: 8, total: 8, note: "#299: measured 2026-07-15 via m10FindingsFromSchema over the cloned prisma/migrations (95 columns parsed across 15 tables, 8 PII/secret-bearing). Headline is jackson_store: Medium (OPAQUE_ENCRYPTED_STORE, the must-not-miss SAML/SSO secret store also pinned directly in external-corpus.test.ts's classifyColumn assertion), plus Account/Session: High (AUTH_TOKEN) and User: High (NAME?/EMAIL/STORED_PASSWORD). Previously not-run — parseColumns matched unquoted \\w+ identifiers only and this target's Prisma-generated migration.sql double-quotes every one (\"Account\", \"userId\"); #299 extended the parser to read quoted identifiers too." },
     },
   },
   {
