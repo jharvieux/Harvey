@@ -3,7 +3,13 @@
 // free-tier calibration invariant (#261). Layer 1 (src/scan/external-corpus.test.ts) proves the
 // scorers in `pnpm verify` with no network; this is the pass that actually re-measures real repos.
 //
-//   pnpm corpus-drift [--target <slug>] [--keep] [--json <path>]
+//   pnpm corpus-drift [--target <slug>] [--keep] [--json <path>] [--install] [--m8]
+//
+// --install (#251) runs `npm install` in each clone before the scanners, which is what lets knip
+// resolve the target's config (CLAUDE.md's M5 prereq). --m8 (#300) additionally installs Stryker +
+// the target's runner plugin and scores the mutation baseline of every target carrying an `m8`
+// config. Both are opt-in and both are minutes per target — the scheduled jobs pass them
+// (corpus-drift.yml --install; corpus-m8.yml --install --m8), a local run stays fast by default.
 //
 // NOT part of `pnpm verify`: it clones six repos over the network and shells out to jscpd/knip and
 // the mechanical binaries. It runs on a schedule (.github/workflows/corpus-drift.yml) — `verify`
@@ -31,11 +37,15 @@ import { runMechanicalScan } from "../scan/mechanical.js";
 import {
   EXTERNAL_CORPUS,
   FREE_TIER_EXPECTATIONS,
+  isMutationBaseline,
+  isNotRun,
   m10FindingsFromSchema,
   scoreExternalBaseline,
   scoreFreeTierExpectation,
+  scoreMutationBaseline,
   type ExternalTarget,
 } from "../scan/external-corpus.js";
+import type { M8CorpusConfig } from "../scan/m8-corpus.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const args = process.argv.slice(2);
@@ -47,6 +57,11 @@ const flag = (name: string): string | undefined => {
 const onlySlug = flag("--target");
 const jsonOut = flag("--json");
 const keep = args.includes("--keep");
+// #251/#300: both opt-in because both cost real minutes of install per target. The scheduled jobs
+// pass them (corpus-drift.yml --install, corpus-m8.yml --install --m8); a local run stays fast and
+// scores the source-tier modules exactly as before.
+const install = args.includes("--install");
+const m8 = args.includes("--m8");
 
 const targets = onlySlug ? EXTERNAL_CORPUS.filter((t) => t.slug === onlySlug) : EXTERNAL_CORPUS;
 if (targets.length === 0) {
@@ -65,6 +80,25 @@ function cloneAtPin(target: ExternalTarget, into: string): void {
   git("checkout", "-q", "FETCH_HEAD");
 }
 
+// #251: knip resolves a target's config imports only when the target's own deps are present
+// (CLAUDE.md's M5 prereq) — without this, M5-knip was unrun on 4 of 6 targets. Off by default and
+// on in the scheduled job (--install): a clone-and-install of six real repos is minutes and a lot
+// of network, which a local `pnpm corpus-drift --target X` shouldn't pay unless it's asking about
+// M5. Measured 2026-07-15: installing is inert for the other modules (M4 and both already-scored
+// M5-knip baselines reproduced byte-identically with deps present).
+//
+// Failure is NOT fatal to the target: quality-scan degrades to its M5-00 "did not run" finding
+// (#223), the M5-knip baseline then drifts, and the job says so — which is the loud failure this
+// job exists for. Swallowing the install error to keep other modules scoring is the same call
+// runScanner already makes.
+function installTargetDeps(dir: string, flags: readonly string[]): void {
+  try {
+    execFileSync("npm", ["install", "--no-audit", "--no-fund", ...flags], { cwd: dir, stdio: ["ignore", "ignore", "inherit"] });
+  } catch {
+    console.error(`  ⚠ npm install failed — M5-knip will report its #223 did-not-run finding and drift against the baseline`);
+  }
+}
+
 function runScanner(script: string, scriptArgs: string[]): Finding[] {
   const out = join(mkdtempSync(join(tmpdir(), "harvey-corpus-")), "findings.json");
   try {
@@ -77,6 +111,33 @@ function runScanner(script: string, scriptArgs: string[]): Finding[] {
   }
   const parsed = JSON.parse(readFileSync(out, "utf8")) as Finding[] | { finding: Finding };
   return Array.isArray(parsed) ? parsed : [parsed.finding];
+}
+
+// #300: installs Stryker + the target's runner plugin, writes the vendored config, and runs the M8
+// wrapper — the setup m8-corpus.ts explains why is per-target data rather than something a generic
+// wrapper infers. --no-save keeps the target's own manifest untouched, and node_modules/.bin is
+// prepended so mutation-scan's `stryker` lookup finds THIS target's binary rather than a stray one.
+//
+// An install/run failure throws: unlike the source-tier modules, there is no partial M8 result to
+// salvage, and a target listed as m8-scoreable that silently produced no score is exactly the
+// silent skip the coverage guard forbids.
+function runMutationScan(dir: string, cfg: M8CorpusConfig): { mutationScore: number; killed: number; valid: number } {
+  execFileSync("npm", ["install", "--no-save", "--no-audit", "--no-fund", ...cfg.installFlags, ...cfg.strykerPackages], { cwd: dir, stdio: ["ignore", "ignore", "inherit"] });
+  writeFileSync(join(dir, "stryker.conf.json"), `${JSON.stringify(cfg.config, null, 2)}\n`);
+
+  const out = join(mkdtempSync(join(tmpdir(), "harvey-m8-")), "m8.json");
+  execFileSync("pnpm", ["mutation-scan", dir, "--out", out], {
+    cwd: repoRoot,
+    stdio: ["ignore", "ignore", "inherit"],
+    env: { ...process.env, PATH: `${join(dir, "node_modules", ".bin")}:${process.env.PATH ?? ""}` },
+  });
+
+  const { summary } = JSON.parse(readFileSync(out, "utf8")) as {
+    summary: { overall: { mutationScore: number; killed: number; totalMutants: number; ignored: number; compileErrors: number } };
+  };
+  const o = summary.overall;
+  // "valid" is Stryker's own denominator for the score: everything it could actually judge.
+  return { mutationScore: o.mutationScore, killed: o.killed, valid: o.totalMutants - o.ignored - o.compileErrors };
 }
 
 // #279: every *.sql file under `dir`, sorted so migrations apply in filename order — the same
@@ -103,6 +164,39 @@ for (const target of targets) {
   console.error(`\n=== ${target.slug} (${target.repo} @ ${target.commit.slice(0, 8)}) ===`);
   try {
     cloneAtPin(target, dir);
+
+    // #251: before any scanner — knip needs these present to resolve the target's config.
+    if (install) installTargetDeps(dir, target.m8?.installFlags ?? []);
+
+    // #300: M8 is scored as a mutation percentage, not a finding count, and only where the manifest
+    // carries both a vendored config and a MutationBaseline. --m8 is an M8-ONLY pass: its job
+    // (corpus-m8.yml) exists because mutation testing is minutes per target, and it deliberately
+    // doesn't install the mechanical binaries the free-tier check below shells out to. Re-scoring
+    // the source tier here would either duplicate corpus-drift.yml's work or fail on a missing
+    // binary. Targets whose M8 is not-run keep their recorded reason; the zero-test targets are
+    // scored by the source-tier pass below, where #224's finding IS the count.
+    if (m8) {
+      if (target.m8) {
+        const baseline = target.modules.M8;
+        if (!isMutationBaseline(baseline)) {
+          throw new Error(`${target.slug}: has an m8 config but its M8 baseline is not a MutationBaseline — the manifest disagrees with itself about whether this target is scoreable`);
+        }
+        const row = scoreMutationBaseline(target.slug, baseline, runMutationScan(dir, target.m8));
+        rows.push({ slug: row.slug, check: "M8 mutation baseline", pass: row.pass, detail: row.detail });
+      } else {
+        // Asked to mutation-score a target the manifest says isn't scoreable. Not a silent no-op:
+        // the reason is recorded, so print it and fail rather than exiting 0 having measured
+        // nothing (the coverage guard — a job that scores nothing must not look green).
+        const baseline = target.modules.M8;
+        rows.push({
+          slug: target.slug,
+          check: "M8 mutation baseline",
+          pass: false,
+          detail: `NOT SCOREABLE: ${isNotRun(baseline) ? baseline.reason : "this target's M8 is scored by the source-tier pass (#224's zero-coverage finding), not by mutation testing — run it without --m8"}`,
+        });
+      }
+      continue;
+    }
 
     // Two scanners emit `M5 —` findings and they measure DIFFERENT things: quality-scan's knip
     // pass is dead code (unused files/exports), detect-static's slop pass is style (else-after-
@@ -145,9 +239,12 @@ for (const target of targets) {
 }
 
 // A target in FREE_TIER_EXPECTATIONS that never got scored (e.g. --target skipped it) must not
-// read as a pass — the invariant is the product promise, so an unrun check is a failure.
-const scoredSlugs = new Set(rows.map((r) => r.slug));
-const unscored = FREE_TIER_EXPECTATIONS.filter((e) => !scoredSlugs.has(e.slug) && (!onlySlug || onlySlug === e.slug));
+// read as a pass — the invariant is the product promise, so an unrun check is a failure. Keyed on
+// the free-tier rows specifically, not on the slug: an M8 row for the same target is not evidence
+// the free-tier check ran. --m8 is exempt because it is an M8-only pass that never claims to score
+// the invariant; the weekly corpus-drift.yml is what holds that promise.
+const freeTierScored = new Set(rows.filter((r) => r.check.startsWith("free tier: ")).map((r) => r.slug));
+const unscored = m8 ? [] : FREE_TIER_EXPECTATIONS.filter((e) => !freeTierScored.has(e.slug) && (!onlySlug || onlySlug === e.slug));
 
 console.error("\n──── corpus drift ────");
 for (const r of rows) console.error(`  ${r.pass ? "✓" : "✗"} ${r.slug.padEnd(23)} ${r.check.padEnd(46)} ${r.detail}`);
