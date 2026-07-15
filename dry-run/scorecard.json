@@ -1,17 +1,17 @@
 {
   "summary": {
-    "caught": 4,
+    "caught": 5,
     "missed": 3,
-    "requires-live-run": 1
+    "requires-live-run": 0
   },
   "bugs": [
     {
       "id": "RLS-USING-TRUE",
       "severity": "Critical",
       "location": "supabase/migrations/20260708000002_rls.sql:31-32",
-      "expectedModule": "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ reviews a USING (true) read policy",
-      "status": "requires-live-run",
-      "note": "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ reviews a USING (true) read policy did not execute in this pass — no caught/missed verdict possible."
+      "expectedModule": "usingTrueReview (src/rls-policy-review.ts, #337) ran inside runMechanicalScan via checkMigrationPolicySemantics and reviewed documents_select_all's USING (true) at the planted line — review tier, so the tier surfaces it for adjudication rather than asserting the verdict",
+      "status": "caught",
+      "note": "Matched by finding \"M1 — Multi-tenant security\" at supabase/migrations/20260708000002_rls.sql:31 (public.documents.documents_select_all)."
     },
     {
       "id": "RLS-AUTH-ROLE",

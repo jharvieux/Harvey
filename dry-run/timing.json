@@ -2,8 +2,8 @@
   {
     "phase": "M1 + supply chain",
     "module": "mechanical scan (secrets, deps, semgrep, supply-chain, leftover-auth)",
-    "ms": 8227.7,
-    "findingCount": 254,
+    "ms": 11102.2,
+    "findingCount": 255,
     "notes": "secrets (trufflehog+gitleaks), dependency CVEs (osv-scanner + curated Next.js ranges), semgrep, supply-chain, leftover-auth grep — all ran live against the target."
   },
   {
@@ -16,8 +16,8 @@
   {
     "phase": "M10",
     "module": "PII/PHI/PCI data map (tools/pii-classify.mjs, static migration-SQL feed)",
-    "ms": 4.7,
-    "findingCount": 5,
-    "notes": "83 columns classified across 5 tables with PII/PHI/PCI hits."
+    "ms": 4.4,
+    "findingCount": 6,
+    "notes": "92 columns classified across 6 tables with PII/PHI/PCI hits."
   }
 ]

@@ -20,11 +20,6 @@ import { type GroundTruthBug, scoreCoverage, type ScorableFinding, summarizeCove
 // actually reasons about this bug's class, not merely fire somewhere in the same file.
 const at = (file: RegExp, rule: RegExp) => (f: ScorableFinding) => file.test(f.location) && rule.test(f.taxonomy);
 
-// Only RLS-USING-TRUE still needs the paid semantic tier: `checkMigrationPolicySemantics` reviews
-// `documents_select_all`, but `reviewPolicy` returns no verdict for a read policy whose USING is
-// `true` and which names no caller-identity function, so no mechanical finding reaches rls.sql:31.
-const NOT_RUN_SEMANTIC_RLS_READ =
-  "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ reviews a USING (true) read policy";
 // A KNOWN, ACCEPTED coverage gap — not a regression. The mechanical tier scans the file and no
 // rule has ever claimed this bug's class, so the bug scores `missed` by design: this is the
 // scorecard measuring the mechanical tier's real ceiling, which is what it exists to do. Verified
@@ -39,9 +34,12 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     id: "RLS-USING-TRUE",
     severity: "Critical",
     location: "supabase/migrations/20260708000002_rls.sql:31-32",
-    expectedModule: NOT_RUN_SEMANTIC_RLS_READ,
-    moduleRan: false,
-    matches: () => false,
+    expectedModule:
+      "usingTrueReview (src/rls-policy-review.ts, #337) ran inside runMechanicalScan via checkMigrationPolicySemantics and reviewed documents_select_all's USING (true) at the planted line — review tier, so the tier surfaces it for adjudication rather than asserting the verdict",
+    moduleRan: true,
+    // `rls.sql:31` is the planted policy's own line, and documents_select_all is the only policy
+    // the semantic review reports there — its siblings are located at their own lines (:6, :38).
+    matches: at(/rls\.sql:31 /, /Multi-tenant security/),
   },
   {
     id: "RLS-AUTH-ROLE",

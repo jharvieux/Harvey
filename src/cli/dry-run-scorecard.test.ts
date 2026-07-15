@@ -7,10 +7,11 @@
 //
 // KNOWN CEILING, stated rather than implied: this guard anchors on the bug's planted location, so it
 // only catches drift where the new rule fires AT that location. It caught RLS-AUTH-ROLE's stale
-// mapping (rls.sql:38); it did NOT catch RLS-DISABLED's, because checkMigrationRlsStatic reports an
-// absence at the CREATE site (schema.sql:35) while GROUND-TRUTH addresses the bug at the absence
-// site (rls.sql:41-43). An address-mismatched rule still needs a human to notice. Making that
-// automatic would mean matching on bug CLASS rather than location — see the follow-up on this PR.
+// mapping (rls.sql:38) and would have caught RLS-USING-TRUE's (#337 fires at rls.sql:31); it did
+// NOT catch RLS-DISABLED's, because checkMigrationRlsStatic reports an absence at the CREATE site
+// (schema.sql:35) while GROUND-TRUTH addresses the bug at the absence site (rls.sql:41-43). An
+// address-mismatched rule still needs a human to notice. Making that automatic would mean matching
+// on bug CLASS rather than location — tracked as a follow-up.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -40,6 +41,11 @@ function mechanicalFindingsAt(file: string, lines: number[]): RawFinding[] {
 }
 
 describe("GROUND_TRUTH_BUGS mappings vs. the findings the scan really produced", () => {
+  // Currently EMPTY, and that is the honest state, not a broken guard: since #337 re-mapped
+  // RLS-USING-TRUE, no bug claims moduleRan:false, so this case list generates nothing and the
+  // second test below carries the weight. Kept rather than deleted — it is the guard that fires
+  // the moment anyone re-introduces a "no mechanical module reaches this" claim, which is exactly
+  // when the claim needs checking.
   const notRun = GROUND_TRUTH_BUGS.filter((b) => !b.moduleRan);
 
   it.each(notRun.map((b) => [b.id, b] as const))(
