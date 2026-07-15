@@ -66,12 +66,14 @@ const M5_NEEDS_INSTALL: ModuleNotRun = {
   reason: "knip needs the target's own `npm install` to resolve config imports — not run in the source-only sweep (CLAUDE.md M5 prereq). Confirmed live: quality-scan emits its M5-00 'did not run' finding (#223) rather than a silent zero.",
 };
 
-// tools/pii-classify.mjs takes a live DB (SUPABASE_DB_URL) or an information_schema-shaped column
-// list; it has no "point it at a migrations dir" CLI path, so M10 on these targets was a manual
-// classifier pass over the schema, not a reproducible command. Recorded as not-run for drift
-// purposes, with the must-not-miss columns asserted directly in external-corpus.test.ts instead.
+// tools/pii-classify.mjs now has a static-schema CLI path (`pnpm pii-classify --schema
+// supabase/migrations`, #250), but running it against these targets means cloning each pinned
+// commit — the deferred Layer 2 supervisor pass this file's header describes, same as the
+// detect-static/quality-scan drift scoring for every other module here. Recorded as not-run for
+// drift purposes until that clone-and-run pass lands; the must-not-miss columns are asserted
+// directly against real column names in external-corpus.test.ts in the meantime.
 const M10_NEEDS_SCHEMA_INPUT: ModuleNotRun = {
-  reason: "M10 has no static-schema CLI entry point (tools/pii-classify.mjs wants SUPABASE_DB_URL or a column list) — classifier behavior on this target's real columns is asserted in external-corpus.test.ts instead. Wiring a schema-file path is tracked as a follow-up.",
+  reason: "M10's static-schema CLI path now exists (tools/pii-classify.mjs --schema, #250) but hasn't been re-run against this target's cloned migrations yet — that's the deferred Layer 2 clone-and-score pass. Classifier behavior on this target's real columns is asserted in external-corpus.test.ts instead.",
 };
 
 export const EXTERNAL_CORPUS: ExternalTarget[] = [
