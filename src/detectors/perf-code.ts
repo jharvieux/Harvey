@@ -77,20 +77,65 @@ function forEachJsxElement(sf: ts.SourceFile, cb: (el: ts.JsxOpeningElement | ts
 
 // --- React Compiler gate -----------------------------------------------------
 
+// The `reactCompiler:` value in next.config, classified from its literal source text.
+// "unresolvable" covers anything that isn't a literal `true`/`false`/object (e.g. an
+// identifier read from `process.env`, as in saas-lite's `reactCompiler: ENABLE_REACT_COMPILER`)
+// — we can't know at scan time what that evaluates to (#249).
+type CompilerFlagValue = { status: "on" | "off"; file?: never; raw?: never } | { status: "unresolvable"; file: string; raw: string; index: number };
+
+function reactCompilerFlag(files: SourceInput[]): CompilerFlagValue {
+  for (const f of files) {
+    const base = f.path.split("/").pop() ?? "";
+    if (/^(\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs))$/.test(base) && f.text.includes("react-compiler")) {
+      return { status: "on" };
+    }
+    if (!/^next\.config\.(js|mjs|cjs|ts)$/.test(base)) continue;
+    const m = /reactCompiler\s*:\s*([^,}\n]+)/.exec(f.text);
+    if (!m) continue;
+    const raw = m[1]!.trim();
+    if (/^true$/.test(raw) || raw.startsWith("{")) return { status: "on" };
+    if (/^false$/.test(raw)) return { status: "off" };
+    return { status: "unresolvable", file: f.path, raw, index: m.index + m[0].indexOf(raw) };
+  }
+  return { status: "off" };
+}
+
 // True when the target enables React Compiler (next.config `reactCompiler: true|{...}` under
 // experimental or top-level, or babel-plugin-react-compiler in a babel config). Auto-memoization
 // then covers the manual-memo classes below, so they report as Info instead of Perf/Low.
+// A variable/env-derived flag is NOT treated as "on" here — see reactCompilerFlag above and
+// detectUnresolvableCompilerFlag, which surfaces that case instead of silently assuming false.
 export function reactCompilerEnabled(files: SourceInput[]): boolean {
-  for (const f of files) {
-    const base = f.path.split("/").pop() ?? "";
-    if (/^next\.config\.(js|mjs|cjs|ts)$/.test(base) && /reactCompiler\s*:\s*(true|\{)/.test(f.text)) return true;
-    if (/^(\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs))$/.test(base) && f.text.includes("react-compiler")) return true;
-  }
-  return false;
+  return reactCompilerFlag(files).status === "on";
 }
 
 const COMPILER_NOTE =
   " React Compiler is enabled in this project's config, so this shape is auto-memoized at build time — reported as informational only.";
+
+// --- A0. React Compiler flag can't be statically resolved [WATCH] ------------
+
+function detectUnresolvableCompilerFlag(files: SourceInput[], nextId: NextId): Finding[] {
+  const flag = reactCompilerFlag(files);
+  if (flag.status !== "unresolvable") return [];
+  const line = flag.file
+    ? files.find((f) => f.path === flag.file)!.text.slice(0, flag.index).split("\n").length
+    : 1;
+  return [
+    makeFinding(nextId, {
+      title: "React Compiler flag set from a variable — cannot be statically resolved",
+      severity: "Watch",
+      confidence: "Review",
+      taxonomy: "M7 — React Compiler flag unresolvable",
+      location: `${flag.file}:${line}`,
+      evidence: `\`reactCompiler: ${flag.raw}\` reads its value from a variable/env rather than a literal \`true\`/\`false\`/object, so this scan can't confirm at scan time whether React Compiler is actually enabled at build/runtime.`,
+      impact: "If this resolves to true in the deployed build, the manual-memo findings below (context value / inline literal props) are auto-fixed by the compiler and shouldn't count as outstanding work. Until confirmed, this audit conservatively keeps them at counted severity rather than assuming the flag is off.",
+      fix: "Confirm the resolved value of this flag for the deployed build (check the variable/env var's actual value) and re-triage the manual-memo M7 findings accordingly.",
+      value: 1,
+      ease: 5,
+      safety: 5,
+    }),
+  ];
+}
 
 // --- A1. Context value recreated every render [PERF] ------------------------
 
@@ -1028,6 +1073,7 @@ export function detectPerfCodeFindings(files: SourceInput[]): Finding[] {
   const nextId: NextId = () => `M7C-${String(++n).padStart(2, "0")}`;
 
   return [
+    ...detectUnresolvableCompilerFlag(files, nextId),
     ...detectContextValueLiteral(sources, nextId, compilerOn),
     ...detectInlinePropLiterals(sources, nextId, compilerOn),
     ...detectRawImgElement(sources, nextId),

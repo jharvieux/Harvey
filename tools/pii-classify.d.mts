@@ -30,3 +30,4 @@ export function buildDataMap(
   columns: ColumnInfo[],
   resolve?: (col: ColumnInfo) => ClassifyResult | null,
 ): Record<string, TableDataMapEntry>;
+export function classifyMigrationSql(sql: string): { columns: ColumnInfo[]; dataMap: Record<string, TableDataMapEntry> };
