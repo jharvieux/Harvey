@@ -41,6 +41,9 @@ jobs:
   drift:
     name: clone pinned commits + score baselines
     runs-on: ubuntu-latest
+    # 30m still holds with #251's six `npm install`s added: measured locally they total ~1m
+    # (largest: proposit's 1010 packages in 33s), and CI's cold npm cache is the slack this covers.
+    # M8's mutation runs are what genuinely didn't fit here — those are corpus-m8.yml.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -74,8 +77,11 @@ jobs:
             | tar -xz -C "$HOME/.local/bin" gitleaks
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      # --install (#251): `npm install` in each clone before the scanners, which is what lets knip
+      # resolve each target's config (CLAUDE.md's M5 prereq) — without it M5-knip scores on 2 of 6
+      # targets instead of 4. It is what pushes this job past its old ~2m: six real installs.
       - name: Score the corpus against its baselines
-        run: pnpm corpus-drift --json corpus-drift.json
+        run: pnpm corpus-drift --install --json corpus-drift.json
 
       # The scorecard is the artifact worth keeping on a failure: it's the per-module, per-target
       # table showing exactly what moved.
