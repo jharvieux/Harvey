@@ -147,5 +147,26 @@
     "phi": false,
     "pci": false,
     "secret": false
+  },
+  "plans": {
+    "columns": [
+      {
+        "column": "name",
+        "infotype": "NAME?",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "NAME?"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
   }
 }
