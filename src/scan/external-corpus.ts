@@ -34,6 +34,7 @@
 import type { Finding } from "../findings.js";
 import type { QuickScanReport } from "../quick-scan.js";
 import { classifyMigrationSql } from "../../tools/pii-classify.mjs";
+import { M8_CORPUS_CONFIGS, type M8CorpusConfig } from "./m8-corpus.js";
 
 export interface ModuleBaseline {
   // Findings that count as work: everything the detectors emit at a severity other than "Info".
@@ -51,6 +52,22 @@ export interface ModuleBaseline {
 // coverage-scorecard.ts).
 export interface ModuleNotRun {
   reason: string;
+}
+
+// #300: M8 on a target with a REAL suite is measured as a mutation score, not a finding count —
+// a distinct shape rather than a reused ModuleBaseline, because `counted: 100` would be read by
+// every other scorer here as "100 findings" when it means "100% of mutants killed". The two
+// zero-test targets keep their ModuleBaseline: there the #224 finding IS the measurement, and a
+// finding count is exactly the right unit for it.
+export interface MutationBaseline {
+  mutationScore: number; // percent, as summarizeMutationReport computes it
+  killed: number;
+  valid: number; // mutants Stryker could actually judge (excludes Ignored/CompileError)
+  note: string;
+}
+
+export function isMutationBaseline(m: ModuleBaseline | ModuleNotRun | MutationBaseline): m is MutationBaseline {
+  return "mutationScore" in m;
 }
 
 export interface ExternalTarget {
@@ -73,40 +90,52 @@ export interface ExternalTarget {
   // payments read 18 against a measured 8). They measure different things and drift independently,
   // so each gets its own key and its own baseline — scoreExternalBaseline's moduleMatches below is
   // the real match rule that keeps them apart (a shared "M5 " prefix can't distinguish them).
-  modules: Partial<Record<"M4" | "M5-knip" | "M5-slop" | "M7" | "M8" | "M9" | "M10", ModuleBaseline | ModuleNotRun>>;
+  // M8 alone may also carry a MutationBaseline (#300): on a target with a real suite it is scored
+  // as a mutation percentage by scoreMutationBaseline, not by counting findings.
+  modules: Partial<Record<"M4" | "M5-knip" | "M5-slop" | "M7" | "M9" | "M10", ModuleBaseline | ModuleNotRun>>
+    & { M8: ModuleBaseline | ModuleNotRun | MutationBaseline };
+  // #300: the vendored Stryker config for targets scored by the M8 workflow. Absent means M8 is
+  // either not-run (with a reason) or a zero-test target whose #224 finding is the measurement.
+  m8?: M8CorpusConfig;
 }
 
-export function isNotRun(m: ModuleBaseline | ModuleNotRun): m is ModuleNotRun {
+export function isNotRun(m: ModuleBaseline | ModuleNotRun | MutationBaseline): m is ModuleNotRun {
   return "reason" in m;
 }
 
-// knip usually needs the TARGET's own node_modules to resolve its config imports (CLAUDE.md's M5
-// row), and none of the six are vendored with deps — so M5-knip is not-run on the targets where it
-// actually failed, rather than falsely 0. NOT uniformly: #263's first real Layer 2 run found knip
-// resolves multi-tenant-starter's and subscription-payments' configs without any install, so those
-// two carry measured baselines. Which targets those are is a measurement, not an assumption.
-const M5_KNIP_NEEDS_INSTALL: ModuleNotRun = {
-  reason: "knip needs the target's own `npm install` to resolve config imports — not run in the source-only sweep (CLAUDE.md M5 prereq). Confirmed live: quality-scan emits its M5-00 'did not run' finding (#223) rather than a silent zero.",
+// #251: the Layer 2 job now runs `npm install` in each clone before quality-scan (installTargetDeps
+// in src/cli/corpus-drift.ts), which is the prereq CLAUDE.md's M5 row names — so "needs the target's
+// npm install" is no longer a reason for anything. Measured 2026-07-15 with deps installed: proposit
+// (85) and boxyhq (12) now carry real baselines, and the two that still can't run fail for reasons
+// that have nothing to do with installing (see each below). Installing is inert for the rest of the
+// corpus: M4 reproduced byte-identically on all four installable targets, and the two M5-knip
+// baselines that already scored without deps (subscription-payments 8, multi-tenant-starter 2) were
+// re-measured WITH deps and did not move — so this fix adds coverage without rebaselining anything.
+const M5_KNIP_ESLINT_PATCH_BROKEN: ModuleNotRun = {
+  reason: "knip loads apps/web/eslint.config.mjs to resolve this target's plugins and dies inside eslint-config-next: \"Failed to patch ESLint because the calling module was not recognized\" (@rushstack/eslint-patch vs the eslint 9 the pinned tree resolves). Measured 2026-07-15 AFTER a full `pnpm install` of the workspace — an upstream config-load incompatibility in the target, not a missing-deps problem, so #251's install step cannot reach it. quality-scan emits its M5-00 'did not run' finding (#223) rather than a silent zero.",
 };
 
-// mutation-scan shells out to a `stryker` binary that is NOT a dependency of this repo (it must be
-// installed in/alongside the target) AND needs a target-specific stryker.conf — no corpus target
-// ships one. So on every target with a real test suite, M8 throws rather than measuring: recorded
-// not-run with the reason, per the coverage guard. The targets WITHOUT a suite are different — they
-// don't need Stryker at all, because #224's zero-coverage finding IS the measurement.
+const M5_KNIP_NO_ROOT_PACKAGE_JSON: ModuleNotRun = {
+  reason: "knip exits `Unable to find package.json`: this target is a polyglot monorepo (flutter/, monero/, nextjs/) with NO root package.json — the Next app's manifest lives at nextjs/package.json. Measured 2026-07-15. Nothing to install at the root, so #251's install step does not apply; scanning it would mean pointing the whole corpus at a subdirectory, which would silently change what every other module here measures (see follow-up).",
+};
+
+// #300: M8 on the targets WITH a real suite now runs for real, in .github/workflows/corpus-m8.yml —
+// a per-target `npm install`, a vendored Stryker config (src/scan/m8-corpus.ts), and a timeout that
+// matches the actual cost. Two of the four are scored; two remain blocked, each for a MEASURED
+// reason below rather than the generic "no config" this constant used to assert for all four.
 //
-// #277 investigated actually closing this 2026-07-15 rather than just re-stating the gap. Result:
-// vendoring a config per target (Option 1 in the issue) DOES work on the easiest case — proposit,
-// `npm install --legacy-peer-deps` (react 19 vs @ai-sdk/react's peer range conflicts without it)
-// + a stryker.conf scoped to lib/pdf/launch.ts (its one file with real coverage) killed 21/21
-// mutants in ~1s wall clock, and confirmed reports/mutation/mutation.json as Stryker 9.6.1's
-// default JSON path. But the other three each carry a target-specific blocker a generic wrapper
-// can't paper over (see each target's note below), and even wiring the ONE working case into the
-// scheduled Layer 2 job needs a target `npm install` step plus a much longer timeout than the
-// current job's ~2m10s — i.e. a new workflow, which is out of this sweep's granted paths
-// (.github/workflows/ is supervised). Recorded as a follow-up rather than attempted here.
-const M8_NEEDS_STRYKER: ModuleNotRun = {
-  reason: "mutation-scan needs a `stryker` binary on PATH plus a target-specific stryker.conf.* (CLAUDE.md's M8 prereq); this target has a real test suite but ships no Stryker config, so the scan throws instead of scoring. Recorded not-run rather than 0 — a 0 here would read as 'no surviving mutants', the exact inversion of an unmeasured suite. Was recorded as a test-FILE count (#263 found the number never matched what the scorer counts: scanner findings).",
+// #277 predicted boxyhq was blocked by its Playwright E2E specs needing a built app + browser.
+// That was WRONG, and re-measuring rather than transcribing is what caught it: boxyhq's own
+// jest.config.js already sets `testPathIgnorePatterns: ['<rootDir>/tests/e2e']`, so the jest runner
+// never sees a Playwright spec. It scores 20% today (measured, 7/35). The targets WITHOUT a suite
+// are different again — they need no Stryker at all, because #224's zero-coverage finding IS the
+// measurement.
+const M8_DOCKER_PER_MUTANT: ModuleNotRun = {
+  reason: "This target's only suite (test/rls.test.mjs, run via `node --test`) spawns a Docker Postgres container per run — verified 2026-07-15 in the cloned tree (its `docker()` helper shells out to `docker run`). Stryker re-runs the suite per mutant, so scoring it means one container start per mutant: a cost no CI budget justifies for a single RLS test file. Recorded not-run rather than 0 — a 0 would read as 'no surviving mutants', the exact inversion of an unmeasured suite. Revisit only if the suite gains a container-reuse mode.",
+};
+
+const M8_E2E_ONLY_SUITE: ModuleNotRun = {
+  reason: "Measured 2026-07-15: this target's `turbo test` orchestrates apps/e2e, whose 3 specs are ALL Playwright E2E (account/auth/password-reset) needing a built app, a browser and a live Supabase stack. There is no unit suite to mutate — so unlike boxyhq (whose jest config ignores its E2E dir and scores fine), scoping a Stryker config here has nothing to point at. This is the 'harness present but suite absent' shape #252 is still deciding the rule for: recorded not-run with the reason, NOT #224's zero-coverage finding, because a `test` script does exist and inventing the policy here would pre-empt that open decision.",
 };
 
 // #279: shapes a schema-only PII/PHI/PCI classification pass into Finding[] so
@@ -148,12 +177,13 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     securityVerdict: "1 Critical (world-readable invitation tokens), 2 High (invite acceptance trusts client userId; member self-escalation to admin)",
     disclosureIssue: 214,
     schemaPath: "supabase/migrations",
+    m8: M8_CORPUS_CONFIGS.proposit,
     modules: {
-      M4: { counted: 68, total: 104, note: "5.27% (2749/52165 lines), 203 raw clone clusters — of which 104 are the cross-file clones jscpdToFindings emits and 68 are counted (36 are sub-15-line Info). The 203 originally recorded here was jscpd's cluster count, not the counted findings this scorer compares (fixed #263 when the Layer 2 job first scored it). Was 9.75%/199 clones pre-#232; the drop is that fix excluding generated/demo paths, NOT the repo changing. Per #232 ~75% of what remains is genuine per-entity copy-paste (CRUD forms, per-entity tool/store/service files) — the corpus's strongest real M4 signal and a factory-refactor case." },
-      "M5-knip": M5_KNIP_NEEDS_INSTALL,
+      M4: { counted: 68, total: 104, note: "5.27% (2749/52165 lines), 203 raw clone clusters — of which 104 are the cross-file clones jscpdToFindings emits and 68 are counted (36 are sub-15-line Info). The 203 originally recorded here was jscpd's cluster count, not the counted findings this scorer compares (fixed #263 when the Layer 2 job first scored it). Was 9.75%/199 clones pre-#232; the drop is that fix excluding generated/demo paths, NOT the repo changing. Per #232 ~75% of what remains is genuine per-entity copy-paste (CRUD forms, per-entity tool/store/service files) — the corpus's strongest real M4 signal and a factory-refactor case. Re-measured 2026-07-15 WITH the target's deps installed (#251): unchanged, confirming the install step is inert for M4." },
+      "M5-knip": { counted: 85, total: 85, note: "#251: measured 2026-07-15 after `npm install --legacy-peer-deps` in the clone — the install step is what unblocked this, exactly the CLAUDE.md M5 prereq. 85 findings, 83 Low + 2 Medium, no Info tail (knip's dead-code findings are never Info unless the scan itself failed). 8 unused files + 77 files with unused exports: BY FAR the corpus's largest M5-knip surface (next is boxyhq at 12), consistent with proposit also being its worst M4 target (68) — the same per-entity copy-paste vein leaving unreferenced exports behind. Worth a triage pass to confirm the shape (see follow-up); recorded here as the measured drift baseline it is, not as a triaged verdict." },
       "M5-slop": { counted: 6, total: 16, note: "#278: measured 2026-07-15 via detect-static (previously excluded from scoring entirely to avoid double-counting M5-knip). 3 'Single-call wrapper' + 3 'Else after return' counted; 10 Info-tail (narrating comments, AI phrasing, decorative emoji, redundant JSDoc)." },
       M7: { counted: 49, total: 79, note: "30 of the 79 are the exhaustive-deps class #230 demoted to Info (~0 real), leaving 49 counted. The real vein is 26 'Unbounded select' on growable request-path lists (low-sev latent scalability). Residual FP tail still counted: 5 inline-literal, 4 context-value-recreated, 2 index-key — the micro-render shapes #230 judged ~0% real (see follow-up)." },
-      M8: M8_NEEDS_STRYKER, // `vitest run` script + a single *.test.* file: a real (if thin) suite, so mutation-scan needs the Stryker config this target doesn't have. #277: verified 2026-07-15 a scoped config (mutate: lib/pdf/launch.ts) runs clean (21/21 killed, ~1s) after `npm install --legacy-peer-deps` — but that's a hand-tuned config, not something the wrapper generates.
+      M8: { mutationScore: 100, killed: 21, valid: 21, note: "#300: MEASURED 2026-07-15 by the real wrapper (not transcribed) — 21/21 mutants killed on lib/pdf/launch.ts, ~1s, via the vendored config in m8-corpus.ts after `npm install --legacy-peer-deps`. A perfect score on the corpus's THINNEST suite: this repo has exactly one spec, so 100% here means 'the one covered file is tested well', NOT that proposit is well-tested — its untested surface doesn't appear in this number at all (that gap is what M8's whole-repo story needs, see follow-up). Useful as drift detection regardless: any drop means the suite or the launch.ts logic moved." },
       M9: { counted: 8, total: 8, note: "4 'Server Action missing input validation' + 4 'Accidental dynamic rendering'. Distinct from the 4 M1 'Server Action missing authorization check' the same run emits — #231 routed the authz vein to M1/#221 rather than scoring it as M9 rendering, and this split is what that fix looks like on real code." },
       M10: { counted: 18, total: 18, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned supabase/migrations (205 columns parsed, 39 PII-bearing across 18 tables — one Finding per table). Headline is organisations: Critical, ADDRESS+API_KEY+STORED_PASSWORD — the #233 must-not-miss plaintext ai_api_key/smtp_pass case, now scored as a real drift check instead of only a unit assertion." },
     },
@@ -168,7 +198,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     schemaPath: "supabase/migrations",
     modules: {
       M4: { counted: 6, total: 8, note: "5.2% (309/5947 lines), 13 raw clusters -> 8 cross-file findings, 6 counted (fixed #263: the 13 was jscpd's cluster count, not counted findings). Down from the sweep's 6.13%/22 clones now #232 excludes `types_db.ts` (Supabase codegen was ~50% of this repo's clones)." },
-      "M5-knip": { counted: 8, total: 8, note: "Ran WITHOUT the target's `npm install` — knip resolved its config anyway (fixed #263: recorded as not-run on the assumption it couldn't, measured as 8). 3 unused files + 5 unused-export files; the Medium is utils/supabase/middleware. If a future knip/config change makes this fail, it degrades to the M5-00 'did not run' finding (#223) and this baseline fails loudly rather than silently reading 0." },
+      "M5-knip": { counted: 8, total: 8, note: "Originally ran WITHOUT the target's `npm install` — knip resolved its config anyway (fixed #263: recorded as not-run on the assumption it couldn't, measured as 8). Re-measured 2026-07-15 WITH deps installed (#251): still 8 — the install step adds coverage elsewhere without disturbing this. 3 unused files + 5 unused-export files; the Medium is utils/supabase/middleware. If a future knip/config change makes this fail, it degrades to the M5-00 'did not run' finding (#223) and this baseline fails loudly rather than silently reading 0." },
       "M5-slop": { counted: 10, total: 12, note: "#278: the double-counting case that started this split — this target's detect-static findings (9 'Else after return' + 1 'Single-call wrapper') were being summed with M5-knip's 8, reading 18 against a measured 8. Measured 2026-07-15: 10 counted, 2 Info." },
       M7: { counted: 2, total: 3, note: "One of the smallest surfaces in the corpus: 2 raw <img> + 1 Info exhaustive-deps. A good FALSE-POSITIVE regression guard — a well-maintained Vercel example should stay near-silent; a jump here means a new over-match." },
       M8: { counted: 1, total: 1, note: "No test script and zero *.test.*/*.spec.* files at this commit, so mutation-scan needs no Stryker: it emits exactly #224's M8-00 zero-coverage finding (High), which IS the measurement. Recorded as 1 counted finding — the 0 previously here was a test-FILE count and would have read as 'no M8 problems' on a repo with no tests at all, inverting the finding's meaning (fixed #263)." },
@@ -183,16 +213,20 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     license: "Apache-2.0",
     securityVerdict: "1 Medium (team billing authz enforced only in UI), 1 Low (invite path bypasses the admins-cant-create-owners guard)",
     disclosureIssue: 216,
+    m8: M8_CORPUS_CONFIGS.boxyhq,
     // #299: Prisma migrations, not supabase/migrations — nested one level deeper
     // (prisma/migrations/<name>/migration.sql) than Supabase's flat layout, which is why
     // corpus-drift.ts's readMigrationSql had to read recursively too, not just this parser.
     schemaPath: "prisma/migrations",
     modules: {
-      M4: { counted: 39, total: 66, note: "4.93% (1148/23283 lines), 90 raw clusters -> 66 cross-file findings, 39 counted (fixed #263: the 90 was jscpd's cluster count). Per #232 the real signal is the API-handler envelope (a `createHandler` extraction candidate), lower severity than proposit's." },
-      "M5-knip": M5_KNIP_NEEDS_INSTALL,
+      M4: { counted: 39, total: 66, note: "4.93% (1148/23283 lines), 90 raw clusters -> 66 cross-file findings, 39 counted (fixed #263: the 90 was jscpd's cluster count). Per #232 the real signal is the API-handler envelope (a `createHandler` extraction candidate), lower severity than proposit's. Re-measured 2026-07-15 WITH deps installed (#251): unchanged." },
+      "M5-knip": { counted: 12, total: 12, note: "#251: measured 2026-07-15 after `npm install --legacy-peer-deps` in the clone — 5 unused files + 7 files with unused exports. Modest for a 23k-line repo, matching this target's reputation as the corpus's best-maintained one (it is also the M8 upper reference point). Worth watching as an FP guard: a jump here on a well-kept repo is more likely a knip/config change than new dead code." },
       "M5-slop": { counted: 12, total: 13, note: "#278: measured 2026-07-15. 9 'Else after return' + 2 'Orphan TODO' + 1 'Single-call wrapper' counted; 1 Info. The corpus's highest slop count on a target with real test coverage — a real regression guard, not just the zero-test targets." },
       M7: { counted: 17, total: 17, note: "Includes the corpus's one genuine middleware stall ('Fetch in middleware hot path') — one of the two real request-path finds #230 kept. The 9 inline-literal + 3 index-key are the residual micro-render tail." },
-      M8: M8_NEEDS_STRYKER, // Best-tested target in the corpus (real `jest` script + 8 test files, plus playwright) — and precisely why it can't be scored without a Stryker config. #277: the playwright specs need a built app + a real browser, a heavier prerequisite than a unit-test mutation run; not attempted.
+      // #300: the manifest calls this target "the M8 upper reference point" — measurement says
+      // otherwise, and that inversion is the whole reason to measure. It has the corpus's most
+      // test FILES (8) but its jest suite is ONE unit spec; the other 7 are Playwright E2E.
+      M8: { mutationScore: 20, killed: 7, valid: 35, note: "#300: MEASURED 2026-07-15 — 20% (7/35 valid mutants) on lib/server-common.ts, the file boxyhq's one jest unit spec (__tests__/lib/server-common.spec.ts) covers. 2 survived, 26 NoCoverage: the spec exercises generateToken but leaves most of the file's exports untouched. #277 predicted the Playwright specs would block this and they do NOT — the target's jest.config.js already sets testPathIgnorePatterns: ['<rootDir>/tests/e2e'], so jest never loads them; the prediction was never tested against the config. Note this reverses the manifest's 'best-tested target' framing: most test files, LOWEST measured mutation score in the corpus (proposit's thin suite scores 100 on what it covers). Test-file count was never test quality — which is #263's lesson restated." },
       M9: { counted: 0, total: 0, note: "MEASURED zero, and it is the #231 fix working: this is a PAGES Router app, where the App-Router-only checks must not fire at all. Pre-#231 it drew a bogus server-only hit. Any non-zero M9 here is a straight regression of that fix." },
       M10: { counted: 8, total: 8, note: "#299: measured 2026-07-15 via m10FindingsFromSchema over the cloned prisma/migrations (95 columns parsed across 15 tables, 8 PII/secret-bearing). Headline is jackson_store: Medium (OPAQUE_ENCRYPTED_STORE, the must-not-miss SAML/SSO secret store also pinned directly in external-corpus.test.ts's classifyColumn assertion), plus Account/Session: High (AUTH_TOKEN) and User: High (NAME?/EMAIL/STORED_PASSWORD). Previously not-run — parseColumns matched unquoted \\w+ identifiers only and this target's Prisma-generated migration.sql double-quotes every one (\"Account\", \"userId\"); #299 extended the parser to read quoted identifiers too." },
     },
@@ -211,10 +245,10 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     modules: {
       M4: { counted: 0, total: 1, note: "0.35% (11/3167 lines), 6 raw clusters -> 1 cross-file finding, and it is Info (sub-15-line), so 0 counted (fixed #263: the 6 was jscpd's cluster count). A MEASURED near-zero on the smallest target; the sweep's 2.95% was the pre-#232 denominator." },
       // The one target small enough (13 deps) to `npm install` cheaply, so M5-knip DID run here.
-      "M5-knip": { counted: 2, total: 2, note: "Ran WITHOUT the target's node_modules — knip still resolves this 13-dep repo's config, so M5-knip is the one target scored here (fixed #263: recorded as 1 finding, measured as 2 — knip reports the two files separately, it does not roll them into one). Both REAL, and the first is security-weighted: `lib/security/guards.ts` exports requireTenantAccess/requireTenantAdmin and NOTHING calls them, on the same repo whose self-join Critical (#217) is a missing-authz bug. #226's security cross-link firing on real code: the dead guard IS the vulnerability's fingerprint. The second is unused exports in lib/supabase/server.ts." },
+      "M5-knip": { counted: 2, total: 2, note: "Originally ran WITHOUT the target's node_modules — knip resolves this 13-dep repo's config either way (fixed #263: recorded as 1 finding, measured as 2 — knip reports the two files separately, it does not roll them into one). Re-measured 2026-07-15 WITH deps installed (#251): still 2, so the new install step did not move this baseline. Both REAL, and the first is security-weighted: `lib/security/guards.ts` exports requireTenantAccess/requireTenantAdmin and NOTHING calls them, on the same repo whose self-join Critical (#217) is a missing-authz bug. #226's security cross-link firing on real code: the dead guard IS the vulnerability's fingerprint. The second is unused exports in lib/supabase/server.ts." },
       "M5-slop": { counted: 0, total: 0, note: "#278: measured 2026-07-15 — MEASURED zero, consistent with M4/M7's floor readings on this 3.1k-line repo. Any non-zero here is almost certainly a new over-match." },
       M7: { counted: 0, total: 0, note: "MEASURED zero — a 3.1k-line repo with no perf surface. A useful floor: any M7 finding appearing here is almost certainly a new over-match." },
-      M8: M8_NEEDS_STRYKER, // One hand-rolled `test/rls.test.mjs` run via `node --test` — detectNoTestSuite counts the `--test` script as a real suite, so this needs Stryker too. #277: verified 2026-07-15 this test spins up a Docker Postgres container per run — mutation testing would pay that cost per mutant, well beyond any CI budget without a dedicated long-running job.
+      M8: M8_DOCKER_PER_MUTANT, // One hand-rolled `test/rls.test.mjs` run via `node --test` — detectNoTestSuite counts the `--test` script as a real suite, so this needs Stryker too, and the per-mutant Docker cost is why #300 left it not-run rather than scoring it.
       M9: { counted: 3, total: 3, note: "2 'Accidental dynamic rendering' + 1 'Data-fetching waterfall'." },
       M10: { counted: 1, total: 1, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned supabase/migrations (21 columns parsed, 1 PII-bearing table). tenant_invitations: Low (EMAIL) — the corpus's near-floor M10 reading, matching this target's otherwise-minimal M4/M7 surface." },
     },
@@ -231,7 +265,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     schemaPath: "supabase/migrations",
     modules: {
       M4: { counted: 4, total: 7, note: "1.35% (211/15684 lines), 11 raw clusters -> 7 cross-file findings, 4 counted (fixed #263: the 11 was jscpd's cluster count). The sweep's headline '13.3%, highest in the corpus' was almost entirely `monero/patches/**` whole-file fork-mirrors. #232's vendored-path exclusion is what closed that ~12-point gap; this target is the regression guard for it." },
-      "M5-knip": M5_KNIP_NEEDS_INSTALL,
+      "M5-knip": M5_KNIP_NO_ROOT_PACKAGE_JSON,
       "M5-slop": { counted: 6, total: 11, note: "#278: measured 2026-07-15. 5 'Else after return' + 1 'Orphan TODO' counted; 5 Info." },
       M7: { counted: 3, total: 4, note: "1 unbounded select + 1 index-key + 1 state-sprawl counted, 1 exhaustive-deps demoted to Info." },
       M8: { counted: 1, total: 1, note: "No package.json at the repo root (it's a monorepo whose apps carry their own) and zero test files — mutation-scan emits #224's M8-00 zero-coverage finding (High), which IS the measurement. 1 counted, not the 0 test-FILE count previously recorded (fixed #263)." },
@@ -249,11 +283,11 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     // Monorepo: the app lives under apps/web, not the repo root.
     schemaPath: "apps/web/supabase/migrations",
     modules: {
-      M4: { counted: 14, total: 16, note: "1.15% (318/27617 lines), 28 raw clusters -> 16 cross-file findings, 14 counted (fixed #263: the 28 was jscpd's cluster count). The sweep's 499-line identical `database.types.ts` copy is now excluded by #232." },
-      "M5-knip": M5_KNIP_NEEDS_INSTALL,
+      M4: { counted: 14, total: 16, note: "1.15% (318/27617 lines), 28 raw clusters -> 16 cross-file findings, 14 counted (fixed #263: the 28 was jscpd's cluster count). The sweep's 499-line identical `database.types.ts` copy is now excluded by #232. Re-measured 2026-07-15 after a full `pnpm install` of the workspace (#251): unchanged." },
+      "M5-knip": M5_KNIP_ESLINT_PATCH_BROKEN,
       "M5-slop": { counted: 23, total: 26, note: "#278: measured 2026-07-15. 22 'Redundant JSDoc' + 1 'Orphan TODO' counted; 3 Info. The corpus's highest slop count — a well-maintained starter kit whose JSDoc habit trips the detector, worth watching for FP drift." },
       M7: { counted: 23, total: 24, note: "Includes the corpus's other genuine request-path stall ('Blocking sync I/O in request handler' — the execSync-on-a-/version-route case #230 kept) plus an 'Await in loop (N+1)' and a raw <img>. The 11 inline-literal + 6 index-key + 2 context-value are the residual micro-render tail. 22 -> 23 when #269 added the 'React Compiler flag unresolvable' class: this repo sets `reactCompiler: ENABLE_REACT_COMPILER` (env-derived), the exact unresolvable-flag case #249 filed. Baseline rebased by #263's first real Layer 2 run — an intended new detection, not a regression, and the drift check catching it on day one is the corpus working." },
-      M8: M8_NEEDS_STRYKER, // `turbo test` script + 3 test files — a partial suite, between boxyhq and the zero-test targets, and still unscoreable without a Stryker config. #277: same class of per-repo tuning cost as the others (turbo monorepo test orchestration); not attempted.
+      M8: M8_E2E_ONLY_SUITE, // `turbo test` script + 3 test files — ALL Playwright E2E (measured #300), so there is no unit suite for Stryker to mutate. #277 called this a turbo-orchestration cost; the real blocker is that the suite is E2E-only, which is #252's open policy question, not a tooling gap.
       M9: { counted: 2, total: 2, note: "2 'Accidental dynamic rendering'." },
       M10: { counted: 1, total: 1, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned apps/web/supabase/migrations (9 columns parsed, 1 PII-bearing table). accounts: Low (ambiguous NAME? + EMAIL) — the corpus's other near-floor M10 reading." },
     },
@@ -352,6 +386,35 @@ interface DriftRow {
   detail: string;
 }
 
+// #300: scores a REAL Stryker run against a target's recorded MutationBaseline. Exact equality on
+// killed/valid rather than a band on the percentage: the target tree is pinned and the mutators are
+// deterministic, so the same suite against the same code kills the same mutants. Comparing the
+// counts, not just the rounded score, means a change that swaps a killed mutant for a survivor at
+// a constant percentage still fails — that is a real test-quality movement, and the percentage
+// alone would hide it.
+//
+// A drift here is EITHER the target's suite/config changing under us (rebaseline with the measured
+// note) OR our wrapper mis-reading Stryker's report (a scanner bug). As everywhere else in this
+// file, the scorer refuses to guess which — it just refuses to be quiet.
+export function scoreMutationBaseline(
+  slug: string,
+  baseline: MutationBaseline,
+  actual: { mutationScore: number; killed: number; valid: number },
+): DriftRow {
+  const pass = actual.killed === baseline.killed && actual.valid === baseline.valid;
+  return {
+    slug,
+    module: "M8",
+    expected: baseline.killed,
+    actual: actual.killed,
+    drift: actual.killed - baseline.killed,
+    pass,
+    detail: pass
+      ? `matches baseline (${baseline.killed}/${baseline.valid} killed, ${baseline.mutationScore}%)`
+      : `DRIFT: expected ${baseline.killed}/${baseline.valid} killed (${baseline.mutationScore}%), got ${actual.killed}/${actual.valid} (${actual.mutationScore}%) — the target's suite moved (rebaseline) or the wrapper mis-read the report (fix the scanner)`,
+  };
+}
+
 // quality-scan's knip pass emits every M5 finding under this one literal taxonomy string; nothing
 // else in the codebase uses it. #278: M5-slop is everything ELSE prefixed "M5 " (detect-static's
 // 11 style classes — else-after-return, single-call wrapper, etc, src/detectors/slop.ts) — matched
@@ -377,6 +440,10 @@ function countedFor(findings: Finding[], module: string): number {
 export function scoreExternalBaseline(target: ExternalTarget, findings: Finding[]): DriftRow[] {
   return Object.entries(target.modules).flatMap(([module, baseline]) => {
     if (isNotRun(baseline)) return [];
+    // #300: an M8 MutationBaseline is a percentage, not a finding count — scoreMutationBaseline
+    // scores it from the Stryker report. Counting findings here would score it 0 and read as
+    // "no M8 problems" on a target whose suite was never mutated.
+    if (isMutationBaseline(baseline)) return [];
     const actual = countedFor(findings, module);
     const drift = actual - baseline.counted;
     return [{
