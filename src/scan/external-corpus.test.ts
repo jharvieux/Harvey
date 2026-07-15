@@ -4,12 +4,22 @@
 //   - pin the M10 classifier against the REAL column names from the swept repos — the module has
 //     no static-schema CLI path, so this is where its #233 behavior on real code is gated.
 // Layer 2 (clone each pinned commit, re-run detect-static/quality-scan, score against the
-// baselines) needs network + binaries; it is the deferred supervisor pass, same shape as the M7
-// live-advisor split in m7.entries.ts.
+// baselines) needs network + binaries, so it is NOT here: it is `pnpm corpus-drift`, scheduled in
+// .github/workflows/corpus-drift.yml (#263). These two layers are complementary — Layer 1 proves
+// the scorers fail on movement without cloning anything, Layer 2 supplies the real movement.
 
 import { describe, expect, it } from "vitest";
 import { classifyColumn } from "../../tools/pii-classify.mjs";
-import { EXTERNAL_CORPUS, isNotRun, scoreExternalBaseline, type ExternalTarget } from "./external-corpus.js";
+import {
+  EXTERNAL_CORPUS,
+  FREE_TIER_EXPECTATIONS,
+  isNotRun,
+  scoreExternalBaseline,
+  scoreFreeTierExpectation,
+  type ExternalTarget,
+  type FreeTierExpectation,
+} from "./external-corpus.js";
+import { buildQuickScanReport } from "../quick-scan.js";
 import type { Finding, Severity } from "../findings.js";
 
 function finding(taxonomy: string, severity: Severity = "Perf"): Finding {
@@ -45,14 +55,16 @@ describe("external corpus manifest", () => {
     }
   });
 
-  it("records M5 as unrun wherever the target's deps were not installed", () => {
+  it("records M5 as unrun on every target where knip could not resolve the config", () => {
     // knip without the target's `npm install` yields a knip-FAILED artifact, not a dead-code
-    // measurement (#223) — so every target except the one small enough to install must be
-    // not-run, never a zero that would read as "no dead code".
-    for (const t of EXTERNAL_CORPUS.filter((x) => x.slug !== "multi-tenant-starter")) {
+    // measurement (#223) — recorded not-run, never a zero that would read as "no dead code".
+    // Which targets those are is MEASURED, not assumed: #263's first real Layer 2 run found knip
+    // resolves two of them without any install, so the rule is "wherever it actually failed".
+    const scored = EXTERNAL_CORPUS.filter((t) => !isNotRun(t.modules.M5!)).map((t) => t.slug);
+    expect(scored.sort()).toEqual(["multi-tenant-starter", "subscription-payments"]);
+    for (const t of EXTERNAL_CORPUS.filter((x) => !scored.includes(x.slug))) {
       expect(isNotRun(t.modules.M5!), t.slug).toBe(true);
     }
-    expect(isNotRun(target("multi-tenant-starter").modules.M5!)).toBe(false);
   });
 });
 
@@ -97,11 +109,90 @@ describe("scoreExternalBaseline", () => {
     expect(scoreExternalBaseline(target("proposit"), []).map((r) => r.module)).not.toContain("M5");
   });
 
-  it("scores M5 on the one target whose deps were installed", () => {
-    // The dead tenant-authz guard (#226's security cross-link on real code). If this detection
-    // stops firing, a quality module lost a finding that corroborates a Critical.
-    const rows = scoreExternalBaseline(target("multi-tenant-starter"), [finding("M5 — Slop / dead code", "Low")]);
-    expect(rows.find((r) => r.module === "M5")).toMatchObject({ pass: true, actual: 1 });
+  it("scores M5 where knip ran, and catches the dead tenant-authz guard going missing", () => {
+    // multi-tenant-starter's two knip findings, one of which is #226's security cross-link on real
+    // code: `lib/security/guards.ts` exports tenant-authz guards nothing calls, on the repo whose
+    // #217 Critical IS a missing-authz bug. If that detection stops firing, a quality module lost
+    // the finding that corroborates a Critical — so the baseline must fail, not shrug.
+    const dead = (): Finding => finding("M5 — Slop / dead code", "Low");
+    expect(scoreExternalBaseline(target("multi-tenant-starter"), [dead(), dead()]).find((r) => r.module === "M5"))
+      .toMatchObject({ pass: true, actual: 2 });
+    expect(scoreExternalBaseline(target("multi-tenant-starter"), [dead()]).find((r) => r.module === "M5"))
+      .toMatchObject({ pass: false, drift: -1 });
+  });
+});
+
+// #261/#227 — the free-tier calibration invariant. These prove the SCORER: that it fails when the
+// free tier cries wolf or stays quiet. Whether the four real repos actually land on the right side
+// of it is not knowable here (it needs their cloned trees) — that's `pnpm corpus-drift`, which ran
+// green on all four at these baselines on 2026-07-15.
+const expectation = (slug: string): FreeTierExpectation => {
+  const e = FREE_TIER_EXPECTATIONS.find((x) => x.slug === slug);
+  if (!e) throw new Error(`no free-tier expectation for ${slug}`);
+  return e;
+};
+
+// An indicator is a review-tier "Multi-tenant security" finding (selectIndicators, #220).
+const rlsIndicator = (severity: Severity): Finding => ({
+  ...finding("M1 — RLS policy semantic tenancy review", severity),
+  category: "Multi-tenant security",
+  precisionTier: "review",
+});
+
+describe("free-tier calibration invariant (#261)", () => {
+  it("covers exactly #227's four named repos, each pinned in the corpus", () => {
+    // The invariant is defined against these four by name; a target quietly dropped from the list
+    // is the check silently shrinking.
+    expect(FREE_TIER_EXPECTATIONS.map((e) => e.slug).sort()).toEqual(["multi-tenant-starter", "mvp-boilerplate", "proposit", "saas-lite"]);
+    for (const e of FREE_TIER_EXPECTATIONS) {
+      expect(EXTERNAL_CORPUS.some((t) => t.slug === e.slug), e.slug).toBe(true);
+    }
+  });
+
+  it("FAILS when the free tier cries wolf — an F on a repo #227 calls sound", () => {
+    const graded: Finding = { ...finding("M1 — Leaked service-role key", "Critical"), precisionTier: "high" };
+    const report = buildQuickScanReport([graded]);
+    expect(report.grade).toBe("F");
+    const rows = scoreFreeTierExpectation(expectation("mvp-boilerplate"), report);
+    const f = rows.find((r) => r.check === "must not score F")!;
+    expect(f.pass).toBe(false);
+    expect(f.detail).toContain("CRIED WOLF");
+  });
+
+  it("FAILS when the free tier accuses a sound repo of a tenancy hole", () => {
+    const rows = scoreFreeTierExpectation(expectation("saas-lite"), buildQuickScanReport([rlsIndicator("High")]));
+    const f = rows.find((r) => r.check.startsWith("must not accuse"))!;
+    expect(f.pass).toBe(false);
+    expect(f.detail).toContain("CRIED WOLF");
+  });
+
+  it("FAILS when the free tier stays quiet on a known-vulnerable repo", () => {
+    // multi-tenant-starter's #217 Critical (any authed user self-joins any tenant as owner) must
+    // have SOME free-tier signal. Silence here is the promise broken.
+    const rows = scoreFreeTierExpectation(expectation("multi-tenant-starter"), buildQuickScanReport([]));
+    const f = rows.find((r) => r.check.startsWith("must raise"))!;
+    expect(f.pass).toBe(false);
+    expect(f.detail).toContain("STAYED QUIET");
+  });
+
+  it("does not accept the Info-severity tenancy disclosure as the loud signal", () => {
+    // Every target with migrations draws the Info "Tenancy model assumed" note (#220). If that
+    // counted as raising the alarm, the two known-vulnerable repos would pass on a note that says
+    // nothing about them — the invariant would be self-satisfying.
+    const rows = scoreFreeTierExpectation(expectation("proposit"), buildQuickScanReport([rlsIndicator("Info")]));
+    expect(rows.find((r) => r.check.startsWith("must raise"))).toMatchObject({ pass: false });
+    expect(scoreFreeTierExpectation(expectation("proposit"), buildQuickScanReport([rlsIndicator("High")]))
+      .find((r) => r.check.startsWith("must raise"))).toMatchObject({ pass: true });
+  });
+
+  it("does not grade the known-vulnerable repos — their Critical is an indicator, never a hygiene verdict", () => {
+    // #213/#220: a review-tier indicator must not move the grade. So the invariant deliberately
+    // makes no grade claim for these two, and asserting one would re-create the #213 inversion.
+    for (const slug of ["multi-tenant-starter", "proposit"]) {
+      expect(expectation(slug).mustNotScoreF, slug).toBe(false);
+    }
+    const report = buildQuickScanReport([rlsIndicator("Critical")]);
+    expect(report.grade).toBe("A");
   });
 });
 
