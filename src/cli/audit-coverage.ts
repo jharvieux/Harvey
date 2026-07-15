@@ -15,7 +15,7 @@
 // Wiring the runners themselves behind one command is the remainder of #229.
 
 import { readFileSync } from "node:fs";
-import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, formatAuditCoverage, MODULE_NAMES, type ModuleCoverage } from "../audit-coverage.js";
+import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, formatAuditCoverage, MODULES, type ModuleCoverage } from "../audit-coverage.js";
 
 function arg(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -28,7 +28,7 @@ if (process.argv.includes("--template")) {
   const template: ModuleCoverage[] = AUDIT_MODULES.map((module) => ({
     module,
     status: "requires-live-run",
-    reason: `TODO: run ${module} (${MODULE_NAMES[module]}) — or state why it could not run`,
+    reason: `TODO: run ${module} (${MODULES[module].name}) — or state why it could not run`,
   }));
   console.log(JSON.stringify(template, null, 2));
   process.exit(0);
