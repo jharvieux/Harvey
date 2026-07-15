@@ -1,0 +1,82 @@
+# M8 (mutation testing) for the external-repo corpus — issue #300.
+#
+# WHY THIS IS A SEPARATE WORKFLOW FROM corpus-drift.yml, which scores every other module of the same
+# targets: cost. corpus-drift's job is ~2 minutes because it clones and reads source. This one runs
+# `npm install` per target and then re-runs the target's whole test suite once per mutant — minutes
+# per target, and the timeout has to be sized for the suite, not the scan. Folding it into the
+# weekly drift job would make the fast check as slow as the slow one, and a timeout bump there would
+# be paying M8's cost on every module.
+#
+# Monthly, not weekly: the targets are pinned at a commit, so the only thing that can move an M8
+# score is OUR wrapper's reading of Stryker's report — a much narrower surface than the source-tier
+# detectors, and one that changes far less often. workflow_dispatch is the on-demand path when the
+# wrapper itself changes; pull_request runs it when the M8 config or its scorer is edited, so a
+# change to either is measured before it lands rather than a month later.
+#
+# On failure: the job names the target whose mutation score moved. As everywhere in this corpus,
+# that is EITHER the target's suite changing under the pin (rebaseline in src/scan/external-corpus.ts
+# with the measured note) OR our wrapper mis-reading the report (a scanner bug). Never something to
+# silence.
+#
+# SCOPE — only 2 of the corpus's 4 suite-carrying targets are scored here, and that is deliberate,
+# recorded, and NOT a silent skip (CLAUDE.md's coverage guard). multi-tenant-starter's suite starts
+# a Docker Postgres container per run, which mutation testing would pay per mutant; saas-lite's
+# suite is Playwright E2E only, so there is nothing to mutate. Both carry their measured reason in
+# external-corpus.ts's M8_DOCKER_PER_MUTANT / M8_E2E_ONLY_SUITE.
+
+name: corpus-m8
+
+on:
+  schedule:
+    - cron: "0 8 1 * *" # 1st of the month, 08:00 UTC — an hour after corpus-drift's weekly slot
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/scan/m8-corpus.ts"
+      - "src/mutation-scan.ts"
+      - "src/cli/mutation-scan.ts"
+      - "src/cli/corpus-drift.ts"
+      - ".github/workflows/corpus-m8.yml"
+
+concurrency:
+  group: corpus-m8-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: install target deps + score M8 mutation baselines
+    runs-on: ubuntu-latest
+    # The measured cost is ~1s of Stryker per target (proposit 21 mutants, boxyhq 35) on top of two
+    # `npm install`s of ~1000-1700 packages. The headroom is for the installs and for a suite that
+    # grows, not for the current mutant count — a Stryker run that somehow hangs should die here
+    # rather than burn an hour.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Only the two targets with a scoreable suite. --install is redundant with --m8's own install
+      # for these two (both are also the ones needing --legacy-peer-deps), but passing it keeps this
+      # job's M5-knip reading consistent with corpus-drift.yml's rather than silently scoring knip
+      # against an uninstalled tree.
+      - name: Score M8 mutation baselines
+        run: |
+          set -euo pipefail
+          pnpm corpus-drift --target proposit --install --m8 --json corpus-m8-proposit.json
+          pnpm corpus-drift --target boxyhq --install --m8 --json corpus-m8-boxyhq.json
+
+      - name: Upload M8 scorecards
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-m8-scorecard
+          path: corpus-m8-*.json
+          if-no-files-found: warn
