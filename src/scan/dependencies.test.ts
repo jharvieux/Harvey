@@ -1,5 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { checkKnownDependencyCVEs, checkNextVersionCVEs, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs, CURATED_CLAIMS, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
+
+// The staleness check (src/cli/osv-staleness.ts, #247) verifies CURATED_CLAIMS against OSV over the
+// network, so it can't run in verify. These offline tests guard the list it reads: an advisory
+// whose claim silently vanishes would never be re-verified again.
+describe("CURATED_CLAIMS (the OSV-verifiable restatement of the curated corpus)", () => {
+  it("carries a real advisory id and fix boundary for every claim", () => {
+    for (const claim of CURATED_CLAIMS) {
+      expect(claim.advisory, claim.note).toMatch(/^GHSA-/);
+      expect(claim.fixed, claim.note).toMatch(/^\d+\.\d+\.\d+/);
+      expect(claim.pkg, claim.note).not.toBe("");
+    }
+  });
+
+  // The #212 regression: the corpus asserted an RSC-RCE fix on the 14.2 line. No released 14.x is
+  // affected (GHSA-9qr9-h5gf-34mp opens at 14.3.0-canary.77), so no 14.x fix may be claimed.
+  it("claims no RSC-RCE fix on any next 14.x line", () => {
+    const rsc = CURATED_CLAIMS.filter((c) => c.advisory === "GHSA-9qr9-h5gf-34mp");
+    expect(rsc.length).toBeGreaterThan(0);
+    expect(rsc.filter((c) => c.fixed.startsWith("14."))).toEqual([]);
+  });
+
+  it("restates every curated Next.js fix boundary, so none goes unverified", () => {
+    const nextFixes = CURATED_CLAIMS.filter((c) => c.pkg === "next").map((c) => c.fixed);
+    // The middleware-bypass table's four lines plus the seven RSC minors.
+    expect(nextFixes).toEqual(expect.arrayContaining(["12.3.5", "13.5.9", "14.2.25", "15.2.3", "15.0.5", "16.0.7"]));
+  });
+});
 
 describe("checkNextVersionCVEs", () => {
   it("flags CVE-2025-29927 for an unpatched 15.x below the fixed version", () => {

@@ -14,6 +14,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type GroundTruthBug, scoreCoverage, type ScorableFinding, summarizeCoverage } from "../coverage-scorecard.js";
 
+// A catch must be the right RULE at the right FILE. `location` is an absolute path into a scratch
+// scan copy, so anchor on the target-relative file suffix; `taxonomy` must name a rule that
+// actually reasons about this bug's class, not merely fire somewhere in the same file.
+const at = (file: RegExp, rule: RegExp) => (f: ScorableFinding) => file.test(f.location) && rule.test(f.taxonomy);
+
 const NOT_RUN_SEMANTIC_RLS_READ =
   "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ evaluates policy semantics";
 const NOT_RUN_SUPABASE_ADVISOR =
@@ -49,9 +54,9 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     id: "SQLI-SERVICE",
     severity: "Critical",
     location: "pages/api/search.js:9",
-    expectedModule: RAN_SEMGREP_NO_RULE("no registry/custom rule matched the raw-SQL-concat pattern in search.js"),
+    expectedModule: "Semgrep ran (src/scan/semgrep.ts) and harvey-sql-injection-template matched the raw-SQL-concat pattern in search.js",
     moduleRan: true,
-    matches: (s) => /search\.js/.test(s) || /sql.?injection/i.test(s),
+    matches: at(/search\.js/, /sql.?injection/i),
   },
   {
     id: "WEBHOOK-REPLAY",
@@ -59,7 +64,7 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     location: "pages/api/webhook.js:20-24",
     expectedModule: RAN_SEMGREP_NO_RULE("no rule targets missing replay/nonce protection"),
     moduleRan: true,
-    matches: (s) => /webhook\.js/.test(s) || /replay/i.test(s),
+    matches: at(/webhook\.js/, /replay|nonce/i),
   },
   {
     id: "COUNTER-RACE",
@@ -67,7 +72,7 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     location: "pages/api/counter/increment.js:11-31",
     expectedModule: RAN_SEMGREP_NO_RULE("no rule targets non-atomic read-modify-write races"),
     moduleRan: true,
-    matches: (s) => /increment\.js/.test(s) || /race/i.test(s),
+    matches: at(/increment\.js/, /race|atomic/i),
   },
   {
     id: "UPDATE-UNSCOPED",
@@ -75,17 +80,15 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     location: "pages/api/profile/update.js:11-14",
     expectedModule: RAN_SEMGREP_NO_RULE("no rule targets an unscoped service-role .update() call"),
     moduleRan: true,
-    matches: (s) => /profile.(\/|\\)?update\.js/.test(s) || /unscoped/i.test(s),
+    matches: at(/profile.(\/|\\)?update\.js/, /unscoped|service.?role/i),
   },
   {
     id: "OPEN-REDIRECT",
     severity: "Low",
     location: "pages/api/redirect.js:9",
-    expectedModule: RAN_SEMGREP_NO_RULE(
-      "the harvey-open-redirect custom rule (src/scan/rules/semgrep-nextjs-supabase.yml) is written for the App-Router shape ($REQ.nextUrl.searchParams.get) — it doesn't match this Pages-Router zod-validated-URL shape",
-    ),
+    expectedModule: "Semgrep ran (src/scan/semgrep.ts) and the harvey-open-redirect custom rule (src/scan/rules/semgrep-nextjs-supabase.yml) matched at redirect.js",
     moduleRan: true,
-    matches: (s) => /redirect\.js/.test(s) || /open.?redirect/i.test(s),
+    matches: at(/redirect\.js/, /open.?redirect/i),
   },
 ];
 

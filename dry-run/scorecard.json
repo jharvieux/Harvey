@@ -1,7 +1,7 @@
 {
   "summary": {
-    "caught": 0,
-    "missed": 5,
+    "caught": 2,
+    "missed": 3,
     "requires-live-run": 3
   },
   "bugs": [
@@ -33,9 +33,9 @@
       "id": "SQLI-SERVICE",
       "severity": "Critical",
       "location": "pages/api/search.js:9",
-      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) but no registry/custom rule matched the raw-SQL-concat pattern in search.js",
-      "status": "missed",
-      "note": "Semgrep ran (src/scan/semgrep.ts) but no registry/custom rule matched the raw-SQL-concat pattern in search.js ran but produced no finding matching this bug."
+      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) and harvey-sql-injection-template matched the raw-SQL-concat pattern in search.js",
+      "status": "caught",
+      "note": "Matched by finding \"src.scan.rules.semgrep.harvey-sql-injection-template\" at /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-JJ0Vim/pages/api/search.js:11."
     },
     {
       "id": "WEBHOOK-REPLAY",
@@ -65,9 +65,9 @@
       "id": "OPEN-REDIRECT",
       "severity": "Low",
       "location": "pages/api/redirect.js:9",
-      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) but the harvey-open-redirect custom rule (src/scan/rules/semgrep-nextjs-supabase.yml) is written for the App-Router shape ($REQ.nextUrl.searchParams.get) — it doesn't match this Pages-Router zod-validated-URL shape",
-      "status": "missed",
-      "note": "Semgrep ran (src/scan/semgrep.ts) but the harvey-open-redirect custom rule (src/scan/rules/semgrep-nextjs-supabase.yml) is written for the App-Router shape ($REQ.nextUrl.searchParams.get) — it doesn't match this Pages-Router zod-validated-URL shape ran but produced no finding matching this bug."
+      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) and the harvey-open-redirect custom rule (src/scan/rules/semgrep-nextjs-supabase.yml) matched at redirect.js",
+      "status": "caught",
+      "note": "Matched by finding \"src.scan.rules.semgrep.harvey-open-redirect\" at /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-JJ0Vim/pages/api/redirect.js:18."
     }
   ]
 }

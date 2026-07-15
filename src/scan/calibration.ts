@@ -89,13 +89,24 @@ function haystack(f: Finding): string {
   return `${f.id} ${f.title} ${f.taxonomy} ${f.evidence} ${normalizeLocation(f.location)}`.toLowerCase();
 }
 
+// Dependency findings label their location "<manifestPath> (<pkg>)" — see checkNextVersionCVEs.
+// Pull the manifest segment back out so an entry can be pinned to one manifest.
+function manifestOf(location: string): string | undefined {
+  const m = /^(.*?)\s*\([^()]*\)\s*$/.exec(normalizeLocation(location));
+  return m?.[1]?.toLowerCase();
+}
+
 // A finding is relevant to an entry when its location contains the entry's location substring
 // and (if the entry lists keywords) at least one keyword appears anywhere in the finding text.
+// An entry that declares a `manifest` additionally requires an EXACT manifest match, so a bare
+// package name can't cross-match another fixture's manifest (#253).
 function relevantFindings(entry: CorpusEntry, findings: Finding[]): Finding[] {
   const loc = entry.location.toLowerCase();
   const keys = entry.match?.map((m) => m.toLowerCase());
+  const manifest = entry.manifest?.toLowerCase();
   return findings.filter((f) => {
     if (!f.location.toLowerCase().includes(loc)) return false;
+    if (manifest !== undefined && manifestOf(f.location) !== manifest) return false;
     if (!keys) return true;
     const hay = haystack(f);
     return keys.some((k) => hay.includes(k));

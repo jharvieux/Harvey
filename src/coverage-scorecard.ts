@@ -16,10 +16,13 @@ export interface GroundTruthBug {
   // False when the module that would catch this bug did not execute in this pass (e.g. needs
   // a live DB, a missing skill package, or a binary unavailable in the sandbox).
   moduleRan: boolean;
-  // A finding is a "catch" if its taxonomy or location references this bug's id/location —
-  // supplied by the caller per-bug since the match signal differs by module (mechanical
-  // findings carry file:line locations; classifier verdicts carry a function/table name).
-  matches: (findingTaxonomyOrLocation: string) => boolean;
+  // True when this finding is a genuine catch of this bug — supplied by the caller per-bug since
+  // the match signal differs by module (mechanical findings carry file:line locations; classifier
+  // verdicts carry a function/table name). Receives the WHOLE finding, so a predicate can require
+  // both the right file AND the right rule: an earlier taxonomy-OR-location signature could only
+  // ever see one field at a time, which scored COUNTER-RACE "caught" off /race/i matching the
+  // dependency `braces@2.3.2` in a lockfile (#246).
+  matches: (finding: ScorableFinding) => boolean;
 }
 
 interface ScoredBug {
@@ -48,7 +51,7 @@ export function scoreCoverage(bugs: GroundTruthBug[], findings: ScorableFinding[
         note: `${bug.expectedModule} did not execute in this pass — no caught/missed verdict possible.`,
       };
     }
-    const hit = findings.find((f) => bug.matches(f.taxonomy) || bug.matches(f.location));
+    const hit = findings.find((f) => bug.matches(f));
     if (hit) {
       return {
         id: bug.id,

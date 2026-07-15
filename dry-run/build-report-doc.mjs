@@ -7,6 +7,12 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const findings = JSON.parse(readFileSync("dry-run/findings.json", "utf8"));
 
+// Read the caught/missed tally off the scorecard rather than restating it by hand — a hardcoded
+// headline silently went stale ("0 of 8") when the run was regenerated (#246). Run
+// src/cli/dry-run-scorecard.ts before this script.
+const { summary } = JSON.parse(readFileSync("dry-run/scorecard.json", "utf8"));
+const plantedTotal = summary.caught + summary.missed + summary["requires-live-run"];
+
 const doc = {
   meta: {
     client: "Calibration target (internal dry run — issue #34)",
@@ -18,7 +24,7 @@ const doc = {
     overallHealth: 0,
     tenantIsolation: "NOT ASSESSED IN THIS PASS — the 3 planted RLS bugs (GROUND-TRUTH.md #1-#3) require either a live Supabase Advisor run or a manual/LLM policy-semantics read, neither of which ran here; see docs/runbooks/dry-run-calibration.md.",
     authModel: "N/A — not evaluated in this pass.",
-    headline: "This is NOT a scored audit. It demonstrates the findings.json -> report render pipeline using REAL output from a real (partial) scan run. 0 of 8 GROUND-TRUTH.md planted bugs were caught by the modules that ran in this sandbox; see the coverage scorecard (dry-run/scorecard.json) for why.",
+    headline: `This is NOT a scored audit. It demonstrates the findings.json -> report render pipeline using REAL output from a real (partial) scan run. ${summary.caught} of ${plantedTotal} GROUND-TRUTH.md planted bugs were caught by the modules that ran in this sandbox (${summary.missed} missed, ${summary["requires-live-run"]} require a live run); see the coverage scorecard (dry-run/scorecard.json) for why.`,
     scope: "targets/calibration (mechanical scan: secrets/deps/semgrep/supply-chain/leftover-auth; M1 detect-deeper grant/definer classifiers fed from migration SQL; M10 PII data map).",
     methodology: "src/cli/dry-run.ts — see docs/runbooks/dry-run-calibration.md for exactly what ran and what didn't.",
     outOfScope: "Everything requiring Docker/a live DB or the LLM /threat-model+/vuln-scan+/triage pass — not available in this sandbox.",

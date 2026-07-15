@@ -333,6 +333,49 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
   },
 ];
 
+// Every hardcoded advisory claim in this file, as data an automated check can re-verify against
+// OSV (#247). The curated tables above stay the source of truth for scanning; this list restates
+// their (advisory, package, fixed-boundary) triples so src/cli/osv-staleness.ts can assert each
+// advisory still exists and still names the fix boundary we hardcode.
+//
+// The verified fact is the FIXED boundary, deliberately not the whole range. It is the boundary
+// every check here actually branches on, and it is what #212 caught: the fabricated "14.2 fixed in
+// 14.2.35" row asserted a fix version the advisory has never listed. The `introduced` edges are
+// intentionally NOT asserted — several curated ranges are knowingly coarser or narrower than OSV's
+// (react-dom's is approximate and review-tiered for that reason; the next-auth/undici rows scope to
+// one major line), and a narrower range under-flags rather than fabricating a vulnerability. See
+// #271 for the coverage gaps that scoping leaves.
+export interface CuratedClaim {
+  advisory: string; // OSV id to query (GHSA preferred — the record CVE ids alias to)
+  pkg: string;
+  fixed: string; // first patched version; OSV must list this as a `fixed` event for `pkg`
+  note: string;
+}
+
+export const CURATED_CLAIMS: CuratedClaim[] = [
+  ...Object.entries(MIDDLEWARE_BYPASS_FIXED_BY_MAJOR).map(([major, fixed]) => ({
+    advisory: "GHSA-f82v-jwr5-mffw",
+    pkg: "next",
+    fixed,
+    note: `CVE-2025-29927 middleware auth bypass, ${major}.x line`,
+  })),
+  ...Object.entries(RSC_RCE_FIXED_BY_MINOR).map(([minor, fixed]) => ({
+    advisory: "GHSA-9qr9-h5gf-34mp",
+    pkg: "next",
+    fixed,
+    note: `CVE-2025-55182 RSC RCE, ${minor} line`,
+  })),
+  { advisory: "GHSA-mq59-m269-xvcx", pkg: "next", fixed: "16.1.7", note: "CVE-2026-27978 Server Actions null-origin CSRF" },
+  { advisory: "GHSA-c4j6-fc7j-m34r", pkg: "next", fixed: "15.5.16", note: "CVE-2026-44578 WebSocket-upgrade SSRF, 13.4-15.5 line" },
+  { advisory: "GHSA-c4j6-fc7j-m34r", pkg: "next", fixed: "16.2.5", note: "CVE-2026-44578 WebSocket-upgrade SSRF, 16.x line" },
+  ...CURATED_DEP_CVES.map((c) => ({
+    advisory: /^GHSA-/.test(c.id) ? c.id : c.source.replace(/^.*\/vulnerability\//, ""),
+    pkg: c.name,
+    fixed: c.fixed,
+    note: `${c.id} — ${c.name}`,
+  })),
+];
+
 export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestPath = "package.json"): Finding[] {
   const findings: Finding[] = [];
   for (const cve of CURATED_DEP_CVES) {

@@ -74,6 +74,27 @@ describe("scoreEntry", () => {
     expect(scoreEntry(secret, [stripe]).pass).toBe(true);
   });
 
+  // #253: a bare package-name location substring-matches every manifest declaring it, so a
+  // root-target entry could score off a fixture's finding while the root rule never fired —
+  // how #212's fabricated P-NEXT-CVE-RSC row appeared to pass. `manifest` pins it to one.
+  it("does not let a bare package-name location score a positive off another manifest's finding", () => {
+    const e = entry({ id: "P-NEXT-CVE-29927", kind: "positive", cls: "framework cve", location: "next", manifest: "package.json", match: ["29927"], expectedTier: "high", note: "" });
+    const fixtureOnly = [finding({ location: "fixtures/b10-vuln-deps/package.json (next)", title: "next@16.0.5 vulnerable to CVE-2025-29927", precisionTier: "high" })];
+    expect(scoreEntry(e, fixtureOnly).pass).toBe(false);
+
+    const rootManifest = [finding({ location: "package.json (next)", title: "next@14.2.5 vulnerable to CVE-2025-29927", precisionTier: "high" })];
+    expect(scoreEntry(e, rootManifest).pass).toBe(true);
+  });
+
+  it("keeps a manifest-pinned negative from clearing on a different manifest's high finding", () => {
+    const e = entry({ id: "N-NEXT-RSC-14X", kind: "negative", cls: "unaffected line", location: "next", manifest: "fixtures/b10-next14-rsc/package.json", match: ["55182"], note: "" });
+    const wrongManifest = [finding({ location: "fixtures/b10-vuln-deps/package.json (next)", title: "CVE-2025-55182 RSC RCE", precisionTier: "high" })];
+    expect(scoreEntry(e, wrongManifest).highFlagged).toBe(false);
+
+    const ownManifest = [finding({ location: "fixtures/b10-next14-rsc/package.json (next)", title: "CVE-2025-55182 RSC RCE", precisionTier: "high" })];
+    expect(scoreEntry(e, ownManifest).pass).toBe(false);
+  });
+
   it("reports a connected-tier entry as N/A, never a failure, even with no findings", () => {
     const e = entry({ id: "P-RLS", kind: "positive", cls: "rls", location: "audit_logs", expectedTier: "connected", note: "" });
     const row = scoreEntry(e, []);
@@ -583,10 +604,16 @@ describe("buildCoverageMatrix", () => {
   });
 
   it("ok is true only when every static positive is caught and every negative cleared", () => {
-    // Synthesize one high-tier finding per static positive at its fixture location.
+    // Synthesize one high-tier finding per static positive at its fixture location. A
+    // manifest-pinned entry gets the real dependency-finding shape, "<manifest> (<pkg>)".
     const staticPositives = CORPUS.filter((e) => e.kind === "positive" && e.expectedTier !== "connected");
     const synth: Finding[] = staticPositives.map((e) =>
-      finding({ location: `${e.location}:1`, title: (e.match ?? [""])[0], taxonomy: (e.match ?? [""])[0], precisionTier: "high" }),
+      finding({
+        location: e.manifest ? `${e.manifest} (${e.location})` : `${e.location}:1`,
+        title: (e.match ?? [""])[0],
+        taxonomy: (e.match ?? [""])[0],
+        precisionTier: "high",
+      }),
     );
     const m = buildCoverageMatrix(synth, CORPUS);
     expect(m.positivesCaught).toBe(m.positivesTotal);
