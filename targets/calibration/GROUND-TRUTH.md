@@ -1703,13 +1703,17 @@ tradeoff comment, a framework contract) rather than pattern-match on shape alone
 
 ### M6 eval status
 
-No live rubric-agreement run has been scored yet — this batch ships the labeled corpus and the
-design note (`docs/design/m6-simplification-eval.md`), not a completed eval pass. Running the
-`/simplify` skill against `targets/calibration/simplify/` and recording which of the 4 positives
-it names and which of the 2 negatives it correctly spares is a documented follow-up, tracked the
-same way M3's live-git and M7's live-branch confirmations are: build the fixture first, run and
-record the live result later. Whatever that run produces, report it as **"reviewer agreed N/4
-positives, M/2 negatives"** — never as an "M6 precision" percentage.
+**Run 1 executed 2026-07-15 (#265) — result contaminated, not a usable baseline.** The reviewer
+agreed 4/4 positives and 2/2 negatives, but every fixture in `targets/calibration/simplify/`
+carries a header comment naming its own expected verdict (`// … — PLANTED (M6-P-DEBOUNCE)`,
+`// … — BENIGN (M6-N-FRAMEWORK): … the rubric must NOT flag this one`), so a perfect score is
+achievable by reading the labels rather than applying the rubric. The run cannot distinguish the
+two. Full write-up and what run 2 requires: `docs/design/m6-simplification-eval.md` §3.1.
+
+De-labeling the fixtures (keeping `depdrop.ts`'s `// WHY:` block and `framework-adapter.ts`'s
+framework shape — those are the discriminators, not labels) is the prerequisite for a real
+baseline. Whatever a run produces, report it as **"reviewer agreed N/4 positives, M/2
+negatives"** — never as an "M6 precision" percentage.
 
 ## Known-public/test-credential recognizer (issues #210, #211, #225)
 

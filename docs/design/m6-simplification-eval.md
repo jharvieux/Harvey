@@ -89,6 +89,66 @@ review pass) against a target directory.
   knip — deterministic, offline). An M6 eval run is a model invocation, on demand, like any other
   LLM-judge eval.
 
+### 3.1 Run log — first execution (2026-07-15, #265)
+
+The eval had never been executed since the corpus landed 2026-07-09 (#72). First run below.
+
+| run | date | reviewer | positives flagged | negatives spared | verdict |
+|---|---|---|---|---|---|
+| 1 | 2026-07-15 | Claude Opus 4.8, M6 brief (`docs/quality-extras.txt` §SIMPLIFICATION) as the prompt, no other context | 4/4 | 2/2 | **contaminated — do not treat as a pass** |
+
+**Procedure followed.** The reviewer read the M6 brief, then the six fixture files, wrote up
+what it would flag, and only then opened `targets/calibration/GROUND-TRUTH.md` to score. Answer
+key strictly after the review, per §3.
+
+**Result as scored: 4/4 positives named (`debounce.ts`, `group.ts`, `id.ts`, `manager.ts`),
+2/2 negatives spared (`depdrop.ts`, `framework-adapter.ts`).**
+
+**Why that number is worthless, and the real finding of this run:**
+
+Every one of the six fixtures opens with a header comment naming its own expected verdict —
+`// simplify/debounce.ts — PLANTED (M6-P-DEBOUNCE)`, `// simplify/depdrop.ts — BENIGN
+(M6-N-DEPDROP)` — several of which additionally cite the exact rubric clause that decides them
+("quality-extras.txt 'FALSE POSITIVES' — an abstraction mandated by a framework/library
+contract") and state the expected outcome outright ("The rubric must NOT flag this one").
+
+The eval's stated purpose (§3/§4) is to force the reviewer to *reason about the why* — the
+`// WHY:` tradeoff comment, the framework contract — rather than pattern-match on shape. The
+labels defeat that: a reviewer that read nothing but the first line of each file scores 6/6.
+The negatives, which the design doc correctly identifies as the whole point, are the most
+contaminated of the six — `framework-adapter.ts` line 3 *tells the reviewer not to flag it*.
+
+This reviewer cannot certify which signal it actually used. Both the labels and the genuine
+discriminators (`depdrop.ts`'s `// WHY:` comment; `framework-adapter.ts`'s
+`getServerSideProps` contract) were in context simultaneously, and introspective claims about
+which one drove the verdict are not evidence. **Assume the labels were sufficient**, because
+they were. 4/4 + 2/2 is consistent with a reviewer doing the rubric perfectly and equally
+consistent with one grepping for `PLANTED`. The run does not distinguish them.
+
+The design doc already warned this corpus "says nothing about the reviewer's false-positive
+rate on code nobody labeled" (§3, *What this is explicitly NOT*). That warning was about
+curation and sample size. This is a strictly worse defect: as it stands, run 1 does not measure
+the reviewer against the *rubric* at all, only against a header comment. **Recorded as a
+contaminated baseline — not a pass, and not a regression-watch datum** (a future prompt/model
+change would be compared against a number that never measured the thing it names).
+
+**What run 2 needs** (tracked as a follow-up, not fixed here — restructuring the corpus is
+outside #265's "run the eval" scope, and the fix has a real design choice in it):
+
+- Strip the verdict-bearing header comments from the six fixtures, moving the labels into
+  `GROUND-TRUTH.md` only (which the reviewer reads after, per §3). The corpus is scored by
+  file path, so nothing about the eval mechanism needs the in-file id.
+- **The one comment that must survive is `depdrop.ts`'s `// WHY:` block** — that is not a
+  label, it is the fixture's actual discriminator, the in-code signal §2 names as separating a
+  deliberate dep-drop from a genuine positive. Deleting it would delete the test. The line to
+  cut is the `— BENIGN (M6-N-DEPDROP)` header above it, not the `// WHY:` rationale below.
+  Same for `framework-adapter.ts`: the `getServerSideProps` shape stays and must be inferable
+  from the code; the "rubric must NOT flag this one" header goes.
+- Re-run and record as run 2. Only run 2 is a usable baseline.
+
+Until then this table has one row and no trustworthy datum in it. That is a more honest state
+than the blank it replaced, but it is not the eval the design doc specifies.
+
 ## 4. The labeled corpus
 
 `targets/calibration/simplify/` — six files, four positives + two negatives (paired 1:1 by shape
