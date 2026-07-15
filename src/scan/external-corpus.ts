@@ -83,6 +83,17 @@ const M5_NEEDS_INSTALL: ModuleNotRun = {
 // ships one. So on every target with a real test suite, M8 throws rather than measuring: recorded
 // not-run with the reason, per the coverage guard. The targets WITHOUT a suite are different — they
 // don't need Stryker at all, because #224's zero-coverage finding IS the measurement.
+//
+// #277 investigated actually closing this 2026-07-15 rather than just re-stating the gap. Result:
+// vendoring a config per target (Option 1 in the issue) DOES work on the easiest case — proposit,
+// `npm install --legacy-peer-deps` (react 19 vs @ai-sdk/react's peer range conflicts without it)
+// + a stryker.conf scoped to lib/pdf/launch.ts (its one file with real coverage) killed 21/21
+// mutants in ~1s wall clock, and confirmed reports/mutation/mutation.json as Stryker 9.6.1's
+// default JSON path. But the other three each carry a target-specific blocker a generic wrapper
+// can't paper over (see each target's note below), and even wiring the ONE working case into the
+// scheduled Layer 2 job needs a target `npm install` step plus a much longer timeout than the
+// current job's ~2m10s — i.e. a new workflow, which is out of this sweep's granted paths
+// (.github/workflows/ is supervised). Recorded as a follow-up rather than attempted here.
 const M8_NEEDS_STRYKER: ModuleNotRun = {
   reason: "mutation-scan needs a `stryker` binary on PATH plus a target-specific stryker.conf.* (CLAUDE.md's M8 prereq); this target has a real test suite but ships no Stryker config, so the scan throws instead of scoring. Recorded not-run rather than 0 — a 0 here would read as 'no surviving mutants', the exact inversion of an unmeasured suite. Was recorded as a test-FILE count (#263 found the number never matched what the scorer counts: scanner findings).",
 };
@@ -109,7 +120,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       M4: { counted: 68, total: 104, note: "5.27% (2749/52165 lines), 203 raw clone clusters — of which 104 are the cross-file clones jscpdToFindings emits and 68 are counted (36 are sub-15-line Info). The 203 originally recorded here was jscpd's cluster count, not the counted findings this scorer compares (fixed #263 when the Layer 2 job first scored it). Was 9.75%/199 clones pre-#232; the drop is that fix excluding generated/demo paths, NOT the repo changing. Per #232 ~75% of what remains is genuine per-entity copy-paste (CRUD forms, per-entity tool/store/service files) — the corpus's strongest real M4 signal and a factory-refactor case." },
       M5: M5_NEEDS_INSTALL,
       M7: { counted: 49, total: 79, note: "30 of the 79 are the exhaustive-deps class #230 demoted to Info (~0 real), leaving 49 counted. The real vein is 26 'Unbounded select' on growable request-path lists (low-sev latent scalability). Residual FP tail still counted: 5 inline-literal, 4 context-value-recreated, 2 index-key — the micro-render shapes #230 judged ~0% real (see follow-up)." },
-      M8: M8_NEEDS_STRYKER, // `vitest run` script + a single *.test.* file: a real (if thin) suite, so mutation-scan needs the Stryker config this target doesn't have.
+      M8: M8_NEEDS_STRYKER, // `vitest run` script + a single *.test.* file: a real (if thin) suite, so mutation-scan needs the Stryker config this target doesn't have. #277: verified 2026-07-15 a scoped config (mutate: lib/pdf/launch.ts) runs clean (21/21 killed, ~1s) after `npm install --legacy-peer-deps` — but that's a hand-tuned config, not something the wrapper generates.
       M9: { counted: 8, total: 8, note: "4 'Server Action missing input validation' + 4 'Accidental dynamic rendering'. Distinct from the 4 M1 'Server Action missing authorization check' the same run emits — #231 routed the authz vein to M1/#221 rather than scoring it as M9 rendering, and this split is what that fix looks like on real code." },
       M10: M10_NEEDS_SCHEMA_INPUT,
     },
@@ -141,7 +152,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       M4: { counted: 39, total: 66, note: "4.93% (1148/23283 lines), 90 raw clusters -> 66 cross-file findings, 39 counted (fixed #263: the 90 was jscpd's cluster count). Per #232 the real signal is the API-handler envelope (a `createHandler` extraction candidate), lower severity than proposit's." },
       M5: M5_NEEDS_INSTALL,
       M7: { counted: 17, total: 17, note: "Includes the corpus's one genuine middleware stall ('Fetch in middleware hot path') — one of the two real request-path finds #230 kept. The 9 inline-literal + 3 index-key are the residual micro-render tail." },
-      M8: M8_NEEDS_STRYKER, // Best-tested target in the corpus (real `jest` script + 8 test files, plus playwright) — and precisely why it can't be scored without a Stryker config.
+      M8: M8_NEEDS_STRYKER, // Best-tested target in the corpus (real `jest` script + 8 test files, plus playwright) — and precisely why it can't be scored without a Stryker config. #277: the playwright specs need a built app + a real browser, a heavier prerequisite than a unit-test mutation run; not attempted.
       M9: { counted: 0, total: 0, note: "MEASURED zero, and it is the #231 fix working: this is a PAGES Router app, where the App-Router-only checks must not fire at all. Pre-#231 it drew a bogus server-only hit. Any non-zero M9 here is a straight regression of that fix." },
       M10: {
         reason: "Prisma schema, no SQL migrations — the sweep did not scan it. Its `jackson_store.value` (SAML/SSO config incl. IdP secrets) is the #233 opaque-encrypted-store case and IS asserted in external-corpus.test.ts against the classifier.",
@@ -163,7 +174,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       // The one target small enough (13 deps) to `npm install` cheaply, so M5 DID run here.
       M5: { counted: 2, total: 2, note: "Ran WITHOUT the target's node_modules — knip still resolves this 13-dep repo's config, so M5 is the one target scored here (fixed #263: recorded as 1 finding, measured as 2 — knip reports the two files separately, it does not roll them into one). Both REAL, and the first is security-weighted: `lib/security/guards.ts` exports requireTenantAccess/requireTenantAdmin and NOTHING calls them, on the same repo whose self-join Critical (#217) is a missing-authz bug. #226's security cross-link firing on real code: the dead guard IS the vulnerability's fingerprint. The second is unused exports in lib/supabase/server.ts." },
       M7: { counted: 0, total: 0, note: "MEASURED zero — a 3.1k-line repo with no perf surface. A useful floor: any M7 finding appearing here is almost certainly a new over-match." },
-      M8: M8_NEEDS_STRYKER, // One hand-rolled `test/rls.test.mjs` run via `node --test` — detectNoTestSuite counts the `--test` script as a real suite, so this needs Stryker too.
+      M8: M8_NEEDS_STRYKER, // One hand-rolled `test/rls.test.mjs` run via `node --test` — detectNoTestSuite counts the `--test` script as a real suite, so this needs Stryker too. #277: verified 2026-07-15 this test spins up a Docker Postgres container per run — mutation testing would pay that cost per mutant, well beyond any CI budget without a dedicated long-running job.
       M9: { counted: 3, total: 3, note: "2 'Accidental dynamic rendering' + 1 'Data-fetching waterfall'." },
       M10: M10_NEEDS_SCHEMA_INPUT,
     },
@@ -195,7 +206,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       M4: { counted: 14, total: 16, note: "1.15% (318/27617 lines), 28 raw clusters -> 16 cross-file findings, 14 counted (fixed #263: the 28 was jscpd's cluster count). The sweep's 499-line identical `database.types.ts` copy is now excluded by #232." },
       M5: M5_NEEDS_INSTALL,
       M7: { counted: 23, total: 24, note: "Includes the corpus's other genuine request-path stall ('Blocking sync I/O in request handler' — the execSync-on-a-/version-route case #230 kept) plus an 'Await in loop (N+1)' and a raw <img>. The 11 inline-literal + 6 index-key + 2 context-value are the residual micro-render tail. 22 -> 23 when #269 added the 'React Compiler flag unresolvable' class: this repo sets `reactCompiler: ENABLE_REACT_COMPILER` (env-derived), the exact unresolvable-flag case #249 filed. Baseline rebased by #263's first real Layer 2 run — an intended new detection, not a regression, and the drift check catching it on day one is the corpus working." },
-      M8: M8_NEEDS_STRYKER, // `turbo test` script + 3 test files — a partial suite, between boxyhq and the zero-test targets, and still unscoreable without a Stryker config.
+      M8: M8_NEEDS_STRYKER, // `turbo test` script + 3 test files — a partial suite, between boxyhq and the zero-test targets, and still unscoreable without a Stryker config. #277: same class of per-repo tuning cost as the others (turbo monorepo test orchestration); not attempted.
       M9: { counted: 2, total: 2, note: "2 'Accidental dynamic rendering'." },
       M10: M10_NEEDS_SCHEMA_INPUT,
     },
