@@ -5,7 +5,7 @@
 > what makes the engagement worth $X, sticky, and expands who'll buy). Do **not** market as "generic code
 > quality" — that's the commoditized lane (SonarQube/Code Climate). Security leads; the rest is the value.
 
-A full audit is 7 modules. Each lists what it finds, the method, the tool/skill that powers it, whether it's
+A full audit is ten modules (M1–M10). Each lists what it finds, the method, the tool/skill that powers it, whether it's
 **net-new build** or **existing tooling to wire in**, and what it contributes to the report.
 
 | # | Module | Powered by | Status |
@@ -161,10 +161,11 @@ A full audit is 7 modules. Each lists what it finds, the method, the tool/skill 
 - **Report:** a data map (table → categories) in context; feeds the severity of every exposure finding.
 
 ## How the modules compose into one engagement
-1. Threat-model (focus areas) → 2. M1 static security scan → 3. M3 hotspots + M4 dup + M5 slop + M6 maintainability
+1. Threat-model (focus areas) → 2. M10 data classification (the data map — it weights every exposure finding's
+severity, so it runs before the security pass) + M1 static security scan → 3. M3 hotspots + M4 dup + M5 slop + M6 maintainability
 + M7 performance + M8 test quality + M9 App Router (can run in parallel; full-repo Stryker, perTest + concurrency)
 → 4. M2 local pen test to **prove** the high-severity M1/M9 findings → 5. assemble into the ranked report
 (`audit-report-skeleton.md`), cross-referencing hotspots and surviving mutants against findings → 6. remediation plan + retest offer.
 
 **Packaging:** offer a **Security audit** (M1+M2+the M9 security items, the wedge, lower price/faster) and a
-**Full codebase audit** (M1–M9, higher price, the upsell). Lead the pitch with the security depth; show the full report as the reason to buy the bigger package.
+**Full codebase audit** (M1–M10, higher price, the upsell). Lead the pitch with the security depth; show the full report as the reason to buy the bigger package.
