@@ -1,8 +1,3 @@
-// simplify/manager.ts — PLANTED (M6-P-OVERABSTRACT): a single-implementation interface + factory
-// wrapping one concrete class. The rubric expects /simplify to name the collapse: delete
-// InvoiceManager/createInvoiceManager, export DefaultInvoiceManager's methods directly
-// (quality-extras.txt M6 "OVER-ABSTRACTION" — "an interface/factory/generic with a single
-// implementation or single call site... adds indirection without behavior").
 export interface InvoiceManager {
   totalFor(invoiceId: string): number;
 }
