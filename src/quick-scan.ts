@@ -3,12 +3,18 @@
 // into the free-tier diagnosis: counts, categories, located findings with a plain-English
 // risk line, ONE fully-revealed teaser (with its fix), and an A–F grade.
 //
-// Two invariants this module enforces as real logic, not labels:
+// Three invariants this module enforces as real logic, not labels:
 //   1. Trust boundary — only ~100%-precision findings (precisionTier "high") reach the
 //      free count/grade/list. A single wrong "critical" is credibility-fatal, so heuristic
 //      ("review") findings are excluded here, not merely downranked.
 //   2. Free/gated split — the free path withholds the fix/remediation for every finding
 //      except the single teaser. Location is NEVER gated (anti-shakedown).
+//   3. The grade is a HYGIENE grade, never a security verdict (#227). The mechanical tier can
+//      only see what it can mechanically verify — dependency and secret hygiene, dangerous
+//      config — which is inversely correlated with what actually matters for this audience
+//      (tenant isolation, authz). So the headline is two-part: a scope-annotated grade PLUS an
+//      explicit risk disclosure naming what was NOT assessed. Source-tier RLS/authz signals ride
+//      alongside as non-grading INDICATORS (#220) — the honest teaser, never a verdict.
 
 import type { Finding, Severity } from "./findings.js";
 import { SEVERITIES } from "./findings.js";
@@ -31,10 +37,14 @@ export interface DiagnosisFinding {
 export interface QuickScanReport {
   grade: Grade;
   score: number;
-  total: number;
+  gradeScope: string; // the grade annotated with what it does and does not cover (#227)
+  riskDisclosure: string; // what this tier could NOT assess — always shown, never softened
+  total: number; // GRADED findings only — the count the grade actually reflects
   countsBySeverity: Record<Severity, number>;
   categories: { category: string; count: number }[];
   findings: DiagnosisFinding[];
+  informational: DiagnosisFinding[]; // seen, reported, deliberately not graded (#213)
+  indicators: DiagnosisFinding[]; // source-tier tenant-isolation/authz signals, not verdicts (#220)
   sample: DiagnosisFinding | null; // the one teaser, always shown with its fix
   reviewTierExcluded: number; // heuristic findings deliberately kept out of the free grade
   locked: boolean;
@@ -61,10 +71,40 @@ const GATED_CAPABILITIES = [
   "Exportable report (PDF / SARIF)",
 ];
 
+// Categories that are high-precision about the FACT but not about EXPLOITABILITY, so they are
+// reported in full and deliberately excluded from the grade (#213/#227). A dependency whose
+// version falls in a CVE range is an exact version match, not a proven vulnerability: whether it
+// is reachable depends on deployment context (a Vercel-hosted middleware CVE is auto-patched).
+// Grading on it produced F's built entirely on unverified version matches while the real
+// vulnerability went unmentioned — worse than silence, because a prospect who bumps the version
+// believes they cleared their top risk. Keyed on category rather than severity so the class, not
+// a per-finding judgment call, is what's excluded.
+const NON_GRADING_CATEGORIES = new Set(["Dependency CVE"]);
+
+const isNonGrading = (f: Finding): boolean => NON_GRADING_CATEGORIES.has(f.category);
+
 // The free tier draws ONLY from the ~100%-precision tier (#25's precisionTier tag).
 // Everything else is heuristic and must not enter the free count/grade.
 export function selectFreeFindings(findings: Finding[]): Finding[] {
   return findings.filter((f) => f.precisionTier === "high");
+}
+
+// Of the free (high-precision) findings, the subset the grade is computed from: the classes that
+// are exact at the mechanical layer AND mean what they say (#227). Everything else stays visible
+// as informational.
+export function selectGradedFindings(findings: Finding[]): Finding[] {
+  return selectFreeFindings(findings).filter((f) => !isNonGrading(f));
+}
+
+// Source-tier tenant-isolation / authz signals (#220). These are INDICATORS, never verdicts: the
+// static tier can see a policy's shape but cannot prove how it behaves against a live database,
+// so they are surfaced loudly and never counted in the grade. Deliberately drawn from the review
+// tier — this is the one place a review-tier signal is shown in the free output, because staying
+// silent about a probable cross-tenant hole to protect a precision claim is the worse failure.
+const INDICATOR_CATEGORY = "Multi-tenant security";
+
+export function selectIndicators(findings: Finding[]): Finding[] {
+  return findings.filter((f) => f.precisionTier === "review" && f.category === INDICATOR_CATEGORY);
 }
 
 function countBySeverity(findings: Finding[]): Record<Severity, number> {
@@ -81,11 +121,29 @@ function categorize(findings: Finding[]): { category: string; count: number }[] 
     .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category));
 }
 
+// Grades the HYGIENE classes only — the caller passes selectGradedFindings' output. Passing an
+// ungraded class here would silently re-create the #213 inversion.
 export function computeGrade(findings: Finding[]): { grade: Grade; score: number } {
   const penalty = findings.reduce((sum, f) => sum + SEVERITY_PENALTY[f.severity], 0);
   const score = Math.max(0, 100 - penalty);
   const grade: Grade = score >= 90 ? "A" : score >= 80 ? "B" : score >= 70 ? "C" : score >= 60 ? "D" : "F";
   return { grade, score };
+}
+
+// The grade never travels without its scope (#227) — "B" alone reads as a security verdict, which
+// is exactly the claim this tier cannot make.
+const RISK_DISCLOSURE =
+  "Tenant isolation and authorization were NOT assessed from source — those need the deep scan " +
+  "(LLM semantic review + live RLS/auth pen test). This grade covers mechanically-verifiable " +
+  "hygiene only; it is not a statement that the app is secure.";
+
+const INDICATOR_DISCLOSURE =
+  " Potential tenant-isolation issues were spotted in your source and are listed below as " +
+  "indicators — unconfirmed, and confirmed or cleared only in the deep scan.";
+
+function gradeScopeLine(grade: Grade, indicatorCount: number): string {
+  const base = `${grade} — hygiene only; tenant isolation and authz not assessed.`;
+  return indicatorCount > 0 ? `${base} ${indicatorCount} potential issue${indicatorCount === 1 ? "" : "s"} flagged for the deep scan — see indicators.` : base;
 }
 
 const severityRank = (s: Severity): number => SEVERITIES.indexOf(s);
@@ -118,17 +176,26 @@ function toDiagnosis(f: Finding, includeFix: boolean): DiagnosisFinding {
 export function buildQuickScanReport(findings: Finding[], opts: { unlocked?: boolean } = {}): QuickScanReport {
   const unlocked = opts.unlocked ?? false;
   const free = selectFreeFindings(findings);
-  const { grade, score } = computeGrade(free);
-  const sample = pickSample(free);
+  const graded = free.filter((f) => !isNonGrading(f));
+  const informational = free.filter(isNonGrading);
+  const indicators = selectIndicators(findings);
+  const { grade, score } = computeGrade(graded);
+  const sample = pickSample(graded);
   return {
     grade,
     score,
-    total: free.length,
-    countsBySeverity: countBySeverity(free),
-    categories: categorize(free),
-    findings: free.map((f) => toDiagnosis(f, unlocked)),
+    gradeScope: gradeScopeLine(grade, indicators.length),
+    riskDisclosure: indicators.length > 0 ? RISK_DISCLOSURE + INDICATOR_DISCLOSURE : RISK_DISCLOSURE,
+    total: graded.length,
+    countsBySeverity: countBySeverity(graded),
+    categories: categorize(graded),
+    findings: graded.map((f) => toDiagnosis(f, unlocked)),
+    informational: informational.map((f) => toDiagnosis(f, unlocked)),
+    indicators: indicators.map((f) => toDiagnosis(f, unlocked)),
     sample: sample ? toDiagnosis(sample, true) : null,
-    reviewTierExcluded: findings.length - free.length,
+    // Heuristic signals kept out of the grade. Indicators are surfaced rather than merely
+    // counted, so they aren't part of this "excluded" tally.
+    reviewTierExcluded: findings.length - free.length - indicators.length,
     locked: !unlocked,
     gated: unlocked ? [] : GATED_CAPABILITIES,
   };
