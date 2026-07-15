@@ -3,9 +3,10 @@
 // mechanical lints can't: each deterministically CLEARS the provably-safe subjects and packages
 // the rest here as a `review`-tier Finding for downstream adjudication (the vuln-scan LLM pass /
 // human triage). `question` states exactly what the reviewer must decide; okWhen/notOkWhen are the
-// adjudication criteria. Mirrors the documented review-tier static-miss class in
+// adjudication criteria. The corpus entries for this class live in
 // src/scan/calibration/b16-storage-secdef.entries.ts (P-STORAGE-AUTH-NOT-OWNER, P-SECDEF-PRIV-
-// WRITE-NOAUTH) — those are the source-migration equivalents of what these live-DB passes catch.
+// WRITE-NOAUTH). Both are now also reached statically — supabase-static.ts feeds these same
+// reviewers from parsed migration SQL (#220/#256, #264), so each rule set has two feeds.
 
 import type { Finding, Severity } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";

@@ -16,6 +16,7 @@ import { scanSecrets } from "./secrets.js";
 import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
 import {
   checkEdgeFunctionVerifyJwt,
+  checkMigrationDefinerAuthz,
   checkMigrationPolicySemantics,
   checkMigrationRlsStatic,
   type TenancyOverride,
@@ -91,6 +92,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     findings.push(...checkPublicDirSensitive(scanDir));
     findings.push(...checkMigrationRlsStatic(scanDir));
     findings.push(...checkMigrationPolicySemantics(scanDir, tenancyOverride));
+    findings.push(...checkMigrationDefinerAuthz(scanDir));
     findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
 
     // Supply chain.

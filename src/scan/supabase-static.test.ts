@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   checkEdgeFunctionVerifyJwt,
+  checkMigrationDefinerAuthz,
   checkMigrationPolicySemantics,
   checkMigrationRlsStatic,
   type TenancyOverride,
@@ -322,5 +323,105 @@ describe("checkMigrationPolicySemantics — tenancy-model disclosure (#258)", ()
       expect(model(dir)!.fix).toContain("--tenant-key");
       expect(model(dir)!.fix).toContain("quick-scan");
     });
+  });
+});
+
+// #264 — the static feed for definer-review.ts, whose own unit tests already cover the reviewer's
+// judgment. What's tested here is what only this layer can get wrong: reaching the function bodies
+// in committed SQL, and staying silent on the shapes that are not client-reachable escalations.
+describe("checkMigrationDefinerAuthz", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function writeMigrations(files: Record<string, string>): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-definer-"));
+    const dir = join(root, "supabase", "migrations");
+    mkdirSync(dir, { recursive: true });
+    for (const [name, sql] of Object.entries(files)) writeFileSync(join(dir, name), sql);
+    return root;
+  }
+
+  const promoteToAdmin = `
+create or replace function public.promote_to_admin(target_user_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  update public.profiles set role = 'admin' where id = target_user_id;
+end;
+$$;
+grant execute on function public.promote_to_admin(uuid) to authenticated;`;
+
+  it("flags a SECURITY DEFINER privileged write with no caller check (P-SECDEF-PRIV-WRITE-NOAUTH)", () => {
+    const dir = writeMigrations({ "0001_secdef.sql": promoteToAdmin });
+    const findings = checkMigrationDefinerAuthz(dir);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.id).toBe("SB-DEFINER-AUTHZ-public.promote_to_admin(target_user_id)");
+    // Never free-count: the body-read can't see a wrapper's own gate, so this is triage-tier.
+    expect(findings[0]!.precisionTier).toBe("review");
+    expect(findings[0]!.location).toContain("0001_secdef.sql:2 (public.promote_to_admin(target_user_id))");
+  });
+
+  // --- Near-miss negatives: the FP shapes this rule must stay silent on ---
+
+  it("clears the same write when the body checks the CALLER's own role first", () => {
+    const dir = writeMigrations({
+      "0001_secdef.sql": `
+create or replace function public.promote_to_admin_checked(target_user_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not exists (select 1 from public.profiles where id = auth.uid() and role = 'admin') then
+    raise exception 'not authorized';
+  end if;
+  update public.profiles set role = 'admin' where id = target_user_id;
+end;
+$$;`,
+    });
+    expect(checkMigrationDefinerAuthz(dir)).toEqual([]);
+  });
+
+  it("clears a SECURITY DEFINER function that only READS — no privileged write to escalate with", () => {
+    const dir = writeMigrations({
+      "0001_secdef.sql": `
+create or replace function public.get_invoice_total(invoice uuid)
+returns numeric language sql security definer set search_path = public as $$
+  select sum(amount) from public.invoice_lines where invoice_id = invoice;
+$$;`,
+    });
+    expect(checkMigrationDefinerAuthz(dir)).toEqual([]);
+  });
+
+  it("clears an unchecked write whose EXECUTE is revoked from the client roles", () => {
+    const dir = writeMigrations({
+      "0001_secdef.sql": `
+create or replace function public.promote_admin(target uuid)
+returns void language sql security definer set search_path = public as $$
+  update public.profiles set role = 'admin' where id = target;
+$$;
+revoke execute on function public.promote_admin(uuid) from public;`,
+    });
+    expect(checkMigrationDefinerAuthz(dir)).toEqual([]);
+  });
+
+  it("still flags when EXECUTE is revoked from some OTHER role — the client can reach it", () => {
+    const dir = writeMigrations({
+      "0001_secdef.sql": `${promoteToAdmin}
+revoke execute on function public.promote_to_admin(uuid) from reporting_readonly;`,
+    });
+    expect(checkMigrationDefinerAuthz(dir)).toHaveLength(1);
+  });
+
+  it("ignores a function that is not SECURITY DEFINER (it runs as the caller already)", () => {
+    const dir = writeMigrations({
+      "0001_secdef.sql": `
+create or replace function public.touch_profile(target uuid)
+returns void language sql as $$
+  update public.profiles set updated_at = now() where id = target;
+$$;`,
+    });
+    expect(checkMigrationDefinerAuthz(dir)).toEqual([]);
+  });
+
+  it("returns nothing when the target has no migrations at all", () => {
+    root = mkdtempSync(join(tmpdir(), "harvey-definer-"));
+    expect(checkMigrationDefinerAuthz(root)).toEqual([]);
   });
 });

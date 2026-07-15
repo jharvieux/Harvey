@@ -19,8 +19,9 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { definerReviewFindings } from "../definer-review.js";
 import type { Finding } from "../findings.js";
-import { parsePolicies } from "../migration-sql-parse.js";
+import { parseDefinerFunctions, parsePolicies } from "../migration-sql-parse.js";
 import { policyReviewFindings, type LivePolicy, type TenancyModel } from "../rls-policy-review.js";
 import { reviewFinding } from "../review-tier.js";
 import { mechanicalFinding } from "./common.js";
@@ -263,6 +264,57 @@ export function checkMigrationPolicySemantics(dir: string, tenancyOverride?: Ten
     }
   }
   if (models.size > 0) findings.push(tenancyModelFinding(models, unrecognised));
+  return findings;
+}
+
+// Postgres grants EXECUTE on a new function to PUBLIC unless it is revoked, and Supabase's
+// anon/authenticated roles inherit that — so a migration that never mentions grants still exposes
+// the function to the client. Same assumption dry-run.ts makes from the same static feed; it is
+// stated in the evidence below rather than presented as a verified grant, because an app's own
+// migrations are not where Supabase's platform grants necessarily live.
+const ASSUMED_DEFAULT_FUNCTION_EXPOSURE = ["anon", "authenticated"];
+
+// A `revoke execute on function <name> ... from <role>` for THIS function — the one static signal
+// that contradicts the PUBLIC-grant default above. Only the roles a client can actually hold
+// matter; a revoke from some other role leaves the function client-reachable.
+function revokedFromClient(sql: string, name: string): boolean {
+  const revoke = new RegExp(`revoke\\s+execute\\s+on\\s+function\\s+[\\w.]*\\b${name}\\s*\\([^)]*\\)\\s*from\\s+([^;]+);`, "i").exec(sql);
+  return revoke !== null && /\b(anon|authenticated|public)\b/i.test(revoke[1]!);
+}
+
+// SECURITY DEFINER caller-authorization review over committed migration SQL (#264) — the source-
+// tier feed for the class definer-review.ts already adjudicates live (detect-deeper.ts's
+// pg_get_functiondef pull). Same arrangement as checkMigrationPolicySemantics above: parse-
+// DefinerFunctions extracts the same {name, argNames, body} struct the live query produces, and
+// the EXISTING reviewer judges it — one rule set, two feeds, no second copy of the logic.
+//
+// P-SECDEF-PRIV-WRITE-NOAUTH (b16-storage-secdef.entries.ts) was filed as an LLM-tier miss on the
+// grounds that function-body semantics need semantic reasoning. That was true of the CLASSIFIER's
+// job (is this function's exposure intended?) but not of this one: needsAuthzReview asks only
+// whether a privileged write runs with no auth.uid()/auth.jwt() anywhere in the body — a textual
+// fact. It clears promote_to_admin_checked (which does check the caller) and flags
+// promote_to_admin (which does not), which is exactly the pair the corpus plants.
+export function checkMigrationDefinerAuthz(dir: string): Finding[] {
+  const migrations = readMigrations(dir);
+  const findings: Finding[] = [];
+
+  for (const { file, sql } of migrations) {
+    const parsed = parseDefinerFunctions(sql).filter((fn) => !revokedFromClient(sql, fn.name));
+    const byName = new Map(parsed.map((fn) => [`${fn.schema}.${fn.name}`, fn]));
+    const reviewable = parsed.map((fn) => ({ ...fn, exposedTo: ASSUMED_DEFAULT_FUNCTION_EXPOSURE }));
+
+    for (const f of definerReviewFindings(reviewable)) {
+      // Re-key off the function rather than definerReviewFindings' per-call index, and re-locate
+      // to file:line: at source tier the migration file is the actionable address. The parameter
+      // list stays in the address because Postgres permits overloads — `promote(uuid)` and
+      // `promote(uuid, text)` are different functions, and one may be gated where the other isn't.
+      const fn = byName.get(f.location)!;
+      const signature = `${f.location}(${fn.argNames.join(", ")})`;
+      const at = sql.toLowerCase().indexOf(`function ${f.location.toLowerCase()}`);
+      const line = at >= 0 ? sql.slice(0, at).split("\n").length : 1;
+      findings.push({ ...f, id: `SB-DEFINER-AUTHZ-${signature}`, location: `${file}:${line} (${signature})` });
+    }
+  }
   return findings;
 }
 
