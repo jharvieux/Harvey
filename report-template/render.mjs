@@ -5,6 +5,12 @@
 //
 // Emits report.html, report.pdf, and page1.png (QA screenshot) in outDir.
 // The findings DATA drives everything — swap the JSON per engagement, format stays.
+//
+// Schema note (#259): this consumes the PAID full-engagement findings.<client>.json
+// (meta + findings[] with confidence/value/ease/safety) — a different, independent
+// schema from QuickScanReport (src/quick-scan.ts), the FREE tier's grade/indicators/
+// informational shape. quick-scan has no export into this renderer today; don't
+// conflate the two when either schema changes.
 
 import fs from "node:fs";
 import path from "node:path";
