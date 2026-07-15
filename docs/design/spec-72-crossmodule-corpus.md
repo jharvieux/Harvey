@@ -10,8 +10,20 @@
 > 2. **Judgment-heavy modules:** M3 hotspots may appear in the free report ONLY as a limited,
 >    deterministic **descriptive map** (churn×complexity, top-K) — factual (client's own data),
 >    false-positive-safe, not asserted as findings; deeper coupling/knowledge-risk stays paid.
->    **M6 simplification is paid-only** (LLM opinion; no false-positive-safe automated free
->    version). Principle: factual/descriptive & FP-safe can be free; asserted judgments cannot.
+>    **M6 simplification splits: free lists hand-rolled-looking code as non-grading indicators
+>    ("this looks hand-rolled; may be worth investigating"); paid triages each and names the
+>    replacement** (revised 2026-07-15, was paid-only — see below). Principle: factual/descriptive
+>    & FP-safe can be free; asserted judgments cannot.
+>
+>    _Revision (2026-07-15, operator):_ "Free tier can list items that look hand rolled and say
+>    they may be worth investigating. Paid tier triages and says what each one should be replaced
+>    with." This **applies** the principle rather than excepting it: that a given shape is present
+>    is a fact the reader can check; *which replacement it warrants* is the asserted judgment, and
+>    that stays paid. M6 therefore takes the same free/paid form as the M1 source-tier RLS/authz
+>    indicators (#227 decision item 3): indicators free and non-grading, verdicts paid. The
+>    hedged wording is load-bearing — copy that drifts to "should be replaced" re-asserts the
+>    judgment and voids the split. Free M6 indicators must NOT move the grade (#213/#227).
+>    Tracked: #267.
 
 # Spec — Issue #72: extend the calibration corpus + #61 validation gate beyond M1 (security) to the rest of the deliverable
 

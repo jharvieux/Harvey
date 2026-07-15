@@ -19,7 +19,7 @@
 | **M3 Hotspots** | Churn × complexity, coupling, knowledge-risk, AI-provenance (needs git history). |
 | **M4 Duplication** | jscpd. |
 | **M5 Slop / dead code** | knip + slop detection. |
-| **M6 Simplification / reuse** | quality pass. |
+| **M6 Simplification / reuse** | **Indicators only, non-grading:** mechanically-recognisable hand-rolled shapes listed as "this looks hand-rolled; may be worth investigating" — never naming a replacement (that judgment is paid). Same form as the M1 source-tier RLS/authz indicators. Operator ruling 2026-07-15; detectors tracked in #267 (not yet built — the free M6 tier does not ship until they are). |
 | **M7 Performance** | Code-level: render patterns, hook dependencies, oversized assets. Bundle-size pass **if** a build artifact is provided. |
 | **M9 App-router / cache correctness** | Static. |
 | **M10 PII/PHI/PCI** | Detection: classify sensitive columns from the schema in migrations — "here's every sensitive column and where it lives." |
@@ -28,6 +28,7 @@
 
 - **Connected (read-only DB):** live confirmation vs production — Supabase security/performance advisors, migration-vs-prod drift, default privileges, pg_cron, realtime exposure, exposed schemas, the M7 DB advisor, the M10 protection-adequacy judgment. *"Is prod actually in this state."*
 - **Dynamic (pen-test, M2):** proving a cross-tenant read returns another tenant's rows, no-rate-limit, service-seam bypass. Needs a running/staging instance. *"We proved it's exploitable."*
+- **M6 verdicts:** the free tier says a shape *looks* hand-rolled; the paid pass triages each candidate and names the concrete replacement (and clears the ones that were deliberate — a `// WHY:` comment recording a considered tradeoff is an answer, not a defect). *"Here's what to replace it with, and what to leave alone."*
 
 ## Report framing (protects the brand, creates the upsell)
 
