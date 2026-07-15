@@ -30,9 +30,14 @@ export interface TenancyModel {
 const CALLER_REF = /auth\.(uid|jwt|role)\s*\(\)|current_setting\s*\(/i;
 const WRITE_CMDS = new Set(["INSERT", "UPDATE", "ALL"]);
 
-// A WITH CHECK that admits every row — `with check (true)`, allowing parens/whitespace. Postgres
-// normalises the live clause to "true", and migration text is nearly always as literal.
-const CHECK_TRUE = /^\s*\(*\s*true\s*\)*\s*$/i;
+// A clause that admits every row — `(true)`, allowing parens/whitespace. Postgres normalises the
+// live clause to "true", and migration text is nearly always as literal. Used for both WITH CHECK
+// (writes accept anything) and USING (every existing row is in scope).
+const CLAUSE_TRUE = /^\s*\(*\s*true\s*\)*\s*$/i;
+
+// USING gates which EXISTING rows the caller reaches. INSERT is absent because it has no USING at
+// all — Postgres rejects one ("only WITH CHECK expression allowed for INSERT").
+const USING_GATED_CMDS = new Set(["SELECT", "UPDATE", "DELETE", "ALL"]);
 
 function refsWord(clause: string | null, word: string): boolean {
   return clause != null && new RegExp(`\\b${word}\\b`, "i").test(clause);
@@ -64,10 +69,47 @@ interface PolicyReview {
 // Deliberately last in each mode: a policy whose USING *is* scoped but whose check is `true` is
 // already reported by the weaker-than-USING rules, whose wording names that specific defect.
 function checkTrueReview(policy: LivePolicy, name: string, isWrite: boolean): PolicyReview | null {
-  if (!isWrite || policy.withCheck === null || !CHECK_TRUE.test(policy.withCheck)) return null;
+  if (!isWrite || policy.withCheck === null || !CLAUSE_TRUE.test(policy.withCheck)) return null;
   return {
     policy: name,
     reason: `WITH CHECK is "true" — the policy accepts any row the caller submits, so writes are not constrained to the caller's own tenant or rows.`,
+    cmd: policy.cmd,
+    qual: policy.qual,
+    withCheck: policy.withCheck,
+  };
+}
+
+// `USING (true)` puts every existing row in scope for a command that gates row visibility, so a
+// SELECT policy with it publishes the whole table to every role the policy applies to — anon
+// included. It is the RLS-USING-TRUE calibration plant and the read-side mirror of checkTrueReview.
+//
+// Scoped DELIBERATELY to per-tenant tables, and that scoping is the rule, not a caveat. `USING
+// (true)` is mechanically unambiguous about its EFFECT (all rows) but says nothing about INTENT: a
+// published catalog or a lookup table is world-readable on purpose, and no amount of reading the
+// clause distinguishes it from a leak. The one static fact that does is the table's own schema — a
+// table declaring a tenant key asserts its rows belong to a tenant, so "every tenant reads every
+// row" contradicts the table's own declaration. A per-user/undeclared table (the shape a reference
+// table takes) has no such contradiction to point at, so we do not guess; that call needs the
+// semantic tier. This costs recall on a genuinely leaky reference-shaped table — the deliberate
+// trade, since a rule that flags every `USING (true)` trains users to ignore findings.
+//
+// Review tier like every rule here: the table may be intentionally public despite its tenant
+// column (a shared catalog that merely records an owner), which only a human can settle.
+//
+// Ordered last with checkTrueReview and for the same reason: a policy whose USING is `true` AND
+// whose WITH CHECK is weaker is better described by the rules above, which name that defect.
+function usingTrueReview(policy: LivePolicy, name: string, model: TenancyModel): PolicyReview | null {
+  if ((model.mode ?? "per-tenant") === "per-user") return null;
+  if (!USING_GATED_CMDS.has(policy.cmd.toUpperCase())) return null;
+  if (policy.qual === null || !CLAUSE_TRUE.test(policy.qual)) return null;
+  const reads = policy.cmd.toUpperCase() === "SELECT" || policy.cmd.toUpperCase() === "ALL";
+  return {
+    policy: name,
+    reason:
+      `USING is "true" — the policy puts every row of a table that declares the tenant key "${model.tenantKey}" in scope, ` +
+      (reads
+        ? `so every caller the policy applies to (including anon, unless a role restriction narrows it) reads every tenant's rows.`
+        : `so every caller the policy applies to can ${policy.cmd.toUpperCase()} any tenant's rows, not just their own.`),
     cmd: policy.cmd,
     qual: policy.qual,
     withCheck: policy.withCheck,
@@ -123,7 +165,7 @@ export function reviewPolicy(policy: LivePolicy, model: TenancyModel): PolicyRev
     };
   }
 
-  return checkTrueReview(policy, name, isWrite);
+  return checkTrueReview(policy, name, isWrite) ?? usingTrueReview(policy, name, model);
 }
 
 export function policyReviewFindings(policies: LivePolicy[], model: TenancyModel): Finding[] {
