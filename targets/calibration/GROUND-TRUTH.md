@@ -74,7 +74,7 @@ Every secret value in these fixtures is FAKE (valid-shape only); this app is nev
 | P-NEXTPUBLIC-SECRET | `.env.local:12` | gitleaks `stripe-access-token` + `supabase-next-public-secret-leak` | review |
 | P-HARDCODED-KEY | `lib/ai.js:4` | gitleaks `anthropic-api-key` (fake, valid-shape; TruffleHog can't verify a dead key → not high) | review |
 | P-NEXT-CVE-29927 | `package.json` (`next@^14.2.5`) | `checkNextVersionCVEs` (< 14.2.25, GHSA-f82v-jwr5-mffw) | high |
-| P-NEXT-CVE-RSC | `package.json` (`next@^14.2.5`) | `checkNextVersionCVEs` (< 14.2.35, React2Shell RSC RCE) | high |
+| ~~P-NEXT-CVE-RSC~~ | ~~`package.json` (`next@^14.2.5`)~~ | **RETIRED (#212) — it was a false positive.** The RSC-RCE advisory (GHSA-9qr9-h5gf-34mp) opens at `14.3.0-canary.77`, so no released 14.x is affected and the `< 14.2.35` boundary this row asserted was fabricated. Re-registered inverted as B10's `N-NEXT-RSC-14X-UNAFFECTED`. | — |
 | P-DEP-CVE | `package.json` (`lodash@4.17.11`) | OSV-Scanner over the committed `package-lock.json` (issue #65) — live run 2026-07-08 matches 7 GHSA advisories against `lodash@4.17.11` (prototype pollution among them) | review (caught) |
 | P-XSS-DSIH | `pages/post.js:8` | Semgrep `harvey-dangerously-set-inner-html` (taint: `router.query` → `__html`) | high |
 | P-CORS-WILDCARD | `pages/api/data.js:5` | Semgrep `harvey-permissive-cors` | high |
@@ -253,7 +253,8 @@ hygiene"). Answer key: `src/scan/calibration/b2-deps.entries.ts`. Unlike the Sem
 **most of this batch's detection code already existed** — it was the *corpus* that lagged: the live
 mechanical scan already produced these findings, but no gate row verified them. The base-batch dep
 rows already ship (`[exists]`, `base.entries.ts`) and are not duplicated: `P-NEXT-CVE-29927`,
-`P-NEXT-CVE-RSC`, `P-DEP-CVE`, `P-SLOPSQUAT`, `P-POSTINSTALL`, `N-DEV-DEP`.
+`P-DEP-CVE`, `P-SLOPSQUAT`, `P-POSTINSTALL`, `N-DEV-DEP` (plus `P-NEXT-CVE-RSC`, retired by #212 —
+see §Base).
 
 Tiering per the locked preamble: only the two deterministic-syntactic checks are `high` (free
 count) — the exact CVE version-range match (WS-SSRF) and the unpinned-range check. The OSV-backed
@@ -745,13 +746,13 @@ declared as DATA ONLY and never installed.
 
 | id | location | detection | tier |
 |---|---|---|---|
-| P-NEXT-CVE-NULLORIGIN | `fixtures/b10-vuln-deps/package.json` (`next@16.0.5`) | `checkNextVersionCVEs` (new 5th row) — Server Actions null-origin CSRF (>=16.0.1 <16.1.7). 16.0.5 also (correctly) trips the RSC-RCE + WS-SSRF ranges; isolated by the `null-origin` keyword | high |
+| P-NEXT-CVE-NULLORIGIN | `fixtures/b10-vuln-deps/package.json` (`next@16.0.5`) | `checkNextVersionCVEs` — CVE-2026-27978 Server Actions null-origin CSRF (>=16.0.1 <16.1.7, GHSA-mq59-m269-xvcx). 16.0.5 also (correctly) trips the RSC-RCE + WS-SSRF ranges; isolated by the `27978` keyword. Carried a descriptive id until #212's OSV check found the real CVE | high |
 | P-JSONWEBTOKEN-CVE | `fixtures/b10-vuln-deps/package.json` (`jsonwebtoken@8.5.1`) | `checkKnownDependencyCVEs` — CVE-2022-23540 (<9.0.0, `jwt.verify` alg-confusion, GHSA-qwph-4952-7xr6) | high |
-| P-NEXTAUTH-CSRF-CVE | `fixtures/b10-nextauth-csrf/package.json` (`next-auth@4.19.0`) | `checkKnownDependencyCVEs` — CVE-2023-27490 (4.x line <4.20.1, OAuth CSRF, GHSA-7fmc-9xx9-wvgm). Co-fires the email class; matched by CVE id | high |
+| P-NEXTAUTH-CSRF-CVE | `fixtures/b10-nextauth-csrf/package.json` (`next-auth@4.19.0`) | `checkKnownDependencyCVEs` — CVE-2023-27490 (4.x line <4.20.1, OAuth CSRF, GHSA-7r7x-4c4q-c4qf). Co-fires the email class; matched by CVE id | high |
 | P-NEXTAUTH-EMAIL-CVE | `fixtures/b10-vuln-deps/package.json` (`next-auth@4.24.5`) | `checkKnownDependencyCVEs` — GHSA-5jpx-9hw9-2fx4 (4.x line <4.24.12, email-signin misdelivery). 4.24.5 is above the CSRF fix, so it fires ONLY this class | high |
 | P-FOLLOW-REDIRECTS-CVE | `fixtures/b10-vuln-deps/package.json` (`follow-redirects@1.15.4`) | `checkKnownDependencyCVEs` — CVE-2024-28849 (<1.15.6, Proxy-Authorization not cleared on cross-origin redirect) | high |
 | P-AXIOS-SSRF-CVE | `fixtures/b10-vuln-deps/package.json` (`axios@1.7.2`) | `checkKnownDependencyCVEs` — CVE-2025-27152 (1.x line <1.8.2, absolute-URL baseURL SSRF, GHSA-jr5f-v2jv-69x6) | high |
-| P-UNDICI-CVE-CLUSTER | `fixtures/b10-vuln-deps/package.json` (`undici@5.7.0`) | `checkKnownDependencyCVEs` — TWO CVEs from one pin: CVE-2022-35949 (pathname SSRF, <5.8.1) + CVE-2024-24758 (Proxy-Auth cross-origin leak, <5.28.3) | high |
+| P-UNDICI-CVE-CLUSTER | `fixtures/b10-vuln-deps/package.json` (`undici@5.7.0`) | `checkKnownDependencyCVEs` — TWO CVEs from one pin: CVE-2022-35949 (pathname SSRF, <5.8.2) + CVE-2024-24758 (Proxy-Auth cross-origin leak, <5.28.3) | high |
 | P-COOKIE-PKG-CVE | `fixtures/b10-vuln-deps/package.json` (`cookie@0.5.0`) | `checkKnownDependencyCVEs` — CVE-2024-47764 (<0.7.0, out-of-bounds chars → field injection) | high |
 | P-WS-REDOS-CVE | `fixtures/b10-vuln-deps/package.json` (`ws@7.4.5`) | `checkKnownDependencyCVEs` — CVE-2021-32640 (7.x line <7.4.6, `Sec-WebSocket-Protocol` ReDoS, GHSA-6fc8-4gx4-v693). Matched by CVE id (not `ws`, a substring of the co-firing next WS-SSRF finding) | high |
 | P-SHARP-LIBWEBP-CVE | `fixtures/b10-vuln-deps/package.json` (`sharp@0.31.3`) | `checkKnownDependencyCVEs` — CVE-2023-4863 (<0.32.6, bundled libwebp <1.3.2 heap overflow, GHSA-54xq-cgqr-rpm3) | high |
@@ -760,12 +761,13 @@ declared as DATA ONLY and never installed.
 
 | id | location | why benign / suppression |
 |---|---|---|
-| N-NEXT-NULLORIGIN-PATCHED | `fixtures/b10-patched-deps/package.json` (`next@16.2.5`) | Above the null-origin fix (16.1.7) AND the overlapping WS-SSRF range (<16.2.5), so `checkNextVersionCVEs` draws nothing — the truly-clean patched next-16. A bare 16.1.7 would still carry a WS-SSRF high, so 16.2.5 is the correct clean negative for the whole next-16 CVE set. |
+| N-NEXT-NULLORIGIN-PATCHED | `fixtures/b10-patched-deps/package.json` (`next@16.2.5`) | Above the CVE-2026-27978 null-origin fix (16.1.7) AND the overlapping WS-SSRF range (<16.2.5), so `checkNextVersionCVEs` draws nothing — the truly-clean patched next-16. A bare 16.1.7 would still carry a WS-SSRF high, so 16.2.5 is the correct clean negative for the whole next-16 CVE set. |
+| N-NEXT-RSC-14X-UNAFFECTED | `fixtures/b10-next14-rsc/package.json` (`next@14.2.35`) | **The #212 regression guard.** GHSA-9qr9-h5gf-34mp's ranges open at `14.3.0-canary.77`, so no RELEASED 14.x is affected by the RSC RCE. This shipped inverted — as base-batch positive `P-NEXT-CVE-RSC` at `high`, against a fabricated `14.2.35` fix — so every `next@14.2.x` target took a Critical FP. Needs its own fixture root: the root target's `next@^14.2.5` shares the bare location `next` with the B10 manifests' genuine RSC findings, which a substring match can't separate. 14.2.35 still (correctly) draws the WS-SSRF high; the `55182` keyword isolates the retired class. |
 | N-JSONWEBTOKEN-PATCHED | `…/package.json` (`jsonwebtoken@9.0.2`) | At/above the 9.0.0 fix — outside the CVE-2022-23540 range. |
 | N-NEXTAUTH-PATCHED | `…/package.json` (`next-auth@4.24.12`) | At/above both fixes (4.20.1 OAuth-CSRF, 4.24.12 email) — clears both classes with one patched pin. |
 | N-FOLLOW-REDIRECTS-PATCHED | `…/package.json` (`follow-redirects@1.15.6`) | At the fix — outside CVE-2024-28849. |
 | N-AXIOS-PATCHED | `…/package.json` (`axios@1.8.2`) | At the fix — outside CVE-2025-27152. |
-| N-UNDICI-PATCHED | `…/package.json` (`undici@5.28.3`) | At/above both cluster fixes (5.8.1 SSRF, 5.28.3 header-leak) — clears the whole cluster. |
+| N-UNDICI-PATCHED | `…/package.json` (`undici@5.28.3`) | At/above both cluster fixes (5.8.2 SSRF, 5.28.3 header-leak) — clears the whole cluster. |
 | N-COOKIE-PATCHED | `…/package.json` (`cookie@0.7.0`) | At the fix — outside CVE-2024-47764. |
 | N-WS-PATCHED | `…/package.json` (`ws@7.4.6`) | At the fix — outside CVE-2021-32640. |
 | N-SHARP-PATCHED | `…/package.json` (`sharp@0.32.6`) | At the fix (bundles libwebp >= 1.3.2) — outside CVE-2023-4863. |

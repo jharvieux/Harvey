@@ -1,0 +1,9 @@
+{
+  "name": "b10-next14-rsc-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "INERT calibration fixture (#212). A standalone project root pinning next@14.2.35 — a RELEASED 14.2 line, which the CVE-2025-55182 RSC-RCE advisory (GHSA-9qr9-h5gf-34mp, ranges opening at 14.3.0-canary.77) does NOT affect. Guards the regression where a fabricated '14.2 fixed in 14.2.35' row made every next@14.2.x a Critical false positive. 14.2.35 sits above the 14.x middleware-bypass fix (14.2.25) and below the WS-SSRF fix (15.5.16), so the ONLY next finding it draws is CVE-2026-44578 — leaving the 55182 keyword unambiguously unmatched. Declared as DATA ONLY — NEVER installed. See GROUND-TRUTH.md §B10.",
+  "dependencies": {
+    "next": "14.2.35"
+  }
+}

@@ -260,8 +260,12 @@ Each new positive rule needs a lookalike that models the FP a competing tool thr
 | N-STORAGE-PRIVATE | Private Storage bucket | `public=false` bucket | P-STORAGE-PUBLIC (connected) | [Supabase storage](https://supabase.com/docs/guides/storage/security/access-control) |
 | N-DEFINER-SCOPED | SECURITY DEFINER fn with `auth.uid()` check | caller-scoped definer fn | P-SECDEF-VIEW (connected) | `docs/scan-extras.txt` |
 | N-SERVER-ONLY-PRESENT | Secret module with `import 'server-only'` | `lib/secret.js` guarded | P-MISSING-SERVER-ONLY | [Next server-only](https://nextjs.org/docs/app/building-your-application/rendering/composition-patterns) |
+| N-SB-DEMO-KEY-SVC | Supabase local-dev demo service_role key | `supabase/seed.sql` — the fixed public demo key (decoded `iss:"supabase-demo"`) | gitleaks `supabase-service-role-jwt` + demo-key-marker correlation | [mechanical-toolchain #210](https://supabase.com/docs/guides/getting-started/api-keys) |
+| N-SB-DEMO-KEY-ANON | Supabase local-dev demo anon key | `supabase/seed.sql` — demo key's anon-role sibling | gitleaks (role:anon, no high-precision rule) | [mechanical-toolchain #210](https://supabase.com/docs/guides/getting-started/api-keys) |
+| N-SB-DEMO-KEY-BEARER | Supabase demo key used as Bearer literal | `scripts/checks.mjs` — demo service_role as literal `Authorization: Bearer` token in smoke test | `harvey-http-authorization-bearer` + demo-key-marker | [known-public-creds #225](https://supabase.com/docs/guides/getting-started/api-keys) |
+| N-SAML-TEST-PRIVATE-KEY | Test/example SAML private key in CI workflow | `.github/workflows/saml-integration-test.yml` — base64 PEM key in test/example context (ENTITY_ID, *.example.com) | gitleaks `private-key` + test-idp-marker correlation (down-ranked, not cleared) | [mechanical-toolchain #211](https://github.com/gitleaks/gitleaks) |
 
-**Negative total:** ~46 (15 existing + ~31 new). Every new `high`-tier positive has a paired negative; `review`-tier positives get a negative where a common FP exists.
+**Negative total:** ~50 (15 existing + ~35 new). Every new `high`-tier positive has a paired negative; `review`-tier positives get a negative where a common FP exists.
 
 ---
 

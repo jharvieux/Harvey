@@ -14,14 +14,27 @@ describe("checkNextVersionCVEs", () => {
     expect(findings.map((f) => f.id)).not.toContain("DEP-CVE-2025-29927");
   });
 
-  it("flags the React2Shell RSC RCE for an unpatched minor line (15.2.0 < 15.2.9)", () => {
+  it("flags the RSC RCE for an unpatched minor line (15.2.0 < 15.2.6)", () => {
     const findings = checkNextVersionCVEs("15.2.0");
     expect(findings.map((f) => f.id)).toContain("DEP-CVE-2025-55182");
   });
 
-  it("does not flag React2Shell for a minor line with no known-fixed entry (e.g. 13.x)", () => {
+  it("does not flag the RSC RCE for a minor line outside the advisory's ranges (e.g. 13.x)", () => {
     const findings = checkNextVersionCVEs("13.5.9");
     expect(findings.map((f) => f.id)).not.toContain("DEP-CVE-2025-55182");
+  });
+
+  // #212: the RSC ranges (GHSA-9qr9-h5gf-34mp) open at 14.3.0-canary.77, so no RELEASED 14.x is
+  // affected. An earlier table wrongly listed a "14.2" line, making every next@14.2.x a Critical
+  // false positive — the exact credibility-fatal shape this corpus is provenance-checked against.
+  it("does not flag the RSC RCE on the stable 14.2 line (unaffected per the advisory)", () => {
+    expect(checkNextVersionCVEs("14.2.5").map((f) => f.id)).not.toContain("DEP-CVE-2025-55182");
+  });
+
+  it("clears the RSC RCE at each line's OSV-stated fixed version", () => {
+    for (const v of ["15.0.5", "15.1.9", "15.2.6", "15.3.6", "15.4.8", "15.5.7", "16.0.7"]) {
+      expect(checkNextVersionCVEs(v).map((f) => f.id), v).not.toContain("DEP-CVE-2025-55182");
+    }
   });
 
   it("flags the WebSocket SSRF for both vulnerable ranges", () => {
@@ -53,17 +66,19 @@ describe("checkNextVersionCVEs", () => {
     expect(finding?.location).toBe("fixtures/legacy-app/package.json (next)");
   });
 
-  it("flags the Server Actions null-origin CSRF for the 16.0.1–16.1.6 range, at high", () => {
+  it("flags CVE-2026-27978 (null-origin CSRF) for the 16.0.1–16.1.6 range, at high", () => {
     for (const v of ["16.0.1", "16.0.5", "16.1.6"]) {
-      const f = checkNextVersionCVEs(v).find((x) => x.id === "DEP-NEXT-NULLORIGIN-CSRF");
+      const f = checkNextVersionCVEs(v).find((x) => x.id === "DEP-CVE-2026-27978");
       expect(f, v).toBeDefined();
       expect(f?.precisionTier).toBe("high");
+      // Medium, not High: the advisory rates it MODERATE (CVSS v4, user-interaction required).
+      expect(f?.severity, v).toBe("Medium");
     }
   });
 
   it("does not flag null-origin once patched (16.1.7) or above the WS-SSRF fix (16.2.5)", () => {
-    expect(checkNextVersionCVEs("16.1.7").map((f) => f.id)).not.toContain("DEP-NEXT-NULLORIGIN-CSRF");
-    expect(checkNextVersionCVEs("16.2.5").map((f) => f.id)).not.toContain("DEP-NEXT-NULLORIGIN-CSRF");
+    expect(checkNextVersionCVEs("16.1.7").map((f) => f.id)).not.toContain("DEP-CVE-2026-27978");
+    expect(checkNextVersionCVEs("16.2.5").map((f) => f.id)).not.toContain("DEP-CVE-2026-27978");
   });
 
   it("16.2.5 is the fully-clean patched next-16 (no null-origin, RSC, or WS-SSRF)", () => {
@@ -126,6 +141,19 @@ describe("checkKnownDependencyCVEs", () => {
     expect(vuln).toContain("DEP-CVE-2022-35949");
     expect(vuln).toContain("DEP-CVE-2024-24758");
     expect(checkKnownDependencyCVEs({ undici: "5.28.3" })).toEqual([]);
+  });
+
+  // #212: OSV puts the CVE-2022-35949 fix at 5.8.2, not 5.8.1 — 5.8.1 is still vulnerable.
+  it("treats undici 5.8.1 as still vulnerable to the pathname SSRF (fixed in 5.8.2)", () => {
+    expect(checkKnownDependencyCVEs({ undici: "5.8.1" }).map((f) => f.id)).toContain("DEP-CVE-2022-35949");
+    expect(checkKnownDependencyCVEs({ undici: "5.8.2" }).map((f) => f.id)).not.toContain("DEP-CVE-2022-35949");
+  });
+
+  // #212: an unverifiable CVE id in a client report is credibility-fatal, so every curated entry
+  // carries the OSV advisory its id and range were checked against, surfaced in the evidence.
+  it("cites the OSV advisory it was verified against in the evidence", () => {
+    const finding = checkKnownDependencyCVEs({ minimist: "1.2.5" })[0];
+    expect(finding?.evidence).toContain("https://osv.dev/vulnerability/GHSA-xvch-5gv4-984h");
   });
 
   it("scopes the ws range to the 7.x line so a patched 6.x isn't mis-flagged for a 7.4.6 fix", () => {
