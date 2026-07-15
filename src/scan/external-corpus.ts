@@ -33,6 +33,7 @@
 
 import type { Finding } from "../findings.js";
 import type { QuickScanReport } from "../quick-scan.js";
+import { classifyMigrationSql } from "../../tools/pii-classify.mjs";
 
 export interface ModuleBaseline {
   // Findings that count as work: everything the detectors emit at a severity other than "Info".
@@ -62,6 +63,11 @@ export interface ExternalTarget {
   // corpus gates the WHOLE audit, not just security.
   securityVerdict: string;
   disclosureIssue?: number;
+  // #279: clone-relative path to the target's SQL migrations, for corpus-drift.ts to feed
+  // classifyMigrationSql. Undefined means "no schema input this classifier can read" — boxyhq's
+  // Prisma migration.sql exists but every identifier is double-quoted ("Account", "userId"),
+  // which parseColumns's unquoted-\w+ regex does not extract (measured: 0 columns parsed).
+  schemaPath?: string;
   // #278: quality-scan's knip pass (dead code) and detect-static's slop pass (style) both emitted
   // `M5 —` findings that used to be merged into one scored module, double-counting M5 (subscription-
   // payments read 18 against a measured 8). They measure different things and drift independently,
@@ -103,15 +109,49 @@ const M8_NEEDS_STRYKER: ModuleNotRun = {
   reason: "mutation-scan needs a `stryker` binary on PATH plus a target-specific stryker.conf.* (CLAUDE.md's M8 prereq); this target has a real test suite but ships no Stryker config, so the scan throws instead of scoring. Recorded not-run rather than 0 — a 0 here would read as 'no surviving mutants', the exact inversion of an unmeasured suite. Was recorded as a test-FILE count (#263 found the number never matched what the scorer counts: scanner findings).",
 };
 
-// tools/pii-classify.mjs now has a static-schema CLI path (`pnpm pii-classify --schema
-// supabase/migrations`, #250), but running it against these targets means cloning each pinned
-// commit — the deferred Layer 2 supervisor pass this file's header describes, same as the
-// detect-static/quality-scan drift scoring for every other module here. Recorded as not-run for
-// drift purposes until that clone-and-run pass lands; the must-not-miss columns are asserted
-// directly against real column names in external-corpus.test.ts in the meantime.
-const M10_NEEDS_SCHEMA_INPUT: ModuleNotRun = {
-  reason: "M10's static-schema CLI path now exists (tools/pii-classify.mjs --schema, #250) but hasn't been re-run against this target's cloned migrations yet — that's the deferred Layer 2 clone-and-score pass. Classifier behavior on this target's real columns is asserted in external-corpus.test.ts instead.",
+// #279: the Layer 2 clone-and-score pass this file's header describes now exists (#263), and
+// tools/pii-classify.mjs has had a static-schema CLI path since #250 — so the blocker the old
+// M10_NEEDS_SCHEMA_INPUT reason named is gone for every target with parseable SQL migrations.
+// boxyhq is the one real exception: its migrations are Prisma-generated with every identifier
+// double-quoted ("Account", "userId"), which parseColumns's unquoted-\w+ column/table regexes
+// don't match at all — verified 2026-07-15 by running parseColumns against boxyhq's cloned
+// prisma/migrations/**/migration.sql: 0 columns parsed. Not a missing schema input (the .sql
+// files exist), a parser limitation on this target's SQL dialect — recorded not-run for that
+// reason, and boxyhq's must-not-miss column (jackson_store.value) stays pinned directly against
+// classifyColumn in external-corpus.test.ts, same as before.
+const M10_PRISMA_UNPARSEABLE: ModuleNotRun = {
+  reason: "boxyhq's migrations are Prisma-generated (prisma/migrations/**/migration.sql, not supabase/migrations) with every table/column identifier double-quoted (\"Account\", \"userId\"). src/migration-sql-parse.ts's parseColumns matches unquoted \\w+ identifiers only, by design (CLAUDE.md: under-extract rather than mis-extract) — verified 2026-07-15 it parses 0 columns from this target's real migration.sql. A parser-dialect gap, not a missing schema input; jackson_store.value is pinned directly against classifyColumn in external-corpus.test.ts instead.",
 };
+
+// #279: shapes a schema-only PII/PHI/PCI classification pass into Finding[] so
+// scoreExternalBaseline's taxonomy-prefix matching can count it like every other module here.
+// No Finding-emitting adapter for tools/pii-classify.mjs existed anywhere in the codebase before
+// this (src/cli/dry-run.ts writes the raw data map to a file; the M10 calibration corpus's own
+// header calls a Finding adapter a documented, unimplemented follow-up) — this is scoped to
+// exactly what corpus scoring needs: one Finding per table with >=1 classified column, at that
+// table's own aggregate severity (buildDataMap's `severity`, which is never "Info" for a real
+// hit — the lowest score a single low-confidence match produces is 0.3, which scoreToSeverity
+// reads as "Low"). Every target's baseline below is therefore counted === total.
+export function m10FindingsFromSchema(sql: string): Finding[] {
+  const { dataMap } = classifyMigrationSql(sql);
+  return Object.entries(dataMap).map(([table, t], i) => ({
+    id: `M10-SCHEMA-${String(i + 1).padStart(2, "0")}`,
+    title: `${table}: ${t.infotypes.join(", ")}`,
+    severity: t.severity as Finding["severity"],
+    confidence: "Confirmed",
+    category: "Data classification",
+    taxonomy: "M10 — Data classification",
+    location: table,
+    status: "Open",
+    evidence: `${t.columns.length} column(s) classified: ${t.columns.map((c: { column: string }) => c.column).join(", ")}.`,
+    impact: `${t.categories.join("/")} data on this table — needs the M10 protection review (encrypted at rest? RLS-scoped? reachable by the anon/authenticated key?).`,
+    fix: "Confirm this data is encrypted at rest (pgsodium/Vault) or scoped behind RLS before it reaches an exposed schema/view.",
+    value: 3,
+    ease: 2,
+    safety: 4,
+    mechanical: true,
+  }));
+}
 
 export const EXTERNAL_CORPUS: ExternalTarget[] = [
   {
@@ -121,6 +161,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     license: "MIT",
     securityVerdict: "1 Critical (world-readable invitation tokens), 2 High (invite acceptance trusts client userId; member self-escalation to admin)",
     disclosureIssue: 214,
+    schemaPath: "supabase/migrations",
     modules: {
       M4: { counted: 68, total: 104, note: "5.27% (2749/52165 lines), 203 raw clone clusters — of which 104 are the cross-file clones jscpdToFindings emits and 68 are counted (36 are sub-15-line Info). The 203 originally recorded here was jscpd's cluster count, not the counted findings this scorer compares (fixed #263 when the Layer 2 job first scored it). Was 9.75%/199 clones pre-#232; the drop is that fix excluding generated/demo paths, NOT the repo changing. Per #232 ~75% of what remains is genuine per-entity copy-paste (CRUD forms, per-entity tool/store/service files) — the corpus's strongest real M4 signal and a factory-refactor case." },
       "M5-knip": M5_KNIP_NEEDS_INSTALL,
@@ -128,7 +169,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       M7: { counted: 49, total: 79, note: "30 of the 79 are the exhaustive-deps class #230 demoted to Info (~0 real), leaving 49 counted. The real vein is 26 'Unbounded select' on growable request-path lists (low-sev latent scalability). Residual FP tail still counted: 5 inline-literal, 4 context-value-recreated, 2 index-key — the micro-render shapes #230 judged ~0% real (see follow-up)." },
       M8: M8_NEEDS_STRYKER, // `vitest run` script + a single *.test.* file: a real (if thin) suite, so mutation-scan needs the Stryker config this target doesn't have. #277: verified 2026-07-15 a scoped config (mutate: lib/pdf/launch.ts) runs clean (21/21 killed, ~1s) after `npm install --legacy-peer-deps` — but that's a hand-tuned config, not something the wrapper generates.
       M9: { counted: 8, total: 8, note: "4 'Server Action missing input validation' + 4 'Accidental dynamic rendering'. Distinct from the 4 M1 'Server Action missing authorization check' the same run emits — #231 routed the authz vein to M1/#221 rather than scoring it as M9 rendering, and this split is what that fix looks like on real code." },
-      M10: M10_NEEDS_SCHEMA_INPUT,
+      M10: { counted: 18, total: 18, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned supabase/migrations (205 columns parsed, 39 PII-bearing across 18 tables — one Finding per table). Headline is organisations: Critical, ADDRESS+API_KEY+STORED_PASSWORD — the #233 must-not-miss plaintext ai_api_key/smtp_pass case, now scored as a real drift check instead of only a unit assertion." },
     },
   },
   {
@@ -138,6 +179,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     license: "MIT",
     securityVerdict: "1 Medium (client-controlled trial length -> arbitrarily long free subscription); otherwise sound — webhook sig verified, RLS scoped, service-role server-only",
     disclosureIssue: 215,
+    schemaPath: "supabase/migrations",
     modules: {
       M4: { counted: 6, total: 8, note: "5.2% (309/5947 lines), 13 raw clusters -> 8 cross-file findings, 6 counted (fixed #263: the 13 was jscpd's cluster count, not counted findings). Down from the sweep's 6.13%/22 clones now #232 excludes `types_db.ts` (Supabase codegen was ~50% of this repo's clones)." },
       "M5-knip": { counted: 8, total: 8, note: "Ran WITHOUT the target's `npm install` — knip resolved its config anyway (fixed #263: recorded as not-run on the assumption it couldn't, measured as 8). 3 unused files + 5 unused-export files; the Medium is utils/supabase/middleware. If a future knip/config change makes this fail, it degrades to the M5-00 'did not run' finding (#223) and this baseline fails loudly rather than silently reading 0." },
@@ -145,7 +187,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       M7: { counted: 2, total: 3, note: "One of the smallest surfaces in the corpus: 2 raw <img> + 1 Info exhaustive-deps. A good FALSE-POSITIVE regression guard — a well-maintained Vercel example should stay near-silent; a jump here means a new over-match." },
       M8: { counted: 1, total: 1, note: "No test script and zero *.test.*/*.spec.* files at this commit, so mutation-scan needs no Stryker: it emits exactly #224's M8-00 zero-coverage finding (High), which IS the measurement. Recorded as 1 counted finding — the 0 previously here was a test-FILE count and would have read as 'no M8 problems' on a repo with no tests at all, inverting the finding's meaning (fixed #263)." },
       M9: { counted: 2, total: 2, note: "2 'Accidental dynamic rendering'. Low and stable — the second FP guard alongside M7." },
-      M10: M10_NEEDS_SCHEMA_INPUT,
+      M10: { counted: 3, total: 3, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned supabase/migrations (36 columns parsed, 5 PII-bearing across 3 tables). users: High (NAME/ADDRESS/PAYMENT_REF), customers: Medium (PAYMENT_REF), products: Low (ambiguous NAME?)." },
     },
   },
   {
@@ -162,9 +204,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       M7: { counted: 17, total: 17, note: "Includes the corpus's one genuine middleware stall ('Fetch in middleware hot path') — one of the two real request-path finds #230 kept. The 9 inline-literal + 3 index-key are the residual micro-render tail." },
       M8: M8_NEEDS_STRYKER, // Best-tested target in the corpus (real `jest` script + 8 test files, plus playwright) — and precisely why it can't be scored without a Stryker config. #277: the playwright specs need a built app + a real browser, a heavier prerequisite than a unit-test mutation run; not attempted.
       M9: { counted: 0, total: 0, note: "MEASURED zero, and it is the #231 fix working: this is a PAGES Router app, where the App-Router-only checks must not fire at all. Pre-#231 it drew a bogus server-only hit. Any non-zero M9 here is a straight regression of that fix." },
-      M10: {
-        reason: "Prisma schema, no SQL migrations — the sweep did not scan it. Its `jackson_store.value` (SAML/SSO config incl. IdP secrets) is the #233 opaque-encrypted-store case and IS asserted in external-corpus.test.ts against the classifier.",
-      },
+      M10: M10_PRISMA_UNPARSEABLE,
     },
   },
   {
@@ -177,6 +217,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     license: "none (no LICENSE file — all rights reserved)",
     securityVerdict: "1 Critical (any authed user self-joins any tenant as owner), 1 High (cross-tenant invitation tampering) — both confirmed dynamically against a local self-hosted clone",
     disclosureIssue: 217,
+    schemaPath: "supabase/migrations",
     modules: {
       M4: { counted: 0, total: 1, note: "0.35% (11/3167 lines), 6 raw clusters -> 1 cross-file finding, and it is Info (sub-15-line), so 0 counted (fixed #263: the 6 was jscpd's cluster count). A MEASURED near-zero on the smallest target; the sweep's 2.95% was the pre-#232 denominator." },
       // The one target small enough (13 deps) to `npm install` cheaply, so M5-knip DID run here.
@@ -185,7 +226,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       M7: { counted: 0, total: 0, note: "MEASURED zero — a 3.1k-line repo with no perf surface. A useful floor: any M7 finding appearing here is almost certainly a new over-match." },
       M8: M8_NEEDS_STRYKER, // One hand-rolled `test/rls.test.mjs` run via `node --test` — detectNoTestSuite counts the `--test` script as a real suite, so this needs Stryker too. #277: verified 2026-07-15 this test spins up a Docker Postgres container per run — mutation testing would pay that cost per mutant, well beyond any CI budget without a dedicated long-running job.
       M9: { counted: 3, total: 3, note: "2 'Accidental dynamic rendering' + 1 'Data-fetching waterfall'." },
-      M10: M10_NEEDS_SCHEMA_INPUT,
+      M10: { counted: 1, total: 1, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned supabase/migrations (21 columns parsed, 1 PII-bearing table). tenant_invitations: Low (EMAIL) — the corpus's near-floor M10 reading, matching this target's otherwise-minimal M4/M7 surface." },
     },
   },
   {
@@ -195,6 +236,9 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     license: "MIT",
     securityVerdict: "1 Low / latent (over-broad anon+authenticated grants on xmr_invoices, not exploitable today — RLS default-deny blocks it); base boilerplate otherwise sound, and the mechanical demo-key Criticals were the #210 FP",
     disclosureIssue: 218,
+    // The app's own schema, not monero/supabase/migrations (the vendored payment-fork mirror
+    // #232 already excludes from M4's duplication denominator for the same reason).
+    schemaPath: "supabase/migrations",
     modules: {
       M4: { counted: 4, total: 7, note: "1.35% (211/15684 lines), 11 raw clusters -> 7 cross-file findings, 4 counted (fixed #263: the 11 was jscpd's cluster count). The sweep's headline '13.3%, highest in the corpus' was almost entirely `monero/patches/**` whole-file fork-mirrors. #232's vendored-path exclusion is what closed that ~12-point gap; this target is the regression guard for it." },
       "M5-knip": M5_KNIP_NEEDS_INSTALL,
@@ -202,7 +246,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       M7: { counted: 3, total: 4, note: "1 unbounded select + 1 index-key + 1 state-sprawl counted, 1 exhaustive-deps demoted to Info." },
       M8: { counted: 1, total: 1, note: "No package.json at the repo root (it's a monorepo whose apps carry their own) and zero test files — mutation-scan emits #224's M8-00 zero-coverage finding (High), which IS the measurement. 1 counted, not the 0 test-FILE count previously recorded (fixed #263)." },
       M9: { counted: 1, total: 1, note: "1 'Data-fetching waterfall'." },
-      M10: M10_NEEDS_SCHEMA_INPUT,
+      M10: { counted: 3, total: 3, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned supabase/migrations (42 columns parsed, 5 PII-bearing across 3 tables). Same shape as subscription-payments' M10 reading (users/customers/products) — both are Stripe-billing starter templates sharing a near-identical schema." },
     },
   },
   {
@@ -212,6 +256,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     license: "MIT",
     securityVerdict: "1 Low (unauthenticated open redirect via the auth-callback `next` param); otherwise sound — RLS scoped on read AND write, service-role server-only",
     disclosureIssue: 219,
+    // Monorepo: the app lives under apps/web, not the repo root.
+    schemaPath: "apps/web/supabase/migrations",
     modules: {
       M4: { counted: 14, total: 16, note: "1.15% (318/27617 lines), 28 raw clusters -> 16 cross-file findings, 14 counted (fixed #263: the 28 was jscpd's cluster count). The sweep's 499-line identical `database.types.ts` copy is now excluded by #232." },
       "M5-knip": M5_KNIP_NEEDS_INSTALL,
@@ -219,7 +265,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       M7: { counted: 23, total: 24, note: "Includes the corpus's other genuine request-path stall ('Blocking sync I/O in request handler' — the execSync-on-a-/version-route case #230 kept) plus an 'Await in loop (N+1)' and a raw <img>. The 11 inline-literal + 6 index-key + 2 context-value are the residual micro-render tail. 22 -> 23 when #269 added the 'React Compiler flag unresolvable' class: this repo sets `reactCompiler: ENABLE_REACT_COMPILER` (env-derived), the exact unresolvable-flag case #249 filed. Baseline rebased by #263's first real Layer 2 run — an intended new detection, not a regression, and the drift check catching it on day one is the corpus working." },
       M8: M8_NEEDS_STRYKER, // `turbo test` script + 3 test files — a partial suite, between boxyhq and the zero-test targets, and still unscoreable without a Stryker config. #277: same class of per-repo tuning cost as the others (turbo monorepo test orchestration); not attempted.
       M9: { counted: 2, total: 2, note: "2 'Accidental dynamic rendering'." },
-      M10: M10_NEEDS_SCHEMA_INPUT,
+      M10: { counted: 1, total: 1, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned apps/web/supabase/migrations (9 columns parsed, 1 PII-bearing table). accounts: Low (ambiguous NAME? + EMAIL) — the corpus's other near-floor M10 reading." },
     },
   },
 ];

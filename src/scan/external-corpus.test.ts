@@ -1,12 +1,15 @@
 // Layer 1 for the external-repo corpus (#222): runs in `pnpm verify` with no clone and no
-// network. Two jobs:
+// network. Three jobs:
 //   - prove the drift scorer actually fails on movement (the point of the corpus);
-//   - pin the M10 classifier against the REAL column names from the swept repos — the module has
-//     no static-schema CLI path, so this is where its #233 behavior on real code is gated.
-// Layer 2 (clone each pinned commit, re-run detect-static/quality-scan, score against the
-// baselines) needs network + binaries, so it is NOT here: it is `pnpm corpus-drift`, scheduled in
-// .github/workflows/corpus-drift.yml (#263). These two layers are complementary — Layer 1 proves
-// the scorers fail on movement without cloning anything, Layer 2 supplies the real movement.
+//   - pin the M10 classifier against the REAL column names from the swept repos (#233's over/
+//     under-match verdicts);
+//   - prove the m10FindingsFromSchema adapter (#279) shapes a schema classification pass into
+//     Finding[] correctly, since Layer 2 is the only place it runs against real migrations.
+// Layer 2 (clone each pinned commit, re-run detect-static/quality-scan/mutation-scan and classify
+// each target's own migrations, score against the baselines) needs network + binaries, so it is
+// NOT here: it is `pnpm corpus-drift`, scheduled in .github/workflows/corpus-drift.yml (#263).
+// These two layers are complementary — Layer 1 proves the scorers fail on movement without
+// cloning anything, Layer 2 supplies the real movement.
 
 import { describe, expect, it } from "vitest";
 import { classifyColumn } from "../../tools/pii-classify.mjs";
@@ -14,6 +17,7 @@ import {
   EXTERNAL_CORPUS,
   FREE_TIER_EXPECTATIONS,
   isNotRun,
+  m10FindingsFromSchema,
   scoreExternalBaseline,
   scoreFreeTierExpectation,
   type ExternalTarget,
@@ -245,5 +249,53 @@ describe("M10 classifier on real external-corpus columns (#233)", () => {
 
   it("still classifies genuine contact PII on the same repos", () => {
     expect(classifyColumn("email", "text", "profiles")).toMatchObject({ infotype: "EMAIL", category: "PII" });
+  });
+});
+
+// #279: m10FindingsFromSchema is the adapter corpus-drift.ts feeds real cloned migrations
+// through — no network needed here, a minimal inline schema proves the shaping is right.
+describe("m10FindingsFromSchema (#279)", () => {
+  const SCHEMA = `
+    create table organisations (
+      id uuid,
+      ai_api_key text,
+      name text
+    );
+    create table widgets (
+      id uuid,
+      color text
+    );
+  `;
+
+  it("emits one Finding per table with a classified column, at that table's severity", () => {
+    // organisations.name is excluded (the #233 org-entity-table suppression), leaving only
+    // ai_api_key: SECRET/high scores 6 -> "High" (scoreToSeverity's >=4 band).
+    const findings = m10FindingsFromSchema(SCHEMA);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      taxonomy: "M10 — Data classification",
+      location: "organisations",
+      severity: "High",
+    });
+  });
+
+  it("never emits a table with zero classified columns", () => {
+    // widgets has no PII/PHI/PCI/SECRET column — must not appear at all, not as a 0/Info finding.
+    const findings = m10FindingsFromSchema(SCHEMA);
+    expect(findings.some((f) => f.location === "widgets")).toBe(false);
+  });
+
+  it("is scoreExternalBaseline-countable: severity is never Info", () => {
+    // buildDataMap's lowest possible score (one low-confidence match) is 0.3 -> "Low", never
+    // "Info" — so counted === total for every M10 baseline in the manifest, by construction.
+    const ambiguous = `
+      create table proposals (
+        id uuid,
+        name text
+      );
+    `;
+    const findings = m10FindingsFromSchema(ambiguous);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).not.toBe("Info");
   });
 });
