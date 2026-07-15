@@ -96,6 +96,7 @@ The eval had never been executed since the corpus landed 2026-07-09 (#72). First
 | run | date | reviewer | positives flagged | negatives spared | verdict |
 |---|---|---|---|---|---|
 | 1 | 2026-07-15 | Claude Opus 4.8, M6 brief (`docs/quality-extras.txt` §SIMPLIFICATION) as the prompt, no other context | 4/4 | 2/2 | **contaminated — do not treat as a pass** |
+| 2 | 2026-07-15 | Claude Opus 4.8, M6 brief as the prompt, against the de-labelled corpus | 4/4 | **1/2** | **usable baseline** — one negative flagged (`framework-adapter.ts`); see §3.2 |
 
 **Procedure followed.** The reviewer read the M6 brief, then the six fixture files, wrote up
 what it would flag, and only then opened `targets/calibration/GROUND-TRUTH.md` to score. Answer
@@ -148,6 +149,70 @@ outside #265's "run the eval" scope, and the fix has a real design choice in it)
 
 Until then this table has one row and no trustworthy datum in it. That is a more honest state
 than the blank it replaced, but it is not the eval the design doc specifies.
+
+### 3.2 Run log — second execution (2026-07-15, #265 follow-up)
+
+The six fixtures were de-labelled first (verdict headers stripped to `GROUND-TRUTH.md`; `depdrop.ts`'s
+`// WHY:` block and `framework-adapter.ts`'s `getServerSideProps` shape kept — those are the
+discriminators §2 names, not labels). Run 2 is the first execution against a corpus that does not
+announce its own answers.
+
+**Procedure.** The reviewer was a subagent with no prior context: it read the `quality-extras.txt`
+M6 section, then the six files, and produced a FLAG/SPARE verdict per file. It was instructed not
+to open `GROUND-TRUTH.md`, this document, or git history, and confirmed it read none of them
+(it noted `GROUND-TRUTH.md` appeared in a directory listing but was not opened). Scoring happened
+only after the writeup. Delegating to a fresh context was deliberate: the operator prompt that
+commissioned this run described the fixtures and their traps, so the orchestrating session was
+itself contaminated and could not serve as the reviewer without reproducing run 1's defect in a
+subtler form.
+
+**Result: 4/4 positives flagged, 1/2 negatives spared.**
+
+- Positives, all named with a concrete replacement: `debounce.ts` (lodash `debounce`), `group.ts`
+  (`Object.groupBy`/lodash `groupBy`), `id.ts` (`crypto.randomUUID()`), `manager.ts` (collapse to a
+  plain function).
+- `depdrop.ts` — **spared, for the right reason.** The reviewer cited the `// WHY:` comment as a
+  bounded tradeoff with a revisit trigger. This is the result the de-labelling was for: the
+  discriminator §2 designed carried the verdict on its own, with no label present.
+- `framework-adapter.ts` — **flagged. A miss against the answer key.**
+
+**The miss, unrationalized.** M6-N-FRAMEWORK is labeled "do not flag: mandated by a framework
+contract." The reviewer flagged it as over-abstraction, explicitly considering and rejecting the
+framework-contract FP class. Its argument: Next.js's real contract is a module-level
+`export async function getServerSideProps(ctx)` — it never discovers or invokes a *class method* —
+so `InvoicePageAdapter` cannot be called by the framework at all, the interface has one
+implementation, and nothing imports it. It corroborated this against `pages/dead-page.js` elsewhere
+in the same target, which uses the module-level form.
+
+**That argument appears to be correct, which makes this a fixture defect, not (only) a reviewer
+defect.** Next.js does dispatch `getServerSideProps` as a module-level export; a class method named
+`getServerSideProps` is not a framework contract, it is a shape borrowed from one. Run 1's header
+comment asserted the contract ("Next.js's `getServerSideProps` middleware convention requires a
+context object shaped like this") and that assertion is what made the fixture read as benign —
+i.e. the label was not merely *sufficient* to score it, the label was **the only thing** making the
+intended verdict correct. Strip the label and the code no longer supports the ground truth. That is
+a strictly more useful finding than 6/6 would have been, and it was invisible while the labels were
+in place.
+
+**Consequences (not fixed here — this run reports, it does not redesign the corpus):**
+
+1. `M6-N-FRAMEWORK` does not currently test what §4 claims. Either the fixture must become a real
+   framework contract whose shape is genuinely mandated *and inferable from the code* (a provider
+   interface a library actually calls, an abstract base a framework requires), or the label must
+   flip to a positive and the corpus loses its second negative. Filed as a follow-up.
+2. Scoring stays **1/2 negatives** for this run. It is not re-scored to 2/2 on the theory that the
+   reviewer was "actually right" — the eval measures agreement with the recorded key, and the key
+   is what is now in doubt. Reporting 2/2 here would be exactly the rationalized pass §3.1 warns
+   against.
+3. The one genuinely-load-bearing negative left is `depdrop.ts`, and the reviewer got it right on
+   the code alone. A single negative is a thin FP test; restoring a second real one is the open work.
+
+**Caveats on this datum.** The reviewer also volunteered two out-of-scope routings (the
+`Math.random()` id as an M1 concern if used as a token; a vulnerable `lodash` pin) — correct
+behavior per the brief, and noted here only because it is evidence the reviewer engaged the code
+rather than a label. As with any n=6 curated set, this says nothing about false-positive rate on
+unlabeled client code (§3, *What this is explicitly NOT*). Report it as **"the reviewer agreed 4/4
+positives and 1/2 negatives on this rubric set"** — never as an M6 precision figure.
 
 ## 4. The labeled corpus
 

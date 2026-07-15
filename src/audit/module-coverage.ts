@@ -1,4 +1,4 @@
-// Audit module-coverage gate. The audit is a 9-module product (M1–M9); a delivery is only
+// Audit module-coverage gate. The audit is a 10-module product (M1–M10); a delivery is only
 // "complete" when EVERY module is accounted for — either run, or explicitly marked not-applicable
 // with a reason. This is the same completeness discipline as the target gate (src/pentest/
 // targets.ts): the RAG-backend and the M8/test-health omissions both happened because nothing
@@ -8,14 +8,14 @@
 type ModuleNeed = "source" | "connected" | "dynamic" | "llm";
 
 interface AuditModule {
-  id: string; // M1..M9
+  id: string; // M1..M10
   name: string;
   tools: string; // what runs it
   needs: ModuleNeed; // the minimum environment it requires
   freeTier: boolean; // contributes to the free quick-scan (vs paid-only)
 }
 
-// The canonical 9 modules (docs/audit-modules.md / epic #2). `needs` lets the gate tell a
+// The canonical 10 modules (docs/audit-modules.md / epic #2). `needs` lets the gate tell a
 // legitimate environment-gated skip (e.g. M2 with no running app in scope) from a silent
 // omission — but even a legitimate skip must be RECORDED as "na" with a reason, never just
 // left out. `needs` is the MINIMUM environment: M7 runs its code-level detectors on source
@@ -31,6 +31,11 @@ export const AUDIT_MODULES: AuditModule[] = [
   { id: "M7", name: "Performance", tools: "code-level perf detectors (src/detectors/perf-code.ts) + Supabase performance advisor (connected)", needs: "source", freeTier: true },
   { id: "M8", name: "Test quality", tools: "Stryker mutation testing", needs: "source", freeTier: true },
   { id: "M9", name: "Next.js App Router", tools: "scan-extras M9 + detectors", needs: "source", freeTier: true },
+  // M10 is "connected or schema" (docs/audit-modules.md), so its MINIMUM is source: `pnpm
+  // pii-classify --schema <migrations>` classifies columns straight out of migration SQL with no DB
+  // (#250). A live connection only adds the protection-adequacy judgment (docs/free-tier-scope.md),
+  // so a source-only run records "partial", not "na" — same shape as M7's missing advisor layer.
+  { id: "M10", name: "Data classification (PII/PHI/PCI)", tools: "pnpm pii-classify (--schema for migration SQL; SUPABASE_DB_URL for a live read-only inventory)", needs: "source", freeTier: true },
 ];
 
 // Modules with no execution record in ANY engagement, ever. This is a repo-level ledger, not a
