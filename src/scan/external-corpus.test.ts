@@ -10,7 +10,16 @@
 
 import { describe, expect, it } from "vitest";
 import { classifyColumn } from "../../tools/pii-classify.mjs";
-import { EXTERNAL_CORPUS, isNotRun, scoreExternalBaseline, type ExternalTarget } from "./external-corpus.js";
+import {
+  EXTERNAL_CORPUS,
+  FREE_TIER_EXPECTATIONS,
+  isNotRun,
+  scoreExternalBaseline,
+  scoreFreeTierExpectation,
+  type ExternalTarget,
+  type FreeTierExpectation,
+} from "./external-corpus.js";
+import { buildQuickScanReport } from "../quick-scan.js";
 import type { Finding, Severity } from "../findings.js";
 
 function finding(taxonomy: string, severity: Severity = "Perf"): Finding {
@@ -110,6 +119,80 @@ describe("scoreExternalBaseline", () => {
       .toMatchObject({ pass: true, actual: 2 });
     expect(scoreExternalBaseline(target("multi-tenant-starter"), [dead()]).find((r) => r.module === "M5"))
       .toMatchObject({ pass: false, drift: -1 });
+  });
+});
+
+// #261/#227 — the free-tier calibration invariant. These prove the SCORER: that it fails when the
+// free tier cries wolf or stays quiet. Whether the four real repos actually land on the right side
+// of it is not knowable here (it needs their cloned trees) — that's `pnpm corpus-drift`, which ran
+// green on all four at these baselines on 2026-07-15.
+const expectation = (slug: string): FreeTierExpectation => {
+  const e = FREE_TIER_EXPECTATIONS.find((x) => x.slug === slug);
+  if (!e) throw new Error(`no free-tier expectation for ${slug}`);
+  return e;
+};
+
+// An indicator is a review-tier "Multi-tenant security" finding (selectIndicators, #220).
+const rlsIndicator = (severity: Severity): Finding => ({
+  ...finding("M1 — RLS policy semantic tenancy review", severity),
+  category: "Multi-tenant security",
+  precisionTier: "review",
+});
+
+describe("free-tier calibration invariant (#261)", () => {
+  it("covers exactly #227's four named repos, each pinned in the corpus", () => {
+    // The invariant is defined against these four by name; a target quietly dropped from the list
+    // is the check silently shrinking.
+    expect(FREE_TIER_EXPECTATIONS.map((e) => e.slug).sort()).toEqual(["multi-tenant-starter", "mvp-boilerplate", "proposit", "saas-lite"]);
+    for (const e of FREE_TIER_EXPECTATIONS) {
+      expect(EXTERNAL_CORPUS.some((t) => t.slug === e.slug), e.slug).toBe(true);
+    }
+  });
+
+  it("FAILS when the free tier cries wolf — an F on a repo #227 calls sound", () => {
+    const graded: Finding = { ...finding("M1 — Leaked service-role key", "Critical"), precisionTier: "high" };
+    const report = buildQuickScanReport([graded]);
+    expect(report.grade).toBe("F");
+    const rows = scoreFreeTierExpectation(expectation("mvp-boilerplate"), report);
+    const f = rows.find((r) => r.check === "must not score F")!;
+    expect(f.pass).toBe(false);
+    expect(f.detail).toContain("CRIED WOLF");
+  });
+
+  it("FAILS when the free tier accuses a sound repo of a tenancy hole", () => {
+    const rows = scoreFreeTierExpectation(expectation("saas-lite"), buildQuickScanReport([rlsIndicator("High")]));
+    const f = rows.find((r) => r.check.startsWith("must not accuse"))!;
+    expect(f.pass).toBe(false);
+    expect(f.detail).toContain("CRIED WOLF");
+  });
+
+  it("FAILS when the free tier stays quiet on a known-vulnerable repo", () => {
+    // multi-tenant-starter's #217 Critical (any authed user self-joins any tenant as owner) must
+    // have SOME free-tier signal. Silence here is the promise broken.
+    const rows = scoreFreeTierExpectation(expectation("multi-tenant-starter"), buildQuickScanReport([]));
+    const f = rows.find((r) => r.check.startsWith("must raise"))!;
+    expect(f.pass).toBe(false);
+    expect(f.detail).toContain("STAYED QUIET");
+  });
+
+  it("does not accept the Info-severity tenancy disclosure as the loud signal", () => {
+    // Every target with migrations draws the Info "Tenancy model assumed" note (#220). If that
+    // counted as raising the alarm, the two known-vulnerable repos would pass on a note that says
+    // nothing about them — the invariant would be self-satisfying.
+    const rows = scoreFreeTierExpectation(expectation("proposit"), buildQuickScanReport([rlsIndicator("Info")]));
+    expect(rows.find((r) => r.check.startsWith("must raise"))).toMatchObject({ pass: false });
+    expect(scoreFreeTierExpectation(expectation("proposit"), buildQuickScanReport([rlsIndicator("High")]))
+      .find((r) => r.check.startsWith("must raise"))).toMatchObject({ pass: true });
+  });
+
+  it("does not grade the known-vulnerable repos — their Critical is an indicator, never a hygiene verdict", () => {
+    // #213/#220: a review-tier indicator must not move the grade. So the invariant deliberately
+    // makes no grade claim for these two, and asserting one would re-create the #213 inversion.
+    for (const slug of ["multi-tenant-starter", "proposit"]) {
+      expect(expectation(slug).mustNotScoreF, slug).toBe(false);
+    }
+    const report = buildQuickScanReport([rlsIndicator("Critical")]);
+    expect(report.grade).toBe("A");
   });
 });
 

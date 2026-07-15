@@ -32,6 +32,7 @@
 // ever scores is a number nobody has checked.
 
 import type { Finding } from "../findings.js";
+import type { QuickScanReport } from "../quick-scan.js";
 
 export interface ModuleBaseline {
   // Findings that count as work: everything the detectors emit at a severity other than "Info".
@@ -200,6 +201,88 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     },
   },
 ];
+
+// #227's free-tier calibration invariant, as data. The product promise in one line: the free tier
+// must not cry wolf on a decent repo, and must not stay quiet on a bad one. #244 encoded this over
+// SYNTHETIC findings — which can only prove the grading arithmetic, never that the DETECTORS put
+// real repos on the right side of it. Scored against a real quick-scan by the Layer 2 job (#261).
+//
+// "Loud" is deliberately `indicators at a real severity`, not `indicators.length > 0`: every target
+// with migrations draws the Info-severity "Tenancy model assumed" disclosure (#220), so counting it
+// would let the bad repos pass on a note that says nothing about them. Measured 2026-07-15.
+export interface FreeTierExpectation {
+  slug: string;
+  mustNotScoreF: boolean;
+  // true  -> at least one non-Info tenant-isolation indicator (the app IS known-vulnerable)
+  // false -> no such indicator (a decent repo must not be accused)
+  mustRaiseLoudIndicator: boolean;
+  why: string;
+}
+
+export const FREE_TIER_EXPECTATIONS: FreeTierExpectation[] = [
+  {
+    slug: "mvp-boilerplate",
+    mustNotScoreF: true,
+    mustRaiseLoudIndicator: false,
+    why: "#227's don't-cry-wolf case: a sound boilerplate whose only mechanical hits were the #210 demo-key FP. An F here, or a tenant-isolation accusation, is the free tier lying about a decent repo. Measured: A (92), 1 Info-only indicator (the tenancy-model disclosure).",
+  },
+  {
+    slug: "saas-lite",
+    mustNotScoreF: true,
+    mustRaiseLoudIndicator: false,
+    why: "The other don't-cry-wolf case: RLS scoped on read AND write, service-role server-only. Its one real issue (open redirect) is not a tenancy hole and must not surface as one. Measured: A (97), 0 indicators.",
+  },
+  {
+    slug: "multi-tenant-starter",
+    mustNotScoreF: false,
+    mustRaiseLoudIndicator: true,
+    why: "The don't-stay-quiet case: any authed user self-joins any tenant as owner (#217 Critical, confirmed dynamically). If the free tier is silent here it has failed the promise. Measured: 4 High RLS indicators. Its grade is deliberately unconstrained — the Critical is an indicator, never a graded hygiene verdict (#213/#220).",
+  },
+  {
+    slug: "proposit",
+    mustNotScoreF: false,
+    mustRaiseLoudIndicator: true,
+    why: "The other don't-stay-quiet case: world-readable invitation tokens (#214 Critical). Measured: 1 High RLS indicator on organisation_invitations — the very table the Critical is about.",
+  },
+];
+
+interface FreeTierRow {
+  slug: string;
+  check: string;
+  pass: boolean;
+  detail: string;
+}
+
+// Scores a REAL free-tier quick-scan of `slug`'s pinned commit against #227's invariant.
+export function scoreFreeTierExpectation(expectation: FreeTierExpectation, report: QuickScanReport): FreeTierRow[] {
+  const loud = report.indicators.filter((i) => i.severity !== "Info");
+  const rows: FreeTierRow[] = [];
+
+  if (expectation.mustNotScoreF) {
+    rows.push({
+      slug: expectation.slug,
+      check: "must not score F",
+      pass: report.grade !== "F",
+      detail: report.grade !== "F"
+        ? `grade ${report.grade} (${report.score}/100)`
+        : `CRIED WOLF: graded F (${report.score}/100) on a repo #227 calls sound — the free tier is failing decent repos`,
+    });
+  }
+
+  const raised = loud.length > 0;
+  rows.push({
+    slug: expectation.slug,
+    check: expectation.mustRaiseLoudIndicator ? "must raise a loud tenant-isolation indicator" : "must not accuse a sound repo of a tenancy hole",
+    pass: raised === expectation.mustRaiseLoudIndicator,
+    detail: raised === expectation.mustRaiseLoudIndicator
+      ? `${loud.length} non-Info indicator(s)`
+      : expectation.mustRaiseLoudIndicator
+        ? `STAYED QUIET: 0 non-Info indicators on a known-vulnerable repo (${report.indicators.length} Info-only) — the deep-scan Critical has no free-tier signal`
+        : `CRIED WOLF: ${loud.length} non-Info indicator(s) (${loud.map((i) => i.title).join("; ")}) on a repo #227 calls sound`,
+  });
+
+  return rows;
+}
 
 interface DriftRow {
   slug: string;

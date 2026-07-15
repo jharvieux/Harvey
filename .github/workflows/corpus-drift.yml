@@ -51,8 +51,22 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      # jscpd/knip are this repo's own devDependencies, so the scored modules (M4/M5/M7/M8/M9) need
-      # no external binaries — only the clone network access.
+      # The baseline modules (M4/M5/M7/M8/M9) run on this repo's own devDependencies, but #261's
+      # free-tier invariant scores a real quick-scan, whose mechanical tier shells out to these.
+      # Each scanner degrades to "found nothing" without its binary rather than failing loudly —
+      # which on a must-raise-an-indicator target would look like the free tier staying quiet. So
+      # they are installed explicitly rather than left to chance.
+      - name: Install mechanical-tier scanner binaries
+        run: |
+          set -euo pipefail
+          pipx install semgrep
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+            | sh -s -- -b "$HOME/.local/bin"
+          curl -sSfL -o "$HOME/.local/bin/osv-scanner" \
+            https://github.com/google/osv-scanner/releases/download/v1.9.2/osv-scanner_1.9.2_linux_amd64
+          chmod +x "$HOME/.local/bin/osv-scanner"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Score the corpus against its baselines
         run: pnpm corpus-drift --json corpus-drift.json
 

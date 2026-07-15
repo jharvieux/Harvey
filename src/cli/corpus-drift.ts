@@ -1,7 +1,7 @@
 // Layer 2 for the external-repo corpus (#263): clones each pinned commit, re-runs the source-tier
-// modules against it, and scores the result against the recorded baselines (#222). Layer 1
-// (src/scan/external-corpus.test.ts) proves the scorer in `pnpm verify` with no network; this is
-// the pass that actually re-measures real repos.
+// modules against it, and scores the result against the recorded baselines (#222) and #227's
+// free-tier calibration invariant (#261). Layer 1 (src/scan/external-corpus.test.ts) proves the
+// scorers in `pnpm verify` with no network; this is the pass that actually re-measures real repos.
 //
 //   pnpm corpus-drift [--target <slug>] [--keep] [--json <path>]
 //
@@ -23,7 +23,15 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Finding } from "../findings.js";
-import { EXTERNAL_CORPUS, scoreExternalBaseline, type ExternalTarget } from "../scan/external-corpus.js";
+import { buildQuickScanReport } from "../quick-scan.js";
+import { runMechanicalScan } from "../scan/mechanical.js";
+import {
+  EXTERNAL_CORPUS,
+  FREE_TIER_EXPECTATIONS,
+  scoreExternalBaseline,
+  scoreFreeTierExpectation,
+  type ExternalTarget,
+} from "../scan/external-corpus.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const args = process.argv.slice(2);
@@ -99,11 +107,23 @@ for (const target of targets) {
       rows.push({ slug: row.slug, check: `${row.module} baseline`, pass: row.pass, detail: row.detail });
     }
 
+    // #261: the free-tier invariant, scored against a REAL quick-scan of this pinned tree rather
+    // than the synthetic findings #244 could only assert over.
+    const expectation = FREE_TIER_EXPECTATIONS.find((e) => e.slug === target.slug);
+    if (expectation) {
+      const report = buildQuickScanReport(await runMechanicalScan({ dir }));
+      rows.push(...scoreFreeTierExpectation(expectation, report).map((r) => ({ slug: r.slug, check: `free tier: ${r.check}`, pass: r.pass, detail: r.detail })));
+    }
   } finally {
     if (keep) console.error(`  (kept clone: ${dir})`);
     else rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// A target in FREE_TIER_EXPECTATIONS that never got scored (e.g. --target skipped it) must not
+// read as a pass — the invariant is the product promise, so an unrun check is a failure.
+const scoredSlugs = new Set(rows.map((r) => r.slug));
+const unscored = FREE_TIER_EXPECTATIONS.filter((e) => !scoredSlugs.has(e.slug) && (!onlySlug || onlySlug === e.slug));
 
 console.error("\n──── corpus drift ────");
 for (const r of rows) console.error(`  ${r.pass ? "✓" : "✗"} ${r.slug.padEnd(23)} ${r.check.padEnd(46)} ${r.detail}`);
@@ -111,9 +131,10 @@ for (const r of rows) console.error(`  ${r.pass ? "✓" : "✗"} ${r.slug.padEnd
 if (jsonOut) writeFileSync(jsonOut, `${JSON.stringify(rows, null, 2)}\n`);
 
 const failed = rows.filter((r) => !r.pass);
-if (failed.length === 0) {
-  console.error(`\n✓ ${rows.length} checks pass — every module reproduces its baseline.`);
+if (failed.length === 0 && unscored.length === 0) {
+  console.error(`\n✓ ${rows.length} checks pass — every module reproduces its baseline and the free-tier invariant holds.`);
   process.exit(0);
 }
 for (const r of failed) console.error(`\n✗ DRIFT ${r.slug} / ${r.check}\n    ${r.detail}`);
+for (const e of unscored) console.error(`\n✗ NOT SCORED ${e.slug} / free-tier invariant — the check never ran, which is not a pass.`);
 process.exit(1);
