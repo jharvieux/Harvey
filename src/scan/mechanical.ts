@@ -14,7 +14,7 @@ import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { scanSecrets } from "./secrets.js";
 import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
-import { checkEdgeFunctionVerifyJwt, checkMigrationRlsStatic } from "./supabase-static.js";
+import { checkEdgeFunctionVerifyJwt, checkMigrationPolicySemantics, checkMigrationRlsStatic } from "./supabase-static.js";
 import { checkInstallScripts, checkKnownIoc, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
 
 interface PackageJson {
@@ -81,6 +81,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     findings.push(...checkMissingCsp(scanDir));
     findings.push(...checkPublicDirSensitive(scanDir));
     findings.push(...checkMigrationRlsStatic(scanDir));
+    findings.push(...checkMigrationPolicySemantics(scanDir));
     findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
 
     // Supply chain.

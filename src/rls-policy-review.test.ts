@@ -110,6 +110,35 @@ describe("reviewPolicy — per-user mode", () => {
     expect(reviewPolicy(writeDropsBinding, perUser)?.reason).toContain("WITH CHECK does not");
   });
 
+  it("clears an ownership binding written as an EXPRESSION, not a bare column (#220)", () => {
+    // Supabase's standard one-folder-per-user storage pattern. Recognising only `<column> =
+    // auth.uid()` flagged this correct policy — a false positive the static #220 feed hit first,
+    // since storage policies are where the pattern is idiomatic.
+    const ownFolder: LivePolicy = {
+      schema: "storage",
+      table: "objects",
+      name: "user_files_select_own",
+      cmd: "SELECT",
+      qual: "bucket_id = 'user-files' and (storage.foldername(name))[1] = auth.uid()::text",
+      withCheck: null,
+    };
+    expect(reviewPolicy(ownFolder, perUser)).toBeNull();
+  });
+
+  it("still flags a caller reference that only LOOKS owner-bound — auth.role(), not auth.uid()", () => {
+    // The widened expression matching must not swallow the real bug it sits next to: a policy
+    // gated on "is the caller logged in" binds no row to anyone.
+    const authedOnly: LivePolicy = {
+      schema: "storage",
+      table: "objects",
+      name: "user_files_select_authenticated",
+      cmd: "SELECT",
+      qual: "bucket_id = 'user-files' and auth.role() = 'authenticated'",
+      withCheck: null,
+    };
+    expect(reviewPolicy(authedOnly, perUser)?.reason).toContain("never binds a row column");
+  });
+
   it("does not apply the per-tenant wrong-column rule (the id=auth.uid() FP that motivated #206)", () => {
     // The same policy flags under the default per-tenant model but clears under per-user.
     expect(reviewPolicy(ownById, { tenantKey: "user_id" })?.reason).toContain("wrong column");

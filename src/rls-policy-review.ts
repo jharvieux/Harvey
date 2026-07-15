@@ -34,9 +34,11 @@ function refsWord(clause: string | null, word: string): boolean {
   return clause != null && new RegExp(`\\b${word}\\b`, "i").test(clause);
 }
 
-// A predicate binding a row column directly to the caller — `<col> = auth.uid()`, allowing a
-// `(select auth.uid())` wrapper or the reverse order. Genuine owner-level isolation.
-const OWNER_BINDING = /[\w.]+\s*=\s*\(?\s*(?:select\s+)?auth\.uid\s*\(\)|auth\.uid\s*\(\)\s*(?:as\s+\w+\s*)?\)?\s*=\s*[\w.]+/i;
+// A predicate binding a row value directly to the caller — `<expr> = auth.uid()`, allowing a
+// `(select auth.uid())` wrapper or the reverse order. Genuine owner-level isolation. The bound
+// side may be a plain column OR an expression over one, e.g. Supabase's standard per-user storage
+// pattern `(storage.foldername(name))[1] = auth.uid()::text` — hence the `)`/`]` terminators.
+const OWNER_BINDING = /[\w.)\]]+\s*=\s*\(?\s*(?:select\s+)?auth\.uid\s*\(\)|auth\.uid\s*\(\)\s*(?:as\s+\w+\s*)?\)?(?:::\w+)?\s*=\s*[\w.)\]]+/i;
 
 function ownerBound(clause: string | null): boolean {
   return clause != null && OWNER_BINDING.test(clause);
