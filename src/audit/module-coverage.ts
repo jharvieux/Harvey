@@ -27,11 +27,31 @@ export const AUDIT_MODULES: AuditModule[] = [
   { id: "M3", name: "Hotspots", tools: "vitals (churn × complexity)", needs: "source", freeTier: false },
   { id: "M4", name: "Duplication", tools: "jscpd", needs: "source", freeTier: true },
   { id: "M5", name: "Slop / dead code", tools: "knip", needs: "source", freeTier: false },
-  { id: "M6", name: "Simplification / reuse", tools: "/simplify + quality-extras (LLM)", needs: "llm", freeTier: false },
+  { id: "M6", name: "Simplification / reuse", tools: "pnpm simplify-scan (assembles the quality-extras M6 brief + target source for a review pass)", needs: "llm", freeTier: false },
   { id: "M7", name: "Performance", tools: "code-level perf detectors (src/detectors/perf-code.ts) + Supabase performance advisor (connected)", needs: "source", freeTier: true },
   { id: "M8", name: "Test quality", tools: "Stryker mutation testing", needs: "source", freeTier: true },
   { id: "M9", name: "Next.js App Router", tools: "scan-extras M9 + detectors", needs: "source", freeTier: true },
 ];
+
+// Modules with no execution record in ANY engagement, ever. This is a repo-level ledger, not a
+// per-engagement one: `na` answers "did this run THIS time," and for a module whose environment is
+// absent by default every time (M6 needs the paid LLM tier), the answer is legitimately "no" at
+// every individual moment while the module has never executed once. Each `na` was correct; the
+// series was a permanent silence. That is the quietest possible failure of "fail loud", so a
+// never-executed module is surfaced regardless of tier and blocks `complete` — an engagement
+// cannot claim full module coverage on the strength of a module that has never produced output.
+//
+// Remove an id here the first time that module actually runs against a target. This is a hand-kept
+// ledger because nothing yet observes what ran — #229's orchestrator half is what would derive it;
+// until then assessModuleCoverage takes its records from the caller and cannot tell on its own.
+export const MODULES_NEVER_EXECUTED = new Set<string>([
+  // M6: defined 2026-07-09 (#72), still zero output as of 2026-07-15. It now has a runner
+  // (`pnpm simplify-scan`, #266); this entry comes out when it is first run against a real target.
+  // The #265 eval run was against our own calibration fixtures, not an engagement target, and its
+  // result was contaminated (docs/design/m6-simplification-eval.md §3.1) — that is not an execution
+  // record.
+  "M6",
+]);
 
 type ModuleStatus = "ran" | "partial" | "na" | "skipped";
 
@@ -59,6 +79,11 @@ interface ModuleCoverage {
   partial: { id: string; note: string }[]; // ran, but not all classes — a disclosed (not silent) gap
   na: { id: string; note: string }[];
   gaps: string[]; // modules neither run nor validly accounted — the fail-loud set
+  // Modules that have never executed in any engagement and didn't execute here either. Distinct
+  // from `na`: `na` is a defensible per-engagement skip, this is a module with zero output ever.
+  // Not folded into `gaps` — a gap is a reasonless omission this engagement, which the caller can
+  // fix by recording a reason. This can't be fixed by a note; only by running the module.
+  neverRun: string[];
 }
 
 export function assessModuleCoverage(records: Record<string, ModuleRecord>, env?: EngagementEnv): ModuleCoverage {
@@ -80,17 +105,35 @@ export function assessModuleCoverage(records: Record<string, ModuleRecord>, env?
       gaps.push(envGated ? `${mod.id} (needs ${mod.needs}: mark na with a reason)` : mod.id);
     }
   }
+  // A module in the never-executed ledger that also didn't run here stays loud no matter how well
+  // reasoned its `na` note is — that note is exactly what has kept it invisible every time before.
+  const neverRun = [...MODULES_NEVER_EXECUTED].filter((id) => !ran.includes(id));
+
   // A partial is disclosed, so it's not a silent gap — but the audit is NOT fully complete while any
   // module is only partially run. "complete" means every module fully ran or is a reasoned na.
-  return { complete: gaps.length === 0 && partial.length === 0, ran, partial, na, gaps };
+  return { complete: gaps.length === 0 && partial.length === 0 && neverRun.length === 0, ran, partial, na, gaps, neverRun };
 }
 
-// Throws only on GAPS (silent omission / reasonless skip). A "partial" is an acknowledged, disclosed
-// incompleteness — it does not block delivery, but assess().complete is false so the report cannot
-// claim full coverage. Read the returned coverage to surface partials honestly.
+// Throws on GAPS (silent omission / reasonless skip) and on NEVER-RUN modules. A "partial" is an
+// acknowledged, disclosed incompleteness — it does not block delivery, but assess().complete is
+// false so the report cannot claim full coverage. Read the returned coverage to surface partials
+// honestly.
+//
+// Why never-run throws rather than warns (#266): a warning is what M6 has effectively had for a
+// year — every engagement recorded a correct, well-reasoned `na` and nobody noticed the module had
+// never produced a single finding while docs/audit-modules.md sold it as a product wedge. A status
+// that doesn't stop anything is the same silence with better paperwork. This is deliberately
+// unsatisfiable by note-writing: the only way to clear it is to run the module once and drop it
+// from MODULES_NEVER_EXECUTED. Throwing is safe today because the ledger is empty apart from M6 and
+// the guard has no callers outside its tests; if that changes and this proves too blunt for a
+// scoped engagement, the dial to turn is an explicit opt-out on EngagementEnv, not a downgrade to a
+// warning.
 export function assertModuleCoverage(records: Record<string, ModuleRecord>, env?: EngagementEnv): void {
-  const { gaps } = assessModuleCoverage(records, env);
+  const { gaps, neverRun } = assessModuleCoverage(records, env);
   if (gaps.length) {
     throw new Error(`Incomplete audit-module coverage — ${gaps.length} module(s) unaccounted: ${gaps.join(", ")}. Every module must be run, marked partial (with what's missing), or na (with a reason) before delivery.`);
+  }
+  if (neverRun.length) {
+    throw new Error(`Module(s) ${neverRun.join(", ")} have NEVER executed in any engagement — no output, ever. This is not a per-engagement 'na': no reason clears it, only running the module does (see MODULES_NEVER_EXECUTED). Run it (M6: \`pnpm simplify-scan <target>\`) or remove the product claim.`);
   }
 }

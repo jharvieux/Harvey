@@ -12,7 +12,7 @@
 |---|---|---|---|
 | M4 Duplication | jscpd | `src/cli/quality-scan.ts` (`pnpm quality-scan`) | Pick consolidation approach per cluster |
 | M5 Slop / dead code | knip + `src/detectors/slop.ts` + `quality-extras.txt` checklist | `src/cli/quality-scan.ts` for dead exports/files; **`detectSlopFindings` (`src/detectors/slop.ts`, ids `SLOP-*`, run via `pnpm detect-static`)** now mechanizes 11 AI-slop classes — see §5; the residue (judgment-heavy simplification) stays a manual read against `quality-extras.txt` | Manual read for the classes neither knip nor the slop detector can see |
-| M6 Simplification / reuse | `/simplify` + `quality-extras.txt` | Not mechanically detectable — `/simplify` review | Fully manual, brief-driven |
+| M6 Simplification / reuse | `pnpm simplify-scan` + `quality-extras.txt` | Not mechanically detectable — the runner assembles a brief+source review packet (`src/cli/simplify-scan.ts`); a reviewer judges it | Fully manual, brief-driven |
 
 ## 1. Running the scan (M4 + M5)
 
@@ -98,8 +98,9 @@ adjust confidence/severity after triage if the mechanical default doesn't match 
   than estimating. Auth/guard/security-path findings (elevated to Medium) belong alongside the M1
   authorization review, not just this list — cross-link them. If M5 didn't run this pass (`M5-00`),
   state that plainly as a disclosed coverage gap rather than implying zero dead code.
-- **§3b Simplification / reuse (M6):** this module has no mechanical detector — it's the
-  `/simplify` skill applied whole-repo against `docs/quality-extras.txt`'s SIMPLIFICATION section
+- **§3b Simplification / reuse (M6):** this module has no mechanical detector — run
+  `pnpm simplify-scan <target>` to assemble the review packet, then review it against
+  `docs/quality-extras.txt`'s SIMPLIFICATION section
   (hand-rolled primitives, hand-rolled versions of an already-in-the-dependency-tree library,
   over-abstraction, premature generality, inconsistent patterns, "would a senior engineer call this
   overcomplicated"). For each item found: the current code → the concrete replacement (stdlib,

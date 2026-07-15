@@ -15,7 +15,7 @@ A full audit is 7 modules. Each lists what it finds, the method, the tool/skill 
 | M3 | Hotspot analysis | **`vitals` plugin** (`/vitals:scan`) | exists — run, don't build |
 | M4 | Duplication | jscpd | exists (`pnpm check:duplication`) |
 | M5 | Slop / dead code | slop-check + D-091 + dead-export detection | exists, wire in |
-| M6 | Simplification / reuse / maintainability | `/simplify` + pre-pr-reviewer doctrine + `quality-extras.txt` | exists, wire in |
+| M6 | Simplification / reuse / maintainability | `pnpm simplify-scan` (brief + source → review packet) + pre-pr-reviewer doctrine | runner exists (#266); **never yet run against a real target** |
 | M7 | Performance tuning | Supabase perf advisors + profiling + bundle/Web-Vitals tools | **net-new** to assemble |
 | M8 | Test quality & intent | StrykerJS mutation testing + tests-for-intent review | **net-new** |
 | M9 | Next.js App Router boundary & rendering | `scan-extras.txt` (M9 section) + static review | **net-new** |
@@ -74,9 +74,17 @@ A full audit is 7 modules. Each lists what it finds, the method, the tool/skill 
 - **Finds:** the supportability tax — hand-rolled implementations of things a stdlib/framework primitive or a
   well-known library already does; over-abstraction (abstractions for single use); inconsistent patterns that
   raise the bus-factor; complexity a senior engineer would call overcomplicated.
-- **Method:** the `/simplify` skill + the pre-pr-reviewer "surgical-changes / reuse / would-a-senior-call-this-
-  overcomplicated" doctrine, generalized to a whole-repo pass, plus the `quality-extras.txt` brief.
-- **Powered by:** `/simplify` + `quality-extras.txt`.
+- **Method:** `pnpm simplify-scan <target>` assembles the `quality-extras.txt` M6 brief (its SIMPLIFICATION +
+  FALSE POSITIVES sections) plus the target's source into a review packet; a reviewer reads the packet and
+  writes up what to replace, applying the pre-pr-reviewer "surgical-changes / reuse / would-a-senior-call-this-
+  overcomplicated" doctrine. The runner assembles and does not judge — M6's verdict is a reviewer's opinion, so
+  the writeup goes through human triage before it reaches a client (`docs/design/m6-simplification-eval.md` §5).
+- **Powered by:** `pnpm simplify-scan` + `quality-extras.txt`.
+- **Status (2026-07-15, #266):** M6 has produced **no output in any engagement** since it was defined
+  (2026-07-09, #72) — it had no runner until now, and the coverage guard recorded its absence as a routine `na`
+  every time. `src/audit/module-coverage.ts` (`MODULES_NEVER_EXECUTED`) now fails loud on this until M6 runs
+  against a real target. Until then, treat the "lower your maintenance cost" pitch below as **unproven by our
+  own tooling** — it is a claim about a module that has never run.
 - **Report:** maintainability recommendations — each "reinvented wheel" with the suggested
   library/primitive to replace it, and the over-abstractions to collapse. This is the "lower your ongoing
   maintenance + onboarding cost" pitch, which lands even with clients who don't think they have a security problem.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertModuleCoverage, assessModuleCoverage, AUDIT_MODULES, type ModuleRecord } from "./module-coverage.js";
+import { assertModuleCoverage, assessModuleCoverage, AUDIT_MODULES, MODULES_NEVER_EXECUTED, type ModuleRecord } from "./module-coverage.js";
 
 const ranAll = (): Record<string, ModuleRecord> => Object.fromEntries(AUDIT_MODULES.map((m) => [m.id, { status: "ran" as const }]));
 
@@ -16,12 +16,13 @@ describe("assessModuleCoverage", () => {
     expect(cov.gaps).toContain("M8");
   });
 
-  it("counts an explicit na-with-reason as accounted", () => {
+  it("counts an explicit na-with-reason as accounted (not a gap)", () => {
     const rec = ranAll();
-    rec.M6 = { status: "na", note: "simplification LLM pass not purchased this round" };
+    rec.M2 = { status: "na", note: "no running app / self-hosted clone in scope" };
     const cov = assessModuleCoverage(rec);
     expect(cov.complete).toBe(true);
-    expect(cov.na).toContainEqual({ id: "M6", note: "simplification LLM pass not purchased this round" });
+    expect(cov.gaps).toEqual([]);
+    expect(cov.na).toContainEqual({ id: "M2", note: "no running app / self-hosted clone in scope" });
   });
 
   it("rejects na without a reason, and a bare skipped, as gaps", () => {
@@ -54,7 +55,51 @@ describe("assessModuleCoverage", () => {
     expect(cov.gaps).toEqual([]); // everything is accounted for…
     expect(cov.complete).toBe(false); // …but the report cannot claim full coverage while M7 is partial
     expect(cov.partial).toContainEqual({ id: "M7", note: expect.stringContaining("no live database") });
-    expect(() => assertModuleCoverage(rec, env)).not.toThrow();
+    // …and M6's reasoned na no longer buys silence — it has never run (#266).
+    expect(cov.neverRun).toContain("M6");
+    expect(() => assertModuleCoverage(rec, env)).toThrow(/NEVER executed/);
+  });
+});
+
+// #266: `na` answers "did this run THIS engagement". For a module whose environment is absent by
+// default in every engagement, that answer is legitimately "no" every single time — so the module
+// can have zero output ever while each individual record is correct. These tests pin the
+// distinction: a well-reasoned na must NOT be able to launder "never executed once" into routine.
+describe("never-run modules (#266)", () => {
+  it("M6 is in the never-executed ledger — the module the guard absorbed as routine na", () => {
+    expect(MODULES_NEVER_EXECUTED.has("M6")).toBe(true);
+  });
+
+  it("a perfectly-reasoned na on a never-run module still fails loud, unlike an na on M2", () => {
+    const rec = ranAll();
+    rec.M6 = { status: "na", note: "paid LLM tier not in scope this engagement — a true and correct reason" };
+    const cov = assessModuleCoverage(rec, { connected: true, dynamic: true, llm: false });
+    // The note is valid, so this is NOT a gap — the old guard stopped here and said "accounted".
+    expect(cov.gaps).toEqual([]);
+    expect(cov.na).toContainEqual({ id: "M6", note: expect.stringContaining("paid LLM tier not in scope") });
+    // But it has never run in any engagement, so coverage is not complete and the gate throws.
+    expect(cov.neverRun).toEqual(["M6"]);
+    expect(cov.complete).toBe(false);
+    expect(() => assertModuleCoverage(rec, { connected: true, dynamic: true, llm: false })).toThrow(/M6/);
+  });
+
+  it("no note clears never-run — only running the module does", () => {
+    const ran = ranAll(); // M6 ran
+    expect(assessModuleCoverage(ran).neverRun).toEqual([]);
+    expect(assessModuleCoverage(ran).complete).toBe(true);
+    expect(() => assertModuleCoverage(ran)).not.toThrow();
+  });
+
+  it("the never-run error names the runner, so the reader knows how to clear it", () => {
+    const rec = ranAll();
+    rec.M6 = { status: "na", note: "not purchased" };
+    expect(() => assertModuleCoverage(rec)).toThrow(/simplify-scan/);
+  });
+
+  it("a never-run module is not double-counted as a gap (a gap is fixable by a note; this isn't)", () => {
+    const rec = ranAll();
+    rec.M6 = { status: "na", note: "not purchased" };
+    expect(assessModuleCoverage(rec).gaps).not.toContain("M6");
   });
 });
 
