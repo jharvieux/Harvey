@@ -75,21 +75,21 @@ M8 report content for that target — a security-critical codebase with zero aut
 coverage is itself the finding, not a reason the scan failed to run. This shape replaces the usual
 `{ summary, reportRows }` output (§2) for that run; the CLI still honors `--out` for it.
 
-**Report path assumption (flagged, not asserted as fact):** Stryker's `json` reporter writes to
-`reports/mutation/mutation.json` relative to the repo root by default. This is accurate for
-recent Stryker versions at time of writing but **is not version-pinned here** — if the installed
-Stryker version writes elsewhere, pass `--report <path>` explicitly (the wrapper skips invoking
+**Report path assumption:** Stryker's `json` reporter writes to `reports/mutation/mutation.json`
+relative to the repo root by default — **confirmed against a real run** (#262, 2026-07-15,
+`@stryker-mutator/core@9.6.1`, see "Targets/calibration structure" below). Still **not
+version-pinned**: an engagement on a different Stryker major could write elsewhere — if the
+installed version doesn't match, pass `--report <path>` explicitly (the wrapper skips invoking
 Stryker entirely when `--report` is given, so it also works to just shape a report from a run
 that already happened).
 
 ### Calibration target
 
 `targets/calibration/` (issue #9) is a small deliberately-broken sample app with a
-`GROUND-TRUTH.md` of known issues — a reasonable target to validate this wrapper's *shaping*
-logic against once it has a test suite and Stryker config of its own. **A live timed run against
-it was out of scope for this pass** (see "Deferred" below) — this doc's mutation-scan wiring was
-verified against synthetic fixtures shaped from Stryker's documented JSON schema, not a real
-Stryker execution.
+`GROUND-TRUTH.md` of known issues. `targets/calibration/test-quality/` (added #72) is the nested
+fixture with its own installable `package.json`/`stryker.config.json` — see "Targets/calibration
+structure" at the end of this doc for the timed run against it (#15's original wall-clock
+calibration acceptance criterion, done #262).
 
 ## 2. Interpreting the output
 
@@ -228,7 +228,39 @@ no-test-suite detection path** — it detects no executable test suite at the ro
 `M8-00` finding ("No automated test suite") + a `partial` module record, then exits cleanly. This
 is the intended demo of what an audit finds when hitting a completely untested app.
 
-Pre-engagement calibration runs (e.g., timing, verifying the Stryker JSON-report shaping) should
-target `targets/calibration/test-quality/` for realistic mutation-testing performance data. The
-root `targets/calibration/` no-test-suite demo is a separate assertion that the #224 no-test-suite
-path is wired correctly — do not rely on it as a performance baseline.
+Pre-engagement calibration runs (timing, verifying the Stryker JSON-report shaping) target
+`targets/calibration/test-quality/`. The root `targets/calibration/` no-test-suite demo is a
+separate assertion that the #224 no-test-suite path is wired correctly — do not rely on it as a
+performance baseline.
+
+#### Wall-clock timing calibration (#15, done #262)
+
+This was #15's original acceptance criterion and had not actually been run — PR #242's rewrite of
+this doc dropped the "hasn't happened yet" flag along with the two genuinely-obsolete pre-#72
+steps, which read as done when it wasn't. Run for real 2026-07-15:
+
+```bash
+cd targets/calibration/test-quality && npm install   # 211 packages, ~1s (own package-lock.json)
+cd ../../..
+pnpm mutation-scan targets/calibration/test-quality --concurrency <n> --out /tmp/m8-run.json
+```
+
+| `--concurrency` | Wall clock (`real`, `/usr/bin/time -p`) | Stryker's own timer |
+|---|---|---|
+| 1 | 3.24s | "Done in 2 seconds" |
+| 4 | 1.86s | "Done in 1 second" |
+| 8 | 1.96s | "Done in 1 second" |
+
+Mutation score held constant across all three runs (76%, 19/25 valid mutants killed, 25 total —
+confirms concurrency only affects wall clock, not the result). Concurrency 4 and 8 land within
+noise of each other: this fixture is deliberately tiny (2 source files, 25 mutants), so wall clock
+here is dominated by Stryker's worker-process startup (~1-2s), not mutant execution — the 1→4
+jump is the real, measurable signal; 4→8 is not a claim this fixture can support. **Do not
+extrapolate these numbers to a whole-repo client engagement** — they calibrate the wrapper's
+wiring and the report-path assumption below, not real-engagement runtime, which scales with mutant
+count in a way this 25-mutant fixture is too small to demonstrate.
+
+Also confirms the report-path assumption in §1: `@stryker-mutator/core@9.6.1` (this fixture's
+pinned devDependency) wrote its JSON reporter to `reports/mutation/mutation.json` relative to the
+target dir on every run, matching what `src/cli/mutation-scan.ts` assumes when `--report` isn't
+passed.
