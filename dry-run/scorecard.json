@@ -2,7 +2,7 @@
   "summary": {
     "caught": 5,
     "missed": 3,
-    "requires-live-run": 0
+    "requires-live-run": 4
   },
   "bugs": [
     {
@@ -68,6 +68,38 @@
       "expectedModule": "Semgrep ran (src/scan/semgrep.ts) and the harvey-open-redirect custom rule (src/scan/rules/semgrep/base.yml) matched at redirect.js",
       "status": "caught",
       "note": "Matched by finding \"src.scan.rules.semgrep.harvey-open-redirect\" at pages/api/redirect.js:18."
+    },
+    {
+      "id": "SHADOW-API-VERSION",
+      "severity": "High",
+      "location": "pages/api/v1/export.js",
+      "expectedModule": "replayShadowApiVersion (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayShadowApiVersion GETs each discovered versioned route as anon and proves the bug only when the deprecated route answers 200 with rows the current route gates. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase",
+      "status": "requires-live-run",
+      "note": "replayShadowApiVersion (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayShadowApiVersion GETs each discovered versioned route as anon and proves the bug only when the deprecated route answers 200 with rows the current route gates. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase did not execute in this pass — no caught/missed verdict possible."
+    },
+    {
+      "id": "NO-RATE-LIMIT",
+      "severity": "High",
+      "location": "pages/api/coupon/redeem.js",
+      "expectedModule": "replayNoRateLimit (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayNoRateLimit POSTs the same coupon 5× and proves the bug only when all 5 are accepted (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase",
+      "status": "requires-live-run",
+      "note": "replayNoRateLimit (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayNoRateLimit POSTs the same coupon 5× and proves the bug only when all 5 are accepted (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase did not execute in this pass — no caught/missed verdict possible."
+    },
+    {
+      "id": "CACHE-CROSS-USER",
+      "severity": "High",
+      "location": "pages/api/me/summary.js",
+      "expectedModule": "replayCacheCrossUser (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayCacheCrossUser warms the route as Tenant A then re-reads it as anon, proving the bug only when anon is served A's tenant_id from a public/s-maxage cache. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase",
+      "status": "requires-live-run",
+      "note": "replayCacheCrossUser (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayCacheCrossUser warms the route as Tenant A then re-reads it as anon, proving the bug only when anon is served A's tenant_id from a public/s-maxage cache. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase did not execute in this pass — no caught/missed verdict possible."
+    },
+    {
+      "id": "ANON-PRIVILEGED-RPC",
+      "severity": "Critical",
+      "location": "supabase/migrations/20260710000002_dynamic_probes.sql",
+      "expectedModule": "replayAnonPrivilegedRpc (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayAnonPrivilegedRpc POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase",
+      "status": "requires-live-run",
+      "note": "replayAnonPrivilegedRpc (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayAnonPrivilegedRpc POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase did not execute in this pass — no caught/missed verdict possible."
     }
   ]
 }
