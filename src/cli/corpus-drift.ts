@@ -92,13 +92,11 @@ for (const target of targets) {
 
     // Two scanners emit `M5 —` findings and they measure DIFFERENT things: quality-scan's knip
     // pass is dead code (unused files/exports), detect-static's slop pass is style (else-after-
-    // return, single-call wrappers). Merging both and counting the prefix double-counts M5 —
-    // subscription-payments reads 18 instead of its measured 8. The manifest's M5 baselines are
-    // the knip dead-code numbers (see M5_NEEDS_INSTALL's reason), so each module is scored only
-    // against the scanner that produced its baseline.
-    const staticFindings = runScanner("detect-static", [dir]);
+    // return, single-call wrappers). #278 split the manifest's single M5 into M5-knip and
+    // M5-slop, each with its own baseline, and scoreExternalBaseline's moduleMatches tells them
+    // apart by taxonomy — so both scanners' output is scored now instead of filtering one out.
     const findings = [
-      ...staticFindings.filter((f) => !f.taxonomy.startsWith("M5 ")),
+      ...runScanner("detect-static", [dir]),
       ...runScanner("quality-scan", [dir]),
       ...runScanner("mutation-scan", [dir]),
     ];

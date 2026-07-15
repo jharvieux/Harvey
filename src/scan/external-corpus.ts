@@ -62,7 +62,12 @@ export interface ExternalTarget {
   // corpus gates the WHOLE audit, not just security.
   securityVerdict: string;
   disclosureIssue?: number;
-  modules: Partial<Record<"M4" | "M5" | "M7" | "M8" | "M9" | "M10", ModuleBaseline | ModuleNotRun>>;
+  // #278: quality-scan's knip pass (dead code) and detect-static's slop pass (style) both emitted
+  // `M5 —` findings that used to be merged into one scored module, double-counting M5 (subscription-
+  // payments read 18 against a measured 8). They measure different things and drift independently,
+  // so each gets its own key and its own baseline — scoreExternalBaseline's moduleMatches below is
+  // the real match rule that keeps them apart (a shared "M5 " prefix can't distinguish them).
+  modules: Partial<Record<"M4" | "M5-knip" | "M5-slop" | "M7" | "M8" | "M9" | "M10", ModuleBaseline | ModuleNotRun>>;
 }
 
 export function isNotRun(m: ModuleBaseline | ModuleNotRun): m is ModuleNotRun {
@@ -70,11 +75,11 @@ export function isNotRun(m: ModuleBaseline | ModuleNotRun): m is ModuleNotRun {
 }
 
 // knip usually needs the TARGET's own node_modules to resolve its config imports (CLAUDE.md's M5
-// row), and none of the six are vendored with deps — so M5 is not-run on the targets where it
+// row), and none of the six are vendored with deps — so M5-knip is not-run on the targets where it
 // actually failed, rather than falsely 0. NOT uniformly: #263's first real Layer 2 run found knip
 // resolves multi-tenant-starter's and subscription-payments' configs without any install, so those
 // two carry measured baselines. Which targets those are is a measurement, not an assumption.
-const M5_NEEDS_INSTALL: ModuleNotRun = {
+const M5_KNIP_NEEDS_INSTALL: ModuleNotRun = {
   reason: "knip needs the target's own `npm install` to resolve config imports — not run in the source-only sweep (CLAUDE.md M5 prereq). Confirmed live: quality-scan emits its M5-00 'did not run' finding (#223) rather than a silent zero.",
 };
 
@@ -118,7 +123,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     disclosureIssue: 214,
     modules: {
       M4: { counted: 68, total: 104, note: "5.27% (2749/52165 lines), 203 raw clone clusters — of which 104 are the cross-file clones jscpdToFindings emits and 68 are counted (36 are sub-15-line Info). The 203 originally recorded here was jscpd's cluster count, not the counted findings this scorer compares (fixed #263 when the Layer 2 job first scored it). Was 9.75%/199 clones pre-#232; the drop is that fix excluding generated/demo paths, NOT the repo changing. Per #232 ~75% of what remains is genuine per-entity copy-paste (CRUD forms, per-entity tool/store/service files) — the corpus's strongest real M4 signal and a factory-refactor case." },
-      M5: M5_NEEDS_INSTALL,
+      "M5-knip": M5_KNIP_NEEDS_INSTALL,
+      "M5-slop": { counted: 6, total: 16, note: "#278: measured 2026-07-15 via detect-static (previously excluded from scoring entirely to avoid double-counting M5-knip). 3 'Single-call wrapper' + 3 'Else after return' counted; 10 Info-tail (narrating comments, AI phrasing, decorative emoji, redundant JSDoc)." },
       M7: { counted: 49, total: 79, note: "30 of the 79 are the exhaustive-deps class #230 demoted to Info (~0 real), leaving 49 counted. The real vein is 26 'Unbounded select' on growable request-path lists (low-sev latent scalability). Residual FP tail still counted: 5 inline-literal, 4 context-value-recreated, 2 index-key — the micro-render shapes #230 judged ~0% real (see follow-up)." },
       M8: M8_NEEDS_STRYKER, // `vitest run` script + a single *.test.* file: a real (if thin) suite, so mutation-scan needs the Stryker config this target doesn't have. #277: verified 2026-07-15 a scoped config (mutate: lib/pdf/launch.ts) runs clean (21/21 killed, ~1s) after `npm install --legacy-peer-deps` — but that's a hand-tuned config, not something the wrapper generates.
       M9: { counted: 8, total: 8, note: "4 'Server Action missing input validation' + 4 'Accidental dynamic rendering'. Distinct from the 4 M1 'Server Action missing authorization check' the same run emits — #231 routed the authz vein to M1/#221 rather than scoring it as M9 rendering, and this split is what that fix looks like on real code." },
@@ -134,7 +140,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     disclosureIssue: 215,
     modules: {
       M4: { counted: 6, total: 8, note: "5.2% (309/5947 lines), 13 raw clusters -> 8 cross-file findings, 6 counted (fixed #263: the 13 was jscpd's cluster count, not counted findings). Down from the sweep's 6.13%/22 clones now #232 excludes `types_db.ts` (Supabase codegen was ~50% of this repo's clones)." },
-      M5: { counted: 8, total: 8, note: "Ran WITHOUT the target's `npm install` — knip resolved its config anyway (fixed #263: recorded as not-run on the assumption it couldn't, measured as 8). 3 unused files + 5 unused-export files; the Medium is utils/supabase/middleware. If a future knip/config change makes this fail, it degrades to the M5-00 'did not run' finding (#223) and this baseline fails loudly rather than silently reading 0." },
+      "M5-knip": { counted: 8, total: 8, note: "Ran WITHOUT the target's `npm install` — knip resolved its config anyway (fixed #263: recorded as not-run on the assumption it couldn't, measured as 8). 3 unused files + 5 unused-export files; the Medium is utils/supabase/middleware. If a future knip/config change makes this fail, it degrades to the M5-00 'did not run' finding (#223) and this baseline fails loudly rather than silently reading 0." },
+      "M5-slop": { counted: 10, total: 12, note: "#278: the double-counting case that started this split — this target's detect-static findings (9 'Else after return' + 1 'Single-call wrapper') were being summed with M5-knip's 8, reading 18 against a measured 8. Measured 2026-07-15: 10 counted, 2 Info." },
       M7: { counted: 2, total: 3, note: "One of the smallest surfaces in the corpus: 2 raw <img> + 1 Info exhaustive-deps. A good FALSE-POSITIVE regression guard — a well-maintained Vercel example should stay near-silent; a jump here means a new over-match." },
       M8: { counted: 1, total: 1, note: "No test script and zero *.test.*/*.spec.* files at this commit, so mutation-scan needs no Stryker: it emits exactly #224's M8-00 zero-coverage finding (High), which IS the measurement. Recorded as 1 counted finding — the 0 previously here was a test-FILE count and would have read as 'no M8 problems' on a repo with no tests at all, inverting the finding's meaning (fixed #263)." },
       M9: { counted: 2, total: 2, note: "2 'Accidental dynamic rendering'. Low and stable — the second FP guard alongside M7." },
@@ -150,7 +157,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     disclosureIssue: 216,
     modules: {
       M4: { counted: 39, total: 66, note: "4.93% (1148/23283 lines), 90 raw clusters -> 66 cross-file findings, 39 counted (fixed #263: the 90 was jscpd's cluster count). Per #232 the real signal is the API-handler envelope (a `createHandler` extraction candidate), lower severity than proposit's." },
-      M5: M5_NEEDS_INSTALL,
+      "M5-knip": M5_KNIP_NEEDS_INSTALL,
+      "M5-slop": { counted: 12, total: 13, note: "#278: measured 2026-07-15. 9 'Else after return' + 2 'Orphan TODO' + 1 'Single-call wrapper' counted; 1 Info. The corpus's highest slop count on a target with real test coverage — a real regression guard, not just the zero-test targets." },
       M7: { counted: 17, total: 17, note: "Includes the corpus's one genuine middleware stall ('Fetch in middleware hot path') — one of the two real request-path finds #230 kept. The 9 inline-literal + 3 index-key are the residual micro-render tail." },
       M8: M8_NEEDS_STRYKER, // Best-tested target in the corpus (real `jest` script + 8 test files, plus playwright) — and precisely why it can't be scored without a Stryker config. #277: the playwright specs need a built app + a real browser, a heavier prerequisite than a unit-test mutation run; not attempted.
       M9: { counted: 0, total: 0, note: "MEASURED zero, and it is the #231 fix working: this is a PAGES Router app, where the App-Router-only checks must not fire at all. Pre-#231 it drew a bogus server-only hit. Any non-zero M9 here is a straight regression of that fix." },
@@ -171,8 +179,9 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     disclosureIssue: 217,
     modules: {
       M4: { counted: 0, total: 1, note: "0.35% (11/3167 lines), 6 raw clusters -> 1 cross-file finding, and it is Info (sub-15-line), so 0 counted (fixed #263: the 6 was jscpd's cluster count). A MEASURED near-zero on the smallest target; the sweep's 2.95% was the pre-#232 denominator." },
-      // The one target small enough (13 deps) to `npm install` cheaply, so M5 DID run here.
-      M5: { counted: 2, total: 2, note: "Ran WITHOUT the target's node_modules — knip still resolves this 13-dep repo's config, so M5 is the one target scored here (fixed #263: recorded as 1 finding, measured as 2 — knip reports the two files separately, it does not roll them into one). Both REAL, and the first is security-weighted: `lib/security/guards.ts` exports requireTenantAccess/requireTenantAdmin and NOTHING calls them, on the same repo whose self-join Critical (#217) is a missing-authz bug. #226's security cross-link firing on real code: the dead guard IS the vulnerability's fingerprint. The second is unused exports in lib/supabase/server.ts." },
+      // The one target small enough (13 deps) to `npm install` cheaply, so M5-knip DID run here.
+      "M5-knip": { counted: 2, total: 2, note: "Ran WITHOUT the target's node_modules — knip still resolves this 13-dep repo's config, so M5-knip is the one target scored here (fixed #263: recorded as 1 finding, measured as 2 — knip reports the two files separately, it does not roll them into one). Both REAL, and the first is security-weighted: `lib/security/guards.ts` exports requireTenantAccess/requireTenantAdmin and NOTHING calls them, on the same repo whose self-join Critical (#217) is a missing-authz bug. #226's security cross-link firing on real code: the dead guard IS the vulnerability's fingerprint. The second is unused exports in lib/supabase/server.ts." },
+      "M5-slop": { counted: 0, total: 0, note: "#278: measured 2026-07-15 — MEASURED zero, consistent with M4/M7's floor readings on this 3.1k-line repo. Any non-zero here is almost certainly a new over-match." },
       M7: { counted: 0, total: 0, note: "MEASURED zero — a 3.1k-line repo with no perf surface. A useful floor: any M7 finding appearing here is almost certainly a new over-match." },
       M8: M8_NEEDS_STRYKER, // One hand-rolled `test/rls.test.mjs` run via `node --test` — detectNoTestSuite counts the `--test` script as a real suite, so this needs Stryker too. #277: verified 2026-07-15 this test spins up a Docker Postgres container per run — mutation testing would pay that cost per mutant, well beyond any CI budget without a dedicated long-running job.
       M9: { counted: 3, total: 3, note: "2 'Accidental dynamic rendering' + 1 'Data-fetching waterfall'." },
@@ -188,7 +197,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     disclosureIssue: 218,
     modules: {
       M4: { counted: 4, total: 7, note: "1.35% (211/15684 lines), 11 raw clusters -> 7 cross-file findings, 4 counted (fixed #263: the 11 was jscpd's cluster count). The sweep's headline '13.3%, highest in the corpus' was almost entirely `monero/patches/**` whole-file fork-mirrors. #232's vendored-path exclusion is what closed that ~12-point gap; this target is the regression guard for it." },
-      M5: M5_NEEDS_INSTALL,
+      "M5-knip": M5_KNIP_NEEDS_INSTALL,
+      "M5-slop": { counted: 6, total: 11, note: "#278: measured 2026-07-15. 5 'Else after return' + 1 'Orphan TODO' counted; 5 Info." },
       M7: { counted: 3, total: 4, note: "1 unbounded select + 1 index-key + 1 state-sprawl counted, 1 exhaustive-deps demoted to Info." },
       M8: { counted: 1, total: 1, note: "No package.json at the repo root (it's a monorepo whose apps carry their own) and zero test files — mutation-scan emits #224's M8-00 zero-coverage finding (High), which IS the measurement. 1 counted, not the 0 test-FILE count previously recorded (fixed #263)." },
       M9: { counted: 1, total: 1, note: "1 'Data-fetching waterfall'." },
@@ -204,7 +214,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     disclosureIssue: 219,
     modules: {
       M4: { counted: 14, total: 16, note: "1.15% (318/27617 lines), 28 raw clusters -> 16 cross-file findings, 14 counted (fixed #263: the 28 was jscpd's cluster count). The sweep's 499-line identical `database.types.ts` copy is now excluded by #232." },
-      M5: M5_NEEDS_INSTALL,
+      "M5-knip": M5_KNIP_NEEDS_INSTALL,
+      "M5-slop": { counted: 23, total: 26, note: "#278: measured 2026-07-15. 22 'Redundant JSDoc' + 1 'Orphan TODO' counted; 3 Info. The corpus's highest slop count — a well-maintained starter kit whose JSDoc habit trips the detector, worth watching for FP drift." },
       M7: { counted: 23, total: 24, note: "Includes the corpus's other genuine request-path stall ('Blocking sync I/O in request handler' — the execSync-on-a-/version-route case #230 kept) plus an 'Await in loop (N+1)' and a raw <img>. The 11 inline-literal + 6 index-key + 2 context-value are the residual micro-render tail. 22 -> 23 when #269 added the 'React Compiler flag unresolvable' class: this repo sets `reactCompiler: ENABLE_REACT_COMPILER` (env-derived), the exact unresolvable-flag case #249 filed. Baseline rebased by #263's first real Layer 2 run — an intended new detection, not a regression, and the drift check catching it on day one is the corpus working." },
       M8: M8_NEEDS_STRYKER, // `turbo test` script + 3 test files — a partial suite, between boxyhq and the zero-test targets, and still unscoreable without a Stryker config. #277: same class of per-repo tuning cost as the others (turbo monorepo test orchestration); not attempted.
       M9: { counted: 2, total: 2, note: "2 'Accidental dynamic rendering'." },
@@ -305,8 +316,21 @@ interface DriftRow {
   detail: string;
 }
 
+// quality-scan's knip pass emits every M5 finding under this one literal taxonomy string; nothing
+// else in the codebase uses it. #278: M5-slop is everything ELSE prefixed "M5 " (detect-static's
+// 11 style classes — else-after-return, single-call wrapper, etc, src/detectors/slop.ts) — matched
+// by exclusion rather than an enumerated list, so a new slop class detect-static adds later is
+// still scored under M5-slop without this file needing an update to notice it.
+const M5_KNIP_TAXONOMY = "M5 — Slop / dead code";
+
+function moduleMatches(taxonomy: string, module: string): boolean {
+  if (module === "M5-knip") return taxonomy === M5_KNIP_TAXONOMY;
+  if (module === "M5-slop") return taxonomy.startsWith("M5 ") && taxonomy !== M5_KNIP_TAXONOMY;
+  return taxonomy.startsWith(`${module} `);
+}
+
 function countedFor(findings: Finding[], module: string): number {
-  return findings.filter((f) => f.taxonomy.startsWith(`${module} `) && f.severity !== "Info").length;
+  return findings.filter((f) => moduleMatches(f.taxonomy, module) && f.severity !== "Info").length;
 }
 
 // Scores a real scan of `target`'s pinned commit against its recorded baseline. Exact equality:
