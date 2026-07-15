@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -11,7 +11,9 @@ import { b12NextconfigEntries } from "./calibration/b12-nextconfig.entries.js";
 import { b13SupaEntries } from "./calibration/b13-supa.entries.js";
 import { b14AppLogicEntries } from "./calibration/b14-applogic.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
+import { m9AuthzEntries } from "./calibration/m9-authz.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
+import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
@@ -619,6 +621,39 @@ describe("buildCoverageMatrix", () => {
     expect(m.positivesCaught).toBe(m.positivesTotal);
     // Negatives whose location substring collides with a synthesized positive location would
     // fail here; assert none do (guards against ambiguous corpus locations).
+    expect(m.negativesCleared).toBe(m.negativesTotal);
+    expect(m.ok).toBe(true);
+  });
+});
+
+describe("#221 authz corpus (live detectAppRouterFindings output over the committed fixture)", () => {
+  // Unlike the recorded-output batches above, this scores the REAL detector against the REAL
+  // committed fixture — so the answer key can't drift away from what the scanner actually emits.
+  const findings = detectAppRouterFindings(
+    m9AuthzEntries.map((e) => ({
+      path: e.location,
+      text: readFileSync(join(import.meta.dirname, "../../targets/calibration", e.location), "utf8"),
+    })),
+  );
+
+  it("catches the planted client-supplied-owner-id bug and clears both near-miss negatives", () => {
+    for (const e of m9AuthzEntries) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe(e.expectedTier);
+      else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("draws exactly one finding of this class on the fixture — the two benign siblings are silent", () => {
+    const hits = findings.filter((f) => f.taxonomy === "M1 — Client-supplied owner id trusted by authenticated action");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("updateProfileName");
+  });
+
+  it("keeps the class out of the free count — the AST cannot prove authorization is absent elsewhere", () => {
+    const m = buildCoverageMatrix(findings, m9AuthzEntries);
+    expect(m.positivesCaughtHigh).toBe(0);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });

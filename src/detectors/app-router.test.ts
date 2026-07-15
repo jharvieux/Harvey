@@ -96,6 +96,85 @@ describe("Server Action missing auth", () => {
   });
 });
 
+const CLIENT_OWNER_ID = "M1 — Client-supplied owner id trusted by authenticated action";
+
+// #221. The gap this closes: the missing-auth check above is satisfied by the mere PRESENCE
+// of an auth call, so an action that authenticates and then scopes its mutation by a
+// client-supplied owner id produced no finding at all. Every negative here is a near-miss —
+// it carries the auth call, the mutation, and an ownership `.eq()` — so a rule that simply
+// matched "server action reading its arguments" would fail them.
+describe("client-supplied owner id trusted by an authenticated action (#221)", () => {
+  it("flags an authenticated, schema-validated action whose mutation is scoped by a client-supplied user_id", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("client-owner-id/positive"));
+    const hits = findings.filter((f) => f.taxonomy === CLIENT_OWNER_ID);
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ severity: "High", category: "Security", confidence: "Likely" });
+    expect(hits[0]?.title).toContain("updateMemberRole");
+    expect(hits[0]?.location).toBe("app/actions.ts:19");
+    expect(hits[0]?.evidence).toContain("currentUser");
+    // The action DOES authenticate and DOES validate — neither of the older checks fires,
+    // which is exactly why this class needed its own detector rather than a widened rule.
+    expect(taxonomies(findings)).not.toContain("M1 — Server Action missing authorization check");
+    expect(taxonomies(findings)).not.toContain("M9 — Server Action missing input validation");
+  });
+
+  it("does not flag the same shape when the owner id is read off the session binding", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("client-owner-id/negative-session-derived"));
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
+  });
+
+  it("does not flag a client-supplied id that is explicitly compared against the session's before mutating", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("client-owner-id/negative-ownership-compared"));
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
+  });
+
+  it("does not flag a read-only action scoped by a client-supplied owner id (RLS's job, not a mutation gap)", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/actions.ts",
+        text: `"use server";\nimport { getCurrentUser } from "../lib/auth";\nexport async function listInvoices(input: { tenantId: string }) {\n  const user = await getCurrentUser();\n  return admin.from("invoices").select("*").eq("tenant_id", input.tenantId);\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
+  });
+
+  it("does not flag a mutation scoped by a client-supplied non-ownership column", () => {
+    // `.eq("status", …)` from the client is an ordinary filter, not an authorization decision —
+    // pins the rule to ownership columns rather than "any .eq() fed an argument".
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/actions.ts",
+        text: `"use server";\nimport { getCurrentUser } from "../lib/auth";\nexport async function archive(input: { status: string }) {\n  const user = await getCurrentUser();\n  await admin.from("tasks").update({ archived: true }).eq("status", input.status).eq("user_id", user.id);\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
+  });
+
+  it("does not flag an owner id that roots in neither the parameters nor the session — client origin is not established", () => {
+    // `.eq("user_id", resolveTenant().id)` roots in a call, not an argument. Pins the rule to a
+    // PROVEN client root: without this the safe default (silence) could invert into "unknown =
+    // client-supplied", which would flag every helper-derived owner id in a real codebase.
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/actions.ts",
+        text: `"use server";\nimport { getCurrentUser } from "../lib/auth";\nexport async function update(input: { bio: string }) {\n  const user = await getCurrentUser();\n  await admin.from("profiles").update({ bio: input.bio }).eq("user_id", resolveTenant().id);\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
+  });
+
+  it("does not flag when auth is called but nothing is bound from it — authorization may live in code this pass cannot see", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/actions.ts",
+        text: `"use server";\nimport { requireUser } from "../lib/auth";\nexport async function update(input: { userId: string; bio: string }) {\n  await requireUser();\n  await admin.from("profiles").update({ bio: input.bio }).eq("user_id", input.userId);\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
+  });
+});
+
 describe("Server Action missing input validation", () => {
   it("flags a 'use server' action that mutates from formData with no schema parse", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("server-action-validation/positive"));
