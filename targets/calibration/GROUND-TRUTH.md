@@ -1699,21 +1699,32 @@ tradeoff comment, a framework contract) rather than pattern-match on shape alone
 | id | location | why benign |
 |---|---|---|
 | M6-N-DEPDROP | `simplify/depdrop.ts` | a small hand-rolled `throttle`, shaped like `debounce.ts`, but carries a `// WHY:` comment recording a deliberate tradeoff (drop a heavy dep for an 8-line function) — `quality-extras.txt` "FALSE POSITIVES": note the tradeoff, don't flag as a defect. |
-| M6-N-FRAMEWORK | `simplify/framework-adapter.ts` | an interface + factory shaped like `manager.ts`'s over-abstraction, but the shape is mandated by a Next.js `getServerSideProps`-style framework contract, not gratuitous — `quality-extras.txt` "FALSE POSITIVES": an abstraction mandated by a framework/library contract. |
+| M6-N-FRAMEWORK | `simplify/framework-adapter.ts` | an interface + factory shaped like `manager.ts`'s over-abstraction, but the shape is mandated by a Next.js `getServerSideProps`-style framework contract, not gratuitous — `quality-extras.txt` "FALSE POSITIVES": an abstraction mandated by a framework/library contract. **⚠️ UNDER REVIEW (run 2, 2026-07-15):** the framework contract this row claims is not demonstrated by the code. Next.js dispatches `getServerSideProps` as a module-level export and never calls a class method, so as written this may be a genuine over-abstraction wearing framework vocabulary — i.e. a positive mislabeled as a negative. Do not count it as a settled negative until the fixture is rebuilt around a contract a framework really imposes (or the label flips). See `docs/design/m6-simplification-eval.md` §3.2. |
 
 ### M6 eval status
 
-**Run 1 executed 2026-07-15 (#265) — result contaminated, not a usable baseline.** The reviewer
-agreed 4/4 positives and 2/2 negatives, but every fixture in `targets/calibration/simplify/`
-carries a header comment naming its own expected verdict (`// … — PLANTED (M6-P-DEBOUNCE)`,
-`// … — BENIGN (M6-N-FRAMEWORK): … the rubric must NOT flag this one`), so a perfect score is
-achievable by reading the labels rather than applying the rubric. The run cannot distinguish the
-two. Full write-up and what run 2 requires: `docs/design/m6-simplification-eval.md` §3.1.
+**The fixtures are de-labelled as of 2026-07-15 (#265 follow-up).** The verdict headers that named
+each file's own expected outcome now live here in this answer key and nowhere else — this section
+and the tables above are the labels. The eval scores by file path, so nothing needs an in-file id.
+`depdrop.ts`'s `// WHY:` block and `framework-adapter.ts`'s `getServerSideProps` shape were kept:
+they are the fixtures' discriminators (the content the rubric must reason about), not labels.
 
-De-labeling the fixtures (keeping `depdrop.ts`'s `// WHY:` block and `framework-adapter.ts`'s
-framework shape — those are the discriminators, not labels) is the prerequisite for a real
-baseline. Whatever a run produces, report it as **"reviewer agreed N/4 positives, M/2
-negatives"** — never as an "M6 precision" percentage.
+**Run 1 (2026-07-15, #265) — contaminated, not a usable baseline.** 4/4 positives, 2/2 negatives,
+scored while every fixture still announced its own verdict in line 1. A reviewer reading only the
+headers scores 6/6, so the run cannot distinguish rubric application from label-reading.
+
+**Run 2 (2026-07-15) — first run against the de-labelled corpus: 4/4 positives, 1/2 negatives.**
+The reviewer (a fresh, uncontaminated context) flagged `framework-adapter.ts` (M6-N-FRAMEWORK),
+arguing Next.js dispatches `getServerSideProps` as a module-level export and never invokes a class
+method — so the shape is not a framework contract and the interface is a genuine single-implementation
+over-abstraction. **That argument looks correct**, which means M6-N-FRAMEWORK's benign status rested
+on its header comment asserting a contract the code does not actually demonstrate. Treat this row as
+**under review — a suspected fixture defect, not a settled negative** (see the note on it above).
+`depdrop.ts` was spared on the `// WHY:` comment alone, which is the negative behaving as designed.
+
+Full write-up: `docs/design/m6-simplification-eval.md` §3.1 (run 1) and §3.2 (run 2). Whatever a run
+produces, report it as **"reviewer agreed N/4 positives, M/2 negatives"** — never as an "M6
+precision" percentage.
 
 ## Known-public/test-credential recognizer (issues #210, #211, #225)
 

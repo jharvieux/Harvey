@@ -1,7 +1,35 @@
 import { describe, expect, it } from "vitest";
+import { AUDIT_MODULES as DOCUMENTED_MODULES } from "../audit-coverage.js";
 import { assertModuleCoverage, assessModuleCoverage, AUDIT_MODULES, MODULES_NEVER_EXECUTED, type ModuleRecord } from "./module-coverage.js";
 
 const ranAll = (): Record<string, ModuleRecord> => Object.fromEntries(AUDIT_MODULES.map((m) => [m.id, { status: "ran" as const }]));
+
+// #275: the guard shipped enumerating only M1–M9 while the product sold ten modules, so M10 could
+// never be a gap, an na, or a never-run — it was absent from the definition of "complete" itself.
+// No test caught it because every test derived its fixture FROM AUDIT_MODULES (see ranAll), which
+// makes the enumeration true by construction: the one thing the guard cannot check about itself is
+// its own list. These pin it against an independent source — src/audit-coverage.ts's list, which is
+// the #229 gate's and is what CLI/report output is built from — so module 11 cannot go missing the
+// same way. If the two ever legitimately diverge, that is a product decision to make explicitly.
+describe("the module enumeration itself (#275)", () => {
+  it("covers every module the product sells — matching the #229 gate's list, not its own", () => {
+    expect(AUDIT_MODULES.map((m) => m.id)).toEqual([...DOCUMENTED_MODULES]);
+  });
+
+  it("enumerates M10 — the module the guard was blind to", () => {
+    expect(AUDIT_MODULES.map((m) => m.id)).toContain("M10");
+  });
+
+  it("names no module the documented set doesn't have (an invented module is a gap the other way)", () => {
+    const documented = new Set<string>(DOCUMENTED_MODULES);
+    expect(AUDIT_MODULES.filter((m) => !documented.has(m.id))).toEqual([]);
+  });
+
+  it("keeps the never-executed ledger to real modules, so a typo can't silently never fire", () => {
+    const ids = new Set(AUDIT_MODULES.map((m) => m.id));
+    expect([...MODULES_NEVER_EXECUTED].filter((id) => !ids.has(id))).toEqual([]);
+  });
+});
 
 describe("assessModuleCoverage", () => {
   it("is complete only when every module is run or validly marked na", () => {
@@ -40,17 +68,20 @@ describe("assessModuleCoverage", () => {
   });
 
   it("models a source-only run: M7's code layer runs, its DB-advisor layer is a disclosed partial (#170)", () => {
-    // Security + M3/M4/M5/M8/M9 over source; M7's code-level detectors also run on source.
+    // Security + M3/M4/M5/M8/M9 over source; M7's and M10's code/schema layers also run on source.
     const rec: Record<string, ModuleRecord> = {
       M1: { status: "ran" }, M3: { status: "ran" }, M4: { status: "ran" },
       M5: { status: "ran" }, M8: { status: "ran" }, M9: { status: "ran" },
     };
     const env = { connected: false, dynamic: false, llm: true };
-    expect(assessModuleCoverage(rec, env).complete).toBe(false); // M2, M6, M7 unaccounted
+    expect(assessModuleCoverage(rec, env).complete).toBe(false); // M2, M6, M7, M10 unaccounted
 
     rec.M2 = { status: "na", note: "no running app / self-hosted clone in scope" };
     rec.M7 = { status: "partial", note: "code-level detectors ran; DB performance advisor n/a — no live database in scope" };
     rec.M6 = { status: "na", note: "simplification LLM pass not purchased this round" };
+    // M10's schema tier runs on migration SQL alone; only its protection-adequacy judgment needs
+    // the live connection — so source-only is a disclosed partial, exactly like M7's (#275).
+    rec.M10 = { status: "partial", note: "columns classified from migration SQL; protection-adequacy judgment n/a — no live database in scope" };
     const cov = assessModuleCoverage(rec, env);
     expect(cov.gaps).toEqual([]); // everything is accounted for…
     expect(cov.complete).toBe(false); // …but the report cannot claim full coverage while M7 is partial
@@ -68,6 +99,15 @@ describe("assessModuleCoverage", () => {
 describe("never-run modules (#266)", () => {
   it("M6 is in the never-executed ledger — the module the guard absorbed as routine na", () => {
     expect(MODULES_NEVER_EXECUTED.has("M6")).toBe(true);
+  });
+
+  it("M10 is NOT in the ledger — unlike M6, it has actually executed", () => {
+    // Established from evidence, not assumed (#275): the dry-run calibration ran M10 for real
+    // against parsed migration columns — 3 tables / 31 columns, artifact dry-run/pii-data-map.json,
+    // recorded in docs/runbooks/dry-run-calibration.md §2. A module with output is not never-run,
+    // and listing it here would be a false alarm — which costs the ledger the credibility that
+    // makes M6's entry worth throwing on.
+    expect(MODULES_NEVER_EXECUTED.has("M10")).toBe(false);
   });
 
   it("a perfectly-reasoned na on a never-run module still fails loud, unlike an na on M2", () => {
