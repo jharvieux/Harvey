@@ -22,6 +22,7 @@ import type { Finding } from "../findings.js";
 import { classifyNoPolicyTables, grantFindings, type NoPolicyTable } from "../grant-classifier.js";
 import { parseColumns, parseDefinerFunctions, parseRlsState } from "../migration-sql-parse.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
+import { relativizeScanScope } from "../scan/scan-scope.js";
 
 interface PhaseResult {
   phase: string;
@@ -116,7 +117,9 @@ async function main(): Promise<void> {
     notes: `${piiPhase.result.columns.length} columns classified across ${Object.keys(dataMap).length} tables with PII/PHI/PCI hits.`,
   });
 
-  writeFileSync(join(outDir, "findings.json"), JSON.stringify(allFindings, null, 2));
+  // findings.json is committed, so it must be diffable across runs and machines (issue #285).
+  const portableFindings = allFindings.map((f) => ({ ...f, location: relativizeScanScope(f.location) }));
+  writeFileSync(join(outDir, "findings.json"), JSON.stringify(portableFindings, null, 2));
   writeFileSync(join(outDir, "pii-data-map.json"), JSON.stringify(dataMap, null, 2));
   writeFileSync(join(outDir, "timing.json"), JSON.stringify(phases, null, 2));
 
