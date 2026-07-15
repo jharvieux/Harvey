@@ -1,5 +1,6 @@
 // Scan CLI entry point.
-//   pnpm exec tsx src/cli/scan.ts --mechanical --dir <path> [--bundle <path>] [--out <file>]
+//   pnpm exec tsx src/cli/scan.ts --mechanical --dir <path> [--bundle <path>]
+//     [--tenant-key <column>] [--tenant-mode per-tenant|per-user] [--out <file>]
 //   pnpm exec tsx src/cli/scan.ts --supabase <project-ref|local> [--functions <dir>] [--out <file>]
 //
 // --supabase against a hosted project needs SUPABASE_ACCESS_TOKEN (a Management API personal
@@ -19,6 +20,12 @@ function arg(flag: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
+function tenantMode(raw: string | undefined): "per-tenant" | "per-user" | undefined {
+  if (raw === undefined || raw === "per-tenant" || raw === "per-user") return raw;
+  console.error(`--tenant-mode must be "per-tenant" or "per-user", got "${raw}"`);
+  process.exit(2);
+}
+
 function emit(findings: Finding[]): void {
   const json = JSON.stringify(findings, null, 2);
   const out = arg("--out");
@@ -30,7 +37,10 @@ async function main(): Promise<void> {
   if (process.argv.includes("--mechanical")) {
     const dir = arg("--dir") ?? process.cwd();
     const bundle = arg("--bundle");
-    emit(await runMechanicalScan({ dir, bundleDir: bundle }));
+    const tenantKey = arg("--tenant-key");
+    const mode = tenantMode(arg("--tenant-mode"));
+    const tenancyOverride = tenantKey || mode ? { tenantKey, mode } : undefined;
+    emit(await runMechanicalScan({ dir, bundleDir: bundle, tenancyOverride }));
     return;
   }
 

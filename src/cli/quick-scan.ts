@@ -4,12 +4,17 @@
 // sample finding with its fix. The remediation for every other finding, the deep scan,
 // monitoring, and the exportable report are gated behind the paid unlock.
 //
-//   pnpm quick-scan --dir <path> [--bundle <path>] [--json] [--out <file>]
+//   pnpm quick-scan --dir <path> [--bundle <path>] [--tenant-key <column>]
+//                    [--tenant-mode per-tenant|per-user] [--json] [--out <file>]
 //
 // Privacy: the scan runs locally and NO SOURCE CODE leaves the machine. Two mechanical
 // checks make network calls that send non-source data only — TruffleHog (--only-verified)
 // sends secret hashes to verify liveness, OSV sends dependency coordinates to match CVEs.
 // Neither uploads your code. The DEEP scan (paid) is the only tier that needs code egress.
+//
+// --tenant-key / --tenant-mode (#280): the same declaration detect-deeper.ts (connected tier)
+// accepts, so the static RLS-tenancy review (SB-RLS-TENANCY-MODEL) can be told the app's tenancy
+// convention instead of only inferring it from a fixed candidate-column list.
 
 import { writeFileSync } from "node:fs";
 import { runMechanicalScan } from "../scan/mechanical.js";
@@ -18,6 +23,12 @@ import { buildQuickScanReport, type QuickScanReport } from "../quick-scan.js";
 function arg(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
   return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+function tenantMode(raw: string | undefined): "per-tenant" | "per-user" | undefined {
+  if (raw === undefined || raw === "per-tenant" || raw === "per-user") return raw;
+  console.error(`--tenant-mode must be "per-tenant" or "per-user", got "${raw}"`);
+  process.exit(2);
 }
 
 const SEVERITY_ORDER = ["Critical", "High", "Medium", "Low", "Perf", "Info", "Watch"] as const;
@@ -124,7 +135,10 @@ function render(r: QuickScanReport): string {
 async function main(): Promise<void> {
   const dir = arg("--dir") ?? process.cwd();
   const bundle = arg("--bundle");
-  const report = buildQuickScanReport(await runMechanicalScan({ dir, bundleDir: bundle }));
+  const tenantKey = arg("--tenant-key");
+  const mode = tenantMode(arg("--tenant-mode"));
+  const tenancyOverride = tenantKey || mode ? { tenantKey, mode } : undefined;
+  const report = buildQuickScanReport(await runMechanicalScan({ dir, bundleDir: bundle, tenancyOverride }));
 
   const out = arg("--out");
   const body = process.argv.includes("--json") ? JSON.stringify(report, null, 2) : render(report);

@@ -77,8 +77,19 @@ export function checkMigrationRlsStatic(dir: string): Finding[] {
 }
 
 // Tenant-key column names, in preference order. At connected tier the operator DECLARES the
-// tenancy model (`--tenant-key`); source-only there's nobody to ask, so it's inferred.
+// tenancy model (`--tenant-key`); source-only there's nobody to ask, so it's inferred — UNLESS
+// the same override is supplied here too (#280; see TenancyOverride below).
 const TENANT_KEY_CANDIDATES = ["tenant_id", "org_id", "organization_id", "workspace_id", "account_id", "company_id"];
+
+// #280 — the same declaration shape detect-deeper.ts already accepts (`--tenant-key`/
+// `--tenant-mode`), threaded down to the static reviewer instead of only the connected tier. A
+// column name only, validated before use since it lands in a RegExp built from it.
+export interface TenancyOverride {
+  tenantKey?: string;
+  mode?: "per-tenant" | "per-user";
+}
+
+const VALID_COLUMN_NAME = /^[a-z0-9_]+$/i;
 
 // Inferred PER TABLE, not per app. A real multi-tenant app is a mix: tenant-scoped data tables
 // (notes.tenant_id) alongside per-user own-row tables (profiles keyed id = auth.uid(), the
@@ -90,10 +101,19 @@ const TENANT_KEY_CANDIDATES = ["tenant_id", "org_id", "organization_id", "worksp
 // A table this parser never saw declared (storage.objects and other system tables) falls through
 // to per-user for the same reason: we have no evidence of a tenant column, and inventing one
 // would manufacture findings against policies we cannot see the schema for.
-function inferTenancyModel(sql: string, table?: string): TenancyModel {
+//
+// `override` (#280) lets the operator DECLARE the convention instead of leaving it to inference:
+// `--tenant-mode per-user` forces every table to per-user (a genuinely single-tenant app, no
+// column to find); `--tenant-key <col>` is tried per table AHEAD of the built-in list, so a table
+// that declares it reviews per-tenant on it while tables that don't still fall through exactly as
+// before — the per-table mix above is preserved, not replaced by one global model.
+function inferTenancyModel(sql: string, table: string | undefined, override?: TenancyOverride): TenancyModel {
+  if (override?.mode === "per-user") return { tenantKey: "", mode: "per-user" };
   const body = table ? tableBody(sql, table) : sql;
   if (body === null) return { tenantKey: "", mode: "per-user" };
-  const key = TENANT_KEY_CANDIDATES.find((c) => new RegExp(`[(,\\n]\\s*${c}\\s+\\w`, "i").test(body));
+  const declared = override?.tenantKey && VALID_COLUMN_NAME.test(override.tenantKey) ? override.tenantKey : undefined;
+  const candidates = declared ? [declared, ...TENANT_KEY_CANDIDATES] : TENANT_KEY_CANDIDATES;
+  const key = candidates.find((c) => new RegExp(`[(,\\n]\\s*${c}\\s+\\w`, "i").test(body));
   return key ? { tenantKey: key } : { tenantKey: "", mode: "per-user" };
 }
 
@@ -139,10 +159,21 @@ function tenancyModelFinding(models: Map<string, TenancyModel>, unrecognised: Ma
       `Reviewed as per-tenant: ${assumed}. Reviewed as per-user (no recognised tenant column — a row bound to auth.uid() is treated as the isolation boundary): ${owned}.` +
       (unknown
         ? ` NOT RECOGNISED — these tables declare a scoping column that is not on the known list, so they were reviewed as per-user and any cross-tenant policy bug in them WAS NOT LOOKED FOR: ${unknown}.`
-        : ""),
+        : "") +
+      // #281 — the NOT RECOGNISED scan only matches "*_id" columns (SCOPE_COLUMN), so a tenant
+      // column named without that suffix (tenant, site, account_slug, ...) is reviewed as per-user
+      // and never appears above — same invisible-miss shape this finding exists to surface, one
+      // level down. Stated rather than silently left, per #281's own acceptance criteria. Worded to
+      // avoid the literal phrase "NOT RECOGNISED" so it can't be mistaken for another entry in that
+      // list by a reader (or a test) scanning for the marker.
+      ` Coverage note: the scoping-column scan above only matches column names ending in "_id" — a tenant column named without that suffix (e.g. "tenant", "site", "account_slug") is reviewed as per-user and will not be named even though it is the same off-list convention. No such column named above means none was found ending in "_id"; it does not mean none exists.`,
     impact:
       "This is the review's central assumption, not a defect. If a table listed as per-user is really tenant-scoped under a name the list does not know (e.g. site_id), its policies were judged against the wrong model and cross-tenant findings were silently missed — a failed inference is indistinguishable from a clean result unless it is stated.",
-    fix: "Confirm the assumed model. If a table is tenant-scoped under a column not listed above, re-run the connected tier with `--tenant-key <column>` (which takes the declared model rather than inferring one), and treat the per-user verdicts for that table as not assessed.",
+    // #280 — this used to point only at the connected tier ("buy the paid tier to fix it"). The
+    // same declaration is now accepted right here at the free tier: --tenant-key is tried ahead of
+    // the built-in list for every table, so a table that has it reviews per-tenant on it while
+    // tables that don't still fall through to per-user exactly as before.
+    fix: "Confirm the assumed model above. If a table is tenant-scoped under a column not listed, re-run this scan with `--tenant-key <column>` (quick-scan / mechanical scan, or detect-deeper at the connected tier) — the reviewer uses the declared column for any table that has it instead of guessing from the built-in list. Use `--tenant-mode per-user` instead if the app is genuinely single-tenant end to end. Until re-run, treat the per-user verdict for any unlisted table as not assessed.",
     precisionTier: "review",
     bftb: { value: 1, ease: 5, safety: 5 },
   });
@@ -175,7 +206,7 @@ function readMigrations(dir: string): { file: string; sql: string }[] {
 // (rls-policy-review.ts) judges it — one semantic rule set, two feeds. Findings stay at review
 // tier: static text can show a policy's shape but never how it behaves against real data, so
 // these surface as free-tier INDICATORS (#227), never graded.
-export function checkMigrationPolicySemantics(dir: string): Finding[] {
+export function checkMigrationPolicySemantics(dir: string, tenancyOverride?: TenancyOverride): Finding[] {
   const migrations = readMigrations(dir);
   if (migrations.length === 0) return [];
 
@@ -222,7 +253,7 @@ export function checkMigrationPolicySemantics(dir: string): Finding[] {
   const models = new Map<string, TenancyModel>();
   const unrecognised = new Map<string, string[]>();
   for (const [table, policies] of byTable) {
-    const model = inferTenancyModel(allSql, table);
+    const model = inferTenancyModel(allSql, table, tenancyOverride);
     models.set(table, model);
     if (model.mode === "per-user") unrecognised.set(table, unrecognisedScopeColumns(allSql, table));
     for (const f of policyReviewFindings(policies, model)) {
