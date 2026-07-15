@@ -77,11 +77,15 @@ const GATED_CAPABILITIES = [
 // is reachable depends on deployment context (a Vercel-hosted middleware CVE is auto-patched).
 // Grading on it produced F's built entirely on unverified version matches while the real
 // vulnerability went unmentioned — worse than silence, because a prospect who bumps the version
-// believes they cleared their top risk. Keyed on category rather than severity so the class, not
-// a per-finding judgment call, is what's excluded.
+// believes they cleared their top risk. Keyed on category as the default because every finding
+// this category carries TODAY is a version match (crisp or approximate) — but the category isn't
+// the actual test. `exploitabilityVerified` (src/findings.ts) is: a finding that earns that flag
+// is claiming confirmed exploitability, not just a version overlap, and grades despite its
+// category (#260) — the decision travels with the finding that knows its own evidence quality,
+// not a category-wide guess.
 const NON_GRADING_CATEGORIES = new Set(["Dependency CVE"]);
 
-const isNonGrading = (f: Finding): boolean => NON_GRADING_CATEGORIES.has(f.category);
+const isNonGrading = (f: Finding): boolean => NON_GRADING_CATEGORIES.has(f.category) && !f.exploitabilityVerified;
 
 // The free tier draws ONLY from the ~100%-precision tier (#25's precisionTier tag).
 // Everything else is heuristic and must not enter the free count/grade.

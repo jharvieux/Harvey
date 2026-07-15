@@ -35,6 +35,13 @@ export interface Finding {
   // as opposed to a human/LLM-authored engagement finding.
   mechanical?: boolean;
   precisionTier?: PrecisionTier;
+  // A finding's own claim that it is more than a version/pattern match — that exploitability in
+  // THIS codebase has actually been confirmed, not just a fact about which CVE range a dependency
+  // falls in. Grading logic (src/quick-scan.ts NON_GRADING_CATEGORIES) treats a whole category as
+  // "fact-only" by default but defers to this per-finding override, so a future exploitability-
+  // verified finding in a non-grading category isn't silently un-graded (#260). Unset/false is the
+  // safe default — set it explicitly, per finding, only when exploitability was actually confirmed.
+  exploitabilityVerified?: boolean;
 }
 
 export interface ReportMeta {
@@ -131,6 +138,9 @@ export function validateFindings(data: unknown): ValidationResult {
     }
     if (f.mechanical !== undefined && typeof f.mechanical !== "boolean") {
       errors.push(`${at}.mechanical: expected boolean`);
+    }
+    if (f.exploitabilityVerified !== undefined && typeof f.exploitabilityVerified !== "boolean") {
+      errors.push(`${at}.exploitabilityVerified: expected boolean`);
     }
     if (f.precisionTier !== undefined && !PRECISION_TIERS.includes(f.precisionTier as PrecisionTier)) {
       errors.push(`${at}.precisionTier: "${String(f.precisionTier)}" not one of ${PRECISION_TIERS.join("/")}`);

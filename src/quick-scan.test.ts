@@ -148,6 +148,34 @@ describe("dependency-CVE version matches do not drive the grade (#213)", () => {
   });
 });
 
+// #260 — the category exclusion is a default, not the actual test. A finding that carries its own
+// confirmed-exploitability claim grades despite living in a non-grading category.
+describe("exploitabilityVerified overrides the category default (#260)", () => {
+  it("a Dependency CVE finding marked exploitabilityVerified grades like any other", () => {
+    const verified = cve("confirmed-rce", "Critical");
+    verified.exploitabilityVerified = true;
+    const graded = selectGradedFindings([verified, cve("dep", "Critical")]);
+    expect(graded.map((f) => f.id)).toEqual(["confirmed-rce"]);
+  });
+
+  it("moves the grade and can be picked as the teaser once verified", () => {
+    const verified = cve("confirmed-rce", "Critical");
+    verified.exploitabilityVerified = true;
+    const report = buildQuickScanReport([verified]);
+    expect(report.grade).toBe("F");
+    expect(report.total).toBe(1);
+    expect(report.sample?.id).toBe("confirmed-rce");
+  });
+
+  it("an unmarked CVE in the same batch stays informational, not graded", () => {
+    const verified = cve("confirmed-rce", "Critical");
+    verified.exploitabilityVerified = true;
+    const report = buildQuickScanReport([verified, cve("still-just-a-match", "Critical")]);
+    expect(report.total).toBe(1);
+    expect(report.informational.map((f) => f.id)).toEqual(["still-just-a-match"]);
+  });
+});
+
 // #220/#227 — source-tier tenant-isolation signals. Silence about a probable cross-tenant hole
 // is the worse failure, so these surface loudly; but static shape isn't proof, so they never grade.
 const indicator = (id: string): Finding => finding(id, "Critical", "review", { category: "Multi-tenant security" });
