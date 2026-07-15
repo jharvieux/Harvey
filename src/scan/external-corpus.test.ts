@@ -1,12 +1,15 @@
 // Layer 1 for the external-repo corpus (#222): runs in `pnpm verify` with no clone and no
-// network. Two jobs:
+// network. Three jobs:
 //   - prove the drift scorer actually fails on movement (the point of the corpus);
-//   - pin the M10 classifier against the REAL column names from the swept repos — the module has
-//     no static-schema CLI path, so this is where its #233 behavior on real code is gated.
-// Layer 2 (clone each pinned commit, re-run detect-static/quality-scan, score against the
-// baselines) needs network + binaries, so it is NOT here: it is `pnpm corpus-drift`, scheduled in
-// .github/workflows/corpus-drift.yml (#263). These two layers are complementary — Layer 1 proves
-// the scorers fail on movement without cloning anything, Layer 2 supplies the real movement.
+//   - pin the M10 classifier against the REAL column names from the swept repos (#233's over/
+//     under-match verdicts);
+//   - prove the m10FindingsFromSchema adapter (#279) shapes a schema classification pass into
+//     Finding[] correctly, since Layer 2 is the only place it runs against real migrations.
+// Layer 2 (clone each pinned commit, re-run detect-static/quality-scan/mutation-scan and classify
+// each target's own migrations, score against the baselines) needs network + binaries, so it is
+// NOT here: it is `pnpm corpus-drift`, scheduled in .github/workflows/corpus-drift.yml (#263).
+// These two layers are complementary — Layer 1 proves the scorers fail on movement without
+// cloning anything, Layer 2 supplies the real movement.
 
 import { describe, expect, it } from "vitest";
 import { classifyColumn } from "../../tools/pii-classify.mjs";
@@ -14,6 +17,7 @@ import {
   EXTERNAL_CORPUS,
   FREE_TIER_EXPECTATIONS,
   isNotRun,
+  m10FindingsFromSchema,
   scoreExternalBaseline,
   scoreFreeTierExpectation,
   type ExternalTarget,
@@ -55,15 +59,23 @@ describe("external corpus manifest", () => {
     }
   });
 
-  it("records M5 as unrun on every target where knip could not resolve the config", () => {
+  it("records M5-knip as unrun on every target where knip could not resolve the config", () => {
     // knip without the target's `npm install` yields a knip-FAILED artifact, not a dead-code
     // measurement (#223) — recorded not-run, never a zero that would read as "no dead code".
     // Which targets those are is MEASURED, not assumed: #263's first real Layer 2 run found knip
     // resolves two of them without any install, so the rule is "wherever it actually failed".
-    const scored = EXTERNAL_CORPUS.filter((t) => !isNotRun(t.modules.M5!)).map((t) => t.slug);
+    const scored = EXTERNAL_CORPUS.filter((t) => !isNotRun(t.modules["M5-knip"]!)).map((t) => t.slug);
     expect(scored.sort()).toEqual(["multi-tenant-starter", "subscription-payments"]);
     for (const t of EXTERNAL_CORPUS.filter((x) => !scored.includes(x.slug))) {
-      expect(isNotRun(t.modules.M5!), t.slug).toBe(true);
+      expect(isNotRun(t.modules["M5-knip"]!), t.slug).toBe(true);
+    }
+  });
+
+  it("#278: M5-slop is scored on every target (detect-static needs no npm install)", () => {
+    // Unlike M5-knip, the slop detector is a source-only AST pass — it has no npm-install
+    // prereq, so every target should carry a measured M5-slop baseline, never not-run.
+    for (const t of EXTERNAL_CORPUS) {
+      expect(isNotRun(t.modules["M5-slop"]!), t.slug).toBe(false);
     }
   });
 });
@@ -106,19 +118,33 @@ describe("scoreExternalBaseline", () => {
   });
 
   it("skips not-run modules instead of scoring them 0 against a baseline", () => {
-    expect(scoreExternalBaseline(target("proposit"), []).map((r) => r.module)).not.toContain("M5");
+    expect(scoreExternalBaseline(target("proposit"), []).map((r) => r.module)).not.toContain("M5-knip");
   });
 
-  it("scores M5 where knip ran, and catches the dead tenant-authz guard going missing", () => {
+  it("scores M5-knip where knip ran, and catches the dead tenant-authz guard going missing", () => {
     // multi-tenant-starter's two knip findings, one of which is #226's security cross-link on real
     // code: `lib/security/guards.ts` exports tenant-authz guards nothing calls, on the repo whose
     // #217 Critical IS a missing-authz bug. If that detection stops firing, a quality module lost
     // the finding that corroborates a Critical — so the baseline must fail, not shrug.
     const dead = (): Finding => finding("M5 — Slop / dead code", "Low");
-    expect(scoreExternalBaseline(target("multi-tenant-starter"), [dead(), dead()]).find((r) => r.module === "M5"))
+    expect(scoreExternalBaseline(target("multi-tenant-starter"), [dead(), dead()]).find((r) => r.module === "M5-knip"))
       .toMatchObject({ pass: true, actual: 2 });
-    expect(scoreExternalBaseline(target("multi-tenant-starter"), [dead()]).find((r) => r.module === "M5"))
+    expect(scoreExternalBaseline(target("multi-tenant-starter"), [dead()]).find((r) => r.module === "M5-knip"))
       .toMatchObject({ pass: false, drift: -1 });
+  });
+
+  it("#278: M5-knip and M5-slop don't double-count each other, the bug that started the split", () => {
+    // subscription-payments read 18 pre-#278 because both scanners' `M5 —` findings were summed
+    // under one key. knip's dead-code finding and detect-static's style findings must land in
+    // separate buckets even though they share the "M5 " taxonomy prefix.
+    const findings = [
+      finding("M5 — Slop / dead code", "Low"), // knip: 1 of subscription-payments' measured 8
+      finding("M5 — Else after return", "Low"), // detect-static slop
+      finding("M5 — Single-call wrapper", "Low"), // detect-static slop
+    ];
+    const rows = scoreExternalBaseline(target("subscription-payments"), findings);
+    expect(rows.find((r) => r.module === "M5-knip")).toMatchObject({ expected: 8, actual: 1, pass: false });
+    expect(rows.find((r) => r.module === "M5-slop")).toMatchObject({ expected: 10, actual: 2, pass: false });
   });
 });
 
@@ -223,5 +249,53 @@ describe("M10 classifier on real external-corpus columns (#233)", () => {
 
   it("still classifies genuine contact PII on the same repos", () => {
     expect(classifyColumn("email", "text", "profiles")).toMatchObject({ infotype: "EMAIL", category: "PII" });
+  });
+});
+
+// #279: m10FindingsFromSchema is the adapter corpus-drift.ts feeds real cloned migrations
+// through — no network needed here, a minimal inline schema proves the shaping is right.
+describe("m10FindingsFromSchema (#279)", () => {
+  const SCHEMA = `
+    create table organisations (
+      id uuid,
+      ai_api_key text,
+      name text
+    );
+    create table widgets (
+      id uuid,
+      color text
+    );
+  `;
+
+  it("emits one Finding per table with a classified column, at that table's severity", () => {
+    // organisations.name is excluded (the #233 org-entity-table suppression), leaving only
+    // ai_api_key: SECRET/high scores 6 -> "High" (scoreToSeverity's >=4 band).
+    const findings = m10FindingsFromSchema(SCHEMA);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      taxonomy: "M10 — Data classification",
+      location: "organisations",
+      severity: "High",
+    });
+  });
+
+  it("never emits a table with zero classified columns", () => {
+    // widgets has no PII/PHI/PCI/SECRET column — must not appear at all, not as a 0/Info finding.
+    const findings = m10FindingsFromSchema(SCHEMA);
+    expect(findings.some((f) => f.location === "widgets")).toBe(false);
+  });
+
+  it("is scoreExternalBaseline-countable: severity is never Info", () => {
+    // buildDataMap's lowest possible score (one low-confidence match) is 0.3 -> "Low", never
+    // "Info" — so counted === total for every M10 baseline in the manifest, by construction.
+    const ambiguous = `
+      create table proposals (
+        id uuid,
+        name text
+      );
+    `;
+    const findings = m10FindingsFromSchema(ambiguous);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).not.toBe("Info");
   });
 });

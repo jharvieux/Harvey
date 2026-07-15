@@ -14,11 +14,14 @@
 // scanner) — the run does not guess which, it just refuses to be quiet about the movement.
 //
 // Modules scored here are the source-only tier: M4/M5 (quality-scan), M7/M9 (detect-static), M8
-// (mutation-scan, only where the absence of a suite IS the finding). Anything a target can't run
-// is recorded not-run WITH THE REASON in the manifest and skipped by the scorer — never scored 0.
+// (mutation-scan, only where the absence of a suite IS the finding), M10 (classifyMigrationSql
+// over the target's own cloned SQL migrations, #279 — targets with no schemaPath in the manifest,
+// e.g. boxyhq's unparseable Prisma migrations, are skipped here and stay not-run in the manifest).
+// Anything a target can't run is recorded not-run WITH THE REASON in the manifest and skipped by
+// the scorer — never scored 0.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +31,7 @@ import { runMechanicalScan } from "../scan/mechanical.js";
 import {
   EXTERNAL_CORPUS,
   FREE_TIER_EXPECTATIONS,
+  m10FindingsFromSchema,
   scoreExternalBaseline,
   scoreFreeTierExpectation,
   type ExternalTarget,
@@ -75,6 +79,16 @@ function runScanner(script: string, scriptArgs: string[]): Finding[] {
   return Array.isArray(parsed) ? parsed : [parsed.finding];
 }
 
+// #279: every *.sql file under `dir`, sorted so migrations apply in filename order — the same
+// shape tools/pii-classify.mjs's own (private) readSchemaSql uses for its --schema CLI path.
+function readMigrationSql(dir: string): string {
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort()
+    .map((f) => readFileSync(join(dir, f), "utf8"))
+    .join("\n\n");
+}
+
 interface Row {
   slug: string;
   check: string;
@@ -92,16 +106,26 @@ for (const target of targets) {
 
     // Two scanners emit `M5 —` findings and they measure DIFFERENT things: quality-scan's knip
     // pass is dead code (unused files/exports), detect-static's slop pass is style (else-after-
-    // return, single-call wrappers). Merging both and counting the prefix double-counts M5 —
-    // subscription-payments reads 18 instead of its measured 8. The manifest's M5 baselines are
-    // the knip dead-code numbers (see M5_NEEDS_INSTALL's reason), so each module is scored only
-    // against the scanner that produced its baseline.
-    const staticFindings = runScanner("detect-static", [dir]);
+    // return, single-call wrappers). #278 split the manifest's single M5 into M5-knip and
+    // M5-slop, each with its own baseline, and scoreExternalBaseline's moduleMatches tells them
+    // apart by taxonomy — so both scanners' output is scored now instead of filtering one out.
     const findings = [
-      ...staticFindings.filter((f) => !f.taxonomy.startsWith("M5 ")),
+      ...runScanner("detect-static", [dir]),
       ...runScanner("quality-scan", [dir]),
       ...runScanner("mutation-scan", [dir]),
     ];
+
+    // #279: M10 over the target's own cloned migrations. A target with no schemaPath (boxyhq —
+    // Prisma migrations this parser can't read) is skipped here and stays not-run in the manifest,
+    // per the coverage guard. A schemaPath that doesn't resolve in the cloned tree is a stale
+    // manifest entry, not an absent module — that throws rather than silently scoring 0.
+    if (target.schemaPath) {
+      const schemaDir = join(dir, target.schemaPath);
+      if (!existsSync(schemaDir)) {
+        throw new Error(`${target.slug}: schemaPath "${target.schemaPath}" not found in the cloned tree — the manifest's path is stale`);
+      }
+      findings.push(...m10FindingsFromSchema(readMigrationSql(schemaDir)));
+    }
 
     for (const row of scoreExternalBaseline(target, findings)) {
       rows.push({ slug: row.slug, check: `${row.module} baseline`, pass: row.pass, detail: row.detail });
