@@ -14,7 +14,12 @@ import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { scanSecrets } from "./secrets.js";
 import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
-import { checkEdgeFunctionVerifyJwt, checkMigrationPolicySemantics, checkMigrationRlsStatic } from "./supabase-static.js";
+import {
+  checkEdgeFunctionVerifyJwt,
+  checkMigrationPolicySemantics,
+  checkMigrationRlsStatic,
+  type TenancyOverride,
+} from "./supabase-static.js";
 import { checkInstallScripts, checkKnownIoc, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
 
 interface PackageJson {
@@ -52,10 +57,14 @@ function runOsvScanner(dir: string): OsvScanResult {
 interface MechanicalScanOptions {
   dir: string;
   bundleDir?: string; // .next/static after `next build`, if available — passed to the secret scan
+  // #280 — the same tenancy declaration detect-deeper.ts accepts at the connected tier
+  // (--tenant-key/--tenant-mode), so the static RLS-tenancy inference can be told the app's
+  // convention instead of only inferring it from the built-in candidate list.
+  tenancyOverride?: TenancyOverride;
 }
 
 export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Finding[]> {
-  const { dir, bundleDir } = opts;
+  const { dir, bundleDir, tenancyOverride } = opts;
 
   // Scope the walk to what should actually be scanned (issue #101): git-tracked files only
   // when dir is a git repo (excludes .env.local, .claude/worktrees/, node_modules, .next —
@@ -81,7 +90,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     findings.push(...checkMissingCsp(scanDir));
     findings.push(...checkPublicDirSensitive(scanDir));
     findings.push(...checkMigrationRlsStatic(scanDir));
-    findings.push(...checkMigrationPolicySemantics(scanDir));
+    findings.push(...checkMigrationPolicySemantics(scanDir, tenancyOverride));
     findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
 
     // Supply chain.

@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkEdgeFunctionVerifyJwt, checkMigrationPolicySemantics, checkMigrationRlsStatic } from "./supabase-static.js";
+import {
+  checkEdgeFunctionVerifyJwt,
+  checkMigrationPolicySemantics,
+  checkMigrationRlsStatic,
+  type TenancyOverride,
+} from "./supabase-static.js";
 
 describe("checkMigrationRlsStatic", () => {
   let root: string;
@@ -209,7 +214,8 @@ describe("checkMigrationPolicySemantics — tenancy-model disclosure (#258)", ()
     return root;
   }
 
-  const model = (dir: string) => checkMigrationPolicySemantics(dir).find((f) => f.id === "SB-RLS-TENANCY-MODEL");
+  const model = (dir: string, override?: TenancyOverride) =>
+    checkMigrationPolicySemantics(dir, override).find((f) => f.id === "SB-RLS-TENANCY-MODEL");
 
   it("names the tenant key it assumed for a recognised per-tenant table", () => {
     const dir = writeMigrations(
@@ -254,5 +260,67 @@ describe("checkMigrationPolicySemantics — tenancy-model disclosure (#258)", ()
 
   it("is not emitted for a migration set that declares no policies at all", () => {
     expect(model(writeMigrations("create table public.notes (id uuid primary key);"))).toBeUndefined();
+  });
+
+  it("states the check only recognises _id-suffixed columns, so an empty list isn't proof of a clean result (#281)", () => {
+    const dir = writeMigrations(
+      "create table public.notes (id uuid primary key, tenant_id uuid not null);\n" +
+        "create policy n_all on public.notes for all using (tenant_id = current_tenant()) with check (tenant_id = current_tenant());",
+    );
+    expect(model(dir)!.evidence).toContain('only matches column names ending in "_id"');
+  });
+
+  // #280 — the static tier used to be able to SEE an off-list convention (via NOT RECOGNISED)
+  // but never CORRECT it; --tenant-key/--tenant-mode let the operator declare it, the same shape
+  // detect-deeper.ts already accepts at the connected tier.
+  describe("--tenant-key / --tenant-mode override (#280)", () => {
+    it("reviews a table declaring the overridden column as per-tenant on it", () => {
+      const dir = writeMigrations(
+        "create table public.pages (id uuid primary key, site_id uuid not null);\n" +
+          "create policy p_all on public.pages for all using (site_id = current_site()) with check (site_id = current_site());",
+      );
+      const evidence = model(dir, { tenantKey: "site_id" })!.evidence;
+      expect(evidence).toContain('pages → per-tenant on "site_id"');
+      expect(evidence).not.toContain("NOT RECOGNISED");
+    });
+
+    it("leaves a table that does NOT declare the overridden column reviewed as per-user, unaffected", () => {
+      const dir = writeMigrations(
+        "create table public.pages (id uuid primary key, site_id uuid not null);\n" +
+          "create policy p_all on public.pages for all using (site_id = current_site()) with check (site_id = current_site());\n" +
+          "create table public.profiles (id uuid primary key, user_id uuid not null);\n" +
+          "create policy pr_sel on public.profiles for select using (id = auth.uid());",
+      );
+      const evidence = model(dir, { tenantKey: "site_id" })!.evidence;
+      expect(evidence).toContain("profiles");
+      expect(evidence).toMatch(/per-user.*profiles/);
+    });
+
+    it("still finds the built-in candidates when the override key isn't the one a table declares", () => {
+      const dir = writeMigrations(
+        "create table public.notes (id uuid primary key, tenant_id uuid not null);\n" +
+          "create policy n_all on public.notes for all using (tenant_id = current_tenant()) with check (tenant_id = current_tenant());",
+      );
+      expect(model(dir, { tenantKey: "site_id" })!.evidence).toContain('notes → per-tenant on "tenant_id"');
+    });
+
+    it("--tenant-mode per-user forces every table to per-user, overriding a recognised tenant column", () => {
+      const dir = writeMigrations(
+        "create table public.notes (id uuid primary key, tenant_id uuid not null);\n" +
+          "create policy n_all on public.notes for all using (tenant_id = current_tenant()) with check (tenant_id = current_tenant());",
+      );
+      const evidence = model(dir, { mode: "per-user" })!.evidence;
+      expect(evidence).toContain("(none — no table declared a recognised tenant column)");
+      expect(evidence).toMatch(/per-user.*notes/);
+    });
+
+    it("no longer reads as upgrade-to-fix — the fix text points at this same tier's flag", () => {
+      const dir = writeMigrations(
+        "create table public.pages (id uuid primary key, site_id uuid not null);\n" +
+          "create policy p_all on public.pages for all using (site_id = current_site()) with check (site_id = current_site());",
+      );
+      expect(model(dir)!.fix).toContain("--tenant-key");
+      expect(model(dir)!.fix).toContain("quick-scan");
+    });
   });
 });
