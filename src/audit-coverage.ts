@@ -21,6 +21,8 @@
 // unenforceable, so the dead guard was deleted and its distinctive parts merged here: the
 // MODULES_NEVER_EXECUTED ledger, the needs/freeTier metadata, and env-gated gap annotation.
 
+import { neverExecutedModules, readExecutionLog } from "./audit-execution-log.js";
+
 // The ten modules of the audit. Authoritative scope: docs/audit-modules.md — audit-coverage.test.ts
 // reads that file and asserts this list matches it, so the doc cannot drift from the code (#275).
 export const AUDIT_MODULES = ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10"] as const;
@@ -57,16 +59,18 @@ export const MODULES: Record<AuditModule, { name: string; needs: ModuleNeed; fre
 // never-executed module is surfaced regardless of tier and blocks `complete` — an engagement
 // cannot claim full module coverage on the strength of a module that has never produced output.
 //
-// Remove an id here the first time that module actually runs against a target. This is a hand-kept
-// ledger (#284) because nothing yet observes what ran — #229's orchestrator half is what would
-// derive it; until then buildAuditCoverage takes its records from the caller and cannot tell.
-export const MODULES_NEVER_EXECUTED = new Set<AuditModule>([
-  // M6: defined 2026-07-09 (#72), still zero output as of 2026-07-15. It now has a runner
-  // (`pnpm simplify-scan`, #266); this entry comes out when it is first run against a real target.
-  // The #265 eval run was against our own calibration fixtures, not an engagement target, and its
-  // result was contaminated (docs/design/m6-simplification-eval.md §3.1) — not an execution record.
-  "M6",
-]);
+// #284: this was a hand-kept Set — someone had to remember to delete "M6" the first time M6 ran,
+// and (the worse half) to ADD any future module that had never run, or it would silently never get
+// the loud treatment M6 got. It is now DERIVED: the complement of audit-execution-log.json, which
+// #229's orchestrator appends to when a probe reports a module actually ran. A module is never-run
+// because no execution record claims it ran — not because a human curated it. The default for an
+// unknown module is never-run, which is the fail-loud direction.
+//
+// M6 is the one module absent from the log: defined 2026-07-09 (#72), still zero output. It has a
+// runner (`pnpm simplify-scan`, #266); its entry appears the first time it runs against a real
+// target. The #265 eval was against our own calibration fixtures and was contaminated
+// (docs/design/m6-simplification-eval.md §3.1) — not an execution record.
+export const MODULES_NEVER_EXECUTED: ReadonlySet<AuditModule> = neverExecutedModules(AUDIT_MODULES, readExecutionLog());
 
 // "ran": the module executed against the target.
 // "partial": it executed but couldn't cover its full scope (e.g. M7 code tier without the DB
@@ -88,7 +92,7 @@ export interface ModuleCoverage {
 // Which environments the engagement actually has. Optional: when supplied, a gap is annotated with
 // the environment it was missing, which turns "we didn't have a live DB" into a recorded decision
 // instead of an unexplained hole. It never excuses the gap — the caller still must record a reason.
-interface EngagementEnv {
+export interface EngagementEnv {
   connected: boolean; // a live/read-only database was provided
   dynamic: boolean; // a running app / self-hosted clone is available for probing
   llm: boolean; // the paid LLM tier is in scope
