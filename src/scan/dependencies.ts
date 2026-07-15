@@ -308,7 +308,8 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
   },
   {
     name: "axios",
-    // OSV also lists an older 0.x line fixed at 0.30.0; scoped to 1.x here as before, tracked separately.
+    // OSV also lists an older 0.x line fixed at 0.30.0; still scoped to 1.x here, so a 0.x below
+    // 0.30.0 under-flags. Widening it is #292 (out of #271's scope — needs its own verification).
     ranges: [{ introduced: "1.0.0", fixed: "1.8.2" }],
     id: "CVE-2025-27152",
     severity: "High",
@@ -351,7 +352,8 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
   },
   {
     name: "ws",
-    // OSV also lists 6.x (fixed 6.2.2) and 5.x (fixed 5.2.3); scoped to 7.x here as before, tracked separately.
+    // OSV also lists 6.x (fixed 6.2.2) and 5.x (fixed 5.2.3); still scoped to 7.x here, so those
+    // lines under-flag. Widening it is #292 (out of #271's scope — needs its own verification).
     ranges: [{ introduced: "7.0.0", fixed: "7.4.6" }],
     id: "CVE-2021-32640",
     severity: "High",
