@@ -16,12 +16,15 @@ import { classifyColumn } from "../../tools/pii-classify.mjs";
 import {
   EXTERNAL_CORPUS,
   FREE_TIER_EXPECTATIONS,
+  isMutationBaseline,
   isNotRun,
   m10FindingsFromSchema,
   scoreExternalBaseline,
   scoreFreeTierExpectation,
+  scoreMutationBaseline,
   type ExternalTarget,
   type FreeTierExpectation,
+  type MutationBaseline,
 } from "./external-corpus.js";
 import { buildQuickScanReport } from "../quick-scan.js";
 import type { Finding, Severity } from "../findings.js";
@@ -62,12 +65,25 @@ describe("external corpus manifest", () => {
   it("records M5-knip as unrun on every target where knip could not resolve the config", () => {
     // knip without the target's `npm install` yields a knip-FAILED artifact, not a dead-code
     // measurement (#223) — recorded not-run, never a zero that would read as "no dead code".
-    // Which targets those are is MEASURED, not assumed: #263's first real Layer 2 run found knip
-    // resolves two of them without any install, so the rule is "wherever it actually failed".
+    // Which targets those are is MEASURED, not assumed. #251 added the install step the CLAUDE.md
+    // M5 row calls for, which took this from 2 scored to 4: the two that remain unrun now fail for
+    // reasons no install can fix (saas-lite's eslint-config-next patch error, mvp-boilerplate's
+    // missing root package.json), each measured 2026-07-15.
     const scored = EXTERNAL_CORPUS.filter((t) => !isNotRun(t.modules["M5-knip"]!)).map((t) => t.slug);
-    expect(scored.sort()).toEqual(["multi-tenant-starter", "subscription-payments"]);
+    expect(scored.sort()).toEqual(["boxyhq", "multi-tenant-starter", "proposit", "subscription-payments"]);
     for (const t of EXTERNAL_CORPUS.filter((x) => !scored.includes(x.slug))) {
       expect(isNotRun(t.modules["M5-knip"]!), t.slug).toBe(true);
+    }
+  });
+
+  it("#251: neither remaining M5-knip gap blames a missing `npm install` — the install step exists now", () => {
+    // The point of the install step is that "needs the target's npm install" stops being an
+    // acceptable reason. If a future change reintroduces that reason, the install step has silently
+    // stopped working (or stopped being wired into the job) and the honest fix is to repair it, not
+    // to re-record the old excuse.
+    for (const t of EXTERNAL_CORPUS) {
+      const m5 = t.modules["M5-knip"]!;
+      if (isNotRun(m5)) expect(m5.reason, t.slug).not.toMatch(/needs the target's own `npm install`/);
     }
   });
 
@@ -118,7 +134,11 @@ describe("scoreExternalBaseline", () => {
   });
 
   it("skips not-run modules instead of scoring them 0 against a baseline", () => {
-    expect(scoreExternalBaseline(target("proposit"), []).map((r) => r.module)).not.toContain("M5-knip");
+    // saas-lite's M5-knip: knip dies loading the target's eslint config, so there is no dead-code
+    // measurement to compare. Scoring the absent findings as 0 would read as "no dead code" —
+    // the silent-skip inversion the coverage guard exists to prevent. (Was proposit until #251's
+    // install step gave proposit a real baseline.)
+    expect(scoreExternalBaseline(target("saas-lite"), []).map((r) => r.module)).not.toContain("M5-knip");
   });
 
   it("scores M5-knip where knip ran, and catches the dead tenant-authz guard going missing", () => {
@@ -145,6 +165,79 @@ describe("scoreExternalBaseline", () => {
     const rows = scoreExternalBaseline(target("subscription-payments"), findings);
     expect(rows.find((r) => r.module === "M5-knip")).toMatchObject({ expected: 8, actual: 1, pass: false });
     expect(rows.find((r) => r.module === "M5-slop")).toMatchObject({ expected: 10, actual: 2, pass: false });
+  });
+});
+
+// #300 — M8 is scored as a mutation percentage, not a finding count. These prove the scorer fails
+// on real test-quality movement; whether the two scoreable targets still hit their numbers needs
+// their cloned trees + Stryker, which is `pnpm corpus-drift --m8` (.github/workflows/corpus-m8.yml).
+describe("scoreMutationBaseline (#300)", () => {
+  const baseline = (): MutationBaseline => ({ mutationScore: 20, killed: 7, valid: 35, note: "boxyhq's measured baseline" });
+
+  it("passes when a Stryker run reproduces the recorded kill count", () => {
+    expect(scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 20, killed: 7, valid: 35 }))
+      .toMatchObject({ pass: true, drift: 0 });
+  });
+
+  it("FAILS when the suite gets worse — a mutant that used to die now survives", () => {
+    // The regression M8 exists to catch: someone weakens an assertion and the suite stops
+    // detecting a mutation it previously killed.
+    const row = scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 17.1, killed: 6, valid: 35 });
+    expect(row.pass).toBe(false);
+    expect(row.drift).toBe(-1);
+    expect(row.detail).toContain("DRIFT");
+  });
+
+  it("FAILS on a kill-for-survivor swap that leaves the percentage identical", () => {
+    // Why the scorer compares killed/valid and not just the rounded score: 7/35 and 7/35 at a
+    // different mutant population is still 20%, but the suite is measuring different code. A
+    // percentage-only check would call this green.
+    expect(scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 20, killed: 4, valid: 20 }))
+      .toMatchObject({ pass: false });
+  });
+
+  it("FAILS when the mutant population grows but nothing new is killed", () => {
+    // The target's source grew (or Stryker's mutators changed) and the suite didn't follow —
+    // real drift in what fraction of the code is actually tested.
+    expect(scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 15.6, killed: 7, valid: 45 }))
+      .toMatchObject({ pass: false });
+  });
+});
+
+describe("M8 manifest shape (#300)", () => {
+  it("gives an m8 Stryker config to exactly the targets carrying a mutation baseline", () => {
+    // The two must agree: a config with no baseline means the job scores against nothing, and a
+    // baseline with no config means nothing ever measures it. corpus-drift throws on the mismatch;
+    // this catches it in `pnpm verify`, before the monthly job would.
+    for (const t of EXTERNAL_CORPUS) {
+      expect(t.m8 !== undefined, `${t.slug}: m8 config vs baseline`).toBe(isMutationBaseline(t.modules.M8));
+    }
+    expect(EXTERNAL_CORPUS.filter((t) => t.m8).map((t) => t.slug).sort()).toEqual(["boxyhq", "proposit"]);
+  });
+
+  it("keeps a measured reason on every M8 that mutation testing does not score", () => {
+    // The coverage guard on the module #300 is specifically about: the two blocked targets and the
+    // two zero-test ones must each say WHY they aren't a mutation score — never omitted, never a 0.
+    for (const t of EXTERNAL_CORPUS.filter((x) => !x.m8)) {
+      const m8 = t.modules.M8;
+      if (isNotRun(m8)) expect(m8.reason.length, t.slug).toBeGreaterThan(20);
+      else expect(m8.note, t.slug).toMatch(/zero-coverage finding/);
+    }
+  });
+
+  it("does not let a mutation baseline be counted as findings by the source-tier scorer", () => {
+    // A MutationBaseline's numbers are percentages/mutant counts. If scoreExternalBaseline ever
+    // starts counting M8 findings against one, it would score proposit's 100 as "100 findings
+    // expected, 0 found" — a fabricated drift on a module that measured perfectly.
+    expect(scoreExternalBaseline(target("proposit"), []).map((r) => r.module)).not.toContain("M8");
+  });
+
+  it("still scores the zero-test targets by finding count — #224's finding IS the measurement", () => {
+    // The other half of the split: where a target has no suite at all, M8 is a plain ModuleBaseline
+    // and must keep being scored from findings, not skipped along with the mutation ones.
+    const zeroCoverage = finding("M8 — Test quality", "High");
+    expect(scoreExternalBaseline(target("subscription-payments"), [zeroCoverage]).find((r) => r.module === "M8"))
+      .toMatchObject({ pass: true, actual: 1 });
   });
 });
 
