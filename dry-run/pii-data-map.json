@@ -1,24 +1,4 @@
 {
-  "tenants": {
-    "columns": [
-      {
-        "column": "name",
-        "infotype": "NAME?",
-        "category": "PII",
-        "confidence": "low"
-      }
-    ],
-    "infotypes": [
-      "NAME?"
-    ],
-    "categories": [
-      "PII"
-    ],
-    "severityScore": 0.3,
-    "severity": "Low",
-    "phi": false,
-    "pci": false
-  },
   "profiles": {
     "columns": [
       {
@@ -37,7 +17,8 @@
     "severityScore": 1,
     "severity": "Low",
     "phi": false,
-    "pci": false
+    "pci": false,
+    "secret": false
   },
   "counters": {
     "columns": [
@@ -57,6 +38,114 @@
     "severityScore": 0.3,
     "severity": "Low",
     "phi": false,
-    "pci": false
+    "pci": false,
+    "secret": false
+  },
+  "pii_calibration_fixture": {
+    "columns": [
+      {
+        "column": "email",
+        "infotype": "EMAIL",
+        "category": "PII",
+        "confidence": "high"
+      },
+      {
+        "column": "date_of_birth",
+        "infotype": "DOB",
+        "category": "PII",
+        "confidence": "high"
+      },
+      {
+        "column": "customer_ssn",
+        "infotype": "US_SSN",
+        "category": "SENSITIVE_PII",
+        "confidence": "high"
+      },
+      {
+        "column": "passport_number",
+        "infotype": "PASSPORT",
+        "category": "SENSITIVE_PII",
+        "confidence": "high"
+      },
+      {
+        "column": "cvv",
+        "infotype": "CVV",
+        "category": "PCI",
+        "confidence": "high"
+      },
+      {
+        "column": "card_last4",
+        "infotype": "CARD",
+        "category": "PCI",
+        "confidence": "high"
+      },
+      {
+        "column": "product_name",
+        "infotype": "NAME?",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "EMAIL",
+      "DOB",
+      "US_SSN",
+      "PASSPORT",
+      "CVV",
+      "CARD",
+      "NAME?"
+    ],
+    "categories": [
+      "PII",
+      "SENSITIVE_PII",
+      "PCI"
+    ],
+    "severityScore": 28.3,
+    "severity": "Critical",
+    "phi": false,
+    "pci": true,
+    "secret": false
+  },
+  "perf_orders": {
+    "columns": [
+      {
+        "column": "customer_email",
+        "infotype": "EMAIL",
+        "category": "PII",
+        "confidence": "high"
+      }
+    ],
+    "infotypes": [
+      "EMAIL"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 1,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
+  },
+  "support_tickets": {
+    "columns": [
+      {
+        "column": "customer_ssn",
+        "infotype": "US_SSN",
+        "category": "SENSITIVE_PII",
+        "confidence": "high"
+      }
+    ],
+    "infotypes": [
+      "US_SSN"
+    ],
+    "categories": [
+      "SENSITIVE_PII"
+    ],
+    "severityScore": 4,
+    "severity": "High",
+    "phi": false,
+    "pci": false,
+    "secret": false
   }
 }

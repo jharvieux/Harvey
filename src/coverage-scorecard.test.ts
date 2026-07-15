@@ -21,11 +21,24 @@ describe("scoreCoverage", () => {
     expect(scored!.status).toBe("requires-live-run");
   });
 
-  it("scores caught when the module ran and a finding matches by taxonomy or location", () => {
+  it("scores caught when the module ran and a finding matches", () => {
     const findings: ScorableFinding[] = [{ taxonomy: "sql-injection", location: "pages/api/search.js:9" }];
-    const bugs = [bug({ id: "SQLI", location: "pages/api/search.js:9", matches: (s) => s.includes("search.js:9") })];
+    const bugs = [bug({ id: "SQLI", location: "pages/api/search.js:9", matches: (f) => f.location.includes("search.js:9") })];
     const [scored] = scoreCoverage(bugs, findings);
     expect(scored!.status).toBe("caught");
+  });
+
+  // The #246 regression: `matches` used to receive taxonomy and location as separate strings, so a
+  // predicate could not require both. COUNTER-RACE scored "caught" off /race/i matching the
+  // dependency `braces@2.3.2` in a lockfile — a different file AND a different rule.
+  it("lets a predicate require the right rule AND the right file, so a same-file or same-word finding is not a catch", () => {
+    const findings: ScorableFinding[] = [
+      { taxonomy: "Known-vulnerable dependency", location: "package-lock.json (braces@2.3.2)" },
+      { taxonomy: "harvey-route-noauth", location: "pages/api/counter/increment.js:4" },
+    ];
+    const bugs = [bug({ id: "COUNTER-RACE", matches: (f) => /increment\.js/.test(f.location) && /race|atomic/i.test(f.taxonomy) })];
+    const [scored] = scoreCoverage(bugs, findings);
+    expect(scored!.status).toBe("missed");
   });
 
   it("scores missed when the module ran but no finding matches — the interesting case, not a crash", () => {
@@ -37,7 +50,7 @@ describe("scoreCoverage", () => {
 
   it("never scores caught off a moduleRan:false bug even if a finding would otherwise match", () => {
     const findings: ScorableFinding[] = [{ taxonomy: "rls_disabled_in_public", location: "public.audit_logs" }];
-    const bugs = [bug({ id: "RLS-DISABLED", moduleRan: false, matches: (s) => s.includes("audit_logs") })];
+    const bugs = [bug({ id: "RLS-DISABLED", moduleRan: false, matches: (f) => f.location.includes("audit_logs") })];
     const [scored] = scoreCoverage(bugs, findings);
     expect(scored!.status).toBe("requires-live-run");
   });
