@@ -29,6 +29,7 @@ import { b14AppLogicEntries } from "./calibration/b14-applogic.entries.js";
 import { b15NextjsAuthzEntries } from "./calibration/b15-nextjs-authz.entries.js";
 import { b16StorageSecdefEntries } from "./calibration/b16-storage-secdef.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
+import { rlsStaticSemanticsEntries } from "./calibration/rls-static-semantics.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
 import { m7Entries } from "./calibration/m7.entries.js";
 import { m8Entries } from "./calibration/m8.entries.js";
@@ -63,6 +64,7 @@ export const CORPUS: CorpusEntry[] = [
   ...b15NextjsAuthzEntries,
   ...b16StorageSecdefEntries,
   ...knownPublicCredsEntries,
+  ...rlsStaticSemanticsEntries,
   ...m10Entries,
   ...m4m5Entries,
   ...m8Entries,

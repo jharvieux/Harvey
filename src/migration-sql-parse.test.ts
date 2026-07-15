@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseColumns, parseDefinerFunctions, parseRlsState, parseTableNames } from "./migration-sql-parse.js";
+import { parseColumns, parseDefinerFunctions, parsePolicies, parseRlsState, parseTableNames } from "./migration-sql-parse.js";
 
 // Fixtures are the real calibration-target migrations (targets/calibration/supabase/migrations) —
 // this test asserts the parser extracts exactly what GROUND-TRUTH.md says is there, so a change
@@ -59,5 +59,62 @@ describe("parseRlsState", () => {
     // documents/invoices have wrong policies (not missing ones); service_state is RLS-on with no
     // policy on purpose (deny-all by design), a benign true-negative the scanner must not flag.
     expect(noPolicyCandidates).toEqual(["service_state"]);
+  });
+});
+
+// #220 — the clauses themselves, not just "does a policy exist". The reviewer downstream
+// (rls-policy-review.ts) can only judge what this extracts, so an under-extraction here is a
+// silent miss of the highest-value bug class.
+describe("parsePolicies", () => {
+  it("extracts USING and WITH CHECK from the real calibration policies", () => {
+    const { policies } = parsePolicies(rlsSql);
+    const notes = policies.find((p) => p.name === "notes_rw_own_tenant");
+    expect(notes).toMatchObject({
+      schema: "public",
+      table: "notes",
+      cmd: "ALL",
+      qual: "tenant_id = public.current_tenant_id()",
+      withCheck: "tenant_id = public.current_tenant_id()",
+    });
+  });
+
+  it("keeps the planted USING(true) body rather than discarding it (GROUND-TRUTH bug #1)", () => {
+    const { policies } = parsePolicies(rlsSql);
+    expect(policies.find((p) => p.name === "documents_select_all")).toMatchObject({ cmd: "SELECT", qual: "true", withCheck: null });
+  });
+
+  it("defaults cmd to ALL when FOR is omitted, as Postgres does", () => {
+    const { policies } = parsePolicies("create policy p on public.t using (tenant_id = x);");
+    expect(policies[0]!.cmd).toBe("ALL");
+  });
+
+  it("distinguishes an absent WITH CHECK (null) from an empty one — the reviewer reads that", () => {
+    const { policies } = parsePolicies("create policy p on public.t for insert with check (tenant_id = x);");
+    expect(policies[0]).toMatchObject({ cmd: "INSERT", qual: null, withCheck: "tenant_id = x" });
+  });
+
+  it("reads a clause containing a nested subquery/EXISTS join without truncating at the first paren", () => {
+    const { policies } = parsePolicies(
+      "create policy p on public.docs for select using (exists (select 1 from members m where m.user_id = (select auth.uid()) and m.org_id = docs.org_id));",
+    );
+    expect(policies[0]!.qual).toBe("exists (select 1 from members m where m.user_id = (select auth.uid()) and m.org_id = docs.org_id)");
+  });
+
+  it("is not fooled by parens or semicolons inside a string literal", () => {
+    const { policies, unparsed } = parsePolicies("create policy p on public.t for select using (role = 'a);b' and tenant_id = x);");
+    expect(unparsed).toEqual([]);
+    expect(policies[0]!.qual).toBe("role = 'a);b' and tenant_id = x");
+  });
+
+  it("handles a quoted policy name", () => {
+    const { policies } = parsePolicies(`create policy "Users can view own" on public.t for select using (id = auth.uid());`);
+    expect(policies[0]).toMatchObject({ name: "Users can view own", qual: "id = auth.uid()" });
+  });
+
+  it("SURFACES a policy it cannot parse instead of dropping it — a failed parse must not read as clean", () => {
+    const { policies, unparsed } = parsePolicies("create policy broken on public.t for select using (tenant_id = x");
+    expect(policies).toEqual([]);
+    expect(unparsed).toHaveLength(1);
+    expect(unparsed[0]).toMatchObject({ table: "t", name: "broken" });
   });
 });

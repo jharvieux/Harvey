@@ -22,32 +22,80 @@ function arg(flag: string): string | undefined {
 
 const SEVERITY_ORDER = ["Critical", "High", "Medium", "Low", "Perf", "Info", "Watch"] as const;
 
+function wrap(text: string, indent: string): string[] {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let line = "";
+  for (const w of words) {
+    if (line && `${line} ${w}`.length > 78) {
+      lines.push(indent + line);
+      line = w;
+    } else line = line ? `${line} ${w}` : w;
+  }
+  if (line) lines.push(indent + line);
+  return lines;
+}
+
 function render(r: QuickScanReport): string {
   const lines: string[] = [];
   lines.push("");
-  lines.push(`  Harvey Quick Scan — Grade ${r.grade}  (${r.score}/100)`);
+  // Two-part headline (#227): the grade never appears without its scope, and the risk
+  // disclosure sits directly under it — a hygiene grade read as a security verdict is the
+  // failure mode this tier exists to avoid.
+  lines.push(`  Harvey Quick Scan — Hygiene Grade ${r.grade}  (${r.score}/100)`);
+  lines.push(`  Scope: ${r.gradeScope}`);
   lines.push("  Ran 100% locally. No source code left your machine.");
+  lines.push("");
+  lines.push(...wrap(r.riskDisclosure, "  "));
   lines.push("");
 
   if (r.total === 0) {
-    lines.push("  No verified issues found. Clean scan.");
-    lines.push("  Stay clean on every push — monitoring is part of the paid unlock.");
+    lines.push("  No hygiene issues found — nothing mechanically verifiable to fix.");
+  } else {
+    const counts = SEVERITY_ORDER.filter((s) => r.countsBySeverity[s] > 0)
+      .map((s) => `${r.countsBySeverity[s]} ${s}`)
+      .join(", ");
+    lines.push(`  ${r.total} verified hygiene issue${r.total === 1 ? "" : "s"}: ${counts}`);
+    lines.push(`  By category: ${r.categories.map((c) => `${c.count}× ${c.category}`).join(", ")}`);
     lines.push("");
-    return lines.join("\n");
+
+    lines.push("  What's wrong and where:");
+    for (const f of r.findings) {
+      lines.push(`    [${f.severity}] ${f.title}`);
+      lines.push(`      ${f.location}`);
+      lines.push(`      Why it matters: ${f.risk}`);
+      lines.push("");
+    }
   }
 
-  const counts = SEVERITY_ORDER.filter((s) => r.countsBySeverity[s] > 0)
-    .map((s) => `${r.countsBySeverity[s]} ${s}`)
-    .join(", ");
-  lines.push(`  ${r.total} verified issue${r.total === 1 ? "" : "s"}: ${counts}`);
-  lines.push(`  By category: ${r.categories.map((c) => `${c.count}× ${c.category}`).join(", ")}`);
-  lines.push("");
+  if (r.indicators.length > 0) {
+    lines.push("  ── Potential issues — confirmed or cleared in the deep scan ─────────────");
+    lines.push("  Spotted in your source. NOT counted in the grade: these need a live database");
+    lines.push("  to confirm, and we don't guess.");
+    lines.push("");
+    for (const f of r.indicators) {
+      lines.push(`    [${f.severity}?] ${f.title}`);
+      lines.push(`      ${f.location}`);
+      lines.push(`      Why it matters if real: ${f.risk}`);
+      lines.push("");
+    }
+  }
 
-  lines.push("  What's wrong and where:");
-  for (const f of r.findings) {
-    lines.push(`    [${f.severity}] ${f.title}`);
-    lines.push(`      ${f.location}`);
-    lines.push(`      Why it matters: ${f.risk}`);
+  if (r.informational.length > 0) {
+    lines.push("  ── Informational — not graded ─────────────");
+    lines.push("  Outdated dependencies matching a published CVE range. A version match is not");
+    lines.push("  proof of exploitability, so these don't move your grade — the deep scan triages");
+    lines.push("  each one against how you actually deploy.");
+    lines.push("");
+    for (const f of r.informational) {
+      lines.push(`    [Info] ${f.title}`);
+      lines.push(`      ${f.location}`);
+      lines.push("");
+    }
+  }
+
+  if (r.total === 0 && r.indicators.length === 0 && r.informational.length === 0) {
+    lines.push("  Stay clean on every push — monitoring is part of the paid unlock.");
     lines.push("");
   }
 

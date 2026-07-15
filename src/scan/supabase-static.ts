@@ -9,10 +9,17 @@
 //   - checkEdgeFunctionVerifyJwt: `[functions.X] verify_jwt = false` in supabase/config.toml — an
 //     Edge Function callable without a valid JWT. Review: a webhook that HMAC-verifies its own
 //     payload legitimately disables verify_jwt.
+//   - checkMigrationPolicySemantics (#220): the semantic RLS review, run from committed migration
+//     SQL instead of live pg_policies. The highest-value bug class (a policy that IS enabled and
+//     syntactically fine but keys on the wrong column) lives in `create policy` statements in
+//     committed .sql — statically visible, but until now only reachable at connected tier.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { Finding } from "../findings.js";
+import { parsePolicies } from "../migration-sql-parse.js";
+import { policyReviewFindings, type LivePolicy, type TenancyModel } from "../rls-policy-review.js";
+import { reviewFinding } from "../review-tier.js";
 import { mechanicalFinding } from "./common.js";
 
 const CREATE_TABLE = /create\s+table\s+(?:if\s+not\s+exists\s+)?public\.([a-z0-9_]+)/gi;
@@ -64,6 +71,108 @@ export function checkMigrationRlsStatic(dir: string): Finding[] {
         precisionTier: "high",
       }),
     );
+}
+
+// Tenant-key column names, in preference order. At connected tier the operator DECLARES the
+// tenancy model (`--tenant-key`); source-only there's nobody to ask, so it's inferred.
+const TENANT_KEY_CANDIDATES = ["tenant_id", "org_id", "organization_id", "workspace_id", "account_id", "company_id"];
+
+// Inferred PER TABLE, not per app. A real multi-tenant app is a mix: tenant-scoped data tables
+// (notes.tenant_id) alongside per-user own-row tables (profiles keyed id = auth.uid(), the
+// standard one-folder-per-user storage pattern). Judging the whole app against one model flags
+// every correct own-row policy — the #206 FP, which per-user mode only solved for apps that are
+// per-user end to end. A table is per-tenant only if it actually DECLARES a tenant column;
+// otherwise a row bound to auth.uid() is the isolation boundary, and reviewPolicy is told so.
+//
+// A table this parser never saw declared (storage.objects and other system tables) falls through
+// to per-user for the same reason: we have no evidence of a tenant column, and inventing one
+// would manufacture findings against policies we cannot see the schema for.
+function inferTenancyModel(sql: string, table?: string): TenancyModel {
+  const body = table ? tableBody(sql, table) : sql;
+  if (body === null) return { tenantKey: "", mode: "per-user" };
+  const key = TENANT_KEY_CANDIDATES.find((c) => new RegExp(`[(,\\n]\\s*${c}\\s+\\w`, "i").test(body));
+  return key ? { tenantKey: key } : { tenantKey: "", mode: "per-user" };
+}
+
+// The column list of `create table [schema.]<table> ( … )`, or null if this SQL never declares it.
+function tableBody(sql: string, table: string): string | null {
+  const m = new RegExp(`create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:\\w+\\.)?${table}\\s*\\(`, "i").exec(sql);
+  if (!m) return null;
+  const open = sql.indexOf("(", m.index);
+  const end = sql.indexOf(");", open);
+  return sql.slice(open, end === -1 ? undefined : end);
+}
+
+function readMigrations(dir: string): { file: string; sql: string }[] {
+  const migrationsDir = join(dir, "supabase", "migrations");
+  if (!existsSync(migrationsDir)) return [];
+  return readdirSync(migrationsDir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort()
+    .map((f) => ({ file: relative(dir, join(migrationsDir, f)), sql: readFileSync(join(migrationsDir, f), "utf8") }));
+}
+
+// Semantic RLS review over committed migration SQL (#220) — the source-tier path to the class the
+// public sweep proved matters most (a self-join INSERT policy, an unscoped invite UPDATE): both
+// were plain `create policy` text, findable with no DB.
+//
+// Deliberately NOT a second copy of the review logic. parsePolicies extracts the same
+// {cmd, qual, withCheck} struct the live pg_policies pull produces, and the EXISTING reviewer
+// (rls-policy-review.ts) judges it — one semantic rule set, two feeds. Findings stay at review
+// tier: static text can show a policy's shape but never how it behaves against real data, so
+// these surface as free-tier INDICATORS (#227), never graded.
+export function checkMigrationPolicySemantics(dir: string): Finding[] {
+  const migrations = readMigrations(dir);
+  if (migrations.length === 0) return [];
+
+  const allSql = migrations.map((m) => m.sql).join("\n");
+  const byTable = new Map<string, LivePolicy[]>();
+  const sites = new Map<string, string>(); // schema.table.name -> file:line
+  const findings: Finding[] = [];
+
+  for (const { file, sql } of migrations) {
+    const { policies: parsed, unparsed } = parsePolicies(sql);
+    for (const p of parsed) {
+      const forTable = byTable.get(p.table) ?? [];
+      forTable.push(p);
+      byTable.set(p.table, forTable);
+      const at = sql.toLowerCase().indexOf(`policy ${p.name.toLowerCase()}`);
+      sites.set(`${p.schema}.${p.table}.${p.name}`, `${file}:${at >= 0 ? sql.slice(0, at).split("\n").length : 1}`);
+    }
+    // Fail loud: a policy we couldn't read is reported as unread. Dropping it would make a failed
+    // parse indistinguishable from a clean policy, which is how a scanner lies by omission.
+    for (const u of unparsed) {
+      findings.push(
+        reviewFinding({
+          id: `SB-RLS-POLICY-UNPARSED-${u.table}-${u.name}`,
+          title: `RLS policy ${u.schema}.${u.table}.${u.name} could not be read from migration SQL`,
+          severity: "Medium",
+          category: "Multi-tenant security",
+          taxonomy: "M1 — Multi-tenant security",
+          location: file,
+          evidence: `${u.reason}. The static reviewer could not evaluate this policy, so its absence from the results above means "not assessed", NOT "clean".`,
+          question: "Does this policy restrict every row it exposes or accepts to the caller's own tenant?",
+          impact: "An unreviewed policy is an unknown: it may be the one that lets another tenant read or write these rows.",
+          fix: "Review this policy by hand, or run the connected-tier scan, which reads the live policy from the database instead of parsing SQL.",
+          okWhen: "Manual review confirms the policy constrains rows to the caller's own tenant.",
+          notOkWhen: "The policy keys on a non-tenant column or under-constrains writes.",
+        }),
+      );
+    }
+  }
+
+  // Re-locate each review finding from `schema.table.policy` to its migration file:line — at
+  // source tier the file is the actionable address, and location is never gated (anti-shakedown).
+  // ids are re-keyed off the policy site because policyReviewFindings numbers its findings per
+  // call, and it's called once per table here.
+  for (const [table, policies] of byTable) {
+    for (const f of policyReviewFindings(policies, inferTenancyModel(allSql, table))) {
+      const site = sites.get(f.location);
+      const id = `SB-RLS-POLICY-${f.location}`;
+      findings.push(site ? { ...f, id, location: `${site} (${f.location})` } : { ...f, id });
+    }
+  }
+  return findings;
 }
 
 const FUNCTIONS_HEADER = /^\s*\[functions\.([a-z0-9_-]+)\]/i;

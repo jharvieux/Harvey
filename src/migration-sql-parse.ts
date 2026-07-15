@@ -91,7 +91,133 @@ export function parseDefinerFunctions(sql: string): ParsedDefinerFunction[] {
 }
 
 const ENABLE_RLS = /alter table\s+(?:(\w+)\.)?(\w+)\s+enable row level security/gi;
-const CREATE_POLICY = /create policy\s+\w+\s+on\s+(?:(\w+)\.)?(\w+)/gi;
+const CREATE_POLICY = /create policy\s+(?:"([^"]+)"|(\w+))\s+on\s+(?:(\w+)\.)?(\w+)/gi;
+
+// A policy parsed out of migration SQL, shaped to feed rls-policy-review.ts's reviewPolicy()
+// unchanged — that reviewer takes a policy struct and doesn't care whether the clauses came from
+// live pg_policies or from this text. `cmd` defaults to ALL, matching Postgres when `FOR` is
+// omitted. A null clause means genuinely absent (no USING / no WITH CHECK), which is itself a
+// signal the reviewer reads — never "we failed to read it". That case is `UnparsedPolicy`.
+interface ParsedPolicy {
+  schema: string;
+  table: string;
+  name: string;
+  cmd: string;
+  qual: string | null;
+  withCheck: string | null;
+}
+
+// A `create policy` we located but could not extract clauses from — an unbalanced/unterminated
+// statement, or a formatting shape these regexes don't cover. Surfaced rather than dropped: a
+// failed parse and a clean policy look identical from the outside, and silently reporting
+// "nothing suspicious" about a policy we never actually read is exactly the coverage failure the
+// fail-loud principle exists to prevent (CLAUDE.md).
+interface UnparsedPolicy {
+  schema: string;
+  table: string;
+  name: string;
+  reason: string;
+}
+
+interface ParsedPolicySet {
+  policies: ParsedPolicy[];
+  unparsed: UnparsedPolicy[];
+}
+
+// Reads a parenthesised expression starting at `open` (the index of its "("), tracking nesting
+// and single-quoted literals so a subquery, an EXISTS join, or a string containing ")" doesn't
+// truncate it. Returns the inner text, or null if the parens never balance.
+function readBalanced(sql: string, open: number): string | null {
+  let depth = 0;
+  let inString = false;
+  for (let i = open; i < sql.length; i++) {
+    const c = sql[i];
+    if (inString) {
+      // '' is an escaped quote inside a literal, not a terminator.
+      if (c === "'") {
+        if (sql[i + 1] === "'") i++;
+        else inString = false;
+      }
+      continue;
+    }
+    if (c === "'") inString = true;
+    else if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0) return sql.slice(open + 1, i).trim();
+    }
+  }
+  return null;
+}
+
+// The statement text from `start` to its terminating ";" at paren depth 0 (a ";" inside a
+// function body or literal doesn't end it). Returns null if unterminated.
+function statementText(sql: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < sql.length; i++) {
+    const c = sql[i];
+    if (inString) {
+      if (c === "'") {
+        if (sql[i + 1] === "'") i++;
+        else inString = false;
+      }
+      continue;
+    }
+    if (c === "'") inString = true;
+    else if (c === "(") depth++;
+    else if (c === ")") depth--;
+    else if (c === ";" && depth === 0) return sql.slice(start, i);
+  }
+  return null;
+}
+
+const FOR_CMD = /\bfor\s+(all|select|insert|update|delete)\b/i;
+const USING_AT = /\busing\s*\(/i;
+const WITH_CHECK_AT = /\bwith\s+check\s*\(/i;
+
+function clauseAt(stmt: string, marker: RegExp): { value: string | null; failed: boolean } {
+  const m = marker.exec(stmt);
+  if (!m) return { value: null, failed: false };
+  const open = stmt.indexOf("(", m.index);
+  const body = readBalanced(stmt, open);
+  return body === null ? { value: null, failed: true } : { value: body, failed: false };
+}
+
+// Extracts every `create policy` in the migration set with its USING / WITH CHECK bodies intact,
+// so the connected-tier semantic reviewer (rls-policy-review.ts) can run against source alone.
+export function parsePolicies(sql: string): ParsedPolicySet {
+  const clean = stripLineComments(sql);
+  const policies: ParsedPolicy[] = [];
+  const unparsed: UnparsedPolicy[] = [];
+
+  for (const m of clean.matchAll(CREATE_POLICY)) {
+    const name = (m[1] ?? m[2])!;
+    const schema = m[3] ?? "public";
+    const table = m[4]!;
+    const stmt = statementText(clean, m.index);
+    if (stmt === null) {
+      unparsed.push({ schema, table, name, reason: "statement has no terminating ';' — could not read its clauses" });
+      continue;
+    }
+    const qual = clauseAt(stmt, USING_AT);
+    const withCheck = clauseAt(stmt, WITH_CHECK_AT);
+    if (qual.failed || withCheck.failed) {
+      unparsed.push({ schema, table, name, reason: `unbalanced parentheses in the ${qual.failed ? "USING" : "WITH CHECK"} clause — could not read it` });
+      continue;
+    }
+    policies.push({
+      schema,
+      table,
+      name,
+      cmd: (FOR_CMD.exec(stmt)?.[1] ?? "ALL").toUpperCase(),
+      qual: qual.value,
+      withCheck: withCheck.value,
+    });
+  }
+
+  return { policies, unparsed };
+}
 
 // Combines every `create table` across the migration set with the RLS enable/policy
 // statements to report, per table, whether RLS is on and whether it has >=1 policy.
@@ -101,7 +227,7 @@ export function parseRlsState(schemaSql: string, rlsSql: string): ParsedRlsTable
   const tables = parseTableNames(schemaSql);
   const cleanRlsSql = stripLineComments(rlsSql);
   const enabled = new Set([...cleanRlsSql.matchAll(ENABLE_RLS)].map((m) => `${m[1] ?? "public"}.${m[2]}`));
-  const policied = new Set([...cleanRlsSql.matchAll(CREATE_POLICY)].map((m) => `${m[1] ?? "public"}.${m[2]}`));
+  const policied = new Set([...cleanRlsSql.matchAll(CREATE_POLICY)].map((m) => `${m[3] ?? "public"}.${m[4]}`));
   return tables.map(({ schema, table }) => ({
     schema,
     table,
