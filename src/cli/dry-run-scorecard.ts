@@ -12,6 +12,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { type GroundTruthBug, scoreCoverage, type ScorableFinding, summarizeCoverage } from "../coverage-scorecard.js";
 
 // A catch must be the right RULE at the right FILE. `location` is an absolute path into a scratch
@@ -19,10 +20,11 @@ import { type GroundTruthBug, scoreCoverage, type ScorableFinding, summarizeCove
 // actually reasons about this bug's class, not merely fire somewhere in the same file.
 const at = (file: RegExp, rule: RegExp) => (f: ScorableFinding) => file.test(f.location) && rule.test(f.taxonomy);
 
+// Only RLS-USING-TRUE still needs the paid semantic tier: `checkMigrationPolicySemantics` reviews
+// `documents_select_all`, but `reviewPolicy` returns no verdict for a read policy whose USING is
+// `true` and which names no caller-identity function, so no mechanical finding reaches rls.sql:31.
 const NOT_RUN_SEMANTIC_RLS_READ =
-  "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ evaluates policy semantics";
-const NOT_RUN_SUPABASE_ADVISOR =
-  "Supabase Advisor lint rls_disabled_in_public (src/scan/supabase-advisors.ts) — requires a live DB via `supabase start` (Docker) or the hosted Management API";
+  "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ reviews a USING (true) read policy";
 // A KNOWN, ACCEPTED coverage gap — not a regression. The mechanical tier scans the file and no
 // rule has ever claimed this bug's class, so the bug scores `missed` by design: this is the
 // scorecard measuring the mechanical tier's real ceiling, which is what it exists to do. Verified
@@ -45,17 +47,28 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     id: "RLS-AUTH-ROLE",
     severity: "Critical",
     location: "supabase/migrations/20260708000002_rls.sql:38-39",
-    expectedModule: NOT_RUN_SEMANTIC_RLS_READ,
-    moduleRan: false,
-    matches: () => false,
+    expectedModule:
+      "checkMigrationPolicySemantics (src/scan/supabase-static.ts, #220) ran inside runMechanicalScan and reviewed invoices_select_authenticated's predicate at the planted line",
+    moduleRan: true,
+    // `rls.sql:38` is the planted policy's own line, and the only policy the semantic review
+    // reports there — the sibling policies in this file are located at their own lines.
+    matches: at(/rls\.sql:38 /, /Multi-tenant security/),
   },
   {
     id: "RLS-DISABLED",
     severity: "High",
     location: "supabase/migrations/20260708000002_rls.sql:41-43",
-    expectedModule: NOT_RUN_SUPABASE_ADVISOR,
-    moduleRan: false,
-    matches: () => false,
+    expectedModule:
+      "checkMigrationRlsStatic (src/scan/supabase-static.ts) ran inside runMechanicalScan and proved audit_logs never gets RLS enabled in ANY migration",
+    moduleRan: true,
+    // GROUND-TRUTH addresses this bug at its ABSENCE site (rls.sql:41-43, where the missing
+    // `enable row level security` belongs); the static check reports the CREATE site
+    // (schema.sql:35) because the absence it proves is file-wide — it asserts no migration
+    // anywhere enables RLS on this table, so it can only anchor on the one line that does exist.
+    // Accepting the create site is honest, not convenient: the rule reasons about exactly this
+    // bug's class for exactly this table, and audit_logs is the only table this rule reports in
+    // schema.sql, so the match cannot be earned by a finding about some other table.
+    matches: at(/schema\.sql:35/, /Migration table without RLS/),
   },
   {
     id: "SQLI-SERVICE",
@@ -120,4 +133,5 @@ function main(): void {
   for (const b of scored) console.log(`  [${b.status.padEnd(17)}] ${b.id.padEnd(16)} (${b.severity})`);
 }
 
-main();
+// Guarded so dry-run-scorecard.test.ts can import GROUND_TRUTH_BUGS without writing scorecard.json.
+if (process.argv[1] === fileURLToPath(import.meta.url)) main();
