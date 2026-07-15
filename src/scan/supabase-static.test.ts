@@ -117,6 +117,11 @@ describe("checkMigrationPolicySemantics", () => {
 
   const schema = "create table public.memberships (id uuid primary key, tenant_id uuid not null, user_id uuid not null);";
 
+  // The policy verdicts, without the SB-RLS-TENANCY-MODEL assumption record (#258) that every run
+  // with policies emits. These tests are about which policies get FLAGGED; the assumption record is
+  // covered on its own below.
+  const reviews = (dir: string) => checkMigrationPolicySemantics(dir).filter((f) => f.id !== "SB-RLS-TENANCY-MODEL");
+
   it("flags an INSERT policy that checks the caller but never the tenant column (the self-join Critical)", () => {
     // supabase-multi-tenant-starter …_rls_policies.sql:92-97 — WITH CHECK keys on auth.uid()
     // alone, so a member can insert a membership row into any tenant.
@@ -124,7 +129,7 @@ describe("checkMigrationPolicySemantics", () => {
       "0001.sql": schema,
       "0002.sql": "create policy memberships_insert on public.memberships for insert with check (user_id = auth.uid());",
     });
-    const findings = checkMigrationPolicySemantics(dir);
+    const findings = reviews(dir);
     expect(findings).toHaveLength(1);
     expect(findings[0]!.evidence).toContain("tenant key");
     expect(findings[0]!.category).toBe("Multi-tenant security");
@@ -135,7 +140,7 @@ describe("checkMigrationPolicySemantics", () => {
       "0001.sql": schema,
       "0002.sql": "create policy m_update on public.memberships for update using (tenant_id = current_tenant()) with check (true);",
     });
-    expect(checkMigrationPolicySemantics(dir)[0]!.evidence).toContain("WITH CHECK");
+    expect(reviews(dir)[0]!.evidence).toContain("WITH CHECK");
   });
 
   it("clears a correctly tenant-scoped policy — the benign lookalike", () => {
@@ -143,7 +148,7 @@ describe("checkMigrationPolicySemantics", () => {
       "0001.sql": schema,
       "0002.sql": "create policy m_all on public.memberships for all using (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid) with check (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);",
     });
-    expect(checkMigrationPolicySemantics(dir)).toEqual([]);
+    expect(reviews(dir)).toEqual([]);
   });
 
   it("locates the finding at its migration file:line — the address a source-tier reader can act on", () => {
@@ -151,7 +156,7 @@ describe("checkMigrationPolicySemantics", () => {
       "0001.sql": schema,
       "0002.sql": "-- header\ncreate policy m_insert on public.memberships for insert with check (user_id = auth.uid());",
     });
-    expect(checkMigrationPolicySemantics(dir)[0]!.location).toContain("supabase/migrations/0002.sql:2");
+    expect(reviews(dir)[0]!.location).toContain("supabase/migrations/0002.sql:2");
   });
 
   it("stays at review tier — static shape is an indicator, never a graded verdict (#227)", () => {
@@ -169,7 +174,7 @@ describe("checkMigrationPolicySemantics", () => {
       "0001.sql": "create table public.profiles (id uuid primary key, email text);",
       "0002.sql": "create policy p_select on public.profiles for select using (id = auth.uid());",
     });
-    expect(checkMigrationPolicySemantics(dir)).toEqual([]);
+    expect(reviews(dir)).toEqual([]);
   });
 
   it("reports a policy it could not parse rather than passing over it in silence", () => {
@@ -177,7 +182,7 @@ describe("checkMigrationPolicySemantics", () => {
       "0001.sql": schema,
       "0002.sql": "create policy m_broken on public.memberships for select using (tenant_id = current_tenant()",
     });
-    const findings = checkMigrationPolicySemantics(dir);
+    const findings = reviews(dir);
     expect(findings).toHaveLength(1);
     expect(findings[0]!.title).toContain("could not be read");
     expect(findings[0]!.evidence).toContain("not assessed");
@@ -186,5 +191,68 @@ describe("checkMigrationPolicySemantics", () => {
   it("returns nothing for a target with no migrations at all", () => {
     root = mkdtempSync(join(tmpdir(), "harvey-policy-"));
     expect(checkMigrationPolicySemantics(root)).toEqual([]);
+  });
+});
+
+// #258 — the tenant-key inference is a fixed 6-name list. An app using another convention reviews
+// every table in per-user mode, so cross-tenant findings are missed AND the miss is invisible:
+// silence from a failed inference reads exactly like a clean result. The assumption must be stated.
+describe("checkMigrationPolicySemantics — tenancy-model disclosure (#258)", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function writeMigrations(sql: string): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-tenancy-"));
+    const dir = join(root, "supabase", "migrations");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "0001.sql"), sql);
+    return root;
+  }
+
+  const model = (dir: string) => checkMigrationPolicySemantics(dir).find((f) => f.id === "SB-RLS-TENANCY-MODEL");
+
+  it("names the tenant key it assumed for a recognised per-tenant table", () => {
+    const dir = writeMigrations(
+      "create table public.notes (id uuid primary key, tenant_id uuid not null);\n" +
+        "create policy n_all on public.notes for all using (tenant_id = current_tenant()) with check (tenant_id = current_tenant());",
+    );
+    expect(model(dir)!.evidence).toContain('notes → per-tenant on "tenant_id"');
+  });
+
+  it("says a table was reviewed as per-user AND names the unrecognised scoping column (the site_id app)", () => {
+    // The exact #258 failure: `site_id` is off the candidate list, so pages reviews per-user and
+    // any cross-tenant bug in it is never looked for. Previously that was silent.
+    const dir = writeMigrations(
+      "create table public.pages (id uuid primary key, site_id uuid not null);\n" +
+        "create policy p_all on public.pages for all using (site_id = current_site()) with check (site_id = current_site());",
+    );
+    const evidence = model(dir)!.evidence;
+    expect(evidence).toContain("NOT RECOGNISED");
+    expect(evidence).toContain("pages (declares site_id)");
+    expect(evidence).toContain("WAS NOT LOOKED FOR");
+  });
+
+  it("does not cry wolf over an owner column or a plain per-user table", () => {
+    // profiles keyed id = auth.uid() is per-user BY DESIGN, not a failed inference. Reporting it as
+    // an unrecognised tenant key would bury the one table that matters.
+    const dir = writeMigrations(
+      "create table public.profiles (id uuid primary key, user_id uuid not null, email text);\n" +
+        "create policy p_sel on public.profiles for select using (id = auth.uid());",
+    );
+    expect(model(dir)!.evidence).not.toContain("NOT RECOGNISED");
+  });
+
+  it("is Info-tier and never counted as a defect — an assumption made visible is not a finding", () => {
+    const dir = writeMigrations(
+      "create table public.pages (id uuid primary key, site_id uuid not null);\n" +
+        "create policy p_all on public.pages for all using (site_id = current_site()) with check (site_id = current_site());",
+    );
+    const f = model(dir)!;
+    expect(f.severity).toBe("Info");
+    expect(f.precisionTier).toBe("review");
+  });
+
+  it("is not emitted for a migration set that declares no policies at all", () => {
+    expect(model(writeMigrations("create table public.notes (id uuid primary key);"))).toBeUndefined();
   });
 });
