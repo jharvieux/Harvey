@@ -1,0 +1,20 @@
+"use server";
+
+import { z } from "zod";
+import { admin } from "../lib/db";
+import { getCurrentUser } from "../lib/auth";
+
+const DeleteAccountSchema = z.object({ accountId: z.string().uuid() });
+
+// Near-miss: the `.eq("account_id", accountId)` DOES read a client-supplied value — the
+// literal shape the detector keys on — but the action explicitly compares it against the
+// session's id and throws first, which IS the authorization check. Must stay silent.
+export async function deleteOwnAccount(input: unknown) {
+  const currentUser = await getCurrentUser();
+  const { accountId } = DeleteAccountSchema.parse(input);
+  if (!currentUser || currentUser.id !== accountId) {
+    throw new Error("Not authorized");
+  }
+
+  await admin.from("accounts").delete().eq("account_id", accountId);
+}

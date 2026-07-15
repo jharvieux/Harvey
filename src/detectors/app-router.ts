@@ -66,6 +66,9 @@ function makeFinding(
     value: number;
     ease: number;
     safety: number;
+    // Left unset by most M9 checks (they aren't scored by the calibration corpus). Set it where
+    // a check IS corpus-scored, so scoreEntry can tell free-count from triage-tier (#221).
+    precisionTier?: Finding["precisionTier"];
   },
 ): Finding {
   return { id: nextId(), status: "Open", ...input };
@@ -302,6 +305,193 @@ function collectServerActions(sf: ts.SourceFile): ServerAction[] {
   };
   visit(sf);
   return actions;
+}
+
+// --- Client-supplied owner id trusted by an authenticated action [HIGH] ----
+//
+// #221's narrow, mechanical half. The three proposit instances share one shape the
+// missing-auth check above is blind to BY CONSTRUCTION: auth IS called, so AUTH_PATTERN
+// is satisfied and nothing fires — yet the mutation is scoped by an owner id the CLIENT
+// supplied, so the session is authenticated but never actually authorizes the row.
+//
+// Deliberately narrow (docs/fp-rules.txt: a finding must be evidence-backed). All four
+// must hold: an ownership-column `.eq()` (never bare `id`), on a mutating chain, whose
+// value roots in a PARAMETER of the action rather than in the session binding, and with
+// no explicit ownership comparison anywhere in the body. The broad class (#221's items 2
+// and 3 — trusting client-supplied prices/roles/trials, and UI-only permission gates) needs
+// cross-file and business-context reasoning and stays semantic/paid-tier: see the B15
+// corpus entries and docs/design/corpus-roadmap-to-100.md §4a.
+//
+// PRECISION IS UNMEASURED AGAINST A REAL TARGET (#221). The dogfood repos can't measure it:
+// ATC and AoP contain zero 'use server' files, so this check has no surface there and its
+// silence on them says nothing about its FP rate. Precision is currently pinned only by the
+// corpus pair + the near-miss negatives in app-router.test.ts — i.e. by shapes we chose. That
+// is why every finding here is `review`/`Likely`, never free-count. Validating it against
+// proposit (the codebase the class was found in) is tracked in the #221 follow-up.
+const OWNERSHIP_COLUMN = /^(user|owner|tenant|account|org|organisation|organization|customer|workspace|member|profile|created_by|author)(_id)?$/i;
+
+// Every identifier a binding introduces: `user` → {user}; `{ data: { user } }` → {user}.
+function bindingNames(name: ts.BindingName, into: Set<string>): void {
+  if (ts.isIdentifier(name)) {
+    into.add(name.text);
+  } else if (ts.isObjectBindingPattern(name)) {
+    for (const el of name.elements) bindingNames(el.name, into);
+  }
+}
+
+// Names bound from an auth/session call — `const user = await getCurrentUser()`,
+// `const { data: { user } } = await supabase.auth.getUser()`. A value rooted in one of
+// these is server-derived and therefore trustworthy to scope a mutation by.
+function collectSessionBoundNames(fn: ts.Node, sf: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      const init = ts.isAwaitExpression(node.initializer) ? node.initializer.expression : node.initializer;
+      if (AUTH_PATTERN.test(sf.text.slice(init.getStart(sf), init.getEnd()))) bindingNames(node.name, names);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(fn);
+  return names;
+}
+
+function collectParamRootNames(fn: ts.Node): Set<string> {
+  const names = new Set<string>();
+  for (const p of (fn as ts.SignatureDeclarationBase).parameters ?? []) bindingNames(p.name, names);
+  return names;
+}
+
+// The identifier a property-access chain roots in: `input.userId` → "input", `userId` → "userId".
+function rootIdentifier(expr: ts.Expression): string | undefined {
+  let cur: ts.Expression = expr;
+  while (ts.isPropertyAccessExpression(cur)) cur = cur.expression;
+  return ts.isIdentifier(cur) ? cur.text : undefined;
+}
+
+// Names bound by destructuring a param root (`const { userId } = input`) or aliasing one
+// (`const uid = input.userId`) — still client-supplied, just one hop from the parameter.
+function collectDerivedClientNames(fn: ts.Node, clientRoots: Set<string>): Set<string> {
+  const derived = new Set<string>();
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.initializer && ts.isExpression(node.initializer)) {
+      const init = ts.isAwaitExpression(node.initializer) ? node.initializer.expression : node.initializer;
+      // `Schema.parse(input)` keeps the client's values — validation is not authorization.
+      const source = ts.isCallExpression(init) ? (init.arguments[0] ?? init.expression) : init;
+      const root = ts.isExpression(source) ? rootIdentifier(source) : undefined;
+      if (root && clientRoots.has(root)) bindingNames(node.name, derived);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(fn);
+  return derived;
+}
+
+// An explicit ownership comparison between a session-derived value and a client-supplied one
+// (`if (currentUser.id !== accountId) throw`) IS the authorization check — the action is
+// guarded even though the .eq() reads a client value.
+function hasOwnershipComparison(fn: ts.Node, sessionNames: Set<string>, clientNames: Set<string>): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isBinaryExpression(node)) {
+      const op = node.operatorToken.kind;
+      const isEquality =
+        op === ts.SyntaxKind.EqualsEqualsToken ||
+        op === ts.SyntaxKind.EqualsEqualsEqualsToken ||
+        op === ts.SyntaxKind.ExclamationEqualsToken ||
+        op === ts.SyntaxKind.ExclamationEqualsEqualsToken;
+      if (isEquality) {
+        const left = rootIdentifier(node.left);
+        const right = rootIdentifier(node.right);
+        const sides = [left, right];
+        if (sides.some((s) => s && sessionNames.has(s)) && sides.some((s) => s && clientNames.has(s))) {
+          found = true;
+          return;
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(fn);
+  return found;
+}
+
+interface ClientOwnerEq {
+  column: string;
+  node: ts.CallExpression;
+}
+
+// An `.eq("<ownership column>", <client-rooted value>)` sitting on a mutating chain.
+function findClientOwnerEq(fn: ts.Node, sf: ts.SourceFile, clientNames: Set<string>): ClientOwnerEq | undefined {
+  let hit: ClientOwnerEq | undefined;
+  const visit = (node: ts.Node) => {
+    if (hit) return;
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "eq" && node.arguments.length === 2) {
+      const [col, val] = node.arguments;
+      if (col && val && ts.isStringLiteralLike(col) && OWNERSHIP_COLUMN.test(col.text)) {
+        const root = rootIdentifier(val);
+        // The .eq() must sit on the mutating chain itself, not on a sibling read in the
+        // same action — so test the enclosing statement, falling back to the chain alone.
+        const stmt = ts.findAncestor(node, ts.isExpressionStatement) ?? ts.findAncestor(node, ts.isVariableStatement) ?? node;
+        const stmtText = sf.text.slice(stmt.getStart(sf), stmt.getEnd());
+        if (root && clientNames.has(root) && MUTATION_PATTERN.test(stmtText)) {
+          hit = { column: col.text, node };
+          return;
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(fn);
+  return hit;
+}
+
+function detectClientSuppliedOwnerId(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    for (const action of collectServerActions(sf)) {
+      const text = sf.text.slice(action.node.getStart(sf), action.node.getEnd());
+      if (!isDbMutationChain(text)) continue;
+      // No auth at all is the OTHER finding (missing authorization check) — don't double-report.
+      if (!AUTH_PATTERN.test(text)) continue;
+
+      const sessionNames = collectSessionBoundNames(action.node, sf);
+      // Auth was called but nothing was bound from it (`await requireUser()` for its throw).
+      // Whether the .eq() value is authorized then depends on code this AST pass can't see.
+      if (sessionNames.size === 0) continue;
+
+      const paramRoots = collectParamRootNames(action.node);
+      const clientNames = new Set([...paramRoots, ...collectDerivedClientNames(action.node, paramRoots)]);
+      if (clientNames.size === 0) continue;
+
+      const eq = findClientOwnerEq(action.node, sf, clientNames);
+      if (!eq) continue;
+      if (hasOwnershipComparison(action.node, sessionNames, clientNames)) continue;
+
+      const sessionName = [...sessionNames][0];
+      findings.push(
+        makeFinding(nextId, {
+          title: `Server Action \`${action.name}\` mutates rows scoped by a client-supplied \`${eq.column}\``,
+          severity: "High",
+          confidence: "Likely",
+          category: "Security",
+          taxonomy: "M1 — Client-supplied owner id trusted by authenticated action",
+          location: loc(path, sf, eq.node),
+          evidence: `\`${action.name}\` authenticates the caller (binding \`${sessionName}\`) but scopes its mutation with \`.eq("${eq.column}", …)\` on a value that comes from the action's own arguments, not from \`${sessionName}\`. No comparison between the two appears in the body.`,
+          impact: "The caller is authenticated but never authorized for the row: any signed-in user can pass another user's/tenant's id and mutate their data. Schema validation does not close this — a well-formed id from the wrong tenant still passes.",
+          fix: `Derive the owner id from the session (\`.eq("${eq.column}", ${sessionName}.id)\`), or explicitly compare the supplied id against the session's before mutating.`,
+          // Review, never free-count: the AST proves the .eq() value is client-rooted and that no
+          // session-vs-client comparison exists IN THIS BODY — not that authorization is absent
+          // from a wrapper/middleware it can't see. That residual is what triage is for.
+          precisionTier: "review",
+          value: 5,
+          ease: 3,
+          safety: 4,
+        }),
+      );
+    }
+  }
+  return findings;
 }
 
 function detectServerActionAuthAndValidation(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
@@ -627,6 +817,7 @@ export function detectAppRouterFindings(files: SourceInput[]): Finding[] {
     ...detectServerClientLeak(sources, nextId),
     ...detectMissingServerOnly(sources, nextId, pagesRouterOnly),
     ...detectServerActionAuthAndValidation(sources, nextId),
+    ...detectClientSuppliedOwnerId(sources, nextId),
     ...detectUnsafeCacheConfig(sources, nextId),
     ...detectDataFetchingWaterfalls(sources, nextId),
     ...detectAccidentalDynamicRendering(sources, nextId),

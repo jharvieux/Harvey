@@ -1,0 +1,17 @@
+"use server";
+
+import { z } from "zod";
+import { admin } from "../lib/db";
+import { getCurrentUser } from "../lib/auth";
+
+const UpdateProfileSchema = z.object({ bio: z.string().max(280) });
+
+// Near-miss: same imports, same auth call, same `.eq("user_id", …)` shape on the same
+// mutating chain — but the owner id is read off the SESSION binding, so the client can
+// only ever edit its own row. Must stay silent.
+export async function updateOwnProfile(input: unknown) {
+  const currentUser = await getCurrentUser();
+  const { bio } = UpdateProfileSchema.parse(input);
+
+  await admin.from("profiles").update({ bio }).eq("user_id", currentUser.id);
+}

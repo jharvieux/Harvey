@@ -1,0 +1,20 @@
+"use server";
+
+import { z } from "zod";
+import { admin } from "../lib/db";
+import { getCurrentUser } from "../lib/auth";
+
+const UpdateRoleSchema = z.object({
+  userId: z.string().uuid(),
+  role: z.string(),
+});
+
+// Modelled on proposit's user-actions.ts (#221): the action authenticates the caller and
+// even validates its input, but the row it updates is chosen by the CLIENT-supplied userId.
+// A well-formed uuid belonging to someone else passes both the session check and the schema.
+export async function updateMemberRole(input: unknown) {
+  const currentUser = await getCurrentUser();
+  const { userId, role } = UpdateRoleSchema.parse(input);
+
+  await admin.from("profiles").update({ role }).eq("user_id", userId);
+}
