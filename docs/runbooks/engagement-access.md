@@ -108,30 +108,34 @@ quoted.
 
 ## Delivery gate — module coverage (before the report ships)
 
-The audit is a 9-module product (M1–M9, `docs/audit-modules.md`). A delivery is only complete
-when **every** module is accounted for — run, or explicitly marked not-applicable with a reason.
-This is enforced mechanically by `assertModuleCoverage` (`src/audit/module-coverage.ts`), the same
-completeness discipline the target gate applies to apps/backends/seams. Record each module before
-delivery:
+The audit is a ten-module product (M1–M10, `docs/audit-modules.md`). A delivery is only complete
+when **every** module is accounted for — run, or explicitly recorded as unable to run with a reason.
+This is enforced mechanically by `assertAuditComplete` (`src/audit-coverage.ts`, run it with
+`pnpm audit-coverage --coverage <file.json>`), the same completeness discipline the target gate
+applies to apps/backends/seams. Record each module before delivery:
 
 - **ran** — **all** of the module's in-scope classes executed. "No tests exist" is a *ran* result
   (it's the M8 finding), not a skip.
-- **partial** — some classes ran but others didn't, **with a note saying what's missing and why**
+- **partial** — some classes ran but others didn't, **with a reason saying what's missing and why**
   (e.g. M2 when the DB-level RLS probes ran but the app-route/seam probes couldn't — no deployed test
-  app). A partial is *disclosed*, so it isn't a silent gap and doesn't block delivery — but
-  `assessModuleCoverage().complete` is **false** while any module is partial, so the report must not
-  claim full coverage. A partial without a note is a gap.
-- **na** — deliberately not applicable, **with a reason** (e.g. M7 performance / M2 dynamic when no
-  live DB or running app is in engagement scope). A bare skip or a reasonless `na`/`partial` is a
-  **gap** and the gate throws, naming the module. Environment-gated modules (`needs:
-  connected/dynamic/llm`) are the common `na`/`partial` cases — but the decision must be recorded,
+  app). A partial is *disclosed*, so it isn't a silent gap and doesn't block delivery — but it never
+  counts as a full run (`ranCount`), so the report must not claim full coverage. A partial without a
+  reason is a gap.
+- **requires-live-run** — a prereq was absent so the module could not execute, **with a reason**
+  (e.g. M2 when no running app is in engagement scope). A bare skip or a reasonless
+  `requires-live-run`/`partial` is a **gap** and the gate throws, naming the module. Environment-gated
+  modules (`needs: connected/dynamic/llm`) are the common cases — but the decision must be recorded,
   never silently omitted.
+
+A module in `MODULES_NEVER_EXECUTED` (today: M6) is stronger than a gap: it has never produced
+output in **any** engagement, so no reason clears it and the gate throws until it is run once.
 
 A "test *database*" is not a test *environment*: M2's app-route and seam probes need a deployed
 non-prod **app**, so a DB-only engagement runs M2's RLS class and marks M2 **partial**, not ran.
 
-The gap this guards against is real: a source-only run legitimately can't do M7 (needs the live DB)
-or M2 (needs a running app), but M3/M4/M5/M8/M9 all run on source and must not be dropped by
+The gap this guards against is real: a source-only run legitimately can't do M2 (needs a running
+app) or M7's advisor layer (needs the live DB), but M3/M4/M5/M8/M9 all run on source — as do M7's
+code detectors and M10's schema tier (`--schema` over migration SQL) — and must not be dropped by
 accident. Fill the coverage record as each module runs; the gate is the last check before the
 report is delivered.
 

@@ -5,7 +5,7 @@
 > what makes the engagement worth $X, sticky, and expands who'll buy). Do **not** market as "generic code
 > quality" — that's the commoditized lane (SonarQube/Code Climate). Security leads; the rest is the value.
 
-A full audit is 7 modules. Each lists what it finds, the method, the tool/skill that powers it, whether it's
+A full audit is ten modules (M1–M10). Each lists what it finds, the method, the tool/skill that powers it, whether it's
 **net-new build** or **existing tooling to wire in**, and what it contributes to the report.
 
 | # | Module | Powered by | Status |
@@ -82,7 +82,7 @@ A full audit is 7 modules. Each lists what it finds, the method, the tool/skill 
 - **Powered by:** `pnpm simplify-scan` + `quality-extras.txt`.
 - **Status (2026-07-15, #266):** M6 has produced **no output in any engagement** since it was defined
   (2026-07-09, #72) — it had no runner until now, and the coverage guard recorded its absence as a routine `na`
-  every time. `src/audit/module-coverage.ts` (`MODULES_NEVER_EXECUTED`) now fails loud on this until M6 runs
+  every time. `src/audit-coverage.ts` (`MODULES_NEVER_EXECUTED`) now fails loud on this until M6 runs
   against a real target. Until then, treat the "lower your maintenance cost" pitch below as **unproven by our
   own tooling** — it is a claim about a module that has never run.
 - **Report:** maintainability recommendations — each "reinvented wheel" with the suggested
@@ -161,10 +161,11 @@ A full audit is 7 modules. Each lists what it finds, the method, the tool/skill 
 - **Report:** a data map (table → categories) in context; feeds the severity of every exposure finding.
 
 ## How the modules compose into one engagement
-1. Threat-model (focus areas) → 2. M1 static security scan → 3. M3 hotspots + M4 dup + M5 slop + M6 maintainability
+1. Threat-model (focus areas) → 2. M10 data classification (the data map — it weights every exposure finding's
+severity, so it runs before the security pass) + M1 static security scan → 3. M3 hotspots + M4 dup + M5 slop + M6 maintainability
 + M7 performance + M8 test quality + M9 App Router (can run in parallel; full-repo Stryker, perTest + concurrency)
 → 4. M2 local pen test to **prove** the high-severity M1/M9 findings → 5. assemble into the ranked report
 (`audit-report-skeleton.md`), cross-referencing hotspots and surviving mutants against findings → 6. remediation plan + retest offer.
 
 **Packaging:** offer a **Security audit** (M1+M2+the M9 security items, the wedge, lower price/faster) and a
-**Full codebase audit** (M1–M9, higher price, the upsell). Lead the pitch with the security depth; show the full report as the reason to buy the bigger package.
+**Full codebase audit** (M1–M10, higher price, the upsell). Lead the pitch with the security depth; show the full report as the reason to buy the bigger package.
