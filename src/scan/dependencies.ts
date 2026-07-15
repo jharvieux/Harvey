@@ -13,6 +13,13 @@
 // against one of them is a duplicate of that finding and is dropped here (see
 // CURATED_ADVISORY_IDS / dedup in parseOsvFindings). Every other OSV hit is "review" — a version
 // match isn't proof of exploitability (deployment context, e.g. self-hosted vs. Vercel, matters).
+//
+// `precisionTier` here ("high" vs "review") is about confidence in the VERSION MATCH itself, a
+// different axis from exploitability. Every "Dependency CVE" finding below is a version match
+// only, so none set Finding.exploitabilityVerified, and the whole category stays out of the free
+// grade (src/quick-scan.ts NON_GRADING_CATEGORIES, #213/#260). If a check is ever added here that
+// independently confirms exploitability in the scanned codebase (not just a version overlap), set
+// exploitabilityVerified: true on that finding so it grades correctly.
 
 import type { Finding, Severity } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
