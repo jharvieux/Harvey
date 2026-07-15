@@ -62,8 +62,11 @@ jobs:
           pipx install semgrep
           curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
             | sh -s -- -b "$HOME/.local/bin"
+          # Pinned to the v2 line the local green run used (2.3.8) — v1 and v2 differ on the CLI
+          # surface, and the asset carries no version in its name, so an unpinned URL would drift
+          # the toolchain under the baselines without anyone choosing to.
           curl -sSfL -o "$HOME/.local/bin/osv-scanner" \
-            https://github.com/google/osv-scanner/releases/download/v1.9.2/osv-scanner_1.9.2_linux_amd64
+            https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_amd64
           chmod +x "$HOME/.local/bin/osv-scanner"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
