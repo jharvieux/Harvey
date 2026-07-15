@@ -2,7 +2,184 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-11 (connected-tier review passes hardened live: raw-body export #205, per-user tenancy mode #206/PR#207; free/connected tier docs PR#208; AoP approved for read-only scanning)_
+_Last updated: 2026-07-15 (sweep #4: 11 issues across PRs #305–#318, all merged. **#229's orchestrator finally LANDED — CLAUDE.md's "known gap" is closed and its text is now stale (#313).** Disclosure still BLOCKED on #245.)_
+
+## Issue-sweep #4 (2026-07-15, latest) — the coverage gap closes, and measurement corrects three assumptions
+
+Operator grant: **#290 + #300** (i.e. `targets/calibration/**`, `docs/design/m6-simplification-eval.md`, `.github/workflows/**`) — pulled in at the gate, verbatim _"include 290 and 300"_. Mid-sweep the operator also asked for the GitGuardian fix and chose the exclusion **+** the redaction issue.
+
+### THE headline: #229 is done (PR #310)
+`src/cli/run-audit.ts` + `src/audit-runner.ts` run all ten modules and **derive** the ledger from execution. Three properties, verified by reading the code, not the executor's summary: no parameter accepts a caller-supplied `ModuleCoverage[]`; a module with no registered runner **throws before anything runs** (`assertRegistryComplete`), so a short registry can't emit a partial ledger that reads as whole; a **crashed probe goes to `failures`, never laundered into `requires-live-run`** (that would be the silent pass the gate exists to prevent). #284 came with it — `MODULES_NEVER_EXECUTED` is now the complement of `audit-execution-log.json`, defaulting unknown → never-run.
+**→ CLAUDE.md's known-gap paragraph now tells operators to hand-do what the tool does. #313 (human-owned, needs your edit).**
+
+### Measurement beat assumption three times — the theme of this sweep
+1. **boxyhq's M10 was recorded not-run for a reason that had stopped being true.** #299 fixed the quoted-identifier parser → not-run became a **measured 8/8** (95 columns/15 tables), confirmed by the corpus scorer against the real clone.
+2. **#300's own issue body was wrong.** It claimed boxyhq was blocked by Playwright needing a built app + browser; boxyhq's jest config already excludes them. Trusting the recorded reason would have left a scoreable target unscored behind a fabricated blocker.
+3. **The corpus's "best-tested" target scores worst.** boxyhq: 8 test files (7 E2E) → **20%** mutation. proposit: 1 spec → **100%**. Test-file count was never test quality — #263's lesson, resurfacing one level up (→ **#319**).
+**Systemic root**: not-run reasons are never re-tested; the guard fails loud on *silence* but is trusting of *stated reasons* → **#321**.
+
+### Landed
+- **#302/#304 → #305** — gitleaks findings sorted before positional id assignment; three dry-run runs now byte-identical. Stale semgrep path fixed.
+- **#299 → #306**; **#301 SKIPPED, no code change** — the limitation is already disclosed in the finding text (#297) and widening `SCOPE_COLUMN` would flood ordinary schemas; left open per its own revisit criteria, reasoning on the issue.
+- **#251/#300 → #315** — M5-knip per-target install + M8 mutation baselines + `corpus-m8.yml` (monthly, 45m cap, read-only). Two of four suite-carrying targets scored; the other two carry **measured reasons** (Docker-per-mutant, E2E-only) — #252's ambiguity left undecided, not guessed.
+- **#229/#284 → #310** · **#221 → #318** · **#290 → #316** · **#303 → #317**.
+- **GitGuardian → #309** (operator-requested): `dry-run/**` excluded. All 5 alerts were pre-existing calibration fakes echoed in scanner **evidence output** — the exclusion treats the symptom; **#308** is the real question.
+
+### #221 shipped narrow on purpose
+Only the mechanical third (client-supplied owner id in a Server Action), `review` tier, never free-count. **Its precision is UNMEASURED against real code and no number is claimed**: ATC/AoP have **zero `'use server'` files**, so the detector's silence across 1,398 files is *no input*, not precision. Only real read available is proposit's 3 known instances → **#326**.
+
+### #290: rebuild, not relabel (PR #316)
+The old fixture's benign status rested entirely on a comment #282 stripped — it was pinning nothing. Rebuilt around a **code-evident** contract (`implements SupportedStorage` + instance handed to `createClient({auth:{storage}})`), no comments. Run 2's 1/2 deliberately **not** re-scored (the reviewer was right about the file it saw; re-scoring = the rationalized pass §3.1 warns about) → **M6 now has NO trustworthy negative datum until run 3** (**#324**).
+
+### Supervisor error worth recording
+**#264 was approved at the gate and I never dispatched it.** I tracked batch state in prose instead of updating the ledger after each change — exactly what the ledger exists to prevent. Caught only at wrap-up reconciliation (the check working, but it shouldn't have needed to) and dispatched late. **Rule: update the ledger on every state change, before writing the prose update.**
+
+### Operator decisions this sweep surfaced (all NEW, all yours)
+- **#311** — M1 reads `ran` off the mechanical layer alone while only *claiming* the semantic/live layers are in scope. Mechanical is **0/8** on planted bugs; the LLM pipeline is **7/8**. The lead module of the wedge carrying the runner's weakest claim. Permanently `partial`, or make the semantic pass leave a checkable artifact?
+- **#308** — findings quote matched secrets **verbatim** in evidence. Fixtures today; **real client credentials** on a real engagement, and `report-template/` renders them into a client-facing doc.
+- **#319** — what can M8's score honestly claim? A 100% on one file of an untested repo is true and misleading.
+- **#322** — per-target scan roots would make M5 measure a different tree than M4 on the same target.
+- **#327** — no detector sets `precisionTier`, so detector findings silently mis-score (positives → misses; untiered FPs indistinguishable from free-count). Fixed narrowly for #221 only.
+
+## Issue-sweep #3 (2026-07-15, later) — the module-scope cleanup
+
+**Operator ruling at the gate, verbatim: _"M10 is included, it never should have been excluded from anything."_** That settled #289 and unblocked #288/#275, which had been excluded pending a decision on the module set. Grant this sweep: `docs/**` + `package.json` (CLAUDE.md and `findings.*.json` stayed excluded).
+
+### The root cause of a whole class of confusion: CLAUDE.md was never committed
+`CLAUDE.md` was last committed **2026-07-08**. The ten-module scope, the module→runner table, and the fail-loud coverage doctrine were written **2026-07-12** and sat **uncommitted for three days**. Sessions read the working copy (ten-module); every dispatched agent read the committed file (**9-module**, none of the table). They disagreed for three days.
+
+That is why **#275** was filed asserting "CLAUDE.md sells ten modules but the guard sees nine" — a contradiction between a file one machine could see and the code everyone else reads. **Now committed in PR #293**, with three rows refreshed against what actually shipped while it sat: M6's `/simplify` (a skill that does not exist) → `pnpm simplify-scan`; M10's `node tools/…` → `pnpm pii-classify --schema`; and #229's "known gap" now distinguishes the gate (landed, takes its ledger from the caller) from the orchestrator (did not).
+
+**Rule going forward: read CLAUDE.md from `origin/main`, never a working copy.** A dirty marker on the file that defines how the repo works is a question, not noise.
+
+### Landed
+- **#289/#288/#275/#254 → #294** — `docs/audit-modules.md` now says TEN consistently (was 7 on line 8, ten in the table, M1–M9 in Packaging — three counts in one file). **The dead second guard is DELETED**: `src/audit/module-coverage.ts` had zero callers and nine modules while `src/audit-coverage.ts` had ten; that duplication is how #275 was possible. New enumeration test **reads** the doc's module table rather than restating it — supervisor mutation-verified: removing M10 from the doc DOES fail it. Two more M10-exclusion instances found beyond #289's three (a composition flow, `docs/runbooks/engagement-access.md`).
+- **#286/#285 → #295** — **#286 verdict: NOT a regression.** `UPDATE-UNSCOPED` scores `missed` because **no rule for that class has ever existed** (`git log -S` over `src/scan/rules/` empty across all history — supervisor-verified); fixture intact and still vulnerable at `update.js:12`; the row scored `missed` in every scorecard back to the #34 baseline. Tally stayed at the honest **2/3/3** — no expectation lowered. #285: dry-run locations relativized, two runs now byte-identical, diff 4.4k → 706 lines.
+- **#277/#278/#279/#262 → #298** — M8/M5-slop/M10 corpus scoring gaps recorded with real reasons; **#262's wall-clock calibration finally RUN** (#15's original acceptance criterion, never done): concurrency 1 → 3.24s, 4 → 1.86s, 8 → 1.96s, mutation score constant at 76% (19/25). The doc explicitly refuses to extrapolate from a 25-mutant fixture to a real engagement.
+- **#280/#281 → #297** — `--tenant-key`/`--tenant-mode` now on quick-scan, reusing detect-deeper's declaration (was connected-tier only, so free tier could *see* a wrong tenancy inference but not fix it). #281 resolved by disclosure rather than widening the regex — the issue's own sanctioned fallback; widening would flood ordinary schemas with noise and there is no corpus to validate against (#301).
+- **#292 → #296** — axios/ws ranges widened, **all OSV-verified**, kept **disjoint** (supervisor-verified `ws@5.2.3` and `ws@6.2.2` stay silent — flattening would have flagged patched versions). Kept ws's real `introduced: "5.0.0"` floor rather than assuming `"0"`. `osv-staleness` now **32/32** claims.
+
+### Corrections made to my own earlier work
+- **#275's premise was wrong** and I filed it — cited the uncommitted CLAUDE.md as committed state. Corrected + reopened, then closed properly via #294 once the real defects (#288/#289) were split out.
+- **#282 was already done** before the wrap-up agent filed it (PR #287 had de-labelled the fixtures) — a race in my own orchestration. Closed with that explanation.
+
+## Issue-sweep 2026-07-15 — the theme: things that reported success without checking
+
+Operator granted `.github/workflows/**` + `package.json` + `docs/**` for this sweep (CLAUDE.md and `report-template/findings.*.json` stayed excluded). 16 issues, 9 PRs, all merged. **Three independent instances of the same defect class — a mechanism reporting success without checking what it claims to check:**
+
+1. **#212 (2026-07-14)** — a fabricated Critical CVE.
+2. **#246/PR #273** — the dry-run scorecard's `matches` took `location` OR `taxonomy` as separate strings, so it structurally could not require both. It scored 4/8 planted bugs "caught" off false matches — the standout: **`COUNTER-RACE` matched `/race/i` against the dependency `braces@2.3.2`**. Honest tally was 2. Matcher fixed rather than committing the number.
+3. **#275/#288** — **two** coverage guards exist. `src/audit-coverage.ts` (#229) is live with all ten modules; `src/audit/module-coverage.ts` has **zero callers** and had nine. One guard drifted while the other didn't, and nothing reconciled them.
+
+**Supervisor error worth recording:** I filed #275 claiming "CLAUDE.md sells ten modules but the guard sees nine". Committed `CLAUDE.md` says **9-module** — the ten-module text is an *uncommitted local edit* in the operator's checkout. I cited a dirty working copy as the repo's state. The executor caught it; #275 corrected + reopened. Verify against `origin/main`, never the local checkout.
+
+### Landed
+- **#246/#253/#247 → #273** — dry-run artifacts regenerated (the fabricated CVE is gone); corpus `location` matching anchored (a bare `next` substring-matched every fixture, which is *how* #212's bad entry "passed"); **OSV staleness check** (`.github/workflows/osv-staleness.yml`, weekly, 29/29 green) — it would have caught #212 mechanically. `pnpm verify` stays offline.
+- **#256/#258 → #270** — `WITH CHECK (true)` rule in the shared reviewer (both tiers). **Half of #256 correctly declined**: PG *rejects* `USING` on INSERT policies and *defaults* `WITH CHECK` to `USING` on UPDATE — verified on real Postgres 16 by the executor AND independently by me. A rule there would be a pure FP factory. #220's text corrected.
+- **#249/#250 → #269** — React Compiler flag now resolves `on`/`off`/**`unresolvable`** (was silently assuming false); M10 got its `--schema` entry point (`pnpm pii-classify`).
+- **#259/#260 → #272** — `total` semantics documented for consumers; `exploitabilityVerified` per-finding escape hatch (inert today, so grading is unchanged).
+- **#263/#261 → #276** — **Layer-2 corpus CI ships and runs** (clones 6 pinned commits, scores baselines, 2m10s, 28/28). **The baselines were themselves wrong and had never been through the scorer**: M4 recorded jscpd *cluster* counts vs the scorer's *findings* (203 vs 68); M8 recorded test-*file* counts; two M5 modules marked "can't run" ran fine. Every M4/M8 baseline would have failed day one. One real drift caught + rebaselined (saas-lite M7 22→23, from #269's new class).
+- **#265/#266 → #274, #275/#282 → #287** — M6 now has a runner (`pnpm simplify-scan`) and is `never-executed` so the gate throws until it runs for real.
+- **#271 → #291** — 5 CVE ranges widened, **all OSV-verified**. Two of #271's own claims were WRONG: `undici` CVE-2022-35949 has no 6.x range (asserting it = a false High on every `undici@6.x`, the #212 defect), and `minimist@0.2.4` is *patched* — its ranges are disjoint, so a naive widen preserves an FP. Also fixed a latent comparator bug: prerelease versions collapsed (`5.0.0-beta.x` → `5.0.0`), so the next-auth beta range would have been **unmatchable while the table looked correct**.
+
+### The M6 eval finally ran honestly — and beat its own answer key
+Run 1 scored **4/4 + 2/2 and was VOIDED as contaminated**: every fixture's line 1 announced its own verdict (`// — PLANTED (M6-P-DEBOUNCE)`, `// The rubric must NOT flag this one`). A reviewer reading only first lines scores 6/6. Labels stripped (#282/PR #287), discriminators kept.
+
+**Run 2 (fresh-context reviewer): 4/4 positives, 1/2 negatives.** It flagged `framework-adapter.ts` — a labeled *benign* — arguing Next.js dispatches `getServerSideProps` as a module-level export and never calls a class method, so `InvoicePageAdapter` is unreachable by the framework it claims to serve. **Verified: the reviewer is right and the fixture is mislabeled** (#290). Its benign status rested entirely on the header comment asserting a contract the code never demonstrates. `depdrop.ts` was spared on its `// WHY:` comment alone — a real negative working as designed.
+
+## ⛔ BLOCKER — do not send any disclosure until #245 clears (2026-07-14)
+
+**#212 found that the scanner asserted a Critical CVSS-10 pre-auth RCE against `next@14.2.x` that does not exist.** Verified against OSV: the Next.js RSC advisory `GHSA-9qr9-h5gf-34mp` opens at `14.3.0-canary.77`, so no released 14.2.x is in range; it is absent from all 26 advisories OSV returns for `next@14.2.5`. The corpus also cited `CVE-2025-66478` (MITRE-REJECTED, 404s at OSV) and a non-existent GHSA. Every fixed-version in that table was wrong. **This fired on 4 real targets in the 2026-07-12 sweep.**
+
+- Corpus corrected in PR #243; each entry now carries its OSV advisory URL.
+- **#245 blocks #214–#219 + #168** — re-check every open disclosure thread against the corrected corpus before sending. Several (e.g. Vercel #215) own the advisory and would spot a fabricated CVE instantly.
+- **#246** — `dry-run/findings.json` still contains the FP; needs regenerating (not hand-editing: it is the record of a real historical run).
+- **#247** — no staleness check against OSV; a periodic re-query would have caught all four defects mechanically.
+
+## Issue-sweep 2026-07-14 (8 issues, 4 PRs, all merged)
+
+- **#222/#228 → PR #241** external-repo regression corpus + quality-module precision validation. Corpus built as pinned-commit clones, **not** vendored extracts: `Wallens11/supabase-multi-tenant-starter` ships **no LICENSE** (all-rights-reserved), so its migration cannot lawfully be copied in; the #230/#232 FP shapes are whole-repo properties an extract can't reproduce anyway. Confirmed #230–#233 hold on real code (mvp-boilerplate dup 13.3%→1.35%; boxyhq Pages Router → clean 0).
+  - **Thesis-validating result:** M5 found multi-tenant-starter exports `requireTenantAccess`/`requireTenantAdmin` that **nothing calls** — on the same repo whose Critical is a missing-authz self-join. The dead guard is the vulnerability's fingerprint: a quality module corroborating a security Critical. Strongest GTM artifact the sweep produced.
+- **#212 → PR #243** CVE corpus provenance (see blocker above).
+- **#229 → PR #243, PARTIAL, still open.** Coverage *gate* landed (`src/audit-coverage.ts`: every M1–M10 accounted for, `assertAuditComplete` throws naming gaps). The `run-audit` **orchestrator did not** — needs prereq detection (target `npm install`, `supabase start`, vitals, DB creds) across 10 heterogeneous CLIs / 3 tiers. **The seam:** the gate takes the ledger *from its caller*, so it cannot detect that you skipped M5. Bookkeeping discipline, not ground truth — CLAUDE.md's "known gap" wording still holds.
+- **#227/#213/#220 → PR #244** free-tier grade scope + risk disclosure + non-grading indicators; static RLS-policy review now feeds the source tier by reusing the existing `rls-policy-review.ts` (shared with the connected tier, not a second copy).
+- **#240 → PR #242** doc-completeness (operator-approved supervised `docs/**` edit).
+
+### Open decisions the sweep surfaced (operator-owned)
+- **#248** M7 micro-render FPs are only demoted when React Compiler is on, and no corpus repo enables it. Either those shapes are real work without the compiler (→ #230's ~10% precision figure is wrong) or they're noise regardless (→ demotion shouldn't be compiler-gated). Baselines move either way.
+- **#255** curated severities diverging from the advisory (jsonwebtoken High vs OSV MODERATE) — defensible, but post-#212 an audit that silently re-rates a CVE invites the same credibility question.
+- **#252** M8 "harness present but suite absent" (proposit: `vitest run` + exactly 1 test file → counted:1, when #224's zero-coverage finding is arguably more honest).
+- **#257** static RLS residual FP (own-row policy on a table that also carries `tenant_id`) — may not be decidable from static SQL alone; the #206 boundary.
+
+### Next-up queue (revised 2026-07-15, after sweep #4)
+1. **#245** — still the only thing blocking all 7 disclosure threads. Unchanged and unstarted across **four** sweeps; it is judgment about what to tell third parties, not a code task.
+2. **#313** — CLAUDE.md's known-gap paragraph is now **wrong** (the #229 runner shipped). It is the file that defines how the repo works and how every dispatched agent behaves; stale text there caused a whole class of confusion in sweep #3. Human-owned → yours.
+3. **#311 / #308 / #319** — the three honesty decisions this sweep surfaced. Each is a claim the product makes to a paying client: what M1's `ran` means, whether findings carry live secrets, what a mutation score asserts.
+4. **#283** run M6 against a real target — still the only thing that clears its gate. **#324** (run 3 vs the corrected corpus) should come first: M6 currently has no trustworthy negative datum, so an engagement run would have nothing to calibrate its FP behavior against.
+5. **#326** — validate #221's detector against proposit. The finding is live and review-tier now; its precision is unmeasured until this runs.
+6. **#320** (triage proposit's 85 M5-knip findings — measured, not verified) · **#321** (not-run reasons never re-tested — the systemic one) · **#307/#327/#322** (parser/scoring/scope gaps).
+
+### Open decisions (operator-owned — agents were explicitly told not to guess these)
+**Pre-existing:** #248 M7 compiler-gating · #252 M8 harness-vs-suite (hit again in #300 — saas-lite's E2E-only suite is exactly this ambiguity; recorded with a reason rather than decided) · #255 curated severity vs advisory · #257 static RLS own-row/tenant_id boundary · #267 the top-100 AI-hand-rolled corpus (HELD for a later sweep).
+**New from sweep #4:** **#311** M1's `ran` claim · **#308** secrets verbatim in evidence · **#319** what M8's score can claim · **#322** per-module vs per-target scan roots · **#327** default `precisionTier` for detector findings.
+
+_Still open + human-owned: disclosures #214–#219/#168 (blocked on #245), GTM #10–#13, live pen-tests #159/#161, Tier-2 port #4._
+
+
+
+## Public-repo dry-run sweep #2 (2026-07-12)
+
+Ran the free-tier static scan (`quick-scan` + `detect-static`) across the remaining `docs/test-targets.md` candidates, plus a live dynamic RLS probe on the best target. ShenSeanChen/launch-mvp was already done (→ #168). Clones + scan outputs are in the session scratchpad (throwaway).
+
+- **6 targets scanned:** mvp-boilerplate, nextjs-saas-starter-kit-lite, nextjs-subscription-payments (vercel), proposit, boxyhq/saas-starter-kit, Wallens11/supabase-multi-tenant-starter. **Two doc-listed repos are dead:** `AppBrewers/supabase-multi-tenant-starter` (404), `mrdave001/supabase-multi-tenant` (empty, no worktree).
+- **Headline result — `Wallens11/supabase-multi-tenant-starter` (0★):** static RLS-policy review predicted two tenant-isolation breaks; **both CONFIRMED dynamically** on a local self-hosted Supabase stack:
+  1. `user_tenants_insert WITH CHECK (user_id = auth.uid() OR ...)` — any authenticated user self-joins **any** tenant (one INSERT) → then reads that tenant's data. Proved: userA (Acme owner) inserted membership into Beta, then read Beta + enumerated Beta members.
+  2. `invitations_update_used USING (used_at IS NULL)` — unscoped; any authed user tampers/consumes **any** unused invitation (proved userA hijacked Beta's invite).
+  - Dynamic method: psql, `SET LOCAL ROLE authenticated` + `request.jwt.claims` sub inside a **single transaction** (local GUC evaporates otherwise → auth.uid() NULL, the trap that voided my first probe run).
+- **Triage collapsed the raw "Criticals":** raw mechanical flagged ~12 Criticals across the 6 repos; the secret-exposure ones are all **false positives** — the local Supabase demo key (`iss:"supabase-demo"`, ships with every `supabase start`) in seed/.env files, and a SAML **test** private key in boxyhq CI. The Next.js CVE Criticals are version-matches (not exploitability-confirmed; some CVE IDs unverified). proposit's 9 Server-Action Highs are review-tier heuristics (no-visible-auth / no-input-validation) needing the triage pass, not free-tier verdicts.
+- **Scanner-precision follow-ups filed:** **#210** local-demo-key FP (highest priority — fires on ~every Supabase repo; a wrong Critical is credibility-fatal), **#211** CI/test private-key FP + mismatched risk copy, **#212** verify Next.js CVE corpus provenance.
+- **Not done:** dynamic local testing of the other 5 targets (each needs its own stack stood up; the multi-tenant-starter was the high-value pick). Responsible disclosure for the 0★ repo left to operator discretion (low marketing value per the doc; disclosure is human-owned like #168).
+
+### LLM deep-scan suite run across all 6 (2026-07-12, later)
+Ran `/threat-model → /vuln-scan → /triage` (one parallel review agent per target). Full per-target write-up in the session scratchpad `llm-suite-results.md`. **Result validates the thesis:** the deep pass caught the real bugs the free/mechanical tier can't see and cleared every false Critical the free tier raised.
+- **Real findings surfaced:** `supabase-multi-tenant-starter` **Critical** self-join owner takeover + **High** invite tampering (matches our dynamic ground truth; the agent was blind to it → independent detection); `proposit` **Critical** anon-readable invite tokens + **High** cross-tenant join + **High** member→admin privesc (3 go-live blockers); `nextjs-subscription-payments` (Vercel) **Medium** client-controlled trial → free subscription; `boxyhq` **Medium** UI-only billing authz. `mvp-boilerplate` and `saas-starter-kit-lite` correctly certified **sound** (one Low each).
+- **Free-vs-deep gap (headline for GTM):** every graded free-tier "Critical" across all 6 was an unverified CVE version-match or a demo/test-key FP — none was real; the genuinely dangerous repos got the same "F" as the well-built ones. Reinforces #210/#212 and the open question below.
+- **OPEN product question (unanswered by operator):** stop dependency-CVE version-matches from counting as "Critical"/setting the grade in the free tier (pair with #210/#212).
+- **Responsible-disclosure candidates (operator-owned, human):** proposit (3 blockers), vercel subscription-payments (trial abuse), boxyhq (billing authz) — alongside launch-mvp #168.
+
+### Disclosure issues + codebase-health module sweep (2026-07-12, later)
+- **Disclosure tracking issues filed (drafts in scratchpad `disclosure-reports.md`):** **#214** proposit (contact: security@propositapp.com from their SECURITY.md), **#215** vercel/nextjs-subscription-payments (GH private advisory; Vercel security page), **#216** boxyhq/saas-starter-kit (GH advisory; verify boxyhq.com security contact), **#217** Wallens11 multi-tenant-starter (GH advisory; low priority, 0★). Each issue carries the findings, maintainer-contact instructions, and the per-target module results. Actual send is operator-owned (not done).
+- **Module runnability learned (source-only, no target deps):** **M4 duplication (jscpd)** runs clean on any source tree — results: mvp-boilerplate 13.3%, proposit 9.8%/199 clones, subscription-payments 6.1%, boxyhq 6.0%, saas-lite 3.7%, multi-tenant-starter 3.0%. **M5 dead-code (knip)** FAILS without the target's `node_modules` (can't resolve config imports like `vitest/config`) → needs `npm install` in the target first, a per-engagement step; it drags M4 down when co-run in `quality-scan`, so run jscpd standalone for a deps-free M4. **M8 mutation (Stryker)** is not source-only — needs the target's test suite + a `stryker.conf` per repo. **M6** = paid review dimension (slop detector already runs via `detect-static`). **M10 PII** needs a DB or schema; ran indicatively off migration SQL (payment/PCI columns in the Stripe repos; invite `token` in proposit/multi-tenant-starter). boxyhq uses Prisma (no SQL migrations) → M10 needs `prisma/schema.prisma` or a live DB.
+- **Not filed:** the 2 clean repos' Low courtesy notes (mvp-boilerplate latent xmr_invoices grants; saas-lite auth-callback open redirect) — kept optional in the report file, not a formal disclosure. **Now filed as #218/#219** (operator asked to file both), and real M5/M8 run on multi-tenant-starter (M5: dead `lib/security/guards.ts`; M8: repo has zero tests → coverage nil, that absence IS the finding) commented on #217.
+
+### Product improvements learned from the sweep (2026-07-12, filed)
+Beyond the precision FPs (#210–#213), the sweep surfaced coverage/positioning gains, all filed:
+- **#220** static RLS-policy review over committed migrations — the highest-value class (self-join, unscoped policies) is in committed `.sql` and was found deps-free by the LLM; move it from connected-only into a source-tier indicator. **Biggest opportunity.**
+- **#221** new "server trusts client input for authz" finding class (client-supplied userId, trusted price/trial, UI-only permission — recurred 4×).
+- **#222** external-repo regression corpus from the 6 labeled targets (gate scanner changes against real code, not just the synthetic target).
+- **#223** quality-scan decouple M4/M5 (knip failure currently drops jscpd too). **#224** mutation-scan emit a no-tests finding instead of being un-runnable. **#225** generalize the public/test-credential recognizer (supersedes #210/#211). **#226** cross-link dead security-code (M5 on auth/guard files).
+
+### Free-grade calibration DECIDED (2026-07-12, tracker #227; locked in [[product-shape-decisions]])
+Operator chose: (1) free headline = **hygiene grade + risk-disclosure line**, not one security grade; (2) **only high-precision mechanical classes move the grade** (CVE version-matches + public/test-cred shapes → non-grading Info); (3) **source-tier RLS/authz indicators (#220) shown as a non-grading "verify in deep scan" section**; (4) **grade annotated with its scope**. Invariant: free output must never contradict the deep verdict, validated on the #222 corpus. #227 is the parent spec; #213/#210/#225/#220/#222 implement it.
+
+### COMPLETE-SUITE correction + coverage guard + quality triage (2026-07-12, latest)
+Operator flagged (2×) that the whole session skewed security-only when Harvey is a **complete 10-module quality suite**; security is the wedge, not the deliverable. Corrections made:
+- **CLAUDE.md updated** (operator-named the file → authorized): new section "The audit — full scope, how to run it, and the coverage guard" — the M1–M10 module→command table with per-module prereqs, the free/connected/dynamic/paid tiering, and the **coverage guard** (never silently skip; `assertComplete` + `coverage-scorecard.moduleRan`; a module that can't run is `partial`/`requires-live-run` with a reason). Corrected stale "9-module" → "ten-module (M1–M10)".
+- **#229** — the real gap behind the skip: there is **no single orchestrator** that runs all M1–M10 and asserts each executed (assertComplete is M2-targets-only, coverage-scorecard is calibration-only). Filed to build a `run-audit` + fail-loud module-coverage gate.
+- **Quality-module triage on the 6-repo corpus (#228 + memory [[harvey-full-quality-suite-not-security-only]]):** raw quality counts have the same precision problem as raw security. **M7 ~10%** (154→16; `exhaustive-deps` + micro-render dominate FPs), **M9 ~12%** (26→3, and those 3 are security IDOR, not App-Router rendering — server-only misfires incl. on a Pages Router repo, cache-config on auth routes), **M4 dup% overstated in 4/6** (generated types + vendored `monero/patches` fork + demo data), **M10 over+under-matching** (real headline: proposit stores plaintext per-tenant AI key + SMTP pass readable by any org member via RLS). Per-module fixes: **#230 M7, #231 M9, #232 M4, #233 M10.**
+- **Corrected scorecard:** real quality signal concentrates in **proposit** (genuine per-entity dup, latent-scalability perf, the M10 secret exposure — bad on every axis); **boxyhq** is the best-engineered (only repo with a real test suite); **mvp-boilerplate's raw "13.3% dup / F" was a fork+codegen artifact**, not real. Security rank ≠ quality rank.
+- **#214 updated** with proposit's M10 finding (plaintext per-tenant Anthropic key + SMTP password readable by any org member via RLS) — a real High data-exposure vuln surfaced by the data-classification pass, added to the disclosure. Other repos had no non-security disclosure-worthy items.
+
+### Issue-sweep executed (2026-07-12, latest) — 10 issues merged, 3 PRs
+`/issue-sweep` over 33 open issues → 3 sonnet batches, all merged green (required `verify`), branches deleted:
+- **PR #235** (P1, `scanner-secrets`): #210 demo-key FP, #211 SAML/test-key FP + risk-copy, #225 generalized public/test-credential recognizer — one gitleaks correlation-marker recognizer; `validate:calibration` gate PASS.
+- **PR #234** (`m4-m5-quality`): #223 decouple M4/M5 (knip failure → M5-00 partial, jscpd still runs), #232 M4 exclude generated/vendored/demo + fragment-size gate, #226 M5 elevate/cross-link security-file dead code.
+- **PR #236** (`module-detectors`): #224 mutation-scan no-tests finding, #230 M7 FP-suppression, #231 M9 server-only/Pages-Router/cache-config gating, #233 M10 dictionary precision.
+- **Deferred (opus, design-heavy, operator's call):** #213, #220, #221, #222, #227, #229 — net-new detectors/orchestrator + the grade-calibration parent spec; better as scoped standalone work than a sweep PR.
+- **Excluded (not agent-executable):** #212 (needs external CVE feeds), #159/#161 (need a deployed target), #2/#4/#10–13 (business/epic), #168/#214–219 (human disclosure), #228 (analysis done, children shipped).
+- **Follow-up #237:** the 3 supervised `docs/*.md` runbooks (M4/M7/M9) are stale after the precision changes — human doc update owed.
+
+
 
 ## Connected-tier review passes — live dry-run + hardening (2026-07-11, late)
 
