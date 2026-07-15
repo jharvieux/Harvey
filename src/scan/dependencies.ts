@@ -308,14 +308,15 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
   },
   {
     name: "axios",
-    // OSV also lists an older 0.x line fixed at 0.30.0; still scoped to 1.x here, so a 0.x below
-    // 0.30.0 under-flags. Widening it is #292 (out of #271's scope — needs its own verification).
-    ranges: [{ introduced: "1.0.0", fixed: "1.8.2" }],
+    // Two disjoint lines, each with its own fix (#292, re-verified against OSV 2026-07-15). OSV's
+    // 0.x event is `introduced: "0"` — no floor below it, same as minimist's 0.x line above — so it
+    // stays unbounded rather than carrying a redundant `introduced: "0"`.
+    ranges: [{ fixed: "0.30.0" }, { introduced: "1.0.0", fixed: "1.8.2" }],
     id: "CVE-2025-27152",
     severity: "High",
     tier: "high",
-    summary: "An absolute request URL overrides a configured `baseURL`, so attacker-controlled input in the path leads to SSRF and credential leakage (GHSA-jr5f-v2jv-69x6). The 1.x line is affected below 1.8.2.",
-    fix: "Upgrade axios to >= 1.8.2.",
+    summary: "An absolute request URL overrides a configured `baseURL`, so attacker-controlled input in the path leads to SSRF and credential leakage (GHSA-jr5f-v2jv-69x6). Affects every version below 0.30.0 on the 0.x line and the 1.x line below 1.8.2.",
+    fix: "Upgrade axios to >= 1.8.2 (or >= 0.30.0 on the 0.x line).",
     source: "https://osv.dev/vulnerability/GHSA-jr5f-v2jv-69x6",
   },
   {
@@ -352,14 +353,19 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
   },
   {
     name: "ws",
-    // OSV also lists 6.x (fixed 6.2.2) and 5.x (fixed 5.2.3); still scoped to 7.x here, so those
-    // lines under-flag. Widening it is #292 (out of #271's scope — needs its own verification).
-    ranges: [{ introduced: "7.0.0", fixed: "7.4.6" }],
+    // Three disjoint lines, each with its own fix (#292, re-verified against OSV 2026-07-15). Unlike
+    // axios/minimist's 0.x lines, OSV bounds the 5.x line at `introduced: "5.0.0"` (not "0") — it
+    // does not assert anything about ws below 5.0.0, so that floor is kept rather than dropped.
+    ranges: [
+      { introduced: "5.0.0", fixed: "5.2.3" },
+      { introduced: "6.0.0", fixed: "6.2.2" },
+      { introduced: "7.0.0", fixed: "7.4.6" },
+    ],
     id: "CVE-2021-32640",
     severity: "High",
     tier: "high",
-    summary: "ReDoS: a crafted `Sec-Websocket-Protocol` header value triggers catastrophic backtracking, stalling the server (GHSA-6fc8-4gx4-v693). The 7.x line is affected below 7.4.6.",
-    fix: "Upgrade ws to >= 7.4.6.",
+    summary: "ReDoS: a crafted `Sec-Websocket-Protocol` header value triggers catastrophic backtracking, stalling the server (GHSA-6fc8-4gx4-v693). Affects the 5.x line below 5.2.3, the 6.x line below 6.2.2, and the 7.x line below 7.4.6.",
+    fix: "Upgrade ws to >= 7.4.6 (or >= 6.2.2 / >= 5.2.3 on the 6.x / 5.x lines).",
     source: "https://osv.dev/vulnerability/GHSA-6fc8-4gx4-v693",
   },
   {
@@ -383,8 +389,7 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
 // every check here actually branches on, and it is what #212 caught: the fabricated "14.2 fixed in
 // 14.2.35" row asserted a fix version the advisory has never listed. The `introduced` edges are
 // still NOT asserted: react-dom's range stays knowingly approximate (review-tiered for that
-// reason), and axios/ws stay scoped to one major line while OSV lists older ones too — both
-// under-flag rather than fabricate. #271 closed the next-auth/undici/minimist gaps by transcribing
+// reason). #271 closed the next-auth/undici/minimist gaps and #292 closed axios/ws by transcribing
 // every OSV range for those entries; a multi-range row restates one claim per line.
 export interface CuratedClaim {
   advisory: string; // OSV id to query (GHSA preferred — the record CVE ids alias to)

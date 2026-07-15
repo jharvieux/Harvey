@@ -28,6 +28,9 @@ describe("CURATED_CLAIMS (the OSV-verifiable restatement of the curated corpus)"
     expect(fixesFor("GHSA-xvch-5gv4-984h", "minimist")).toEqual(expect.arrayContaining(["0.2.4", "1.2.6"]));
     expect(fixesFor("GHSA-5jpx-9hw9-2fx4", "next-auth")).toEqual(expect.arrayContaining(["4.24.12", "5.0.0-beta.30"]));
     expect(fixesFor("GHSA-3787-6prv-h9w3", "undici")).toEqual(expect.arrayContaining(["5.28.3", "6.6.1"]));
+    // #292: axios's older 0.x line and ws's older 6.x/5.x lines each get their own claim.
+    expect(fixesFor("GHSA-jr5f-v2jv-69x6", "axios")).toEqual(expect.arrayContaining(["0.30.0", "1.8.2"]));
+    expect(fixesFor("GHSA-6fc8-4gx4-v693", "ws")).toEqual(expect.arrayContaining(["5.2.3", "6.2.2", "7.4.6"]));
   });
 
   it("restates every curated Next.js fix boundary, so none goes unverified", () => {
@@ -222,8 +225,38 @@ describe("checkKnownDependencyCVEs", () => {
     expect(finding?.evidence).toContain("https://osv.dev/vulnerability/GHSA-xvch-5gv4-984h");
   });
 
-  it("scopes the ws range to the 7.x line so a patched 6.x isn't mis-flagged for a 7.4.6 fix", () => {
+  it("does not flag a patched 6.x ws (6.2.2) against the 7.4.6 fix on the maintained line", () => {
     expect(checkKnownDependencyCVEs({ ws: "6.2.2" }).map((f) => f.id)).not.toContain("DEP-CVE-2021-32640");
+  });
+
+  // #292: OSV lists three disjoint ws lines (5.x, 6.x, 7.x), each with its own fix. The old
+  // single-range "7.x only" entry under-flagged a vulnerable 5.x/6.x pin entirely.
+  it.each([
+    ["4.9.9", false], // below OSV's asserted 5.x floor — not part of this advisory's ranges
+    ["5.0.0", true],
+    ["5.2.2", true],
+    ["5.2.3", false], // the 5.x line's own fix
+    ["6.0.0", true],
+    ["6.2.1", true],
+    ["6.2.2", false], // the 6.x line's own fix
+    ["7.4.5", true],
+    ["7.4.6", false], // the 7.x line's own fix
+  ])("matches OSV's three ws ranges: %s vulnerable=%s", (version, vulnerable) => {
+    const ids = checkKnownDependencyCVEs({ ws: version }).map((f) => f.id);
+    expect(ids.includes("DEP-CVE-2021-32640"), `ws@${version}`).toBe(vulnerable);
+  });
+
+  // #292: OSV's axios 0.x range is unbounded below (introduced "0"), same as minimist's 0.x line.
+  it.each([
+    ["0.0.1", true],
+    ["0.29.1", true],
+    ["0.30.0", false], // the 0.x line's own fix
+    ["1.0.0", true],
+    ["1.8.1", true],
+    ["1.8.2", false], // the 1.x line's own fix
+  ])("matches OSV's two axios ranges: %s vulnerable=%s", (version, vulnerable) => {
+    const ids = checkKnownDependencyCVEs({ axios: version }).map((f) => f.id);
+    expect(ids.includes("DEP-CVE-2025-27152"), `axios@${version}`).toBe(vulnerable);
   });
 
   // #271: both advisories list an unbounded range, so a pre-4.x next-auth is affected too — the

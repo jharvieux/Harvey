@@ -23,6 +23,13 @@ const NOT_RUN_SEMANTIC_RLS_READ =
   "Semantic RLS-policy predicate read (tier1-runbook.md step 1 LLM /vuln-scan + /triage pass, or manual hand-verify at step 6) — no mechanical module in src/ evaluates policy semantics";
 const NOT_RUN_SUPABASE_ADVISOR =
   "Supabase Advisor lint rls_disabled_in_public (src/scan/supabase-advisors.ts) — requires a live DB via `supabase start` (Docker) or the hosted Management API";
+// A KNOWN, ACCEPTED coverage gap — not a regression. The mechanical tier scans the file and no
+// rule has ever claimed this bug's class, so the bug scores `missed` by design: this is the
+// scorecard measuring the mechanical tier's real ceiling, which is what it exists to do. Verified
+// for all three users of this text (#286): `missed` in EVERY committed scorecard.json back to the
+// original #34 baseline, and `git log -S` finds no rule for any of these classes in any semgrep
+// rule file, ever. These bugs are the paid semantic tier's job (docs/free-tier-scope.md).
+// A `caught` here would mean a NEW rule genuinely fires — never relax a `matches` to manufacture it.
 const RAN_SEMGREP_NO_RULE = (why: string) => `Semgrep ran (src/scan/semgrep.ts) but ${why}`;
 
 export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [

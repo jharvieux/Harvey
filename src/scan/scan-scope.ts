@@ -82,3 +82,15 @@ export function resolveScanScope(dir: string): ScanScope {
   else copyExcluding(dir, scratch);
   return { scanDir: scratch, cleanup: () => rmSync(scratch, { recursive: true, force: true }) };
 }
+
+// The scratch root is a fresh mkdtemp dir on every run, so any finding location that names it
+// carries a path that is unique per-run and per-machine. That is invisible for a throwaway scan,
+// but poisons a COMMITTED scan artifact: every location differs on every regeneration, burying
+// the real diff (issue #285). Strip the scratch prefix wherever it appears so locations come out
+// target-relative. Not anchored at the string start: locations may carry a "[source] " prefix or
+// a " (pkg@version)" suffix around the path.
+const SCAN_SCOPE_PREFIX = /\S*[/\\]harvey-scan-scope-[^/\\]+[/\\]/g;
+
+export function relativizeScanScope(location: string): string {
+  return location.replace(SCAN_SCOPE_PREFIX, "");
+}
