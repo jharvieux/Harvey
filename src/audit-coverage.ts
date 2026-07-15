@@ -14,24 +14,59 @@
 // This is the pure ledger + gate. Executing the ten runners is the caller's job (they span
 // separate CLIs, tiers, and prereqs — see CLAUDE.md's module table); the caller records what it
 // actually did here, and assertAuditComplete decides whether that constitutes an audit.
+//
+// #288: this was one of TWO coverage guards. src/audit/module-coverage.ts enumerated nine modules
+// while this one enumerated ten, and nothing reconciled them — which is how #275 ("M10 is
+// invisible") was possible. Two answers to "did every module run?" makes the guarantee
+// unenforceable, so the dead guard was deleted and its distinctive parts merged here: the
+// MODULES_NEVER_EXECUTED ledger, the needs/freeTier metadata, and env-gated gap annotation.
 
-// The ten modules of the audit. Authoritative scope: docs/audit-modules.md.
+// The ten modules of the audit. Authoritative scope: docs/audit-modules.md — audit-coverage.test.ts
+// reads that file and asserts this list matches it, so the doc cannot drift from the code (#275).
 export const AUDIT_MODULES = ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10"] as const;
 
 export type AuditModule = (typeof AUDIT_MODULES)[number];
 
-export const MODULE_NAMES: Record<AuditModule, string> = {
-  M1: "Multi-tenant security",
-  M2: "Local pen-test (dynamic)",
-  M3: "Hotspot analysis",
-  M4: "Duplication",
-  M5: "Slop / dead code",
-  M6: "Simplification / maintainability",
-  M7: "Performance",
-  M8: "Test quality",
-  M9: "App Router boundary/rendering",
-  M10: "Data classification (PII/PHI/PCI)",
+// The minimum environment a module requires. Lets the gate tell a legitimate environment-gated
+// skip (e.g. M2 with no running app in scope) from a silent omission — it annotates the gap with
+// what was missing rather than excusing it. This is the MINIMUM: M7 runs its code-level detectors
+// on source alone (#170) and M10 classifies columns straight out of migration SQL (#250); without
+// a live DB each loses a layer, so each records "partial", not a skip.
+type ModuleNeed = "source" | "connected" | "dynamic" | "llm";
+
+// `freeTier`: contributes to the free quick-scan (vs paid-only). Per-module split:
+// docs/free-tier-scope.md.
+export const MODULES: Record<AuditModule, { name: string; needs: ModuleNeed; freeTier: boolean }> = {
+  M1: { name: "Multi-tenant security", needs: "source", freeTier: true },
+  M2: { name: "Local pen-test (dynamic)", needs: "dynamic", freeTier: false },
+  M3: { name: "Hotspot analysis", needs: "source", freeTier: false },
+  M4: { name: "Duplication", needs: "source", freeTier: true },
+  M5: { name: "Slop / dead code", needs: "source", freeTier: false },
+  M6: { name: "Simplification / maintainability", needs: "llm", freeTier: false },
+  M7: { name: "Performance", needs: "source", freeTier: true },
+  M8: { name: "Test quality", needs: "source", freeTier: true },
+  M9: { name: "App Router boundary/rendering", needs: "source", freeTier: true },
+  M10: { name: "Data classification (PII/PHI/PCI)", needs: "source", freeTier: true },
 };
+
+// Modules with no execution record in ANY engagement, ever. This is a repo-level ledger, not a
+// per-engagement one: a reason answers "why not THIS time," and for a module whose environment is
+// absent by default every time (M6 needs the paid LLM tier), the answer is legitimately "no" at
+// every individual moment while the module has never executed once. Each reason was correct; the
+// series was a permanent silence. That is the quietest possible failure of "fail loud", so a
+// never-executed module is surfaced regardless of tier and blocks `complete` — an engagement
+// cannot claim full module coverage on the strength of a module that has never produced output.
+//
+// Remove an id here the first time that module actually runs against a target. This is a hand-kept
+// ledger (#284) because nothing yet observes what ran — #229's orchestrator half is what would
+// derive it; until then buildAuditCoverage takes its records from the caller and cannot tell.
+export const MODULES_NEVER_EXECUTED = new Set<AuditModule>([
+  // M6: defined 2026-07-09 (#72), still zero output as of 2026-07-15. It now has a runner
+  // (`pnpm simplify-scan`, #266); this entry comes out when it is first run against a real target.
+  // The #265 eval run was against our own calibration fixtures, not an engagement target, and its
+  // result was contaminated (docs/design/m6-simplification-eval.md §3.1) — not an execution record.
+  "M6",
+]);
 
 // "ran": the module executed against the target.
 // "partial": it executed but couldn't cover its full scope (e.g. M7 code tier without the DB
@@ -50,7 +85,22 @@ export interface ModuleCoverage {
   detail?: string;
 }
 
+// Which environments the engagement actually has. Optional: when supplied, a gap is annotated with
+// the environment it was missing, which turns "we didn't have a live DB" into a recorded decision
+// instead of an unexplained hole. It never excuses the gap — the caller still must record a reason.
+export interface EngagementEnv {
+  connected: boolean; // a live/read-only database was provided
+  dynamic: boolean; // a running app / self-hosted clone is available for probing
+  llm: boolean; // the paid LLM tier is in scope
+}
+
 const isPlaceholder = (reason: string | undefined): boolean => /^todo\b/i.test(reason ?? "");
+
+const envGated = (module: AuditModule, env: EngagementEnv | undefined): boolean => {
+  if (!env) return false;
+  const needs = MODULES[module].needs;
+  return (needs === "connected" && !env.connected) || (needs === "dynamic" && !env.dynamic) || (needs === "llm" && !env.llm);
+};
 
 interface AuditCoverageGap {
   module: AuditModule;
@@ -60,13 +110,17 @@ interface AuditCoverageGap {
 interface AuditCoverageReport {
   rows: (ModuleCoverage & { name: string })[];
   gaps: AuditCoverageGap[];
+  // Modules that have never executed in ANY engagement and didn't execute here either. Distinct
+  // from a gap: a gap is a reasonless omission this engagement, which the caller can fix by
+  // recording a reason. This cannot be fixed by a reason; only by running the module.
+  neverRun: AuditModule[];
   complete: boolean;
   ranCount: number;
 }
 
 // Builds the coverage matrix over ALL ten modules from what the caller recorded. A module absent
 // from `recorded` is a gap — the point of the gate: we never infer that an unmentioned module ran.
-export function buildAuditCoverage(recorded: ModuleCoverage[]): AuditCoverageReport {
+export function buildAuditCoverage(recorded: ModuleCoverage[], env?: EngagementEnv): AuditCoverageReport {
   const byModule = new Map<AuditModule, ModuleCoverage>();
   const gaps: AuditCoverageGap[] = [];
 
@@ -83,8 +137,9 @@ export function buildAuditCoverage(recorded: ModuleCoverage[]): AuditCoverageRep
   const rows = AUDIT_MODULES.map((module) => {
     const entry = byModule.get(module);
     if (!entry) {
-      gaps.push({ module, problem: `never accounted for — no run, and no reason given for skipping it` });
-      return { module, name: MODULE_NAMES[module], status: "requires-live-run" as const, reason: "not accounted for in this engagement" };
+      const gated = envGated(module, env) ? ` (needs ${MODULES[module].needs}: record it requires-live-run with that reason)` : "";
+      gaps.push({ module, problem: `never accounted for — no run, and no reason given for skipping it${gated}` });
+      return { module, name: MODULES[module].name, status: "requires-live-run" as const, reason: "not accounted for in this engagement" };
     }
     const reason = entry.reason?.trim();
     if (entry.status !== "ran" && !reason) {
@@ -94,24 +149,43 @@ export function buildAuditCoverage(recorded: ModuleCoverage[]): AuditCoverageRep
       // refuse the one reason that is definitionally not an accounting: the prompt to write one.
       gaps.push({ module, problem: `reason is still the "${reason}" placeholder — record why ${module} could not run` });
     }
-    return { ...entry, name: MODULE_NAMES[module] };
+    return { ...entry, name: MODULES[module].name };
   });
+
+  // A module in the never-executed ledger that also didn't run here stays loud no matter how well
+  // reasoned its excuse — that reason is exactly what has kept it invisible every time before.
+  const ran = new Set(rows.filter((r) => r.status === "ran").map((r) => r.module));
+  const neverRun = [...MODULES_NEVER_EXECUTED].filter((module) => !ran.has(module));
 
   return {
     rows,
     gaps,
-    complete: gaps.length === 0,
-    ranCount: rows.filter((r) => r.status === "ran").length,
+    neverRun,
+    complete: gaps.length === 0 && neverRun.length === 0,
+    ranCount: ran.size,
   };
 }
 
 // The fail-loud half, mirroring assertComplete's contract: throw, naming every unaccounted-for
 // module, so a partial audit can never be reported as a complete one.
-export function assertAuditComplete(recorded: ModuleCoverage[]): void {
-  const { gaps } = buildAuditCoverage(recorded);
-  if (gaps.length === 0) return;
-  const detail = gaps.map((g) => `${g.module} (${MODULE_NAMES[g.module]}): ${g.problem}`).join("; ");
-  throw new Error(`Incomplete audit coverage — ${gaps.length} of ${AUDIT_MODULES.length} module(s) unaccounted for: ${detail}`);
+//
+// Why never-run throws rather than warns (#266): a warning is what M6 has effectively had — every
+// engagement recorded a correct, well-reasoned excuse and nobody noticed the module had never
+// produced a single finding while docs/audit-modules.md sold it as a product wedge. A status that
+// doesn't stop anything is the same silence with better paperwork. It is deliberately unsatisfiable
+// by reason-writing: the only way to clear it is to run the module once and drop it from
+// MODULES_NEVER_EXECUTED.
+export function assertAuditComplete(recorded: ModuleCoverage[], env?: EngagementEnv): void {
+  const { gaps, neverRun } = buildAuditCoverage(recorded, env);
+  if (gaps.length) {
+    const detail = gaps.map((g) => `${g.module} (${MODULES[g.module].name}): ${g.problem}`).join("; ");
+    throw new Error(`Incomplete audit coverage — ${gaps.length} of ${AUDIT_MODULES.length} module(s) unaccounted for: ${detail}`);
+  }
+  if (neverRun.length) {
+    throw new Error(
+      `Module(s) ${neverRun.join(", ")} have NEVER executed in any engagement — no output, ever. This is not a per-engagement excuse: no reason clears it, only running the module does (see MODULES_NEVER_EXECUTED). Run it (M6: \`pnpm simplify-scan <target>\`) or remove the product claim.`,
+    );
+  }
 }
 
 // The coverage matrix as report/console lines: one per module, every gap visible.
@@ -126,6 +200,9 @@ export function formatAuditCoverage(report: AuditCoverageReport): string {
   if (report.gaps.length) {
     lines.push("", `COVERAGE FAIL — ${report.gaps.length} module(s) unaccounted for:`);
     for (const g of report.gaps) lines.push(`  ${g.module}: ${g.problem}`);
+  }
+  if (report.neverRun.length) {
+    lines.push("", `COVERAGE FAIL — module(s) that have NEVER executed in any engagement: ${report.neverRun.join(", ")}`);
   }
   return lines.join("\n");
 }

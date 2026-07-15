@@ -82,7 +82,7 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
 - **Powered by:** `pnpm simplify-scan` + `quality-extras.txt`.
 - **Status (2026-07-15, #266):** M6 has produced **no output in any engagement** since it was defined
   (2026-07-09, #72) — it had no runner until now, and the coverage guard recorded its absence as a routine `na`
-  every time. `src/audit/module-coverage.ts` (`MODULES_NEVER_EXECUTED`) now fails loud on this until M6 runs
+  every time. `src/audit-coverage.ts` (`MODULES_NEVER_EXECUTED`) now fails loud on this until M6 runs
   against a real target. Until then, treat the "lower your maintenance cost" pitch below as **unproven by our
   own tooling** — it is a claim about a module that has never run.
 - **Report:** maintainability recommendations — each "reinvented wheel" with the suggested
