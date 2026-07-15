@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveScanScope } from "./scan-scope.js";
+import { relativizeScanScope, resolveScanScope } from "./scan-scope.js";
 
 const scratches: string[] = [];
 afterEach(() => {
@@ -108,5 +108,30 @@ describe("resolveScanScope — non-git target (zip export fallback)", () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+describe("relativizeScanScope", () => {
+  // The whole point (#285): the same finding scanned twice, under two different mkdtemp roots,
+  // must serialize to one identical location — otherwise the committed artifact churns.
+  it("collapses two different scratch roots to the same target-relative location", () => {
+    const a = relativizeScanScope("/var/folders/vp/T/harvey-scan-scope-JJ0Vim/pages/api/search.js:9");
+    const b = relativizeScanScope("/tmp/harvey-scan-scope-Zq91aa/pages/api/search.js:9");
+    expect(a).toBe("pages/api/search.js:9");
+    expect(b).toBe(a);
+  });
+
+  it("strips the scratch root while keeping a [source] prefix and a (pkg) suffix", () => {
+    expect(relativizeScanScope("[source] /var/folders/vp/T/harvey-scan-scope-JJ0Vim/.npmrc:4")).toBe("[source] .npmrc:4");
+    expect(relativizeScanScope("/var/folders/vp/T/harvey-scan-scope-JJ0Vim/package-lock.json (braces@2.3.2)")).toBe(
+      "package-lock.json (braces@2.3.2)",
+    );
+  });
+
+  it("leaves an already-relative location untouched", () => {
+    expect(relativizeScanScope("supabase/migrations/20260708000001_schema.sql:35")).toBe(
+      "supabase/migrations/20260708000001_schema.sql:35",
+    );
+    expect(relativizeScanScope("package.json (next)")).toBe("package.json (next)");
   });
 });

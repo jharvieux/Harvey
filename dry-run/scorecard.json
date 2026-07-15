@@ -35,7 +35,7 @@
       "location": "pages/api/search.js:9",
       "expectedModule": "Semgrep ran (src/scan/semgrep.ts) and harvey-sql-injection-template matched the raw-SQL-concat pattern in search.js",
       "status": "caught",
-      "note": "Matched by finding \"src.scan.rules.semgrep.harvey-sql-injection-template\" at /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-JJ0Vim/pages/api/search.js:11."
+      "note": "Matched by finding \"src.scan.rules.semgrep.harvey-sql-injection-template\" at pages/api/search.js:11."
     },
     {
       "id": "WEBHOOK-REPLAY",
@@ -67,7 +67,7 @@
       "location": "pages/api/redirect.js:9",
       "expectedModule": "Semgrep ran (src/scan/semgrep.ts) and the harvey-open-redirect custom rule (src/scan/rules/semgrep-nextjs-supabase.yml) matched at redirect.js",
       "status": "caught",
-      "note": "Matched by finding \"src.scan.rules.semgrep.harvey-open-redirect\" at /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-JJ0Vim/pages/api/redirect.js:18."
+      "note": "Matched by finding \"src.scan.rules.semgrep.harvey-open-redirect\" at pages/api/redirect.js:18."
     }
   ]
 }
