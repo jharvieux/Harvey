@@ -23,6 +23,13 @@ export interface CorpusEntry {
   module?: string;
   // Substring expected in a relevant finding's `location` (file path / lockfile coordinate).
   location: string;
+  // Anchors a dependency entry to ONE manifest. Dependency findings encode location as
+  // "<manifestPath> (<pkg>)", so a bare package-name `location` like "next" substring-matches
+  // EVERY manifest that declares it — the root target's and every fixtures/*/package.json. That
+  // let a positive score off the wrong fixture while the rule under test never fired on the
+  // intended one, which is how #212's bad P-NEXT-CVE-RSC row appeared to pass (#253). When set,
+  // a finding is relevant only if its manifest segment equals this exactly.
+  manifest?: string;
   // Optional keywords; a finding is relevant only if one appears in its id/title/taxonomy/
   // evidence. Disambiguates fixtures that share a file (e.g. the anon key vs. the mis-prefixed
   // secret, both in .env.local).
