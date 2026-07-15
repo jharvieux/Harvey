@@ -1,7 +1,15 @@
-// Coverage scorecard for the calibration dry run (issue #34): maps every planted bug in
-// targets/calibration/GROUND-TRUTH.md to the module expected to catch it, and scores each
-// caught/missed/requires-live-run against dry-run/findings.json (src/cli/dry-run.ts's real
+// Coverage scorecard for the calibration dry run (issue #34): maps the planted bugs in
+// targets/calibration/GROUND-TRUTH.md's §"Planted bugs" to the module expected to catch each, and
+// scores caught/missed/requires-live-run against dry-run/findings.json (src/cli/dry-run.ts's real
 // output — this script does not invent results, it only classifies what's already there).
+//
+// SCOPE, per GROUND-TRUTH's own split: the 8 statically-reachable bugs are this scorecard's
+// semantic/RLS ground truth and the only ones a static dry run can return a verdict on. The other
+// two populations are scored by the tier that can actually reach them, NOT re-scored here: the
+// mechanical precision corpus (`pnpm validate:calibration` / src/scan/calibration.test.ts) and the
+// M2 dynamic replays (src/pentest/verify.ts). Rows 9–12 are still LISTED below — as
+// requires-live-run with their reason — because a bug this pass cannot judge must be visible as
+// awaiting a live run, never absent (see NOT_RUN_M2_REPLAY).
 //
 //   pnpm exec tsx src/cli/dry-run.ts --out dry-run   # produces dry-run/findings.json first
 //   pnpm exec tsx src/cli/dry-run-scorecard.ts --findings dry-run/findings.json --out dry-run
@@ -28,6 +36,19 @@ const at = (file: RegExp, rule: RegExp) => (f: ScorableFinding) => file.test(f.l
 // rule file, ever. These bugs are the paid semantic tier's job (docs/free-tier-scope.md).
 // A `caught` here would mean a NEW rule genuinely fires — never relax a `matches` to manufacture it.
 const RAN_SEMGREP_NO_RULE = (why: string) => `Semgrep ran (src/scan/semgrep.ts) but ${why}`;
+
+// GROUND-TRUTH rows 9–12 (§"Dynamic-tier probes", #145–#148) are live-BEHAVIOR classes: only a
+// request replayed against a running app confirms them, which is why GROUND-TRUTH itself puts them
+// outside the mechanical count. A static pass genuinely cannot judge them — that part was never in
+// dispute. What was wrong is that they were absent rather than deferred: the scorecard reported
+// `requires-live-run: 0`, asserting nothing awaits a live run, while four bugs did. Deferring a bug
+// silently is the one thing the coverage guard forbids outright, so they are listed here with the
+// reason instead.
+// `matches: () => false` is the honest matcher: a static pass cannot produce a finding that proves a
+// live-behavior class, and any matcher that COULD fire here would manufacture a catch the tier never
+// earned. Do not add mechanical rules for these — the M2 probes are the detection.
+const NOT_RUN_M2_REPLAY = (probe: string, proves: string) =>
+  `${probe} (src/pentest/verify.ts) — M2 dynamic pen-test replay: ${probe} ${proves}. Requires a running app plus a local \`supabase start\` stack seeded with two tenants (\`pnpm exec tsx src/cli/pentest.ts\`); this dry run is static and executed no M2 phase`;
 
 export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
   {
@@ -107,6 +128,50 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     expectedModule: "Semgrep ran (src/scan/semgrep.ts) and the harvey-open-redirect custom rule (src/scan/rules/semgrep/base.yml) matched at redirect.js",
     moduleRan: true,
     matches: at(/redirect\.js/, /open.?redirect/i),
+  },
+  {
+    id: "SHADOW-API-VERSION",
+    severity: "High",
+    location: "pages/api/v1/export.js",
+    expectedModule: NOT_RUN_M2_REPLAY(
+      "replayShadowApiVersion",
+      "GETs each discovered versioned route as anon and proves the bug only when the deprecated route answers 200 with rows the current route gates",
+    ),
+    moduleRan: false,
+    matches: () => false,
+  },
+  {
+    id: "NO-RATE-LIMIT",
+    severity: "High",
+    location: "pages/api/coupon/redeem.js",
+    expectedModule: NOT_RUN_M2_REPLAY(
+      "replayNoRateLimit",
+      "POSTs the same coupon 5× and proves the bug only when all 5 are accepted (side-effecting, so it additionally needs allowDestructive)",
+    ),
+    moduleRan: false,
+    matches: () => false,
+  },
+  {
+    id: "CACHE-CROSS-USER",
+    severity: "High",
+    location: "pages/api/me/summary.js",
+    expectedModule: NOT_RUN_M2_REPLAY(
+      "replayCacheCrossUser",
+      "warms the route as Tenant A then re-reads it as anon, proving the bug only when anon is served A's tenant_id from a public/s-maxage cache",
+    ),
+    moduleRan: false,
+    matches: () => false,
+  },
+  {
+    id: "ANON-PRIVILEGED-RPC",
+    severity: "Critical",
+    location: "supabase/migrations/20260710000002_dynamic_probes.sql",
+    expectedModule: NOT_RUN_M2_REPLAY(
+      "replayAnonPrivilegedRpc",
+      "POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive)",
+    ),
+    moduleRan: false,
+    matches: () => false,
   },
 ];
 
