@@ -216,25 +216,19 @@ overall), the per-module rows above (mutation score per module), and the top of
 
 ---
 
-### Deferred: live timed run against a real test suite
+### Targets/calibration structure: real test fixture vs. no-test-suite demo
 
-This pass built and tested the wrapper's JSON-shaping logic against synthetic fixtures shaped
-from Stryker's published schema — **it did not run Stryker live** against a real client repo or
-`targets/calibration/` (that target doesn't yet have its own test suite or Stryker config, and a
-live run is explicitly out of scope for this automated batch per the sweep instructions). Running
-`pnpm mutation-scan` against `targets/calibration/` as-is today would only exercise the #224
-no-test-suite path (it would emit `M8-00`, not a real mutation report) — still useful as a live
-check of that path, but not a substitute for step 1 below. Before this module is used on a real
-engagement:
+`targets/calibration/test-quality/` (added #72) is the **real mutation-shaping-logic target** — it
+ships its own `package.json` + `stryker.config.json` with a test suite configured for
+`coverageAnalysis: "perTest"`. Pointing `pnpm mutation-scan` at this nested fixture exercises the
+normal (Stryker-running) code path.
 
-1. Add a minimal test suite + `stryker.conf.json` (`coverageAnalysis: "perTest"`) to
-   `targets/calibration/` (or another sample repo with tests).
-2. Run `pnpm mutation-scan` against it for real, record wall-clock time at a couple of
-   `--concurrency` settings (the issue's original acceptance criterion — calibration timing),
-   and confirm the assumed `reports/mutation/mutation.json` output path matches the installed
-   Stryker version.
-3. Confirm the `coverageAnalysis: "perTest"` JSON-config sanity check actually catches a
-   misconfigured client repo, not just the synthetic case.
+Pointing `pnpm mutation-scan` at the root `targets/calibration/` instead exercises the **#224
+no-test-suite detection path** — it detects no executable test suite at the root and emits the
+`M8-00` finding ("No automated test suite") + a `partial` module record, then exits cleanly. This
+is the intended demo of what an audit finds when hitting a completely untested app.
 
-Tracked as a manual follow-up in the PR for issue #15 rather than a new issue, since it's a
-direct acceptance-criterion gap on the same issue, not a separate bug.
+Pre-engagement calibration runs (e.g., timing, verifying the Stryker JSON-report shaping) should
+target `targets/calibration/test-quality/` for realistic mutation-testing performance data. The
+root `targets/calibration/` no-test-suite demo is a separate assertion that the #224 no-test-suite
+path is wired correctly — do not rely on it as a performance baseline.
