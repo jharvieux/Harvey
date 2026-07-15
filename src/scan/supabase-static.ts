@@ -12,7 +12,10 @@
 //   - checkMigrationPolicySemantics (#220): the semantic RLS review, run from committed migration
 //     SQL instead of live pg_policies. The highest-value bug class (a policy that IS enabled and
 //     syntactically fine but keys on the wrong column) lives in `create policy` statements in
-//     committed .sql — statically visible, but until now only reachable at connected tier.
+//     committed .sql — statically visible, but until now only reachable at connected tier. It also
+//     emits SB-RLS-TENANCY-MODEL (#258): one Info record stating the tenancy model it ASSUMED per
+//     table, because that inference is a fixed name list and a failed inference is otherwise
+//     indistinguishable from a clean result.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -94,6 +97,57 @@ function inferTenancyModel(sql: string, table?: string): TenancyModel {
   return key ? { tenantKey: key } : { tenantKey: "", mode: "per-user" };
 }
 
+// Columns that name a row's OWNER or its own identity — per-user by design, not a missed tenant
+// key. Excluded from the unrecognised-scope report below so the honest per-user tables
+// (profiles.id, notes.user_id) don't drown the one table that actually uses an off-list convention.
+const OWNER_COLUMNS = /^(id|user_id|owner_id|created_by|updated_by|author_id|profile_id)$/i;
+const SCOPE_COLUMN = /[(,\n]\s*([a-z0-9_]*_id)\s+\w/gi;
+
+// Foreign keys to a per-tenant table are how an off-list convention shows itself: a `site_id uuid`
+// on a policied table is either the tenant key under another name (#258's failure) or a plain
+// relation. We cannot tell statically — so we report the assumption instead of guessing.
+function unrecognisedScopeColumns(sql: string, table: string): string[] {
+  const body = tableBody(sql, table);
+  if (body === null) return [];
+  const cols = [...body.matchAll(SCOPE_COLUMN)].map((m) => m[1]!.toLowerCase());
+  return [...new Set(cols.filter((c) => !OWNER_COLUMNS.test(c) && !TENANT_KEY_CANDIDATES.includes(c)))];
+}
+
+// #258 — the tenant-key inference is a fixed 6-name list, so an app using `site_id` reviews every
+// table in per-user mode and the misses are INVISIBLE: silence from a failed inference reads
+// exactly like "clean". This reports what was assumed per table so a reader can falsify it, and
+// names the tables whose scoping column we did not recognise. Info-tier: an assumption made
+// visible is not itself a vulnerability, and this must never inflate a finding count.
+function tenancyModelFinding(models: Map<string, TenancyModel>, unrecognised: Map<string, string[]>): Finding {
+  const perTenant = [...models].filter(([, m]) => m.mode !== "per-user");
+  const perUser = [...models].filter(([, m]) => m.mode === "per-user");
+  const suspect = perUser.map(([t]) => [t, unrecognised.get(t) ?? []] as const).filter(([, cols]) => cols.length > 0);
+
+  const assumed = perTenant.length > 0 ? perTenant.map(([t, m]) => `${t} → per-tenant on "${m.tenantKey}"`).join("; ") : "(none — no table declared a recognised tenant column)";
+  const owned = perUser.length > 0 ? perUser.map(([t]) => t).join(", ") : "(none)";
+  const unknown = suspect.length > 0 ? suspect.map(([t, cols]) => `${t} (declares ${cols.join(", ")})`).join("; ") : "";
+
+  return mechanicalFinding({
+    id: "SB-RLS-TENANCY-MODEL",
+    title: "Tenancy model assumed by the static RLS review",
+    severity: "Info",
+    category: "Multi-tenant security",
+    taxonomy: "M1 — Multi-tenant security",
+    location: "supabase/migrations/",
+    evidence:
+      `The static policy review inferred tenancy PER TABLE by looking for one of the known tenant-key columns (${TENANT_KEY_CANDIDATES.join(", ")}). ` +
+      `Reviewed as per-tenant: ${assumed}. Reviewed as per-user (no recognised tenant column — a row bound to auth.uid() is treated as the isolation boundary): ${owned}.` +
+      (unknown
+        ? ` NOT RECOGNISED — these tables declare a scoping column that is not on the known list, so they were reviewed as per-user and any cross-tenant policy bug in them WAS NOT LOOKED FOR: ${unknown}.`
+        : ""),
+    impact:
+      "This is the review's central assumption, not a defect. If a table listed as per-user is really tenant-scoped under a name the list does not know (e.g. site_id), its policies were judged against the wrong model and cross-tenant findings were silently missed — a failed inference is indistinguishable from a clean result unless it is stated.",
+    fix: "Confirm the assumed model. If a table is tenant-scoped under a column not listed above, re-run the connected tier with `--tenant-key <column>` (which takes the declared model rather than inferring one), and treat the per-user verdicts for that table as not assessed.",
+    precisionTier: "review",
+    bftb: { value: 1, ease: 5, safety: 5 },
+  });
+}
+
 // The column list of `create table [schema.]<table> ( … )`, or null if this SQL never declares it.
 function tableBody(sql: string, table: string): string | null {
   const m = new RegExp(`create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:\\w+\\.)?${table}\\s*\\(`, "i").exec(sql);
@@ -165,13 +219,19 @@ export function checkMigrationPolicySemantics(dir: string): Finding[] {
   // source tier the file is the actionable address, and location is never gated (anti-shakedown).
   // ids are re-keyed off the policy site because policyReviewFindings numbers its findings per
   // call, and it's called once per table here.
+  const models = new Map<string, TenancyModel>();
+  const unrecognised = new Map<string, string[]>();
   for (const [table, policies] of byTable) {
-    for (const f of policyReviewFindings(policies, inferTenancyModel(allSql, table))) {
+    const model = inferTenancyModel(allSql, table);
+    models.set(table, model);
+    if (model.mode === "per-user") unrecognised.set(table, unrecognisedScopeColumns(allSql, table));
+    for (const f of policyReviewFindings(policies, model)) {
       const site = sites.get(f.location);
       const id = `SB-RLS-POLICY-${f.location}`;
       findings.push(site ? { ...f, id, location: `${site} (${f.location})` } : { ...f, id });
     }
   }
+  if (models.size > 0) findings.push(tenancyModelFinding(models, unrecognised));
   return findings;
 }
 
