@@ -1,13 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type AuditModule } from "./audit-coverage.js";
+import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, MODULES_NEVER_EXECUTED, type AuditModule } from "./audit-coverage.js";
 import { assertRegistryComplete, formatFailures, type ModuleRunner, type ProbeOutcome, type RunContext } from "./audit-runner.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 
+// A tool run that produced real, positive evidence for whichever CLI the probe shelled out to.
+// #350: exit 0 is no longer enough — a probe reads the tool's OUTPUT, so the "everything ran
+// cleanly" baseline must emit the evidence a clean run actually prints (a knip-clean Finding[], a
+// Stryker summary, a non-zero detect-static file count, an M3 hotspot table).
+const cleanOutput = (argv: string[]): string => {
+  const cmd = argv.join(" ");
+  if (cmd.includes("quality-scan")) return "[]"; // Finding[] with no M5-00 → knip ran clean
+  if (cmd.includes("mutation-scan")) return JSON.stringify({ summary: { overall: {} }, reportRows: [] });
+  if (cmd.includes("detect-static")) return "loaded 42 source files (30 product-code) from /target\n\n3 findings across 2 classes:";
+  if (cmd.includes("hotspot-scan.ts")) return "M3 hotspot table — /target (5 rows, worst first)";
+  if (cmd.includes("pentest.ts")) return JSON.stringify({ findings: [] });
+  return "";
+};
+
 const ctx = (over: Partial<RunContext> = {}): RunContext => ({
   targetDir: "/target",
   env: { connected: false, dynamic: false, llm: false },
-  exec: () => ({ ok: true, output: "" }),
+  exec: (_command, argv) => ({ ok: true, output: cleanOutput(argv) }),
   exists: () => true,
   ...over,
 });
@@ -161,6 +175,94 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
       if (row.status !== "ran") expect(row.reason, `${row.module} must say why`).toBeTruthy();
     }
     expect(buildAuditCoverage(recorded, ctx().env).gaps).toEqual([]);
+  });
+});
+
+// A RunContext whose exec succeeds (exit 0) but returns the no-op OUTPUT each tool prints when it
+// scanned nothing — the exact shape #350 proved slips past an exit-code check.
+const status = (runners: typeof AUDIT_RUNNERS, over: Partial<RunContext>, module: AuditModule) =>
+  runAudit(runners, ctx(over)).recorded.find((r) => r.module === module);
+
+describe("probes derive status from evidence, not the exit code (#350)", () => {
+  it("M5 — knip did not run (M5-00 disclosure emitted, exit 0) is NOT recorded ran", () => {
+    // quality-scan exits 0 by design (#223) so M4 keeps its findings; the M5-00 finding is the tell.
+    const knipFailed = { exec: () => ({ ok: true, output: JSON.stringify([{ id: "M4-00" }, { id: "M5-00", title: "M5 dead-code scan (knip) did not run" }]) }) };
+    const m5 = status(AUDIT_RUNNERS, knipFailed, "M5");
+    expect(m5?.status).not.toBe("ran");
+    expect(m5?.status).toBe("partial");
+    expect(m5?.reason).toMatch(/knip did not run/);
+  });
+
+  it("M8 — no test suite (moduleRecord partial, exit 0) is NOT recorded ran", () => {
+    // mutation-scan's #224 branch: the correct verdict is serialized and must be read, not discarded.
+    const noSuite = { exec: () => ({ ok: true, output: JSON.stringify({ finding: { id: "M8-00" }, moduleRecord: { status: "partial", note: "No automated test suite found (no scripts.test) — mutation scan could not run." } }) }) };
+    const m8 = status(AUDIT_RUNNERS, noSuite, "M8");
+    expect(m8?.status).not.toBe("ran");
+    expect(m8?.status).toBe("partial");
+    expect(m8?.reason).toMatch(/no automated test suite/i);
+  });
+
+  it("M9 — an empty directory (detect-static: loaded 0 source files, exit 0) is NOT recorded ran", () => {
+    const emptyDir = { exec: () => ({ ok: true, output: "loaded 0 source files (0 product-code) from /empty\n\n0 findings across 0 classes:" }) };
+    const m9 = status(AUDIT_RUNNERS, emptyDir, "M9");
+    expect(m9?.status).not.toBe("ran");
+    expect(m9?.reason).toMatch(/0 source files/);
+  });
+
+  it("M9 records ran only when the tool reports a non-zero file count", () => {
+    expect(status(AUDIT_RUNNERS, {}, "M9")?.status).toBe("ran");
+  });
+});
+
+describe("a flag is intent, not evidence — no flag alone produces ran (#311/#356)", () => {
+  // Every tier flag set, but the flag-gated operator/live passes leave nothing the orchestrator can
+  // observe. None of the modules whose `ran` was previously flag-derived may read ran.
+  const allFlags = { env: { connected: true, dynamic: true, llm: true } };
+
+  it("M1 stays partial with --connected --llm — the mechanical tier is all the orchestrator ran (#311)", () => {
+    const m1 = status(AUDIT_RUNNERS, allFlags, "M1");
+    expect(m1?.status).toBe("partial");
+    expect(m1?.reason).toMatch(/mechanical tier only/);
+  });
+
+  it("M2 stays requires-live-run with --dynamic — a flag is not a reachable stack (#356)", () => {
+    const m2 = status(AUDIT_RUNNERS, allFlags, "M2");
+    expect(m2?.status).toBe("requires-live-run");
+    expect(m2?.reason).toMatch(/flag is not a reachable stack/);
+  });
+
+  it("no module reads ran off the flags when the flag-gated passes produced no evidence", () => {
+    const flagGated = runAudit(AUDIT_RUNNERS, ctx(allFlags)).recorded.filter((r) => ["M1", "M2", "M6"].includes(r.module));
+    expect(flagGated.every((r) => r.status !== "ran")).toBe(true);
+  });
+});
+
+describe("M6's never-run alarm is not cleared by a review packet (#351)", () => {
+  it("M6 with --llm reports partial, never ran — a packet is not a verdict", () => {
+    const m6 = status(AUDIT_RUNNERS, { env: { connected: false, dynamic: false, llm: true } }, "M6");
+    expect(m6?.status).toBe("partial");
+    expect(m6?.status).not.toBe("ran");
+    expect(m6?.reason).toMatch(/not a verdict/);
+  });
+
+  it("M6 stays in the never-executed ledger after an --llm run — no `ran` was banked to clear it", () => {
+    // M6 is the one module absent from audit-execution-log.json; the packet run must not change that.
+    expect(MODULES_NEVER_EXECUTED.has("M6")).toBe(true);
+    const { recorded } = runAudit(AUDIT_RUNNERS, ctx({ env: { connected: false, dynamic: false, llm: true } }));
+    expect(buildAuditCoverage(recorded).neverRun).toContain("M6");
+  });
+});
+
+describe("M3 derives ran from a real vitals parse, never a no-op exit (#314)", () => {
+  it("records ran when hotspot-scan emits the ranked table (vitals report parsed)", () => {
+    expect(status(AUDIT_RUNNERS, {}, "M3")?.status).toBe("ran");
+  });
+
+  it("records requires-live-run when vitals_cli.py is not on PATH", () => {
+    const noVitals = { exec: () => ({ ok: false, output: "vitals_cli.py not found on PATH (#314)" }) };
+    const m3 = status(AUDIT_RUNNERS, noVitals, "M3");
+    expect(m3?.status).toBe("requires-live-run");
+    expect(m3?.reason).toMatch(/vitals/);
   });
 });
 
