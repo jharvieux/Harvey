@@ -31,6 +31,7 @@
 // out to run fine. Per-target notes say which. The lesson is the corpus's own: a baseline no job
 // ever scores is a number nobody has checked.
 
+import { M4_DIVERGED_TAXONOMY } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
 import type { QuickScanReport } from "../quick-scan.js";
 import { classifyMigrationSql } from "../../tools/pii-classify.mjs";
@@ -92,7 +93,11 @@ export interface ExternalTarget {
   // the real match rule that keeps them apart (a shared "M5 " prefix can't distinguish them).
   // M8 alone may also carry a MutationBaseline (#300): on a target with a real suite it is scored
   // as a mutation percentage by scoreMutationBaseline, not by counting findings.
-  modules: Partial<Record<"M4" | "M5-knip" | "M5-slop" | "M7" | "M9" | "M10", ModuleBaseline | ModuleNotRun>>
+  // #360: "M4-diverged" is the near-miss security-clone pass (src/diverged-clones.ts) — same
+  // split rationale as M5-knip/M5-slop: it shares M4's taxonomy prefix but is a different
+  // detector with a different (review-tier, similarity-threshold) drift profile, so it gets its
+  // own baseline instead of silently moving M4's.
+  modules: Partial<Record<"M4" | "M4-diverged" | "M5-knip" | "M5-slop" | "M7" | "M9" | "M10", ModuleBaseline | ModuleNotRun>>
     & { M8: ModuleBaseline | ModuleNotRun | MutationBaseline };
   // #300: the vendored Stryker config for targets scored by the M8 workflow. Absent means M8 is
   // either not-run (with a reason) or a zero-test target whose #224 finding is the measurement.
@@ -179,7 +184,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     schemaPath: "supabase/migrations",
     m8: M8_CORPUS_CONFIGS.proposit,
     modules: {
-      M4: { counted: 68, total: 104, note: "5.27% (2749/52165 lines), 203 raw clone clusters — of which 104 are the cross-file clones jscpdToFindings emits and 68 are counted (36 are sub-15-line Info). The 203 originally recorded here was jscpd's cluster count, not the counted findings this scorer compares (fixed #263 when the Layer 2 job first scored it). Was 9.75%/199 clones pre-#232; the drop is that fix excluding generated/demo paths, NOT the repo changing. Per #232 ~75% of what remains is genuine per-entity copy-paste (CRUD forms, per-entity tool/store/service files) — the corpus's strongest real M4 signal and a factory-refactor case. Re-measured 2026-07-15 WITH the target's deps installed (#251): unchanged, confirming the install step is inert for M4." },
+      M4: { counted: 73, total: 105, note: "5.27% (2749/52165 lines), 203 raw clone clusters — 104 individual cross-file findings, 73 counted, plus the #365 M4-00 small-clone disclosure (44 sub-10-line clones, Info) for 105 total. Re-measured 2026-07-16: counted 68->73 because #361 elevates security-path clones one tier — 5 sub-15-line clones in components/auth/* + lib/supabase/server.ts moved Info->Low (10 clones total carry the elevation, the other 5 were already counted). Was 9.75%/199 clones pre-#232; the drop is that fix excluding generated/demo paths, NOT the repo changing. Per #232 ~75% of what remains is genuine per-entity copy-paste (CRUD forms, per-entity tool/store/service files) — the corpus's strongest real M4 signal and a factory-refactor case. #251 measured the install step inert for M4." },
+      "M4-diverged": { counted: 1, total: 1, note: "#360: measured 2026-07-16 — 20 security-path files, 1 diverged family (High, review tier). Small for the corpus's worst M4 target because its per-entity copies live under lib/ai/tools/* and lib/stores/*, which don't hit SECURITY_PATH_KEYWORDS — the pass is deliberately scoped to auth/guard/middleware/security paths." },
       "M5-knip": { counted: 85, total: 85, note: "#251: measured 2026-07-15 after `npm install --legacy-peer-deps` in the clone — the install step is what unblocked this, exactly the CLAUDE.md M5 prereq. 85 findings, 83 Low + 2 Medium, no Info tail (knip's dead-code findings are never Info unless the scan itself failed). 8 unused files + 77 files with unused exports: BY FAR the corpus's largest M5-knip surface (next is boxyhq at 12), consistent with proposit also being its worst M4 target (68) — the same per-entity copy-paste vein leaving unreferenced exports behind. Worth a triage pass to confirm the shape (see follow-up); recorded here as the measured drift baseline it is, not as a triaged verdict." },
       "M5-slop": { counted: 6, total: 16, note: "#278: measured 2026-07-15 via detect-static (previously excluded from scoring entirely to avoid double-counting M5-knip). 3 'Single-call wrapper' + 3 'Else after return' counted; 10 Info-tail (narrating comments, AI phrasing, decorative emoji, redundant JSDoc)." },
       M7: { counted: 49, total: 79, note: "30 of the 79 are the exhaustive-deps class #230 demoted to Info (~0 real), leaving 49 counted. The real vein is 26 'Unbounded select' on growable request-path lists (low-sev latent scalability). Residual FP tail still counted: 5 inline-literal, 4 context-value-recreated, 2 index-key — the micro-render shapes #230 judged ~0% real (see follow-up)." },
@@ -197,7 +203,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     disclosureIssue: 215,
     schemaPath: "supabase/migrations",
     modules: {
-      M4: { counted: 6, total: 8, note: "5.2% (309/5947 lines), 13 raw clusters -> 8 cross-file findings, 6 counted (fixed #263: the 13 was jscpd's cluster count, not counted findings). Down from the sweep's 6.13%/22 clones now #232 excludes `types_db.ts` (Supabase codegen was ~50% of this repo's clones)." },
+      M4: { counted: 8, total: 9, note: "5.2% (309/5947 lines), 13 raw clusters -> 8 cross-file findings, 8 counted, plus the #365 M4-00 disclosure (4 small clones, Info) for 9 total. Re-measured 2026-07-16: counted 6->8, two sub-15-line clones in components/ui/AuthForms/* moved Info->Low under #361's security-path elevation. Down from the sweep's 6.13%/22 clones now #232 excludes `types_db.ts` (Supabase codegen was ~50% of this repo's clones)." },
+      "M4-diverged": { counted: 2, total: 2, note: "#360: measured 2026-07-16 — 14 security-path files, 2 diverged families (High, review tier) in the AuthForms components." },
       "M5-knip": { counted: 8, total: 8, note: "Originally ran WITHOUT the target's `npm install` — knip resolved its config anyway (fixed #263: recorded as not-run on the assumption it couldn't, measured as 8). Re-measured 2026-07-15 WITH deps installed (#251): still 8 — the install step adds coverage elsewhere without disturbing this. 3 unused files + 5 unused-export files; the Medium is utils/supabase/middleware. If a future knip/config change makes this fail, it degrades to the M5-00 'did not run' finding (#223) and this baseline fails loudly rather than silently reading 0." },
       "M5-slop": { counted: 10, total: 12, note: "#278: the double-counting case that started this split — this target's detect-static findings (9 'Else after return' + 1 'Single-call wrapper') were being summed with M5-knip's 8, reading 18 against a measured 8. Measured 2026-07-15: 10 counted, 2 Info." },
       M7: { counted: 2, total: 3, note: "One of the smallest surfaces in the corpus: 2 raw <img> + 1 Info exhaustive-deps. A good FALSE-POSITIVE regression guard — a well-maintained Vercel example should stay near-silent; a jump here means a new over-match." },
@@ -219,7 +226,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     // corpus-drift.ts's readMigrationSql had to read recursively too, not just this parser.
     schemaPath: "prisma/migrations",
     modules: {
-      M4: { counted: 39, total: 66, note: "4.93% (1148/23283 lines), 90 raw clusters -> 66 cross-file findings, 39 counted (fixed #263: the 90 was jscpd's cluster count). Per #232 the real signal is the API-handler envelope (a `createHandler` extraction candidate), lower severity than proposit's. Re-measured 2026-07-15 WITH deps installed (#251): unchanged." },
+      M4: { counted: 48, total: 67, note: "4.93% (1148/23283 lines), 90 raw clusters -> 66 cross-file findings, 48 counted, plus the #365 M4-00 disclosure (3 small clones, Info) for 67 total. Re-measured 2026-07-16: counted 39->48, nine sub-15-line clones under pages/api/auth/*, pages/auth/*, components/auth/* (and one tests/e2e/auth spec) moved Info->Low under #361's security-path elevation. Per #232 the real signal is the API-handler envelope (a `createHandler` extraction candidate), lower severity than proposit's. #251 measured the install step inert for M4." },
+      "M4-diverged": { counted: 2, total: 2, note: "#360: measured 2026-07-16 — 38 security-path files, 2 diverged families (High, review tier). The larger family is the per-page getServerSideProps auth boilerplate (8 pages, one adjudication row thanks to family grouping — per-pair emission would have been 21 findings, the measured basis for grouping)." },
       "M5-knip": { counted: 12, total: 12, note: "#251: measured 2026-07-15 after `npm install --legacy-peer-deps` in the clone — 5 unused files + 7 files with unused exports. Modest for a 23k-line repo, matching this target's reputation as the corpus's best-maintained one (it is also the M8 upper reference point). Worth watching as an FP guard: a jump here on a well-kept repo is more likely a knip/config change than new dead code." },
       "M5-slop": { counted: 12, total: 13, note: "#278: measured 2026-07-15. 9 'Else after return' + 2 'Orphan TODO' + 1 'Single-call wrapper' counted; 1 Info. The corpus's highest slop count on a target with real test coverage — a real regression guard, not just the zero-test targets." },
       M7: { counted: 17, total: 17, note: "Includes the corpus's one genuine middleware stall ('Fetch in middleware hot path') — one of the two real request-path finds #230 kept. The 9 inline-literal + 3 index-key are the residual micro-render tail." },
@@ -243,7 +251,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     disclosureIssue: 217,
     schemaPath: "supabase/migrations",
     modules: {
-      M4: { counted: 0, total: 1, note: "0.35% (11/3167 lines), 6 raw clusters -> 1 cross-file finding, and it is Info (sub-15-line), so 0 counted (fixed #263: the 6 was jscpd's cluster count). A MEASURED near-zero on the smallest target; the sweep's 2.95% was the pre-#232 denominator." },
+      M4: { counted: 1, total: 2, note: "0.35% (11/3167 lines), 6 raw clusters -> 1 cross-file finding, 1 counted, plus the #365 M4-00 disclosure (2 small clones, Info) for 2 total. Re-measured 2026-07-16: counted 0->1 — the single sub-15-line clone (app/dashboard/CreateTenantForm.tsx, paired against an auth-path file) moved Info->Low under #361's elevation. Still a MEASURED near-floor on the smallest target; the sweep's 2.95% was the pre-#232 denominator." },
+      "M4-diverged": { counted: 0, total: 0, note: "#360: measured 2026-07-16 — 8 security-path files, ZERO diverged families. A measured zero on the repo whose dead requireTenantAccess guard (#217/#226) is the M5 headline: its guards were never wired, so they never got copy-pasted and drifted. Any non-zero here is a new detection or an over-match — look before rebaselining." },
       // The one target small enough (13 deps) to `npm install` cheaply, so M5-knip DID run here.
       "M5-knip": { counted: 2, total: 2, note: "Originally ran WITHOUT the target's node_modules — knip resolves this 13-dep repo's config either way (fixed #263: recorded as 1 finding, measured as 2 — knip reports the two files separately, it does not roll them into one). Re-measured 2026-07-15 WITH deps installed (#251): still 2, so the new install step did not move this baseline. Both REAL, and the first is security-weighted: `lib/security/guards.ts` exports requireTenantAccess/requireTenantAdmin and NOTHING calls them, on the same repo whose self-join Critical (#217) is a missing-authz bug. #226's security cross-link firing on real code: the dead guard IS the vulnerability's fingerprint. The second is unused exports in lib/supabase/server.ts." },
       "M5-slop": { counted: 0, total: 0, note: "#278: measured 2026-07-15 — MEASURED zero, consistent with M4/M7's floor readings on this 3.1k-line repo. Any non-zero here is almost certainly a new over-match." },
@@ -264,7 +273,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     // #232 already excludes from M4's duplication denominator for the same reason).
     schemaPath: "supabase/migrations",
     modules: {
-      M4: { counted: 4, total: 7, note: "1.35% (211/15684 lines), 11 raw clusters -> 7 cross-file findings, 4 counted (fixed #263: the 11 was jscpd's cluster count). The sweep's headline '13.3%, highest in the corpus' was almost entirely `monero/patches/**` whole-file fork-mirrors. #232's vendored-path exclusion is what closed that ~12-point gap; this target is the regression guard for it." },
+      M4: { counted: 5, total: 8, note: "1.35% (211/15684 lines), 11 raw clusters -> 7 cross-file findings, 5 counted, plus the #365 M4-00 disclosure (1 small clone, Info) for 8 total. Re-measured 2026-07-16: counted 4->5 — one sub-15-line clone (nextjs/app/api/auth_callback/route.ts) moved Info->Low under #361's security-path elevation. The sweep's headline '13.3%, highest in the corpus' was almost entirely `monero/patches/**` whole-file fork-mirrors. #232's vendored-path exclusion is what closed that ~12-point gap; this target is the regression guard for it." },
+      "M4-diverged": { counted: 0, total: 0, note: "#360: measured 2026-07-16 — 4 security-path files, ZERO diverged families. Same FP-floor role as this target's M7/M5-slop zeros." },
       "M5-knip": M5_KNIP_NO_ROOT_PACKAGE_JSON,
       "M5-slop": { counted: 6, total: 11, note: "#278: measured 2026-07-15. 5 'Else after return' + 1 'Orphan TODO' counted; 5 Info." },
       M7: { counted: 3, total: 4, note: "1 unbounded select + 1 index-key + 1 state-sprawl counted, 1 exhaustive-deps demoted to Info." },
@@ -283,7 +293,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     // Monorepo: the app lives under apps/web, not the repo root.
     schemaPath: "apps/web/supabase/migrations",
     modules: {
-      M4: { counted: 14, total: 16, note: "1.15% (318/27617 lines), 28 raw clusters -> 16 cross-file findings, 14 counted (fixed #263: the 28 was jscpd's cluster count). The sweep's 499-line identical `database.types.ts` copy is now excluded by #232. Re-measured 2026-07-15 after a full `pnpm install` of the workspace (#251): unchanged." },
+      M4: { counted: 14, total: 17, note: "1.15% (318/27617 lines), 28 raw clusters -> 16 cross-file findings, 14 counted, plus the #365 M4-00 disclosure (9 small clones, Info) for 17 total. Re-measured 2026-07-16: counted unchanged by #361 — its security-path clones were already >=15 lines, so the elevation moved severities (Low->Medium) without crossing the Info/counted line. The sweep's 499-line identical `database.types.ts` copy is now excluded by #232. #251 measured the install step inert for M4." },
+      "M4-diverged": { counted: 5, total: 5, note: "#360: measured 2026-07-16 — 52 security-path files, 5 diverged families (High, review tier): the auth pages (sign-in/sign-up/password-reset), the callback/confirm route GETs, and the ErrorAlert/SuccessAlert i18n-key drift — the corpus's largest near-miss surface, consistent with its packages/features/auth breadth." },
       "M5-knip": M5_KNIP_ESLINT_PATCH_BROKEN,
       "M5-slop": { counted: 23, total: 26, note: "#278: measured 2026-07-15. 22 'Redundant JSDoc' + 1 'Orphan TODO' counted; 3 Info. The corpus's highest slop count — a well-maintained starter kit whose JSDoc habit trips the detector, worth watching for FP drift." },
       M7: { counted: 23, total: 24, note: "Includes the corpus's other genuine request-path stall ('Blocking sync I/O in request handler' — the execSync-on-a-/version-route case #230 kept) plus an 'Await in loop (N+1)' and a raw <img>. The 11 inline-literal + 6 index-key + 2 context-value are the residual micro-render tail. 22 -> 23 when #269 added the 'React Compiler flag unresolvable' class: this repo sets `reactCompiler: ENABLE_REACT_COMPILER` (env-derived), the exact unresolvable-flag case #249 filed. Baseline rebased by #263's first real Layer 2 run — an intended new detection, not a regression, and the drift check catching it on day one is the corpus working." },
@@ -425,6 +436,10 @@ const M5_KNIP_TAXONOMY = "M5 — Slop / dead code";
 function moduleMatches(taxonomy: string, module: string): boolean {
   if (module === "M5-knip") return taxonomy === M5_KNIP_TAXONOMY;
   if (module === "M5-slop") return taxonomy.startsWith("M5 ") && taxonomy !== M5_KNIP_TAXONOMY;
+  // #360: same shared-prefix split as M5 — the diverged-clone pass emits under an "M4 —" taxonomy
+  // but drifts independently of jscpd, so it is scored as its own module.
+  if (module === "M4-diverged") return taxonomy === M4_DIVERGED_TAXONOMY;
+  if (module === "M4") return taxonomy.startsWith("M4 ") && taxonomy !== M4_DIVERGED_TAXONOMY;
   return taxonomy.startsWith(`${module} `);
 }
 
