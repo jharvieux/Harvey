@@ -10,8 +10,19 @@
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
 import type { ModuleRunner, ProbeOutcome, RunContext } from "./audit-runner.js";
+import type { Finding } from "./findings.js";
 
 const trimOut = (output: string): string => output.trim().slice(0, 200);
+
+// #312 findings capture. When the run context is capturing, a module whose CLI emits a report-schema
+// Finding[] to --out writes it to <captureDir>/<module>.json and reads it back onto the outcome so
+// run-audit can assemble one engagement findings.json. Absent capture (the default) → no --out, no
+// read: coverage-only runs are unchanged.
+const captureOut = (ctx: RunContext, module: AuditModule): string | undefined =>
+  ctx.captureDir && ctx.readFindings ? join(ctx.captureDir, `${module}.json`) : undefined;
+
+const readCaptured = (ctx: RunContext, outPath: string | undefined): Finding[] =>
+  outPath && ctx.readFindings ? ctx.readFindings(outPath) : [];
 
 // Runs a module's CLI and returns the raw result plus a printable command for the ledger's detail.
 const runCli = (ctx: RunContext, script: string, argv: string[]): { ok: boolean; output: string; command: string } => {
@@ -33,6 +44,23 @@ const viaCli = (module: AuditModule, script: string, args: (ctx: RunContext) => 
   run: (ctx: RunContext): ProbeOutcome => {
     const { ok, output, command } = runCli(ctx, script, args(ctx));
     return ok ? { status: "ran", detail: command } : { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
+  },
+});
+
+// Like viaCli, but for a module whose CLI emits a report-schema Finding[] to --out: when the run
+// context is capturing (#312), append `--out <captureDir>/<module>.json`, then read the emitted
+// findings back onto the outcome so run-audit can assemble them. Shared CLIs (quality-scan feeds
+// M4+M5, detect-static feeds M7+M9) get captured under each module key; the assembler de-dupes.
+const capturing = (module: AuditModule, script: string, args: (ctx: RunContext) => string[]) => ({
+  module,
+  run: (ctx: RunContext): ProbeOutcome => {
+    const argv = args(ctx);
+    const command = `pnpm ${script} ${argv.join(" ")}`.trim();
+    const outPath = captureOut(ctx, module);
+    const { ok, output } = ctx.exec("pnpm", [script, ...argv, ...(outPath ? ["--out", outPath] : [])]);
+    if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
+    const findings = readCaptured(ctx, outPath);
+    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
   },
 });
 
@@ -130,13 +158,23 @@ const m2: ModuleRunner = {
 // run that analyzed nothing would still read as `ran` is inference from M5/M8/M9's shared
 // exit-code pattern (#350), not measurement. Do not upgrade that to a verified claim without a
 // real vitals run.
+//
+// #312 capture: hotspot-scan prints the ranked table to stdout (the status evidence above) AND, with
+// --out, writes an M3 artifact. That artifact is an OBJECT ({ hotspots, findings, ... }), not the
+// bare Finding[] the assembler's readFindings accepts, so real capturing runs will not yield M3
+// findings through this path — M3 reaches the report via its coverage-ledger row until the sidecar
+// is reconciled (#420). The readCaptured call is kept for symmetry and is exercised by the assembler
+// test's mocked readFindings.
 const m3: ModuleRunner = {
   module: "M3",
   run: (ctx) => {
-    const { ok, output, command } = runCli(ctx, "exec", ["tsx", "src/cli/hotspot-scan.ts", ctx.targetDir]);
+    const outPath = captureOut(ctx, "M3");
+    const { ok, output } = ctx.exec("pnpm", ["exec", "tsx", "src/cli/hotspot-scan.ts", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+    const command = `pnpm exec tsx src/cli/hotspot-scan.ts ${ctx.targetDir}`;
     if (!ok) return { status: "requires-live-run", reason: `vitals plugin unavailable or hotspot-scan failed: ${trimOut(output)}` };
     if (!/M3 hotspot table/.test(output)) return { status: "requires-live-run", reason: `hotspot-scan produced no M3 table — vitals report empty or unrecognized: ${trimOut(output)}` };
-    return { status: "ran", detail: command };
+    const findings = readCaptured(ctx, outPath);
+    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
   },
 };
 
@@ -144,7 +182,7 @@ const m3: ModuleRunner = {
 // source alone, while knip cannot resolve config imports without the target's installed deps. One
 // `ran` covering both would be the composite-claim bug the gate exists to catch, so they probe
 // separately and M5 owns the node_modules precondition.
-const m4: ModuleRunner = viaCli("M4", "quality-scan", (ctx) => [ctx.targetDir]);
+const m4: ModuleRunner = capturing("M4", "quality-scan", (ctx) => [ctx.targetDir]);
 
 // M5 (#350): knip exits 0 even when it could not run — quality-scan then substitutes an M5-00
 // disclosure finding (#223). So the exit code is not the evidence; the presence of that finding in
@@ -154,12 +192,16 @@ const m5: ModuleRunner = {
   module: "M5",
   run: (ctx) => {
     if (!hasNodeModules(ctx)) return { status: "requires-live-run", reason: "target has no node_modules — knip cannot resolve config imports without the target's installed deps (run `npm install` in the target)" };
-    const { ok, output, command } = runCli(ctx, "quality-scan", [ctx.targetDir]);
+    const outPath = captureOut(ctx, "M5");
+    const command = `pnpm quality-scan ${ctx.targetDir}`;
+    const { ok, output } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
     if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-    const findings = parseFindings(output);
+    // The verdict array is read from the captured --out file when capturing (quality-scan writes a
+    // bare Finding[] there and stays silent on stdout), else parsed from stdout (#312/#419).
+    const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
     if (!findings) return { status: "requires-live-run", reason: `could not read quality-scan output to confirm knip ran: ${trimOut(output)}` };
-    if (findings.some((f) => f.id === "M5-00")) return { status: "partial", detail: command, reason: "knip did not run — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage was skipped this pass (M4 duplication still ran) (#223/#350)" };
-    return { status: "ran", detail: command };
+    if (findings.some((f) => (f as { id?: string }).id === "M5-00")) return { status: "partial", detail: command, reason: "knip did not run — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage was skipped this pass (M4 duplication still ran) (#223/#350)" };
+    return outPath && findings.length ? { status: "ran", detail: command, findings: findings as Finding[] } : { status: "ran", detail: command };
   },
 };
 
@@ -206,30 +248,43 @@ const m7: ModuleRunner = {
 // mutation-scan says so in a machine-readable moduleRecord while exiting 0. The probe reads that
 // verdict rather than the exit code: no test suite → partial (the zero-coverage finding), a real
 // Stryker report → ran.
+// #312 capture note: mutation-scan's --out artifact is an OBJECT ({ summary, ... } or { finding,
+// moduleRecord }), not the bare Finding[] the assembler reads, and --out silences the stdout verdict
+// this probe derives its status from — so real capturing runs surface M8 through its coverage-ledger
+// row, not captured findings, until the sidecar is reconciled (#420). readCaptured is kept for
+// symmetry and exercised by the assembler test's mocked readFindings.
 const m8: ModuleRunner = {
   module: "M8",
   run: (ctx) => {
     if (!hasNodeModules(ctx)) return { status: "requires-live-run", reason: "target has no node_modules — StrykerJS needs the target's installed deps and test suite" };
-    const { ok, output, command } = runCli(ctx, "mutation-scan", [ctx.targetDir]);
+    const outPath = captureOut(ctx, "M8");
+    const command = `pnpm mutation-scan ${ctx.targetDir}`;
+    const { ok, output } = ctx.exec("pnpm", ["mutation-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
     if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
     const verdict = mutationVerdict(output);
     if (verdict.kind === "no-suite") return { status: "partial", detail: command, reason: verdict.note };
     if (verdict.kind === "unknown") return { status: "requires-live-run", reason: `mutation-scan produced no recognizable verdict — cannot confirm M8 ran: ${trimOut(output)}` };
-    return { status: "ran", detail: command };
+    const findings = readCaptured(ctx, outPath);
+    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
   },
 };
 
 // M9 (#350): detect-static exits 0 over an empty directory ("loaded 0 source files"). Exit code is
 // not evidence of a scan; the file count the tool printed is. Zero files scanned is not `ran`.
+// detect-static prints the count to stdout AND writes a bare Finding[] to --out, so status and
+// capture (#312) coexist in real runs.
 const m9: ModuleRunner = {
   module: "M9",
   run: (ctx) => {
-    const { ok, output, command } = runCli(ctx, "detect-static", [ctx.targetDir]);
+    const outPath = captureOut(ctx, "M9");
+    const command = `pnpm detect-static ${ctx.targetDir}`;
+    const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
     if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
     const scanned = filesScanned(output);
     if (scanned === undefined) return { status: "requires-live-run", reason: `could not read detect-static output to confirm files were scanned: ${trimOut(output)}` };
     if (scanned === 0) return { status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — nothing to analyze (empty or non-source target) (#350)` };
-    return { status: "ran", detail: command };
+    const findings = readCaptured(ctx, outPath);
+    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
   },
 };
 

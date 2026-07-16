@@ -16,12 +16,15 @@
 //      fails loud on its own.
 
 import { AUDIT_MODULES, type AuditModule, type EngagementEnv, type ModuleCoverage, MODULES } from "./audit-coverage.js";
+import type { Finding } from "./findings.js";
 
 // What a probe reports about its OWN execution. It is deliberately not ModuleCoverage: a probe may
 // only describe what it did, and cannot claim a status for a module it isn't registered under.
+// `findings` (#312): the report-schema Finding[] the module's CLI emitted, when the probe captured
+// it. A requires-live-run probe produced no output, so it carries none.
 export type ProbeOutcome =
-  | { status: "ran"; detail: string }
-  | { status: "partial"; detail: string; reason: string }
+  | { status: "ran"; detail: string; findings?: Finding[] }
+  | { status: "partial"; detail: string; reason: string; findings?: Finding[] }
   | { status: "requires-live-run"; reason: string };
 
 // The seam that keeps this engine testable and offline: probes reach the outside world only through
@@ -34,6 +37,11 @@ export interface RunContext {
   exec: (command: string, args: string[]) => { ok: boolean; output: string };
   // Prereq probing (target node_modules, a test suite, migrations). Injected for the same reason.
   exists: (path: string) => boolean;
+  // #312 findings assembly. When both are set, an emitter probe writes its Finding[] to a file in
+  // captureDir and reads it back, so run-audit can assemble one engagement findings.json. Absent
+  // (the default) means no capture — coverage-only runs keep their prior behaviour.
+  captureDir?: string;
+  readFindings?: (path: string) => Finding[];
 }
 
 export interface ModuleRunner {
@@ -50,6 +58,9 @@ interface AuditRunResult {
   // Derived, not supplied: one row per module, each the outcome of that module's probe.
   recorded: ModuleCoverage[];
   failures: ModuleFailure[];
+  // Report-schema findings captured from the module CLIs that emit them (#312). Raw and possibly
+  // overlapping (shared CLIs feed two probes); assembleEngagementDocument de-duplicates.
+  findings: Finding[];
 }
 
 // A registry missing a module is the #229 defect at the source — an audit that never even tries M5
@@ -77,6 +88,7 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
   const byModule = new Map(runners.map((r) => [r.module, r]));
   const recorded: ModuleCoverage[] = [];
   const failures: ModuleFailure[] = [];
+  const findings: Finding[] = [];
 
   // Iterate AUDIT_MODULES, not `runners`: the ledger's shape is owned by the module enumeration,
   // so a registry can never shorten the audit by reordering or under-listing itself.
@@ -100,9 +112,10 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
         ? { module, status: "requires-live-run", reason: outcome.reason }
         : { module, status: outcome.status, detail: outcome.detail, ...(outcome.status === "partial" ? { reason: outcome.reason } : {}) },
     );
+    if (outcome.status !== "requires-live-run" && outcome.findings) findings.push(...outcome.findings);
   }
 
-  return { recorded, failures };
+  return { recorded, failures, findings };
 }
 
 export function formatFailures(failures: ModuleFailure[]): string {
