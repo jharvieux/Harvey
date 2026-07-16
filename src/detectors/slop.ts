@@ -2,12 +2,15 @@
 // detector at all; this gives it a complete mechanical slop capability for CLIENT code,
 // complementing knip dead-code (src/quality-scan.ts) and the M6 /simplify LLM pass.
 //
-// Two provenance groups:
+// Three provenance groups:
 //   • Ported from ATC's `scripts/slop-check.ts` (which only runs on ATC's own diffs): orphan
 //     TODOs, narrating comments, try/catch-rethrow, single-call wrappers.
 //   • Additional classes researched for this module: placeholder stubs, elision comments,
 //     AI comment phrasing, redundant booleans, else-after-return, decorative emoji,
 //     redundant JSDoc.
+//   • Coverage fan-out (#362, #364, #370, #371): unused parameter, unused import, single-use
+//     helper (the general "called exactly once" shape, broader than single-call-wrapper's
+//     pass-through-only scope), unreachable branch (tier-1 literal conditions).
 //
 // Method: TypeScript compiler API. Comment-text checks run over the file's comment trivia
 // (scanned once); structural checks walk the AST or match the source text. Emits Finding[]
@@ -489,12 +492,100 @@ function detectRedundantJsdoc(sf: ts.SourceFile, path: string, nextId: NextId): 
   return findings;
 }
 
+// --- Coverage additions (#362) -----------------------------
+
+// Unused parameter (#362): a declared parameter never referenced in the function body — the
+// "stub-shaped code" D-091 #1 shape (`getPublicKey(kid)` ignoring `kid`). Mirrors ESLint
+// no-unused-vars' own `args: "after-used"` default: only the TRAILING run of unused params
+// (nothing used after them) is flagged, so a leading unused param followed by a used one
+// (Express-style `(err, req, res, next)`) stays silent. Only named declarations (function
+// declarations, `const f = (...) => ...`, methods) are checked — an anonymous arrow passed
+// straight into a call (`arr.map((item, index, array) => item * 2)`) is never visited by this
+// walk at all, which is what keeps caller-mandated callback shapes silent (measured against a
+// real ESLint run, 2026-07-16: unlike this issue's own doc claim, ESLint's after-used does NOT
+// exempt that shape — the anonymous-callback guard here is what actually does).
+function isReferenced(body: ts.Node, name: string): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isIdentifier(node) && node.text === name) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return found;
+}
+
+function unusedParamFindings(fn: ts.FunctionLikeDeclaration, fnName: string, sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const body = fn.body;
+  if (!body) return [];
+  const params = fn.parameters;
+  // Destructured patterns, rest params, and `this` params are treated as "used" — never flagged
+  // themselves, and they correctly terminate the trailing-unused run for params before them.
+  const usedFlags = params.map((p) => {
+    if (!ts.isIdentifier(p.name) || p.dotDotDotToken) return true;
+    const name = p.name.text;
+    if (name === "this" || name.startsWith("_")) return true;
+    return isReferenced(body, name);
+  });
+  let lastUsedIdx = -1;
+  usedFlags.forEach((used, i) => {
+    if (used) lastUsedIdx = i;
+  });
+  const findings: Finding[] = [];
+  for (let i = lastUsedIdx + 1; i < params.length; i++) {
+    const p = params[i];
+    if (!p || !ts.isIdentifier(p.name)) continue;
+    findings.push(
+      makeFinding(nextId, {
+        title: `Parameter \`${p.name.text}\` in \`${fnName}\` is declared but never used`,
+        severity: "Low",
+        confidence: "Review",
+        taxonomy: "M5 — Unused parameter",
+        location: `${path}:${lineOf(sf, p)}`,
+        evidence: `\`${fnName}(${params.map((x) => x.getText(sf)).join(", ")})\` — \`${p.name.text}\` never appears in the body, so the function's output can't depend on it.`,
+        impact: "Stub-shaped code: the signature looks parameterized but silently ignores an input — the historical D-091 example (`getPublicKey(kid)` always returning the same PEM) was exactly this shape.",
+        fix: "Reference the parameter, prefix it `_name` if intentionally unused, or remove it (and update call sites).",
+        value: 3,
+        ease: 4,
+        safety: 4,
+      }),
+    );
+  }
+  return findings;
+}
+
+function detectUnusedParameter(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name && node.body) {
+      findings.push(...unusedParamFindings(node, node.name.text, sf, path, nextId));
+    } else if (ts.isMethodDeclaration(node) && node.body) {
+      const name = ts.isIdentifier(node.name) ? node.name.text : node.name.getText(sf);
+      findings.push(...unusedParamFindings(node, name, sf, path, nextId));
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+    ) {
+      findings.push(...unusedParamFindings(node.initializer, node.name.text, sf, path, nextId));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
 // --- Orchestrator ------------------------------------------------------------
 
 /**
  * Runs the mechanical AI-slop checks over the given source set and returns Finding[]
- * (taxonomy `M5 — …`). Covers the four patterns ported from ATC's slop-check plus seven
- * additional researched classes; no overlap with knip dead-code.
+ * (taxonomy `M5 — …`). Covers the four patterns ported from ATC's slop-check, seven
+ * additional researched classes, and the #362 coverage fan-out; no overlap with
+ * knip dead-code.
  */
 export function detectSlopFindings(files: SourceInput[]): Finding[] {
   let n = 0;
@@ -516,6 +607,7 @@ export function detectSlopFindings(files: SourceInput[]): Finding[] {
       ...detectElseAfterReturn(sf, f.path, nextId),
       ...detectEmoji(sf, comments, f.path, nextId),
       ...detectRedundantJsdoc(sf, f.path, nextId),
+      ...detectUnusedParameter(sf, f.path, nextId),
     );
   }
   return findings;

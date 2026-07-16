@@ -51,6 +51,8 @@ const CASES: Case[] = [
   { name: "else after return", dir: "else-after-return", taxonomy: "M5 — Else after return", posCount: 1, severity: "Low", confidence: "Likely" },
   { name: "decorative emoji", dir: "emoji", taxonomy: "M5 — Decorative emoji", posCount: 2, severity: "Info", confidence: "Review" },
   { name: "redundant JSDoc", dir: "redundant-jsdoc", taxonomy: "M5 — Redundant JSDoc", posCount: 1, severity: "Low", confidence: "Review" },
+  // Coverage fan-out (#362, #364, #370, #371).
+  { name: "unused parameter", dir: "unused-parameter", taxonomy: "M5 — Unused parameter", posCount: 2, severity: "Low", confidence: "Review" },
 ];
 
 for (const c of CASES) {
@@ -99,6 +101,20 @@ describe("discrimination boundaries (regression locks)", () => {
   it("narrating-comment matches multiple verbs but not a verb-first long sentence", () => {
     expect(byTaxonomy("narrating-comment/positive", "M5 — Narrating comment")).toHaveLength(2);
     expect(byTaxonomy("narrating-comment/negative", "M5 — Narrating comment")).toHaveLength(0);
+  });
+
+  it("unused-parameter flags a trailing unused param but exempts a leading one before a used param, and never visits an anonymous inline callback", () => {
+    // negative/handlers.ts has `errorHandler(err, req, res, next)` where only `next` (last) is
+    // used — err/req/res come BEFORE the last used param, so the after-used convention must
+    // keep them silent. It also has an anonymous `numbers.map((item, index, array) => ...)`
+    // callback: never a named declaration, so this detector never even visits it — that's what
+    // actually keeps the callback-contract shape silent (not ESLint's after-used rule, which a
+    // live check showed DOES flag that shape).
+    expect(byTaxonomy("unused-parameter/negative", "M5 — Unused parameter")).toHaveLength(0);
+    const pos = byTaxonomy("unused-parameter/positive", "M5 — Unused parameter");
+    expect(pos.map((f) => f.location)).toEqual(["keys.ts:3", "keys.ts:7"]);
+    expect(pos[0]?.title).toContain("kid");
+    expect(pos[1]?.title).toContain("includeEmail");
   });
 });
 
