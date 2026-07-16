@@ -54,6 +54,7 @@ const CASES: Case[] = [
   // Coverage fan-out (#362, #364, #370, #371).
   { name: "unused parameter", dir: "unused-parameter", taxonomy: "M5 — Unused parameter", posCount: 2, severity: "Low", confidence: "Review" },
   { name: "unused import", dir: "unused-import", taxonomy: "M5 — Unused import", posCount: 2, severity: "Low", confidence: "Likely" },
+  { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 1, severity: "Low", confidence: "Review" },
 ];
 
 for (const c of CASES) {
@@ -116,6 +117,13 @@ describe("discrimination boundaries (regression locks)", () => {
     expect(pos.map((f) => f.location)).toEqual(["keys.ts:3", "keys.ts:7"]);
     expect(pos[0]?.title).toContain("kid");
     expect(pos[1]?.title).toContain("includeEmail");
+  });
+
+  it("single-use-helper exempts an exported single-caller but still catches a non-exported one, and stays silent on a two-site helper", () => {
+    const pos = byTaxonomy("single-use-helper/positive", "M5 — Single-use helper");
+    expect(pos).toHaveLength(1);
+    expect(pos[0]?.title).toContain("computeDiscount");
+    expect(byTaxonomy("single-use-helper/negative", "M5 — Single-use helper")).toHaveLength(0);
   });
 });
 

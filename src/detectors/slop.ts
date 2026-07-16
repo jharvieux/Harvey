@@ -492,7 +492,7 @@ function detectRedundantJsdoc(sf: ts.SourceFile, path: string, nextId: NextId): 
   return findings;
 }
 
-// --- Coverage additions (#362, #364) -----------------------------
+// --- Coverage additions (#362, #364, #370) -----------------------------
 
 // Unused parameter (#362): a declared parameter never referenced in the function body — the
 // "stub-shaped code" D-091 #1 shape (`getPublicKey(kid)` ignoring `kid`). Mirrors ESLint
@@ -644,12 +644,79 @@ function detectUnusedImport(sf: ts.SourceFile, path: string, nextId: NextId): Fi
   return findings;
 }
 
+// Single-use helper (#370): a non-exported, block-bodied function/const-arrow called from
+// exactly one site in the same file — the general "called exactly once" class, broader than
+// detectSingleCallWrapper's pass-through-only scope (which only checks EXPORTED declarations,
+// so the two detectors never double-fire on the same node). Exported declarations are API
+// surface, not slop — restricting to non-exported is the mechanical stand-in for "intent",
+// per the issue's own guidance. `confidence: "Review"` for the same reason as the existing
+// single-call-wrapper detector: a mechanical count can't know it's a deliberate test/refactor
+// seam.
+function countCalls(sf: ts.SourceFile, name: string, ownNode: ts.Node): number {
+  let count = 0;
+  const visit = (node: ts.Node) => {
+    if (node === ownNode) return; // excludes the declaration itself and any self-recursive calls
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === name) count++;
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return count;
+}
+
+function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  interface Candidate {
+    name: string;
+    node: ts.Node;
+    declNode: ts.Node;
+  }
+  const candidates: Candidate[] = [];
+  for (const stmt of sf.statements) {
+    const exported = ts.canHaveModifiers(stmt) && ts.getModifiers(stmt)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+    if (exported) continue;
+    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body && ts.isBlock(stmt.body) && stmt.body.statements.length >= 1) {
+      candidates.push({ name: stmt.name.text, node: stmt, declNode: stmt });
+    } else if (ts.isVariableStatement(stmt)) {
+      for (const decl of stmt.declarationList.declarations) {
+        if (
+          ts.isIdentifier(decl.name) &&
+          decl.initializer &&
+          (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) &&
+          decl.initializer.body &&
+          ts.isBlock(decl.initializer.body)
+        ) {
+          candidates.push({ name: decl.name.text, node: stmt, declNode: decl });
+        }
+      }
+    }
+  }
+  for (const c of candidates) {
+    if (countCalls(sf, c.name, c.declNode) !== 1) continue;
+    findings.push(
+      makeFinding(nextId, {
+        title: `Single-use helper \`${c.name}\` is only called from one site`,
+        severity: "Low",
+        confidence: "Review",
+        taxonomy: "M5 — Single-use helper",
+        location: `${path}:${lineOf(sf, c.node)}`,
+        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file.`,
+        impact: "An extracted layer the reader must trace through for a single caller — unless it's a deliberate test/refactor seam.",
+        fix: "Inline it at its one call site, unless it exists as an intentional seam (leave it if so).",
+        value: 2,
+        ease: 3,
+        safety: 4,
+      }),
+    );
+  }
+  return findings;
+}
+
 // --- Orchestrator ------------------------------------------------------------
 
 /**
  * Runs the mechanical AI-slop checks over the given source set and returns Finding[]
  * (taxonomy `M5 — …`). Covers the four patterns ported from ATC's slop-check, seven
- * additional researched classes, and the #362/#364 coverage fan-out; no overlap with
+ * additional researched classes, and the #362/#364/#370 coverage fan-out; no overlap with
  * knip dead-code.
  */
 export function detectSlopFindings(files: SourceInput[]): Finding[] {
@@ -674,6 +741,7 @@ export function detectSlopFindings(files: SourceInput[]): Finding[] {
       ...detectRedundantJsdoc(sf, f.path, nextId),
       ...detectUnusedParameter(sf, f.path, nextId),
       ...detectUnusedImport(sf, f.path, nextId),
+      ...detectSingleUseHelper(sf, f.path, nextId),
     );
   }
   return findings;
