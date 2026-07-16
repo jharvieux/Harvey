@@ -1,0 +1,24 @@
+interface Order {
+  id: string;
+  customerId: string;
+  total: number;
+}
+interface Customer {
+  id: string;
+  name: string;
+}
+
+// The FIX for the positive fixture: index once, O(n+m). Must never be flagged.
+export function enrichOrders(orders: Order[], customers: Customer[]) {
+  const byId = new Map(customers.map((c) => [c.id, c]));
+  return orders.map((o) => ({
+    ...o,
+    customer: byId.get(o.customerId),
+  }));
+}
+
+// Set-membership version of the .includes positive.
+export function visibleItems(items: { id: string }[], rows: { itemId: string }[]) {
+  const allowed = new Set(rows.map((r) => r.itemId));
+  return items.filter((i) => allowed.has(i.id));
+}

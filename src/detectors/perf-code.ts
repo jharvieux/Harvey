@@ -1177,6 +1177,157 @@ function detectJsonDeepClone(sources: Map<string, ts.SourceFile>, nextId: NextId
   return findings;
 }
 
+// --- E3. Nested-loop join over scaling collections [PERF] — one per file --------------
+
+// The accidental O(n·m) join (#385): a per-item linear scan (`.find`/`.some`/`.includes`/…) over
+// a SECOND collection inside a loop over the first, where a Map/Set built once would do — the
+// "forgot to build a lookup" shape AI-generated enrichment code defaults to. FP-heavy by nature
+// (a scan over a small bounded array is fine regardless of shape), so every guard below narrows
+// to the shape where both collections plausibly scale with data, and the confidence stays Review:
+//   - the inner receiver must be LOOP-INVARIANT (an outer-scope identifier, not the outer item's
+//     own field or something re-derived per iteration — per-row `p.tags.find(…)` is normal);
+//   - the inner probe must reference the outer loop's item (a join, not two unrelated loops that
+//     happen to nest);
+//   - hardcoded/const-literal lists are exempt on BOTH sides (same isStaticListSource exemption
+//     as detectIndexAsKey — a status enum or nav list never scales), and so are SCREAMING_SNAKE
+//     receivers: isStaticListSource can't see across module boundaries, and an all-caps
+//     identifier is the convention for exactly those imported config constants (measured on this
+//     repo's own source: FREE_TIER_EXPECTATIONS, a hardcoded cross-file list, was the one hit
+//     the literal check missed);
+//   - `.includes`/`.indexOf` exist on strings too, so the value forms additionally require
+//     in-file evidence the receiver is an array (array type annotation, array literal, or an
+//     array-producing initializer) — `query.includes(name)` over a string must not fire.
+
+const OUTER_LOOP_METHODS = new Set(["map", "filter", "forEach", "flatMap"]);
+const INNER_SCAN_CALLBACK = new Set(["find", "findIndex", "some", "filter"]); // callback forms — receiver is array-like by construction
+const INNER_SCAN_VALUE = new Set(["includes", "indexOf"]); // value forms — strings have these too
+const ARRAY_PRODUCER = new Set(["map", "filter", "concat", "flat", "flatMap", "slice", "from", "split"]);
+
+function isArrayIshType(type: ts.TypeNode | undefined): boolean {
+  if (!type) return false;
+  if (ts.isArrayTypeNode(type)) return true;
+  return ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName) && /^(Readonly)?Array$/.test(type.typeName.text);
+}
+
+function hasArrayEvidence(sf: ts.SourceFile, name: string): boolean {
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if ((ts.isVariableDeclaration(n) || ts.isParameter(n)) && ts.isIdentifier(n.name) && n.name.text === name) {
+      if (isArrayIshType(n.type)) {
+        found = true;
+        return;
+      }
+      if (ts.isVariableDeclaration(n) && n.initializer) {
+        const init = n.initializer;
+        if (
+          ts.isArrayLiteralExpression(init) ||
+          (ts.isCallExpression(init) && ts.isPropertyAccessExpression(init.expression) && ARRAY_PRODUCER.has(init.expression.name.text))
+        ) {
+          found = true;
+          return;
+        }
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+function declaredWithin(scope: ts.Node, name: string): boolean {
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (
+      ((ts.isVariableDeclaration(n) || ts.isParameter(n)) && ts.isIdentifier(n.name) && n.name.text === name) ||
+      (ts.isFunctionDeclaration(n) && n.name?.text === name)
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(scope);
+  return found;
+}
+
+function detectNestedLoopJoin(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    const hits: ts.CallExpression[] = [];
+
+    const inspectLoop = (itemNames: Set<string>, declScope: ts.Node, body: ts.Node) => {
+      const scan = (n: ts.Node) => {
+        if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression)) {
+          const method = n.expression.name.text;
+          const recv = n.expression.expression;
+          if (INNER_SCAN_CALLBACK.has(method) || INNER_SCAN_VALUE.has(method)) {
+            const probe = n.arguments[0];
+            if (
+              probe !== undefined &&
+              referencesAny(probe, itemNames) && // a join on the current item, not an unrelated nested loop
+              !itemNames.has(recv.text) &&
+              !declaredWithin(declScope, recv.text) && // loop-invariant: the same outer collection every pass
+              !isStaticListSource(sf, recv) && // hardcoded lists never scale
+              !/^[A-Z][A-Z0-9_]*$/.test(recv.text) && // SCREAMING_SNAKE = an (often imported) config constant
+              (INNER_SCAN_CALLBACK.has(method) || hasArrayEvidence(sf, recv.text)) // value forms exist on strings
+            ) {
+              hits.push(n);
+              return;
+            }
+          }
+        }
+        // Deeper function boundaries (a per-B callback, an event handler built per row) are not
+        // this loop's per-iteration cost — a deeper nested loop is visited as its own outer loop.
+        if (ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n)) return;
+        ts.forEachChild(n, scan);
+      };
+      scan(body);
+    };
+
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        OUTER_LOOP_METHODS.has(node.expression.name.text) &&
+        !isStaticListSource(sf, node.expression.expression)
+      ) {
+        const cb = node.arguments[0];
+        if (cb && (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb))) {
+          const p0 = cb.parameters[0];
+          if (p0 && ts.isIdentifier(p0.name)) inspectLoop(new Set([p0.name.text]), cb, cb.body);
+        }
+      }
+      if (ts.isForOfStatement(node) && !isStaticListSource(sf, node.expression)) {
+        const names = loopBindingNames(node);
+        if (names.size > 0) inspectLoop(names, node.statement, node.statement);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+
+    const first = hits[0];
+    if (!first) continue;
+    findings.push(
+      makeFinding(nextId, {
+        title: `Nested-loop join — per-item linear scan over another collection (${hits.length}× in ${path})`,
+        severity: "Perf",
+        confidence: "Review",
+        taxonomy: "M7 — Nested-loop join",
+        location: loc(path, sf, first),
+        evidence: `\`${first.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` runs once per item of the enclosing loop over a loop-invariant collection${hits.length > 1 ? ` (first of ${hits.length})` : ""} — O(n·m) comparisons where a lookup built once would be O(n+m).`,
+        impact: "Cost multiplies: 1k items × 1k rows is a million comparisons per call. Only matters when BOTH collections scale with tenant/user data — a scan over a small bounded array is fine regardless of shape; confirm sizes before reporting.",
+        fix: "Index the scanned collection once before the loop — `const byId = new Map(other.map(o => [o.id, o]))` (or a Set of keys) — and use `.get()`/`.has()` inside it.",
+        value: 3,
+        ease: 4,
+        safety: 5,
+      }),
+    );
+  }
+  return findings;
+}
+
 // --- Orchestrator --------------------------------------------------------------------
 
 /**
@@ -1211,5 +1362,6 @@ export function detectPerfCodeFindings(files: SourceInput[]): Finding[] {
     ...detectMiddlewareFetch(sources, nextId),
     ...detectSyncIoInHandler(sources, nextId),
     ...detectJsonDeepClone(sources, nextId),
+    ...detectNestedLoopJoin(sources, nextId),
   ];
 }

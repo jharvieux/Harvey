@@ -261,6 +261,23 @@ describe("JSON deep-clone", () => {
   });
 });
 
+describe("nested-loop join", () => {
+  const TAX = "M7 — Nested-loop join";
+  it("flags .find inside .map, .some inside for-of, and array .includes inside .filter — one rolled-up finding per file", () => {
+    const hits = byTaxonomy("nested-loop-join/positive", TAX);
+    expect(hits).toHaveLength(2);
+    const enrich = hits.find((h) => h.location.startsWith("lib/enrich-orders.ts"));
+    const allowed = hits.find((h) => h.location.startsWith("lib/filter-allowed.ts"));
+    expect(enrich?.title).toContain("2×");
+    expect(enrich).toMatchObject({ severity: "Perf", confidence: "Review" });
+    expect(allowed?.evidence).toContain("allowedIds.includes(i.id)");
+    expect(allowed?.fix).toContain("new Map");
+  });
+  it("does not flag the Map/Set-indexed fix, a hardcoded or SCREAMING_SNAKE config list, a per-item field scan, or String.includes", () => {
+    expect(byTaxonomy("nested-loop-join/negative", TAX)).toHaveLength(0);
+  });
+});
+
 describe("render-once contexts (emails / PDF documents)", () => {
   it("suppresses every React re-render class in email templates and @react-pdf documents", () => {
     // ATC dogfood: email clients REQUIRE raw <img>, and index keys can't cause remounts in
