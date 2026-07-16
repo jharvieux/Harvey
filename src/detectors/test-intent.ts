@@ -574,6 +574,82 @@ function detectRlsMockedDb(ctx: TestFileContext, byPath: ReadonlyMap<string, Sou
   return findings;
 }
 
+// --- Happy-path-only coverage on security/money-critical code (#386, layer 1) -------
+
+// The issue's own keyword list (auth, tenant, rls, payment, price, discount, refund) applied
+// to filename WORDS, not substrings — `author.ts` must not match `auth`, while `authorize.ts`
+// and `authentication.ts` must.
+const CRITICAL_WORDS = new Set(["auth", "authz", "authn", "rls", "tenant", "tenants", "payment", "payments", "price", "prices", "pricing", "discount", "discounts", "refund", "refunds"]);
+const CRITICAL_PREFIXES = ["authoriz", "authentic", "permission"];
+
+function pathWords(path: string): string[] {
+  const base = stripExt(posix.basename(path)).replace(/\.(test|spec)$/, "");
+  return base
+    .split(/[^a-zA-Z0-9]+|(?<=[a-z0-9])(?=[A-Z])/)
+    .filter(Boolean)
+    .map((w) => w.toLowerCase());
+}
+
+function isSecurityCritical(path: string): boolean {
+  return pathWords(path).some((w) => CRITICAL_WORDS.has(w) || CRITICAL_PREFIXES.some((p) => w.startsWith(p)));
+}
+
+const DENIAL_NAME = /\bden(y|ies|ied|ial)\b|reject|unauthori[sz]ed|forbid|\bthrows?\b|invalid|\bnegative\b|boundar|\bedge\b|non-?member|\berrors?\b|\bfails?\b|disallow/i;
+const DENIAL_ARGS = new Set(["false", "null", "undefined"]);
+const DENIAL_MATCHERS = new Set(["toBeNull", "toBeUndefined", "toBeFalsy"]);
+
+// Denial-path evidence is EITHER a denial/boundary keyword in a test name (the issue's cheap
+// heuristic) OR a denial-shaped assertion (toThrow/rejects/toBe(false)/toBeNull) — so a test
+// named "handles a bad total" that asserts a throw still clears its subject.
+function hasDenialEvidence(ctx: TestFileContext): boolean {
+  for (const block of ctx.blocks) {
+    if (DENIAL_NAME.test(block.fullName)) return true;
+    for (const a of block.assertions) {
+      if (a.kind !== "expect" || a.chain.includes("not")) continue;
+      if (a.matcher?.startsWith("toThrow") || a.chain.includes("rejects")) return true;
+      if (a.matcher && DENIAL_MATCHERS.has(a.matcher)) return true;
+      if (a.matcher && EQUALITY_MATCHERS.has(a.matcher) && a.matcherArg && DENIAL_ARGS.has(a.matcherArg.getText(ctx.sf))) return true;
+    }
+  }
+  return false;
+}
+
+function coveringTestContexts(sourcePath: string, testCtxs: TestFileContext[], byPath: ReadonlyMap<string, SourceInput>): TestFileContext[] {
+  return testCtxs.filter((ctx) => {
+    if (posix.dirname(ctx.file.path) === posix.dirname(sourcePath) && subjectBasename(ctx.file.path) === stripExt(posix.basename(sourcePath))) return true;
+    return ctx.imports.some((i) => resolveModule(ctx.file.path, i.specifier, byPath)?.path === sourcePath);
+  });
+}
+
+// A critical file with NO covering tests is deliberately not flagged here — that is a coverage
+// gap the mutation scan's NoCoverage count (and #224's no-suite finding) already owns; this
+// class is specifically "tests exist and every one of them is a happy path".
+function detectHappyPathOnly(files: SourceInput[], testCtxs: TestFileContext[], byPath: ReadonlyMap<string, SourceInput>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const src of files) {
+    if (isTestFile(src.path) || !isSecurityCritical(src.path)) continue;
+    const covering = coveringTestContexts(src.path, testCtxs, byPath);
+    if (covering.length === 0) continue;
+    if (covering.some((ctx) => hasDenialEvidence(ctx))) continue;
+    findings.push(
+      makeFinding(nextId, {
+        title: `Happy-path-only tests on security/money-critical \`${posix.basename(src.path)}\``,
+        severity: "Medium",
+        confidence: "Review",
+        taxonomy: "M8 — Happy-path-only tests on security-critical code",
+        location: `${src.path}:1`,
+        evidence: `Covered by ${covering.map((c) => `\`${c.file.path}\``).join(", ")}, but no test name mentions a denial/negative/boundary case and no assertion checks a denial shape (throw/rejects/false/null).`,
+        impact: "For authz/tenant/money paths the DENIAL case is the one that matters — a suite that only proves the allowed path passes while a broken guard lets everything through.",
+        fix: "Add the denial-path tests (wrong role, wrong tenant, negative/boundary amounts) and assert the operation is refused; confirm against a mutation run when available.",
+        value: 4,
+        ease: 3,
+        safety: 5,
+      }),
+    );
+  }
+  return findings;
+}
+
 // --- orchestrator ------------------------------------------------------------------
 
 /**
@@ -587,9 +663,11 @@ export function detectTestIntentFindings(files: SourceInput[]): Finding[] {
   const parseable = files.filter((f) => PARSEABLE.test(f.path));
   const byPath = new Map(parseable.map((f) => [f.path, f]));
   const findings: Finding[] = [];
+  const testCtxs: TestFileContext[] = [];
   for (const file of parseable) {
     if (!isTestFile(file.path)) continue;
     const ctx = contextFor(file);
+    testCtxs.push(ctx);
     findings.push(
       ...detectMockOfSubject(ctx, nextId),
       ...detectAssertionFree(ctx, nextId),
@@ -599,5 +677,6 @@ export function detectTestIntentFindings(files: SourceInput[]): Finding[] {
       ...detectRlsMockedDb(ctx, byPath, nextId),
     );
   }
+  findings.push(...detectHappyPathOnly(parseable, testCtxs, byPath, nextId));
   return findings;
 }

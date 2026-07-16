@@ -1,0 +1,8 @@
+export interface Author {
+  id: string;
+  name: string;
+}
+
+export function formatAuthor(author: Author): string {
+  return `${author.name} (${author.id})`;
+}

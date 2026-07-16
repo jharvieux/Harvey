@@ -147,6 +147,11 @@ const summary = summarizeMutationReport(report, hotspotFiles);
 
 console.error(`M8 mutation score: ${summary.overall.mutationScore}% (${summary.overall.killed + summary.overall.timeout}/${summary.overall.totalMutants - summary.overall.ignored - summary.overall.compileErrors} valid mutants killed)`);
 console.error(`${summary.survivingMutants.length} surviving mutant(s), ${summary.survivingMutants.filter((m) => m.hotspot).length} on a flagged hotspot`);
+// #386: survivors concentrated in the boundary/negation mutator families mean "the denial
+// branch was never tested" — a sharper sentence than "some mutants survived".
+for (const b of summary.mutatorBreakdown.filter((x) => x.denialBoundaryConcentrated)) {
+  console.error(`⚠ ${b.file}: ${b.boundarySurvivors}/${b.boundarySurvivors + b.otherSurvivors} survivors are boundary/negation mutants (ConditionalExpression/EqualityOperator/BooleanLiteral) — denial/boundary path looks untested`);
+}
 
 const output = { summary, reportRows: toReportRows(summary) };
 const json = JSON.stringify(output, null, 2);

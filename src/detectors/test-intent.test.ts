@@ -53,6 +53,9 @@ const CASES: Case[] = [
   // mocked client never reaches). Distinct from mock-of-subject: the mocked module here is a
   // legitimately-mocked-looking dependency.
   { name: "tenant-isolation test mocks the DB client", dir: "rls-mocked-db", taxonomy: "M8 — Tenant-isolation test mocks the DB client", posCount: 3, severity: "High", confidence: "Likely" },
+  // #386 layer 1 — a security/money-critical file whose covering tests never name or assert a
+  // denial/boundary case. The post-Stryker layer 2 lives in src/mutation-scan.ts.
+  { name: "happy-path-only tests on security-critical code", dir: "happy-path-only", taxonomy: "M8 — Happy-path-only tests on security-critical code", posCount: 2, severity: "Medium", confidence: "Review" },
 ];
 
 for (const c of CASES) {
@@ -123,6 +126,17 @@ describe("discrimination boundaries (regression locks)", () => {
 
   it("rls-mocked-db clears a real-client tenant test, a mocked-client non-tenant test, and a non-db mock", () => {
     expect(byTaxonomy("rls-mocked-db/negative", "M8 — Tenant-isolation test mocks the DB client")).toHaveLength(0);
+  });
+
+  it("happy-path-only anchors on the SOURCE file, found via basename AND via import resolution", () => {
+    const hits = byTaxonomy("happy-path-only/positive", "M8 — Happy-path-only tests on security-critical code");
+    expect(hits.map((h) => h.location).sort()).toEqual(["auth.ts:1", "payment.ts:1"]);
+    // the import-resolved covering test is named in the evidence
+    expect(hits.find((h) => h.location.startsWith("payment"))?.evidence).toContain("billing/charge.test.ts");
+  });
+
+  it("happy-path-only is cleared by a denial NAME, by a toThrow ASSERTION, by a non-critical word (author ≠ auth), and by having no covering tests at all", () => {
+    expect(byTaxonomy("happy-path-only/negative", "M8 — Happy-path-only tests on security-critical code")).toHaveLength(0);
   });
 });
 

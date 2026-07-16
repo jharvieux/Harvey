@@ -1,0 +1,5 @@
+export function applyDiscount(total: number, isMember: boolean): number {
+  if (total < 0) throw new Error("total must be non-negative");
+  if (!isMember) return total;
+  return total * 0.8;
+}
