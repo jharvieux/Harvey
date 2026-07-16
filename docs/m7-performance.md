@@ -11,9 +11,9 @@
 | Layer | Finds | Automated by | Manual / follow-up |
 |---|---|---|---|
 | **DB** | Unindexed FKs, unused/duplicate indexes, `auth_rls_initplan`, redundant permissive policies | `src/cli/perf-scan.ts` (`pnpm perf-scan`) — pulls the Supabase performance advisor and shapes it into `Finding[]` | Verify each fix against a test DB before recommending (index migrations, RLS rewrites) |
-| **API/data** | N+1 await-in-loop, unbounded `select("*")` (no `.range()`/`.limit()`), data-fetching waterfalls, accidental dynamic rendering, missing caching | **Wired (#170):** await-in-loop and unbounded-select are `src/detectors/perf-code.ts` (§2a). Waterfalls / cache-config / dynamic rendering stay with **M9** (`src/detectors/app-router.ts`) — M7's job is to pull M9's performance-tagged findings into the §3b rows, not re-implement them | Confirm unbounded-select candidates against table size (a 3-row config table is benign) |
-| **Client render/bundle** | React render waste (context value churn, inline literal props, index keys, raw `<img>`, sort-in-render, state sprawl), whole-library imports, heavy libs in client chunks, manual font links; **measured first-load JS per route / shared baseline** from a `next build` artifact | **Wired (#170):** `src/detectors/perf-code.ts` (§2a) incl. the React Compiler downgrade gate; bundle ground truth via `src/detectors/bundle-stats.ts` (§2b, ids `M7B-*`) | Turbopack builds (Next 16 default) carry no per-route manifest — the shared baseline is still measured and the attribution gap is emitted as an Info finding; per-route numbers need a bundle-analyzer re-build. Core Web Vitals (`lighthouse`) remain documented-plan-only (§3) |
-| **Code hot-path** | Blocking sync I/O in request handlers, fetch-in-middleware, JSON deep-clones | **Wired (#170):** `src/detectors/perf-code.ts` (§2a) | Deeper algorithmic judgment (O(n²) over app-sized collections, "is this computation expensive") stays an [L] review-tier read during the M6 pass; flag under M7 when the concern is *speed* at scale rather than *maintainability* |
+| **API/data** | N+1 await-in-loop, unbounded `select("*")` (no `.range()`/`.limit()`), data-fetching waterfalls, accidental dynamic rendering, missing caching | **Wired (#170):** await-in-loop and unbounded-select are `src/detectors/perf-code.ts` (§2a), and so is the client-side fetch-in-useEffect waterfall (#383). *Server-side* waterfalls / cache-config / dynamic rendering stay with **M9** (`src/detectors/app-router.ts`) — M7's job is to pull M9's performance-tagged findings into the §3b rows, not re-implement them | Confirm unbounded-select candidates against table size (a 3-row config table is benign) |
+| **Client render/bundle** | React render waste (context value churn, inline literal props, index keys, raw `<img>`, sort-in-render, state sprawl), whole-library imports, heavy libs in client chunks, manual font links; **measured first-load JS per route / shared baseline** from a `next build` artifact | **Wired (#170):** `src/detectors/perf-code.ts` (§2a) incl. the React Compiler downgrade gate; bundle ground truth via `src/detectors/bundle-stats.ts` (§2b, ids `M7B-*`) | Turbopack builds (Next 16 default) carry no per-route manifest — the shared baseline is still measured and the attribution gap is emitted as an Info finding; per-route numbers need a bundle-analyzer stats artifact (`--stats`, §2b `M7B-06`). Core Web Vitals (`lighthouse`) remain documented-plan-only (§3) |
+| **Code hot-path** | Blocking sync I/O in request handlers, fetch-in-middleware, JSON deep-clones, nested-loop O(n·m) joins | **Wired (#170):** `src/detectors/perf-code.ts` (§2a), incl. the nested-loop-join shape (#385, Review tier) | Confirm nested-loop-join hits against collection sizes (only matters when both scale with data). Remaining algorithmic judgment ("is this computation expensive") stays an [L] review-tier read during the M6 pass; flag under M7 when the concern is *speed* at scale rather than *maintainability* |
 
 ## 1. Running the DB advisor scan
 
@@ -123,6 +123,8 @@ Classes (severity / confidence — see the detector for per-check evidence and l
 | State sprawl | ≥ 8 `useState` hooks in one component | Low / Review |
 | Await in loop (N+1) | per-item independent `await` in a `for`/`for-of` (loop-carried-state and `for await` excluded) | Perf / Likely |
 | Unbounded select | `select("*")`/`select()` with no `.limit()`/`.range()`/`.single()` (`.in()` id lookups and post-`.insert()`/`.upsert()` `.select()` echoes are treated as bounded, not scans) | Perf / Review |
+| Client fetch in useEffect | a data read on mount (`fetch` whose result is consumed, or a Supabase `.from().select()` chain) inside `useEffect` in a `'use client'` file — the HTML → JS → data waterfall (#383; files importing SWR/React Query are skipped, fire-and-forget beacons don't count) | Perf / Review |
+| Nested-loop join | per-item `.find`/`.some`/`.filter`/`.includes`/`.indexOf` scan over a loop-invariant second collection inside a loop over the first — O(n·m) where a Map/Set built once would do (#385; static lists, SCREAMING_SNAKE constants, and string receivers exempt) | Perf / Review |
 | Whole-library import | bare `lodash`/`moment`/`underscore`; namespace imports of known barrels | Perf / Likely |
 | Heavy import in client bundle | known-heavy lib (`monaco`, `three`, `xlsx`, …) statically imported in a `'use client'` file | Perf / Likely |
 | Manual font stylesheet | Google Fonts `<link rel="stylesheet">` instead of `next/font` | Low / Likely |
@@ -159,20 +161,20 @@ prints. `pnpm detect-static` picks the artifact up automatically (`<target>/.nex
   no per-route manifest exists. The shared baseline is still measured (`M7B-02`), and the
   per-route gap is **disclosed** as an Info finding (`M7B-03`) instead of silently skipped —
   the fix is a bundle-analyzer re-build.
-- **Still deferred on #170:** duplicate-modules-across-chunks and which-dependency-ships-
-  where — those need webpack stats (`@next/bundle-analyzer`), an artifact the intake can
-  request but the manifest parse can't derive.
+- **Bundle-analyzer depth (shipped — #179, closed):** pass an `@next/bundle-analyzer` stats
+  JSON via `pnpm detect-static <t> --stats <stats.json>` (repeatable; no auto-detection — the
+  artifact isn't part of `.next`, the intake requests it) and `parseBundleAnalyzerStats` emits
+  `M7B-04` duplicate modules across chunks, `M7B-05` per-package dependency attribution (which
+  catches server-only deps shipped in client bundles), and `M7B-06` per-route first-load on
+  Turbopack builds — closing exactly the per-route gap `M7B-03` discloses.
 
-## 3. Client: bundle weight & Core Web Vitals (documented plan — deferred)
+## 3. Client: Core Web Vitals (documented plan — deferred)
 
-**Deliberately not wired in this PR** — this audit module doesn't yet have a real client repo to
-run it against, and both pieces below pull in a dependency Harvey doesn't currently have
-installed (`lighthouse`), which the issue scoping this module explicitly said to avoid unless a
-real run justifies it. Tracked as a follow-up rather than silently skipped:
-
-- **Bundle weight:** run `next build` and parse its stdout/`.next/build-manifest.json` for
-  first-load JS per route; flag routes over a threshold (e.g. 200 KB first-load JS) and the
-  largest contributing chunks. No new dependency — this is Next's own build output.
+- **Bundle weight: no longer deferred** — §2b measures first-load JS per route from a real
+  `next build` artifact (`M7B-01`/`M7B-02`/`M7B-03`) and, with a bundle-analyzer stats artifact,
+  the depth classes (`M7B-04`/`M7B-05`/`M7B-06`). Only Lighthouse remains documented-plan-only,
+  because it pulls in a dependency Harvey doesn't currently have installed (`lighthouse`), which
+  the issue scoping this module explicitly said to avoid unless a real run justifies it.
 - **Core Web Vitals / Lighthouse:** run the `lighthouse` CLI against a running instance of the
   client's app (staging or authorized local), capture LCP/INP/CLS/TBT, and flag pages below
   Google's "Good" thresholds. Requires `lighthouse` (npm) + a headless Chrome, and a running
@@ -194,7 +196,7 @@ Effort` — map:
 - **Layer:** `DB` for every `M7-*` id from `pnpm perf-scan`; `API/data` for M9-sourced
   waterfall/cache/dynamic-rendering findings plus `M7C-*` await-in-loop / unbounded-select;
   `render` for the `M7C-*` React classes; `bundle` for `M7C-*` import-weight classes (ground-truth
-  shipped-KB numbers still come from the deferred [B] bundle-stats pass, §3).
+  shipped-KB numbers come from the [B] bundle-stats pass, §2b — the `M7B-*` ids).
 - **Impact:** the `Finding.impact` field, as written by `parseAdvisorFindings` for DB rows.
 - **Fix:** the `Finding.fix` field.
 - **Effort:** derive from `ease` (1–2 → multi-day/week, 3 → ~a day, 4–5 → quick) — the skeleton's
@@ -248,9 +250,6 @@ review pass says what the right structure would be.
 
 ### Deferred / scoped-out follow-ups
 
-- **Bundle-analyzer depth ([B] tier remainder, #170):** duplicate modules across chunks,
-  server-only deps in client bundles, and per-route numbers on Turbopack builds — need an
-  `@next/bundle-analyzer` stats artifact on top of §2b's manifest parse. Tracked on #170.
 - **Web Vitals (§3):** no `lighthouse` integration — needs a real client repo and a decision on
   where it runs (staging vs. local) before it's worth the new dependency.
 - **`/advisors/performance` endpoint path:** inferred by analogy, not exercised live — verify on

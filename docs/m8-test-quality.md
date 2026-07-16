@@ -1,9 +1,13 @@
 # M8 test quality & intent runbook — mutation testing + tests-for-intent review
 
 > The headline: *your coverage number is lying to you, here's where.* Two facets — a mechanical
-> mutation scan (StrykerJS, whole repo) for the quantitative blind-spot map, and a manual
+> mutation scan (StrykerJS, whole repo) for the quantitative blind-spot map, and a
 > tests-for-intent read of the high-value tests (auth, tenant isolation, payments, state
-> machines) for the qualitative "would this test catch a real regression" read. See
+> machines) for the qualitative "would this test catch a real regression" read. The
+> tests-for-intent facet is no longer fully manual: its structurally-dead classes are
+> mechanical detectors (`src/detectors/test-intent.ts`, #372/#384/#386), and the deletion-
+> survival litmus test runs executed via `--stub-check` (#373) — the hand review starts from
+> their output instead of a blank page. See
 > `docs/audit-modules.md` M8 for the module catalog entry this generalizes, and
 > `docs/quality-extras.txt`'s "TEST QUALITY / INTENT (M8)" section for the hand-review brief.
 
@@ -12,7 +16,8 @@
 | Facet | Tool | Automated by | Manual step |
 |---|---|---|---|
 | Mutation scan | StrykerJS (external CLI, not an npm dep of this repo) | `src/cli/mutation-scan.ts` (`pnpm mutation-scan`) shapes the report | Running Stryker itself (needs the client's own test-runner config); triaging surviving mutants |
-| Tests-for-intent review | `quality-extras.txt` M8 brief | Not mechanically detectable | Fully manual, brief-driven read of high-value tests |
+| Deletion-survival check | `src/stub-check.ts` (#373) | `pnpm mutation-scan <t> --stub-check` — stubs each covered exported function, re-runs its covering tests, emits `M8-01-*` per suite that survives; no Stryker install | Triaging which survivals matter; Stryker remains ground truth for partial mutant survival |
+| Tests-for-intent review | `quality-extras.txt` M8 brief + `src/detectors/test-intent.ts` (#372/#384/#386) | `pnpm detect-static <t>` — the structurally-dead classes: mock-of-subject, assertion-free, tautological, snapshot-only, call-count-only, tenant-isolation tests that mock the DB client, happy-path-only coverage on security/money-critical code | Brief-driven read of high-value tests for what the AST can't see (asserts-WHAT-not-WHY, accidental mutant kills) |
 
 ## 1. Running the mutation scan
 
@@ -83,6 +88,19 @@ installed version doesn't match, pass `--report <path>` explicitly (the wrapper 
 Stryker entirely when `--report` is given, so it also works to just shape a report from a run
 that already happened).
 
+### Pre-Stryker deletion-survival check (#373)
+
+`pnpm mutation-scan <target> --stub-check [--test-cmd "<cmd>"]` stubs each covered exported
+function's body to `return undefined` (in place, backed up and restored), re-runs the covering
+test files (default command `npm test --`, covering test paths appended), and emits an
+`M8-01-*` finding for every suite that still passes — the brief's own litmus test ("if you
+deleted the logic it covers, would this test go red?") run mechanically. O(exported functions)
+suite runs instead of O(all mutants); it proves only the worst case (total-deletion survival),
+so Stryker remains the ground truth for partial mutant survival. Files with no covering tests
+are skipped — that gap belongs to the NoCoverage/#224 path, not this check. `--stub-check`
+bypasses Stryker entirely (nothing to install), so it also works as the fast triage pass or
+fallback where full Stryker setup isn't available.
+
 ### Calibration target
 
 `targets/calibration/` (issue #9) is a small deliberately-broken sample app with a
@@ -152,7 +170,12 @@ rather than treating every surviving mutant as equally urgent.
 ## 4. Tests-for-intent hand-review method
 
 The mutation scan is the mechanical half; this is the qualitative half — apply
-`docs/quality-extras.txt`'s M8 section directly. Scope the review to **high-value tests only**:
+`docs/quality-extras.txt`'s M8 section directly. Start from the mechanical pre-screen: `pnpm
+detect-static <t>` already emits the structurally-dead classes (categories 1, 2, and 6 below,
+category 5's keyword-scoped first layer, plus assertion-free and call-count-only tests —
+`src/detectors/test-intent.ts`, #372/#384/#386), and `--stub-check` (§1) executes the litmus
+test itself. The hand read covers what those can't: categories 3 and 4, and category 5 beyond
+the keyword list. Scope the review to **high-value tests only**:
 auth, tenant isolation, payments/money math, state machines. Don't attempt to hand-review the
 whole suite — that's what the mutation scan is for; the manual read exists because a mutant
 surviving *is* proof of a blind spot, but a mutant that *doesn't* survive doesn't prove the test
@@ -212,7 +235,16 @@ overall), the per-module rows above (mutation score per module), and the top of
   (`src/mutation-scan.test.ts`).
 - `src/cli/mutation-scan.ts` — the CLI: invokes `stryker run` against a target repo (or reads an
   already-written report via `--report`), calls the pure transforms, and writes/prints the
-  merged summary. Registered as `pnpm mutation-scan` in `package.json`.
+  merged summary. Registered as `pnpm mutation-scan` in `package.json`. `--stub-check` (#373)
+  runs the deletion-survival pass instead of Stryker.
+- `src/stub-check.ts` — pure transforms for the #373 check: `stubExportedFunctions`,
+  `coveringTests` (co-location + import resolution), `runStubCheck` (injectable runner),
+  `stubSurvivalFindings` → `M8-01-*`. Tested with an executed fixture pair (`stub-check.test.ts`
+  runs the covering test against real and stubbed source on every `pnpm verify`).
+- `src/detectors/test-intent.ts` — the #372/#384/#386 mechanical test-intent detectors, run via
+  `pnpm detect-static` (which loads test files for this pass even though the product-code
+  detectors exclude them). Every class gated by a positive+negative fixture pair
+  (`test-intent.test.ts`, the #61 discipline).
 
 ---
 
