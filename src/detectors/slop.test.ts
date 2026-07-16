@@ -55,6 +55,7 @@ const CASES: Case[] = [
   { name: "unused parameter", dir: "unused-parameter", taxonomy: "M5 — Unused parameter", posCount: 2, severity: "Low", confidence: "Review" },
   { name: "unused import", dir: "unused-import", taxonomy: "M5 — Unused import", posCount: 2, severity: "Low", confidence: "Likely" },
   { name: "single-use helper", dir: "single-use-helper", taxonomy: "M5 — Single-use helper", posCount: 1, severity: "Low", confidence: "Review" },
+  { name: "unreachable branch", dir: "unreachable-branch", taxonomy: "M5 — Unreachable branch", posCount: 2, severity: "Low", confidence: "Likely" },
 ];
 
 for (const c of CASES) {

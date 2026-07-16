@@ -492,7 +492,7 @@ function detectRedundantJsdoc(sf: ts.SourceFile, path: string, nextId: NextId): 
   return findings;
 }
 
-// --- Coverage additions (#362, #364, #370) -----------------------------
+// --- Coverage additions (#362, #364, #370, #371) -----------------------------
 
 // Unused parameter (#362): a declared parameter never referenced in the function body — the
 // "stub-shaped code" D-091 #1 shape (`getPublicKey(kid)` ignoring `kid`). Mirrors ESLint
@@ -711,13 +711,80 @@ function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId):
   return findings;
 }
 
+// Unreachable branch (#371): tier-1 literal-condition detection — `if`/`while`/ternary
+// conditions that are a boolean literal or a constant-foldable literal-vs-literal comparison
+// (`1 === 2`). Pure AST pattern match, no dataflow, so it deliberately does NOT catch the
+// harder D-091 example (`else if` provably false only given an earlier runtime check) — that
+// needs real control-flow analysis and is left to tier 2 / the M6 semantic pass per the issue.
+function literalValue(node: ts.Expression): string | number | boolean | undefined {
+  if (ts.isStringLiteralLike(node)) return node.text;
+  if (ts.isNumericLiteral(node)) return Number(node.text);
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
+  return undefined;
+}
+
+function literalBoolValue(node: ts.Expression): boolean | undefined {
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
+  if (ts.isParenthesizedExpression(node)) return literalBoolValue(node.expression);
+  if (ts.isBinaryExpression(node)) {
+    const op = node.operatorToken.kind;
+    const isEq = op === ts.SyntaxKind.EqualsEqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsToken;
+    const isNeq = op === ts.SyntaxKind.ExclamationEqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken;
+    if (!isEq && !isNeq) return undefined;
+    const l = literalValue(node.left);
+    const r = literalValue(node.right);
+    if (l === undefined || r === undefined) return undefined;
+    const eq = l === r;
+    return isEq ? eq : !eq;
+  }
+  return undefined;
+}
+
+function detectUnreachableBranch(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const flag = (node: ts.Node, snippet: string) =>
+    findings.push(
+      makeFinding(nextId, {
+        title: "Unreachable branch (condition can never hold at runtime)",
+        severity: "Low",
+        confidence: "Likely",
+        taxonomy: "M5 — Unreachable branch",
+        location: `${path}:${lineOf(sf, node)}`,
+        evidence: `\`${snippet.slice(0, 70)}\` — the condition is a constant, so this branch never runs.`,
+        impact: "Dead branch that reads as live logic; the D-091 catalog's own example (an always-false `else if`) shipped as a real bug this shape would have caught.",
+        fix: "Delete the unreachable branch, or fix the condition if it was meant to be reachable.",
+        value: 3,
+        ease: 4,
+        safety: 4,
+      }),
+    );
+  const visit = (node: ts.Node) => {
+    if (ts.isIfStatement(node)) {
+      const val = literalBoolValue(node.expression);
+      if (val === false) flag(node, node.getText(sf));
+      else if (val === true && node.elseStatement) flag(node, node.getText(sf));
+    } else if (ts.isWhileStatement(node)) {
+      if (literalBoolValue(node.expression) === false) flag(node, node.getText(sf));
+    } else if (ts.isConditionalExpression(node)) {
+      const val = literalBoolValue(node.condition);
+      if (val === true || val === false) flag(node, node.getText(sf));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
 // --- Orchestrator ------------------------------------------------------------
 
 /**
  * Runs the mechanical AI-slop checks over the given source set and returns Finding[]
  * (taxonomy `M5 — …`). Covers the four patterns ported from ATC's slop-check, seven
- * additional researched classes, and the #362/#364/#370 coverage fan-out; no overlap with
- * knip dead-code.
+ * additional researched classes, and the #362/#364/#370/#371 coverage fan-out (unused
+ * parameter, unused import, single-use helper, unreachable branch); no overlap with knip
+ * dead-code.
  */
 export function detectSlopFindings(files: SourceInput[]): Finding[] {
   let n = 0;
@@ -742,6 +809,7 @@ export function detectSlopFindings(files: SourceInput[]): Finding[] {
       ...detectUnusedParameter(sf, f.path, nextId),
       ...detectUnusedImport(sf, f.path, nextId),
       ...detectSingleUseHelper(sf, f.path, nextId),
+      ...detectUnreachableBranch(sf, f.path, nextId),
     );
   }
   return findings;
