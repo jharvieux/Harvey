@@ -1,0 +1,6 @@
+{
+  "name": "class-merge-negative-with-dep",
+  "dependencies": {
+    "clsx": "^2.1.0"
+  }
+}

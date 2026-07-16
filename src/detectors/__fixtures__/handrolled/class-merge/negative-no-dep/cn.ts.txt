@@ -1,0 +1,6 @@
+// Same helper shape as the positive, but NO class-merge library is in this tree — hand-rolling
+// the join here is the deliberate keep-the-dep-out choice (the corpus depdrop shape), not a
+// reinvention beside an installed library.
+export function cn(...classes: Array<string | false | null | undefined>): string {
+  return classes.filter(Boolean).join(" ");
+}

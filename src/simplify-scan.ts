@@ -1,7 +1,11 @@
-// M6 (simplification / reuse) runner. M6 has no mechanical detector and never will — its output
-// is a reviewer's judgment, not a Finding[] a tool can assert (docs/design/m6-simplification-eval.md
+// M6 (simplification / reuse) runner — the VERDICT path. M6's verdict has no mechanical detector —
+// it is a reviewer's judgment, not a Finding[] a tool can assert (docs/design/m6-simplification-eval.md
 // §1/§5). So this does NOT score anything: it assembles the M6 brief + the target's source into one
 // review packet, which a reviewer (LLM or human) then reads. That is the whole runner.
+//
+// (Since #267 M6 also has a mechanical FREE-tier layer — src/detectors/handrolled.ts, run via
+// `pnpm detect-static` — but those are hedged, non-grading "looks hand-rolled" indicators, never
+// verdicts. The judgment and the named replacement still only come from a reviewer over this packet.)
 //
 // Why it exists at all: before this, M6's documented entry point was "the /simplify skill", which is
 // not installed — so M6's execution path was "a human remembers to invoke a tool that isn't there."

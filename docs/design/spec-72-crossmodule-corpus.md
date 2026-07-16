@@ -136,7 +136,19 @@ Terminology carried from `src/scan/calibration.ts`: `expectedTier` ∈ {`high`, 
 
 ### M6 — Simplification / reuse / maintainability
 
-**What "precision/recall" even means here (read first):** M6 has **no mechanical detector** — it is the `/simplify` LLM review against `docs/quality-extras.txt` (`docs/m4-m6-quality.md` §0: "Not mechanically detectable"). You cannot gate an LLM suggestion with a precision number the way you gate jscpd. #72 must **not** manufacture one. What #72 *can* build is a **labeled rubric-eval set**: known hand-rolled-vs-stdlib patterns the reviewer *should* flag + benign lookalikes it *should* spare, run through `/simplify`, reported as an **agreement rate against the rubric**, explicitly not a "precision" claim.
+**What "precision/recall" even means here (read first):** M6's **verdict** has no mechanical detector — it is the `/simplify` LLM review against `docs/quality-extras.txt` (`docs/m4-m6-quality.md` §0: "Not mechanically detectable"). You cannot gate an LLM suggestion with a precision number the way you gate jscpd. #72 must **not** manufacture one. What #72 *can* build is a **labeled rubric-eval set**: known hand-rolled-vs-stdlib patterns the reviewer *should* flag + benign lookalikes it *should* spare, run through `/simplify`, reported as an **agreement rate against the rubric**, explicitly not a "precision" claim.
+
+> _Revision (2026-07-16, #267):_ under the free-indicator ruling in the preamble, a **mechanical
+> subset** now exists — `src/detectors/handrolled.ts` (run via `pnpm detect-static`), emitting
+> hedged, Info-only, non-grading `M6 — Indicator: …` findings for five shapes: JSON-stringify
+> deep-equal, manual query-string parsing, manual cookie parsing, `Math.random()`-chain string
+> ids, and hand-rolled class-string merge (dep-gated). These are shape-presence facts, each gated
+> by a positive+negative fixture pair in `handrolled.test.ts` — they carry no `CorpusEntry`, no
+> `expectedTier`, and no precision claim, so everything in this section about the VERDICT still
+> holds unchanged. Boundary calls: the JSON round-trip clone stays `M7 — JSON deep-clone` (the
+> #278 no-double-count rule); retry/backoff and Supabase pagination did not graduate
+> (judgment-bearing negative / cross-statement analysis respectively). The graduation ledger:
+> `docs/quality-extras.txt` "MECHANICAL SUBSET".
 
 (a) **Planted positives (should be flagged for replacement)**
 
@@ -153,6 +165,7 @@ Terminology carried from `src/scan/calibration.ts`: `expectedTier` ∈ {`high`, 
 |---|---|---|
 | M6-N-DEPDROP | a small reimplementation with a `// WHY:` comment explaining it deliberately drops a heavy dependency | "a re-implementation chosen deliberately to drop a heavy dependency — note the tradeoff, don't flag" |
 | M6-N-FRAMEWORK | an abstraction mandated by a framework/library contract (e.g. a required provider/adapter shape) | "an abstraction mandated by a framework/library contract (not gratuitous)" |
+| M6-N-SEAM | `simplify/reconcile.ts` — a single-use helper (one caller) that is the exported pure money-math half of an I/O-entangled function, i.e. a deliberate testability seam (added 2026-07-16, #325) | "a 'single-use' helper that exists for testability/seam reasons, or that's clearly about to have more callers" |
 
 (c) **Tool + invocation:** the `/simplify` skill / pre-pr-reviewer doctrine, run against the `simplify/` fixture dir. Output is prose recommendations, not `Finding[]` — the eval harness must parse "did the reviewer name fixture X" (by file/line mention).
 
@@ -268,7 +281,7 @@ targets/calibration/
   .jscpdignore                 # dup/generated/**
   simplify/                    # M6 (rubric eval, not a gate)
     debounce.ts, group.ts, id.ts, manager.ts   # M6-P-*
-    depdrop.ts, framework-adapter.ts            # M6-N-*
+    depdrop.ts, framework-adapter.ts, reconcile.ts  # M6-N-*
   test-quality/                # M8
     discount.ts, authz.ts, tenant.ts           # sources-under-test
     *.tautological/happy/mocked.test.ts        # M8-P-* weak tests
