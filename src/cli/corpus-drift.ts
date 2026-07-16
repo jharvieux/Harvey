@@ -34,6 +34,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Finding } from "../findings.js";
 import { buildQuickScanReport } from "../quick-scan.js";
+import { cloneAtPin } from "../scan/corpus-clone.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import {
   EXTERNAL_CORPUS,
@@ -44,7 +45,6 @@ import {
   scoreExternalBaseline,
   scoreFreeTierExpectation,
   scoreMutationBaseline,
-  type ExternalTarget,
 } from "../scan/external-corpus.js";
 import type { M8CorpusConfig } from "../scan/m8-corpus.js";
 
@@ -68,17 +68,6 @@ const targets = onlySlug ? EXTERNAL_CORPUS.filter((t) => t.slug === onlySlug) : 
 if (targets.length === 0) {
   console.error(`no corpus target "${onlySlug}" — known: ${EXTERNAL_CORPUS.map((t) => t.slug).join(", ")}`);
   process.exit(2);
-}
-
-// Fetch by exact commit rather than clone + checkout: the baselines are only meaningful against
-// the pinned tree, and `fetch --depth 1 <sha>` refuses rather than silently landing on HEAD if the
-// pin ever disappears upstream (a force-push or a deleted repo must fail loudly, not re-baseline).
-function cloneAtPin(target: ExternalTarget, into: string): void {
-  const git = (...a: string[]): void => void execFileSync("git", ["-C", into, ...a], { stdio: ["ignore", "ignore", "pipe"] });
-  execFileSync("git", ["init", "-q", into], { stdio: "inherit" });
-  git("remote", "add", "origin", `https://github.com/${target.repo}`);
-  git("fetch", "-q", "--depth", "1", "origin", target.commit);
-  git("checkout", "-q", "FETCH_HEAD");
 }
 
 // #251: knip resolves a target's config imports only when the target's own deps are present
@@ -166,7 +155,7 @@ for (const target of targets) {
   const dir = mkdtempSync(join(tmpdir(), `harvey-${target.slug}-`));
   console.error(`\n=== ${target.slug} (${target.repo} @ ${target.commit.slice(0, 8)}) ===`);
   try {
-    cloneAtPin(target, dir);
+    cloneAtPin(target.repo, target.commit, dir);
 
     // #251: before any scanner — knip needs these present to resolve the target's config.
     if (install) installTargetDeps(dir, target.m8?.installFlags ?? []);
