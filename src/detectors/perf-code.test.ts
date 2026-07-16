@@ -157,6 +157,20 @@ describe("unbounded select", () => {
   });
 });
 
+describe("client fetch in useEffect", () => {
+  const TAX = "M7 — Client fetch in useEffect";
+  it("flags a fetch/.then chain, an async-IIFE await fetch, and a Supabase read via an invoked local function — one rolled-up finding per file", () => {
+    const hits = byTaxonomy("client-fetch-effect/positive", TAX);
+    expect(hits).toHaveLength(3);
+    for (const h of hits) expect(h).toMatchObject({ severity: "Perf", confidence: "Review" });
+    expect(hits.find((h) => h.location.startsWith("components/orders-table.tsx"))?.evidence).toContain("fetch(\"/api/orders\")");
+    expect(hits.find((h) => h.location.startsWith("components/profile-card.tsx"))?.evidence).toContain("supabase.from(\"profiles\")");
+  });
+  it("does not flag SWR-routed fetching, a Server Component fetch (the fix), a listener-registered fetch that only runs on a user event, or a fire-and-forget beacon", () => {
+    expect(byTaxonomy("client-fetch-effect/negative", TAX)).toHaveLength(0);
+  });
+});
+
 describe("whole-library import", () => {
   const TAX = "M7 — Whole-library import";
   it("flags bare lodash and moment imports", () => {

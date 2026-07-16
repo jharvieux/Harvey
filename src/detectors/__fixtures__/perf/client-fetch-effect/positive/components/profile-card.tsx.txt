@@ -1,0 +1,16 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/db";
+
+export function ProfileCard({ userId }: { userId: string }) {
+  const [profile, setProfile] = useState<{ name: string } | null>(null);
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabase.from("profiles").select("id, name").eq("id", userId).single();
+      setProfile(data);
+    };
+    load();
+  }, [userId]);
+  return <div>{profile?.name}</div>;
+}

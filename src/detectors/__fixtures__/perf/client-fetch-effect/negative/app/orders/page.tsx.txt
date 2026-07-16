@@ -1,0 +1,13 @@
+// Server Component — the fetch runs on the server and the data ships in the initial HTML.
+// This is the FIX for the client-fetch-effect shape, so it must never be flagged.
+export default async function OrdersPage() {
+  const res = await fetch("https://api.example.com/orders", { next: { revalidate: 60 } });
+  const orders: { id: string; total: number }[] = await res.json();
+  return (
+    <ul>
+      {orders.map((o) => (
+        <li key={o.id}>{o.total}</li>
+      ))}
+    </ul>
+  );
+}

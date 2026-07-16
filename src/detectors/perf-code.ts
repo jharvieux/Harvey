@@ -705,6 +705,127 @@ function findSelectArg(chainRoot: ts.CallExpression): string | undefined | "-" {
   return "-";
 }
 
+// --- B3. Client-side data fetch in useEffect [PERF] — one per file ---------------
+
+// A 'use client' component fetching its own data on mount (`useEffect(() => { fetch(...) }, [])`
+// or a Supabase read chain) instead of a Server Component fetch or a cache-aware client hook —
+// the default shape AI assistants produce when they don't know App Router conventions (#383).
+// Ships a client-server round trip after hydration, a loading spinner, and no request de-dup.
+
+// Files that import a cache-aware data-fetching library already route client data through it —
+// flagging their internals would be noise (issue #383's explicit exclusion).
+const DATA_FETCH_LIB = /^(swr|@tanstack\/react-query|react-query)(\/|$)/;
+
+function importsDataFetchLib(sf: ts.SourceFile): boolean {
+  return sf.statements.some(
+    (s) => ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier) && DATA_FETCH_LIB.test(s.moduleSpecifier.text),
+  );
+}
+
+// A data READ: a `fetch(...)` whose result is consumed (`.then` chain or awaited — a bare
+// fire-and-forget statement like `fetch("/api/track", {method:"POST"})` is a beacon, not a
+// waterfall), or the outermost call of a Supabase `.from(...).select(...)` chain.
+function isMountDataRead(n: ts.CallExpression): boolean {
+  if (ts.isIdentifier(n.expression) && n.expression.text === "fetch") {
+    return ts.isPropertyAccessExpression(n.parent) || ts.isAwaitExpression(n.parent);
+  }
+  if (!ts.isPropertyAccessExpression(n.parent)) {
+    const names = callChainNames(n);
+    return names.includes("from") && names.includes("select");
+  }
+  return false;
+}
+
+// Data reads that actually RUN when the effect runs: direct calls in the effect body, plus the
+// bodies of IIFEs and of local functions the body invokes (`(async () => {...})()` and
+// `const load = async () => {...}; load();` — the two common shapes). A nested function that is
+// only DEFINED and handed elsewhere (an event-listener callback, a returned cleanup) does not
+// run on mount and must not count — that's the user-action / unmount path, not a waterfall.
+function mountDataReads(effectBody: ts.Node): ts.CallExpression[] {
+  const reads: ts.CallExpression[] = [];
+  const localFns = new Map<string, ts.Node>();
+  const invoked = new Set<string>();
+  const walked = new Set<string>();
+
+  const walk = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      if (ts.isIdentifier(n.expression)) invoked.add(n.expression.text);
+      const callee = ts.isParenthesizedExpression(n.expression) ? n.expression.expression : n.expression;
+      if (ts.isArrowFunction(callee) || ts.isFunctionExpression(callee)) {
+        walk(callee.body); // an IIFE's body runs on mount
+        return;
+      }
+      if (isMountDataRead(n)) reads.push(n);
+    }
+    if (ts.isFunctionDeclaration(n) && n.name && n.body) {
+      localFns.set(n.name.text, n.body);
+      return;
+    }
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.initializer &&
+      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
+    ) {
+      localFns.set(n.name.text, n.initializer.body);
+      return;
+    }
+    if (ts.isArrowFunction(n) || ts.isFunctionExpression(n)) return; // defined, not invoked here
+    ts.forEachChild(n, walk);
+  };
+  walk(effectBody);
+
+  // Local functions the mount path invokes (directly or via another invoked one) also run.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, body] of localFns) {
+      if (invoked.has(name) && !walked.has(name)) {
+        walked.add(name);
+        changed = true;
+        walk(body);
+      }
+    }
+  }
+  return reads;
+}
+
+function detectClientFetchEffect(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    if (leadingDirective(sf) !== "use client") continue; // Server Components fetch server-side — that's the fix, not the bug
+    if (isRenderOnce(path, sf)) continue;
+    if (importsDataFetchLib(sf)) continue;
+    const hits: ts.CallExpression[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "useEffect") {
+        const cb = node.arguments[0];
+        if (cb && (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb))) hits.push(...mountDataReads(cb.body));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    const first = hits[0];
+    if (!first) continue;
+    findings.push(
+      makeFinding(nextId, {
+        title: `Client-side data fetch in useEffect (${hits.length}× in ${path})`,
+        severity: "Perf",
+        confidence: "Review",
+        taxonomy: "M7 — Client fetch in useEffect",
+        location: loc(path, sf, first),
+        evidence: `\`${first.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` runs on mount inside useEffect in a 'use client' component${hits.length > 1 ? ` (first of ${hits.length})` : ""} — the data round-trip starts only after the JS bundle downloads, parses, and hydrates, with no caching or request de-duplication.`,
+        impact: "A serial network waterfall (HTML → JS → data) plus a loading spinner on every visit; concurrent mounts of the component each refetch. A Server Component fetch ships the data in the initial HTML; a cache hook de-dupes on the client.",
+        fix: "Fetch in a Server Component (or route loader) and pass the data down; if it must stay client-side (third-party API, live widget), use a cache-aware hook (useSWR / React Query) instead of raw fetch-in-effect.",
+        value: 3,
+        ease: 3,
+        safety: 4,
+      }),
+    );
+  }
+  return findings;
+}
+
 // --- C1. Whole-library import [PERF] --------------------------------------------
 
 // CJS libraries where ANY bare import ships the entire package (no tree-shaking), plus
@@ -1082,6 +1203,7 @@ export function detectPerfCodeFindings(files: SourceInput[]): Finding[] {
     ...detectStateSprawl(sources, nextId),
     ...detectAwaitInLoop(sources, nextId),
     ...detectUnboundedSelect(sources, nextId),
+    ...detectClientFetchEffect(sources, nextId),
     ...detectWholeLibraryImport(sources, nextId),
     ...detectHeavyClientImport(sources, nextId),
     ...detectUnoptimizedBarrelImports(files, sources, nextId),
