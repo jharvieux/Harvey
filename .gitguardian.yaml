@@ -7,9 +7,8 @@ version: 2
 secret:
   ignored-paths:
     - "targets/calibration/**"
-    # dry-run/ is scanner OUTPUT over those same fixtures, and a finding quotes the
-    # matched secret back as evidence — so the planted fakes appear here a second time.
-    # Excluded for the same reason, one step downstream. Note this only holds while the
-    # scanned target is the fixture corpus: evidence strings would carry REAL secrets if
-    # a real engagement's findings were ever committed here — see #308.
+    # dry-run/ is scanner OUTPUT over those same fixtures. Since #308, evidence redacts the
+    # matched value to a short prefix + length, so a finding no longer quotes a full secret
+    # back — but a prefix of a planted fake can still surface here, so keep the exclusion.
+    # A real engagement's findings must never be committed here regardless.
     - "dry-run/**"
