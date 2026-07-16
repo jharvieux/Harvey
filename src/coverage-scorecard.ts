@@ -6,7 +6,26 @@
 // executed in that pass — this module never guesses whether something ran. A bug whose detecting
 // module didn't run is scored "requires-live-run", never silently "missed".
 
+import type { ProbeScore } from "./pentest/scorecard.js";
+
 type CoverageStatus = "caught" | "missed" | "requires-live-run";
+
+// Resolve a dynamic (M2) bug's coverage status from a committed pen-test scorecard (#347), so the
+// dry-run scorecard's `requires-live-run` deferral for the M2 replays (SHADOW-API-VERSION,
+// NO-RATE-LIMIT, CACHE-CROSS-USER, ANON-PRIVILEGED-RPC) can point at a real recorded outcome
+// instead of a memory. Maps the probe's own status: `caught` proved the bug live; `cleared` means
+// the probe ran and the bug was absent (a miss on a target where it was planted);
+// `not-applicable`/`not-run` recorded no live verdict, so the row stays requires-live-run.
+export function statusFromDynamicProbe(status: ProbeScore["status"]): CoverageStatus {
+  switch (status) {
+    case "caught":
+      return "caught";
+    case "cleared":
+      return "missed";
+    default:
+      return "requires-live-run";
+  }
+}
 
 export interface GroundTruthBug {
   id: string;
