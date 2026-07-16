@@ -81,9 +81,9 @@ describe("jscpdToFindings", () => {
     expect(big?.impact).toBe("60 duplicated lines (900 tokens) — a fix in one copy is a fix missed in the other.");
   });
 
-  it("assigns unique sequential M4 ids", () => {
+  it("assigns unique sequential M4 ids, with the #365 sub-threshold aggregate as the trailing meta row", () => {
     const findings = jscpdToFindings(jscpdReport);
-    expect(findings.map((f) => f.id)).toEqual(["M4-01", "M4-02"]);
+    expect(findings.map((f) => f.id)).toEqual(["M4-01", "M4-02", "M4-00"]);
   });
 
   it("tags every clone at the high precision tier (issue #72 calibration)", () => {
@@ -96,9 +96,48 @@ describe("jscpdToFindings", () => {
     expect(findings.some((f) => f.location.includes("icons.tsx"))).toBe(false);
   });
 
-  it("excludes clusters under the significant-lines gate — e.g. a shared import header (#232)", () => {
+  it("emits no INDIVIDUAL finding for clusters under the significant-lines gate — e.g. a shared import header (#232)", () => {
     const findings = jscpdToFindings(jscpdReport);
     expect(findings.some((f) => f.location.includes("src/c.ts"))).toBe(false);
+  });
+});
+
+// #365: the 5-9-line band the significance floor drops is where AI-assisted duplication
+// concentrates (measured 2026-07-16 on the external corpus: 30% of proposit's cross-file clones).
+// The floor stays, but the band must be DISCLOSED as an aggregate, never silently absorbed.
+describe("jscpdToFindings — sub-threshold small-clone disclosure (#365)", () => {
+  it("discloses the dropped band in one M4-00 aggregate naming the pairs and their sizes", () => {
+    const findings = jscpdToFindings(jscpdReport);
+    const disclosure = findings.find((f) => f.id === "M4-00");
+    expect(disclosure?.severity).toBe("Info");
+    expect(disclosure?.location).toBe("(repo-wide)");
+    expect(disclosure?.title).toContain("1 small cross-file clone(s)");
+    expect(disclosure?.evidence).toContain("src/c.ts:1-6 ↔ src/d.ts:1-6 (6 lines)");
+  });
+
+  it("does not count self-file repetition in the disclosure — #232 excludes it at any size", () => {
+    const selfOnly: JscpdReport = {
+      statistics: { total: { percentage: 0, duplicatedLines: 0, lines: 100 } },
+      duplicates: [
+        {
+          format: "typescript",
+          lines: 7,
+          tokens: 80,
+          fragment: "<path />",
+          firstFile: { name: "src/icons.tsx", start: 1, end: 7 },
+          secondFile: { name: "src/icons.tsx", start: 20, end: 27 },
+        },
+      ],
+    };
+    expect(jscpdToFindings(selfOnly)).toEqual([]);
+  });
+
+  it("emits no disclosure row at all when nothing was dropped — an empty band is not a finding", () => {
+    const bigOnly: JscpdReport = {
+      statistics: { total: { percentage: 0, duplicatedLines: 0, lines: 100 } },
+      duplicates: [jscpdReport.duplicates[1]!],
+    };
+    expect(jscpdToFindings(bigOnly).find((f) => f.id === "M4-00")).toBeUndefined();
   });
 });
 
@@ -235,6 +274,11 @@ describe("duplicationSummary", () => {
     const summary = duplicationSummary(jscpdReport);
     expect(summary.duplicatedLines).toBe(71);
     expect(summary.percentage).toBe(22.19);
+  });
+
+  it("counts the dropped small-clone band separately without polluting the headline percentage (#365)", () => {
+    const summary = duplicationSummary(jscpdReport);
+    expect(summary.subThresholdCloneCount).toBe(1); // the c.ts/d.ts import header; the self-file clone is not counted
   });
 });
 

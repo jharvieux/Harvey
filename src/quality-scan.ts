@@ -87,12 +87,59 @@ function isCrossFileClone(dup: JscpdDuplicate): boolean {
 
 // jscpd's own default gate (minLines 5 / minTokens 50) still lets through clusters the #232
 // triage named explicitly as noise: shared import headers, tiny boilerplate overlaps. This raises
-// the bar for what counts as real duplicated logic vs. incidental short overlap — a judgment
-// call, not a measured constant; revisit if it starts hiding genuine small-but-real clones.
+// the bar for what counts as real duplicated logic vs. incidental short overlap.
+//
+// #365 revisited this floor against the AI-era small-block duplication trend (GitClear 2025:
+// 5+-line duplicated-block commits rose 8x during 2024). MEASURED 2026-07-16 on the #222 external
+// corpus at production settings (minTokens 50): on the AI-authored target (proposit) 44 of 148
+// cross-file clones — 30% — fall in the 5-9-line band this floor drops, and a fragment review
+// found roughly three quarters of them genuine per-entity logic duplication (the lib/ai/tools/* and
+// lib/stores/* copy-paste families, several containing organisation_id tenant-scoping), not
+// boilerplate; import headers were a ~1/4 minority. On the conventional target (mvp-boilerplate)
+// the band was 1 of 8. DECISION: keep the floor for individual findings (44 extra sub-10-line
+// findings would triple the M4 report for little per-item action, and the #232 noise classes live
+// in the same band), and DISCLOSE the dropped band as one aggregate M4-00 finding
+// (subThresholdDisclosureFinding) so it is visible in the report instead of silently absorbed.
 const MIN_SIGNIFICANT_LINES = 10;
 
 function isSignificantClone(dup: JscpdDuplicate): boolean {
   return isCrossFileClone(dup) && dup.lines >= MIN_SIGNIFICANT_LINES;
+}
+
+// #365: cross-file clones jscpd DID see (they cleared its minTokens/minLines gate) but that fall
+// under MIN_SIGNIFICANT_LINES. Self-file repetition stays excluded entirely (#232 — not
+// extractable duplication at any size).
+function isSubThresholdClone(dup: JscpdDuplicate): boolean {
+  return isCrossFileClone(dup) && dup.lines < MIN_SIGNIFICANT_LINES;
+}
+
+function subThresholdDisclosureFinding(smallClones: JscpdDuplicate[]): Finding {
+  const worst = [...smallClones].sort((a, b) => b.lines - a.lines);
+  const totalLines = smallClones.reduce((sum, d) => sum + d.lines, 0);
+  const examples = worst
+    .slice(0, 3)
+    .map((d) => `${d.firstFile.name}:${d.firstFile.start}-${d.firstFile.end} ↔ ${d.secondFile.name}:${d.secondFile.start}-${d.secondFile.end} (${d.lines} lines)`)
+    .join("; ");
+  return {
+    id: "M4-00",
+    title: `${smallClones.length} small cross-file clone(s) below the M4 significance floor`,
+    severity: "Info",
+    confidence: "Confirmed",
+    category: "Maintainability",
+    taxonomy: "M4 — Duplication",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `jscpd found ${smallClones.length} cross-file clone(s) of 5-${MIN_SIGNIFICANT_LINES - 1} duplicated lines (${totalLines} lines total), e.g. ${examples}`,
+    impact:
+      "Individually below the floor for an actionable duplication finding, but AI-assisted codebases concentrate genuine duplication in exactly this small-block band (#365 measured 30% of one AI-authored corpus target's cross-file clones here, ~3/4 of them real logic, though the band also holds import-header noise). Disclosed as an aggregate so the band is visible rather than silently dropped.",
+    fix: "No per-item action required. If this count is large relative to the significant-clone findings above, sample the evidence pairs — repeated small blocks across per-entity files usually mean one helper should exist.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+    // Same text-match precision as every other jscpd count — the COUNT is exact even though
+    // each member is individually low-value.
+    precisionTier: "high",
+  };
 }
 
 // jscpd's json reporter always writes duplicates in discovery order, not
@@ -100,7 +147,7 @@ function isSignificantClone(dup: JscpdDuplicate): boolean {
 export function jscpdToFindings(report: JscpdReport): Finding[] {
   const worst = report.duplicates.filter(isSignificantClone).sort((a, b) => b.lines - a.lines);
 
-  return worst.map((dup, i): Finding => {
+  const findings = worst.map((dup, i): Finding => {
     // #361: same signal M5 already uses for dead code — check BOTH sides, since either copy
     // sitting in a security path makes the pair a patch-divergence risk.
     const securityPath = touchesSecurityPath(dup.firstFile.name) || touchesSecurityPath(dup.secondFile.name);
@@ -134,6 +181,13 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
       precisionTier: "high",
     };
   });
+
+  // #365: the dropped small-clone band, disclosed as one aggregate rather than omitted. Appended
+  // after the individual findings (M4-00 is the meta row, same convention as M5-00).
+  const smallClones = report.duplicates.filter(isSubThresholdClone);
+  if (smallClones.length > 0) findings.push(subThresholdDisclosureFinding(smallClones));
+
+  return findings;
 }
 
 // #232: jscpd's own statistics.total counts every raw clone it found, including the self-file
@@ -141,11 +195,14 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
 // matches what the findings above actually claim. Reimplements jscpd's own
 // Statistic.calculatePercentage (round(cloned/total*10000)/100, verified against
 // @jscpd/core's source) rather than guessing a formula.
-export function duplicationSummary(report: JscpdReport): { percentage: number; duplicatedLines: number; totalLines: number } {
+export function duplicationSummary(report: JscpdReport): { percentage: number; duplicatedLines: number; totalLines: number; subThresholdCloneCount: number } {
   const totalLines = report.statistics.total.lines;
   const duplicatedLines = report.duplicates.filter(isSignificantClone).reduce((sum, d) => sum + d.lines, 0);
   const percentage = totalLines ? Math.round((10000 * duplicatedLines) / totalLines) / 100 : 0;
-  return { percentage, duplicatedLines, totalLines };
+  // #365: not part of the headline percentage (that stands behind the significant findings), but
+  // surfaced so the small-clone band is visible wherever the summary is printed.
+  const subThresholdCloneCount = report.duplicates.filter(isSubThresholdClone).length;
+  return { percentage, duplicatedLines, totalLines, subThresholdCloneCount };
 }
 
 // #223: knip throws (rather than reporting) when it can't resolve a target's config/plugin

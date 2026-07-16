@@ -15,8 +15,15 @@ export const m4m5Entries: CorpusEntry[] = [
   { module: "M4", id: "M4-P-CLONE-B", kind: "positive", cls: "Copy-pasted report aggregation block", location: "report-a.ts", expectedTier: "high", note: "dup/report-a.ts and dup/report-b.ts share a 52-line copy-pasted metric-aggregation block (658 tokens). jscpd clone cluster; jscpdToFindings' severityForClone -> Medium (>=50 lines)." },
   { module: "M4", id: "M4-P-CLONE-SEC", kind: "positive", cls: "Copy-pasted session/tenant validation block in an auth path", location: "auth/session-check-api.ts", expectedTier: "high", note: "dup/auth/session-check-api.ts and dup/auth/session-check-action.ts share a genuine 25-line copy-pasted session/tenant validation block (246 tokens) under an auth/ path. jscpd clone cluster; touchesSecurityPath fires (#361) so jscpdToFindings elevates Low->Medium and appends the M1 cross-check note. Severity/note asserted in src/quality-scan.test.ts (the matrix scores caught-at-tier only)." },
 
+  // #365: the "genuine small clone" boundary pair — one fixture, two contracts. The 9-line
+  // pricing-tier ladder is real logic (not boilerplate) under MIN_SIGNIFICANT_LINES: it must NOT
+  // become an individual finding (M4-N-SMALL-FLOOR) and MUST be counted by the aggregate M4-00
+  // sub-threshold disclosure (M4-P-SMALL-DISCLOSED, matched via the example pair in its evidence).
+  { module: "M4", id: "M4-P-SMALL-DISCLOSED", kind: "positive", cls: "Sub-threshold small-clone band disclosed in aggregate", location: "(repo-wide)", match: ["pricing-tier"], expectedTier: "high", note: "dup/pricing-tier-a.ts and dup/pricing-tier-b.ts share a genuine 9-line volume-discount ladder (129 tokens) — the AI-era small-block shape #365 measured at 30% of cross-file clones on the corpus's AI-authored target. jscpdToFindings' M4-00 disclosure finding must exist and name this pair in its evidence." },
+
   // --- M4 duplication NEGATIVES ---
   { module: "M4", id: "M4-N-GENERATED", kind: "negative", cls: "Generated file repeating a block found elsewhere", location: "schema.gen.ts", note: "dup/generated/schema.gen.ts repeats the invoice-total.ts tax block but is a generated file, not a hand-maintained duplicate. Excluded via the quality-scan CLI's jscpd --ignore glob (extended to **/generated/**, src/cli/quality-scan.ts) — jscpd never sees it." },
+  { module: "M4", id: "M4-N-SMALL-FLOOR", kind: "negative", cls: "Genuine small clone stays below the individual-finding floor", location: "pricing-tier-a.ts", note: "The same 9-line pricing-tier ladder must not surface as its own M4-* finding (44 of these would triple an AI-authored target's M4 report — #365's measured basis for keeping MIN_SIGNIFICANT_LINES=10). Its visibility is the M4-00 aggregate, checked by M4-P-SMALL-DISCLOSED." },
   { module: "M4", id: "M4-N-BOILERPLATE", kind: "negative", cls: "Framework-mandated route boilerplate", location: "route-a.ts", note: "dup/route-a.ts and dup/route-b.ts share the Next.js API-route config+handler-signature boilerplate. The shared span stays under jscpd's 50-token minimum (.jscpd.json minTokens) — not a defect, not flagged." },
 
   // --- M5 dead code (knip) POSITIVES ---

@@ -108,7 +108,7 @@ const findings: Finding[] = [
 
 const dup = duplicationSummary(jscpdReport);
 console.error(
-  `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s)`,
+  `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s), ${dup.subThresholdCloneCount} sub-threshold small clone(s) disclosed in M4-00 (#365)`,
 );
 if (knipReport) {
   console.error(
