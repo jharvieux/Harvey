@@ -2,7 +2,17 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-15 (sweep #4 + a measurement audit: 15 PRs #305–#346 merged, 34 issues filed. **#229's orchestrator LANDED** (its text is now stale — #313). **The engagement path was then audited by execution and has the same disease the internal scorecard had — see below; #349 is the one a client sees.** Disclosure still BLOCKED on #245.)_
+_Last updated: 2026-07-16 (the M6 #267/#406 build-out, below. Everything from 2026-07-15 still stands: **#349 is still the one a client sees**, disclosure still BLOCKED on #245.)_
+
+## M6 build-out (2026-07-16) — #267 closed out, #406 executed, M6 now has a measured mechanical tier
+
+Eleven PRs (#404–#412, #414 + the operator-authorized CLAUDE.md row fix #407), all merged green:
+
+- **#267's remaining scope is DONE**: the 106-pattern catalogue (`docs/design/m6-handrolled-catalogue.md` — 76 of 106 do NOT graduate, that number is the finding), the volume/rollup rule, and the free-report wiring (`pnpm quick-scan` now renders a second non-grading "Looks hand-rolled" section, #227-style; rollup per class per file, caps disclosed out loud, --json keeps every location). Issue left open only for the operator to close.
+- **#406 items 1–4 all executed** (three parallel agents + one batch-2 agent, every PR supervisor-reviewed): corpus frequency MEASURED (`pnpm handrolled-frequency`, signatures gate-tested against their own examples); the 7 catalogue boundary checks settled by probing (74 → BOUNDARY→M7); `depGatePresent` per-library gate + central WHY-comment suppression in `makeIndicator`; **batch 2 shipped — M6 is now 13 fixture-gated indicator classes** (batch 1 #395 + eight measured-nonzero: date-math ms-constants, MIME tables, currency-toFixed, email-regex-on-zod, formatDate concat, query-string build, base64url, cookie serialization). Dogfood: 0 indicators on Harvey src (one true positive on our own frequency-tool source, resolved via its designed WHY-comment mechanism) and 0 on targets/calibration; per-class corpus fire counts reconciled against the measurement with every difference explained.
+- **The measurement's headline (→ #413, operator-shaped):** 36 of 55 measured shapes — incl. 17 of 25 YES entries — have ZERO corpus presence. The 6-repo corpus is curated starter kits, not the AI-generated population the M6 wedge targets. The 17 measured-zero YES entries are deliberately deferred until an AI-generated corpus tier exists; do not build them on judgment.
+- **Ops fix worth knowing:** `.claude/` agent worktrees broke local `pnpm verify` (ESLint walked them) — ignored in eslint+vitest (#411). Local verify is trustworthy again during parallel-agent sessions.
+- **Supervised drift owed to the operator:** `docs/quality-extras.txt` lines 29–34 ("MECHANICAL SUBSET … " listing 5 classes) are stale — 13 classes now; recommended wording is in PR #414's body. Human edit required.
 
 ## ⚠️ START HERE (2026-07-15, end of session) — what the engagement path actually does
 
@@ -159,7 +169,7 @@ Run 1 scored **4/4 + 2/2 and was VOIDED as contaminated**: every fixture's line 
 5. **The honesty decisions** — **#311** (what M1's `ran` means) · **#308** (findings carry live client secrets into a rendered report) · **#319** (what a mutation score asserts) · **#341** (a blended `147/153` implying uniform ten-module coverage) · **#342** (`caught` flattening review-tier surfacing).
 6. **#353 / #354 — operator-directed: can we catch these mechanically without FPs?** #353: the 3 never-covered planted bugs (**UPDATE-UNSCOPED looks most tractable** — a raw UPDATE with no WHERE is a textual fact). #354: the 6 review-tier gaps — **at least 2 look mechanical, not semantic** (`P-MW-MATCHER-EXCLUDES-API` is a string literal; `P-DRAFTMODE-NO-SECRET`'s own note looks wrong). Most of #354's negatives **already exist**; #353's must be built. Precedent for both: **#333** — the discriminator wasn't in the code shape at all.
 7. **#339 / #321** — the structural fixes. One gated key per question; make stale reasons impossible rather than guarded after the fact.
-8. **#283/#324** (M6 has no measured basis at all — #267 is the parent) · **#326** (#221's detector precision unmeasured) · **#320** · **#307/#322/#327**.
+8. **#283/#324** (M6's PAID tier still has no trustworthy datum: never run against a real target, eval run 3 not done — the mechanical indicator tier, by contrast, is now 13 fixture-gated classes with measured corpus behavior, see the 2026-07-16 section) · **#413** (AI-generated corpus tier — blocks the 17 measured-zero YES entries) · **#326** (#221's detector precision unmeasured) · **#320** · **#307/#322/#327**.
 
 ### Open decisions (operator-owned — agents were explicitly told not to guess these)
 **Pre-existing:** #248 M7 compiler-gating · #252 M8 harness-vs-suite (hit again in #300 — saas-lite's E2E-only suite is exactly this ambiguity; recorded with a reason rather than decided) · #255 curated severity vs advisory · #257 static RLS own-row/tenant_id boundary · #267 the top-100 AI-hand-rolled corpus (HELD for a later sweep).
