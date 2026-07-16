@@ -1,0 +1,21 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+// The effect only REGISTERS a listener on mount — the fetch runs on a user-driven focus
+// event, not as a mount-time data waterfall. The bare POST is a fire-and-forget beacon
+// whose response is never consumed. Neither is the #383 shape.
+export function FocusRefresh() {
+  const [orders, setOrders] = useState<{ id: string }[]>([]);
+  useEffect(() => {
+    const onFocus = () => {
+      fetch("/api/orders")
+        .then((r) => r.json())
+        .then(setOrders);
+    };
+    window.addEventListener("focus", onFocus);
+    fetch("/api/track", { method: "POST", body: JSON.stringify({ event: "mount" }) });
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+  return <div>{orders.length}</div>;
+}

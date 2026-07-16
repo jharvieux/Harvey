@@ -6,12 +6,13 @@
 //
 // Per the locked product decision + spec discipline: a hotspot RANK is an ordering over a
 // continuous score, not a true/false finding — there is no M3 precision number, and these entries
-// must never be read as one. Only the two DETERMINISTIC BOOLEAN sub-signals (truck-factor-1,
-// co-change coupling edge) are modeled here as CorpusEntry positives/negatives, because — unlike
-// a rank — "is this file truck-factor-1" and "are these two files coupled" are true/false facts,
-// scored the same way every other module's facts are (src/hotspot-scan.ts::toFactFindings ->
-// buildCoverageMatrix). module: "M3" keeps them out of validate-calibration.ts's
-// `module === undefined` filter, same as M7/M8/M10.
+// must never be read as one. Only the three DETERMINISTIC BOOLEAN sub-signals (truck-factor-1,
+// co-change coupling edge, AI-authored+high-churn — spec-72 §M3, #369) are modeled here as
+// CorpusEntry positives/negatives, because — unlike a rank — "is this file truck-factor-1",
+// "are these two files coupled", and "is this file AI-provenance-logged with churn label HIGH"
+// are true/false facts, scored the same way every other module's facts are
+// (src/hotspot-scan.ts::toFactFindings -> buildCoverageMatrix). module: "M3" keeps them out of
+// validate-calibration.ts's `module === undefined` filter, same as M7/M8/M10.
 //
 // M3-P-HOTSPOT (the planted churn×complexity hotspot) and M3-N-CHURN-TRIVIAL (the high-churn/
 // trivial-complexity file that must NOT rank top-K) are DELIBERATELY NOT modeled as CorpusEntry
@@ -41,8 +42,17 @@ export const m3Entries: CorpusEntry[] = [
     expectedTier: "high",
     note: "core/a.ts and core/b.ts are always committed together in the real-schema vitals fixture (a coupling edge in the top-level coupling array). toFactFindings emits a Coupling (co-change) Finding at location 'core/a.ts <> core/b.ts'.",
   },
+  {
+    module: "M3",
+    id: "M3-P-AIPROV",
+    kind: "positive",
+    cls: "AI-authored + high-churn file (provenance-logged)",
+    location: "core/checkout.ts",
+    expectedTier: "high",
+    note: "core/checkout.ts is in provenance.ai_files (vitals hook log) AND carries churn_label HIGH in the real-schema vitals fixture. toFactFindings emits an AI provenance (AI-authored, high-churn) Finding at location core/checkout.ts (#369).",
+  },
 
-  // --- Boolean sub-signal NEGATIVE (must NOT be flagged) ---
+  // --- Boolean sub-signal NEGATIVES (must NOT be flagged) ---
   {
     module: "M3",
     id: "M3-N-MULTIAUTHOR",
@@ -50,5 +60,21 @@ export const m3Entries: CorpusEntry[] = [
     cls: "Multi-author file — must NOT be flagged truck-factor-1",
     location: "core/reporting.ts",
     note: "core/reporting.ts is committed by 3 distinct seeded authors in the real-schema vitals fixture (knowledge_risk truck_factor: 3) — toFactFindings emits nothing for it, so it must clear the negative check.",
+  },
+  {
+    module: "M3",
+    id: "M3-N-AIPROV-STABLE",
+    kind: "negative",
+    cls: "AI-authored but low-churn file — must NOT be flagged AI-provenance",
+    location: "lib/stable.ts",
+    note: "lib/stable.ts IS in provenance.ai_files but its churn_label is LOW in the real-schema vitals fixture — the #369 finding requires the conjunction (AI-authored AND high churn), so toFactFindings emits nothing for it.",
+  },
+  {
+    module: "M3",
+    id: "M3-N-AIPROV-HUMAN",
+    kind: "negative",
+    cls: "High-churn but human-authored file — must NOT be flagged AI-provenance",
+    location: "generated/schema.gen.ts",
+    note: "generated/schema.gen.ts carries churn_label HIGH but is NOT in provenance.ai_files in the real-schema vitals fixture — high churn alone must never read as AI attribution, so toFactFindings emits nothing for it. (Distinct from M3-N-CHURN-TRIVIAL, the top-K ordering assertion on this same file, which stays in hotspot-scan.test.ts and is deliberately not a CorpusEntry.)",
   },
 ];

@@ -1,0 +1,26 @@
+interface Order {
+  id: string;
+  customerId: string;
+  total: number;
+}
+interface Customer {
+  id: string;
+  name: string;
+}
+
+// The classic forgot-to-build-a-lookup join: n orders × m customers = O(n·m).
+export function enrichOrders(orders: Order[], customers: Customer[]) {
+  return orders.map((o) => ({
+    ...o,
+    customer: customers.find((c) => c.id === o.customerId),
+  }));
+}
+
+// Same shape via for-of + .some over a second scaling collection.
+export function shippedOrders(orders: Order[], shipments: { orderId: string }[]) {
+  const out: Order[] = [];
+  for (const o of orders) {
+    if (shipments.some((s) => s.orderId === o.id)) out.push(o);
+  }
+  return out;
+}

@@ -32,6 +32,7 @@ import { knownPublicCredsEntries } from "./calibration/known-public-creds.entrie
 import { rlsStaticSemanticsEntries } from "./calibration/rls-static-semantics.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
 import { m7Entries } from "./calibration/m7.entries.js";
+import { m7InitplanStaticEntries } from "./calibration/m7-initplan-static.entries.js";
 import { m8Entries } from "./calibration/m8.entries.js";
 import { m9AuthzEntries } from "./calibration/m9-authz.entries.js";
 import { m10Entries } from "./calibration/m10.entries.js";
@@ -71,6 +72,7 @@ export const CORPUS: CorpusEntry[] = [
   ...m4m5Entries,
   ...m8Entries,
   ...m7Entries,
+  ...m7InitplanStaticEntries,
   ...m3Entries,
 ];
 

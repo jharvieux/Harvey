@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { couplingEdges, rankHotspots, toFactFindings, topKFiles, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
+import type { Finding } from "./findings.js";
+import { aiProvenanceFiles, couplingEdges, crossReferenceHotspots, rankHotspots, toFactFindings, topKFiles, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
+import { summarizeMutationReport, type StrykerReport } from "./mutation-scan.js";
 import { buildCoverageMatrix } from "./scan/calibration.js";
 import { m3Entries } from "./scan/calibration/m3.entries.js";
 
@@ -12,7 +14,9 @@ import { m3Entries } from "./scan/calibration/m3.entries.js";
 //   - core/billing.ts     M3-P-TRUCK1       sole-author -> truck_factor: 1 in knowledge_risk
 //   - core/reporting.ts   M3-N-MULTIAUTHOR  3 seeded authors -> truck_factor: 3, must not be flagged
 //   - core/a.ts / core/b.ts  M3-P-COUPLING  always co-committed -> one coupling edge
-//   - lib/stable.ts       (not a corpus fixture) low churn/complexity, rounds out the ranking
+//   - core/checkout.ts    M3-P-AIPROV       also in provenance.ai_files + churn HIGH -> AI finding (#369)
+//   - lib/stable.ts       M3-N-AIPROV-STABLE  in provenance.ai_files but churn LOW, must NOT be flagged
+//   - generated/schema.gen.ts  M3-N-AIPROV-HUMAN  churn HIGH but human-authored, must NOT be flagged
 const report: VitalsReport = JSON.parse(
   readFileSync(new URL("./__fixtures__/vitals-report.json", import.meta.url), "utf8"),
 ) as VitalsReport;
@@ -60,7 +64,90 @@ describe("M3 boolean sub-signals (deterministic facts, scored like any other mod
     const findings = toFactFindings(report);
     const matrix = buildCoverageMatrix(findings, m3Entries);
     expect(matrix.ok).toBe(true);
-    expect(matrix.positivesCaught).toBe(matrix.positivesTotal); // M3-P-TRUCK1, M3-P-COUPLING
-    expect(matrix.negativesCleared).toBe(matrix.negativesTotal); // M3-N-MULTIAUTHOR
+    expect(matrix.positivesCaught).toBe(matrix.positivesTotal); // M3-P-TRUCK1, M3-P-COUPLING, M3-P-AIPROV
+    expect(matrix.negativesCleared).toBe(matrix.negativesTotal); // M3-N-MULTIAUTHOR, M3-N-AIPROV-STABLE, M3-N-AIPROV-HUMAN
+  });
+});
+
+describe("M3 AI-provenance sub-signal (#369 — spec-72 §M3's third boolean fact)", () => {
+  it("extracts the AI-authored files the provenance log attributes", () => {
+    expect(aiProvenanceFiles(report)).toEqual(["core/checkout.ts", "lib/stable.ts"]);
+  });
+
+  it("returns nothing when vitals reports no provenance data — the real { has_data: false } shape carries no ai_files key", () => {
+    expect(aiProvenanceFiles({ ...report, provenance: { has_data: false } })).toEqual([]);
+  });
+
+  it("tolerates a capture without the provenance key (pre-0.2.0) instead of crashing", () => {
+    const withoutProvenance: VitalsReport = { hotspots: report.hotspots, coupling: report.coupling, knowledge_risk: report.knowledge_risk };
+    expect(aiProvenanceFiles(withoutProvenance)).toEqual([]);
+  });
+
+  it("emits the finding only for the AI-authored AND high-churn conjunction", () => {
+    const ids = toFactFindings(report).map((f) => f.id);
+    // core/checkout.ts: in ai_files AND churn_label HIGH -> flagged.
+    expect(ids).toContain("M3-AIPROV-core/checkout.ts");
+    // lib/stable.ts: in ai_files but churn LOW -> AI attribution alone is not the finding.
+    expect(ids).not.toContain("M3-AIPROV-lib/stable.ts");
+    // generated/schema.gen.ts: churn HIGH but human-authored -> churn alone is not AI attribution.
+    expect(ids).not.toContain("M3-AIPROV-generated/schema.gen.ts");
+  });
+});
+
+const planted = (id: string, location: string, note?: string): Finding => ({
+  id,
+  title: id,
+  severity: "High",
+  confidence: "Confirmed",
+  category: "Security",
+  taxonomy: "test",
+  location,
+  status: "Open",
+  evidence: "planted",
+  impact: "planted",
+  fix: "planted",
+  value: 4,
+  ease: 4,
+  safety: 4,
+  note,
+});
+
+describe("M3 cross-reference against other modules' findings (#363)", () => {
+  // core/checkout.ts is top-3 by risk_score in the fixture; lib/stable.ts is not.
+  const onHotspot = planted("M1-RLS-01", "core/checkout.ts:42");
+  const offHotspot = planted("M7-N1-01", "lib/stable.ts:10");
+
+  it("annotates and front-orders a finding whose location sits on a top-K hotspot", () => {
+    const { findings, hotspotFindingIds } = crossReferenceHotspots([offHotspot, onHotspot], report, 3);
+    expect(hotspotFindingIds).toEqual(["M1-RLS-01"]);
+    expect(findings.map((f) => f.id)).toEqual(["M1-RLS-01", "M7-N1-01"]); // hotspot first
+    expect(findings[0]?.note).toMatch(/top remediation priority/i);
+    expect(findings[0]?.note).toContain("core/checkout.ts");
+    expect(findings[1]?.note).toBeUndefined();
+  });
+
+  it("preserves an existing note instead of overwriting the auditor's words", () => {
+    const { findings } = crossReferenceHotspots([planted("M9-01", "core/checkout.ts:7", "operator note")], report, 3);
+    expect(findings[0]?.note).toMatch(/^operator note /);
+    expect(findings[0]?.note).toMatch(/hotspot/);
+  });
+
+  it("never alters severity or the BFTB inputs — the cross-reference reorders, it does not regrade", () => {
+    const { findings } = crossReferenceHotspots([onHotspot], report, 3);
+    expect(findings[0]).toMatchObject({ severity: "High", value: 4, ease: 4, safety: 4 });
+    expect(onHotspot.note).toBeUndefined(); // input not mutated
+  });
+
+  it("feeds M8 directly: topKFiles output is consumable as summarizeMutationReport's hotspot list", () => {
+    const stryker: StrykerReport = {
+      files: {
+        "core/checkout.ts": { mutants: [{ id: "1", mutatorName: "BooleanLiteral", status: "Survived", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } } }] },
+        "lib/stable.ts": { mutants: [{ id: "2", mutatorName: "BooleanLiteral", status: "Survived", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } } }] },
+      },
+    };
+    const summary = summarizeMutationReport(stryker, topKFiles(report, 3));
+    expect(summary.survivingMutants.find((m) => m.file === "core/checkout.ts")?.hotspot).toBe(true);
+    expect(summary.survivingMutants.find((m) => m.file === "lib/stable.ts")?.hotspot).toBe(false);
+    expect(summary.survivingMutants[0]?.file).toBe("core/checkout.ts"); // hotspot survivor sorts first
   });
 });

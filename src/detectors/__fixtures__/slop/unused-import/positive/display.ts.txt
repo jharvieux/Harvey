@@ -1,0 +1,7 @@
+import { formatDate, parseDate } from "./date-utils";
+import { logger } from "./logger";
+
+// A refactor stopped calling parseDate() and never removed the import; same for logger.
+export function displayDate(value: string): string {
+  return formatDate(value);
+}
