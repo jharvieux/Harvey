@@ -196,6 +196,36 @@ interface CoverageMatrix {
   ok: boolean; // every static positive caught AND every static negative cleared
 }
 
+// A module whose entries omit `module` is the original M1 mechanical-scan corpus (base+secrets+
+// b2–b16+…). Everything else carries an explicit M3/M4/M5/M7/M8/M9/M10 label.
+export function moduleOf(entry: CorpusEntry): string {
+  return entry.module ?? "M1";
+}
+
+export interface ModuleCensusRow {
+  module: string;
+  positivesStatic: number; // static positives (excludes connected tier)
+  positivesConnected: number; // connected-tier positives (live-DB only, N/A statically)
+  negatives: number;
+}
+
+// Per-module fixture census over the corpus, so a blended recall count can never imply uniform
+// coverage: a module standing on 1 positive is visibly thin here rather than averaged into the
+// M1-dominated total (#341). Purely counts the answer key — says nothing about what any gate runs.
+export function moduleCensus(corpus: CorpusEntry[] = CORPUS): ModuleCensusRow[] {
+  const rows = new Map<string, ModuleCensusRow>();
+  for (const e of corpus) {
+    const m = moduleOf(e);
+    const row = rows.get(m) ?? { module: m, positivesStatic: 0, positivesConnected: 0, negatives: 0 };
+    if (e.kind === "negative") row.negatives++;
+    else if (e.expectedTier === "connected") row.positivesConnected++;
+    else row.positivesStatic++;
+    rows.set(m, row);
+  }
+  const numOf = (m: string) => Number(m.replace(/^M/, "")) || 0;
+  return [...rows.values()].sort((a, b) => numOf(a.module) - numOf(b.module));
+}
+
 export function buildCoverageMatrix(findings: Finding[], corpus: CorpusEntry[] = CORPUS): CoverageMatrix {
   const rows = corpus.map((e) => scoreEntry(e, findings));
   const staticPos = rows.filter((r) => r.kind === "positive" && r.expectedTier !== "connected");

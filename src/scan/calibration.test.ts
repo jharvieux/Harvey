@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildCoverageMatrix, CORPUS, scoreEntry, type CorpusEntry } from "./calibration.js";
+import { buildCoverageMatrix, CORPUS, moduleCensus, scoreEntry, type CorpusEntry } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
@@ -596,6 +596,31 @@ describe("Batch B14 app-logic heuristics corpus (real leftover-auth greps → ti
     expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(5);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
+  });
+});
+
+describe("moduleCensus (#341 — per-module legibility so a blended count can't imply uniform coverage)", () => {
+  it("tallies each module's fixtures and keeps thin modules visible, not averaged away", () => {
+    const census = moduleCensus(CORPUS);
+    const byModule = new Map(census.map((c) => [c.module, c]));
+
+    // Every module the corpus tags must appear as its own row.
+    const modulesInCorpus = new Set(CORPUS.map((e) => e.module ?? "M1"));
+    expect(new Set(census.map((c) => c.module))).toEqual(modulesInCorpus);
+
+    // The census must equal a direct recount — a thin module reads as thin, not blended into M1.
+    for (const m of modulesInCorpus) {
+      const entries = CORPUS.filter((e) => (e.module ?? "M1") === m);
+      const row = byModule.get(m)!;
+      expect(row.negatives).toBe(entries.filter((e) => e.kind === "negative").length);
+      expect(row.positivesConnected).toBe(entries.filter((e) => e.kind === "positive" && e.expectedTier === "connected").length);
+      expect(row.positivesStatic).toBe(entries.filter((e) => e.kind === "positive" && e.expectedTier !== "connected").length);
+    }
+
+    // M1 rows first, then ascending module number.
+    expect(census[0]?.module).toBe("M1");
+    const nums = census.map((c) => Number(c.module.replace(/^M/, "")));
+    expect(nums).toEqual([...nums].sort((a, b) => a - b));
   });
 });
 
