@@ -1,0 +1,9 @@
+// toFixed as plain numeric display precision — no currency symbol adjacent, so this is
+// number formatting, not money formatting.
+export function formatLatency(ms: number): string {
+  return `${ms.toFixed(1)} ms`;
+}
+
+export function formatPercent(ratio: number): string {
+  return (ratio * 100).toFixed(0) + "%";
+}

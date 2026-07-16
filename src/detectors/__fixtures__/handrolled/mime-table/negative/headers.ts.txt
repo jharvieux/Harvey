@@ -1,0 +1,7 @@
+// A single content-type constant and a header object with one content-type value are
+// configuration, not a lookup table — several extension→type rows are required to flag.
+const JSON_TYPE = "application/json";
+
+export function jsonHeaders(): Record<string, string> {
+  return { "Content-Type": JSON_TYPE, Accept: "application/json" };
+}

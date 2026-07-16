@@ -1,0 +1,6 @@
+{
+  "name": "date-math-negative-no-dep",
+  "dependencies": {
+    "react": "^18.3.0"
+  }
+}

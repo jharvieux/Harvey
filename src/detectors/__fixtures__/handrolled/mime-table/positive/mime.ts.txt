@@ -1,0 +1,11 @@
+export const CONTENT_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".pdf": "application/pdf",
+};
+
+export function contentTypeFor(filename: string): string {
+  const ext = filename.slice(filename.lastIndexOf("."));
+  return CONTENT_TYPES[ext] ?? "application/octet-stream";
+}
