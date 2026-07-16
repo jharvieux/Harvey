@@ -47,6 +47,28 @@ const HIGH_PRECISION_GITLEAKS_RULES = new Set([
 // user-facing finding on their own. See parseGitleaksFindings below.
 const CORRELATION_MARKER_RULES = new Set(["supabase-demo-key-marker", "harvey-test-idp-marker"]);
 
+// DECISION (#308): findings render into a client-facing HTML/PDF report, so evidence must NOT
+// reproduce a matched credential verbatim — on a real engagement that string is a LIVE secret.
+// Default is to REDACT the matched value to a short identifying prefix + its length, e.g.
+// `sk_test_51Q…[redacted, 44 chars]`. That keeps enough for triage to tell two hits on the same
+// rule+file apart (prefix format marker + a few discriminating chars + length, plus file:line in
+// the location) without quoting the secret back. Exception: rules whose "match" is a structural,
+// non-secret claim — the decoded "role":"service_role" JWT body — are quoted as-is; they reveal
+// nothing sensitive and the literal string is the whole signal. (TruffleHog evidence already
+// carries only its own pre-redacted representation, so it needs no handling here.)
+const NON_SECRET_MATCH_RULES = new Set(["supabase-service-role-jwt"]);
+
+function redactMatch(raw: string): string {
+  const prefixLen = Math.min(12, Math.ceil(raw.length / 2));
+  return `${raw.slice(0, prefixLen)}…[redacted, ${raw.length} chars]`;
+}
+
+function gitleaksEvidenceMatch(r: GitleaksResult): string {
+  const raw = r.Match ?? r.Secret;
+  if (raw === undefined) return "(match redacted)";
+  return NON_SECRET_MATCH_RULES.has(r.RuleID) ? raw : redactMatch(raw);
+}
+
 // Per-rule "why it matters" text for high-precision hits. Only supabase-service-role-jwt's claim
 // is actually about a decoded JWT role — every other high-precision rule (private-key,
 // sb_secret_, DB URIs, …) was previously getting that same JWT-specific sentence (#211).
@@ -139,7 +161,7 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
     .map((r, i) => {
       const testIdpPrivateKey = r.RuleID === "private-key" && CI_WORKFLOW_PATH.test(r.File) && testIdpFiles.has(r.File);
       const high = HIGH_PRECISION_GITLEAKS_RULES.has(r.RuleID) && !testIdpPrivateKey;
-      const evidence = `gitleaks rule "${r.RuleID}" matched: ${r.Match ?? r.Secret ?? "(match redacted)"}.`;
+      const evidence = `gitleaks rule "${r.RuleID}" matched: ${gitleaksEvidenceMatch(r)}.`;
       return mechanicalFinding({
         id: `SEC-GL-${scope}-${i + 1}`,
         title: `${r.Description ?? r.RuleID} (${r.RuleID})`,
