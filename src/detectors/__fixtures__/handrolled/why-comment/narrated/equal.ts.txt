@@ -1,0 +1,4 @@
+export function settingsChanged(prev: object, next: object): boolean {
+  // compare the serialized forms of the two settings objects
+  return JSON.stringify(prev) !== JSON.stringify(next);
+}

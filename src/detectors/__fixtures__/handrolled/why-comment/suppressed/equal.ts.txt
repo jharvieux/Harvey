@@ -1,0 +1,5 @@
+export function settingsChanged(prev: object, next: object): boolean {
+  // WHY: prev/next come from JSON.parse with stable key order — string comparison is
+  // deliberate here; revisit if the settings shape ever gains Dates or Maps.
+  return JSON.stringify(prev) !== JSON.stringify(next);
+}
