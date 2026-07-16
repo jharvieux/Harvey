@@ -24,6 +24,23 @@ const viaCli = (module: AuditModule, script: string, args: (ctx: RunContext) => 
   },
 });
 
+// Like viaCli, but for a module whose CLI emits a report-schema Finding[] to --out: when the run
+// context is capturing (#312), append `--out <captureDir>/<module>.json`, then read the emitted
+// findings back onto the outcome so run-audit can assemble them. Shared CLIs (quality-scan feeds
+// M4+M5, detect-static feeds M7+M9) get captured under each module key; the assembler de-dupes.
+const capturing = (module: AuditModule, script: string, args: (ctx: RunContext) => string[]) => ({
+  module,
+  run: (ctx: RunContext): ProbeOutcome => {
+    const argv = args(ctx);
+    const command = `pnpm ${script} ${argv.join(" ")}`.trim();
+    const outPath = ctx.captureDir && ctx.readFindings ? join(ctx.captureDir, `${module}.json`) : undefined;
+    const { ok, output } = ctx.exec("pnpm", [script, ...argv, ...(outPath ? ["--out", outPath] : [])]);
+    if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${output.trim().slice(0, 200)}` };
+    const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : [];
+    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
+  },
+});
+
 const hasNodeModules = (ctx: RunContext): boolean => ctx.exists(join(ctx.targetDir, "node_modules"));
 
 // M1 mechanical tier. The semantic (LLM) and live (detect-deeper) layers are operator-driven passes
@@ -52,27 +69,19 @@ const m2: ModuleRunner = {
 // vitals JSON was actually parsed into the M3 deliverable (ranked table + boolean-fact findings),
 // not merely that an external binary exited 0. vitals itself stays external (run, don't build):
 // when it is not on PATH (#314) the CLI exits non-zero and the probe carries that reason.
-const m3: ModuleRunner = {
-  module: "M3",
-  run: (ctx) => {
-    const { ok, output } = ctx.exec("pnpm", ["exec", "tsx", "src/cli/hotspot-scan.ts", ctx.targetDir]);
-    return ok
-      ? { status: "ran", detail: `pnpm exec tsx src/cli/hotspot-scan.ts ${ctx.targetDir}` }
-      : { status: "requires-live-run", reason: `vitals plugin unavailable or hotspot-scan failed: ${output.trim().slice(0, 200)}` };
-  },
-};
+const m3: ModuleRunner = capturing("M3", "exec", (ctx) => ["tsx", "src/cli/hotspot-scan.ts", ctx.targetDir]);
 
 // M4 (jscpd) and M5 (knip) share one CLI, but they are two modules with two prereqs: jscpd reads
 // source alone, while knip cannot resolve config imports without the target's installed deps. One
 // `ran` covering both would be the composite-claim bug the gate exists to catch, so they probe
 // separately and M5 owns the node_modules precondition.
-const m4: ModuleRunner = viaCli("M4", "quality-scan", (ctx) => [ctx.targetDir]);
+const m4: ModuleRunner = capturing("M4", "quality-scan", (ctx) => [ctx.targetDir]);
 
 const m5: ModuleRunner = {
   module: "M5",
   run: (ctx) =>
     hasNodeModules(ctx)
-      ? viaCli("M5", "quality-scan", (c) => [c.targetDir]).run(ctx)
+      ? capturing("M5", "quality-scan", (c) => [c.targetDir]).run(ctx)
       : { status: "requires-live-run", reason: "target has no node_modules — knip cannot resolve config imports without the target's installed deps (run `npm install` in the target)" },
 };
 
@@ -108,11 +117,11 @@ const m8: ModuleRunner = {
   module: "M8",
   run: (ctx) =>
     hasNodeModules(ctx)
-      ? viaCli("M8", "mutation-scan", (c) => [c.targetDir]).run(ctx)
+      ? capturing("M8", "mutation-scan", (c) => [c.targetDir]).run(ctx)
       : { status: "requires-live-run", reason: "target has no node_modules — StrykerJS needs the target's installed deps and test suite" },
 };
 
-const m9: ModuleRunner = viaCli("M9", "detect-static", (ctx) => [ctx.targetDir]);
+const m9: ModuleRunner = capturing("M9", "detect-static", (ctx) => [ctx.targetDir]);
 
 // M10 classifies live columns, or parses migration SQL when there is no DB (#250) — two tiers, so
 // a schema-only pass is partial rather than a skip.
