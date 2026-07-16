@@ -97,6 +97,7 @@ The eval had never been executed since the corpus landed 2026-07-09 (#72). First
 |---|---|---|---|---|---|
 | 1 | 2026-07-15 | Claude Opus 4.8, M6 brief (`docs/quality-extras.txt` §SIMPLIFICATION) as the prompt, no other context | 4/4 | 2/2 | **contaminated — do not treat as a pass** |
 | 2 | 2026-07-15 | Claude Opus 4.8, M6 brief as the prompt, against the de-labelled corpus | 4/4 | **1/2** | **usable baseline** — one negative flagged (`framework-adapter.ts`), correctly: the fixture was defective, rebuilt in #290. Scored 1/2 against the key it ran against, not re-scored; see §3.2 |
+| 3 | 2026-07-16 | Claude Fable 5 (fresh-context subagent), the `pnpm simplify-scan` packet as the sole input, against the corrected corpus (#290 rebuild) | 4/4 | **2/2** | **first trustworthy negative datum** — both negatives spared on code evidence alone; see §3.3 |
 
 **Procedure followed.** The reviewer read the M6 brief, then the six fixture files, wrote up
 what it would flag, and only then opened `targets/calibration/GROUND-TRUTH.md` to score. Answer
@@ -211,7 +212,7 @@ in place.
    against.
 3. At the time of this run the one genuinely-load-bearing negative was `depdrop.ts`, and the
    reviewer got it right on the code alone. #290's rebuild restored the second, so run 3 faces two
-   real negatives. Run 3 has not been executed — there is no datum against the corrected key yet.
+   real negatives. (Run 3 executed 2026-07-16 — §3.3.)
 
 **Caveats on this datum.** The reviewer also volunteered two out-of-scope routings (the
 `Math.random()` id as an M1 concern if used as a token; a vulnerable `lodash` pin) — correct
@@ -219,6 +220,55 @@ behavior per the brief, and noted here only because it is evidence the reviewer 
 rather than a label. As with any n=6 curated set, this says nothing about false-positive rate on
 unlabeled client code (§3, *What this is explicitly NOT*). Report it as **"the reviewer agreed 4/4
 positives and 1/2 negatives on this rubric set"** — never as an M6 precision figure.
+
+### 3.3 Run log — third execution (2026-07-16, #324)
+
+The first run against the corrected key: #290's rebuilt `framework-adapter.ts` plus the five
+fixtures run 2 already faced. The question this run existed to answer (#324): does a reviewer
+spare the rebuilt negative on the code evidence alone — `implements SupportedStorage` and the
+instance handed to `createClient({ auth: { storage } })` — with no comment telling it to?
+
+**Procedure.** Two deliberate properties, both continuing §3.2's discipline:
+
+- **Fresh-context reviewer.** A subagent (Claude Fable 5) with no prior context, instructed to
+  read exactly one file and nothing else — no repo files, no `GROUND-TRUTH.md`, no design docs, no
+  git history — and to confirm afterwards what it read (it confirmed: the packet only). The
+  orchestrating session had read the answer key and did not review, per §3.2's contamination
+  reasoning.
+- **The production packet as the input.** Unlike runs 1–2 (brief + files read separately), run 3's
+  sole input was the packet emitted by `pnpm simplify-scan targets/calibration/simplify` — the
+  first eval run through the #266 runner path, so the run also exercises the packet M6 actually
+  ships. The packet embeds the same M6 brief + FALSE POSITIVES sections the earlier runs read, so
+  the rubric content is unchanged; the framing prose (the two standing rules in `renderPacket`) is
+  the production framing, recorded here as a procedural difference from run 2.
+
+Scoring happened only after the writeup, by the orchestrator, against the `GROUND-TRUTH.md` key.
+
+**Result: 4/4 positives flagged, 2/2 negatives spared.**
+
+- Positives, each with a concrete replacement: `debounce.ts` (lodash-es `debounce`, or consolidate
+  with the throttle), `group.ts` (`Object.groupBy`/`Map.groupBy`), `id.ts` (`crypto.randomUUID()`,
+  plus the predictability point), `manager.ts` (collapse to a plain function — it read
+  `manager.ts`'s "no second implementation is planned" comment as evidence *for* the finding,
+  which is exactly right).
+- `depdrop.ts` — **spared on the `// WHY:` block**, the designed discriminator, same as run 2.
+- `framework-adapter.ts` — **spared on the library contract in the code**: the reviewer named
+  `SupportedStorage` and the `auth.storage` option as the reason the class shape is mandated, with
+  no header comment present to assert it. This is the datum #290's rebuild was built to make
+  possible and run 2 could not provide.
+
+**What can now be said about M6's negative side, and what still can't.** The corrected corpus has
+a measured run: *the reviewer agreed 4/4 positives and 2/2 negatives on this rubric set*. That is
+the regression-watch baseline for future prompt/model changes. It is still an n=6 curated set —
+it says nothing about the false-positive rate on unlabeled client code, and must never be quoted
+as "M6 precision" (§3, *What this is explicitly NOT*).
+
+**Corpus artifact worth knowing (not a miss).** The reviewer cross-read the fixtures as one
+codebase: it observed that `debounce.ts`'s existence arguably satisfies the "second lodash-es
+need" revisit trigger in `depdrop.ts`'s `// WHY:` comment, and folded that into its `debounce.ts`
+recommendation (while still sparing `depdrop.ts`). Correct reasoning over the directory as given;
+just remember the six files were authored as independent fixtures, so cross-file inferences like
+this are artifacts of co-location, not planted signals.
 
 ## 4. The labeled corpus
 

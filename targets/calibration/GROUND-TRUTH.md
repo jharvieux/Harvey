@@ -1724,7 +1724,17 @@ status rested on a header comment asserting a contract the code never demonstrat
 **Run 2 stays scored 1/2 against the key it ran against.** It is not retroactively re-scored to 2/2
 now that the fixture is fixed: the run happened against the old file, and the reviewer's flag was the
 right call on that code. The rebuild below changes what a *future* run faces, not what run 2 measured.
-Run 3 is the first datum against the corrected key, and there is no run 3 yet.
+
+**Run 3 (2026-07-16, #324) — first run against the corrected key: 4/4 positives, 2/2 negatives.**
+A fresh-context reviewer (Claude Fable 5 subagent, confirmed it read only its input) reviewed the
+packet produced by `pnpm simplify-scan targets/calibration/simplify` — the production M6 runner path.
+It spared `framework-adapter.ts` by naming the `SupportedStorage` contract and the
+`createClient({ auth: { storage } })` call site as the reason the shape is mandated — the code
+evidence alone, no comment present to assert it — and spared `depdrop.ts` on its `// WHY:` block.
+This is the datum the #290 rebuild existed to enable: the corpus now has a measured
+negative-side baseline. Report it as "reviewer agreed 4/4 positives, 2/2 negatives on this rubric
+set" — never as a precision figure. Full procedure and caveats:
+`docs/design/m6-simplification-eval.md` §3.3.
 
 ### M6-N-FRAMEWORK rebuild (2026-07-15, #290)
 
