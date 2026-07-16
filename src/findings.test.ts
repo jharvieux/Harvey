@@ -65,6 +65,41 @@ describe("validateFindings — mechanical scan fields", () => {
   });
 });
 
+describe("validateFindings — coverage ledger (#349)", () => {
+  const ledger = [
+    { module: "M4", name: "Duplication", status: "ran", detail: "pnpm quality-scan /t" },
+    { module: "M2", name: "Local pen-test (dynamic)", status: "requires-live-run", reason: "no local supabase stack" },
+    { module: "M7", name: "Performance", status: "partial", reason: "code tier only — no DB creds" },
+  ];
+
+  it("accepts a well-formed derived ledger alongside findings", () => {
+    expect(validateFindings({ ...example, coverage: ledger }).ok).toBe(true);
+  });
+
+  it("still accepts a document with no coverage ledger — back-compat with hand-authored docs", () => {
+    expect(validateFindings(example).ok).toBe(true);
+    expect(Object.hasOwn(example, "coverage")).toBe(false);
+  });
+
+  it("rejects an unknown coverage status", () => {
+    const { ok, errors } = validateFindings({ ...example, coverage: [{ module: "M1", name: "x", status: "skipped" }] });
+    expect(ok).toBe(false);
+    expect(errors).toContainEqual(expect.stringContaining("coverage[0].status"));
+  });
+
+  // The whole point of the ledger: a non-"ran" row without a reason is a silent skip wearing a
+  // status, which reads in the report as "clean". It must not validate.
+  it("rejects a partial / requires-live-run row with no reason", () => {
+    const { ok, errors } = validateFindings({ ...example, coverage: [{ module: "M5", name: "Slop", status: "requires-live-run" }] });
+    expect(ok).toBe(false);
+    expect(errors).toContainEqual(expect.stringContaining("coverage[0].reason"));
+  });
+
+  it("does not require a reason on a clean ran row", () => {
+    expect(validateFindings({ ...example, coverage: [{ module: "M4", name: "Duplication", status: "ran" }] }).ok).toBe(true);
+  });
+});
+
 describe("bftb", () => {
   it("matches the renderer's formula: round(value*ease*safety/125*100)", () => {
     expect(bftb({ value: 5, ease: 5, safety: 5 })).toBe(100);
