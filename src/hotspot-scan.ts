@@ -1,11 +1,16 @@
 // M3 (hotspot analysis) — shapes the `vitals` plugin's churn×complexity / coupling / knowledge-
-// risk output into (a) a ranked hotspot table and (b) the deterministic boolean sub-signals
-// (truck-factor-1, co-change coupling) as Finding[] for the shared calibration harness.
+// risk / AI-provenance output into (a) a ranked hotspot table and (b) the deterministic boolean
+// sub-signals (truck-factor-1, co-change coupling, AI-authored+high-churn) as Finding[] for the
+// shared calibration harness.
 //
 // STATUS: schema VERIFIED against a live `vitals 0.2.0 report --json <path>` run (issue #94).
 // VitalsReport/VitalsHotspotRow below match the real top-level shape: `hotspots` (per-file rows,
 // sorted by `risk_score`), a separate top-level `coupling` array (not nested per-row), and a
 // separate top-level `knowledge_risk` array (truck-factor lives there, not on hotspot rows).
+// The `provenance` shape (#369) is verified against vitals 0.2.0's own source
+// (scripts/vitals_cli.py provenance_info + scripts/db.py get_ai_file_stats/get_provenance_summary):
+// `{ has_data: false }` when no .vitals provenance DB exists, or has_data: true plus `summary`
+// and `ai_files` (30-day window, ordered by total_events desc) when it does.
 // `src/__fixtures__/vitals-report.json` is a synthetic report built to this real shape (paths and
 // values are synthetic; the field names and nesting are not).
 //
@@ -13,8 +18,8 @@
 // M3 section: a hotspot RANK is an ordering over a continuous score, not a true/false finding —
 // there is no M3 precision number, free-tier M3 output is a descriptive map only, never an
 // asserted finding. What IS gateable the same way every other module's positives/negatives are:
-// the deterministic boolean sub-signals (truck-factor-1, a coupling edge), which toFactFindings
-// below emits as Finding[] for buildCoverageMatrix. The rank itself is gated separately as a
+// the deterministic boolean sub-signals (truck-factor-1, a coupling edge, AI-authored+high-churn),
+// which toFactFindings below emits as Finding[] for buildCoverageMatrix. The rank itself is gated separately as a
 // top-K *membership* check (rankHotspots / topKFiles) — see hotspot-scan.test.ts — never scored
 // as a percentage.
 
@@ -57,10 +62,33 @@ export interface VitalsKnowledgeRiskRow {
   authors: Array<[string, number]>;
 }
 
+interface VitalsAiFileRow {
+  file_path: string;
+  edit_count: number;
+  write_count: number;
+  last_modified: number; // unix epoch seconds (float)
+  total_events: number;
+}
+
+export interface VitalsProvenance {
+  has_data: boolean;
+  // Present only when has_data is true — vitals emits a bare { has_data: false } otherwise.
+  summary?: {
+    total_events: number;
+    unique_files: number;
+    total_sessions: number;
+    first_event: number;
+    last_event: number;
+  };
+  ai_files?: VitalsAiFileRow[];
+}
+
 export interface VitalsReport {
   hotspots: VitalsHotspotRow[];
   coupling: VitalsCouplingEdgeRow[];
   knowledge_risk: VitalsKnowledgeRiskRow[];
+  // Optional so a pre-0.2.0 capture without the key still parses; 0.2.0 always includes it.
+  provenance?: VitalsProvenance;
 }
 
 // Worst-first by vitals' risk_score. Rank is an ordering, never scored as a percentage — callers
@@ -77,6 +105,16 @@ export function topKFiles(report: VitalsReport, k: number): string[] {
 
 export function truckFactorOneFiles(report: VitalsReport): string[] {
   return report.knowledge_risk.filter((r) => r.truck_factor === 1).map((r) => r.file_path);
+}
+
+// Files the vitals provenance log attributes to AI tooling (Edit/Write hook events, 30-day
+// window). The attribution itself is a fact given the log (spec-72 §M3); the FINDING below
+// additionally requires vitals' own HIGH churn label, because in an AI-assisted codebase
+// "AI-touched" alone flags nearly every file — the remediation-priority signal is the
+// conjunction (AI-authored AND under heavy iteration), per #369.
+export function aiProvenanceFiles(report: VitalsReport): string[] {
+  if (!report.provenance?.has_data) return [];
+  return (report.provenance.ai_files ?? []).map((r) => r.file_path);
 }
 
 interface CouplingEdge {
@@ -143,6 +181,33 @@ export function toFactFindings(report: VitalsReport): Finding[] {
       evidence: `vitals: ${edge.a} and ${edge.b} are always committed together.`,
       impact: "Hidden coupling raises the blast radius of a change to either file.",
       fix: "Confirm the coupling is intentional; if not, decouple.",
+      value: 2,
+      ease: 3,
+      safety: 5,
+      mechanical: true,
+      precisionTier: "high",
+    });
+  }
+
+  // Third sub-signal (#369): AI-authored (provenance-logged) AND vitals churn label HIGH. Both
+  // inputs are deterministic per-file facts from the same report — never the risk-score rank.
+  // Note vitals truncates `hotspots` to its top-N, so the churn label is only visible for files
+  // hot enough to make that list — exactly the population this conjunction is about.
+  const highChurn = new Set(report.hotspots.filter((h) => h.churn_label === "HIGH").map((h) => h.file_path));
+  for (const file of aiProvenanceFiles(report)) {
+    if (!highChurn.has(file)) continue;
+    findings.push({
+      id: `M3-AIPROV-${file}`,
+      title: `AI-authored high-churn file: ${file}`,
+      severity: "Watch",
+      confidence: "Confirmed",
+      category: "Maintainability",
+      taxonomy: "AI provenance (AI-authored, high-churn)",
+      location: file,
+      status: "Open",
+      evidence: `vitals provenance log attributes ${file} to AI tooling (Edit/Write events, 30-day window) and labels its churn HIGH.`,
+      impact: "AI-generated code under heavy iteration is the highest-likelihood home for looks-right-isn't bugs — a different remediation priority than human-authored churn.",
+      fix: "Human-review this file's recent history; add tests before the next AI-assisted change.",
       value: 2,
       ease: 3,
       safety: 5,
