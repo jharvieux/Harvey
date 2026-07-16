@@ -48,15 +48,17 @@ const m2: ModuleRunner = {
       : { status: "requires-live-run", reason: "no local supabase stack — M2 probes a running two-tenant stack (see CLAUDE.md's module table)" },
 };
 
-// M3 is an external plugin (vitals). Harvey does not vendor it, so the probe reports its absence
-// rather than pretending a hotspot pass happened.
+// M3 runs the vitals plugin THROUGH the hotspot-scan CLI (#363), so a successful probe means the
+// vitals JSON was actually parsed into the M3 deliverable (ranked table + boolean-fact findings),
+// not merely that an external binary exited 0. vitals itself stays external (run, don't build):
+// when it is not on PATH (#314) the CLI exits non-zero and the probe carries that reason.
 const m3: ModuleRunner = {
   module: "M3",
   run: (ctx) => {
-    const { ok, output } = ctx.exec("vitals_cli.py", ["report", "--json", ctx.targetDir]);
+    const { ok, output } = ctx.exec("pnpm", ["exec", "tsx", "src/cli/hotspot-scan.ts", ctx.targetDir]);
     return ok
-      ? { status: "ran", detail: `vitals_cli.py report --json ${ctx.targetDir}` }
-      : { status: "requires-live-run", reason: `vitals plugin unavailable or failed: ${output.trim().slice(0, 200)}` };
+      ? { status: "ran", detail: `pnpm exec tsx src/cli/hotspot-scan.ts ${ctx.targetDir}` }
+      : { status: "requires-live-run", reason: `vitals plugin unavailable or hotspot-scan failed: ${output.trim().slice(0, 200)}` };
   },
 };
 

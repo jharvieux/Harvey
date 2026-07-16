@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { aiProvenanceFiles, couplingEdges, rankHotspots, toFactFindings, topKFiles, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
+import type { Finding } from "./findings.js";
+import { aiProvenanceFiles, couplingEdges, crossReferenceHotspots, rankHotspots, toFactFindings, topKFiles, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
+import { summarizeMutationReport, type StrykerReport } from "./mutation-scan.js";
 import { buildCoverageMatrix } from "./scan/calibration.js";
 import { m3Entries } from "./scan/calibration/m3.entries.js";
 
@@ -89,5 +91,63 @@ describe("M3 AI-provenance sub-signal (#369 — spec-72 §M3's third boolean fac
     expect(ids).not.toContain("M3-AIPROV-lib/stable.ts");
     // generated/schema.gen.ts: churn HIGH but human-authored -> churn alone is not AI attribution.
     expect(ids).not.toContain("M3-AIPROV-generated/schema.gen.ts");
+  });
+});
+
+const planted = (id: string, location: string, note?: string): Finding => ({
+  id,
+  title: id,
+  severity: "High",
+  confidence: "Confirmed",
+  category: "Security",
+  taxonomy: "test",
+  location,
+  status: "Open",
+  evidence: "planted",
+  impact: "planted",
+  fix: "planted",
+  value: 4,
+  ease: 4,
+  safety: 4,
+  note,
+});
+
+describe("M3 cross-reference against other modules' findings (#363)", () => {
+  // core/checkout.ts is top-3 by risk_score in the fixture; lib/stable.ts is not.
+  const onHotspot = planted("M1-RLS-01", "core/checkout.ts:42");
+  const offHotspot = planted("M7-N1-01", "lib/stable.ts:10");
+
+  it("annotates and front-orders a finding whose location sits on a top-K hotspot", () => {
+    const { findings, hotspotFindingIds } = crossReferenceHotspots([offHotspot, onHotspot], report, 3);
+    expect(hotspotFindingIds).toEqual(["M1-RLS-01"]);
+    expect(findings.map((f) => f.id)).toEqual(["M1-RLS-01", "M7-N1-01"]); // hotspot first
+    expect(findings[0]?.note).toMatch(/top remediation priority/i);
+    expect(findings[0]?.note).toContain("core/checkout.ts");
+    expect(findings[1]?.note).toBeUndefined();
+  });
+
+  it("preserves an existing note instead of overwriting the auditor's words", () => {
+    const { findings } = crossReferenceHotspots([planted("M9-01", "core/checkout.ts:7", "operator note")], report, 3);
+    expect(findings[0]?.note).toMatch(/^operator note /);
+    expect(findings[0]?.note).toMatch(/hotspot/);
+  });
+
+  it("never alters severity or the BFTB inputs — the cross-reference reorders, it does not regrade", () => {
+    const { findings } = crossReferenceHotspots([onHotspot], report, 3);
+    expect(findings[0]).toMatchObject({ severity: "High", value: 4, ease: 4, safety: 4 });
+    expect(onHotspot.note).toBeUndefined(); // input not mutated
+  });
+
+  it("feeds M8 directly: topKFiles output is consumable as summarizeMutationReport's hotspot list", () => {
+    const stryker: StrykerReport = {
+      files: {
+        "core/checkout.ts": { mutants: [{ id: "1", mutatorName: "BooleanLiteral", status: "Survived", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } } }] },
+        "lib/stable.ts": { mutants: [{ id: "2", mutatorName: "BooleanLiteral", status: "Survived", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } } }] },
+      },
+    };
+    const summary = summarizeMutationReport(stryker, topKFiles(report, 3));
+    expect(summary.survivingMutants.find((m) => m.file === "core/checkout.ts")?.hotspot).toBe(true);
+    expect(summary.survivingMutants.find((m) => m.file === "lib/stable.ts")?.hotspot).toBe(false);
+    expect(summary.survivingMutants[0]?.file).toBe("core/checkout.ts"); // hotspot survivor sorts first
   });
 });

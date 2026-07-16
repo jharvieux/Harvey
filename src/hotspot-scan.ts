@@ -1,7 +1,8 @@
 // M3 (hotspot analysis) — shapes the `vitals` plugin's churn×complexity / coupling / knowledge-
 // risk / AI-provenance output into (a) a ranked hotspot table and (b) the deterministic boolean
 // sub-signals (truck-factor-1, co-change coupling, AI-authored+high-churn) as Finding[] for the
-// shared calibration harness.
+// shared calibration harness, plus (c) the mechanical cross-reference of other modules' findings
+// against the top-K hotspots (#363).
 //
 // STATUS: schema VERIFIED against a live `vitals 0.2.0 report --json <path>` run (issue #94).
 // VitalsReport/VitalsHotspotRow below match the real top-level shape: `hotspots` (per-file rows,
@@ -217,4 +218,30 @@ export function toFactFindings(report: VitalsReport): Finding[] {
   }
 
   return findings;
+}
+
+interface HotspotCrossRef {
+  findings: Finding[];
+  hotspotFindingIds: string[];
+}
+
+// Mechanical cross-reference (#363): a finding that also sits on a top-K churn×complexity
+// hotspot is top remediation priority — the same rule summarizeMutationReport applies to M8's
+// surviving mutants, generalized to any module's Finding[] (M1/M7/M9). Matching is substring
+// containment of the hotspot file path in the finding's location, which covers "path:line",
+// "path (pkg)", and "a <> b" location formats. Annotates via `note` and moves flagged findings
+// to the front; severity and the BFTB inputs are never touched, so graded counts are unchanged.
+export function crossReferenceHotspots(findings: Finding[], report: VitalsReport, k = 10): HotspotCrossRef {
+  const topK = topKFiles(report, k);
+  const annotated = findings.map((f) => {
+    const file = topK.find((hotspot) => f.location.includes(hotspot));
+    if (!file) return { finding: f, hotspot: false };
+    const tag = `Top remediation priority: ${file} is a top-${k} churn×complexity hotspot (M3 cross-reference).`;
+    return { finding: { ...f, note: f.note ? `${f.note} ${tag}` : tag }, hotspot: true };
+  });
+  const flagged = annotated.filter((a) => a.hotspot);
+  return {
+    findings: [...flagged, ...annotated.filter((a) => !a.hotspot)].map((a) => a.finding),
+    hotspotFindingIds: flagged.map((a) => a.finding.id),
+  };
 }
