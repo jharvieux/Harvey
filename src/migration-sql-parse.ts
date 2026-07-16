@@ -48,6 +48,7 @@ interface ParsedRlsTable {
 const SQL_TYPES = [
   "uuid", "text", "timestamptz", "timestamp", "integer", "bigint", "boolean",
   "numeric", "jsonb", "json", "date", "smallint", "varchar", "real", "double precision",
+  "serial", "bigserial", "smallserial",
 ];
 
 // #299: Prisma-generated migrations (prisma/migrations/**/migration.sql) double-quote every
