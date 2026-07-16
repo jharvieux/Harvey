@@ -9,6 +9,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
+import { detectHandrolledFindings } from "../detectors/handrolled.js";
+import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
@@ -63,10 +65,14 @@ interface MechanicalScanOptions {
   // (--tenant-key/--tenant-mode), so the static RLS-tenancy inference can be told the app's
   // convention instead of only inferring it from the built-in candidate list.
   tenancyOverride?: TenancyOverride;
+  // #267 — also run the M6 "looks hand-rolled" indicator detectors (Info-only, non-grading).
+  // Opt-in: the free-report path (quick-scan) wants them; the calibration gate and the other
+  // M1-scoring callers keep the M1-only default so their answer keys stay one-question keys.
+  handrolledIndicators?: boolean;
 }
 
 export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Finding[]> {
-  const { dir, bundleDir, tenancyOverride } = opts;
+  const { dir, bundleDir, tenancyOverride, handrolledIndicators } = opts;
 
   // Scope the walk to what should actually be scanned (issue #101): git-tracked files only
   // when dir is a git repo (excludes .env.local, .claude/worktrees/, node_modules, .next —
@@ -112,6 +118,12 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
 
     // Leftover-auth greps.
     findings.push(...scanLeftoverAuth(scanDir));
+
+    // M6 free-tier indicators (#267) — product code only; test/fixture files aren't audit
+    // findings. package.json stays in the set: the class-merge dep-gate reads it.
+    if (handrolledIndicators) {
+      findings.push(...detectHandrolledFindings(loadSources(scanDir).filter((f) => !NON_PRODUCT.test(f.path))));
+    }
 
     return findings;
   } finally {

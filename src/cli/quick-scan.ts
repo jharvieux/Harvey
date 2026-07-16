@@ -18,7 +18,7 @@
 
 import { writeFileSync } from "node:fs";
 import { runMechanicalScan } from "../scan/mechanical.js";
-import { buildQuickScanReport, type QuickScanReport } from "../quick-scan.js";
+import { buildQuickScanReport, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
 
 function arg(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -105,7 +105,28 @@ function render(r: QuickScanReport): string {
     }
   }
 
-  if (r.total === 0 && r.indicators.length === 0 && r.informational.length === 0) {
+  if (r.handrolled.length > 0) {
+    lines.push(`  ── ${HANDROLLED_SECTION_TITLE} ─────────────`);
+    lines.push(...wrap(HANDROLLED_SECTION_BLURB, "  "));
+    lines.push("");
+    for (const c of r.handrolled) {
+      const fileCount = c.files.length;
+      lines.push(`    ${c.shape} — ${c.total} place${c.total === 1 ? "" : "s"} in ${fileCount} file${fileCount === 1 ? "" : "s"}`);
+      for (const f of c.files.slice(0, HANDROLLED_FILES_SHOWN)) {
+        lines.push(`      ${f.locations[0]}${f.locations.length > 1 ? ` (${f.locations.length} places in this file)` : ""}`);
+      }
+      // The volume cap never truncates silently: what isn't printed is counted out loud,
+      // and every location is in the --json report.
+      const hidden = c.files.slice(HANDROLLED_FILES_SHOWN);
+      if (hidden.length > 0) {
+        const hiddenPlaces = hidden.reduce((sum, f) => sum + f.locations.length, 0);
+        lines.push(`      … and ${hidden.length} more file${hidden.length === 1 ? "" : "s"} (${hiddenPlaces} more place${hiddenPlaces === 1 ? "" : "s"}) — every location is in the --json output`);
+      }
+      lines.push("");
+    }
+  }
+
+  if (r.total === 0 && r.indicators.length === 0 && r.informational.length === 0 && r.handrolled.length === 0) {
     lines.push("  Stay clean on every push — monitoring is part of the paid unlock.");
     lines.push("");
   }
@@ -138,7 +159,7 @@ async function main(): Promise<void> {
   const tenantKey = arg("--tenant-key");
   const mode = tenantMode(arg("--tenant-mode"));
   const tenancyOverride = tenantKey || mode ? { tenantKey, mode } : undefined;
-  const report = buildQuickScanReport(await runMechanicalScan({ dir, bundleDir: bundle, tenancyOverride }));
+  const report = buildQuickScanReport(await runMechanicalScan({ dir, bundleDir: bundle, tenancyOverride, handrolledIndicators: true }));
 
   const out = arg("--out");
   const body = process.argv.includes("--json") ? JSON.stringify(report, null, 2) : render(report);
