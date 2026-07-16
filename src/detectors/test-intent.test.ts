@@ -1,0 +1,119 @@
+// M8 test-intent calibration gate: every structurally-dead-test class ships only with a caught
+// positive AND a cleared benign negative — the #61 fixture discipline (same gate shape as
+// slop.test.ts). This CASES table is the Layer-1 gate for #372/#384/#386's mechanical classes;
+// src/scan/calibration/m8.entries.ts is deliberately NOT extended — its module-tagged entries
+// are excluded from validate-calibration.ts scoring (see that file's header), so entries there
+// would gate nothing. This suite runs in `pnpm verify`.
+
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { detectTestIntentFindings } from "./test-intent.js";
+import type { SourceInput } from "./common.js";
+
+const FIXTURES_ROOT = fileURLToPath(new URL("./__fixtures__/test-intent/", import.meta.url));
+
+function loadFixtureDir(relDir: string): SourceInput[] {
+  const root = join(FIXTURES_ROOT, relDir);
+  const files: SourceInput[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (entry.endsWith(".txt")) files.push({ path: relative(root, full).replace(/\.txt$/, "").split(sep).join("/"), text: readFileSync(full, "utf8") });
+    }
+  };
+  walk(root);
+  return files;
+}
+
+function byTaxonomy(relDir: string, taxonomy: string) {
+  return detectTestIntentFindings(loadFixtureDir(relDir)).filter((f) => f.taxonomy === taxonomy);
+}
+
+interface Case {
+  name: string;
+  dir: string;
+  taxonomy: string;
+  posCount: number;
+  severity: string;
+  confidence: string;
+}
+
+const CASES: Case[] = [
+  // #372's three named classes.
+  { name: "mock of the subject under test", dir: "mock-of-subject", taxonomy: "M8 — Mock of the subject under test", posCount: 2, severity: "Medium", confidence: "Likely" },
+  { name: "assertion-free test", dir: "assertion-free", taxonomy: "M8 — Assertion-free test", posCount: 2, severity: "Medium", confidence: "Likely" },
+  { name: "tautological assertion", dir: "tautological", taxonomy: "M8 — Tautological assertion", posCount: 2, severity: "Medium", confidence: "Likely" },
+  // The two variants #372's follow-up comment adds.
+  { name: "snapshot-only test", dir: "snapshot-only", taxonomy: "M8 — Snapshot-only test", posCount: 2, severity: "Low", confidence: "Review" },
+  { name: "call-count-only test", dir: "call-count-only", taxonomy: "M8 — Call-count-only test", posCount: 1, severity: "Low", confidence: "Review" },
+];
+
+for (const c of CASES) {
+  describe(c.name, () => {
+    it("catches the positive with the right count, severity, confidence, and a line-anchored location", () => {
+      const hits = byTaxonomy(`${c.dir}/positive`, c.taxonomy);
+      expect(hits).toHaveLength(c.posCount);
+      for (const h of hits) {
+        expect(h).toMatchObject({ category: "Test quality", status: "Open", severity: c.severity, confidence: c.confidence });
+        expect(h.location).toMatch(/[^:]:\d+$/); // `path:line` — catches a detector that loses its line
+      }
+    });
+    it("clears the benign negative (incl. the discrimination boundaries)", () => {
+      expect(byTaxonomy(`${c.dir}/negative`, c.taxonomy)).toHaveLength(0);
+    });
+  });
+}
+
+// The discrimination boundaries that keep these low-FP are the load-bearing logic — lock them
+// individually so a lost guard fails a named test, not just the aggregate count.
+describe("discrimination boundaries (regression locks)", () => {
+  it("mock-of-subject fires on the basename match AND on an invoked binding from a differently-named module", () => {
+    const hits = byTaxonomy("mock-of-subject/positive", "M8 — Mock of the subject under test");
+    expect(hits.map((h) => h.location.split(":")[0]).sort()).toEqual(["api.test.ts", "user-service.test.ts"]);
+  });
+
+  it("mock-of-subject stays silent on a dependency mock, a partial mock (importOriginal), and mock-config-only usage", () => {
+    // negative/ has all three FP classes: mocking ./mailer.js while testing ./user-service.js,
+    // vi.mock with an importOriginal factory, and vi.mocked(fn).mockReturnValue() configuration.
+    expect(byTaxonomy("mock-of-subject/negative", "M8 — Mock of the subject under test")).toHaveLength(0);
+  });
+
+  it("assertion-free is cleared by expect, node:assert, a local assertion helper, and exempts it.todo", () => {
+    expect(byTaxonomy("assertion-free/negative", "M8 — Assertion-free test")).toHaveLength(0);
+  });
+
+  it("a snapshot-only test is NOT also flagged assertion-free (toMatchSnapshot is an expect call)", () => {
+    expect(byTaxonomy("snapshot-only/positive", "M8 — Assertion-free test")).toHaveLength(0);
+  });
+
+  it("a call-count-only test is NOT also flagged assertion-free, and toHaveBeenCalledWith clears it", () => {
+    expect(byTaxonomy("call-count-only/positive", "M8 — Assertion-free test")).toHaveLength(0);
+    expect(byTaxonomy("call-count-only/negative", "M8 — Call-count-only test")).toHaveLength(0);
+  });
+
+  it("tautological keys on the SAME expression on both sides — distinct identifiers and negation stay silent", () => {
+    const pos = byTaxonomy("tautological/positive", "M8 — Tautological assertion");
+    expect(pos.map((f) => f.location)).toEqual(["totals.test.ts:7", "totals.test.ts:12"]);
+    expect(byTaxonomy("tautological/negative", "M8 — Tautological assertion")).toHaveLength(0);
+  });
+
+  it("a snapshot test that also asserts a specific value clears snapshot-only", () => {
+    expect(byTaxonomy("snapshot-only/negative", "M8 — Snapshot-only test")).toHaveLength(0);
+  });
+});
+
+describe("finding shape", () => {
+  it("emits sequential TESTINT-* ids", () => {
+    const findings = detectTestIntentFindings(loadFixtureDir("tautological/positive"));
+    expect(findings.length).toBeGreaterThan(0);
+    findings.forEach((f, i) => expect(f.id).toBe(`TESTINT-${String(i + 1).padStart(2, "0")}`));
+  });
+
+  it("ignores non-test source files even when they contain test-shaped code", () => {
+    const text = readFileSync(join(FIXTURES_ROOT, "assertion-free/positive/report.test.ts.txt"), "utf8");
+    expect(detectTestIntentFindings([{ path: "report-helpers.ts", text }])).toHaveLength(0);
+  });
+});

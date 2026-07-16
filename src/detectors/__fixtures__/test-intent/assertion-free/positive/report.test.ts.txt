@@ -1,0 +1,12 @@
+import { describe, it } from "vitest";
+import { buildReport, exportPdf } from "./report.js";
+
+describe("report", () => {
+  it("builds the quarterly report", () => {
+    buildReport("2026-Q2");
+  });
+
+  it("exports to pdf", async () => {
+    await exportPdf("2026-Q2");
+  });
+});

@@ -1,0 +1,23 @@
+import assert from "node:assert";
+import { describe, expect, it } from "vitest";
+import { buildReport, exportPdf } from "./report.js";
+
+function checkReportShape(report: unknown): void {
+  expect(report).toMatchObject({ quarter: expect.any(String) });
+}
+
+describe("report", () => {
+  it("builds the quarterly report", () => {
+    expect(buildReport("2026-Q2").rows.length).toBe(12);
+  });
+
+  it("exports to pdf", async () => {
+    assert.equal(await exportPdf("2026-Q2"), true);
+  });
+
+  it("delegates its assertions to a local helper", () => {
+    checkReportShape(buildReport("2026-Q2"));
+  });
+
+  it.todo("handles an empty quarter");
+});

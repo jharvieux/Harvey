@@ -13,8 +13,9 @@
 // on Turbopack builds; optional, no auto-detection (the artifact isn't part of `.next`).
 //
 // Thin untested I/O wrapper per the repo convention — the detectors themselves are the
-// tested pure transforms. Test/story/fixture files are excluded: perf and boundary findings
-// in test code aren't audit findings.
+// tested pure transforms. Test/story/fixture files are excluded from the product-code
+// detectors (perf and boundary findings in test code aren't audit findings) but ARE loaded
+// for the M8 test-intent pass (#372) — its subject matter is the test files themselves.
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
@@ -25,6 +26,7 @@ import { parseBundleAnalyzerStats, parseBundleStats } from "../detectors/bundle-
 import { detectHookDepFindings } from "../detectors/hook-deps.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
+import { detectTestIntentFindings } from "../detectors/test-intent.js";
 import type { SourceInput } from "../detectors/common.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
 
@@ -53,7 +55,6 @@ function loadSources(root: string): SourceInput[] {
         if (!EXCLUDED_DIR.test(entry)) walk(full);
       } else if (SOURCE_FILE.test(entry) || CONFIG_FILE.test(entry)) {
         const path = relative(root, full).split(sep).join("/");
-        if (NON_PRODUCT.test(path)) continue;
         files.push({ path, text: readFileSync(full, "utf8") });
       }
     }
@@ -65,8 +66,11 @@ function loadSources(root: string): SourceInput[] {
 const targetDir = resolve(targetArg);
 const { scanDir, cleanup } = resolveScanScope(targetDir);
 try {
-  const sources = loadSources(scanDir);
-  console.log(`loaded ${sources.length} source files from ${targetDir}`);
+  const allSources = loadSources(scanDir);
+  // Product-code detectors skip test/story/fixture files; the M8 test-intent pass reads the
+  // full set (test files are its subject; non-test files feed its cross-file resolution).
+  const sources = allSources.filter((f) => !NON_PRODUCT.test(f.path));
+  console.log(`loaded ${allSources.length} source files (${sources.length} product-code) from ${targetDir}`);
 
   // Bundle tier: explicit --build flags, or auto-detected .next dirs (root + apps/*).
   // Build artifacts live in the REAL target dir — they're gitignored, so the scoped copy
@@ -96,6 +100,7 @@ try {
     ...detectPerfCodeFindings(sources),
     ...detectHookDepFindings(sources),
     ...detectSlopFindings(sources),
+    ...detectTestIntentFindings(allSources), // M8 free tier (#372) — needs the test files too
     ...scanAssetWeight(scanDir), // scoped copy = committed files only
     ...buildDirs.flatMap((b) => parseBundleStats(b)),
     ...statsPaths.flatMap((p) => parseBundleAnalyzerStats(p)),
