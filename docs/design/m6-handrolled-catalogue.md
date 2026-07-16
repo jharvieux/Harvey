@@ -37,8 +37,9 @@ capability-claiming text.
 
 **Dep-gate** below means the detector fires only when the named library (or category of library) is
 already in the target's dependency tree — otherwise hand-rolling is the deliberate dep-drop shape
-(`targets/calibration/simplify/depdrop.ts`), not a reinvention indicator. The shipped class-merge
-detector is the reference implementation (`hasClassMergeDep`, fails closed with no package.json).
+(`targets/calibration/simplify/depdrop.ts`), not a reinvention indicator. The gate is the generic
+`depGatePresent(files, libNames)` (`src/detectors/handrolled.ts`, PR #409 — fails closed with no
+package.json); the shipped class-merge detector is its first consumer.
 
 ---
 
@@ -272,12 +273,16 @@ unwound.
    corpus so the next detector batch is ordered by measured frequency instead of judgment. Until
    then, no "common"/"rampant" claim from this doc may appear in client-facing text.
 2. **Next detector batch** — the YES column, in corpus-measured order, fixtures first. The
-   dep-gate entries need `hasClassMergeDep` generalized to a per-library gate.
+   per-library dep-gate the entries need is DONE (PR #409: `depGatePresent`, fails closed) — the
+   dep-gated entries are unblocked on that front.
 3. **The boundary checks** — SETTLED 2026-07-16 (#406): 74 → BOUNDARY → M7 (`detectUnboundedSelect`
    fires on the fetch-all variant, probed); 18/47/65/67/72/102 verified non-overlapping — each
    stays MAYBE with the evidence and the remaining blocker recorded in its reason cell. One
    residual cross-module note: the column-projected `select('id')` + `.length` count shape is
    outside M7's current net (probed silent) — an M7 net extension, if wanted, not M6 work.
-4. **WHY-comment suppression** (from 58) — a mechanical "an adjacent `WHY:` comment suppresses the
-   indicator" rule would extend the depdrop discipline to every indicator class; worth designing
-   once, centrally, not per-detector.
+4. **WHY-comment suppression** (from 58) — DONE 2026-07-16 (PR #409): implemented once, centrally,
+   in the shared emission path (`makeIndicator`), so it applies to every current and future
+   indicator class. Adjacency = a `/why:/i` comment leading the flagged node's enclosing statement
+   or trailing on its line; narration without the marker never suppresses (fixture-locked). Known
+   literalism: a WHY comment above the enclosing *function* does not suppress a shape inside the
+   body — extend deliberately if real targets show that placement dominates.
