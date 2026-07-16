@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, PrecisionTier, Severity } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
-import { buildQuickScanReport, computeGrade, pickSample, selectFreeFindings, selectGradedFindings, selectIndicators } from "./quick-scan.js";
+import {
+  buildQuickScanReport,
+  computeGrade,
+  HANDROLLED_FILES_SHOWN,
+  HANDROLLED_SECTION_BLURB,
+  HANDROLLED_SECTION_TITLE,
+  pickSample,
+  rollupHandrolled,
+  selectFreeFindings,
+  selectGradedFindings,
+  selectIndicators,
+} from "./quick-scan.js";
 
 function finding(id: string, severity: Severity, precisionTier: PrecisionTier, over: Partial<Finding> = {}): Finding {
   return {
@@ -198,6 +209,96 @@ describe("RLS/authz indicators are surfaced but never graded (#220)", () => {
     const report = buildQuickScanReport([indicator("rls"), finding("other", "High", "review", { category: "Leftover auth" })]);
     expect(report.indicators).toHaveLength(1);
     expect(report.reviewTierExcluded).toBe(1); // the leftover-auth noise only
+  });
+});
+
+// #267 — M6 "looks hand-rolled" indicators: the second non-grading indicators section, and the
+// volume rule (roll up per class per file; the report keeps EVERY location — only the text
+// renderer caps files, out loud). Mirrors src/detectors/handrolled.ts's makeIndicator exactly:
+// severity Info, no precisionTier — the shape the real detector emits.
+function m6(id: string, shape: string, location: string): Finding {
+  return {
+    id,
+    status: "Open",
+    category: "Maintainability",
+    severity: "Info",
+    confidence: "Review",
+    title: `Looks hand-rolled: ${shape} — may be worth investigating`,
+    taxonomy: `M6 — Indicator: ${shape}`,
+    location,
+    evidence: "e",
+    impact: "i",
+    fix: "non-grading indicator",
+    value: 2,
+    ease: 3,
+    safety: 4,
+  };
+}
+
+describe("M6 hand-rolled indicators are rolled up and never graded (#267)", () => {
+  it("groups by class then by file, most occurrences first, keeping every location", () => {
+    const rolled = rollupHandrolled([
+      m6("a", "cookie parsing", "src/session.ts:12"),
+      m6("b", "cookie parsing", "src/session.ts:30"),
+      m6("c", "cookie parsing", "src/mw.ts:8"),
+      m6("d", "JSON deep-equal", "src/eq.ts:3"),
+      finding("noise", "High", "review", { category: "Leftover auth" }),
+    ]);
+    expect(rolled.map((c) => c.shape)).toEqual(["cookie parsing", "JSON deep-equal"]); // by total desc
+    expect(rolled[0]).toMatchObject({ taxonomy: "M6 — Indicator: cookie parsing", total: 3 });
+    expect(rolled[0]!.files).toEqual([
+      { file: "src/session.ts", locations: ["src/session.ts:12", "src/session.ts:30"] },
+      { file: "src/mw.ts", locations: ["src/mw.ts:8"] },
+    ]);
+  });
+
+  it("the rollup itself never drops anything — the renderer's file cap is presentation only", () => {
+    const many = Array.from({ length: HANDROLLED_FILES_SHOWN + 4 }, (_, i) => m6(`f${i}`, "random-string id", `src/f${i}.ts:1`));
+    const rolled = rollupHandrolled(many);
+    expect(rolled[0]!.files).toHaveLength(HANDROLLED_FILES_SHOWN + 4);
+    expect(rolled[0]!.total).toBe(HANDROLLED_FILES_SHOWN + 4);
+  });
+
+  it("indicators reach the report but never the grade, count, or teaser", () => {
+    const report = buildQuickScanReport([m6("a", "cookie parsing", "src/x.ts:1"), finding("dep", "Low", "high")]);
+    expect(report.handrolled).toHaveLength(1);
+    expect(report.grade).toBe("A");
+    expect(report.total).toBe(1);
+    expect(report.sample?.id).toBe("dep");
+  });
+
+  it("is not swept into the 'excluded signals' tally — shown, not withheld", () => {
+    const report = buildQuickScanReport([
+      m6("a", "cookie parsing", "src/x.ts:1"),
+      m6("b", "cookie parsing", "src/x.ts:9"),
+      finding("other", "High", "review", { category: "Leftover auth" }),
+    ]);
+    expect(report.handrolled[0]?.total).toBe(2);
+    expect(report.reviewTierExcluded).toBe(1); // the leftover-auth noise only
+  });
+
+  it("a clean target has an empty section", () => {
+    expect(buildQuickScanReport([]).handrolled).toEqual([]);
+  });
+});
+
+// The #267 operator ruling's language discipline applies to the SECTION copy too, not just the
+// detector fields (which src/detectors/handrolled.test.ts already locks): hedged, no replacement
+// named, no defect asserted. If the copy drifts to "should be replaced with X", this fails.
+describe("free-report hand-rolled section copy stays hedged (#267 language lock)", () => {
+  const REPLACEMENT_NAMES =
+    /structuredClone|isDeepStrictEqual|URLSearchParams|useSearchParams|next\/headers|cookies\(\)|randomUUID|nanoid|clsx|tailwind-merge|\bclassnames\b|lodash|should be replaced|replace (this|it) with/i;
+
+  it("never names a replacement or asserts a defect", () => {
+    for (const copy of [HANDROLLED_SECTION_TITLE, HANDROLLED_SECTION_BLURB]) {
+      expect(copy).not.toMatch(REPLACEMENT_NAMES);
+    }
+  });
+
+  it("hedges and stays out of the grade in so many words", () => {
+    expect(HANDROLLED_SECTION_TITLE).toContain("may be worth investigating");
+    expect(HANDROLLED_SECTION_BLURB).toContain("NOT counted in the grade");
+    expect(HANDROLLED_SECTION_BLURB).toContain("no defect is asserted");
   });
 });
 

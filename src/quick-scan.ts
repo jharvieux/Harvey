@@ -34,6 +34,19 @@ export interface DiagnosisFinding {
   fix?: string;
 }
 
+// One M6 "looks hand-rolled" indicator class, rolled up for presentation (#267 Phase 2).
+// The rollup is the volume rule the operator ruling requires: repeats of the same shape are
+// grouped per file rather than listed one row per occurrence, so forty debounces can't bury
+// the real signal. `files` is COMPLETE (every file, every location) — the presentation layer
+// caps how many it prints, but the report itself never silently truncates.
+export interface HandrolledIndicatorClass {
+  taxonomy: string; // "M6 — Indicator: cookie parsing"
+  shape: string; // the class label shown to the reader — the taxonomy's suffix
+  title: string; // the hedged per-finding title (locked vocabulary, shared by the class)
+  total: number; // occurrences of this shape across the whole target
+  files: { file: string; locations: string[] }[]; // every occurrence, grouped by file
+}
+
 export interface QuickScanReport {
   grade: Grade;
   score: number;
@@ -45,6 +58,7 @@ export interface QuickScanReport {
   findings: DiagnosisFinding[];
   informational: DiagnosisFinding[]; // seen, reported, deliberately not graded (#213)
   indicators: DiagnosisFinding[]; // source-tier tenant-isolation/authz signals, not verdicts (#220)
+  handrolled: HandrolledIndicatorClass[]; // M6 "looks hand-rolled" indicators, rolled up (#267)
   sample: DiagnosisFinding | null; // the one teaser, always shown with its fix
   reviewTierExcluded: number; // heuristic findings deliberately kept out of the free grade
   locked: boolean;
@@ -110,6 +124,61 @@ const INDICATOR_CATEGORY = "Multi-tenant security";
 export function selectIndicators(findings: Finding[]): Finding[] {
   return findings.filter((f) => f.precisionTier === "review" && f.category === INDICATOR_CATEGORY);
 }
+
+// M6 "looks hand-rolled" indicators (#267) — the second non-grading indicators section, same
+// #227 framing as the RLS/authz one: descriptive, hedged, never a verdict, never in the grade.
+// Keyed on the taxonomy prefix the detectors (src/detectors/handrolled.ts) and their language
+// lock already guarantee.
+const HANDROLLED_TAXONOMY_PREFIX = "M6 — Indicator: ";
+
+function selectHandrolledIndicators(findings: Finding[]): Finding[] {
+  return findings.filter((f) => f.taxonomy.startsWith(HANDROLLED_TAXONOMY_PREFIX));
+}
+
+// The volume rule (#267 Phase 2, the operator ruling's risk #2): group per class, then per
+// file, ordered most-occurrences-first. Nothing is dropped — `files` carries every location;
+// only the text renderer caps how many FILES it prints (HANDROLLED_FILES_SHOWN) and it always
+// states what it didn't print. Presentation problem, presentation-layer fix: the underlying
+// Finding[] (detect-static output, the --json report) stays one row per occurrence.
+export const HANDROLLED_FILES_SHOWN = 3;
+
+export function rollupHandrolled(findings: Finding[]): HandrolledIndicatorClass[] {
+  const byTaxonomy = new Map<string, Finding[]>();
+  for (const f of selectHandrolledIndicators(findings)) {
+    const list = byTaxonomy.get(f.taxonomy) ?? [];
+    list.push(f);
+    byTaxonomy.set(f.taxonomy, list);
+  }
+  return [...byTaxonomy.entries()]
+    .map(([taxonomy, hits]) => {
+      const byFile = new Map<string, string[]>();
+      for (const h of hits) {
+        const file = h.location.replace(/:\d+$/, "");
+        const locs = byFile.get(file) ?? [];
+        locs.push(h.location);
+        byFile.set(file, locs);
+      }
+      return {
+        taxonomy,
+        shape: taxonomy.slice(HANDROLLED_TAXONOMY_PREFIX.length),
+        title: hits[0]!.title,
+        total: hits.length,
+        files: [...byFile.entries()]
+          .map(([file, locations]) => ({ file, locations }))
+          .sort((a, b) => b.locations.length - a.locations.length || a.file.localeCompare(b.file)),
+      };
+    })
+    .sort((a, b) => b.total - a.total || a.taxonomy.localeCompare(b.taxonomy));
+}
+
+// Section copy for the free report, exported so the CLI renders exactly these strings and the
+// language-lock test can gate them alongside the detector vocabulary: hedged, no replacement
+// named, no defect asserted — drifting to "should be replaced" voids the free/paid split.
+export const HANDROLLED_SECTION_TITLE = "Looks hand-rolled — may be worth investigating";
+export const HANDROLLED_SECTION_BLURB =
+  "Recognisable hand-rolled shapes in your source. NOT counted in the grade, and no defect is " +
+  "asserted — each may be a deliberate choice. The deep scan triages every one: genuine " +
+  "reinvention, or a reasonable decision worth a WHY comment.";
 
 function countBySeverity(findings: Finding[]): Record<Severity, number> {
   const counts = Object.fromEntries(SEVERITIES.map((s) => [s, 0])) as Record<Severity, number>;
@@ -183,6 +252,8 @@ export function buildQuickScanReport(findings: Finding[], opts: { unlocked?: boo
   const graded = free.filter((f) => !isNonGrading(f));
   const informational = free.filter(isNonGrading);
   const indicators = selectIndicators(findings);
+  const handrolled = rollupHandrolled(findings);
+  const handrolledCount = handrolled.reduce((sum, c) => sum + c.total, 0);
   const { grade, score } = computeGrade(graded);
   const sample = pickSample(graded);
   return {
@@ -196,10 +267,11 @@ export function buildQuickScanReport(findings: Finding[], opts: { unlocked?: boo
     findings: graded.map((f) => toDiagnosis(f, unlocked)),
     informational: informational.map((f) => toDiagnosis(f, unlocked)),
     indicators: indicators.map((f) => toDiagnosis(f, unlocked)),
+    handrolled,
     sample: sample ? toDiagnosis(sample, true) : null,
-    // Heuristic signals kept out of the grade. Indicators are surfaced rather than merely
-    // counted, so they aren't part of this "excluded" tally.
-    reviewTierExcluded: findings.length - free.length - indicators.length,
+    // Heuristic signals kept out of the grade. Indicators (both kinds) are surfaced rather
+    // than merely counted, so they aren't part of this "excluded" tally.
+    reviewTierExcluded: findings.length - free.length - indicators.length - handrolledCount,
     locked: !unlocked,
     gated: unlocked ? [] : GATED_CAPABILITIES,
   };

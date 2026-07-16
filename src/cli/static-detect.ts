@@ -17,18 +17,18 @@
 // detectors (perf and boundary findings in test code aren't audit findings) but ARE loaded
 // for the M8 test-intent pass (#372) — its subject matter is the test files themselves.
 
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { Finding } from "../findings.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { scanAssetWeight } from "../detectors/asset-weight.js";
 import { parseBundleAnalyzerStats, parseBundleStats } from "../detectors/bundle-stats.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { detectHookDepFindings } from "../detectors/hook-deps.js";
+import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
 import { detectTestIntentFindings } from "../detectors/test-intent.js";
-import type { SourceInput } from "../detectors/common.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
 
 const args = process.argv.slice(2);
@@ -39,29 +39,6 @@ const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
 if (!targetArg) {
   console.error("usage: pnpm detect-static <target-dir> [--out findings.static.json]");
   process.exit(2);
-}
-
-const SOURCE_FILE = /\.(ts|tsx|jsx|mjs)$/;
-const CONFIG_FILE = /^(next\.config\.(js|mjs|cjs|ts)|\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs)|package\.json)$/;
-const EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out)$/;
-const NON_PRODUCT = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)(__tests__|__mocks__|__fixtures__|__snapshots__)\/|\.stories\./;
-
-function loadSources(root: string): SourceInput[] {
-  const files: SourceInput[] = [];
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      const stat = statSync(full);
-      if (stat.isDirectory()) {
-        if (!EXCLUDED_DIR.test(entry)) walk(full);
-      } else if (SOURCE_FILE.test(entry) || CONFIG_FILE.test(entry)) {
-        const path = relative(root, full).split(sep).join("/");
-        files.push({ path, text: readFileSync(full, "utf8") });
-      }
-    }
-  };
-  walk(root);
-  return files;
 }
 
 const targetDir = resolve(targetArg);
