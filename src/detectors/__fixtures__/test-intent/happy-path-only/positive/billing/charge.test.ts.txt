@@ -1,0 +1,10 @@
+import { describe, expect, it } from "vitest";
+import { chargeCard } from "../payment.js";
+
+describe("chargeCard", () => {
+  it("charges the saved card", () => {
+    const receipt = chargeCard(500);
+    expect(receipt.ok).toBe(true);
+    expect(receipt.amount).toBe(500);
+  });
+});

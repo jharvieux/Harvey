@@ -1,0 +1,9 @@
+export interface Receipt {
+  ok: boolean;
+  amount: number;
+}
+
+export function chargeCard(amount: number): Receipt {
+  if (amount <= 0) throw new Error("amount must be positive");
+  return { ok: true, amount };
+}

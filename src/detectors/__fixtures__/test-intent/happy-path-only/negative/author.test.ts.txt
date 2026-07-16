@@ -1,0 +1,8 @@
+import { describe, expect, it } from "vitest";
+import { formatAuthor } from "./author.js";
+
+describe("formatAuthor", () => {
+  it("formats the display name", () => {
+    expect(formatAuthor({ id: "a1", name: "Ada" })).toBe("Ada (a1)");
+  });
+});

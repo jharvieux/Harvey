@@ -1,0 +1,10 @@
+import { describe, expect, it } from "vitest";
+import { renderBanner } from "./banner.js";
+
+describe("banner", () => {
+  it("renders the banner with the tenant name", () => {
+    const html = renderBanner("acme");
+    expect(html).toContain("acme");
+    expect(html).toMatchSnapshot();
+  });
+});

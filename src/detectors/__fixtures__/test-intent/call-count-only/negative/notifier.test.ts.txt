@@ -1,0 +1,17 @@
+import { describe, expect, it, vi } from "vitest";
+import { notifyAll } from "./notifier.js";
+
+describe("notifier", () => {
+  it("notifies with the right payload", () => {
+    const send = vi.fn();
+    notifyAll(["a"], send);
+    expect(send).toHaveBeenCalledWith("a");
+  });
+
+  it("counts calls but also checks the result", () => {
+    const send = vi.fn(() => true);
+    const delivered = notifyAll(["a"], send);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(delivered).toBe(1);
+  });
+});

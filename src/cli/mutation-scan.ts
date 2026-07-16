@@ -15,6 +15,13 @@
 //
 //   pnpm mutation-scan <target-dir> [--config <path>] [--concurrency <n>] [--incremental]
 //                       [--report <path>] [--hotspots <file>] [--out <file>]
+//                       [--stub-check [--test-cmd "<cmd>"]]
+//
+// --stub-check (#373) runs the fast pre-Stryker deletion-survival pass INSTEAD of Stryker:
+// each covered exported function is stubbed to `return undefined` in place (backed up and
+// restored), the covering test files are re-run via --test-cmd (default `npm test --`, which
+// gets the covering test paths appended), and a suite that still passes yields an M8-01-*
+// finding (src/stub-check.ts). O(exported functions) suite runs, no Stryker install needed.
 //
 // --report points at the mutation.json Stryker already wrote (skips re-running Stryker — use
 // this to shape a report from a prior run). Without --report, this invokes `stryker run` and
@@ -24,9 +31,11 @@
 // --hotspots points at a text file, one repo-relative path per line (e.g. the M3 hotspot file
 // list), used to flag surviving mutants that sit on a security/perf hotspot as top priority.
 
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { execSync, execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
+import type { SourceInput } from "../detectors/common.js";
+import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
 import {
   detectNoTestSuite,
   noTestSuiteFinding,
@@ -49,11 +58,12 @@ function arg(flag: string): string | undefined {
 const targetArg = args.find((a) => !a.startsWith("--"));
 
 if (!targetArg) {
-  console.error("usage: pnpm mutation-scan <target-dir> [--config <path>] [--concurrency <n>] [--incremental] [--report <path>] [--hotspots <file>] [--out <file>]");
+  console.error("usage: pnpm mutation-scan <target-dir> [--config <path>] [--concurrency <n>] [--incremental] [--report <path>] [--hotspots <file>] [--out <file>] [--stub-check [--test-cmd \"<cmd>\"]]");
   process.exit(2);
 }
 
 const targetDir = resolve(targetArg);
+const stubCheck = process.argv.includes("--stub-check");
 const configPath = arg("--config");
 const concurrency = arg("--concurrency");
 const incremental = process.argv.includes("--incremental");
@@ -108,6 +118,61 @@ if (!reportPath) {
   }
 }
 
+// #373: the fast pre-Stryker deletion-survival pass. Everything below (Stryker invocation,
+// report shaping) is bypassed — this mode's output is stub-check runs + M8-01 findings.
+if (stubCheck) {
+  const SOURCE_FILE = /\.([cm]?[jt]s|[jt]sx)$/;
+  const EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out|reports|stryker-tmp)$/;
+  const loadSources = (root: string): SourceInput[] => {
+    const files: SourceInput[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) {
+          if (!EXCLUDED_DIR.test(entry)) walk(full);
+        } else if (SOURCE_FILE.test(entry)) {
+          files.push({ path: relative(root, full).split(sep).join("/"), text: readFileSync(full, "utf8") });
+        }
+      }
+    };
+    walk(root);
+    return files;
+  };
+
+  const testCmd = arg("--test-cmd") ?? "npm test --";
+  // In-place stub with backup/restore — the same write-mutate-run shape Stryker itself uses,
+  // restored in a finally so a crashed test run can't leave a stubbed file behind.
+  const runner: StubTestRunner = (stub, tests) => {
+    const abs = join(targetDir, stub.file);
+    const original = readFileSync(abs, "utf8");
+    writeFileSync(abs, stub.stubbedText);
+    try {
+      execSync(`${testCmd} ${tests.join(" ")}`, { cwd: targetDir, stdio: "ignore" });
+      return true; // exit 0 with the body deleted — the suite survived
+    } catch {
+      return false;
+    } finally {
+      writeFileSync(abs, original);
+    }
+  };
+
+  const runs = runStubCheck(loadSources(targetDir), runner);
+  const findings = stubSurvivalFindings(runs);
+  const checkedFiles = new Set(runs.map((r) => r.file)).size;
+  console.error(`M8 stub-check: ${runs.length} exported function(s) stubbed across ${checkedFiles} covered file(s); ${findings.length} suite(s) survive deletion`);
+  if (runs.length === 0) {
+    console.error("⚠ no covered source files found (no test file imports or sits beside a source file) — nothing was checked; this is NOT a clean result");
+  }
+  const stubJson = JSON.stringify({ runs, findings }, null, 2);
+  if (outPath) {
+    writeFileSync(outPath, stubJson + "\n");
+    console.error(`wrote stub-check results to ${outPath}`);
+  } else {
+    console.log(stubJson);
+  }
+  process.exit(0);
+}
+
 function runStryker(): string {
   const strykerArgs = ["run"];
   if (configPath) strykerArgs.push(configPath);
@@ -147,6 +212,11 @@ const summary = summarizeMutationReport(report, hotspotFiles);
 
 console.error(`M8 mutation score: ${summary.overall.mutationScore}% (${summary.overall.killed + summary.overall.timeout}/${summary.overall.totalMutants - summary.overall.ignored - summary.overall.compileErrors} valid mutants killed)`);
 console.error(`${summary.survivingMutants.length} surviving mutant(s), ${summary.survivingMutants.filter((m) => m.hotspot).length} on a flagged hotspot`);
+// #386: survivors concentrated in the boundary/negation mutator families mean "the denial
+// branch was never tested" — a sharper sentence than "some mutants survived".
+for (const b of summary.mutatorBreakdown.filter((x) => x.denialBoundaryConcentrated)) {
+  console.error(`⚠ ${b.file}: ${b.boundarySurvivors}/${b.boundarySurvivors + b.otherSurvivors} survivors are boundary/negation mutants (ConditionalExpression/EqualityOperator/BooleanLiteral) — denial/boundary path looks untested`);
+}
 
 const output = { summary, reportRows: toReportRows(summary) };
 const json = JSON.stringify(output, null, 2);

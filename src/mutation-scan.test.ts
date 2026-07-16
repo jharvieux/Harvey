@@ -98,6 +98,29 @@ describe("summarizeMutationReport", () => {
   });
 });
 
+// #386 layer 2: the mutator-type breakdown that separates "the denial/boundary branch is
+// untested" (survivors concentrated in ConditionalExpression/EqualityOperator/BooleanLiteral)
+// from "scattered coverage gaps".
+describe("mutatorBreakdown", () => {
+  it("counts each file's Survived+NoCoverage mutants per mutator type", () => {
+    const summary = summarizeMutationReport(report);
+    const secrets = summary.mutatorBreakdown.find((b) => b.file === "src/scan/secrets.ts");
+    expect(secrets).toMatchObject({ survivorsByMutator: { BooleanLiteral: 1 }, boundarySurvivors: 1, otherSurvivors: 0 });
+    const supabase = summary.mutatorBreakdown.find((b) => b.file === "src/scan/supabase.ts");
+    expect(supabase).toMatchObject({ survivorsByMutator: { ConditionalExpression: 1 }, boundarySurvivors: 1, otherSurvivors: 0 });
+  });
+
+  it("does NOT call a single boundary survivor concentrated — the >=2 floor is load-bearing", () => {
+    const summary = summarizeMutationReport(report);
+    expect(summary.mutatorBreakdown.every((b) => !b.denialBoundaryConcentrated)).toBe(true);
+  });
+
+  it("omits files with zero survivors entirely", () => {
+    const summary = summarizeMutationReport(report);
+    expect(summary.mutatorBreakdown.some((b) => b.file === "src/findings.ts")).toBe(false);
+  });
+});
+
 describe("toReportRows", () => {
   it("shapes one row per module with mutation score and surviving-mutant counts for the §3b table", () => {
     const summary = summarizeMutationReport(report, ["src/scan/supabase.ts"]);
@@ -181,6 +204,21 @@ describe("M8 calibration corpus — live Stryker capture (#72 §M8)", () => {
     const summary = summarizeMutationReport(m8Report);
     // 19 killed / 25 valid = 76.0% — matches Stryker's own "All files" score-table row.
     expect(summary.overall).toMatchObject({ totalMutants: 25, killed: 19, survived: 4, noCoverage: 2, mutationScore: 76 });
+  });
+
+  // #386's acceptance ground truth: M8-P-TAUTOLOGICAL's documented survivors land on the
+  // non-member branch, the negative-total guard, and the <100 boundary — so the breakdown must
+  // identify discount.ts as denial/boundary-concentrated without any new fixture being planted.
+  it("flags discount.ts as denial/boundary-concentrated (4 boundary-family vs 2 other survivors) and leaves authz.ts out", () => {
+    const summary = summarizeMutationReport(m8Report);
+    const discount = summary.mutatorBreakdown.find((b) => b.file === "discount.ts");
+    expect(discount).toMatchObject({
+      survivorsByMutator: { ConditionalExpression: 3, EqualityOperator: 1, StringLiteral: 1, ArithmeticOperator: 1 },
+      boundarySurvivors: 4,
+      otherSurvivors: 2,
+      denialBoundaryConcentrated: true,
+    });
+    expect(summary.mutatorBreakdown.some((b) => b.file === "authz.ts")).toBe(false);
   });
 });
 

@@ -6,6 +6,7 @@ import {
   checkEdgeFunctionVerifyJwt,
   checkMigrationDefinerAuthz,
   checkMigrationPolicySemantics,
+  checkMigrationRlsInitplanStatic,
   checkMigrationRlsStatic,
   type TenancyOverride,
 } from "./supabase-static.js";
@@ -423,5 +424,108 @@ $$;`,
   it("returns nothing when the target has no migrations at all", () => {
     root = mkdtempSync(join(tmpdir(), "harvey-definer-"));
     expect(checkMigrationDefinerAuthz(root)).toEqual([]);
+  });
+});
+
+describe("checkMigrationRlsInitplanStatic (#374)", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function writeMigrations(files: Record<string, string>): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-initplan-"));
+    const dir = join(root, "supabase", "migrations");
+    mkdirSync(dir, { recursive: true });
+    for (const [name, sql] of Object.entries(files)) writeFileSync(join(dir, name), sql);
+    return root;
+  }
+
+  it("flags a bare auth.uid() in a USING clause at review tier, never the free count", () => {
+    const dir = writeMigrations({
+      "0001_rls.sql": `create policy orders_select_own on public.orders
+  for select using (tenant_id = public.current_tenant_id() and created_by = auth.uid());`,
+    });
+    const findings = checkMigrationRlsInitplanStatic(dir);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.precisionTier).toBe("review");
+    expect(findings[0]!.severity).toBe("Perf");
+    expect(findings[0]!.evidence).toContain("auth.uid() in USING");
+    expect(findings[0]!.location).toContain("0001_rls.sql:1");
+    expect(findings[0]!.location).toContain("public.orders.orders_select_own");
+  });
+
+  it("flags a bare auth.role() in a WITH CHECK clause", () => {
+    const dir = writeMigrations({
+      "0001_rls.sql": `create policy orders_insert on public.orders
+  for insert with check (auth.role() = 'authenticated');`,
+    });
+    const findings = checkMigrationRlsInitplanStatic(dir);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.evidence).toContain("auth.role() in WITH CHECK");
+  });
+
+  it("clears a call already wrapped as (select auth.uid()) — the hoisted initplan shape", () => {
+    const dir = writeMigrations({
+      "0001_rls.sql": `create policy events_select_own on public.events
+  for select using (tenant_id = public.current_tenant_id() and actor = (select auth.uid()));`,
+    });
+    expect(checkMigrationRlsInitplanStatic(dir)).toEqual([]);
+  });
+
+  it("clears the wrapper regardless of case and inner whitespace: ( SELECT auth.uid() )", () => {
+    const dir = writeMigrations({
+      "0001_rls.sql": `create policy events_select_own on public.events
+  for select using (actor = ( SELECT auth.uid() ));`,
+    });
+    expect(checkMigrationRlsInitplanStatic(dir)).toEqual([]);
+  });
+
+  it("still flags extra parens that are NOT a subquery: (auth.uid()) re-evaluates per row", () => {
+    const dir = writeMigrations({
+      "0001_rls.sql": `create policy orders_select_own on public.orders
+  for select using (created_by = (auth.uid()));`,
+    });
+    expect(checkMigrationRlsInitplanStatic(dir)).toHaveLength(1);
+  });
+
+  it("does not let a preceding balanced pair fool the outward walk (fn() and auth.uid())", () => {
+    // The paren pair of current_tenant_id() closes before the auth call — it is NOT an
+    // enclosing wrapper, so the call is still bare and must be flagged.
+    const dir = writeMigrations({
+      "0001_rls.sql": `create policy notes_rw on public.notes
+  for all using (tenant_id = public.current_tenant_id() and created_by = auth.uid());`,
+    });
+    expect(checkMigrationRlsInitplanStatic(dir)).toHaveLength(1);
+  });
+
+  it("treats an auth.* call inside an EXISTS (select …) subquery as hoisted — favor precision", () => {
+    const dir = writeMigrations({
+      "0001_rls.sql": `create policy items_select on public.items
+  for select using (exists (select 1 from public.members m where m.user_id = auth.uid()));`,
+    });
+    expect(checkMigrationRlsInitplanStatic(dir)).toEqual([]);
+  });
+
+  it("stays silent on policies with no auth.* call at all", () => {
+    const dir = writeMigrations({
+      "0001_rls.sql": `create policy notes_rw on public.notes
+  for all using (tenant_id = public.current_tenant_id());`,
+    });
+    expect(checkMigrationRlsInitplanStatic(dir)).toEqual([]);
+  });
+
+  it("rolls both clauses of one policy into a single finding", () => {
+    const dir = writeMigrations({
+      "0001_rls.sql": `create policy notes_rw on public.notes
+  for all using (created_by = auth.uid()) with check (created_by = auth.uid());`,
+    });
+    const findings = checkMigrationRlsInitplanStatic(dir);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.evidence).toContain("auth.uid() in USING");
+    expect(findings[0]!.evidence).toContain("auth.uid() in WITH CHECK");
+  });
+
+  it("returns nothing when the target has no migrations at all", () => {
+    root = mkdtempSync(join(tmpdir(), "harvey-initplan-"));
+    expect(checkMigrationRlsInitplanStatic(root)).toEqual([]);
   });
 });

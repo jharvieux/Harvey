@@ -1,0 +1,12 @@
+import { describe, expect, it } from "vitest";
+import { renderBanner, renderFooter } from "./banner.js";
+
+describe("banner", () => {
+  it("renders the banner", () => {
+    expect(renderBanner("acme")).toMatchSnapshot();
+  });
+
+  it("renders the footer", () => {
+    expect(renderFooter()).toMatchInlineSnapshot(`"<footer>acme</footer>"`);
+  });
+});

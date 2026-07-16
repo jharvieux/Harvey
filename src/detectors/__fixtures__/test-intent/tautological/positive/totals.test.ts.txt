@@ -1,0 +1,14 @@
+import { describe, expect, it } from "vitest";
+import { computeTotal } from "./totals.js";
+
+describe("totals", () => {
+  it("computes the total", () => {
+    const total = computeTotal([1, 2, 3]);
+    expect(total).toBe(total);
+  });
+
+  it("keeps the user name", () => {
+    const user = { name: "Ada" };
+    expect(user.name).toEqual(user.name);
+  });
+});

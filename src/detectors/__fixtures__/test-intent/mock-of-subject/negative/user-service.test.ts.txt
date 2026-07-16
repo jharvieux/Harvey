@@ -1,0 +1,13 @@
+import { describe, expect, it, vi } from "vitest";
+import { getUser } from "./user-service.js";
+import { sendWelcomeEmail } from "./mailer.js";
+
+vi.mock("./mailer.js");
+
+describe("getUser", () => {
+  it("sends a welcome email for new users", async () => {
+    const user = await getUser("u1");
+    expect(user.isNew).toBe(true);
+    expect(sendWelcomeEmail).toHaveBeenCalledWith("u1");
+  });
+});

@@ -1,0 +1,5 @@
+// Security-critical by name but has NO covering test — that absence is the mutation scan's
+// NoCoverage signal (and #224's), not a happy-path-only finding; this detector must stay silent.
+export function tenantIdFromHost(host: string): string {
+  return host.split(".")[0] ?? "";
+}

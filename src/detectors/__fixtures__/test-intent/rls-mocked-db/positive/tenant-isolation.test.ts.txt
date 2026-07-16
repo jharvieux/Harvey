@@ -1,0 +1,20 @@
+import { describe, expect, it, vi } from "vitest";
+import { getOrdersForTenant } from "./orders.js";
+
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: vi.fn(() => ({
+    from: vi.fn(() => ({ select: vi.fn(() => ({ eq: vi.fn(() => ({ data: [], error: null })) })) })),
+  })),
+}));
+
+describe("tenant isolation", () => {
+  it("blocks cross-tenant order reads", async () => {
+    const rows = await getOrdersForTenant("tenant-b", "tenant-a-user");
+    expect(rows).toEqual([]);
+  });
+
+  it("scopes rls to the caller's tenant", async () => {
+    const rows = await getOrdersForTenant("tenant-a", "tenant-a-user");
+    expect(rows).toEqual([]);
+  });
+});

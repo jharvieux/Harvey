@@ -705,6 +705,127 @@ function findSelectArg(chainRoot: ts.CallExpression): string | undefined | "-" {
   return "-";
 }
 
+// --- B3. Client-side data fetch in useEffect [PERF] — one per file ---------------
+
+// A 'use client' component fetching its own data on mount (`useEffect(() => { fetch(...) }, [])`
+// or a Supabase read chain) instead of a Server Component fetch or a cache-aware client hook —
+// the default shape AI assistants produce when they don't know App Router conventions (#383).
+// Ships a client-server round trip after hydration, a loading spinner, and no request de-dup.
+
+// Files that import a cache-aware data-fetching library already route client data through it —
+// flagging their internals would be noise (issue #383's explicit exclusion).
+const DATA_FETCH_LIB = /^(swr|@tanstack\/react-query|react-query)(\/|$)/;
+
+function importsDataFetchLib(sf: ts.SourceFile): boolean {
+  return sf.statements.some(
+    (s) => ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier) && DATA_FETCH_LIB.test(s.moduleSpecifier.text),
+  );
+}
+
+// A data READ: a `fetch(...)` whose result is consumed (`.then` chain or awaited — a bare
+// fire-and-forget statement like `fetch("/api/track", {method:"POST"})` is a beacon, not a
+// waterfall), or the outermost call of a Supabase `.from(...).select(...)` chain.
+function isMountDataRead(n: ts.CallExpression): boolean {
+  if (ts.isIdentifier(n.expression) && n.expression.text === "fetch") {
+    return ts.isPropertyAccessExpression(n.parent) || ts.isAwaitExpression(n.parent);
+  }
+  if (!ts.isPropertyAccessExpression(n.parent)) {
+    const names = callChainNames(n);
+    return names.includes("from") && names.includes("select");
+  }
+  return false;
+}
+
+// Data reads that actually RUN when the effect runs: direct calls in the effect body, plus the
+// bodies of IIFEs and of local functions the body invokes (`(async () => {...})()` and
+// `const load = async () => {...}; load();` — the two common shapes). A nested function that is
+// only DEFINED and handed elsewhere (an event-listener callback, a returned cleanup) does not
+// run on mount and must not count — that's the user-action / unmount path, not a waterfall.
+function mountDataReads(effectBody: ts.Node): ts.CallExpression[] {
+  const reads: ts.CallExpression[] = [];
+  const localFns = new Map<string, ts.Node>();
+  const invoked = new Set<string>();
+  const walked = new Set<string>();
+
+  const walk = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      if (ts.isIdentifier(n.expression)) invoked.add(n.expression.text);
+      const callee = ts.isParenthesizedExpression(n.expression) ? n.expression.expression : n.expression;
+      if (ts.isArrowFunction(callee) || ts.isFunctionExpression(callee)) {
+        walk(callee.body); // an IIFE's body runs on mount
+        return;
+      }
+      if (isMountDataRead(n)) reads.push(n);
+    }
+    if (ts.isFunctionDeclaration(n) && n.name && n.body) {
+      localFns.set(n.name.text, n.body);
+      return;
+    }
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.initializer &&
+      (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))
+    ) {
+      localFns.set(n.name.text, n.initializer.body);
+      return;
+    }
+    if (ts.isArrowFunction(n) || ts.isFunctionExpression(n)) return; // defined, not invoked here
+    ts.forEachChild(n, walk);
+  };
+  walk(effectBody);
+
+  // Local functions the mount path invokes (directly or via another invoked one) also run.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, body] of localFns) {
+      if (invoked.has(name) && !walked.has(name)) {
+        walked.add(name);
+        changed = true;
+        walk(body);
+      }
+    }
+  }
+  return reads;
+}
+
+function detectClientFetchEffect(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    if (leadingDirective(sf) !== "use client") continue; // Server Components fetch server-side — that's the fix, not the bug
+    if (isRenderOnce(path, sf)) continue;
+    if (importsDataFetchLib(sf)) continue;
+    const hits: ts.CallExpression[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "useEffect") {
+        const cb = node.arguments[0];
+        if (cb && (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb))) hits.push(...mountDataReads(cb.body));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    const first = hits[0];
+    if (!first) continue;
+    findings.push(
+      makeFinding(nextId, {
+        title: `Client-side data fetch in useEffect (${hits.length}× in ${path})`,
+        severity: "Perf",
+        confidence: "Review",
+        taxonomy: "M7 — Client fetch in useEffect",
+        location: loc(path, sf, first),
+        evidence: `\`${first.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` runs on mount inside useEffect in a 'use client' component${hits.length > 1 ? ` (first of ${hits.length})` : ""} — the data round-trip starts only after the JS bundle downloads, parses, and hydrates, with no caching or request de-duplication.`,
+        impact: "A serial network waterfall (HTML → JS → data) plus a loading spinner on every visit; concurrent mounts of the component each refetch. A Server Component fetch ships the data in the initial HTML; a cache hook de-dupes on the client.",
+        fix: "Fetch in a Server Component (or route loader) and pass the data down; if it must stay client-side (third-party API, live widget), use a cache-aware hook (useSWR / React Query) instead of raw fetch-in-effect.",
+        value: 3,
+        ease: 3,
+        safety: 4,
+      }),
+    );
+  }
+  return findings;
+}
+
 // --- C1. Whole-library import [PERF] --------------------------------------------
 
 // CJS libraries where ANY bare import ships the entire package (no tree-shaking), plus
@@ -1056,6 +1177,157 @@ function detectJsonDeepClone(sources: Map<string, ts.SourceFile>, nextId: NextId
   return findings;
 }
 
+// --- E3. Nested-loop join over scaling collections [PERF] — one per file --------------
+
+// The accidental O(n·m) join (#385): a per-item linear scan (`.find`/`.some`/`.includes`/…) over
+// a SECOND collection inside a loop over the first, where a Map/Set built once would do — the
+// "forgot to build a lookup" shape AI-generated enrichment code defaults to. FP-heavy by nature
+// (a scan over a small bounded array is fine regardless of shape), so every guard below narrows
+// to the shape where both collections plausibly scale with data, and the confidence stays Review:
+//   - the inner receiver must be LOOP-INVARIANT (an outer-scope identifier, not the outer item's
+//     own field or something re-derived per iteration — per-row `p.tags.find(…)` is normal);
+//   - the inner probe must reference the outer loop's item (a join, not two unrelated loops that
+//     happen to nest);
+//   - hardcoded/const-literal lists are exempt on BOTH sides (same isStaticListSource exemption
+//     as detectIndexAsKey — a status enum or nav list never scales), and so are SCREAMING_SNAKE
+//     receivers: isStaticListSource can't see across module boundaries, and an all-caps
+//     identifier is the convention for exactly those imported config constants (measured on this
+//     repo's own source: FREE_TIER_EXPECTATIONS, a hardcoded cross-file list, was the one hit
+//     the literal check missed);
+//   - `.includes`/`.indexOf` exist on strings too, so the value forms additionally require
+//     in-file evidence the receiver is an array (array type annotation, array literal, or an
+//     array-producing initializer) — `query.includes(name)` over a string must not fire.
+
+const OUTER_LOOP_METHODS = new Set(["map", "filter", "forEach", "flatMap"]);
+const INNER_SCAN_CALLBACK = new Set(["find", "findIndex", "some", "filter"]); // callback forms — receiver is array-like by construction
+const INNER_SCAN_VALUE = new Set(["includes", "indexOf"]); // value forms — strings have these too
+const ARRAY_PRODUCER = new Set(["map", "filter", "concat", "flat", "flatMap", "slice", "from", "split"]);
+
+function isArrayIshType(type: ts.TypeNode | undefined): boolean {
+  if (!type) return false;
+  if (ts.isArrayTypeNode(type)) return true;
+  return ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName) && /^(Readonly)?Array$/.test(type.typeName.text);
+}
+
+function hasArrayEvidence(sf: ts.SourceFile, name: string): boolean {
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if ((ts.isVariableDeclaration(n) || ts.isParameter(n)) && ts.isIdentifier(n.name) && n.name.text === name) {
+      if (isArrayIshType(n.type)) {
+        found = true;
+        return;
+      }
+      if (ts.isVariableDeclaration(n) && n.initializer) {
+        const init = n.initializer;
+        if (
+          ts.isArrayLiteralExpression(init) ||
+          (ts.isCallExpression(init) && ts.isPropertyAccessExpression(init.expression) && ARRAY_PRODUCER.has(init.expression.name.text))
+        ) {
+          found = true;
+          return;
+        }
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+function declaredWithin(scope: ts.Node, name: string): boolean {
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (
+      ((ts.isVariableDeclaration(n) || ts.isParameter(n)) && ts.isIdentifier(n.name) && n.name.text === name) ||
+      (ts.isFunctionDeclaration(n) && n.name?.text === name)
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(scope);
+  return found;
+}
+
+function detectNestedLoopJoin(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    const hits: ts.CallExpression[] = [];
+
+    const inspectLoop = (itemNames: Set<string>, declScope: ts.Node, body: ts.Node) => {
+      const scan = (n: ts.Node) => {
+        if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression)) {
+          const method = n.expression.name.text;
+          const recv = n.expression.expression;
+          if (INNER_SCAN_CALLBACK.has(method) || INNER_SCAN_VALUE.has(method)) {
+            const probe = n.arguments[0];
+            if (
+              probe !== undefined &&
+              referencesAny(probe, itemNames) && // a join on the current item, not an unrelated nested loop
+              !itemNames.has(recv.text) &&
+              !declaredWithin(declScope, recv.text) && // loop-invariant: the same outer collection every pass
+              !isStaticListSource(sf, recv) && // hardcoded lists never scale
+              !/^[A-Z][A-Z0-9_]*$/.test(recv.text) && // SCREAMING_SNAKE = an (often imported) config constant
+              (INNER_SCAN_CALLBACK.has(method) || hasArrayEvidence(sf, recv.text)) // value forms exist on strings
+            ) {
+              hits.push(n);
+              return;
+            }
+          }
+        }
+        // Deeper function boundaries (a per-B callback, an event handler built per row) are not
+        // this loop's per-iteration cost — a deeper nested loop is visited as its own outer loop.
+        if (ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n)) return;
+        ts.forEachChild(n, scan);
+      };
+      scan(body);
+    };
+
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        OUTER_LOOP_METHODS.has(node.expression.name.text) &&
+        !isStaticListSource(sf, node.expression.expression)
+      ) {
+        const cb = node.arguments[0];
+        if (cb && (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb))) {
+          const p0 = cb.parameters[0];
+          if (p0 && ts.isIdentifier(p0.name)) inspectLoop(new Set([p0.name.text]), cb, cb.body);
+        }
+      }
+      if (ts.isForOfStatement(node) && !isStaticListSource(sf, node.expression)) {
+        const names = loopBindingNames(node);
+        if (names.size > 0) inspectLoop(names, node.statement, node.statement);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+
+    const first = hits[0];
+    if (!first) continue;
+    findings.push(
+      makeFinding(nextId, {
+        title: `Nested-loop join — per-item linear scan over another collection (${hits.length}× in ${path})`,
+        severity: "Perf",
+        confidence: "Review",
+        taxonomy: "M7 — Nested-loop join",
+        location: loc(path, sf, first),
+        evidence: `\`${first.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` runs once per item of the enclosing loop over a loop-invariant collection${hits.length > 1 ? ` (first of ${hits.length})` : ""} — O(n·m) comparisons where a lookup built once would be O(n+m).`,
+        impact: "Cost multiplies: 1k items × 1k rows is a million comparisons per call. Only matters when BOTH collections scale with tenant/user data — a scan over a small bounded array is fine regardless of shape; confirm sizes before reporting.",
+        fix: "Index the scanned collection once before the loop — `const byId = new Map(other.map(o => [o.id, o]))` (or a Set of keys) — and use `.get()`/`.has()` inside it.",
+        value: 3,
+        ease: 4,
+        safety: 5,
+      }),
+    );
+  }
+  return findings;
+}
+
 // --- Orchestrator --------------------------------------------------------------------
 
 /**
@@ -1082,6 +1354,7 @@ export function detectPerfCodeFindings(files: SourceInput[]): Finding[] {
     ...detectStateSprawl(sources, nextId),
     ...detectAwaitInLoop(sources, nextId),
     ...detectUnboundedSelect(sources, nextId),
+    ...detectClientFetchEffect(sources, nextId),
     ...detectWholeLibraryImport(sources, nextId),
     ...detectHeavyClientImport(sources, nextId),
     ...detectUnoptimizedBarrelImports(files, sources, nextId),
@@ -1089,5 +1362,6 @@ export function detectPerfCodeFindings(files: SourceInput[]): Finding[] {
     ...detectMiddlewareFetch(sources, nextId),
     ...detectSyncIoInHandler(sources, nextId),
     ...detectJsonDeepClone(sources, nextId),
+    ...detectNestedLoopJoin(sources, nextId),
   ];
 }

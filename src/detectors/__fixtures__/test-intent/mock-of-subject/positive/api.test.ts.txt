@@ -1,0 +1,11 @@
+import { describe, expect, it } from "@jest/globals";
+import * as billing from "../lib/billing.js";
+
+jest.mock("../lib/billing.js");
+
+describe("charge flow", () => {
+  it("charges the card", () => {
+    const receipt = billing.charge(500);
+    expect(receipt).toEqual({ ok: true });
+  });
+});

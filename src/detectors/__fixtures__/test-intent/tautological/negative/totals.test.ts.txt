@@ -1,0 +1,21 @@
+import { describe, expect, it } from "vitest";
+import { computeTotal } from "./totals.js";
+
+describe("totals", () => {
+  it("computes the total", () => {
+    const total = computeTotal([1, 2, 3]);
+    expect(total).toBe(6);
+  });
+
+  it("compares the actual against a separately stated expected", () => {
+    const actual = computeTotal([2]);
+    const expected = 2;
+    expect(actual).toBe(expected);
+  });
+
+  it("negated comparison of two different results", () => {
+    const a = computeTotal([1]);
+    const b = computeTotal([2]);
+    expect(a).not.toBe(b);
+  });
+});

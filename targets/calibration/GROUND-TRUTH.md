@@ -1209,6 +1209,9 @@ negatives below are exactly that configuration.
 |---|---|---|---|
 | M4-P-CLONE-A | `dup/invoice-total.ts` ↔ `dup/order-total.ts` | genuine 27-line copy-pasted tax/rounding block (299 tokens); jscpd clone cluster; `jscpdToFindings` → Low severity | high |
 | M4-P-CLONE-B | `dup/report-a.ts` ↔ `dup/report-b.ts` | genuine 52-line copy-pasted metric-aggregation block (658 tokens); jscpd clone cluster; `severityForClone` → Medium (≥50 lines) | high |
+| M4-P-CLONE-SEC | `dup/auth/session-check-api.ts` ↔ `dup/auth/session-check-action.ts` | genuine 25-line copy-pasted session/tenant validation block (246 tokens) in an auth path; jscpd clone cluster; `touchesSecurityPath` fires (#361) → severity elevated Low→Medium + M1 cross-check note in impact | high |
+| M4-P-SMALL-DISCLOSED | `dup/pricing-tier-a.ts` ↔ `dup/pricing-tier-b.ts` | genuine 9-line volume-discount ladder (129 tokens) — real logic under `MIN_SIGNIFICANT_LINES`; must be counted (and named in evidence) by the aggregate `M4-00` sub-threshold disclosure finding (#365) | high |
+| M4-P-DIVERGED-TENANT | `dup/auth/require-tenant-api.ts` ↔ `dup/auth/require-tenant-admin.ts` | copy-pasted tenant guard whose copies have DIVERGED (`'tenant_id'` vs `'owner_id'` scoping literal + drifted error strings) — jscpd's exact token match sees only sub-threshold fragments, never the pair; the #360 near-miss pass (`src/diverged-clones.ts`) emits an `M4-DIV-*` review finding (High) naming the drifted literals | review |
 
 **Negatives — benign lookalikes (must NOT be flagged)**
 
@@ -1216,6 +1219,8 @@ negatives below are exactly that configuration.
 |---|---|---|
 | M4-N-GENERATED | `dup/generated/schema.gen.ts` | repeats the `invoice-total.ts` tax block but is a generated file, not hand-maintained duplication. Excluded via the quality-scan CLI's jscpd `--ignore` glob, extended to `**/generated/**` (`src/cli/quality-scan.ts`) — jscpd never sees it. |
 | M4-N-BOILERPLATE | `dup/route-a.ts` ↔ `dup/route-b.ts` | shares the Next.js API-route `config` + handler-signature boilerplate — a framework contract, not a defect. Shared span stays under jscpd's 50-token minimum (`.jscpd.json` `minTokens`) — not flagged. |
+| M4-N-SMALL-FLOOR | `dup/pricing-tier-a.ts` ↔ `dup/pricing-tier-b.ts` | the same 9-line ladder must NOT surface as an individual `M4-*` finding — #365 measured that emitting the 5–9-line band individually would triple an AI-authored target's M4 report while the #232 noise classes (import headers) share the band. Disclosed via the `M4-00` aggregate instead. |
+| M4-N-DIV-DISTINCT | `dup/auth/api-key-check.ts` | an independently-written guard in the same auth path — same domain, different structure. The #360 pass must not pair it with the require-tenant guards (similarity-floor FP guard). Note the `session-check-*` pair is also a #360 negative by construction: a CONSISTENT rename (Type-2) is faithful duplication jscpd already reports, not drift — asserted in `src/diverged-clones.test.ts`. |
 
 ### M5 — Slop / dead code (knip)
 
@@ -1343,6 +1348,22 @@ installed there (`src/cli/mutation-scan.ts`).
 | id | fixture | weakness class | expected Stryker result |
 |---|---|---|---|
 | M8-P-TAUTOLOGICAL | `test-quality/discount.ts` + `discount.tautological.test.ts` | happy-path-only / assertion-light (quality-extras.txt M8 category 5) | ≥1 mutant Survived/NoCoverage on `discount.ts` |
+
+### M8 stub-check pair (#373) — deletion-survival, proven by execution (not Stryker)
+
+The stub-check instrument (`src/stub-check.ts`, `pnpm mutation-scan <t> --stub-check`) answers
+the M8 brief's litmus test directly: stub each covered exported function's body to
+`return undefined` and re-run the covering tests. Its planted pair (deliberately NOT added to
+`stryker.config.json`'s `mutate` list, so the recorded live result above stays reproducible):
+
+| id | fixture | expected stub-check result |
+|---|---|---|
+| M8-P-DELETION-SURVIVING | `test-quality/audit-log.ts` + `audit-log.deletion-surviving.test.ts` | covering test calls `logAuditEvent` but asserts nothing → still passes with the body stubbed → `M8-01-*` finding |
+| (contrast, reuses M8-P-TAUTOLOGICAL) | `test-quality/discount.ts` + `discount.tautological.test.ts` | weak per Stryker, but its one assertion checks a return value → FAILS when `applyDiscount` is stubbed → no finding |
+
+Both verdicts are executed (transpile-and-run), not recorded: `src/stub-check.test.ts`'s
+"M8-P-DELETION-SURVIVING calibration pair" block runs the covering tests against the real and
+stubbed sources on every `pnpm verify`.
 
 ### M8 negatives — planted strong test (must NOT be flagged)
 

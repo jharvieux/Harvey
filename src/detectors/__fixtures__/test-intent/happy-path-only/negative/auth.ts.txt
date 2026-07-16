@@ -1,0 +1,5 @@
+export type Role = "admin" | "member";
+
+export function canDelete(role: Role, resourceId: string): boolean {
+  return role === "admin" && resourceId.length > 0;
+}

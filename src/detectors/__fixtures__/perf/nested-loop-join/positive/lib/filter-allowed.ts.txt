@@ -1,0 +1,6 @@
+// .includes over an array derived from a second scaling collection — the value-form join.
+// allowedIds is array-evidenced (built by .map), loop-invariant, and probed with the item's id.
+export function visibleItems(items: { id: string }[], rows: { itemId: string }[]) {
+  const allowedIds = rows.map((r) => r.itemId);
+  return items.filter((i) => allowedIds.includes(i.id));
+}
