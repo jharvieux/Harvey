@@ -1,0 +1,9 @@
+const PEM = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...\n-----END PUBLIC KEY-----";
+
+export function getPublicKey(kid: string): string {
+  return PEM;
+}
+
+export function formatUser(user: { name: string }, includeEmail: boolean): string {
+  return `Name: ${user.name}`;
+}

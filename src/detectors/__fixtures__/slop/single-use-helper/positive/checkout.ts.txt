@@ -1,0 +1,9 @@
+function computeDiscount(price: number, rate: number): number {
+  const raw = price * rate;
+  const rounded = Math.round(raw * 100) / 100;
+  return Math.min(rounded, price);
+}
+
+export function checkout(price: number, rate: number): number {
+  return computeDiscount(price, rate);
+}
