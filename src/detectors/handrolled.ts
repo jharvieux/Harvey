@@ -20,7 +20,17 @@
 //   • Supabase pagination reinvention is deferred: needs cross-statement correlation.
 // The class-merge detector is gated on a merge library already being in the target's dependency
 // tree — hand-rolling one when no such dep exists is the deliberate dep-drop shape, not a
-// reinvention indicator.
+// reinvention indicator. The gate itself is generic (`depGatePresent`, #406) so future dep-gated
+// classes (catalogue entries 28, 81, …) reuse it instead of growing per-class copies.
+//
+// WHY-comment suppression (#406, catalogue follow-up 4): every indicator class is suppressed by
+// an adjacent `WHY:` comment — the depdrop discipline generalized. A flagged shape whose comment
+// records a deliberate reason IS the answer an investigation would surface. Suppressed shapes
+// emit NOTHING, and that is a deliberate design decision, not a silent skip: the WHY comment is
+// the in-code record of the reason, visible to any reader at the flagged site, so the
+// suppression is auditable in the target itself in a way a scanner-side omission never is;
+// emitting a "suppressed" row would only restate the comment. The check lives in the shared
+// emission path (makeIndicator), never per-detector.
 //
 // Method: TypeScript compiler API, same conventions as slop.ts (M5). Emits Finding[] with
 // taxonomy `M6 — Indicator: …`, ids `M6IND-…`, category "Maintainability". Every class is gated
@@ -37,10 +47,37 @@ const INDICATOR_IMPACT =
 const INDICATOR_FIX =
   "Non-grading indicator — worth investigating whether this shape is deliberate. The paid M6 triage decides whether it is a genuine reinvention and names the concrete replacement; if it is deliberate, record the reason in a WHY comment.";
 
+// Adjacency for WHY suppression is mechanical (catalogue entry 58's /why:/i): the marker in the
+// leading comment trivia of the flagged node's enclosing statement, or in a trailing comment at
+// that statement's end (the shape's own line). A comment without the marker never suppresses —
+// narration is not a recorded reason.
+const WHY_MARKER = /why:/i;
+
+function enclosingStatement(node: ts.Node): ts.Node {
+  let cur: ts.Node = node;
+  while (cur.parent && !ts.isStatement(cur)) cur = cur.parent;
+  return cur;
+}
+
+function isWhySuppressed(sf: ts.SourceFile, node: ts.Node): boolean {
+  const stmt = enclosingStatement(node);
+  const ranges = [
+    ...(ts.getLeadingCommentRanges(sf.text, stmt.getFullStart()) ?? []),
+    ...(ts.getTrailingCommentRanges(sf.text, stmt.end) ?? []),
+  ];
+  return ranges.some((r) => WHY_MARKER.test(sf.text.slice(r.pos, r.end)));
+}
+
+// The one shared emission path — every detector emits through here, so WHY-comment suppression
+// applies to every current and future indicator class without per-detector wiring.
 function makeIndicator(
   nextId: NextId,
-  input: { title: string; taxonomy: string; location: string; evidence: string },
-): Finding {
+  sf: ts.SourceFile,
+  path: string,
+  node: ts.Node,
+  input: { title: string; taxonomy: string; evidence: string },
+): Finding | undefined {
+  if (isWhySuppressed(sf, node)) return undefined;
   return {
     id: nextId(),
     status: "Open",
@@ -52,8 +89,27 @@ function makeIndicator(
     value: 2,
     ease: 3,
     safety: 4,
+    location: `${path}:${lineOf(sf, node)}`,
     ...input,
   };
+}
+
+// Generic dep-gate for dep-gated indicator classes (#406): open only when one of the named
+// libraries is already in dependencies/devDependencies of a package.json in the scanned set.
+// Fails CLOSED — no package.json in the set, or none that parses, means the gate cannot be
+// verified and stays shut.
+export function depGatePresent(files: SourceInput[], libNames: string[]): boolean {
+  for (const f of files) {
+    if (!/(^|\/)package\.json$/.test(f.path)) continue;
+    try {
+      const pkg = JSON.parse(f.text) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+      if (libNames.some((d) => d in deps)) return true;
+    } catch {
+      // not JSON — a fixture or template; the gate simply doesn't open on it
+    }
+  }
+  return false;
 }
 
 function lineOf(sf: ts.SourceFile, node: ts.Node): number {
@@ -94,14 +150,12 @@ function detectJsonStringifyEquality(sf: ts.SourceFile, path: string, nextId: Ne
       isJsonCall(unwrapParens(node.left), "stringify") &&
       isJsonCall(unwrapParens(node.right), "stringify")
     ) {
-      findings.push(
-        makeIndicator(nextId, {
-          title: "Looks hand-rolled: deep equality via JSON string comparison — may be worth investigating",
-          taxonomy: "M6 — Indicator: JSON deep-equal",
-          location: `${path}:${lineOf(sf, node)}`,
-          evidence: `\`${node.getText(sf).slice(0, 70)}\` — compares two values by comparing their JSON serializations (key order and unserializable values change the result).`,
-        }),
-      );
+      const f = makeIndicator(nextId, sf, path, node, {
+        title: "Looks hand-rolled: deep equality via JSON string comparison — may be worth investigating",
+        taxonomy: "M6 — Indicator: JSON deep-equal",
+        evidence: `\`${node.getText(sf).slice(0, 70)}\` — compares two values by comparing their JSON serializations (key order and unserializable values change the result).`,
+      });
+      if (f) findings.push(f);
     }
     ts.forEachChild(node, visit);
   };
@@ -147,14 +201,12 @@ function detectQueryStringParse(sf: ts.SourceFile, path: string, nextId: NextId)
   for (const amp of ampSplits) {
     const scope = enclosingScope(amp);
     if (eqSplits.some((eq) => eq.pos >= scope.pos && eq.end <= scope.end)) {
-      findings.push(
-        makeIndicator(nextId, {
-          title: "Looks hand-rolled: query-string parsing via string splits — may be worth investigating",
-          taxonomy: "M6 — Indicator: query-string parsing",
-          location: `${path}:${lineOf(sf, amp)}`,
-          evidence: `\`${amp.getText(sf).slice(0, 70)}\` — splits on "&" with a companion split on "=" in the same scope, the shape of by-hand key=value parsing (no percent-decoding, no repeated-key handling).`,
-        }),
-      );
+      const f = makeIndicator(nextId, sf, path, amp, {
+        title: "Looks hand-rolled: query-string parsing via string splits — may be worth investigating",
+        taxonomy: "M6 — Indicator: query-string parsing",
+        evidence: `\`${amp.getText(sf).slice(0, 70)}\` — splits on "&" with a companion split on "=" in the same scope, the shape of by-hand key=value parsing (no percent-decoding, no repeated-key handling).`,
+      });
+      if (f) findings.push(f);
     }
   }
   return findings;
@@ -167,15 +219,14 @@ const DOCUMENT_COOKIE_RE = /(^|\.)document\.cookie$/;
 
 function detectCookieParse(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
-  const push = (node: ts.Node) =>
-    findings.push(
-      makeIndicator(nextId, {
-        title: "Looks hand-rolled: cookie-header parsing — may be worth investigating",
-        taxonomy: "M6 — Indicator: cookie parsing",
-        location: `${path}:${lineOf(sf, node)}`,
-        evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — takes a raw cookie string apart by hand (quoting, encoding, and attribute edge cases are easy to get wrong).`,
-      }),
-    );
+  const push = (node: ts.Node) => {
+    const f = makeIndicator(nextId, sf, path, node, {
+      title: "Looks hand-rolled: cookie-header parsing — may be worth investigating",
+      taxonomy: "M6 — Indicator: cookie parsing",
+      evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — takes a raw cookie string apart by hand (quoting, encoding, and attribute edge cases are easy to get wrong).`,
+    });
+    if (f) findings.push(f);
+  };
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && COOKIE_PARSE_METHODS.has(node.expression.name.text)) {
       const receiverText = node.expression.expression.getText(sf);
@@ -225,14 +276,12 @@ function detectRandomStringId(sf: ts.SourceFile, path: string, nextId: NextId): 
       Number((node.arguments[0] as ts.NumericLiteral).text) > 10 &&
       isMathRandomCall(node.expression.expression)
     ) {
-      findings.push(
-        makeIndicator(nextId, {
-          title: "Looks hand-rolled: random-string id from Math.random() — may be worth investigating",
-          taxonomy: "M6 — Indicator: random-string id",
-          location: `${path}:${lineOf(sf, node)}`,
-          evidence: `\`${node.getText(sf).slice(0, 70)}\` — builds an identifier from Math.random(), which is neither collision-safe nor unpredictable.`,
-        }),
-      );
+      const f = makeIndicator(nextId, sf, path, node, {
+        title: "Looks hand-rolled: random-string id from Math.random() — may be worth investigating",
+        taxonomy: "M6 — Indicator: random-string id",
+        evidence: `\`${node.getText(sf).slice(0, 70)}\` — builds an identifier from Math.random(), which is neither collision-safe nor unpredictable.`,
+      });
+      if (f) findings.push(f);
     }
     ts.forEachChild(node, visit);
   };
@@ -248,20 +297,6 @@ function detectRandomStringId(sf: ts.SourceFile, path: string, nextId: NextId): 
 
 const CLASS_MERGE_DEPS = ["clsx", "classnames", "tailwind-merge"];
 const CLASS_MERGE_NAME_RE = /^(cn|cx|clsx|class-?names?|merge-?class(-?names?)?|join-?class(-?names?)?)$/i;
-
-export function hasClassMergeDep(files: SourceInput[]): boolean {
-  for (const f of files) {
-    if (!/(^|\/)package\.json$/.test(f.path)) continue;
-    try {
-      const pkg = JSON.parse(f.text) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-      if (CLASS_MERGE_DEPS.some((d) => d in deps)) return true;
-    } catch {
-      // not JSON — a fixture or template; the gate simply doesn't open on it
-    }
-  }
-  return false;
-}
 
 function isFilterBooleanJoinSpace(node: ts.Node): node is ts.CallExpression {
   if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== "join") return false;
@@ -297,14 +332,12 @@ function detectClassMerge(sf: ts.SourceFile, path: string, nextId: NextId, depGa
   const findings: Finding[] = [];
   const visit = (node: ts.Node) => {
     if (isFilterBooleanJoinSpace(node) && inClassNameContext(node)) {
-      findings.push(
-        makeIndicator(nextId, {
-          title: "Looks hand-rolled: class-string merge — may be worth investigating",
-          taxonomy: "M6 — Indicator: class-string merge",
-          location: `${path}:${lineOf(sf, node)}`,
-          evidence: `\`${node.getText(sf).slice(0, 70)}\` — merges conditional class names by hand while a class-merge library is already in the dependency tree.`,
-        }),
-      );
+      const f = makeIndicator(nextId, sf, path, node, {
+        title: "Looks hand-rolled: class-string merge — may be worth investigating",
+        taxonomy: "M6 — Indicator: class-string merge",
+        evidence: `\`${node.getText(sf).slice(0, 70)}\` — merges conditional class names by hand while a class-merge library is already in the dependency tree.`,
+      });
+      if (f) findings.push(f);
     }
     ts.forEachChild(node, visit);
   };
@@ -323,7 +356,7 @@ function detectClassMerge(sf: ts.SourceFile, path: string, nextId: NextId, depGa
 export function detectHandrolledFindings(files: SourceInput[]): Finding[] {
   let n = 0;
   const nextId: NextId = () => `M6IND-${String(++n).padStart(2, "0")}`;
-  const depGateOpen = hasClassMergeDep(files);
+  const depGateOpen = depGatePresent(files, CLASS_MERGE_DEPS);
   const findings: Finding[] = [];
   for (const f of files) {
     if (!/\.(ts|tsx|jsx|mjs)$/.test(f.path)) continue;
