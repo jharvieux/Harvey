@@ -94,7 +94,7 @@ export function scoreCoverage(bugs: GroundTruthBug[], findings: ScorableFinding[
 
 // Tier-aware, deliberately NOT keyed on a blended "caught": a review-tier catch is a shape surfaced
 // for a human, not a verdict the mechanical tier asserted, so the two are separate counts (#342).
-export interface CoverageSummary {
+interface CoverageSummary {
   asserted: number;
   "surfaced-for-review": number;
   missed: number;

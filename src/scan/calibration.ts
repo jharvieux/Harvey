@@ -198,11 +198,11 @@ interface CoverageMatrix {
 
 // A module whose entries omit `module` is the original M1 mechanical-scan corpus (base+secrets+
 // b2–b16+…). Everything else carries an explicit M3/M4/M5/M7/M8/M9/M10 label.
-export function moduleOf(entry: CorpusEntry): string {
+function moduleOf(entry: CorpusEntry): string {
   return entry.module ?? "M1";
 }
 
-export interface ModuleCensusRow {
+interface ModuleCensusRow {
   module: string;
   positivesStatic: number; // static positives (excludes connected tier)
   positivesConnected: number; // connected-tier positives (live-DB only, N/A statically)
