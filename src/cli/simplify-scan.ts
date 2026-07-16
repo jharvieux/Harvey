@@ -53,3 +53,7 @@ if (outPath) {
   console.log(packet);
 }
 console.error("M6 is a judgment pass, not a detector — this packet needs a reviewer, and the writeup needs human triage before a client sees it.");
+// #351: assembling this packet is NOT an M6 execution. The orchestrator records M6 `partial` (not
+// `ran`) on the strength of this run, so it never clears M6's never-run alarm — only a recorded
+// reviewed verdict does (see src/audit-runners.ts m6, and the #416 durable-artifact path).
+console.error("This packet is an input to M6's verdict, not the verdict — it does not count as M6 having run (#351).");
