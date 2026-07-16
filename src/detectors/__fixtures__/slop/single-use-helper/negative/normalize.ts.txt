@@ -1,0 +1,25 @@
+// Same "does real work, called once" shape as the positive fixture, but EXPORTED — API
+// surface, not slop.
+export function computeDiscount(price: number, rate: number): number {
+  const raw = price * rate;
+  const rounded = Math.round(raw * 100) / 100;
+  return Math.min(rounded, price);
+}
+
+export function checkout(price: number, rate: number): number {
+  return computeDiscount(price, rate);
+}
+
+// Non-exported, but called from TWO sites — not single-use.
+function clamp(value: number, min: number, max: number): number {
+  const lower = Math.max(value, min);
+  return Math.min(lower, max);
+}
+
+export function normalizeA(value: number): number {
+  return clamp(value, 0, 1);
+}
+
+export function normalizeB(value: number): number {
+  return clamp(value, -1, 1);
+}
