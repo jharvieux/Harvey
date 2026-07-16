@@ -133,6 +133,17 @@ describe("scoreExternalBaseline", () => {
     expect(rows.find((r) => r.module === "M7")).toMatchObject({ pass: true, actual: 3 });
   });
 
+  it("keeps the #360 diverged-clone pass out of M4's jscpd baseline — shared 'M4 —' prefix, separate modules", () => {
+    // Same split rationale as M5-knip/M5-slop: one taxonomy family, two detectors with
+    // independent drift profiles. A diverged-clone finding must move ONLY the M4-diverged row.
+    const rows = scoreExternalBaseline(target("saas-lite"), [
+      finding("M4 — Diverged security-path clone", "High"),
+      finding("M4 — Duplication", "Medium"),
+    ]);
+    expect(rows.find((r) => r.module === "M4")).toMatchObject({ actual: 1 });
+    expect(rows.find((r) => r.module === "M4-diverged")).toMatchObject({ actual: 1 });
+  });
+
   it("skips not-run modules instead of scoring them 0 against a baseline", () => {
     // saas-lite's M5-knip: knip dies loading the target's eslint config, so there is no dead-code
     // measurement to compare. Scoring the absent findings as 0 would read as "no dead code" —
