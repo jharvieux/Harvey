@@ -1,7 +1,9 @@
-// Batch M4+M5 (#72, spec §M4/§M5) — duplication (jscpd) + dead code (knip). Fully
-// self-contained, static: no live DB, no external service. Findings come from
-// src/quality-scan.ts::jscpdToFindings / knipToFindings via `pnpm quality-scan
-// targets/calibration`. See GROUND-TRUTH.md "Batch M4+M5 (#72)" for the fixtures.
+// Batch M4+M5 (#72, spec §M4/§M5) — duplication (jscpd + the #360 diverged-clone pass) + dead
+// code (knip). Fully self-contained, static: no live DB, no external service. Findings come from
+// src/quality-scan.ts::jscpdToFindings / knipToFindings and src/diverged-clones.ts via
+// `pnpm quality-scan targets/calibration`. See GROUND-TRUTH.md "Batch M4+M5 (#72)" for the
+// fixtures. The M4 slice is measured live by src/quality-scan.test.ts (validate-calibration
+// scores only mechanical-scan modules).
 // Per the spec's locked precision-tier discipline, both are `high`: jscpd's text-match
 // and knip's dead-export detection are ~100% precise once the FP class (generated code /
 // framework magic / dynamic reference / public API) is configured — the negatives below
@@ -15,6 +17,11 @@ export const m4m5Entries: CorpusEntry[] = [
   { module: "M4", id: "M4-P-CLONE-B", kind: "positive", cls: "Copy-pasted report aggregation block", location: "report-a.ts", expectedTier: "high", note: "dup/report-a.ts and dup/report-b.ts share a 52-line copy-pasted metric-aggregation block (658 tokens). jscpd clone cluster; jscpdToFindings' severityForClone -> Medium (>=50 lines)." },
   { module: "M4", id: "M4-P-CLONE-SEC", kind: "positive", cls: "Copy-pasted session/tenant validation block in an auth path", location: "auth/session-check-api.ts", expectedTier: "high", note: "dup/auth/session-check-api.ts and dup/auth/session-check-action.ts share a genuine 25-line copy-pasted session/tenant validation block (246 tokens) under an auth/ path. jscpd clone cluster; touchesSecurityPath fires (#361) so jscpdToFindings elevates Low->Medium and appends the M1 cross-check note. Severity/note asserted in src/quality-scan.test.ts (the matrix scores caught-at-tier only)." },
 
+  // #360: the Type-3 shape jscpd structurally cannot see — a copy-pasted tenant guard whose
+  // copies have DIVERGED (tenant_id vs owner_id scoping literal). Caught by the near-miss pass
+  // (src/diverged-clones.ts), review tier: it is an adjudication request, not a verdict.
+  { module: "M4", id: "M4-P-DIVERGED-TENANT", kind: "positive", cls: "Diverged copy-pasted tenant-scoping guard", location: "require-tenant-api.ts", match: ["diverged"], expectedTier: "review", note: "dup/auth/require-tenant-api.ts and require-tenant-admin.ts hold structurally-identical guards that disagree on the scoping literal ('tenant_id' vs 'owner_id') plus drifted error strings — jscpd's exact match sees only sub-threshold fragments, never the pair. divergedCloneFindings -> M4-DIV-* reviewFinding (High severity, review tier) naming the drifted literals." },
+
   // #365: the "genuine small clone" boundary pair — one fixture, two contracts. The 9-line
   // pricing-tier ladder is real logic (not boilerplate) under MIN_SIGNIFICANT_LINES: it must NOT
   // become an individual finding (M4-N-SMALL-FLOOR) and MUST be counted by the aggregate M4-00
@@ -24,6 +31,7 @@ export const m4m5Entries: CorpusEntry[] = [
   // --- M4 duplication NEGATIVES ---
   { module: "M4", id: "M4-N-GENERATED", kind: "negative", cls: "Generated file repeating a block found elsewhere", location: "schema.gen.ts", note: "dup/generated/schema.gen.ts repeats the invoice-total.ts tax block but is a generated file, not a hand-maintained duplicate. Excluded via the quality-scan CLI's jscpd --ignore glob (extended to **/generated/**, src/cli/quality-scan.ts) — jscpd never sees it." },
   { module: "M4", id: "M4-N-SMALL-FLOOR", kind: "negative", cls: "Genuine small clone stays below the individual-finding floor", location: "pricing-tier-a.ts", note: "The same 9-line pricing-tier ladder must not surface as its own M4-* finding (44 of these would triple an AI-authored target's M4 report — #365's measured basis for keeping MIN_SIGNIFICANT_LINES=10). Its visibility is the M4-00 aggregate, checked by M4-P-SMALL-DISCLOSED." },
+  { module: "M4", id: "M4-N-DIV-DISTINCT", kind: "negative", cls: "Independently-written guard in the same auth path", location: "api-key-check.ts", note: "dup/auth/api-key-check.ts shares the domain (guard, early throws) but not the structure of the require-tenant pair — the #360 pass must not pair it with anything. Guards the near-miss detector's similarity floor against 'all guards look alike' FPs." },
   { module: "M4", id: "M4-N-BOILERPLATE", kind: "negative", cls: "Framework-mandated route boilerplate", location: "route-a.ts", note: "dup/route-a.ts and dup/route-b.ts share the Next.js API-route config+handler-signature boilerplate. The shared span stays under jscpd's 50-token minimum (.jscpd.json minTokens) — not a defect, not flagged." },
 
   // --- M5 dead code (knip) POSITIVES ---

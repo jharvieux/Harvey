@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { divergedCloneFindings } from "./diverged-clones.js";
 import {
   duplicationSummary,
   JSCPD_IGNORE_GLOBS,
@@ -224,11 +225,12 @@ describe("jscpdToFindings — security-path elevation (#361)", () => {
 
 // LIVE corpus measurement for the M4 slice of m4-m5.entries.ts. validate-calibration.ts scores
 // only mechanical-scan modules (module === undefined), so without this test the M4 entries would
-// be an answer key nothing ever checks. Runs the REAL jscpd (a local node dependency, not an
-// external binary) over targets/calibration/dup with the same flags src/cli/quality-scan.ts uses,
-// then scores the findings through the shared calibration harness — the same pattern M3 uses in
-// hotspot-scan.test.ts, except with live tool output instead of a recorded report.
-describe("M4 calibration corpus — measured against a live jscpd run (#361)", () => {
+// be an answer key nothing ever checks. Runs the REAL full M4 layer over targets/calibration/dup
+// exactly as src/cli/quality-scan.ts wires it — jscpd (a local node dependency, not an external
+// binary) plus the #360 diverged-clone pass over the security-path files — then scores the merged
+// findings through the shared calibration harness (the M3 pattern from hotspot-scan.test.ts,
+// with live tool output instead of a recorded report).
+describe("M4 calibration corpus — measured against a live jscpd + diverged-clone run (#361/#360)", () => {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const dupDir = join(repoRoot, "targets", "calibration", "dup");
 
@@ -252,9 +254,13 @@ describe("M4 calibration corpus — measured against a live jscpd run (#361)", (
   }
 
   it("catches every planted M4 positive and stays silent on every M4 negative", { timeout: 30_000 }, () => {
-    const findings = jscpdToFindings(runJscpdLive());
+    const authDir = join(dupDir, "auth");
+    const securityFiles = readdirSync(authDir)
+      .filter((f) => f.endsWith(".ts"))
+      .map((f) => ({ path: `auth/${f}`, source: readFileSync(join(authDir, f), "utf8") }));
+    const findings = [...jscpdToFindings(runJscpdLive()), ...divergedCloneFindings(securityFiles)];
     const m4Entries = m4m5Entries.filter((e) => e.module === "M4");
-    expect(m4Entries.length).toBeGreaterThanOrEqual(5); // guards against the corpus silently shrinking
+    expect(m4Entries.length).toBeGreaterThanOrEqual(7); // guards against the corpus silently shrinking
     const matrix = buildCoverageMatrix(findings, m4Entries);
     const failed = matrix.rows.filter((r) => !r.pass).map((r) => `${r.id}: ${r.detail}`);
     expect(failed).toEqual([]);
@@ -264,6 +270,14 @@ describe("M4 calibration corpus — measured against a live jscpd run (#361)", (
     const sec = findings.find((f) => f.location.includes("auth/session-check-api.ts"));
     expect(sec?.severity).toBe("Medium");
     expect(sec?.impact).toContain("M1 authorization review");
+
+    // Same for #360: exactly ONE diverged pair exists in the fixture set — the require-tenant
+    // guards — and nothing else may pair (the session-check clones are a consistent Type-2
+    // rename; api-key-check.ts is structurally distinct).
+    const diverged = findings.filter((f) => f.id.startsWith("M4-DIV"));
+    expect(diverged).toHaveLength(1);
+    expect(diverged[0]?.location).toContain("require-tenant-api.ts");
+    expect(diverged[0]?.location).toContain("require-tenant-admin.ts");
   });
 });
 
