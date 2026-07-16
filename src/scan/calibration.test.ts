@@ -105,6 +105,15 @@ describe("scoreEntry", () => {
     expect(row.detail).toContain("connected");
   });
 
+  it("fails loud when a relevant finding reaches the scorer with no precisionTier (#327)", () => {
+    // The latent bug: a detector finding with no tier scored as "no tier at all" — a positive
+    // registered as an outright miss and an untiered FP was invisible to precision, both silently.
+    // An untiered finding relevant to an entry must now THROW, never score as a quiet miss/clear.
+    const e = entry({ id: "P-UNTIERED", kind: "positive", cls: "x", location: "search.js", match: ["sql"], expectedTier: "review", note: "" });
+    const untiered: Finding = { ...finding({ location: "pages/api/search.js:11", taxonomy: "SQL injection", precisionTier: "high" }), precisionTier: undefined };
+    expect(() => scoreEntry(e, [untiered])).toThrow(/precisionTier/);
+  });
+
   it("does not let an environment-dependent checkout path leak a match keyword into the haystack (issue #86)", () => {
     // Mirrors the real B6 corpus entry: match keyword "decode" against jwt.decode()-for-authz.
     // The finding here is an UNRELATED header check on the same file, reported at an absolute
@@ -644,6 +653,11 @@ describe("#221 authz corpus (live detectAppRouterFindings output over the commit
       if (e.kind === "positive") expect(row.caughtTier, e.id).toBe(e.expectedTier);
       else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
     }
+  });
+
+  it("emits every finding with an explicit precisionTier — none reach the scorer untiered (#327)", () => {
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every((f) => f.precisionTier !== undefined)).toBe(true);
   });
 
   it("draws exactly one finding of this class on the fixture — the two benign siblings are silent", () => {

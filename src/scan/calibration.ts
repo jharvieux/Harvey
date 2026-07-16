@@ -123,6 +123,23 @@ function topTier(findings: Finding[]): PrecisionTier | undefined {
   return undefined;
 }
 
+// A mechanical finding reaching the corpus scorer MUST declare its precisionTier. An untiered
+// finding scores as "no tier" in BOTH directions silently: a detector true-positive registers as
+// an outright MISS, and a negative's untiered false-positive is indistinguishable from a clean
+// clear (it never counts against precision). Detectors set an explicit conservative default, but
+// a finding that still arrives untiered is a bug in whatever produced it — fail loud here rather
+// than let it corrupt the numbers unseen (#327).
+function assertTiered(entry: CorpusEntry, relevant: Finding[]): void {
+  const untiered = relevant.filter((f) => f.precisionTier === undefined);
+  if (untiered.length === 0) return;
+  throw new Error(
+    `Corpus entry ${entry.id} matched ${untiered.length} finding(s) with no precisionTier ` +
+      `(${untiered.map((f) => `${f.id} @ ${f.location}`).join(", ")}). A mechanical finding reaching ` +
+      `the calibration scorer must set precisionTier — an untiered finding silently mis-scores. ` +
+      `Set it on the detector that produced it.`,
+  );
+}
+
 export interface MatrixRow {
   id: string;
   kind: CorpusEntry["kind"];
@@ -141,6 +158,7 @@ export interface MatrixRow {
 //             (it gets triaged out of the count) but recorded. A "connected"-tier negative is N/A.
 export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
   const relevant = relevantFindings(entry, findings);
+  assertTiered(entry, relevant);
   const highFlagged = relevant.some((f) => f.precisionTier === "high");
   const reviewFlagged = relevant.some((f) => f.precisionTier === "review");
   const caughtTier = topTier(relevant);
