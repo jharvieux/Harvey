@@ -1,3 +1,8 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   duplicationSummary,
@@ -8,6 +13,8 @@ import {
   type JscpdReport,
   type KnipReport,
 } from "./quality-scan.js";
+import { buildCoverageMatrix } from "./scan/calibration.js";
+import { m4m5Entries } from "./scan/calibration/m4-m5.entries.js";
 
 // Base two entries shaped from real `jscpd --reporters json` output (captured against a
 // throwaway two-file clone) — jscpd's json reporter emits duplicates out of size order. The
@@ -92,6 +99,132 @@ describe("jscpdToFindings", () => {
   it("excludes clusters under the significant-lines gate — e.g. a shared import header (#232)", () => {
     const findings = jscpdToFindings(jscpdReport);
     expect(findings.some((f) => f.location.includes("src/c.ts"))).toBe(false);
+  });
+});
+
+// #361: a clone in an auth/guard/security path is the code most likely to become an M1 finding
+// when one copy is patched and its sibling isn't — mirror M5's #226 elevation for M4.
+const securityJscpdReport: JscpdReport = {
+  statistics: { total: { percentage: 0, duplicatedLines: 0, lines: 500 } },
+  duplicates: [
+    // 25 lines -> base Low, elevated to Medium (one side in an auth path is enough).
+    {
+      format: "typescript",
+      lines: 25,
+      tokens: 246,
+      fragment: "if (session === null) { return problems; }",
+      firstFile: { name: "dup/auth/session-check-api.ts", start: 10, end: 35 },
+      secondFile: { name: "app/actions/session-check.ts", start: 12, end: 37 },
+    },
+    // 11 lines -> base Info, elevated to Low (middleware path).
+    {
+      format: "typescript",
+      lines: 11,
+      tokens: 120,
+      fragment: "const token = header.slice(7);",
+      firstFile: { name: "src/middleware/rate-limit.ts", start: 1, end: 11 },
+      secondFile: { name: "src/middleware/rate-limit-edge.ts", start: 1, end: 11 },
+    },
+    // 60 lines -> already Medium; stays Medium but still gets the cross-check note.
+    {
+      format: "typescript",
+      lines: 60,
+      tokens: 700,
+      fragment: "export function requireRole(role) {}",
+      firstFile: { name: "lib/guards/role-a.ts", start: 1, end: 60 },
+      secondFile: { name: "lib/guards/role-b.ts", start: 1, end: 60 },
+    },
+    // 'auth' as a mere substring (authors.ts) must NOT elevate — same tokenizer as M5 (#226).
+    {
+      format: "typescript",
+      lines: 25,
+      tokens: 250,
+      fragment: "const byline = formatAuthor(post.author);",
+      firstFile: { name: "src/blog/authors.ts", start: 1, end: 25 },
+      secondFile: { name: "src/blog/contributors.ts", start: 1, end: 25 },
+    },
+  ],
+};
+
+describe("jscpdToFindings — security-path elevation (#361)", () => {
+  const findings = jscpdToFindings(securityJscpdReport);
+  const byFile = (s: string) => findings.find((f) => f.location.includes(s));
+
+  it("elevates a Low clone touching an auth path to Medium, even when only one side is security-relevant", () => {
+    const f = byFile("dup/auth/session-check-api.ts");
+    expect(f?.severity).toBe("Medium");
+    expect(f?.title).toContain("security-relevant path");
+  });
+
+  it("elevates an Info clone in a middleware path to Low", () => {
+    expect(byFile("rate-limit.ts")?.severity).toBe("Low");
+  });
+
+  it("keeps an already-Medium guard-path clone at Medium but adds the cross-check note", () => {
+    const f = byFile("lib/guards/role-a.ts");
+    expect(f?.severity).toBe("Medium");
+    expect(f?.impact).toContain("M1 authorization review");
+  });
+
+  it("appends the patched-one-copy cross-check note to every security-path clone", () => {
+    for (const loc of ["dup/auth/session-check-api.ts", "rate-limit.ts", "lib/guards/role-a.ts"]) {
+      expect(byFile(loc)?.impact).toContain("confirm the other copy(ies) were too");
+    }
+  });
+
+  it("does not elevate a clone whose path merely contains 'auth' as a substring (authors.ts)", () => {
+    const f = byFile("src/blog/authors.ts");
+    expect(f?.severity).toBe("Low"); // plain 25-line severity, no elevation
+    expect(f?.impact).not.toContain("M1 authorization review");
+  });
+
+  it("raises the BFTB value alongside the elevated severity", () => {
+    expect(byFile("dup/auth/session-check-api.ts")?.value).toBe(4);
+  });
+});
+
+// LIVE corpus measurement for the M4 slice of m4-m5.entries.ts. validate-calibration.ts scores
+// only mechanical-scan modules (module === undefined), so without this test the M4 entries would
+// be an answer key nothing ever checks. Runs the REAL jscpd (a local node dependency, not an
+// external binary) over targets/calibration/dup with the same flags src/cli/quality-scan.ts uses,
+// then scores the findings through the shared calibration harness — the same pattern M3 uses in
+// hotspot-scan.test.ts, except with live tool output instead of a recorded report.
+describe("M4 calibration corpus — measured against a live jscpd run (#361)", () => {
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const dupDir = join(repoRoot, "targets", "calibration", "dup");
+
+  function runJscpdLive(): JscpdReport {
+    const outDir = mkdtempSync(join(tmpdir(), "harvey-jscpd-test-"));
+    try {
+      execFileSync(
+        join(repoRoot, "node_modules", ".bin", "jscpd"),
+        [dupDir, "--reporters", "json", "--output", outDir, "--threshold", "100", "--absolute", "--silent", "--noTips", "--ignore", JSCPD_IGNORE_GLOBS.join(",")],
+        { stdio: ["ignore", "ignore", "pipe"] },
+      );
+      const report = JSON.parse(readFileSync(join(outDir, "jscpd-report.json"), "utf8")) as JscpdReport;
+      for (const dup of report.duplicates) {
+        dup.firstFile.name = relative(dupDir, resolve(dup.firstFile.name));
+        dup.secondFile.name = relative(dupDir, resolve(dup.secondFile.name));
+      }
+      return report;
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  }
+
+  it("catches every planted M4 positive and stays silent on every M4 negative", { timeout: 30_000 }, () => {
+    const findings = jscpdToFindings(runJscpdLive());
+    const m4Entries = m4m5Entries.filter((e) => e.module === "M4");
+    expect(m4Entries.length).toBeGreaterThanOrEqual(5); // guards against the corpus silently shrinking
+    const matrix = buildCoverageMatrix(findings, m4Entries);
+    const failed = matrix.rows.filter((r) => !r.pass).map((r) => `${r.id}: ${r.detail}`);
+    expect(failed).toEqual([]);
+
+    // The matrix scores caught-at-tier only; the #361 elevation contract (severity + note) is
+    // asserted here against the same live findings so the fixture can't silently degrade.
+    const sec = findings.find((f) => f.location.includes("auth/session-check-api.ts"));
+    expect(sec?.severity).toBe("Medium");
+    expect(sec?.impact).toContain("M1 authorization review");
   });
 });
 

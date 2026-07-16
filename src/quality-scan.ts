@@ -67,6 +67,16 @@ function severityForClone(lines: number): Finding["severity"] {
   return "Info";
 }
 
+// #361: a clone in an auth/guard/security path is the highest-value instance of M4's
+// bug-multiplier framing — it's the code most likely to become an M1 finding when one copy gets
+// patched and its siblings don't. One tier up, capped at Medium: still a maintainability finding
+// (the copies are identical today), not a confirmed security defect.
+function elevateForSecurityPath(severity: Finding["severity"]): Finding["severity"] {
+  if (severity === "Info") return "Low";
+  if (severity === "Low") return "Medium";
+  return severity;
+}
+
 // #232: jscpd matching a file against itself is how it reports internally-repetitive DATA (SVG
 // icon-path tables, enum/lookup literal blocks) — not cross-file logic duplication a client could
 // "extract into a shared module" (the M4 fix text). Excluded from scoring, not just re-labeled,
@@ -91,15 +101,21 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
   const worst = report.duplicates.filter(isSignificantClone).sort((a, b) => b.lines - a.lines);
 
   return worst.map((dup, i): Finding => {
-    const severity = severityForClone(dup.lines);
+    // #361: same signal M5 already uses for dead code — check BOTH sides, since either copy
+    // sitting in a security path makes the pair a patch-divergence risk.
+    const securityPath = touchesSecurityPath(dup.firstFile.name) || touchesSecurityPath(dup.secondFile.name);
+    const severity = securityPath ? elevateForSecurityPath(severityForClone(dup.lines)) : severityForClone(dup.lines);
     const fragment =
       dup.fragment.length > FRAGMENT_PREVIEW_LEN
         ? `${dup.fragment.slice(0, FRAGMENT_PREVIEW_LEN)}…`
         : dup.fragment;
+    const baseImpact = `${dup.lines} duplicated lines (${dup.tokens} tokens) — a fix in one copy is a fix missed in the other.`;
 
     return {
       id: `M4-${String(i + 1).padStart(2, "0")}`,
-      title: `Duplicated code: ${dup.firstFile.name} ↔ ${dup.secondFile.name}`,
+      title: securityPath
+        ? `Duplicated code in security-relevant path: ${dup.firstFile.name} ↔ ${dup.secondFile.name}`
+        : `Duplicated code: ${dup.firstFile.name} ↔ ${dup.secondFile.name}`,
       severity,
       confidence: "Confirmed",
       category: "Maintainability",
@@ -107,7 +123,9 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
       location: `${dup.firstFile.name}:${dup.firstFile.start}-${dup.firstFile.end} ↔ ${dup.secondFile.name}:${dup.secondFile.start}-${dup.secondFile.end}`,
       status: "Open",
       evidence: fragment.replace(/\n/g, " / "),
-      impact: `${dup.lines} duplicated lines (${dup.tokens} tokens) — a fix in one copy is a fix missed in the other.`,
+      impact: securityPath
+        ? `${baseImpact} This duplicated block sits in an auth/guard/security path — if one copy is patched for a security issue, confirm the other copy(ies) were too (cross-check against the M1 authorization review).`
+        : baseImpact,
       fix: "Extract the shared logic into one function/module and have both call sites use it.",
       value: severity === "Medium" ? 4 : severity === "Low" ? 3 : 2,
       ease: 4,
@@ -164,7 +182,7 @@ export function knipUnavailableFinding(reason: string): Finding {
 // substring match would produce (e.g. "author"/"authors" containing "auth").
 const SECURITY_PATH_KEYWORDS = new Set(["auth", "guard", "guards", "middleware", "security"]);
 
-function touchesSecurityPath(path: string): boolean {
+export function touchesSecurityPath(path: string): boolean {
   const tokens = path.split(/[^a-zA-Z0-9]+|(?<=[a-z0-9])(?=[A-Z])/).map((t) => t.toLowerCase());
   return tokens.some((t) => SECURITY_PATH_KEYWORDS.has(t));
 }

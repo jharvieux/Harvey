@@ -1209,6 +1209,7 @@ negatives below are exactly that configuration.
 |---|---|---|---|
 | M4-P-CLONE-A | `dup/invoice-total.ts` ↔ `dup/order-total.ts` | genuine 27-line copy-pasted tax/rounding block (299 tokens); jscpd clone cluster; `jscpdToFindings` → Low severity | high |
 | M4-P-CLONE-B | `dup/report-a.ts` ↔ `dup/report-b.ts` | genuine 52-line copy-pasted metric-aggregation block (658 tokens); jscpd clone cluster; `severityForClone` → Medium (≥50 lines) | high |
+| M4-P-CLONE-SEC | `dup/auth/session-check-api.ts` ↔ `dup/auth/session-check-action.ts` | genuine 25-line copy-pasted session/tenant validation block (246 tokens) in an auth path; jscpd clone cluster; `touchesSecurityPath` fires (#361) → severity elevated Low→Medium + M1 cross-check note in impact | high |
 
 **Negatives — benign lookalikes (must NOT be flagged)**
 
