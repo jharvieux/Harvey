@@ -1,0 +1,9 @@
+import React from "react";
+import { useState } from "react";
+
+// Classic-transform JSX pragma: React has no textual reference here even though it's required
+// by the compiler under the classic transform. useState IS referenced below.
+export function Widget() {
+  const [count, setCount] = useState(0);
+  return <div onClick={() => setCount(count + 1)}>{count}</div>;
+}

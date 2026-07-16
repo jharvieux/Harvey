@@ -2,12 +2,15 @@
 // detector at all; this gives it a complete mechanical slop capability for CLIENT code,
 // complementing knip dead-code (src/quality-scan.ts) and the M6 /simplify LLM pass.
 //
-// Two provenance groups:
+// Three provenance groups:
 //   • Ported from ATC's `scripts/slop-check.ts` (which only runs on ATC's own diffs): orphan
 //     TODOs, narrating comments, try/catch-rethrow, single-call wrappers.
 //   • Additional classes researched for this module: placeholder stubs, elision comments,
 //     AI comment phrasing, redundant booleans, else-after-return, decorative emoji,
 //     redundant JSDoc.
+//   • Coverage fan-out (#362, #364, #370, #371): unused parameter, unused import, single-use
+//     helper (the general "called exactly once" shape, broader than single-call-wrapper's
+//     pass-through-only scope), unreachable branch (tier-1 literal conditions).
 //
 // Method: TypeScript compiler API. Comment-text checks run over the file's comment trivia
 // (scanned once); structural checks walk the AST or match the source text. Emits Finding[]
@@ -489,12 +492,299 @@ function detectRedundantJsdoc(sf: ts.SourceFile, path: string, nextId: NextId): 
   return findings;
 }
 
+// --- Coverage additions (#362, #364, #370, #371) -----------------------------
+
+// Unused parameter (#362): a declared parameter never referenced in the function body — the
+// "stub-shaped code" D-091 #1 shape (`getPublicKey(kid)` ignoring `kid`). Mirrors ESLint
+// no-unused-vars' own `args: "after-used"` default: only the TRAILING run of unused params
+// (nothing used after them) is flagged, so a leading unused param followed by a used one
+// (Express-style `(err, req, res, next)`) stays silent. Only named declarations (function
+// declarations, `const f = (...) => ...`, methods) are checked — an anonymous arrow passed
+// straight into a call (`arr.map((item, index, array) => item * 2)`) is never visited by this
+// walk at all, which is what keeps caller-mandated callback shapes silent (measured against a
+// real ESLint run, 2026-07-16: unlike this issue's own doc claim, ESLint's after-used does NOT
+// exempt that shape — the anonymous-callback guard here is what actually does).
+function isReferenced(body: ts.Node, name: string): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isIdentifier(node) && node.text === name) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return found;
+}
+
+function unusedParamFindings(fn: ts.FunctionLikeDeclaration, fnName: string, sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const body = fn.body;
+  if (!body) return [];
+  const params = fn.parameters;
+  // Destructured patterns, rest params, and `this` params are treated as "used" — never flagged
+  // themselves, and they correctly terminate the trailing-unused run for params before them.
+  const usedFlags = params.map((p) => {
+    if (!ts.isIdentifier(p.name) || p.dotDotDotToken) return true;
+    const name = p.name.text;
+    if (name === "this" || name.startsWith("_")) return true;
+    return isReferenced(body, name);
+  });
+  let lastUsedIdx = -1;
+  usedFlags.forEach((used, i) => {
+    if (used) lastUsedIdx = i;
+  });
+  const findings: Finding[] = [];
+  for (let i = lastUsedIdx + 1; i < params.length; i++) {
+    const p = params[i];
+    if (!p || !ts.isIdentifier(p.name)) continue;
+    findings.push(
+      makeFinding(nextId, {
+        title: `Parameter \`${p.name.text}\` in \`${fnName}\` is declared but never used`,
+        severity: "Low",
+        confidence: "Review",
+        taxonomy: "M5 — Unused parameter",
+        location: `${path}:${lineOf(sf, p)}`,
+        evidence: `\`${fnName}(${params.map((x) => x.getText(sf)).join(", ")})\` — \`${p.name.text}\` never appears in the body, so the function's output can't depend on it.`,
+        impact: "Stub-shaped code: the signature looks parameterized but silently ignores an input — the historical D-091 example (`getPublicKey(kid)` always returning the same PEM) was exactly this shape.",
+        fix: "Reference the parameter, prefix it `_name` if intentionally unused, or remove it (and update call sites).",
+        value: 3,
+        ease: 4,
+        safety: 4,
+      }),
+    );
+  }
+  return findings;
+}
+
+function detectUnusedParameter(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name && node.body) {
+      findings.push(...unusedParamFindings(node, node.name.text, sf, path, nextId));
+    } else if (ts.isMethodDeclaration(node) && node.body) {
+      const name = ts.isIdentifier(node.name) ? node.name.text : node.name.getText(sf);
+      findings.push(...unusedParamFindings(node, name, sf, path, nextId));
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+    ) {
+      findings.push(...unusedParamFindings(node.initializer, node.name.text, sf, path, nextId));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// Unused import (#364): an import specifier never referenced elsewhere in the file. Side-effect
+// imports (no clause) and re-exports (`export {...} from`, a different AST node entirely) are
+// never visited. `import React from "react"` in a .tsx file is exempted unconditionally — the
+// classic-transform JSX pragma has no textual reference even when required (no `ts.Program`/
+// compiler-options in this single-file pipeline to check the actual `jsx` setting, so this is a
+// documented small allowlist per the issue's own fallback, not a detected fact).
+function isReactPragma(path: string, name: string): boolean {
+  return name === "React" && /\.(tsx|jsx)$/.test(path);
+}
+
+function importedBindings(clause: ts.ImportClause): { name: string; node: ts.Node }[] {
+  const out: { name: string; node: ts.Node }[] = [];
+  if (clause.name) out.push({ name: clause.name.text, node: clause.name });
+  if (clause.namedBindings) {
+    if (ts.isNamespaceImport(clause.namedBindings)) {
+      out.push({ name: clause.namedBindings.name.text, node: clause.namedBindings.name });
+    } else if (ts.isNamedImports(clause.namedBindings)) {
+      for (const el of clause.namedBindings.elements) out.push({ name: el.name.text, node: el.name });
+    }
+  }
+  return out;
+}
+
+function referencedOutsideImport(sf: ts.SourceFile, importStmt: ts.Statement, name: string): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found || node === importStmt) return;
+    if (ts.isIdentifier(node) && node.text === name) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return found;
+}
+
+function detectUnusedImport(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !stmt.importClause) continue; // no clause = side-effect-only import
+    const moduleSpecifier = ts.isStringLiteralLike(stmt.moduleSpecifier) ? stmt.moduleSpecifier.text : stmt.moduleSpecifier.getText(sf);
+    for (const b of importedBindings(stmt.importClause)) {
+      if (isReactPragma(path, b.name)) continue;
+      if (referencedOutsideImport(sf, stmt, b.name)) continue;
+      findings.push(
+        makeFinding(nextId, {
+          title: `Unused import \`${b.name}\` from "${moduleSpecifier}"`,
+          severity: "Low",
+          confidence: "Likely",
+          taxonomy: "M5 — Unused import",
+          location: `${path}:${lineOf(sf, b.node)}`,
+          evidence: `\`${b.name}\` is imported from "${moduleSpecifier}" but never referenced elsewhere in the file.`,
+          impact: "Dead import left behind by a refactor or generation pass — adds a phantom dependency edge and reading cost.",
+          fix: "Remove the unused specifier (or the whole import if nothing else from it is used).",
+          value: 1,
+          ease: 5,
+          safety: 5,
+        }),
+      );
+    }
+  }
+  return findings;
+}
+
+// Single-use helper (#370): a non-exported, block-bodied function/const-arrow called from
+// exactly one site in the same file — the general "called exactly once" class, broader than
+// detectSingleCallWrapper's pass-through-only scope (which only checks EXPORTED declarations,
+// so the two detectors never double-fire on the same node). Exported declarations are API
+// surface, not slop — restricting to non-exported is the mechanical stand-in for "intent",
+// per the issue's own guidance. `confidence: "Review"` for the same reason as the existing
+// single-call-wrapper detector: a mechanical count can't know it's a deliberate test/refactor
+// seam.
+function countCalls(sf: ts.SourceFile, name: string, ownNode: ts.Node): number {
+  let count = 0;
+  const visit = (node: ts.Node) => {
+    if (node === ownNode) return; // excludes the declaration itself and any self-recursive calls
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === name) count++;
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return count;
+}
+
+function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  interface Candidate {
+    name: string;
+    node: ts.Node;
+    declNode: ts.Node;
+  }
+  const candidates: Candidate[] = [];
+  for (const stmt of sf.statements) {
+    const exported = ts.canHaveModifiers(stmt) && ts.getModifiers(stmt)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+    if (exported) continue;
+    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body && ts.isBlock(stmt.body) && stmt.body.statements.length >= 1) {
+      candidates.push({ name: stmt.name.text, node: stmt, declNode: stmt });
+    } else if (ts.isVariableStatement(stmt)) {
+      for (const decl of stmt.declarationList.declarations) {
+        if (
+          ts.isIdentifier(decl.name) &&
+          decl.initializer &&
+          (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer)) &&
+          decl.initializer.body &&
+          ts.isBlock(decl.initializer.body)
+        ) {
+          candidates.push({ name: decl.name.text, node: stmt, declNode: decl });
+        }
+      }
+    }
+  }
+  for (const c of candidates) {
+    if (countCalls(sf, c.name, c.declNode) !== 1) continue;
+    findings.push(
+      makeFinding(nextId, {
+        title: `Single-use helper \`${c.name}\` is only called from one site`,
+        severity: "Low",
+        confidence: "Review",
+        taxonomy: "M5 — Single-use helper",
+        location: `${path}:${lineOf(sf, c.node)}`,
+        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file.`,
+        impact: "An extracted layer the reader must trace through for a single caller — unless it's a deliberate test/refactor seam.",
+        fix: "Inline it at its one call site, unless it exists as an intentional seam (leave it if so).",
+        value: 2,
+        ease: 3,
+        safety: 4,
+      }),
+    );
+  }
+  return findings;
+}
+
+// Unreachable branch (#371): tier-1 literal-condition detection — `if`/`while`/ternary
+// conditions that are a boolean literal or a constant-foldable literal-vs-literal comparison
+// (`1 === 2`). Pure AST pattern match, no dataflow, so it deliberately does NOT catch the
+// harder D-091 example (`else if` provably false only given an earlier runtime check) — that
+// needs real control-flow analysis and is left to tier 2 / the M6 semantic pass per the issue.
+function literalValue(node: ts.Expression): string | number | boolean | undefined {
+  if (ts.isStringLiteralLike(node)) return node.text;
+  if (ts.isNumericLiteral(node)) return Number(node.text);
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
+  return undefined;
+}
+
+function literalBoolValue(node: ts.Expression): boolean | undefined {
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
+  if (ts.isParenthesizedExpression(node)) return literalBoolValue(node.expression);
+  if (ts.isBinaryExpression(node)) {
+    const op = node.operatorToken.kind;
+    const isEq = op === ts.SyntaxKind.EqualsEqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsToken;
+    const isNeq = op === ts.SyntaxKind.ExclamationEqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken;
+    if (!isEq && !isNeq) return undefined;
+    const l = literalValue(node.left);
+    const r = literalValue(node.right);
+    if (l === undefined || r === undefined) return undefined;
+    const eq = l === r;
+    return isEq ? eq : !eq;
+  }
+  return undefined;
+}
+
+function detectUnreachableBranch(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const flag = (node: ts.Node, snippet: string) =>
+    findings.push(
+      makeFinding(nextId, {
+        title: "Unreachable branch (condition can never hold at runtime)",
+        severity: "Low",
+        confidence: "Likely",
+        taxonomy: "M5 — Unreachable branch",
+        location: `${path}:${lineOf(sf, node)}`,
+        evidence: `\`${snippet.slice(0, 70)}\` — the condition is a constant, so this branch never runs.`,
+        impact: "Dead branch that reads as live logic; the D-091 catalog's own example (an always-false `else if`) shipped as a real bug this shape would have caught.",
+        fix: "Delete the unreachable branch, or fix the condition if it was meant to be reachable.",
+        value: 3,
+        ease: 4,
+        safety: 4,
+      }),
+    );
+  const visit = (node: ts.Node) => {
+    if (ts.isIfStatement(node)) {
+      const val = literalBoolValue(node.expression);
+      if (val === false) flag(node, node.getText(sf));
+      else if (val === true && node.elseStatement) flag(node, node.getText(sf));
+    } else if (ts.isWhileStatement(node)) {
+      if (literalBoolValue(node.expression) === false) flag(node, node.getText(sf));
+    } else if (ts.isConditionalExpression(node)) {
+      const val = literalBoolValue(node.condition);
+      if (val === true || val === false) flag(node, node.getText(sf));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
 // --- Orchestrator ------------------------------------------------------------
 
 /**
  * Runs the mechanical AI-slop checks over the given source set and returns Finding[]
- * (taxonomy `M5 — …`). Covers the four patterns ported from ATC's slop-check plus seven
- * additional researched classes; no overlap with knip dead-code.
+ * (taxonomy `M5 — …`). Covers the four patterns ported from ATC's slop-check, seven
+ * additional researched classes, and the #362/#364/#370/#371 coverage fan-out (unused
+ * parameter, unused import, single-use helper, unreachable branch); no overlap with knip
+ * dead-code.
  */
 export function detectSlopFindings(files: SourceInput[]): Finding[] {
   let n = 0;
@@ -516,6 +806,10 @@ export function detectSlopFindings(files: SourceInput[]): Finding[] {
       ...detectElseAfterReturn(sf, f.path, nextId),
       ...detectEmoji(sf, comments, f.path, nextId),
       ...detectRedundantJsdoc(sf, f.path, nextId),
+      ...detectUnusedParameter(sf, f.path, nextId),
+      ...detectUnusedImport(sf, f.path, nextId),
+      ...detectSingleUseHelper(sf, f.path, nextId),
+      ...detectUnreachableBranch(sf, f.path, nextId),
     );
   }
   return findings;

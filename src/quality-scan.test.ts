@@ -1,4 +1,10 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { divergedCloneFindings } from "./diverged-clones.js";
 import {
   duplicationSummary,
   JSCPD_IGNORE_GLOBS,
@@ -8,6 +14,8 @@ import {
   type JscpdReport,
   type KnipReport,
 } from "./quality-scan.js";
+import { buildCoverageMatrix } from "./scan/calibration.js";
+import { m4m5Entries } from "./scan/calibration/m4-m5.entries.js";
 
 // Base two entries shaped from real `jscpd --reporters json` output (captured against a
 // throwaway two-file clone) — jscpd's json reporter emits duplicates out of size order. The
@@ -74,9 +82,9 @@ describe("jscpdToFindings", () => {
     expect(big?.impact).toBe("60 duplicated lines (900 tokens) — a fix in one copy is a fix missed in the other.");
   });
 
-  it("assigns unique sequential M4 ids", () => {
+  it("assigns unique sequential M4 ids, with the #365 sub-threshold aggregate as the trailing meta row", () => {
     const findings = jscpdToFindings(jscpdReport);
-    expect(findings.map((f) => f.id)).toEqual(["M4-01", "M4-02"]);
+    expect(findings.map((f) => f.id)).toEqual(["M4-01", "M4-02", "M4-00"]);
   });
 
   it("tags every clone at the high precision tier (issue #72 calibration)", () => {
@@ -89,9 +97,187 @@ describe("jscpdToFindings", () => {
     expect(findings.some((f) => f.location.includes("icons.tsx"))).toBe(false);
   });
 
-  it("excludes clusters under the significant-lines gate — e.g. a shared import header (#232)", () => {
+  it("emits no INDIVIDUAL finding for clusters under the significant-lines gate — e.g. a shared import header (#232)", () => {
     const findings = jscpdToFindings(jscpdReport);
     expect(findings.some((f) => f.location.includes("src/c.ts"))).toBe(false);
+  });
+});
+
+// #365: the 5-9-line band the significance floor drops is where AI-assisted duplication
+// concentrates (measured 2026-07-16 on the external corpus: 30% of proposit's cross-file clones).
+// The floor stays, but the band must be DISCLOSED as an aggregate, never silently absorbed.
+describe("jscpdToFindings — sub-threshold small-clone disclosure (#365)", () => {
+  it("discloses the dropped band in one M4-00 aggregate naming the pairs and their sizes", () => {
+    const findings = jscpdToFindings(jscpdReport);
+    const disclosure = findings.find((f) => f.id === "M4-00");
+    expect(disclosure?.severity).toBe("Info");
+    expect(disclosure?.location).toBe("(repo-wide)");
+    expect(disclosure?.title).toContain("1 small cross-file clone(s)");
+    expect(disclosure?.evidence).toContain("src/c.ts:1-6 ↔ src/d.ts:1-6 (6 lines)");
+  });
+
+  it("does not count self-file repetition in the disclosure — #232 excludes it at any size", () => {
+    const selfOnly: JscpdReport = {
+      statistics: { total: { percentage: 0, duplicatedLines: 0, lines: 100 } },
+      duplicates: [
+        {
+          format: "typescript",
+          lines: 7,
+          tokens: 80,
+          fragment: "<path />",
+          firstFile: { name: "src/icons.tsx", start: 1, end: 7 },
+          secondFile: { name: "src/icons.tsx", start: 20, end: 27 },
+        },
+      ],
+    };
+    expect(jscpdToFindings(selfOnly)).toEqual([]);
+  });
+
+  it("emits no disclosure row at all when nothing was dropped — an empty band is not a finding", () => {
+    const bigOnly: JscpdReport = {
+      statistics: { total: { percentage: 0, duplicatedLines: 0, lines: 100 } },
+      duplicates: [jscpdReport.duplicates[1]!],
+    };
+    expect(jscpdToFindings(bigOnly).find((f) => f.id === "M4-00")).toBeUndefined();
+  });
+});
+
+// #361: a clone in an auth/guard/security path is the code most likely to become an M1 finding
+// when one copy is patched and its sibling isn't — mirror M5's #226 elevation for M4.
+const securityJscpdReport: JscpdReport = {
+  statistics: { total: { percentage: 0, duplicatedLines: 0, lines: 500 } },
+  duplicates: [
+    // 25 lines -> base Low, elevated to Medium (one side in an auth path is enough).
+    {
+      format: "typescript",
+      lines: 25,
+      tokens: 246,
+      fragment: "if (session === null) { return problems; }",
+      firstFile: { name: "dup/auth/session-check-api.ts", start: 10, end: 35 },
+      secondFile: { name: "app/actions/session-check.ts", start: 12, end: 37 },
+    },
+    // 11 lines -> base Info, elevated to Low (middleware path).
+    {
+      format: "typescript",
+      lines: 11,
+      tokens: 120,
+      fragment: "const token = header.slice(7);",
+      firstFile: { name: "src/middleware/rate-limit.ts", start: 1, end: 11 },
+      secondFile: { name: "src/middleware/rate-limit-edge.ts", start: 1, end: 11 },
+    },
+    // 60 lines -> already Medium; stays Medium but still gets the cross-check note.
+    {
+      format: "typescript",
+      lines: 60,
+      tokens: 700,
+      fragment: "export function requireRole(role) {}",
+      firstFile: { name: "lib/guards/role-a.ts", start: 1, end: 60 },
+      secondFile: { name: "lib/guards/role-b.ts", start: 1, end: 60 },
+    },
+    // 'auth' as a mere substring (authors.ts) must NOT elevate — same tokenizer as M5 (#226).
+    {
+      format: "typescript",
+      lines: 25,
+      tokens: 250,
+      fragment: "const byline = formatAuthor(post.author);",
+      firstFile: { name: "src/blog/authors.ts", start: 1, end: 25 },
+      secondFile: { name: "src/blog/contributors.ts", start: 1, end: 25 },
+    },
+  ],
+};
+
+describe("jscpdToFindings — security-path elevation (#361)", () => {
+  const findings = jscpdToFindings(securityJscpdReport);
+  const byFile = (s: string) => findings.find((f) => f.location.includes(s));
+
+  it("elevates a Low clone touching an auth path to Medium, even when only one side is security-relevant", () => {
+    const f = byFile("dup/auth/session-check-api.ts");
+    expect(f?.severity).toBe("Medium");
+    expect(f?.title).toContain("security-relevant path");
+  });
+
+  it("elevates an Info clone in a middleware path to Low", () => {
+    expect(byFile("rate-limit.ts")?.severity).toBe("Low");
+  });
+
+  it("keeps an already-Medium guard-path clone at Medium but adds the cross-check note", () => {
+    const f = byFile("lib/guards/role-a.ts");
+    expect(f?.severity).toBe("Medium");
+    expect(f?.impact).toContain("M1 authorization review");
+  });
+
+  it("appends the patched-one-copy cross-check note to every security-path clone", () => {
+    for (const loc of ["dup/auth/session-check-api.ts", "rate-limit.ts", "lib/guards/role-a.ts"]) {
+      expect(byFile(loc)?.impact).toContain("confirm the other copy(ies) were too");
+    }
+  });
+
+  it("does not elevate a clone whose path merely contains 'auth' as a substring (authors.ts)", () => {
+    const f = byFile("src/blog/authors.ts");
+    expect(f?.severity).toBe("Low"); // plain 25-line severity, no elevation
+    expect(f?.impact).not.toContain("M1 authorization review");
+  });
+
+  it("raises the BFTB value alongside the elevated severity", () => {
+    expect(byFile("dup/auth/session-check-api.ts")?.value).toBe(4);
+  });
+});
+
+// LIVE corpus measurement for the M4 slice of m4-m5.entries.ts. validate-calibration.ts scores
+// only mechanical-scan modules (module === undefined), so without this test the M4 entries would
+// be an answer key nothing ever checks. Runs the REAL full M4 layer over targets/calibration/dup
+// exactly as src/cli/quality-scan.ts wires it — jscpd (a local node dependency, not an external
+// binary) plus the #360 diverged-clone pass over the security-path files — then scores the merged
+// findings through the shared calibration harness (the M3 pattern from hotspot-scan.test.ts,
+// with live tool output instead of a recorded report).
+describe("M4 calibration corpus — measured against a live jscpd + diverged-clone run (#361/#360)", () => {
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const dupDir = join(repoRoot, "targets", "calibration", "dup");
+
+  function runJscpdLive(): JscpdReport {
+    const outDir = mkdtempSync(join(tmpdir(), "harvey-jscpd-test-"));
+    try {
+      execFileSync(
+        join(repoRoot, "node_modules", ".bin", "jscpd"),
+        [dupDir, "--reporters", "json", "--output", outDir, "--threshold", "100", "--absolute", "--silent", "--noTips", "--ignore", JSCPD_IGNORE_GLOBS.join(",")],
+        { stdio: ["ignore", "ignore", "pipe"] },
+      );
+      const report = JSON.parse(readFileSync(join(outDir, "jscpd-report.json"), "utf8")) as JscpdReport;
+      for (const dup of report.duplicates) {
+        dup.firstFile.name = relative(dupDir, resolve(dup.firstFile.name));
+        dup.secondFile.name = relative(dupDir, resolve(dup.secondFile.name));
+      }
+      return report;
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  }
+
+  it("catches every planted M4 positive and stays silent on every M4 negative", { timeout: 30_000 }, () => {
+    const authDir = join(dupDir, "auth");
+    const securityFiles = readdirSync(authDir)
+      .filter((f) => f.endsWith(".ts"))
+      .map((f) => ({ path: `auth/${f}`, source: readFileSync(join(authDir, f), "utf8") }));
+    const findings = [...jscpdToFindings(runJscpdLive()), ...divergedCloneFindings(securityFiles)];
+    const m4Entries = m4m5Entries.filter((e) => e.module === "M4");
+    expect(m4Entries.length).toBeGreaterThanOrEqual(7); // guards against the corpus silently shrinking
+    const matrix = buildCoverageMatrix(findings, m4Entries);
+    const failed = matrix.rows.filter((r) => !r.pass).map((r) => `${r.id}: ${r.detail}`);
+    expect(failed).toEqual([]);
+
+    // The matrix scores caught-at-tier only; the #361 elevation contract (severity + note) is
+    // asserted here against the same live findings so the fixture can't silently degrade.
+    const sec = findings.find((f) => f.location.includes("auth/session-check-api.ts"));
+    expect(sec?.severity).toBe("Medium");
+    expect(sec?.impact).toContain("M1 authorization review");
+
+    // Same for #360: exactly ONE diverged pair exists in the fixture set — the require-tenant
+    // guards — and nothing else may pair (the session-check clones are a consistent Type-2
+    // rename; api-key-check.ts is structurally distinct).
+    const diverged = findings.filter((f) => f.id.startsWith("M4-DIV"));
+    expect(diverged).toHaveLength(1);
+    expect(diverged[0]?.location).toContain("require-tenant-api.ts");
+    expect(diverged[0]?.location).toContain("require-tenant-admin.ts");
   });
 });
 
@@ -102,6 +288,11 @@ describe("duplicationSummary", () => {
     const summary = duplicationSummary(jscpdReport);
     expect(summary.duplicatedLines).toBe(71);
     expect(summary.percentage).toBe(22.19);
+  });
+
+  it("counts the dropped small-clone band separately without polluting the headline percentage (#365)", () => {
+    const summary = duplicationSummary(jscpdReport);
+    expect(summary.subThresholdCloneCount).toBe(1); // the c.ts/d.ts import header; the self-file clone is not counted
   });
 });
 

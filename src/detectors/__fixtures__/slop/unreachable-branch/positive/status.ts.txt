@@ -1,0 +1,14 @@
+export function computeStatus(count: number): string {
+  if (false) {
+    return "impossible";
+  }
+  return count > 0 ? "active" : "inactive";
+}
+
+export function legacyFlag(value: number): number {
+  if (true) {
+    return value;
+  } else {
+    return value * -1;
+  }
+}

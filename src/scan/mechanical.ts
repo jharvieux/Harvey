@@ -18,6 +18,7 @@ import {
   checkEdgeFunctionVerifyJwt,
   checkMigrationDefinerAuthz,
   checkMigrationPolicySemantics,
+  checkMigrationRlsInitplanStatic,
   checkMigrationRlsStatic,
   type TenancyOverride,
 } from "./supabase-static.js";
@@ -93,6 +94,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     findings.push(...checkMigrationRlsStatic(scanDir));
     findings.push(...checkMigrationPolicySemantics(scanDir, tenancyOverride));
     findings.push(...checkMigrationDefinerAuthz(scanDir));
+    findings.push(...checkMigrationRlsInitplanStatic(scanDir));
     findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
 
     // Supply chain.

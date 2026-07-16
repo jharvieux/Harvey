@@ -1,0 +1,26 @@
+// Trailing param prefixed `_` — the intentionally-unused convention.
+function logAccess(msg: string, _meta: object): void {
+  console.log(msg);
+}
+
+// Leading unused params before a used one (Express-style error middleware): `err`/`req`/`res`
+// come BEFORE the last used param `next`, so ESLint's own `args: "after-used" convention (and
+// this detector) leaves them silent.
+function errorHandler(err: Error, req: unknown, res: unknown, next: () => void): void {
+  next();
+}
+
+const numbers = [1, 2, 3];
+// Anonymous callback passed straight into a call: the shape is mandated by Array#map's
+// signature, not authored freely, and this detector never even visits it (it only checks
+// named declarations).
+numbers.map((item: number, index: number, array: number[]) => item * 2);
+
+// Destructured parameter where at least one field is used.
+function greet({ name, title }: { name: string; title: string }): string {
+  return `Hello, ${name}`;
+}
+
+logAccess("x", {});
+errorHandler(new Error(), {}, {}, () => {});
+greet({ name: "Ada", title: "Dr" });

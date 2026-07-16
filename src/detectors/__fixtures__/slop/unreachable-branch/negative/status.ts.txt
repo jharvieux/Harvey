@@ -1,0 +1,21 @@
+export function computeStatus(count: number, enabled: boolean): string {
+  if (enabled) {
+    return "active";
+  }
+  return "inactive";
+}
+
+// D-091's own real shape: only provably-false given an EARLIER runtime check (dataflow, not a
+// literal) — the harder case this tier-1 detector deliberately leaves to tier 2 / M6.
+export function applyUpdates(updates: Record<string, unknown>): string {
+  if (Object.keys(updates).length === 0) {
+    return "none";
+  } else if (Object.keys(updates).length > 0) {
+    return "some";
+  }
+  return "unreachable-but-not-literal";
+}
+
+export function pickEnv(mode: string): string {
+  return mode === "production" ? "prod" : "dev";
+}

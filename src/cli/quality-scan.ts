@@ -7,10 +7,11 @@
 //   pnpm quality-scan <target-dir> [--out findings.quality.json]
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { divergedCloneFindings, type SecurityPathFile } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
 import {
   duplicationSummary,
@@ -18,6 +19,7 @@ import {
   jscpdToFindings,
   knipToFindings,
   knipUnavailableFinding,
+  touchesSecurityPath,
   type JscpdReport,
   type KnipReport,
 } from "../quality-scan.js";
@@ -79,7 +81,32 @@ function lineCount(dir: string, relPath: string): number | undefined {
   }
 }
 
+// #360: collect the security-relevant source subset for the diverged-clone pass. Skips the same
+// generated/vendored/build shapes JSCPD_IGNORE_GLOBS excludes from M4, plus tests — a drifted
+// copy inside a test file is not a per-handler authorization drift, and test suites legitimately
+// repeat near-identical setup.
+const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".next", ".git", "generated", "vendor", "patches", "__tests__", "e2e"]);
+const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
+const SKIP_FILE = /(\.gen\.ts|\.test\.|\.spec\.)|^(database\.types|types_db)\.ts$/;
+
+function securityPathFiles(dir: string, rel = ""): SecurityPathFile[] {
+  const files: SecurityPathFile[] = [];
+  for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+    const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...securityPathFiles(dir, relPath));
+    } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name) && touchesSecurityPath(relPath)) {
+      files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
+    }
+  }
+  return files;
+}
+
 const jscpdReport = runJscpd(targetDir);
+
+// #360: the Type-3 near-miss layer jscpd structurally cannot provide — diverged copies of
+// security checks. Scoped to touchesSecurityPath files only.
+const divergedFindings = divergedCloneFindings(securityPathFiles(targetDir));
 
 // #223: M4 has no dependency on M5 — a knip failure (most commonly the target's own
 // node_modules isn't installed, so it can't resolve config/plugin imports) must not cost the
@@ -103,12 +130,13 @@ if (knipReport) {
 
 const findings: Finding[] = [
   ...jscpdToFindings(jscpdReport),
+  ...divergedFindings,
   ...(knipReport ? knipToFindings(knipReport, fileLineCounts) : [knipUnavailableFinding(knipFailure ?? "unknown error")]),
 ];
 
 const dup = duplicationSummary(jscpdReport);
 console.error(
-  `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s)`,
+  `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s), ${dup.subThresholdCloneCount} sub-threshold small clone(s) disclosed in M4-00 (#365), ${divergedFindings.length} diverged security-path clone pair(s) (#360, review tier)`,
 );
 if (knipReport) {
   console.error(
