@@ -103,6 +103,30 @@ CREATE TABLE IF NOT EXISTS "jackson_store" (
 `);
     expect(cols.find((c) => c.column_name === "value")).toMatchObject({ table_name: "jackson_store", data_type: "text" });
   });
+
+  it("extracts columns with SERIAL/BIGSERIAL/SMALLSERIAL types (#307)", () => {
+    const cols = parseColumns(`
+create table jackson_index (
+    id serial primary key,
+    name text not null
+);
+
+create table audit_trail (
+    entry_id bigserial,
+    tenant_id uuid,
+    action smallserial
+);
+`);
+    expect(cols.filter((c) => c.table_name === "jackson_index")).toEqual([
+      { table_name: "jackson_index", column_name: "id", data_type: "serial" },
+      { table_name: "jackson_index", column_name: "name", data_type: "text" },
+    ]);
+    expect(cols.filter((c) => c.table_name === "audit_trail")).toEqual([
+      { table_name: "audit_trail", column_name: "entry_id", data_type: "bigserial" },
+      { table_name: "audit_trail", column_name: "tenant_id", data_type: "uuid" },
+      { table_name: "audit_trail", column_name: "action", data_type: "smallserial" },
+    ]);
+  });
 });
 
 describe("parseTableNames — quoted vs unquoted identifiers (#299)", () => {

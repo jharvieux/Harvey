@@ -52,6 +52,12 @@ const m2: ModuleRunner = {
 // vitals JSON was actually parsed into the M3 deliverable (ranked table + boolean-fact findings),
 // not merely that an external binary exited 0. vitals itself stays external (run, don't build):
 // when it is not on PATH (#314) the CLI exits non-zero and the probe carries that reason.
+//
+// #357 (untestable in CI): vitals is not on PATH in this environment, so every M3 probe here has
+// only ever recorded requires-live-run — the `ran` branch below is UNEXERCISED. Whether a vitals
+// run that analyzed nothing would still read as `ran` is inference from M5/M8/M9's shared
+// exit-code pattern (#350), not measurement. Do not upgrade that to a verified claim without a
+// real vitals run.
 const m3: ModuleRunner = {
   module: "M3",
   run: (ctx) => {
@@ -89,6 +95,12 @@ const m6: ModuleRunner = {
 
 // M7 is two layers: code-tier detectors on source (#170) plus the DB advisors. Without creds it
 // loses a layer — partial, not a skip.
+//
+// #357 (untestable in CI): with no live DB, the `perf-scan` advisor call has only ever been
+// exercised in its FAILURE path (advisors failed → partial). Whether a successful advisor run that
+// linted nothing would read as `ran` rather than an honest partial is unverified — same open
+// question as M3/M5/M8/M9's exit-code-as-evidence pattern (#350). It fails honestly today; that a
+// success stays honest is not yet measured.
 const m7: ModuleRunner = {
   module: "M7",
   run: (ctx) => {
@@ -116,6 +128,11 @@ const m9: ModuleRunner = viaCli("M9", "detect-static", (ctx) => [ctx.targetDir])
 
 // M10 classifies live columns, or parses migration SQL when there is no DB (#250) — two tiers, so
 // a schema-only pass is partial rather than a skip.
+//
+// #357 (untestable in CI): the `connected` branch below (live pii-classify → `ran`) needs real DB
+// creds and has only been exercised in its failure path here. Whether a live classify that sampled
+// nothing would read as `ran` is unverified — the schema-tier (partial) path is the only one this
+// environment can exercise.
 const m10: ModuleRunner = {
   module: "M10",
   run: (ctx) => {
