@@ -7,7 +7,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { detectHandrolledFindings, hasClassMergeDep } from "./handrolled.js";
+import { depGatePresent, detectHandrolledFindings } from "./handrolled.js";
 import type { SourceInput } from "./common.js";
 
 const FIXTURES_ROOT = fileURLToPath(new URL("./__fixtures__/handrolled/", import.meta.url));
@@ -64,6 +64,7 @@ for (const c of CASES) {
 
 describe("class-string merge (dep-gated)", () => {
   const TAX = "M6 — Indicator: class-string merge";
+  const CLASS_MERGE_LIBS = ["clsx", "classnames", "tailwind-merge"];
 
   it("catches the inline-JSX and cn-helper positives when a merge library is in the tree", () => {
     const hits = byTaxonomy("class-merge/positive", TAX);
@@ -73,14 +74,49 @@ describe("class-string merge (dep-gated)", () => {
 
   it("stays silent when no merge library is in the tree — the deliberate dep-drop shape", () => {
     const files = loadFixtureDir("class-merge/negative-no-dep");
-    expect(hasClassMergeDep(files)).toBe(false);
+    expect(depGatePresent(files, CLASS_MERGE_LIBS)).toBe(false);
     expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
   });
 
   it("stays silent on a sentence-builder join even with the gate open — className context is required", () => {
     const files = loadFixtureDir("class-merge/negative-with-dep");
-    expect(hasClassMergeDep(files)).toBe(true);
+    expect(depGatePresent(files, CLASS_MERGE_LIBS)).toBe(true);
     expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+});
+
+// The generic dep-gate every future dep-gated class reuses (#406). The class-merge suite above
+// covers the fixture-set path end-to-end; these lock the generic semantics directly.
+describe("depGatePresent (generic dep-gate)", () => {
+  const DATE_LIBS = ["date-fns", "dayjs"];
+
+  it("opens on a named lib in dependencies or devDependencies of any package.json", () => {
+    expect(depGatePresent([{ path: "package.json", text: JSON.stringify({ dependencies: { "date-fns": "^3.6.0" } }) }], DATE_LIBS)).toBe(true);
+    expect(depGatePresent([{ path: "apps/web/package.json", text: JSON.stringify({ devDependencies: { dayjs: "^1.11.0" } }) }], DATE_LIBS)).toBe(true);
+  });
+
+  it("fails closed: no package.json in the set, none that parses, or no named lib", () => {
+    expect(depGatePresent([{ path: "src/app.ts", text: "export {}" }], DATE_LIBS)).toBe(false);
+    expect(depGatePresent([{ path: "package.json", text: "{ not json" }], DATE_LIBS)).toBe(false);
+    expect(depGatePresent([{ path: "package.json", text: JSON.stringify({ dependencies: { react: "^18.3.0" } }) }], DATE_LIBS)).toBe(false);
+  });
+});
+
+// WHY-comment suppression is ONE mechanism in the shared emission path (makeIndicator), so the
+// fixtures deliberately span two indicator classes and both adjacency forms: a leading comment
+// block above the flagged statement (JSON deep-equal) and a trailing comment on the statement's
+// own line (random-string id). The narrated pair is the negative-of-the-negative: the SAME
+// shapes with ordinary comments must still flag — narration is not a recorded reason.
+describe("WHY-comment suppression (#406, the depdrop discipline generalized)", () => {
+  it("an adjacent WHY: comment suppresses the indicator entirely — the reason is already recorded at the site", () => {
+    expect(detectHandrolledFindings(loadFixtureDir("why-comment/suppressed"))).toHaveLength(0);
+  });
+
+  it("an ordinary narrating comment does NOT suppress the same shapes", () => {
+    const taxonomies = detectHandrolledFindings(loadFixtureDir("why-comment/narrated"))
+      .map((f) => f.taxonomy)
+      .sort();
+    expect(taxonomies).toEqual(["M6 — Indicator: JSON deep-equal", "M6 — Indicator: random-string id"]);
   });
 });
 

@@ -1,0 +1,3 @@
+export function tempKey(): string {
+  return `tmp_${Math.random().toString(36).substring(2)}`; // build a temp key with a random suffix
+}
