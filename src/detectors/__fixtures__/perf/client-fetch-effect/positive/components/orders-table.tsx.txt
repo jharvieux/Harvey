@@ -1,0 +1,19 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+export function OrdersTable() {
+  const [orders, setOrders] = useState<{ id: string; total: number }[]>([]);
+  useEffect(() => {
+    fetch("/api/orders")
+      .then((r) => r.json())
+      .then(setOrders);
+  }, []);
+  return (
+    <ul>
+      {orders.map((o) => (
+        <li key={o.id}>{o.total}</li>
+      ))}
+    </ul>
+  );
+}

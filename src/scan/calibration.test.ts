@@ -18,7 +18,8 @@ import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
 import { checkPublicDirSensitive, parseSemgrepFindings, type SemgrepResult } from "./semgrep.js";
-import { checkEdgeFunctionVerifyJwt, checkMigrationRlsStatic } from "./supabase-static.js";
+import { checkEdgeFunctionVerifyJwt, checkMigrationRlsInitplanStatic, checkMigrationRlsStatic } from "./supabase-static.js";
+import { m7InitplanStaticEntries } from "./calibration/m7-initplan-static.entries.js";
 import { checkKnownIoc, checkLockfilePresence } from "./supply-chain.js";
 import type { Finding, PrecisionTier } from "../findings.js";
 
@@ -656,5 +657,37 @@ describe("#221 authz corpus (live detectAppRouterFindings output over the commit
     expect(m.positivesCaughtHigh).toBe(0);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
+  });
+});
+
+describe("#374 static auth_rls_initplan corpus (live checkMigrationRlsInitplanStatic over the committed fixture)", () => {
+  // Like the #221 block above: the REAL check against the REAL committed SQL fixtures, so the
+  // answer key can't drift from what the scanner emits. The plants are the SAME migration the
+  // connected-tier M7-P-RLS-INITPLAN / M7-N-WRAPPED-RLS pair scores against — no new SQL needed.
+  const findings = checkMigrationRlsInitplanStatic(join(import.meta.dirname, "../../targets/calibration"));
+
+  it("catches the bare-auth.uid() plant at review tier and clears the (select …)-wrapped sibling", () => {
+    for (const e of m7InitplanStaticEntries) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe(e.expectedTier);
+      else expect(row.reviewFlagged, `${e.id} must draw no finding at all`).toBe(false);
+    }
+  });
+
+  it("keeps every finding of this class at review tier — a perf lint never inflates the security free count", () => {
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every((f) => f.precisionTier === "review")).toBe(true);
+  });
+
+  it("also surfaces the corpus's other bare auth.* policies without flagging any (select …)-wrapped one", () => {
+    // The check runs over the whole migration set: the b15 storage own-folder policies and the
+    // invoices auth.role() policy carry bare auth.* calls too (Splinter would lint them all).
+    // Cross-class corpus negatives (e.g. N-STORAGE-OWNERSHIP-SCOPED-STATIC) keyword-match these
+    // findings, which is exactly why the class stays at review tier: review hits are triaged out,
+    // never free-count FPs.
+    const flagged = findings.map((f) => f.location);
+    expect(flagged.some((l) => l.includes("perf_orders_select_own"))).toBe(true);
+    expect(flagged.every((l) => !l.includes("perf_events_select_own"))).toBe(true);
   });
 });

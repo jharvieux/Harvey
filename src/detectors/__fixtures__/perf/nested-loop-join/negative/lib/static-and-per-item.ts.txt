@@ -1,0 +1,29 @@
+// A hardcoded const list never scales — same isStaticListSource exemption as detectIndexAsKey.
+const STATUSES = [
+  { code: "open", label: "Open" },
+  { code: "closed", label: "Closed" },
+];
+
+export function labelled(orders: { id: string; status: string }[]) {
+  return orders.map((o) => ({
+    ...o,
+    statusLabel: STATUSES.find((s) => s.code === o.status)?.label,
+  }));
+}
+
+// An imported SCREAMING_SNAKE constant: isStaticListSource can't see across files, but the
+// all-caps convention marks it as a hardcoded config list that never scales.
+import { ALLOWED_ROLES } from "./roles";
+
+export function admins(users: { id: string; role: string }[]) {
+  return users.filter((u) => ALLOWED_ROLES.some((r) => r === u.role));
+}
+
+// The scanned collection is the ITEM'S OWN field re-derived per iteration (a per-row tag list),
+// not a loop-invariant second collection — normal per-row work, not an O(n·m) join.
+export function pinnedTag(posts: { tags: string[]; pinned: string }[]) {
+  return posts.map((p) => {
+    const tags = p.tags;
+    return tags.find((t) => t === p.pinned);
+  });
+}

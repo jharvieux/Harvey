@@ -318,6 +318,71 @@ export function checkMigrationDefinerAuthz(dir: string): Finding[] {
   return findings;
 }
 
+// Static auth_rls_initplan (#374) — the source-tier mirror of Splinter's performance lint of the
+// same name (LINT_PROFILES.auth_rls_initplan in src/perf-scan.ts, connected tier). A policy
+// calling auth.uid()/auth.role()/auth.jwt()/auth.email() bare inside USING/WITH CHECK makes
+// Postgres re-evaluate the call once PER ROW; wrapping it as `(select auth.uid())` hoists it to a
+// once-per-query initplan. The clause text is already extracted by parsePolicies for the semantic
+// review above — this check reads the same feed for the perf shape.
+//
+// Review tier, not free-count, for two reasons: (1) migrations are cumulative and this check
+// doesn't track `drop policy` / re-creates, so a policy rewritten in a later migration could
+// still be reported from its original file — the live advisor is the ground truth the connected
+// tier confirms against; (2) the free count is the security grade, and a perf lint must never
+// inflate it.
+const AUTH_FN_CALL = /\bauth\.(uid|role|jwt|email)\s*\(\s*\)/gi;
+
+// Whether the auth.* call at `index` in `clause` is already hoisted: walk outward to the nearest
+// unclosed "(" to its left and confirm the token following it is `select` — the `(select …)`
+// wrapper (Splinter's own distinction). No enclosing paren, or a paren not opening a subquery
+// (e.g. `(auth.uid())`), means the call is evaluated per row. Note parsePolicies returns the
+// clause with the outer USING(…) parens already stripped, so a bare call has no enclosing paren.
+function isSelectWrapped(clause: string, index: number): boolean {
+  let depth = 0;
+  for (let i = index - 1; i >= 0; i--) {
+    const c = clause[i];
+    if (c === ")") depth++;
+    else if (c === "(") {
+      if (depth === 0) return /^\s*select\b/i.test(clause.slice(i + 1, index));
+      depth--;
+    }
+  }
+  return false;
+}
+
+export function checkMigrationRlsInitplanStatic(dir: string): Finding[] {
+  const findings: Finding[] = [];
+  for (const { file, sql } of readMigrations(dir)) {
+    for (const p of parsePolicies(sql).policies) {
+      const bare: string[] = [];
+      for (const [clauseName, clause] of [["USING", p.qual], ["WITH CHECK", p.withCheck]] as const) {
+        if (!clause) continue;
+        for (const m of clause.matchAll(AUTH_FN_CALL)) {
+          if (!isSelectWrapped(clause, m.index)) bare.push(`${m[0].replace(/\s+/g, "")} in ${clauseName}`);
+        }
+      }
+      if (bare.length === 0) continue;
+      const at = sql.toLowerCase().indexOf(`policy ${p.name.toLowerCase()}`);
+      findings.push(
+        mechanicalFinding({
+          id: `SB-RLS-INITPLAN-${p.table}-${p.name}`,
+          title: `RLS policy ${p.name} re-evaluates auth.* per row`,
+          severity: "Perf",
+          category: "Performance",
+          taxonomy: "auth_rls_initplan (static)",
+          location: `${file}:${at >= 0 ? sql.slice(0, at).split("\n").length : 1} (${p.schema}.${p.table}.${p.name})`,
+          evidence: `Policy ${p.name} on ${p.schema}.${p.table} calls ${bare.join(", ")} without a (select …) wrapper, so Postgres re-evaluates it once per candidate row instead of once per query — Supabase's auth_rls_initplan advisor lint, read here from migration SQL.`,
+          impact: "Every query the policy guards pays the auth function call per row scanned — linear slowdown that grows with table size and is invisible until the table does.",
+          fix: `Wrap the call in a subquery — e.g. auth.uid() → (select auth.uid()) — to hoist it to a once-per-query initplan. Verify the rewritten policy is behavior-identical before shipping. Confirm against the live advisor (pnpm perf-scan) in case a later migration already rewrote this policy.`,
+          precisionTier: "review",
+          bftb: { value: 4, ease: 4, safety: 4 },
+        }),
+      );
+    }
+  }
+  return findings;
+}
+
 const FUNCTIONS_HEADER = /^\s*\[functions\.([a-z0-9_-]+)\]/i;
 const VERIFY_JWT_FALSE = /^\s*verify_jwt\s*=\s*false\b/i;
 const TABLE_HEADER = /^\s*\[/;

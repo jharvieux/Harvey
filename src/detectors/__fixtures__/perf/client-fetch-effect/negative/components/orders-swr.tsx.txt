@@ -1,0 +1,16 @@
+"use client";
+
+import useSWR from "swr";
+
+const fetcher = (url: string) => fetch(url).then((r) => r.json());
+
+export function OrdersTable() {
+  const { data: orders } = useSWR<{ id: string; total: number }[]>("/api/orders", fetcher);
+  return (
+    <ul>
+      {(orders ?? []).map((o) => (
+        <li key={o.id}>{o.total}</li>
+      ))}
+    </ul>
+  );
+}

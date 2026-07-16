@@ -1,0 +1,5 @@
+// String.prototype.includes on a loop-invariant STRING — not an array join. The value-form
+// check requires in-file array evidence for the receiver, which `query: string` fails.
+export function matches(names: string[], query: string) {
+  return names.filter((n) => query.includes(n));
+}

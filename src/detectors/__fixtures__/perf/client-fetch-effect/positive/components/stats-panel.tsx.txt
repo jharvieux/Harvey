@@ -1,0 +1,14 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+export function StatsPanel() {
+  const [stats, setStats] = useState<Record<string, number>>({});
+  useEffect(() => {
+    (async () => {
+      const res = await fetch("/api/stats");
+      setStats(await res.json());
+    })();
+  }, []);
+  return <pre>{JSON.stringify(stats)}</pre>;
+}

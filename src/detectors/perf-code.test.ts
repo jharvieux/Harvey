@@ -157,6 +157,20 @@ describe("unbounded select", () => {
   });
 });
 
+describe("client fetch in useEffect", () => {
+  const TAX = "M7 — Client fetch in useEffect";
+  it("flags a fetch/.then chain, an async-IIFE await fetch, and a Supabase read via an invoked local function — one rolled-up finding per file", () => {
+    const hits = byTaxonomy("client-fetch-effect/positive", TAX);
+    expect(hits).toHaveLength(3);
+    for (const h of hits) expect(h).toMatchObject({ severity: "Perf", confidence: "Review" });
+    expect(hits.find((h) => h.location.startsWith("components/orders-table.tsx"))?.evidence).toContain("fetch(\"/api/orders\")");
+    expect(hits.find((h) => h.location.startsWith("components/profile-card.tsx"))?.evidence).toContain("supabase.from(\"profiles\")");
+  });
+  it("does not flag SWR-routed fetching, a Server Component fetch (the fix), a listener-registered fetch that only runs on a user event, or a fire-and-forget beacon", () => {
+    expect(byTaxonomy("client-fetch-effect/negative", TAX)).toHaveLength(0);
+  });
+});
+
 describe("whole-library import", () => {
   const TAX = "M7 — Whole-library import";
   it("flags bare lodash and moment imports", () => {
@@ -244,6 +258,23 @@ describe("JSON deep-clone", () => {
   });
   it("does not flag structuredClone", () => {
     expect(byTaxonomy("json-clone/negative", TAX)).toHaveLength(0);
+  });
+});
+
+describe("nested-loop join", () => {
+  const TAX = "M7 — Nested-loop join";
+  it("flags .find inside .map, .some inside for-of, and array .includes inside .filter — one rolled-up finding per file", () => {
+    const hits = byTaxonomy("nested-loop-join/positive", TAX);
+    expect(hits).toHaveLength(2);
+    const enrich = hits.find((h) => h.location.startsWith("lib/enrich-orders.ts"));
+    const allowed = hits.find((h) => h.location.startsWith("lib/filter-allowed.ts"));
+    expect(enrich?.title).toContain("2×");
+    expect(enrich).toMatchObject({ severity: "Perf", confidence: "Review" });
+    expect(allowed?.evidence).toContain("allowedIds.includes(i.id)");
+    expect(allowed?.fix).toContain("new Map");
+  });
+  it("does not flag the Map/Set-indexed fix, a hardcoded or SCREAMING_SNAKE config list, a per-item field scan, or String.includes", () => {
+    expect(byTaxonomy("nested-loop-join/negative", TAX)).toHaveLength(0);
   });
 });
 
