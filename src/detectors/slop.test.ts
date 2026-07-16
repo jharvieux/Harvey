@@ -53,6 +53,7 @@ const CASES: Case[] = [
   { name: "redundant JSDoc", dir: "redundant-jsdoc", taxonomy: "M5 — Redundant JSDoc", posCount: 1, severity: "Low", confidence: "Review" },
   // Coverage fan-out (#362, #364, #370, #371).
   { name: "unused parameter", dir: "unused-parameter", taxonomy: "M5 — Unused parameter", posCount: 2, severity: "Low", confidence: "Review" },
+  { name: "unused import", dir: "unused-import", taxonomy: "M5 — Unused import", posCount: 2, severity: "Low", confidence: "Likely" },
 ];
 
 for (const c of CASES) {

@@ -492,7 +492,7 @@ function detectRedundantJsdoc(sf: ts.SourceFile, path: string, nextId: NextId): 
   return findings;
 }
 
-// --- Coverage additions (#362) -----------------------------
+// --- Coverage additions (#362, #364) -----------------------------
 
 // Unused parameter (#362): a declared parameter never referenced in the function body — the
 // "stub-shaped code" D-091 #1 shape (`getPublicKey(kid)` ignoring `kid`). Mirrors ESLint
@@ -579,12 +579,77 @@ function detectUnusedParameter(sf: ts.SourceFile, path: string, nextId: NextId):
   return findings;
 }
 
+// Unused import (#364): an import specifier never referenced elsewhere in the file. Side-effect
+// imports (no clause) and re-exports (`export {...} from`, a different AST node entirely) are
+// never visited. `import React from "react"` in a .tsx file is exempted unconditionally — the
+// classic-transform JSX pragma has no textual reference even when required (no `ts.Program`/
+// compiler-options in this single-file pipeline to check the actual `jsx` setting, so this is a
+// documented small allowlist per the issue's own fallback, not a detected fact).
+function isReactPragma(path: string, name: string): boolean {
+  return name === "React" && /\.(tsx|jsx)$/.test(path);
+}
+
+function importedBindings(clause: ts.ImportClause): { name: string; node: ts.Node }[] {
+  const out: { name: string; node: ts.Node }[] = [];
+  if (clause.name) out.push({ name: clause.name.text, node: clause.name });
+  if (clause.namedBindings) {
+    if (ts.isNamespaceImport(clause.namedBindings)) {
+      out.push({ name: clause.namedBindings.name.text, node: clause.namedBindings.name });
+    } else if (ts.isNamedImports(clause.namedBindings)) {
+      for (const el of clause.namedBindings.elements) out.push({ name: el.name.text, node: el.name });
+    }
+  }
+  return out;
+}
+
+function referencedOutsideImport(sf: ts.SourceFile, importStmt: ts.Statement, name: string): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found || node === importStmt) return;
+    if (ts.isIdentifier(node) && node.text === name) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return found;
+}
+
+function detectUnusedImport(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !stmt.importClause) continue; // no clause = side-effect-only import
+    const moduleSpecifier = ts.isStringLiteralLike(stmt.moduleSpecifier) ? stmt.moduleSpecifier.text : stmt.moduleSpecifier.getText(sf);
+    for (const b of importedBindings(stmt.importClause)) {
+      if (isReactPragma(path, b.name)) continue;
+      if (referencedOutsideImport(sf, stmt, b.name)) continue;
+      findings.push(
+        makeFinding(nextId, {
+          title: `Unused import \`${b.name}\` from "${moduleSpecifier}"`,
+          severity: "Low",
+          confidence: "Likely",
+          taxonomy: "M5 — Unused import",
+          location: `${path}:${lineOf(sf, b.node)}`,
+          evidence: `\`${b.name}\` is imported from "${moduleSpecifier}" but never referenced elsewhere in the file.`,
+          impact: "Dead import left behind by a refactor or generation pass — adds a phantom dependency edge and reading cost.",
+          fix: "Remove the unused specifier (or the whole import if nothing else from it is used).",
+          value: 1,
+          ease: 5,
+          safety: 5,
+        }),
+      );
+    }
+  }
+  return findings;
+}
+
 // --- Orchestrator ------------------------------------------------------------
 
 /**
  * Runs the mechanical AI-slop checks over the given source set and returns Finding[]
  * (taxonomy `M5 — …`). Covers the four patterns ported from ATC's slop-check, seven
- * additional researched classes, and the #362 coverage fan-out; no overlap with
+ * additional researched classes, and the #362/#364 coverage fan-out; no overlap with
  * knip dead-code.
  */
 export function detectSlopFindings(files: SourceInput[]): Finding[] {
@@ -608,6 +673,7 @@ export function detectSlopFindings(files: SourceInput[]): Finding[] {
       ...detectEmoji(sf, comments, f.path, nextId),
       ...detectRedundantJsdoc(sf, f.path, nextId),
       ...detectUnusedParameter(sf, f.path, nextId),
+      ...detectUnusedImport(sf, f.path, nextId),
     );
   }
   return findings;
