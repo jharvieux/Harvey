@@ -26,7 +26,9 @@ function lineOf(sf: ts.SourceFile, node: ts.Node): number {
   return sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
 }
 
-export interface StubVariant {
+// Not exported (mirrors mutation-scan.ts's convention): callers get these shapes as the
+// fully-typed inferred returns of stubExportedFunctions/runStubCheck.
+interface StubVariant {
   exportName: string;
   line: number;
   // The whole file with ONLY this export's body replaced by `return undefined` — the
@@ -81,7 +83,7 @@ export function coveringTests(subjectPath: string, files: SourceInput[]): string
   return out;
 }
 
-export interface StubCheckRun {
+interface StubCheckRun {
   file: string;
   exportName: string;
   line: number;
