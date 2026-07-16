@@ -1,11 +1,18 @@
 # M6 — Simplification / reuse eval design (issue #72, M6 slice)
 
 > **Not a gate.** This document defines a paid-tier LLM rubric-agreement eval for M6, not a
-> precision/recall gate. M6 has no mechanical detector — there is no false-positive-safe
-> automated free version, and no `pnpm validate:*` command this batch adds. Read
-> `docs/design/spec-72-crossmodule-corpus.md` §M6 (locked decision, "Product decisions" preamble
-> item 2) before extending this: **do not** build a detector, an `expectedTier` for M6, or any
-> claim shaped like "M6 precision = X%."
+> precision/recall gate. M6's verdict has no mechanical detector, and no `pnpm validate:*`
+> command exists for it. Read `docs/design/spec-72-crossmodule-corpus.md` §M6 ("Product
+> decisions" preamble item 2, as revised 2026-07-15) before extending this: **do not** build an
+> `expectedTier` for M6 or any claim shaped like "M6 precision = X%."
+>
+> _Revision (2026-07-16, #267):_ this preamble previously also said "M6 has no mechanical
+> detector … do not build a detector." That sentence predated the operator's free-indicator
+> ruling (§5.1) and is superseded for the **indicator** layer only: `src/detectors/handrolled.ts`
+> now emits hedged, Info-only, non-grading `M6 — Indicator: …` shape-presence findings (run via
+> `pnpm detect-static`, gated by its own fixture pairs in `handrolled.test.ts`). The VERDICT —
+> what a shape should be replaced with — still has no detector and never gets one; everything
+> else in this document is about that verdict and stands.
 
 ## 1. What M6 is
 

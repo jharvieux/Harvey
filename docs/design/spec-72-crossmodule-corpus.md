@@ -136,7 +136,19 @@ Terminology carried from `src/scan/calibration.ts`: `expectedTier` ∈ {`high`, 
 
 ### M6 — Simplification / reuse / maintainability
 
-**What "precision/recall" even means here (read first):** M6 has **no mechanical detector** — it is the `/simplify` LLM review against `docs/quality-extras.txt` (`docs/m4-m6-quality.md` §0: "Not mechanically detectable"). You cannot gate an LLM suggestion with a precision number the way you gate jscpd. #72 must **not** manufacture one. What #72 *can* build is a **labeled rubric-eval set**: known hand-rolled-vs-stdlib patterns the reviewer *should* flag + benign lookalikes it *should* spare, run through `/simplify`, reported as an **agreement rate against the rubric**, explicitly not a "precision" claim.
+**What "precision/recall" even means here (read first):** M6's **verdict** has no mechanical detector — it is the `/simplify` LLM review against `docs/quality-extras.txt` (`docs/m4-m6-quality.md` §0: "Not mechanically detectable"). You cannot gate an LLM suggestion with a precision number the way you gate jscpd. #72 must **not** manufacture one. What #72 *can* build is a **labeled rubric-eval set**: known hand-rolled-vs-stdlib patterns the reviewer *should* flag + benign lookalikes it *should* spare, run through `/simplify`, reported as an **agreement rate against the rubric**, explicitly not a "precision" claim.
+
+> _Revision (2026-07-16, #267):_ under the free-indicator ruling in the preamble, a **mechanical
+> subset** now exists — `src/detectors/handrolled.ts` (run via `pnpm detect-static`), emitting
+> hedged, Info-only, non-grading `M6 — Indicator: …` findings for five shapes: JSON-stringify
+> deep-equal, manual query-string parsing, manual cookie parsing, `Math.random()`-chain string
+> ids, and hand-rolled class-string merge (dep-gated). These are shape-presence facts, each gated
+> by a positive+negative fixture pair in `handrolled.test.ts` — they carry no `CorpusEntry`, no
+> `expectedTier`, and no precision claim, so everything in this section about the VERDICT still
+> holds unchanged. Boundary calls: the JSON round-trip clone stays `M7 — JSON deep-clone` (the
+> #278 no-double-count rule); retry/backoff and Supabase pagination did not graduate
+> (judgment-bearing negative / cross-statement analysis respectively). The graduation ledger:
+> `docs/quality-extras.txt` "MECHANICAL SUBSET".
 
 (a) **Planted positives (should be flagged for replacement)**
 

@@ -1,0 +1,17 @@
+export function readClientCookie(name: string): string | undefined {
+  for (const part of document.cookie.split("; ")) {
+    const eq = part.indexOf("=");
+    if (part.slice(0, eq) === name) return decodeURIComponent(part.slice(eq + 1));
+  }
+  return undefined;
+}
+
+export function parseCookieHeader(req: { headers: { cookie?: string } }): Record<string, string> {
+  const cookieHeader = req.headers.cookie ?? "";
+  const out: Record<string, string> = {};
+  for (const part of cookieHeader.split(";")) {
+    const [k, v] = part.trim().split("=");
+    if (k) out[k] = v ?? "";
+  }
+  return out;
+}

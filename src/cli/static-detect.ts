@@ -22,6 +22,7 @@ import type { Finding } from "../findings.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { scanAssetWeight } from "../detectors/asset-weight.js";
 import { parseBundleAnalyzerStats, parseBundleStats } from "../detectors/bundle-stats.js";
+import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { detectHookDepFindings } from "../detectors/hook-deps.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
@@ -96,6 +97,7 @@ try {
     ...detectPerfCodeFindings(sources),
     ...detectHookDepFindings(sources),
     ...detectSlopFindings(sources),
+    ...detectHandrolledFindings(sources), // M6 free-tier indicators — Info-only, non-grading (#267)
     ...scanAssetWeight(scanDir), // scoped copy = committed files only
     ...buildDirs.flatMap((b) => parseBundleStats(b)),
     ...statsPaths.flatMap((p) => parseBundleAnalyzerStats(p)),

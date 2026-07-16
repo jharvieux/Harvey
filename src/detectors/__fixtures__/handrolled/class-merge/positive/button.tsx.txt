@@ -1,0 +1,13 @@
+interface Props {
+  active: boolean;
+  disabled: boolean;
+}
+
+export function Button({ active, disabled }: Props) {
+  return (
+    <button
+      className={["btn", active && "btn-active", disabled && "btn-disabled"].filter(Boolean).join(" ")}
+      disabled={disabled}
+    />
+  );
+}

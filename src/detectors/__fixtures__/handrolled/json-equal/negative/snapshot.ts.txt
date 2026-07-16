@@ -1,0 +1,9 @@
+// Comparing a fresh serialization against a STORED snapshot string is legitimate change
+// detection — only stringify-vs-stringify (deep-equal in disguise) should flag.
+export function dirtySince(saved: string, current: object): boolean {
+  return JSON.stringify(current) !== saved;
+}
+
+export function sameRef(a: object, b: object): boolean {
+  return a === b;
+}

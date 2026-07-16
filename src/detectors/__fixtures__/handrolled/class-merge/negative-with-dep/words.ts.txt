@@ -1,0 +1,5 @@
+// The dep gate is open here (clsx is in package.json), but this join builds a sentence, not a
+// class string — no className context, so it must stay silent.
+export function sentence(parts: Array<string | false>): string {
+  return parts.filter(Boolean).join(" ");
+}

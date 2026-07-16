@@ -1,0 +1,11 @@
+// split("&") with no companion split("=") in the same scope: an ampersand-delimited list, not a
+// query string.
+export function parseTagList(tags: string): string[] {
+  return tags.split("&").map((t) => t.trim());
+}
+
+// split("=") with no companion split("&"): a single key=value line, not a query string.
+export function parseEnvLine(line: string): [string, string] {
+  const [key, value] = line.split("=");
+  return [key ?? "", value ?? ""];
+}

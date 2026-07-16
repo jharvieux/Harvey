@@ -1671,15 +1671,19 @@ verified schema" — still never "M3 precision = X%." The git-history fixture (b
 ## M6 (#72) — Simplification / reuse rubric-eval corpus
 
 The M6 slice of the #72 cross-module corpus (spec `docs/design/spec-72-crossmodule-corpus.md`
-§M6; full rubric writeup `docs/design/m6-simplification-eval.md`). **Not a gate — M6 has no
-mechanical detector.** Unlike every other module in this file, there is no `Finding[]`-emitting
-adapter, no `precisionTier`, and no `CorpusEntry` rows in `src/scan/calibration.ts` for this
-batch: M6's output is prose from an LLM review (the `/simplify` skill against
-`docs/quality-extras.txt`'s SIMPLIFICATION section), not a tool result a scorer can match against
-a `location`. Folding it into `CorpusEntry`/`buildCoverageMatrix` — even filtered out of today's
-gate, the way M8/M10's entries are — would leave a row shaped exactly like a precision-tier
-finding, one line away from being scored as one. Per the spec's locked preamble (item 2): "M6
-simplification is paid-only (LLM opinion; no false-positive-safe automated free version)."
+§M6; full rubric writeup `docs/design/m6-simplification-eval.md`). **Not a gate — M6's verdict
+has no mechanical detector.** Unlike every other module in this file, there is no
+`Finding[]`-emitting adapter, no `precisionTier`, and no `CorpusEntry` rows in
+`src/scan/calibration.ts` for this corpus: M6's output is prose from an LLM review (the
+review packet `pnpm simplify-scan` assembles from `docs/quality-extras.txt`'s SIMPLIFICATION
+section), not a tool result a scorer can match against a `location`. Folding it into
+`CorpusEntry`/`buildCoverageMatrix` — even filtered out of today's gate, the way M8/M10's entries
+are — would leave a row shaped exactly like a precision-tier finding, one line away from being
+scored as one. (Since #267, M6 also has a mechanical FREE-tier indicator layer —
+`src/detectors/handrolled.ts`, hedged Info-only `M6 — Indicator: …` findings — but it is gated by
+its own co-located fixture pairs in `handrolled.test.ts`, not by this corpus, and it asserts
+shape presence, never a verdict. Per the spec preamble item 2 as revised 2026-07-15: indicators
+free and non-grading, verdicts paid.)
 
 Fixtures: `targets/calibration/simplify/` — four planted reinventions to flag, three benign
 lookalikes to spare, paired by shape so the reviewer has to reason about *why* (a `// WHY:`

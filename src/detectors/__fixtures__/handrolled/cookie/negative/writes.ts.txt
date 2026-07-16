@@ -1,0 +1,9 @@
+// Writing document.cookie is not parsing it, and split(";") on a non-cookie receiver is just a
+// delimited list.
+export function setTheme(theme: string): void {
+  document.cookie = `theme=${encodeURIComponent(theme)}; path=/`;
+}
+
+export function parsePathList(pathList: string): string[] {
+  return pathList.split(";").filter((p) => p.length > 0);
+}

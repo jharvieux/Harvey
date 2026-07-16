@@ -1,0 +1,17 @@
+// toString with a radix on a real number is formatting; Math.random() without the string chain
+// is jitter. Neither is id-building.
+export function toBase36(counter: number): string {
+  return counter.toString(36);
+}
+
+export function toHex(byte: number): string {
+  return byte.toString(16).padStart(2, "0");
+}
+
+export function jitterMs(baseMs: number): number {
+  return baseMs + Math.random() * 100;
+}
+
+export function coinFlip(): string {
+  return Math.random().toString();
+}
