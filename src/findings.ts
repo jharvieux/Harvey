@@ -8,9 +8,29 @@ export const CONFIDENCES = ["Confirmed", "Likely", "Review", "N/A"] as const;
 // Semgrep rule) — safe to count without triage. "review" = heuristic/grep-sourced, needs triage.
 export const PRECISION_TIERS = ["high", "review"] as const;
 
+// Per-module coverage ledger carried into the deliverable (#349/#312). Derived by run-audit from
+// what each probe reported — never hand-typed. Its presence is what lets the report tell a module
+// that ran and found nothing (status "ran", no reason) from one that never ran (a non-"ran" status
+// WITH a reason). Without it, both collapse into the same silence, which reads as a clean bill of
+// health for a module that was never assessed — the exact inversion the coverage guard exists to
+// prevent.
+export const COVERAGE_STATUSES = ["ran", "partial", "requires-live-run"] as const;
+
 export type Severity = (typeof SEVERITIES)[number];
 export type Confidence = (typeof CONFIDENCES)[number];
 export type PrecisionTier = (typeof PRECISION_TIERS)[number];
+export type CoverageStatus = (typeof COVERAGE_STATUSES)[number];
+
+export interface CoverageRow {
+  module: string; // "M1".."M10"
+  name: string;
+  status: CoverageStatus;
+  // Why the module fell short. Required for anything but a clean "ran": an unexplained gap is
+  // indistinguishable from a silent skip.
+  reason?: string;
+  // What actually executed (command, tier).
+  detail?: string;
+}
 
 export interface Finding {
   id: string;
@@ -63,6 +83,10 @@ export interface ReportMeta {
 export interface FindingsDocument {
   meta: ReportMeta;
   findings: Finding[];
+  // The derived per-module coverage ledger (#349). Optional for back-compat with hand-authored
+  // engagement docs; when present the renderer states coverage from it rather than from the
+  // free-text meta.outOfScope.
+  coverage?: CoverageRow[];
 }
 
 // Bang-for-the-buck score, 0–100. Mirrors the formula in report-template/render.mjs.
@@ -92,6 +116,33 @@ function scoreInRange(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 5;
 }
 
+function validateCoverage(coverage: unknown, errors: string[]): void {
+  if (!Array.isArray(coverage)) {
+    errors.push("coverage: expected an array of module rows");
+    return;
+  }
+  coverage.forEach((row: unknown, i: number) => {
+    const at = `coverage[${i}]`;
+    if (!isRecord(row)) {
+      errors.push(`${at}: not an object`);
+      return;
+    }
+    if (typeof row.module !== "string" || row.module === "") errors.push(`${at}.module: expected non-empty string`);
+    if (typeof row.name !== "string") errors.push(`${at}.name: expected string`);
+    if (!COVERAGE_STATUSES.includes(row.status as CoverageStatus)) {
+      errors.push(`${at}.status: "${String(row.status)}" not one of ${COVERAGE_STATUSES.join("/")}`);
+    }
+    if (row.detail !== undefined && typeof row.detail !== "string") errors.push(`${at}.detail: expected string`);
+    // A non-"ran" row without a reason is a silent skip wearing a status — the exact failure the
+    // ledger exists to surface. Mirrors buildAuditCoverage's gap rule (src/audit-coverage.ts).
+    if (row.status !== "ran" && (typeof row.reason !== "string" || row.reason.trim() === "")) {
+      errors.push(`${at}.reason: required for status "${String(row.status)}" — a gap without a reason is a silent skip`);
+    } else if (row.reason !== undefined && typeof row.reason !== "string") {
+      errors.push(`${at}.reason: expected string`);
+    }
+  });
+}
+
 export function validateFindings(data: unknown): ValidationResult {
   const errors: string[] = [];
 
@@ -107,6 +158,8 @@ export function validateFindings(data: unknown): ValidationResult {
     const h = data.meta.overallHealth;
     if (typeof h !== "number" || h < 0 || h > 10) errors.push("meta.overallHealth: expected number 0–10");
   }
+
+  if (data.coverage !== undefined) validateCoverage(data.coverage, errors);
 
   if (!Array.isArray(data.findings)) {
     errors.push("findings: missing or not an array");

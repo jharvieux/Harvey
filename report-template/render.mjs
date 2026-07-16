@@ -109,6 +109,34 @@ function findingCard(f) {
   </div>`;
 }
 
+// Per-module coverage badge palette (#349). "Not assessed" is deliberately alarming: a module that
+// never ran contributes no findings, and without this row that silence reads as "clean".
+const COV = {
+  ran: { label: "Assessed", c: "#15803d", bg: "#f0fdf4", bd: "#bbf7d0" },
+  partial: { label: "Partial", c: "#b88600", bg: "#fffbeb", bd: "#fde68a" },
+  "requires-live-run": { label: "Not assessed", c: "#b3261e", bg: "#fef2f2", bd: "#fecaca" },
+};
+
+// The derived coverage ledger, rendered as the report's authoritative coverage statement (#349).
+// Replaces the hand-typed meta.outOfScope as the source of truth; outOfScope is demoted to a note.
+function coverageSection(rows, m) {
+  const body = rows.map((r) => {
+    const s = COV[r.status] ?? COV["requires-live-run"];
+    const note = r.status === "ran" ? esc(r.detail ?? "") : esc(r.reason ?? "");
+    return `<tr><td class="b">${esc(r.module)}</td><td>${esc(r.name)}</td>
+      <td><span class="cov-badge" style="color:${s.c};background:${s.bg};border:1px solid ${s.bd}">${s.label}</span></td>
+      <td>${note}</td></tr>`;
+  }).join("");
+  const notAssessed = rows.filter((r) => r.status === "requires-live-run").length;
+  const intro = notAssessed
+    ? `A module marked <b style="color:#b3261e">Not assessed</b> produced no findings because it did not run — <b>this is not a clean result</b>; the reason is stated.`
+    : "Every module was assessed.";
+  return `<h2>Module coverage</h2>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">All ten audit modules, and whether each was assessed on this engagement. ${intro}</div>
+    <table class="cov"><tr><th>Module</th><th>Area</th><th>Status</th><th>What ran / why not</th></tr>${body}</table>
+    <div class="kv" style="margin-top:10px"><b>Out of scope</b> ${esc(m.outOfScope)}</div>`;
+}
+
 function buildHtml(data) {
   const all = data.findings.map((x) => ({ ...x, _bftb: bftb(x) }));
   const f = all.filter((x) => x.confidence !== "N/A"); // live findings
@@ -172,6 +200,8 @@ function buildHtml(data) {
   .crit{background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 10px;margin:7px 0 2px;font-size:11px}
   .crit .cu{color:#92400e;font-weight:700;margin-bottom:4px}
   .crit .ok{color:#15803d;font-weight:700}.crit .notok{color:#b3261e;font-weight:700}
+  .cov-badge{border-radius:5px;padding:1px 8px;font-size:10px;font-weight:700;letter-spacing:.3px;white-space:nowrap}
+  table.cov td:first-child{white-space:nowrap;font-weight:800}
   </style></head><body>
   <div class="cover-band"></div>
   <div class="page">
@@ -210,7 +240,7 @@ function buildHtml(data) {
     <h2>Scope &amp; methodology</h2>
     <div class="kv"><b>Reviewed</b> ${esc(m.scope)}</div>
     <div class="kv"><b>Tooling</b> ${esc(m.methodology)}</div>
-    <div class="kv"><b>Out of scope</b> ${esc(m.outOfScope)}</div>
+    ${data.coverage?.length ? coverageSection(data.coverage, m) : `<div class="kv"><b>Out of scope</b> ${esc(m.outOfScope)}</div>`}
     <h2>Findings</h2>
     ${sorted.map(findingCard).join("")}
     ${na.length ? `<h2>Checked &amp; ruled out (not applicable)</h2>
