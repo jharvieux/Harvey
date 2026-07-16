@@ -22,7 +22,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { Finding } from "../findings.js";
 import { AUTOMATED_REPLAY_IDS } from "../pentest/verify.js";
+import { scoreEntry } from "../scan/calibration.js";
+import { rlsStaticSemanticsEntries } from "../scan/calibration/rls-static-semantics.entries.js";
 import { GROUND_TRUTH_BUGS } from "./dry-run-scorecard.js";
 
 interface RawFinding {
@@ -149,5 +152,40 @@ describe("GROUND_TRUTH_BUGS mappings vs. the findings the scan really produced",
     // RAN_SEMGREP_NO_RULE bugs are excluded above: they are the tier's honest, known ceiling.
     const notFiring = claimedCaught.filter((b) => !findings.some((f) => b.matches(f)));
     expect(notFiring.map((b) => b.id)).toEqual([]);
+  });
+});
+
+// #339 (partial — the full single-key migration is #425). The dry-run and the gated corpus
+// answered "does a rule catch this?" from two independent keys; the dry-run's key drifted for weeks
+// (#332, then #337). This binds the two over the SAME committed findings the dry-run produced:
+// the gated corpus (which cannot drift, it fails `pnpm verify`) is scored against dry-run/findings.
+// json, and the scorecard's verdict for the same bug must agree. If a rule stops firing, the corpus
+// side fails; if the scorecard under-reports a class the corpus proves caught (exactly #332/#337),
+// this fails. The remaining hand-keyed `matches` is not yet removed — that's the remainder issue.
+describe("dry-run detection verdicts are bound to the gated corpus, not a parallel key (#339)", () => {
+  const fullFindings = JSON.parse(
+    readFileSync(join(import.meta.dirname, "..", "..", "dry-run", "findings.json"), "utf8"),
+  ) as Finding[];
+
+  // The static-RLS classes that were the observed drift (#332 RLS-AUTH-ROLE, #337 RLS-USING-TRUE):
+  // each gated corpus positive paired with the scorecard bug it corresponds to.
+  const bound = [
+    { corpusId: "P-RLS-USING-TRUE-STATIC", bugId: "RLS-USING-TRUE" },
+    { corpusId: "P-RLS-AUTH-ROLE-STATIC", bugId: "RLS-AUTH-ROLE" },
+  ];
+
+  it.each(bound)("corpus $corpusId proves the class on the committed findings, and $bugId scores caught to match", ({ corpusId, bugId }) => {
+    const entry = rlsStaticSemanticsEntries.find((e) => e.id === corpusId)!;
+    expect(entry, `${corpusId} is no longer in the gated corpus — the binding is stale`).toBeDefined();
+
+    // Corpus side (gated on every verify): the rule fires on the dry-run's own committed output.
+    const row = scoreEntry(entry, fullFindings);
+    expect(row.pass, `${corpusId}: ${row.detail}`).toBe(true);
+
+    // Scorecard side must not drift below it: a class the corpus proves detectable cannot be
+    // reported requires-live-run/missed — the exact under-selling #332/#337 did.
+    const bug = GROUND_TRUTH_BUGS.find((b) => b.id === bugId)!;
+    const hit = fullFindings.some((f) => bug.matches(f));
+    expect(hit, `corpus proves ${corpusId} caught on these findings, but scorecard bug ${bugId}'s matcher no longer fires — the two keys have drifted apart`).toBe(true);
   });
 });
