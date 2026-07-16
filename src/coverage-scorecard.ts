@@ -25,6 +25,14 @@ export interface GroundTruthBug {
   // ever see one field at a time, which scored COUNTER-RACE "caught" off /race/i matching the
   // dependency `braces@2.3.2` in a lockfile (#246).
   matches: (finding: ScorableFinding) => boolean;
+  // Location-INDEPENDENT class predicate: true for any finding whose taxonomy targets this bug's
+  // CLASS, wherever it fires. `matches` is anchored to the planted address, so it can't catch a
+  // rule that proves the bug at a DIFFERENT address (an absence-shaped bug proved at its create
+  // site, not its absence site) — the drift the location guard structurally misses (#335). Must be
+  // precise (an exact taxonomy/rule-id), never a loose word regex, or it false-matches a
+  // same-word rule for an unrelated class. The drift guard uses this to falsify a "no mechanical
+  // rule reaches this class" claim against the real findings.
+  classMatch?: (finding: ScorableFinding) => boolean;
 }
 
 interface ScoredBug {

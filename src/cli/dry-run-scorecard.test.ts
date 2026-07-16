@@ -5,13 +5,15 @@
 // claim), but the claim "no mechanical module reaches this bug" is falsifiable against the real
 // findings the scan produced.
 //
-// KNOWN CEILING, stated rather than implied: the location-anchored guard only catches drift where a
-// new rule fires AT the bug's planted location. It caught RLS-AUTH-ROLE's stale mapping (rls.sql:38)
-// and would have caught RLS-USING-TRUE's (#337 fires at rls.sql:31); it did NOT catch RLS-DISABLED's,
-// because checkMigrationRlsStatic reports an absence at the CREATE site (schema.sql:35) while
-// GROUND-TRUTH addresses the bug at the absence site (rls.sql:41-43). An address-mismatched rule
-// still needs a human to notice. Making that automatic would mean matching on bug CLASS rather than
-// location — tracked as a follow-up.
+// Two complementary guards. The LOCATION guard catches drift where a rule fires AT a bug's planted
+// line. The CLASS guard (#335) closes its ceiling: it keys on a bug's `classMatch` (an exact rule
+// taxonomy, address-independent), so a rule that proves the bug at a DIFFERENT address than planted
+// still falsifies a "no rule reaches this class" claim. That was the hole in the location guard:
+// checkMigrationRlsStatic proves RLS-DISABLED at the CREATE site (schema.sql:35) while GROUND-TRUTH
+// addresses it at the absence site (rls.sql:41-43), so a location guard anchored on the planted
+// line sees nothing — the class guard sees the rule firing and would catch a stale re-key (the
+// mutation test below demonstrates this on RLS-DISABLED). classMatch is precise by construction: a
+// loose word regex would false-match a same-word rule for an unrelated class (#246).
 //
 // It also guards the failure mode one level up, which no amount of per-bug checking can see: a bug
 // that GROUND-TRUTH plants but the scorecard never maps at all is absent from scorecard.json rather
@@ -82,6 +84,43 @@ describe("GROUND_TRUTH_BUGS mappings vs. the findings the scan really produced",
       ).toEqual([]);
     },
   );
+
+  // #335 — the CLASS guard. A bug that claims "no mechanical rule reaches this class" (the accepted
+  // Semgrep-ran-but-no-rule gaps, and any not-run-mechanical bug) is falsified against real findings
+  // by its own class, wherever the rule would fire — not only at its planted line. If a rule for the
+  // class ever lands, this fails and forces a re-key to caught, closing the honest→caught drift the
+  // location guard structurally cannot see.
+  const claimsNoRuleReaches = GROUND_TRUTH_BUGS.filter((b) => b.classMatch && (b.expectedModule.includes("but no rule") || (!b.moduleRan && !dynamic.includes(b))));
+
+  it.each(claimsNoRuleReaches.map((b) => [b.id, b] as const))(
+    "%s claims no rule reaches its class — no mechanical finding of that class fires ANYWHERE (address-independent)",
+    (_id, bug) => {
+      const reached = findings.filter((f) => f.mechanical === true && bug.classMatch!({ taxonomy: f.taxonomy, location: f.location }));
+      expect(
+        reached,
+        `${bug.id} is mapped as reached by no mechanical rule ("${bug.expectedModule}") but a mechanical finding of its class fired: ` +
+          `${reached.map((f) => `"${f.taxonomy}" at ${f.location}`).join("; ")}. A rule now reaches this class — re-key to caught.`,
+      ).toEqual([]);
+    },
+  );
+
+  it("class guard catches address-mismatched staleness the location guard misses (#335, RLS-DISABLED)", () => {
+    // RLS-DISABLED is the absence-shaped case: planted at rls.sql:41-43 but proved by
+    // checkMigrationRlsStatic at schema.sql:35. Simulate the stale re-key this guard must catch —
+    // the bug wrongly remapped to "no mechanical rule reaches this."
+    const rlsDisabled = GROUND_TRUTH_BUGS.find((b) => b.id === "RLS-DISABLED")!;
+    expect(rlsDisabled.classMatch, "RLS-DISABLED needs a classMatch for the class guard to protect it").toBeDefined();
+
+    // The LOCATION guard looks only at the planted absence lines and sees nothing — it would bless
+    // the stale mapping, exactly the ceiling #335 documents.
+    const plantedAbsence = plantedAt(rlsDisabled.location)!;
+    expect(mechanicalFindingsAt(plantedAbsence.file, plantedAbsence.lines)).toEqual([]);
+
+    // The CLASS guard keys on the taxonomy and finds the rule firing at its create site — the
+    // contradiction the location guard could not see, now caught automatically.
+    const byClass = findings.filter((f) => f.mechanical === true && rlsDisabled.classMatch!({ taxonomy: f.taxonomy, location: f.location }));
+    expect(byClass.length, "class guard must see the rule firing at schema.sql:35 despite the address mismatch").toBeGreaterThan(0);
+  });
 
   // Guards the two files against drifting apart, which is how rows 9–12 went unlisted: they were
   // added to GROUND-TRUTH (#145–#148) and nothing required the scorecard to acknowledge them, so

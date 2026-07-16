@@ -31,6 +31,11 @@ import { type GroundTruthBug, scoreCoverage, type ScorableFinding, summarizeCove
 // actually reasons about this bug's class, not merely fire somewhere in the same file.
 const at = (file: RegExp, rule: RegExp) => (f: ScorableFinding) => file.test(f.location) && rule.test(f.taxonomy);
 
+// Location-independent class predicate (#335): matches any finding whose taxonomy targets a class,
+// wherever it fires. Precise by construction — an exact rule taxonomy, never a loose word regex
+// (e.g. /service.?role/ would false-match harvey-service-role-in-client, a different class).
+const ofClass = (rule: RegExp) => (f: ScorableFinding) => rule.test(f.taxonomy);
+
 // A KNOWN, ACCEPTED coverage gap — not a regression. The mechanical tier scans the file and no
 // rule has ever claimed this bug's class, so the bug scores `missed` by design: this is the
 // scorecard measuring the mechanical tier's real ceiling, which is what it exists to do. Verified
@@ -91,6 +96,10 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     // bug's class for exactly this table, and audit_logs is the only table this rule reports in
     // schema.sql, so the match cannot be earned by a finding about some other table.
     matches: at(/schema\.sql:35/, /Migration table without RLS/),
+    // The exact address mismatch #335 is about: planted at the absence site (rls.sql:41-43) but
+    // proved at the create site (schema.sql:35). classMatch keys on the rule's class so a
+    // re-key to "not reached" is falsified wherever the rule fires, not only at the planted line.
+    classMatch: ofClass(/Migration table without RLS/),
   },
   {
     id: "SQLI-SERVICE",
@@ -107,6 +116,9 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     expectedModule: RAN_SEMGREP_NO_RULE("no rule targets missing replay/nonce protection"),
     moduleRan: true,
     matches: at(/webhook\.js/, /replay|nonce/i),
+    // The "no rule for this class" claim, made falsifiable: if a rule ever emits a replay/nonce
+    // taxonomy anywhere, this fails and forces a re-key to caught (#335, honest→caught drift).
+    classMatch: ofClass(/replay|nonce/i),
   },
   {
     id: "COUNTER-RACE",
@@ -115,6 +127,7 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     expectedModule: RAN_SEMGREP_NO_RULE("no rule targets non-atomic read-modify-write races"),
     moduleRan: true,
     matches: at(/increment\.js/, /race|atomic/i),
+    classMatch: ofClass(/race|atomic/i),
   },
   {
     id: "UPDATE-UNSCOPED",
@@ -123,6 +136,9 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     expectedModule: RAN_SEMGREP_NO_RULE("no rule targets an unscoped service-role .update() call"),
     moduleRan: true,
     matches: at(/profile.(\/|\\)?update\.js/, /unscoped|service.?role/i),
+    // Deliberately /unscoped/ only — the /service.?role/ half of `matches` false-matches
+    // harvey-service-role-in-client (a different class), so the class guard must not reuse it.
+    classMatch: ofClass(/unscoped/i),
   },
   {
     id: "OPEN-REDIRECT",
