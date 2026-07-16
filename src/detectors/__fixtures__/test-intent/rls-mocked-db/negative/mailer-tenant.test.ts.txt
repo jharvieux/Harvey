@@ -1,0 +1,11 @@
+import { describe, expect, it, vi } from "vitest";
+import { notifyTenantAdmins } from "./mailer-tenant.js";
+
+vi.mock("./format-helpers.js");
+
+describe("notifyTenantAdmins", () => {
+  it("notifies only the tenant's own admins", async () => {
+    const sent = await notifyTenantAdmins("tenant-1");
+    expect(sent).toHaveLength(2);
+  });
+});

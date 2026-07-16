@@ -49,6 +49,10 @@ const CASES: Case[] = [
   // The two variants #372's follow-up comment adds.
   { name: "snapshot-only test", dir: "snapshot-only", taxonomy: "M8 — Snapshot-only test", posCount: 2, severity: "Low", confidence: "Review" },
   { name: "call-count-only test", dir: "call-count-only", taxonomy: "M8 — Call-count-only test", posCount: 1, severity: "Low", confidence: "Review" },
+  // #384 — provably false confidence by construction (RLS is enforced by Postgres, which a
+  // mocked client never reaches). Distinct from mock-of-subject: the mocked module here is a
+  // legitimately-mocked-looking dependency.
+  { name: "tenant-isolation test mocks the DB client", dir: "rls-mocked-db", taxonomy: "M8 — Tenant-isolation test mocks the DB client", posCount: 3, severity: "High", confidence: "Likely" },
 ];
 
 for (const c of CASES) {
@@ -102,6 +106,23 @@ describe("discrimination boundaries (regression locks)", () => {
 
   it("a snapshot test that also asserts a specific value clears snapshot-only", () => {
     expect(byTaxonomy("snapshot-only/negative", "M8 — Snapshot-only test")).toHaveLength(0);
+  });
+
+  it("rls-mocked-db flags per CLAIMING test — the non-tenant test in the same mocked file stays silent", () => {
+    const hits = byTaxonomy("rls-mocked-db/positive", "M8 — Tenant-isolation test mocks the DB client");
+    // tenant-isolation.test.ts has two claiming tests; orders.test.ts has one claiming
+    // ("enforces rls…") and one benign ("formats order totals") — 3 findings, not 4.
+    expect(hits.map((h) => h.location.split(":")[0]).sort()).toEqual(["orders.test.ts", "tenant-isolation.test.ts", "tenant-isolation.test.ts"]);
+  });
+
+  it("rls-mocked-db resolves a local wrapper (@/lib/db-client → lib/db-client.ts) as a Supabase client mock", () => {
+    const hits = byTaxonomy("rls-mocked-db/positive", "M8 — Tenant-isolation test mocks the DB client");
+    const wrapper = hits.find((h) => h.location.startsWith("orders.test.ts"));
+    expect(wrapper?.evidence).toContain("lib/db-client.ts");
+  });
+
+  it("rls-mocked-db clears a real-client tenant test, a mocked-client non-tenant test, and a non-db mock", () => {
+    expect(byTaxonomy("rls-mocked-db/negative", "M8 — Tenant-isolation test mocks the DB client")).toHaveLength(0);
   });
 });
 

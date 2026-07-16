@@ -526,6 +526,54 @@ function detectCallCountOnly(ctx: TestFileContext, nextId: NextId): Finding[] {
   });
 }
 
+// --- RLS / tenant-isolation tests that mock the DB client (#384) --------------------
+
+// Deliberately narrow (the issue's own allowlist): only tests that CLAIM tenant-isolation/RLS
+// coverage by name are eligible — the finding's force is that the name promises exactly what
+// the mock makes structurally impossible, so a keyword miss is a silent skip, not an FP.
+const TENANT_CLAIM = /tenant|\brls\b|isolation|row[- ]?level/i;
+
+const SUPABASE_CLIENT_FACTORY = /\bcreate(Server|Browser|Route|Middleware)?Client\s*\(/;
+
+// Distinct from #372's mock-of-subject: here the mocked module is a legitimately-mocked-looking
+// DEPENDENCY (the Supabase client or a local wrapper around it), which is precisely why RLS —
+// enforced by Postgres, not by application code — can never be observed through it.
+function dbClientMockDescription(mock: MockCall, ctx: TestFileContext, byPath: ReadonlyMap<string, SourceInput>): string | undefined {
+  const spec = mock.specifier;
+  if (spec.startsWith("@supabase/")) return `the Supabase client package \`${spec}\``;
+  if (/supabase/i.test(spec)) return `\`${spec}\` (a Supabase client module by name)`;
+  const resolved = resolveModule(ctx.file.path, spec, byPath);
+  if (resolved && (/@supabase\//.test(resolved.text) || SUPABASE_CLIENT_FACTORY.test(resolved.text))) {
+    return `\`${spec}\`, which wraps the Supabase client (${resolved.path})`;
+  }
+  return undefined;
+}
+
+function detectRlsMockedDb(ctx: TestFileContext, byPath: ReadonlyMap<string, SourceInput>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const dbMock = ctx.mocks.filter((m) => !m.partial).map((m) => dbClientMockDescription(m, ctx, byPath)).find(Boolean);
+  if (!dbMock) return findings;
+  for (const block of ctx.blocks) {
+    if (!TENANT_CLAIM.test(block.fullName)) continue;
+    findings.push(
+      makeFinding(nextId, {
+        title: `Tenant-isolation test cannot observe RLS: "${block.title || "(unnamed)"}"`,
+        severity: "High",
+        confidence: "Likely",
+        taxonomy: "M8 — Tenant-isolation test mocks the DB client",
+        location: `${ctx.file.path}:${lineOf(ctx.sf, block.node)}`,
+        evidence: `"${block.fullName}" claims tenant-isolation/RLS coverage, but this file mocks ${dbMock} — no query ever reaches Postgres, where RLS is enforced.`,
+        impact: "Provably false confidence by construction: an RLS policy regression (or its outright removal) passes this test unchanged, on the highest-stakes path a multi-tenant app has.",
+        fix: "Run the test against a real local stack (`supabase start`, two seeded tenants) with anon/second-tenant credentials, and assert the cross-tenant query returns nothing.",
+        value: 5,
+        ease: 3,
+        safety: 5,
+      }),
+    );
+  }
+  return findings;
+}
+
 // --- orchestrator ------------------------------------------------------------------
 
 /**
@@ -537,6 +585,7 @@ export function detectTestIntentFindings(files: SourceInput[]): Finding[] {
   let n = 0;
   const nextId: NextId = () => `TESTINT-${String(++n).padStart(2, "0")}`;
   const parseable = files.filter((f) => PARSEABLE.test(f.path));
+  const byPath = new Map(parseable.map((f) => [f.path, f]));
   const findings: Finding[] = [];
   for (const file of parseable) {
     if (!isTestFile(file.path)) continue;
@@ -547,6 +596,7 @@ export function detectTestIntentFindings(files: SourceInput[]): Finding[] {
       ...detectTautological(ctx, nextId),
       ...detectSnapshotOnly(ctx, nextId),
       ...detectCallCountOnly(ctx, nextId),
+      ...detectRlsMockedDb(ctx, byPath, nextId),
     );
   }
   return findings;
