@@ -19,16 +19,16 @@ The productized audit service extracted from `jharvieux/atc` (ATC issue 1527, no
 |---|--------|-------------|---------------|
 | M1 | Multi-tenant security (lead) | `pnpm quick-scan --dir <t>` (mechanical) + `pnpm exec tsx src/cli/scan.ts --supabase <ref\|local>` (config) + LLM `/vuln-scan --extra docs/scan-extras.txt` → `/triage --fp-rules docs/fp-rules.txt` (semantic) + `pnpm detect-deeper` (live RLS/policy review) | free → connected → paid-LLM |
 | M2 | Local pen-test (dynamic) | `pnpm exec tsx src/cli/pentest.ts` against a local `supabase start` stack seeded with two tenants | needs live stack; `assertComplete` gates target coverage |
-| M3 | Hotspot analysis | `vitals` plugin — `/vitals:scan` or `vitals_cli.py report --json <path>` | external plugin; run, don't build |
-| M4 | Duplication | `pnpm check:duplication` or `pnpm quality-scan <t>` (jscpd) | source-only |
+| M3 | Hotspot analysis | `pnpm exec tsx src/cli/hotspot-scan.ts <t>` — wraps `vitals_cli.py report --json` (pass `--report <capture>` when vitals is off PATH, #314; `--hotspots-out` feeds M8's `--hotspots`) | external plugin; run, don't build |
+| M4 | Duplication | `pnpm check:duplication` or `pnpm quality-scan <t>` (jscpd + diverged-clone near-miss pass, #360) | source-only |
 | M5 | Slop / dead code | `pnpm quality-scan <t>` (knip) | **NEEDS target `npm install`** — knip can't resolve config imports without the target's deps |
-| M6 | Simplification / maintainability | `pnpm simplify-scan <t>` (assembles the `docs/quality-extras.txt` brief + source into a review packet) | free = non-grading "looks hand-rolled" indicators; paid = triage + name the replacement (#267). **`simplify-scan` produces a review PACKET, not a verdict — printing source is not running M6; the verdict is a human/LLM pass over the packet (#351).** **Never yet run against a real target** (#283) |
-| M7 | Performance | `pnpm detect-static <t>` (code tier) + `pnpm perf-scan` (DB advisors) | source (code) + connected (advisors) |
-| M8 | Test quality | `pnpm mutation-scan <t>` (StrykerJS) | needs target test suite + stryker config; **no tests → emit a zero-coverage finding, don't skip** (#224) |
+| M6 | Simplification / maintainability | `pnpm detect-static <t>` (free non-grading "looks hand-rolled" indicators, #267) + `pnpm simplify-scan <t>` (assembles the `docs/quality-extras.txt` brief + source into a review packet) | free = non-grading "looks hand-rolled" indicators; paid = triage + name the replacement (#267). **`simplify-scan` produces a review PACKET, not a verdict — printing source is not running M6; the verdict is a human/LLM pass over the packet (#351).** **Never yet run against a real target** (#283) |
+| M7 | Performance | `pnpm detect-static <t>` (code tier) + `pnpm quick-scan --dir <t>` (static RLS initplan, #374) + `pnpm perf-scan` (DB advisors) | source (code) + connected (advisors) |
+| M8 | Test quality | `pnpm detect-static <t>` (test-intent detectors, #372) + `pnpm mutation-scan <t> --stub-check` (pre-Stryker deletion survival, #373) + `pnpm mutation-scan <t>` (StrykerJS) | source (test-intent; stub-check needs the target's tests runnable but no Stryker install); full mutation run needs target test suite + stryker config; **no tests → emit a zero-coverage finding, don't skip** (#224) |
 | M9 | App Router boundary/rendering | `pnpm detect-static <t>` (M9 AST) | source-only |
 | M10 | Data classification (PII/PHI/PCI) | `pnpm pii-classify` — `SUPABASE_DB_URL=…` (live) or `--schema <dir\|.sql>` over `supabase/migrations/` (#250) | connected or schema |
 
-Source/free tier = M1(mechanical), M4, M5, M7(code), M9, M10(schema); connected adds M1(live), M7(advisors), M10(live); dynamic = M2; paid-LLM = M1(semantic), M6, M3-depth. Per-module free/paid split: `docs/free-tier-scope.md` + the `product-shape-decisions` memory.
+Source/free tier = M1(mechanical), M4, M5, M6(indicators, #267), M7(code), M8(test-intent, #372), M9, M10(schema); connected adds M1(live), M7(advisors), M10(live); dynamic = M2; paid-LLM = M1(semantic), M6(triage), M3-depth. Per-module free/paid split: `docs/free-tier-scope.md` + the `product-shape-decisions` memory.
 
 ### The coverage guard — never silently skip a module
 

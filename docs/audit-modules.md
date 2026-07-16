@@ -59,7 +59,10 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
 
 ## M4 — Duplication
 - **Finds:** copy-paste clones — a bug-multiplier and maintenance tax (fix once, miss the other three copies).
-- **Method:** jscpd across the source tree; report % duplication and the worst clusters.
+- **Method:** jscpd across the source tree; report % duplication and the worst clusters. Plus a scoped
+  diverged-clone near-miss pass (#360) over security-relevant files only: function-level Type-3 comparison that
+  catches copy-pasted auth/tenant checks that were then EDITED — exactly the "patched one copy, missed the other"
+  population jscpd's exact-token match structurally cannot see. Review tier, never a mechanical verdict.
 - **Powered by:** existing `pnpm check:duplication` (jscpd) — point it at the client repo.
 - **Report:** duplication summary + top clone clusters with consolidation suggestions.
 
