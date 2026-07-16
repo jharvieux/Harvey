@@ -1,0 +1,9 @@
+// join("&") over plain values — an ampersand-delimited list, not key=value assembly. Only a
+// map producing k=v-shaped strings reads as query-string building.
+export function joinTags(tags: string[]): string {
+  return tags.map((t) => t.trim()).join("&");
+}
+
+export function joinParts(parts: string[]): string {
+  return parts.join("&");
+}

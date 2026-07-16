@@ -1,0 +1,10 @@
+// The calendar getters used as SEPARATE values — comparisons and standalone reads, never
+// concatenated into one formatting expression. Using the getters is normal code; only the
+// build-a-date-string-by-hand co-occurrence is the indicator.
+export function isNewYearsDay(d: Date): boolean {
+  return d.getMonth() === 0 && d.getDate() === 1;
+}
+
+export function yearOf(d: Date): number {
+  return d.getFullYear();
+}

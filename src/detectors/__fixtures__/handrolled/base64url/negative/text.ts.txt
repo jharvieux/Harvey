@@ -1,0 +1,15 @@
+// Replaces that LOOK like alphabet swaps but aren't the base64 dance: a plus-sign replace
+// with a different target (form decoding), an underscore swap for slug display, and a real
+// swap pair with no base64/btoa/atob context in the statement. None of these flag — the
+// class needs either two swaps in one statement or a swap beside base64 context.
+export function decodeFormComponent(s: string): string {
+  return decodeURIComponent(s.replace(/\+/g, " "));
+}
+
+export function slugToTitle(slug: string): string {
+  return slug.replace(/_/g, " ");
+}
+
+export function plusesFromDashes(csv: string): string {
+  return csv.replace(/-/g, "+");
+}

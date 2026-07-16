@@ -1,0 +1,7 @@
+export function buildSessionCookie(name: string, value: string, maxAge: number): string {
+  return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=Lax`;
+}
+
+export function clearCookie(name: string): string {
+  return name + "=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT";
+}

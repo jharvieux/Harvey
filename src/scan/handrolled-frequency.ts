@@ -52,6 +52,9 @@ const countMatches = (re: RegExp) => (f: SourceInput): number => f.text.match(re
 // Regexes passed here must NOT carry /g — .test() on a /g regex is stateful across calls.
 const filePresence = (...res: RegExp[]) => (f: SourceInput): number => (res.every((re) => re.test(f.text)) ? 1 : 0);
 
+// WHY: the signature/example strings below deliberately contain the raw shapes they count
+// (cookie-attribute literals, currency templates, …) — they are descriptions for the frequency
+// tool, not hand-rolled implementations, so the M6 indicators are suppressed on this statement.
 export const MEASURED_SHAPES: MeasuredShape[] = [
   {
     entry: 3,

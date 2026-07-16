@@ -1,0 +1,7 @@
+{
+  "name": "date-math-positive",
+  "dependencies": {
+    "date-fns": "^3.6.0",
+    "react": "^18.3.0"
+  }
+}

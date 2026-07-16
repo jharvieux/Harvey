@@ -1,0 +1,10 @@
+// A cookie string that is PARSED, not built: the attribute literal is a probe argument
+// (includes) and the split belongs to the shipped cookie-parsing class. Serialization must
+// stay silent here — reads are the parse class's territory, and one shape never double-fires.
+export function isHttpOnly(setCookieHeader: string): boolean {
+  return setCookieHeader.includes("; HttpOnly");
+}
+
+export function cookiePairs(setCookieHeader: string): string[] {
+  return setCookieHeader.split("; ");
+}

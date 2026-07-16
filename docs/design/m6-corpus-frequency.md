@@ -141,6 +141,13 @@ AI-generated tier before "common in AI code" claims can ever be grounded (follow
 
 ## Recommended batch-2 build order (YES entries, measured counts ONLY)
 
+> **Executed 2026-07-16 (#406 item 2):** all eight entries below SHIPPED as detectors, in this
+> order — see the catalogue's SHIPPED rows. Detector dogfood on the same pins found the counts
+> below are signature counts, not detector counts: the 41 "hits" are repeated `Content-Type`
+> header objects (signature over-count, no real lookup table in the corpus), 29 and 37 exist
+> only in cross-statement forms the detectors deliberately don't match, and the dep gates
+> (28, 81) close most repos. The measurement record below is unchanged.
+
 Non-zero measured YES entries, in measured order (ties broken by entry number, stated):
 
 1. **28** — date math on raw ms constants (11, and the only shape present on 5 of 6 repos)

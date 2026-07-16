@@ -1,0 +1,8 @@
+// The SAME shapes as the positive, but NO date library is in this tree — hand-rolling the
+// offset here is the deliberate keep-the-dep-out choice (the corpus depdrop shape), not a
+// reinvention beside an installed library. The dep-gate stays shut.
+export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+export function expiresTomorrow(): Date {
+  return new Date(Date.now() + 86400000);
+}

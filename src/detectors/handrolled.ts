@@ -20,8 +20,15 @@
 //   • Supabase pagination reinvention is deferred: needs cross-statement correlation.
 // The class-merge detector is gated on a merge library already being in the target's dependency
 // tree — hand-rolling one when no such dep exists is the deliberate dep-drop shape, not a
-// reinvention indicator. The gate itself is generic (`depGatePresent`, #406) so future dep-gated
-// classes (catalogue entries 28, 81, …) reuse it instead of growing per-class copies.
+// reinvention indicator. The gate itself is generic (`depGatePresent`, #406); its consumers are
+// class-merge, raw-millisecond date math (28), and email-shape regex (81).
+//
+// Batch 2 (#406 item 2): the eight measured-nonzero YES entries of the catalogue, built in
+// measured order (docs/design/m6-corpus-frequency.md): 28 raw-ms date math (dep-gated on a date
+// lib), 41 MIME-type lookup table, 88 currency via symbol+toFixed, 81 email-shape regex
+// (dep-gated on zod), 29 manual date formatting, 37 query-string building (the mirror of the
+// shipped parse class — must never fire on the parse shape), 42 base64url conversion, and
+// 52 cookie serialization (the shipped parse class covers reads; this is writes).
 //
 // WHY-comment suppression (#406, catalogue follow-up 4): every indicator class is suppressed by
 // an adjacent `WHY:` comment — the depdrop discipline generalized. A flagged shape whose comment
@@ -345,6 +352,448 @@ function detectClassMerge(sf: ts.SourceFile, path: string, nextId: NextId, depGa
   return findings;
 }
 
+// --- 6. Date math on raw millisecond constants (catalogue 28, dep-gated) --------
+// Only fires when a date library is ALREADY in the tree — with no such dep, hand-rolling the
+// offset is the deliberate dep-drop shape, exactly like class-merge. Flags bare hour/day
+// constants and all-literal multiplication chains whose product is a whole number of hours
+// (60*60*1000, 24*60*60*1000, 7*24*60*60*1000, …).
+
+const DATE_MATH_DEPS = ["date-fns", "dayjs", "luxon", "moment"];
+const MS_PER_HOUR = 3_600_000;
+const MS_LITERALS = new Set([3_600_000, 86_400_000]);
+
+function numericValue(node: ts.Node): number | undefined {
+  return ts.isNumericLiteral(node) ? Number(node.text.replace(/_/g, "")) : undefined;
+}
+
+function isMultiplication(node: ts.Node): node is ts.BinaryExpression {
+  return ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.AsteriskToken;
+}
+
+// Product of a multiplication chain made ENTIRELY of numeric literals; undefined otherwise.
+function literalChainProduct(expr: ts.Expression): number | undefined {
+  const e = unwrapParens(expr);
+  if (isMultiplication(e)) {
+    const l = literalChainProduct(e.left);
+    const r = literalChainProduct(e.right);
+    return l !== undefined && r !== undefined ? l * r : undefined;
+  }
+  return numericValue(e);
+}
+
+// True when the node feeds a wider `*` chain — the outermost chain carries the flag, so inner
+// sub-products and the constants inside a flagged chain never emit twice.
+function insideMultiplication(node: ts.Node): boolean {
+  let p: ts.Node | undefined = node.parent;
+  while (p && ts.isParenthesizedExpression(p)) p = p.parent;
+  return p !== undefined && isMultiplication(p);
+}
+
+function detectRawMsDateMath(sf: ts.SourceFile, path: string, nextId: NextId, depGateOpen: boolean): Finding[] {
+  if (!depGateOpen) return [];
+  const findings: Finding[] = [];
+  const push = (node: ts.Node) => {
+    const f = makeIndicator(nextId, sf, path, node, {
+      title: "Looks hand-rolled: date math on raw millisecond constants — may be worth investigating",
+      taxonomy: "M6 — Indicator: raw-millisecond date math",
+      evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — computes a time span from raw millisecond arithmetic while a date library is already in the dependency tree (DST and calendar boundaries don't fit fixed offsets).`,
+    });
+    if (f) findings.push(f);
+  };
+  const visit = (node: ts.Node) => {
+    if (isMultiplication(node) && !insideMultiplication(node)) {
+      const product = literalChainProduct(node);
+      if (product !== undefined && product >= MS_PER_HOUR && product % MS_PER_HOUR === 0) push(node);
+    } else if (ts.isNumericLiteral(node) && !insideMultiplication(node) && MS_LITERALS.has(numericValue(node) ?? 0)) {
+      push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 7. MIME-type lookup table (catalogue 41) ------------------------------------
+// An object literal with several extension→content-type rows. Several are required so a single
+// content-type constant (a header object, one Content-Type entry) never flags.
+
+const MIME_VALUE_RE = /^(?:image|application|text|video|audio|font)\/[\w.+-]+$/;
+const EXTENSION_KEY_RE = /^\.?[\w+-]{1,6}$/;
+
+function propertyKeyText(name: ts.PropertyName): string | undefined {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text;
+  return undefined;
+}
+
+function detectMimeLookupTable(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isObjectLiteralExpression(node)) {
+      const rows = node.properties.filter((p) => {
+        if (!ts.isPropertyAssignment(p)) return false;
+        const key = propertyKeyText(p.name);
+        return (
+          key !== undefined &&
+          EXTENSION_KEY_RE.test(key) &&
+          ts.isStringLiteralLike(p.initializer) &&
+          MIME_VALUE_RE.test(p.initializer.text)
+        );
+      });
+      if (rows.length >= 3) {
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: file-extension content-type table — may be worth investigating",
+          taxonomy: "M6 — Indicator: MIME-type lookup table",
+          evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — maps file extensions to content-type strings by hand (${rows.length} rows; types outside the table fall through).`,
+        });
+        if (f) findings.push(f);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 8. Currency via symbol + toFixed concat (catalogue 88) ----------------------
+
+const CURRENCY_PREFIX_RE = /[$€£]\s*$/;
+const CURRENCY_SUFFIX_RE = /^\s*[$€£]/;
+
+function isToFixedCall(expr: ts.Expression): boolean {
+  const e = unwrapParens(expr);
+  return ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && e.expression.name.text === "toFixed";
+}
+
+function isStringLiteralNode(node: ts.Expression): node is ts.StringLiteralLike {
+  return ts.isStringLiteralLike(node);
+}
+
+function detectCurrencyToFixed(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const push = (node: ts.Node) => {
+    const f = makeIndicator(nextId, sf, path, node, {
+      title: "Looks hand-rolled: currency formatting via symbol + toFixed concatenation — may be worth investigating",
+      taxonomy: "M6 — Indicator: currency formatting",
+      evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — formats money by gluing a currency symbol onto toFixed output (locale, grouping, and negative amounts are unhandled).`,
+    });
+    if (f) findings.push(f);
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isTemplateExpression(node)) {
+      const symbolThenToFixed = node.templateSpans.some((span, i) => {
+        const before = i === 0 ? node.head.text : (node.templateSpans[i - 1] as ts.TemplateSpan).literal.text;
+        return CURRENCY_PREFIX_RE.test(before) && isToFixedCall(span.expression);
+      });
+      if (symbolThenToFixed) push(node);
+    } else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = unwrapParens(node.left);
+      const right = unwrapParens(node.right);
+      if (
+        (isStringLiteralNode(left) && CURRENCY_PREFIX_RE.test(left.text) && isToFixedCall(right)) ||
+        (isToFixedCall(left) && isStringLiteralNode(right) && CURRENCY_SUFFIX_RE.test(right.text))
+      ) {
+        push(node);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 9. Email-shape validation regex (catalogue 81, dep-gated on zod) ------------
+// Without a schema-validation library in the tree, a hand-written regex IS the standard
+// approach — the gate keeps the class honest, exactly like class-merge and date math.
+
+const EMAIL_SCHEMA_DEPS = ["zod"];
+// A character class (or \S/\w) quantified into an @ — the spine of email-shaped regexes.
+const EMAIL_REGEX_SPINE = /(?:\]|\\S|\\w)[+*]@/;
+
+function detectEmailShapeRegex(sf: ts.SourceFile, path: string, nextId: NextId, depGateOpen: boolean): Finding[] {
+  if (!depGateOpen) return [];
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isRegularExpressionLiteral(node) && EMAIL_REGEX_SPINE.test(node.text)) {
+      const f = makeIndicator(nextId, sf, path, node, {
+        title: "Looks hand-rolled: email-shape validation regex — may be worth investigating",
+        taxonomy: "M6 — Indicator: email-shape regex",
+        evidence: `\`${node.getText(sf).slice(0, 70)}\` — an email-shaped regex literal while a schema-validation library is already in the dependency tree (hand-written email regexes drift from the addresses they intend to accept).`,
+      });
+      if (f) findings.push(f);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 10. Manual date formatting via calendar getters (catalogue 29) --------------
+// getFullYear()/getMonth()/getDate() co-occurring in ONE template or string-concat expression.
+// The getters used separately (comparisons, standalone values) never flag.
+
+const DATE_GETTERS = ["getFullYear", "getMonth", "getDate"];
+
+function zeroArgCallNames(node: ts.Node): Set<string> {
+  const names = new Set<string>();
+  const visit = (n: ts.Node) => {
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.arguments.length === 0) {
+      names.add(n.expression.name.text);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return names;
+}
+
+function isPlusExpression(node: ts.Node): node is ts.BinaryExpression {
+  return ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken;
+}
+
+function plusOperands(expr: ts.Expression, out: ts.Expression[]): void {
+  const e = unwrapParens(expr);
+  if (isPlusExpression(e)) {
+    plusOperands(e.left, out);
+    plusOperands(e.right, out);
+  } else {
+    out.push(e);
+  }
+}
+
+function insidePlusChain(node: ts.Node): boolean {
+  let p: ts.Node | undefined = node.parent;
+  while (p && ts.isParenthesizedExpression(p)) p = p.parent;
+  return p !== undefined && isPlusExpression(p);
+}
+
+function detectDateGetterFormat(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const push = (node: ts.Node) => {
+    const f = makeIndicator(nextId, sf, path, node, {
+      title: "Looks hand-rolled: date formatting via calendar-getter concatenation — may be worth investigating",
+      taxonomy: "M6 — Indicator: manual date formatting",
+      evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — assembles a date string from the year/month/day getters by hand (zero-based months, zero-padding, and locale order are all manual here).`,
+    });
+    if (f) findings.push(f);
+  };
+  const allGettersPresent = (node: ts.Node) => {
+    const names = zeroArgCallNames(node);
+    return DATE_GETTERS.every((g) => names.has(g));
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isTemplateExpression(node) && allGettersPresent(node)) {
+      push(node);
+      return; // one flag per formatting expression
+    }
+    if (isPlusExpression(node) && !insidePlusChain(node)) {
+      const operands: ts.Expression[] = [];
+      plusOperands(node, operands);
+      const isConcat = operands.some((o) => ts.isStringLiteralLike(o) || ts.isTemplateExpression(o));
+      if (isConcat && allGettersPresent(node)) {
+        push(node);
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 11. Query-string BUILDING via key=value joins (catalogue 37) ----------------
+// The mirror of the shipped parse class: `.join("&")` over `.map(...)` callbacks that produce
+// `k=v`-shaped strings. A join("&") over plain values (an ampersand-delimited list) never
+// flags, and the parse shape (splits) is a different class entirely.
+
+function isJoinOn(node: ts.Node, separator: string): node is ts.CallExpression {
+  return (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === "join" &&
+    node.arguments.length === 1 &&
+    ts.isStringLiteralLike(node.arguments[0] as ts.Expression) &&
+    (node.arguments[0] as ts.StringLiteralLike).text === separator
+  );
+}
+
+function returnedExpressions(fn: ts.ArrowFunction | ts.FunctionExpression): ts.Expression[] {
+  if (ts.isArrowFunction(fn) && !ts.isBlock(fn.body)) return [fn.body];
+  const out: ts.Expression[] = [];
+  const visit = (n: ts.Node) => {
+    if (ts.isReturnStatement(n) && n.expression) out.push(n.expression);
+    ts.forEachChild(n, visit);
+  };
+  visit(fn.body);
+  return out;
+}
+
+function isKeyEqualsValueString(expr: ts.Expression): boolean {
+  const e = unwrapParens(expr);
+  if (ts.isTemplateExpression(e)) {
+    return e.head.text.includes("=") || e.templateSpans.some((s) => s.literal.text.includes("="));
+  }
+  if (isPlusExpression(e)) {
+    const operands: ts.Expression[] = [];
+    plusOperands(e, operands);
+    return operands.some((o) => ts.isStringLiteralLike(o) && o.text.includes("="));
+  }
+  return false;
+}
+
+function detectQueryStringBuild(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (isJoinOn(node, "&")) {
+      const receiver = unwrapParens((node.expression as ts.PropertyAccessExpression).expression);
+      const mapCallback =
+        ts.isCallExpression(receiver) &&
+        ts.isPropertyAccessExpression(receiver.expression) &&
+        receiver.expression.name.text === "map" &&
+        receiver.arguments.length >= 1
+          ? receiver.arguments[0]
+          : undefined;
+      if (
+        mapCallback !== undefined &&
+        (ts.isArrowFunction(mapCallback) || ts.isFunctionExpression(mapCallback)) &&
+        returnedExpressions(mapCallback).some(isKeyEqualsValueString)
+      ) {
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: query-string building via key=value joins — may be worth investigating",
+          taxonomy: "M6 — Indicator: query-string building",
+          evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — assembles a query string by joining key=value templates on "&" (encoding and repeated-key handling are easy to get wrong).`,
+        });
+        if (f) findings.push(f);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 12. base64url conversion via replace chain (catalogue 42) -------------------
+// The +/− and /→_ alphabet swaps (plus padding strips) beside btoa/atob or base64 context.
+// One statement = one finding: two swaps in a statement are self-evidencing; a single swap
+// needs base64 context in the same statement, so a lone slug/URL replace never flags.
+
+function replaceSwapOf(node: ts.Node): [string, string] | undefined {
+  if (
+    !ts.isCallExpression(node) ||
+    !ts.isPropertyAccessExpression(node.expression) ||
+    !["replace", "replaceAll"].includes(node.expression.name.text) ||
+    node.arguments.length !== 2 ||
+    !ts.isStringLiteralLike(node.arguments[1] as ts.Expression)
+  ) {
+    return undefined;
+  }
+  const target = node.arguments[0] as ts.Expression;
+  const replacement = (node.arguments[1] as ts.StringLiteralLike).text;
+  if (ts.isRegularExpressionLiteral(target)) {
+    const source = target.text.slice(1, target.text.lastIndexOf("/"));
+    return [source, replacement];
+  }
+  if (ts.isStringLiteralLike(target)) return [target.text, replacement];
+  return undefined;
+}
+
+function isBase64AlphabetSwap(source: string, replacement: string): boolean {
+  return (
+    ((source === "\\+" || source === "+") && replacement === "-") ||
+    ((source === "\\/" || source === "/") && replacement === "_") ||
+    (source === "-" && replacement === "+") ||
+    (source === "_" && replacement === "/") ||
+    (/^=+\$?$|^=\{1,2\}\$$/.test(source) && replacement === "")
+  );
+}
+
+function detectBase64UrlChain(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const swapsByStatement = new Map<ts.Node, ts.Node[]>();
+  const visit = (node: ts.Node) => {
+    const swap = replaceSwapOf(node);
+    if (swap && isBase64AlphabetSwap(swap[0], swap[1])) {
+      const stmt = enclosingStatement(node);
+      const list = swapsByStatement.get(stmt) ?? [];
+      list.push(node);
+      swapsByStatement.set(stmt, list);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  const findings: Finding[] = [];
+  for (const [stmt, swaps] of swapsByStatement) {
+    if (swaps.length >= 2 || /\batob\(|\bbtoa\(|base64/i.test(stmt.getText(sf))) {
+      const anchor = swaps[0] as ts.Node;
+      const f = makeIndicator(nextId, sf, path, anchor, {
+        title: "Looks hand-rolled: URL-safe base64 conversion via replace chain — may be worth investigating",
+        taxonomy: "M6 — Indicator: base64url conversion",
+        evidence: `\`${stmt.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — converts between the standard and URL-safe base64 alphabets by character replacement (padding and alphabet edge cases are easy to get wrong).`,
+      });
+      if (f) findings.push(f);
+    }
+  }
+  return findings;
+}
+
+// --- 13. Cookie serialization by hand (catalogue 52) -----------------------------
+// Building cookie/Set-Cookie strings with attribute literals (`; Path=`, `; Max-Age=`,
+// `; HttpOnly`, …). The shipped cookie-parsing class covers reads; this covers writes — an
+// attribute literal used to PROBE an existing cookie string (includes/startsWith/split/…)
+// stays the parse side's territory and never fires here.
+
+const COOKIE_ATTR_RE = /;\s*(?:path|max-age|expires|domain|samesite)=|;\s*(?:httponly|secure)\b/i;
+const STRING_PROBE_METHODS = new Set([
+  "includes",
+  "startsWith",
+  "endsWith",
+  "indexOf",
+  "lastIndexOf",
+  "split",
+  "match",
+  "matchAll",
+  "search",
+  "replace",
+  "replaceAll",
+  "test",
+]);
+
+function stringChunksOf(node: ts.Node): string[] | undefined {
+  if (ts.isTemplateExpression(node)) return [node.head.text, ...node.templateSpans.map((s) => s.literal.text)];
+  if (ts.isStringLiteralLike(node)) return [node.text];
+  return undefined;
+}
+
+function isProbeArgument(node: ts.Node): boolean {
+  const parent = node.parent;
+  return (
+    ts.isCallExpression(parent) &&
+    parent.arguments.some((a) => a === node) &&
+    ts.isPropertyAccessExpression(parent.expression) &&
+    STRING_PROBE_METHODS.has(parent.expression.name.text)
+  );
+}
+
+function detectCookieSerialize(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const flaggedStatements = new Set<ts.Node>();
+  const visit = (node: ts.Node) => {
+    const chunks = stringChunksOf(node);
+    if (chunks?.some((c) => COOKIE_ATTR_RE.test(c)) && !isProbeArgument(node)) {
+      const stmt = enclosingStatement(node);
+      if (!flaggedStatements.has(stmt)) {
+        flaggedStatements.add(stmt);
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: cookie-header serialization — may be worth investigating",
+          taxonomy: "M6 — Indicator: cookie serialization",
+          evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — builds a cookie string with attribute literals by hand (attribute rules, encoding, and expiry formats are easy to get wrong).`,
+        });
+        if (f) findings.push(f);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
 // --- Orchestrator ----------------------------------------------------------------
 
 /**
@@ -356,7 +805,9 @@ function detectClassMerge(sf: ts.SourceFile, path: string, nextId: NextId, depGa
 export function detectHandrolledFindings(files: SourceInput[]): Finding[] {
   let n = 0;
   const nextId: NextId = () => `M6IND-${String(++n).padStart(2, "0")}`;
-  const depGateOpen = depGatePresent(files, CLASS_MERGE_DEPS);
+  const classMergeGateOpen = depGatePresent(files, CLASS_MERGE_DEPS);
+  const dateMathGateOpen = depGatePresent(files, DATE_MATH_DEPS);
+  const emailRegexGateOpen = depGatePresent(files, EMAIL_SCHEMA_DEPS);
   const findings: Finding[] = [];
   for (const f of files) {
     if (!/\.(ts|tsx|jsx|mjs)$/.test(f.path)) continue;
@@ -366,7 +817,16 @@ export function detectHandrolledFindings(files: SourceInput[]): Finding[] {
       ...detectQueryStringParse(sf, f.path, nextId),
       ...detectCookieParse(sf, f.path, nextId),
       ...detectRandomStringId(sf, f.path, nextId),
-      ...detectClassMerge(sf, f.path, nextId, depGateOpen),
+      ...detectClassMerge(sf, f.path, nextId, classMergeGateOpen),
+      // Batch 2 (#406 item 2), in measured corpus order:
+      ...detectRawMsDateMath(sf, f.path, nextId, dateMathGateOpen),
+      ...detectMimeLookupTable(sf, f.path, nextId),
+      ...detectCurrencyToFixed(sf, f.path, nextId),
+      ...detectEmailShapeRegex(sf, f.path, nextId, emailRegexGateOpen),
+      ...detectDateGetterFormat(sf, f.path, nextId),
+      ...detectQueryStringBuild(sf, f.path, nextId),
+      ...detectBase64UrlChain(sf, f.path, nextId),
+      ...detectCookieSerialize(sf, f.path, nextId),
     );
   }
   return findings;

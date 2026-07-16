@@ -1,0 +1,7 @@
+export function toBase64Url(bytes: string): string {
+  return btoa(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export function fromBase64UrlString(s: string): string {
+  return atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+}

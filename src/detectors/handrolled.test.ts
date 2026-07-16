@@ -39,11 +39,20 @@ interface Case {
 
 // No "JSON round-trip clone" case: that shape is deliberately M7's (`M7 — JSON deep-clone` in
 // perf-code.ts) — see handrolled.ts's header for the #278 double-count reasoning.
+// The batch-2 dep-gated classes (raw-ms date math, email-shape regex) have their own suites
+// below, mirroring class-merge: their negative is the gate staying shut, not a different shape.
 const CASES: Case[] = [
   { name: "JSON deep-equal", dir: "json-equal", taxonomy: "M6 — Indicator: JSON deep-equal", posCount: 1 },
   { name: "query-string parsing", dir: "querystring", taxonomy: "M6 — Indicator: query-string parsing", posCount: 1 },
   { name: "cookie parsing", dir: "cookie", taxonomy: "M6 — Indicator: cookie parsing", posCount: 2 },
   { name: "random-string id", dir: "random-id", taxonomy: "M6 — Indicator: random-string id", posCount: 2 },
+  // Batch 2 (#406 item 2):
+  { name: "MIME-type lookup table", dir: "mime-table", taxonomy: "M6 — Indicator: MIME-type lookup table", posCount: 1 },
+  { name: "currency formatting", dir: "currency", taxonomy: "M6 — Indicator: currency formatting", posCount: 2 },
+  { name: "manual date formatting", dir: "format-date", taxonomy: "M6 — Indicator: manual date formatting", posCount: 1 },
+  { name: "query-string building", dir: "querystring-build", taxonomy: "M6 — Indicator: query-string building", posCount: 1 },
+  { name: "base64url conversion", dir: "base64url", taxonomy: "M6 — Indicator: base64url conversion", posCount: 2 },
+  { name: "cookie serialization", dir: "cookie-serialize", taxonomy: "M6 — Indicator: cookie serialization", posCount: 2 },
 ];
 
 for (const c of CASES) {
@@ -81,6 +90,39 @@ describe("class-string merge (dep-gated)", () => {
   it("stays silent on a sentence-builder join even with the gate open — className context is required", () => {
     const files = loadFixtureDir("class-merge/negative-with-dep");
     expect(depGatePresent(files, CLASS_MERGE_LIBS)).toBe(true);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+});
+
+describe("raw-millisecond date math (dep-gated, batch 2)", () => {
+  const TAX = "M6 — Indicator: raw-millisecond date math";
+  const DATE_LIBS = ["date-fns", "dayjs", "luxon", "moment"];
+
+  it("catches the literal-product chain and the bare day constant when a date library is in the tree", () => {
+    const hits = byTaxonomy("date-math/positive", TAX);
+    expect(hits).toHaveLength(2);
+    expect(hits.map((h) => h.location)).toEqual(["ttl.ts:1", "ttl.ts:4"]);
+  });
+
+  it("stays silent when no date library is in the tree — the deliberate dep-drop shape", () => {
+    const files = loadFixtureDir("date-math/negative-no-dep");
+    expect(depGatePresent(files, DATE_LIBS)).toBe(false);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+});
+
+describe("email-shape regex (dep-gated on a schema-validation library, batch 2)", () => {
+  const TAX = "M6 — Indicator: email-shape regex";
+
+  it("catches the email-shaped regex literal when zod is in the tree", () => {
+    const hits = byTaxonomy("email-regex/positive", TAX);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.location).toBe("validate.ts:1");
+  });
+
+  it("stays silent when no schema-validation library is in the tree — a regex IS the standard approach there", () => {
+    const files = loadFixtureDir("email-regex/negative-no-dep");
+    expect(depGatePresent(files, ["zod"])).toBe(false);
     expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
   });
 });
@@ -138,6 +180,28 @@ describe("discrimination boundaries (regression locks)", () => {
     expect(byTaxonomy("random-id/positive", "M6 — Indicator: random-string id")).toHaveLength(2);
     expect(byTaxonomy("random-id/negative", "M6 — Indicator: random-string id")).toHaveLength(0);
   });
+
+  it("query-string building and parsing are mirror classes that never fire on each other's shapes", () => {
+    expect(byTaxonomy("querystring-build/positive", "M6 — Indicator: query-string parsing")).toHaveLength(0);
+    expect(byTaxonomy("querystring/positive", "M6 — Indicator: query-string building")).toHaveLength(0);
+  });
+
+  it("cookie serialization vs parsing: builds are serialization's, probes of an existing cookie string are parsing's", () => {
+    // The serialize positive builds cookie strings — the parse class stays silent on it.
+    expect(byTaxonomy("cookie-serialize/positive", "M6 — Indicator: cookie parsing")).toHaveLength(0);
+    // The serialize negative PARSES a Set-Cookie string: the parse class owns it (one finding),
+    // serialization stays silent — no double-fire on one shape.
+    expect(byTaxonomy("cookie-serialize/negative", "M6 — Indicator: cookie parsing")).toHaveLength(1);
+    // And the complement: the parse class's write-negative (document.cookie = "…; path=/") IS
+    // serialization — the two classes split reads/writes between them, deliberately.
+    expect(byTaxonomy("cookie/negative", "M6 — Indicator: cookie serialization")).toHaveLength(1);
+  });
+
+  it("date math: constants inside a flagged product chain never emit a second finding", () => {
+    // ttl.ts:1 is `24 * 60 * 60 * 1000` — one finding for the chain, none for its factors.
+    const hits = byTaxonomy("date-math/positive", "M6 — Indicator: raw-millisecond date math");
+    expect(hits.filter((h) => h.location === "ttl.ts:1")).toHaveLength(1);
+  });
 });
 
 // The operator ruling's language discipline, as a gate: free-tier indicators must hedge and must
@@ -150,9 +214,18 @@ describe("free-tier language lock (#267 operator ruling)", () => {
     ...detectHandrolledFindings(loadFixtureDir("cookie/positive")),
     ...detectHandrolledFindings(loadFixtureDir("random-id/positive")),
     ...detectHandrolledFindings(loadFixtureDir("class-merge/positive")),
+    // Batch 2 (#406 item 2):
+    ...detectHandrolledFindings(loadFixtureDir("date-math/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("mime-table/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("currency/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("email-regex/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("format-date/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("querystring-build/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("base64url/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("cookie-serialize/positive")),
   ];
   const REPLACEMENT_NAMES =
-    /structuredClone|isDeepStrictEqual|fast-deep-equal|deep-equal|URLSearchParams|useSearchParams|next\/headers|cookies\(\)|cookie-parse|randomUUID|getRandomValues|nanoid|\buuid\b|clsx|tailwind-merge|\bclassnames\b|lodash|should be replaced/i;
+    /structuredClone|isDeepStrictEqual|fast-deep-equal|deep-equal|URLSearchParams|useSearchParams|next\/headers|cookies\(\)|cookie-parse|randomUUID|getRandomValues|nanoid|\buuid\b|clsx|tailwind-merge|\bclassnames\b|lodash|date-fns|dayjs|luxon|\bmoment\b|\bIntl\b|toLocale(?:Date|Time)?String|DateTimeFormat|NumberFormat|\bmime\b|\bzod\b|\bjose\b|padStart|base64url|fromBase64|should be replaced/i;
 
   it("produced findings to lock (the corpus is not empty)", () => {
     expect(allPositiveFindings.length).toBeGreaterThanOrEqual(8);

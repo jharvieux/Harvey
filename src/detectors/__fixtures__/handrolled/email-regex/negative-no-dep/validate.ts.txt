@@ -1,0 +1,8 @@
+// The SAME regex as the positive, but NO schema-validation library is in this tree — with
+// nothing installed to express the rule in, a regex IS the standard approach, so the dep-gate
+// stays shut and nothing flags.
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function isEmail(value: string): boolean {
+  return EMAIL_RE.test(value);
+}
