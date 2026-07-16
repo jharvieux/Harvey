@@ -1,0 +1,13 @@
+import { describe, expect, it } from "vitest";
+import { applyDiscount } from "./discount.js";
+
+describe("applyDiscount", () => {
+  it("gives members a discount", () => {
+    expect(applyDiscount(100, true)).toBe(80);
+  });
+
+  it("handles a bad total", () => {
+    // No denial keyword in the name — the toThrow assertion is the denial-path evidence.
+    expect(() => applyDiscount(-1, true)).toThrow();
+  });
+});

@@ -1349,6 +1349,22 @@ installed there (`src/cli/mutation-scan.ts`).
 |---|---|---|---|
 | M8-P-TAUTOLOGICAL | `test-quality/discount.ts` + `discount.tautological.test.ts` | happy-path-only / assertion-light (quality-extras.txt M8 category 5) | ≥1 mutant Survived/NoCoverage on `discount.ts` |
 
+### M8 stub-check pair (#373) — deletion-survival, proven by execution (not Stryker)
+
+The stub-check instrument (`src/stub-check.ts`, `pnpm mutation-scan <t> --stub-check`) answers
+the M8 brief's litmus test directly: stub each covered exported function's body to
+`return undefined` and re-run the covering tests. Its planted pair (deliberately NOT added to
+`stryker.config.json`'s `mutate` list, so the recorded live result above stays reproducible):
+
+| id | fixture | expected stub-check result |
+|---|---|---|
+| M8-P-DELETION-SURVIVING | `test-quality/audit-log.ts` + `audit-log.deletion-surviving.test.ts` | covering test calls `logAuditEvent` but asserts nothing → still passes with the body stubbed → `M8-01-*` finding |
+| (contrast, reuses M8-P-TAUTOLOGICAL) | `test-quality/discount.ts` + `discount.tautological.test.ts` | weak per Stryker, but its one assertion checks a return value → FAILS when `applyDiscount` is stubbed → no finding |
+
+Both verdicts are executed (transpile-and-run), not recorded: `src/stub-check.test.ts`'s
+"M8-P-DELETION-SURVIVING calibration pair" block runs the covering tests against the real and
+stubbed sources on every `pnpm verify`.
+
 ### M8 negatives — planted strong test (must NOT be flagged)
 
 | id | fixture | why genuinely strong | must NOT happen |

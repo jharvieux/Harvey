@@ -69,10 +69,27 @@ interface SurvivingMutant {
   hotspot: boolean;
 }
 
+// #386 layer 2: the mutator families that encode negation/boundary logic. Survivors
+// concentrated here mean "the suite never tested the denial branch" — a distinct, higher-
+// priority signal than scattered coverage gaps, and the sentence the report needs.
+const BOUNDARY_MUTATORS: ReadonlySet<string> = new Set(["ConditionalExpression", "EqualityOperator", "BooleanLiteral"]);
+
+interface FileMutatorBreakdown {
+  file: string;
+  // Survived + NoCoverage counts per mutator type — both are mutants the suite never disproved.
+  survivorsByMutator: Record<string, number>;
+  boundarySurvivors: number;
+  otherSurvivors: number;
+  // Concentration needs a majority AND at least two boundary-family survivors — a single
+  // surviving ConditionalExpression is an ordinary gap, not a denial-branch pattern.
+  denialBoundaryConcentrated: boolean;
+}
+
 interface MutationSummary {
   overall: ModuleMutationSummary;
   byModule: ModuleMutationSummary[];
   survivingMutants: SurvivingMutant[];
+  mutatorBreakdown: FileMutatorBreakdown[];
 }
 
 const NOT_VALID: ReadonlySet<MutantStatus> = new Set(["Ignored", "CompileError", "Pending"]);
@@ -141,6 +158,28 @@ export function summarizeMutationReport(report: StrykerReport, hotspotFiles: rea
     .map(([mod, mutants]) => summarize(mod, mutants))
     .sort((a, b) => a.mutationScore - b.mutationScore);
 
+  const byFileSurvivors = new Map<string, SurvivingMutant[]>();
+  for (const s of survivingMutants) {
+    const bucket = byFileSurvivors.get(s.file) ?? [];
+    bucket.push(s);
+    byFileSurvivors.set(s.file, bucket);
+  }
+  const mutatorBreakdown: FileMutatorBreakdown[] = [...byFileSurvivors.entries()]
+    .map(([file, survivors]) => {
+      const survivorsByMutator: Record<string, number> = {};
+      for (const s of survivors) survivorsByMutator[s.mutatorName] = (survivorsByMutator[s.mutatorName] ?? 0) + 1;
+      const boundarySurvivors = survivors.filter((s) => BOUNDARY_MUTATORS.has(s.mutatorName)).length;
+      const otherSurvivors = survivors.length - boundarySurvivors;
+      return {
+        file,
+        survivorsByMutator,
+        boundarySurvivors,
+        otherSurvivors,
+        denialBoundaryConcentrated: boundarySurvivors >= 2 && boundarySurvivors > otherSurvivors,
+      };
+    })
+    .sort((a, b) => b.boundarySurvivors - a.boundarySurvivors || (a.file < b.file ? -1 : 1));
+
   // Hotspot-flagged survivors first (the cross-reference against M1/M3 that makes them top
   // remediation priority), then by file/line for a stable, reviewable order.
   survivingMutants.sort((a, b) => {
@@ -153,6 +192,7 @@ export function summarizeMutationReport(report: StrykerReport, hotspotFiles: rea
     overall: summarize("(overall)", allMutants),
     byModule,
     survivingMutants,
+    mutatorBreakdown,
   };
 }
 

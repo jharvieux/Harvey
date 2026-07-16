@@ -1,0 +1,12 @@
+import { describe, expect, it } from "vitest";
+import { canDelete } from "./auth.js";
+
+describe("canDelete", () => {
+  it("allows an admin to delete a document", () => {
+    expect(canDelete("admin", "doc-1")).toBe(true);
+  });
+
+  it("denies a member from deleting", () => {
+    expect(canDelete("member", "doc-1")).toBe(false);
+  });
+});

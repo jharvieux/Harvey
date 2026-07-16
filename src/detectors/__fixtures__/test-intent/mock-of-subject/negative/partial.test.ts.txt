@@ -1,0 +1,13 @@
+import { describe, expect, it, vi } from "vitest";
+import { computeTotals } from "./partial.js";
+
+vi.mock("./partial.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./partial.js")>();
+  return { ...actual, fetchRates: vi.fn(() => 1.0) };
+});
+
+describe("computeTotals", () => {
+  it("computes totals with the real implementation", () => {
+    expect(computeTotals([10, 20])).toBe(30);
+  });
+});

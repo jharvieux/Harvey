@@ -1,0 +1,12 @@
+import { describe, expect, it } from "vitest";
+import { createClient } from "@supabase/supabase-js";
+
+// Hits a real local stack — the shape the detector must NOT flag: the query reaches Postgres,
+// so RLS is actually exercised.
+describe("tenant isolation", () => {
+  it("denies cross-tenant reads under rls", async () => {
+    const anon = createClient("http://127.0.0.1:54321", "local-anon-key");
+    const { data } = await anon.from("orders").select("*").eq("tenant_id", "other-tenant");
+    expect(data).toEqual([]);
+  });
+});

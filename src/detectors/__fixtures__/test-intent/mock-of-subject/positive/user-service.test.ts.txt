@@ -1,0 +1,11 @@
+import { describe, expect, it, vi } from "vitest";
+import { getUser } from "./user-service.js";
+
+vi.mock("./user-service.js", () => ({ getUser: vi.fn(() => ({ id: "u1", name: "Ada" })) }));
+
+describe("getUser", () => {
+  it("returns the user", async () => {
+    const user = await getUser("u1");
+    expect(user.name).toBe("Ada");
+  });
+});

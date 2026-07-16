@@ -1,0 +1,10 @@
+import { describe, expect, it, vi } from "vitest";
+import { formatOrderDate } from "./dates.js";
+
+vi.mock("@supabase/supabase-js");
+
+describe("order dates", () => {
+  it("formats the created-at date", () => {
+    expect(formatOrderDate("2026-07-16T00:00:00Z")).toBe("Jul 16, 2026");
+  });
+});

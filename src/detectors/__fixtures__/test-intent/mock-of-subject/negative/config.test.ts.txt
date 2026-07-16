@@ -1,0 +1,12 @@
+import { describe, expect, it, vi } from "vitest";
+import { fetchQuota } from "./quota-api.js";
+import { renderBanner } from "./config.js";
+
+vi.mock("./quota-api.js");
+
+describe("banner", () => {
+  it("renders the quota banner", () => {
+    vi.mocked(fetchQuota).mockReturnValue(42);
+    expect(renderBanner()).toContain("42");
+  });
+});

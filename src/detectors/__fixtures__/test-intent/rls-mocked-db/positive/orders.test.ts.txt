@@ -1,0 +1,16 @@
+import { describe, expect, it } from "@jest/globals";
+import { listOrders } from "./orders.js";
+
+jest.mock("@/lib/db-client");
+
+describe("orders", () => {
+  it("enforces rls on the orders table", async () => {
+    const rows = await listOrders("tenant-a");
+    expect(rows).toEqual([]);
+  });
+
+  it("formats order totals", async () => {
+    const rows = await listOrders("tenant-a");
+    expect(rows.length).toBe(0);
+  });
+});
