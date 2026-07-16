@@ -67,10 +67,21 @@ describe("dedupeFindings", () => {
   });
 });
 
+// The evidence each tool prints on a clean run — #419's probes derive status from this, so a
+// capturing run must feed it (an exit-0 with empty output now reads as requires-live-run, #350).
+const toolOutput = (argv: string[]): string => {
+  const cmd = argv.join(" ");
+  if (cmd.includes("quality-scan")) return "[]";
+  if (cmd.includes("mutation-scan")) return JSON.stringify({ summary: { overall: {} }, reportRows: [] });
+  if (cmd.includes("detect-static")) return "loaded 42 source files (30 product-code) from /target";
+  if (cmd.includes("hotspot-scan.ts")) return "M3 hotspot table — /target (5 rows, worst first)";
+  return "";
+};
+
 describe("runAudit findings capture (#312)", () => {
   it("collects findings from the emitting modules and nothing from the non-emitters", () => {
-    const captured = runAudit(AUDIT_RUNNERS, ctx({ captureDir: "/cap", readFindings: (p) => [finding(basename(p))] }));
-    // M3/M4/M5/M8/M9 shell out to report-schema Finding[] emitters; M1/M2/M6/M7/M10 do not capture.
+    const captured = runAudit(AUDIT_RUNNERS, ctx({ exec: (_c, argv) => ({ ok: true, output: toolOutput(argv) }), captureDir: "/cap", readFindings: (p) => [finding(basename(p))] }));
+    // M3/M4/M5/M8/M9 shell out to Finding-emitting CLIs; M1/M2/M6/M7/M10 do not capture.
     expect(captured.findings.map((f) => f.id).sort()).toEqual(["M3.json", "M4.json", "M5.json", "M8.json", "M9.json"]);
   });
 
