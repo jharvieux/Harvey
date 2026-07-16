@@ -40,10 +40,14 @@ async function timePhase<T>(phase: string, module: string, fn: () => T | Promise
   return { result, findings, report: { phase, module, ms, findingCount: findings.length, notes: "" } };
 }
 
+// Recursive (#355, matching the #299 fix already applied to corpus-drift.ts's readMigrationSql
+// and pii-classify.mjs's readSchemaSql): a Prisma schemaPath (prisma/migrations/<name>/migration.sql)
+// is one directory deeper than Supabase's flat supabase/migrations/<timestamp>.sql — a
+// non-recursive readdir silently finds nothing there, reading as "no schema input".
 function readMigrations(targetDir: string): string {
   const dir = join(targetDir, "supabase", "migrations");
   if (!existsSync(dir)) return "";
-  return readdirSync(dir)
+  return readdirSync(dir, { recursive: true, encoding: "utf8" })
     .filter((f) => f.endsWith(".sql"))
     .sort()
     .map((f) => readFileSync(join(dir, f), "utf8"))
