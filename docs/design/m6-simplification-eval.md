@@ -98,6 +98,7 @@ The eval had never been executed since the corpus landed 2026-07-09 (#72). First
 | 1 | 2026-07-15 | Claude Opus 4.8, M6 brief (`docs/quality-extras.txt` §SIMPLIFICATION) as the prompt, no other context | 4/4 | 2/2 | **contaminated — do not treat as a pass** |
 | 2 | 2026-07-15 | Claude Opus 4.8, M6 brief as the prompt, against the de-labelled corpus | 4/4 | **1/2** | **usable baseline** — one negative flagged (`framework-adapter.ts`), correctly: the fixture was defective, rebuilt in #290. Scored 1/2 against the key it ran against, not re-scored; see §3.2 |
 | 3 | 2026-07-16 | Claude Fable 5 (fresh-context subagent), the `pnpm simplify-scan` packet as the sole input, against the corrected corpus (#290 rebuild) | 4/4 | **2/2** | **first trustworthy negative datum** — both negatives spared on code evidence alone; see §3.3 |
+| 4 | 2026-07-16 | Claude Fable 5 (a second, distinct fresh-context subagent), the packet as the sole input, against the seven-file corpus (M6-N-SEAM added, #325) | 4/4 | **2/3** | the new seam negative spared for the designed reason; `framework-adapter.ts` flagged on a new, self-rated-low-confidence argument the packet gave it no way to check — see §3.4 |
 
 **Procedure followed.** The reviewer read the M6 brief, then the six fixture files, wrote up
 what it would flag, and only then opened `targets/calibration/GROUND-TRUTH.md` to score. Answer
@@ -270,11 +271,54 @@ recommendation (while still sparing `depdrop.ts`). Correct reasoning over the di
 just remember the six files were authored as independent fixtures, so cross-file inferences like
 this are artifacts of co-location, not planted signals.
 
+### 3.4 Run log — fourth execution (2026-07-16, #325)
+
+Same procedure as §3.3 (a second, distinct fresh-context Claude Fable 5 subagent; the regenerated
+`pnpm simplify-scan` packet as its only input; confirmed it read nothing else; scored after the
+writeup by the contaminated orchestrator, who did not review). First run over the seven-file
+corpus: `reconcile.ts` (M6-N-SEAM, added by #325 for the third `quality-extras.txt` FP class) now
+in the set.
+
+**Result: 4/4 positives flagged, 2/3 negatives spared.**
+
+- **M6-N-SEAM: spared, for the designed reason** — the reviewer named the pure-`reconcileTotals` /
+  I/O-`monthlyReconciliation` split as "exactly the 'single-use helper that exists for
+  testability/seam reasons' the FALSE POSITIVES section protects — the pure function is
+  unit-testable without a database." That is the new fixture's discriminator carrying the verdict
+  from code alone on its first exposure, the datum #325 wanted.
+- `depdrop.ts`: spared on the `// WHY:` block, consistent with runs 2–3.
+- `framework-adapter.ts`: **flagged — a miss against the key**, but NOT run 2's argument (the
+  #290 rebuild killed that one for good: this reviewer explicitly accepted that `SupportedStorage`
+  mandates the class shape). Its new argument: the file as a whole duplicates what `@supabase/ssr`
+  provides. It self-rated this "my lowest-confidence flag," conceding it could not see whether
+  `@supabase/ssr` is installed — and it is not: the rubric class it invoked is *hand-rolled
+  versions of an **already-in-the-dependency-tree** library's feature*, and the premise was
+  unverifiable from the packet, which contains no dependency manifest. Scored as a miss against
+  the recorded key, per the same no-rationalizing rule as run 2.
+
+**What run 4 adds beyond the score.** Two findings about the eval itself:
+
+1. **Reviewer variance is now measured, not hypothesized.** Runs 3 and 4 saw the same
+   `framework-adapter.ts` under the same rubric and split on it. This is what the
+   regression-watch framing (§3) is for — single runs are datapoints, not verdicts — and it is
+   also the concrete argument for the paid tier's human sign-off (§5).
+2. **The packet gives a reviewer no way to apply the "already-in-the-dependency-tree" rubric
+   class.** `simplify-scan` packets carry source files only, so any dep-tree claim a reviewer
+   makes is a guess; run 4's miss is exactly that guess going wrong. Follow-up: include the
+   target's `package.json` (or a dependency list) in the packet. Tracked as a follow-up issue
+   from the #325 batch.
+
+Report run 4 as **"the reviewer agreed 4/4 positives and 2/3 negatives on this rubric set"** —
+never as an M6 precision figure.
+
 ## 4. The labeled corpus
 
-`targets/calibration/simplify/` — six files, four positives + two negatives (paired 1:1 by shape
+`targets/calibration/simplify/` — seven files, four positives + three negatives (paired by shape
 so each positive has a visually-similar negative that should NOT be flagged, forcing the reviewer
-to reason about the *why*, not just pattern-match "this shape looks reusable").
+to reason about the *why*, not just pattern-match "this shape looks reusable"). The three
+negatives now cover all three FP classes `quality-extras.txt` names: the deliberate dep-drop, the
+framework/library contract, and — added 2026-07-16, #325 — the single-use helper kept as a
+testability seam.
 
 | id | file | class | should flag? |
 |---|---|---|---|
@@ -284,6 +328,7 @@ to reason about the *why*, not just pattern-match "this shape looks reusable").
 | M6-P-OVERABSTRACT | `manager.ts` | single-implementation `interface` + factory wrapping one concrete class | yes — collapse to the concrete code |
 | M6-N-DEPDROP | `depdrop.ts` | small reimplementation, `// WHY:` comment records a deliberate heavy-dep tradeoff | no |
 | M6-N-FRAMEWORK | `framework-adapter.ts` | single-implementation class shaped like `manager.ts`, but `implements SupportedStorage` (a `@supabase/supabase-js` type) and is passed to `createClient`'s `auth.storage` — the library calls it; rebuilt 2026-07-15 (#290) | no |
+| M6-N-SEAM | `reconcile.ts` | single-use helper shaped like the over-abstraction class (`reconcileTotals`, one caller), but it is the exported pure money-math half of a function whose other half is Supabase I/O — inlining it would entangle the logic with the network (the brief's own MISSING SEAMS failure); added 2026-07-16 (#325) | no |
 
 Full answer key with reasoning: `targets/calibration/GROUND-TRUTH.md` §"M6 (#72) — Simplification
 / reuse rubric-eval corpus".

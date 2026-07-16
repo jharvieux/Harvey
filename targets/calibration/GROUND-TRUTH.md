@@ -1681,9 +1681,10 @@ gate, the way M8/M10's entries are — would leave a row shaped exactly like a p
 finding, one line away from being scored as one. Per the spec's locked preamble (item 2): "M6
 simplification is paid-only (LLM opinion; no false-positive-safe automated free version)."
 
-Fixtures: `targets/calibration/simplify/` — four planted reinventions to flag, two benign
-lookalikes to spare, paired 1:1 by shape so the reviewer has to reason about *why* (a `// WHY:`
-tradeoff comment, a framework contract) rather than pattern-match on shape alone.
+Fixtures: `targets/calibration/simplify/` — four planted reinventions to flag, three benign
+lookalikes to spare, paired by shape so the reviewer has to reason about *why* (a `// WHY:`
+tradeoff comment, a framework contract, a testability seam) rather than pattern-match on shape
+alone.
 
 ### M6 positives — planted reinventions (should be flagged for replacement)
 
@@ -1700,6 +1701,7 @@ tradeoff comment, a framework contract) rather than pattern-match on shape alone
 |---|---|---|
 | M6-N-DEPDROP | `simplify/depdrop.ts` | a small hand-rolled `throttle`, shaped like `debounce.ts`, but carries a `// WHY:` comment recording a deliberate tradeoff (drop a heavy dep for an 8-line function) — `quality-extras.txt` "FALSE POSITIVES": note the tradeoff, don't flag as a defect. |
 | M6-N-FRAMEWORK | `simplify/framework-adapter.ts` | a single-implementation class shaped like `manager.ts`'s over-abstraction, but the shape is imposed by a library contract the code itself demonstrates: `CookieSessionStorage implements SupportedStorage`, the type `@supabase/supabase-js` re-exports from `@supabase/auth-js`, and the instance is passed to `createClient`'s `auth.storage` option — so auth-js really does call `getItem`/`setItem`/`removeItem` on it. The `getItem → string \| null` signature and the `isServer` flag are the library's, not the author's; collapsing the class would break the option's type. `quality-extras.txt` "FALSE POSITIVES": an abstraction mandated by a framework/library contract. **Rebuilt 2026-07-15 (#290)** — see "M6-N-FRAMEWORK rebuild" below. |
+| M6-N-SEAM | `simplify/reconcile.ts` | a single-use helper shaped like the over-abstraction class (`reconcileTotals` has exactly one caller, `monthlyReconciliation`), but the helper is the testability seam the brief itself demands: it is the pure money-math half of a function whose other half is Supabase I/O. Inlining it into its one caller would entangle the calculation with the network — the exact "MISSING SEAMS — business logic entangled with I/O so it can't be tested without the DB/network" failure `quality-extras.txt`'s SUPPORTABILITY section names — and it is exported, so a test can exercise the money math with no client at all. `quality-extras.txt` "FALSE POSITIVES": a single-use helper that exists for testability/seam reasons. The contract is in the code (pure exported helper + I/O-entangled sole caller), not asserted in a comment — the #290 bar. **Added 2026-07-16 (#325)**; the same FP class on the M5 mechanical side is handled by `detectSingleUseHelper`'s non-exported-only scope (#370). |
 
 ### M6 eval status
 
@@ -1735,6 +1737,16 @@ This is the datum the #290 rebuild existed to enable: the corpus now has a measu
 negative-side baseline. Report it as "reviewer agreed 4/4 positives, 2/2 negatives on this rubric
 set" — never as a precision figure. Full procedure and caveats:
 `docs/design/m6-simplification-eval.md` §3.3.
+
+**Run 4 (2026-07-16, #325) — first run over the seven-file corpus: 4/4 positives, 2/3 negatives.**
+A second fresh-context reviewer, same procedure. The new M6-N-SEAM (`reconcile.ts`) was **spared on
+its first exposure, for the designed reason** (the pure/I-O split is a testability seam).
+`framework-adapter.ts` was flagged — a miss, but on a NEW argument (duplicates `@supabase/ssr`),
+not run 2's: the reviewer explicitly accepted that `SupportedStorage` mandates the class shape,
+then guessed at a dependency-tree premise the packet gave it no way to check (`@supabase/ssr` is
+not in this target's deps). Scored 2/3 against the key, unrationalized. Runs 3 and 4 splitting on
+the same fixture is measured reviewer variance — the reason the paid tier has human sign-off.
+Details: `docs/design/m6-simplification-eval.md` §3.4.
 
 ### M6-N-FRAMEWORK rebuild (2026-07-15, #290)
 
@@ -1772,9 +1784,10 @@ real published types cited above. This is the same footing as every other fixtur
 none of which compile; an M6 reviewer reads source, it does not typecheck. If the corpus ever gains a
 real install, this fixture should typecheck as-is.
 
-Full write-up: `docs/design/m6-simplification-eval.md` §3.1 (run 1) and §3.2 (run 2). Whatever a run
-produces, report it as **"reviewer agreed N/4 positives, M/2 negatives"** — never as an "M6
-precision" percentage.
+Full write-up: `docs/design/m6-simplification-eval.md` §3.1 (run 1), §3.2 (run 2), §3.3 (run 3),
+§3.4 (run 4, the first over the seven-file corpus). Whatever a run produces, report it as
+**"reviewer agreed N/4 positives, M/3 negatives"** (M/2 for runs 1–3, which predate M6-N-SEAM) —
+never as an "M6 precision" percentage.
 
 ## Known-public/test-credential recognizer (issues #210, #211, #225)
 

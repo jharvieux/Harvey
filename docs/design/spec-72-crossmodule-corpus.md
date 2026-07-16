@@ -153,6 +153,7 @@ Terminology carried from `src/scan/calibration.ts`: `expectedTier` ∈ {`high`, 
 |---|---|---|
 | M6-N-DEPDROP | a small reimplementation with a `// WHY:` comment explaining it deliberately drops a heavy dependency | "a re-implementation chosen deliberately to drop a heavy dependency — note the tradeoff, don't flag" |
 | M6-N-FRAMEWORK | an abstraction mandated by a framework/library contract (e.g. a required provider/adapter shape) | "an abstraction mandated by a framework/library contract (not gratuitous)" |
+| M6-N-SEAM | `simplify/reconcile.ts` — a single-use helper (one caller) that is the exported pure money-math half of an I/O-entangled function, i.e. a deliberate testability seam (added 2026-07-16, #325) | "a 'single-use' helper that exists for testability/seam reasons, or that's clearly about to have more callers" |
 
 (c) **Tool + invocation:** the `/simplify` skill / pre-pr-reviewer doctrine, run against the `simplify/` fixture dir. Output is prose recommendations, not `Finding[]` — the eval harness must parse "did the reviewer name fixture X" (by file/line mention).
 
@@ -268,7 +269,7 @@ targets/calibration/
   .jscpdignore                 # dup/generated/**
   simplify/                    # M6 (rubric eval, not a gate)
     debounce.ts, group.ts, id.ts, manager.ts   # M6-P-*
-    depdrop.ts, framework-adapter.ts            # M6-N-*
+    depdrop.ts, framework-adapter.ts, reconcile.ts  # M6-N-*
   test-quality/                # M8
     discount.ts, authz.ts, tenant.ts           # sources-under-test
     *.tautological/happy/mocked.test.ts        # M8-P-* weak tests
