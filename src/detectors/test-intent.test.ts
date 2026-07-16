@@ -44,7 +44,7 @@ interface Case {
 const CASES: Case[] = [
   // #372's three named classes.
   { name: "mock of the subject under test", dir: "mock-of-subject", taxonomy: "M8 — Mock of the subject under test", posCount: 2, severity: "Medium", confidence: "Likely" },
-  { name: "assertion-free test", dir: "assertion-free", taxonomy: "M8 — Assertion-free test", posCount: 2, severity: "Medium", confidence: "Likely" },
+  { name: "assertion-free test", dir: "assertion-free", taxonomy: "M8 — Assertion-free test", posCount: 3, severity: "Medium", confidence: "Likely" },
   { name: "tautological assertion", dir: "tautological", taxonomy: "M8 — Tautological assertion", posCount: 2, severity: "Medium", confidence: "Likely" },
   // The two variants #372's follow-up comment adds.
   { name: "snapshot-only test", dir: "snapshot-only", taxonomy: "M8 — Snapshot-only test", posCount: 2, severity: "Low", confidence: "Review" },
@@ -88,8 +88,16 @@ describe("discrimination boundaries (regression locks)", () => {
     expect(byTaxonomy("mock-of-subject/negative", "M8 — Mock of the subject under test")).toHaveLength(0);
   });
 
-  it("assertion-free is cleared by expect, node:assert, a local assertion helper, and exempts it.todo", () => {
+  it("assertion-free is cleared by expect, node:assert, local + object assertion helpers, hooks, it.todo, and Playwright specs", () => {
+    // negative/ carries every measured FP class: beforeEach hooks (vitest AND test.beforeEach),
+    // helper delegation by function and by method (page-object shape), and a whole
+    // @playwright/test spec whose assertions live inside its fixtures (boxyhq corpus, 2026-07-16).
     expect(byTaxonomy("assertion-free/negative", "M8 — Assertion-free test")).toHaveLength(0);
+  });
+
+  it("assertion-free still fires on an it.each registration (the mod allowlist keeps real registrations)", () => {
+    const hits = byTaxonomy("assertion-free/positive", "M8 — Assertion-free test");
+    expect(hits.some((h) => h.title.includes("builds %s"))).toBe(true);
   });
 
   it("a snapshot-only test is NOT also flagged assertion-free (toMatchSnapshot is an expect call)", () => {

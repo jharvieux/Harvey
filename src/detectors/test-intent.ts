@@ -71,7 +71,14 @@ function callHead(node: ts.CallExpression): CallHead | undefined {
   return undefined;
 }
 
-const EXEMPT_MODS = new Set(["skip", "todo"]);
+// Modifier ALLOWLISTS, not a skip-blocklist: Playwright hangs its whole API off `test`
+// (`test.beforeEach`, `test.use`, `test.step`, `test.setTimeout`, …), and treating those as
+// test registrations flagged every boxyhq E2E hook as an assertion-free test (corpus FP,
+// 2026-07-16). Only the modifiers that REGISTER a runnable test/suite qualify; skip/todo/fixme
+// registrations can't fail by design, so their whole subtree is exempt.
+const EXEMPT_MODS = new Set(["skip", "todo", "fixme"]);
+const TEST_MODS = new Set(["only", "each", "for", "concurrent", "sequential", "fails", "failing", "runIf", "skipIf"]);
+const DESCRIBE_MODS = new Set(["only", "each", "for", "concurrent", "sequential", "shuffle", "runIf", "skipIf"]);
 const TEST_HEADS = new Set(["it", "test"]);
 
 function titleOf(node: ts.CallExpression, sf: ts.SourceFile): string {
@@ -173,8 +180,11 @@ function collectTestBlocks(sf: ts.SourceFile): TestBlock[] {
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node)) {
       const head = callHead(node);
-      if (head && !EXEMPT_MODS.has(head.mod ?? "")) {
-        if (head.base === "describe") {
+      if (head) {
+        const isDescribe = head.base === "describe";
+        const isTest = TEST_HEADS.has(head.base);
+        if ((isDescribe || isTest) && EXEMPT_MODS.has(head.mod ?? "")) return; // skipped subtree can't fail by design
+        if (isDescribe && (head.mod === undefined || DESCRIBE_MODS.has(head.mod))) {
           const fn = callbackOf(node);
           if (fn && fn.body) {
             describeStack.push(titleOf(node, sf));
@@ -183,7 +193,7 @@ function collectTestBlocks(sf: ts.SourceFile): TestBlock[] {
             return;
           }
         }
-        if (TEST_HEADS.has(head.base)) {
+        if (isTest && (head.mod === undefined || TEST_MODS.has(head.mod))) {
           const fn = callbackOf(node);
           if (fn && fn.body) {
             const title = titleOf(node, sf);
@@ -363,8 +373,16 @@ function detectMockOfSubject(ctx: TestFileContext, nextId: NextId): Finding[] {
 // --- ASSERTION-FREE (#372) -------------------------------------------------------
 
 // A zero-assertion body that delegates to a local helper containing assertions (or to anything
-// named like one) is NOT assertion-free — the classic FP class for this check.
-const ASSERTION_HELPER_NAME = /^(assert|check|verify|expect|ensure)/i;
+// named like one) is NOT assertion-free — the classic FP class for this check. Matched against
+// the callee's FINAL name segment as a substring, not a prefix: the boxyhq corpus's page-object
+// methods (`loggedInCheck`, `checkNoApiKeys`) hold real expects behind both shapes (2026-07-16).
+const ASSERTION_HELPER_NAME = /assert|check|verify|expect|ensure|validate/i;
+
+// Browser-E2E specs (Playwright) keep assertions inside page-object fixtures the spec file
+// never syntactically shows — every boxyhq tests/e2e spec flagged in the corpus run was this
+// shape, so the ASSERTION-FREE class (only) is unreliable there and stays silent. The other
+// classes (tautological, snapshot-only, rls-mocked-db, …) still run on these files.
+const BROWSER_E2E_MODULE = /^@playwright\/test$|^playwright(\/|$)/;
 
 function localAssertionHelpers(sf: ts.SourceFile): Set<string> {
   const names = new Set<string>();
@@ -388,11 +406,14 @@ function localAssertionHelpers(sf: ts.SourceFile): Set<string> {
   return names;
 }
 
-function bodyCalls(block: TestBlock): string[] {
-  const calls: string[] = [];
+function bodyCalls(block: TestBlock): { text: string; lastName: string }[] {
+  const calls: { text: string; lastName: string }[] = [];
   const visit = (node: ts.Node) => {
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) calls.push(node.expression.text);
-    else if (ts.isCallExpression(node)) calls.push(node.expression.getText());
+    if (ts.isCallExpression(node)) {
+      if (ts.isIdentifier(node.expression)) calls.push({ text: node.expression.text, lastName: node.expression.text });
+      else if (ts.isPropertyAccessExpression(node.expression)) calls.push({ text: node.expression.getText(), lastName: node.expression.name.text });
+      else calls.push({ text: node.expression.getText(), lastName: "" });
+    }
     ts.forEachChild(node, visit);
   };
   visit(block.fn.body!);
@@ -401,12 +422,13 @@ function bodyCalls(block: TestBlock): string[] {
 
 function detectAssertionFree(ctx: TestFileContext, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
+  if (ctx.imports.some((i) => BROWSER_E2E_MODULE.test(i.specifier))) return findings;
   const helpers = localAssertionHelpers(ctx.sf);
   for (const block of ctx.blocks) {
     if (block.assertions.length > 0) continue;
     const calls = bodyCalls(block);
     if (calls.length === 0) continue; // empty body — dead weight, but it exercises nothing to miscredit
-    if (calls.some((c) => helpers.has(c) || ASSERTION_HELPER_NAME.test(c))) continue;
+    if (calls.some((c) => helpers.has(c.lastName) || ASSERTION_HELPER_NAME.test(c.lastName))) continue;
     findings.push(
       makeFinding(nextId, {
         title: `Assertion-free test: "${block.title || "(unnamed)"}"`,
@@ -414,7 +436,7 @@ function detectAssertionFree(ctx: TestFileContext, nextId: NextId): Finding[] {
         confidence: "Likely",
         taxonomy: "M8 — Assertion-free test",
         location: `${ctx.file.path}:${lineOf(ctx.sf, block.node)}`,
-        evidence: `The test body calls \`${calls[0]}\` but contains no expect/assert/should — it can only fail if the code throws, so it pads coverage while asserting nothing.`,
+        evidence: `The test body calls \`${calls[0]?.text}\` but contains no expect/assert/should — it can only fail if the code throws, so it pads coverage while asserting nothing.`,
         impact: "Coverage numbers count this test, but no behavior regression short of a crash can ever fail it.",
         fix: "Assert on the call's observable result (return value, state change, emitted call args) — or delete the test.",
         value: 3,

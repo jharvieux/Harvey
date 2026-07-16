@@ -1,0 +1,15 @@
+import { test } from "@playwright/test";
+import { apiKeyName } from "./support/helper.js";
+
+// Playwright page-object shape (measured FP class, boxyhq corpus 2026-07-16): the expects live
+// inside the fixture's page-object methods, so the spec file shows no syntactic assertion.
+// The assertion-free class must stay silent on browser-E2E specs.
+test.beforeEach(async ({ loginPage }) => {
+  await loginPage.goto();
+});
+
+test("Should be able to create new API Key", async ({ apiKeyPage }) => {
+  await apiKeyPage.goto();
+  await apiKeyPage.createNewApiKey(apiKeyName);
+  await apiKeyPage.apiKeyVisible(apiKeyName);
+});

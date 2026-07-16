@@ -1,10 +1,15 @@
 import assert from "node:assert";
-import { describe, expect, it } from "vitest";
-import { buildReport, exportPdf } from "./report.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { buildReport, exportPdf, resetReportCache } from "./report.js";
+import { reportChecker } from "./report-checker.js";
 
 function checkReportShape(report: unknown): void {
   expect(report).toMatchObject({ quarter: expect.any(String) });
 }
+
+beforeEach(() => {
+  resetReportCache();
+});
 
 describe("report", () => {
   it("builds the quarterly report", () => {
@@ -17,6 +22,10 @@ describe("report", () => {
 
   it("delegates its assertions to a local helper", () => {
     checkReportShape(buildReport("2026-Q2"));
+  });
+
+  it("delegates its assertions to an object helper method (page-object shape)", () => {
+    reportChecker.checkTotals(buildReport("2026-Q2"));
   });
 
   it.todo("handles an empty quarter");

@@ -9,4 +9,8 @@ describe("report", () => {
   it("exports to pdf", async () => {
     await exportPdf("2026-Q2");
   });
+
+  it.each([["2026-Q1"], ["2026-Q2"]])("builds %s", (quarter) => {
+    buildReport(quarter);
+  });
 });
