@@ -14,8 +14,10 @@
 // /vuln-scan, /triage pass (needs the anthropics/defending-code-reference-harness skills),
 // and M2/M7/M8 (quality-scan, perf-scan, mutation-scan — need a live DB and/or a running app).
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { buildDataMap } from "../../tools/pii-classify.mjs";
 import { classifyDefinerFunctions, definerFindings, type DefinerFunction } from "../definer-classifier.js";
 import type { Finding } from "../findings.js";
@@ -54,6 +56,65 @@ function readMigrations(targetDir: string): string {
     .join("\n\n");
 }
 
+// #343 — targets/calibration/.gitignore excludes .env/.env.local so a stray `npm install` or
+// `next build` run inside the target never lands real-looking artifacts in THIS repo's own
+// index, but those two files also hold the planted secret fixtures gitleaks/trufflehog must see.
+// runMechanicalScan's scope guard (src/scan/scan-scope.ts, #101) walks git-TRACKED files only —
+// correct for a real client repo, but here it silently drops any fixture a contributor forgot to
+// `git add -f` into this repo's own index; a plain `git add -A` never stages them and the dry run
+// exits clean with the findings simply missing. Build a disposable git repo around a COPY of the
+// target and force-add everything its .gitignore would otherwise skip except genuine build
+// output (node_modules/.next/*.log), so the scope guard always sees the fixtures regardless of
+// what got committed upstream — there is nothing left to forget.
+//
+// Nested one level inside its own repo root (targetDir's real relationship to the Harvey repo is
+// mirrored: a subdirectory, not the root) so secrets.ts's isGitRepoRoot still sees a
+// SUBDIRECTORY and the git-history trufflehog pass stays skipped, exactly as it is today for the
+// real targets/calibration path — this only changes which files the TRACKED-file walk finds.
+const BUILD_ARTIFACT_IGNORE = /(^|\/)(node_modules|\.next)\/|\.log$/;
+
+function findEnvFixtures(dir: string, base = dir): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".next" || entry.name === ".git") continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...findEnvFixtures(full, base));
+    else if (entry.name === ".env" || entry.name === ".env.local") found.push(relative(base, full));
+  }
+  return found;
+}
+
+function buildScratchTarget(targetDir: string): { scanDir: string; cleanup: () => void } {
+  const scratchRoot = mkdtempSync(join(tmpdir(), "harvey-dry-run-scratch-"));
+  const repoRoot = join(scratchRoot, "repo");
+  const scanDir = join(repoRoot, "target");
+  cpSync(targetDir, scanDir, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+  execFileSync("git", ["-C", repoRoot, "add", "-A"]);
+
+  const ignored = execFileSync("git", ["-C", repoRoot, "status", "--porcelain", "--ignored=matching"], { encoding: "utf8" })
+    .split("\n")
+    .filter((l) => l.startsWith("!! "))
+    .map((l) => l.slice(3));
+  const fixtures = ignored.filter((p) => !BUILD_ARTIFACT_IGNORE.test(p));
+  if (fixtures.length > 0) execFileSync("git", ["-C", repoRoot, "add", "-f", "--", ...fixtures]);
+
+  // Fail loud (#343's minimum bar, kept as a safety net alongside the force-add above): if the
+  // source tree has planted .env fixtures but the scratch repo's index doesn't have every one of
+  // them, the force-add pass above regressed — a quietly-wrong dry run is worse than a crash that
+  // names exactly which fixture went missing.
+  const expected = findEnvFixtures(targetDir);
+  if (expected.length > 0) {
+    const tracked = new Set(execFileSync("git", ["-C", scanDir, "ls-files", "-z"], { encoding: "utf8" }).split("\0").filter(Boolean));
+    const missing = expected.filter((rel) => !tracked.has(rel));
+    if (missing.length > 0) {
+      throw new Error(`dry-run scratch repo dropped planted secret fixture(s): ${missing.join(", ")} — buildScratchTarget's force-add did not include them.`);
+    }
+  }
+
+  return { scanDir, cleanup: () => rmSync(scratchRoot, { recursive: true, force: true }) };
+}
+
 // Postgres grants EXECUTE on a function to PUBLIC by default unless explicitly REVOKEd — every
 // role (including Supabase's anon/authenticated) is implicitly a PUBLIC member for privilege
 // purposes. None of the calibration migrations contain a REVOKE, so this is the correct default
@@ -78,9 +139,17 @@ async function main(): Promise<void> {
   const allFindings: Finding[] = [];
 
   // --- M1 (+ dependency CVE / supply-chain / leftover-auth): mechanical scan ---
-  const mech = await timePhase("M1 + supply chain", "mechanical scan (secrets, deps, semgrep, supply-chain, leftover-auth)", () =>
-    runMechanicalScan({ dir: targetDir }),
-  );
+  // Scan a scratch copy (#343) rather than targetDir directly, so the scope guard's
+  // git-tracked-only walk can't silently drop a planted .env fixture nobody force-added upstream.
+  const scratch = buildScratchTarget(targetDir);
+  let mech: Awaited<ReturnType<typeof timePhase<Finding[]>>>;
+  try {
+    mech = await timePhase("M1 + supply chain", "mechanical scan (secrets, deps, semgrep, supply-chain, leftover-auth)", () =>
+      runMechanicalScan({ dir: scratch.scanDir }),
+    );
+  } finally {
+    scratch.cleanup();
+  }
   mech.report.notes = "secrets (trufflehog+gitleaks), dependency CVEs (osv-scanner + curated Next.js ranges), semgrep, supply-chain, leftover-auth grep — all ran live against the target.";
   phases.push(mech.report);
   allFindings.push(...mech.findings);
