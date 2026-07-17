@@ -11,6 +11,8 @@ import {
   jscpdToFindings,
   knipToFindings,
   knipUnavailableFinding,
+  touchesSecurityPath,
+  touchesTenantSupabasePath,
   type JscpdReport,
   type KnipReport,
 } from "./quality-scan.js";
@@ -183,6 +185,16 @@ const securityJscpdReport: JscpdReport = {
       firstFile: { name: "src/blog/authors.ts", start: 1, end: 25 },
       secondFile: { name: "src/blog/contributors.ts", start: 1, end: 25 },
     },
+    // #400: a test naming an auth path (tests/e2e/auth/*.spec.ts) is not a per-handler
+    // authorization drift risk — must NOT elevate, even though touchesSecurityPath matches "auth".
+    {
+      format: "typescript",
+      lines: 11,
+      tokens: 120,
+      fragment: "await page.goto('/auth/idp-initiated');",
+      firstFile: { name: "tests/e2e/auth/idp-initiated.spec.ts", start: 1, end: 11 },
+      secondFile: { name: "tests/e2e/auth/idp-initiated-2.spec.ts", start: 1, end: 11 },
+    },
   ],
 };
 
@@ -218,8 +230,40 @@ describe("jscpdToFindings — security-path elevation (#361)", () => {
     expect(f?.impact).not.toContain("M1 authorization review");
   });
 
+  it("does not elevate a clone confined to test/e2e files even though the path contains 'auth' (#400)", () => {
+    const f = byFile("tests/e2e/auth/idp-initiated.spec.ts");
+    expect(f?.severity).toBe("Info"); // plain 11-line severity, no elevation
+    expect(f?.title).not.toContain("security-relevant path");
+    expect(f?.impact).not.toContain("M1 authorization review");
+  });
+
   it("raises the BFTB value alongside the elevated severity", () => {
     expect(byFile("dup/auth/session-check-api.ts")?.value).toBe(4);
+  });
+});
+
+// #399: the v2 widening of the #360 diverged-clone pass's file selection — content-based, not
+// path-based, so it needs both signals present (not either alone) to stay defensible.
+describe("touchesTenantSupabasePath (#399)", () => {
+  it("admits a file that both scopes by a tenant key AND queries supabase", () => {
+    const source = `
+      const { data } = await supabase.from("customers").select("*").eq("organisation_id", orgId);
+    `;
+    expect(touchesTenantSupabasePath(source)).toBe(true);
+  });
+
+  it("does not admit a tenant-key literal with no supabase query", () => {
+    const source = `const filters = { organisation_id: orgId, status: "active" };`;
+    expect(touchesTenantSupabasePath(source)).toBe(false);
+  });
+
+  it("does not admit a supabase query with no tenant-key literal", () => {
+    const source = `const { data } = await supabase.from("public_settings").select("*");`;
+    expect(touchesTenantSupabasePath(source)).toBe(false);
+  });
+
+  it("does not admit plain source with neither signal", () => {
+    expect(touchesTenantSupabasePath("export function add(a: number, b: number) { return a + b; }")).toBe(false);
   });
 });
 
@@ -253,11 +297,24 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
     }
   }
 
+  // Mirrors src/cli/quality-scan.ts's securityPathFiles exactly: admit on EITHER
+  // touchesSecurityPath (path, #360) OR touchesTenantSupabasePath (content, #399).
+  function widenedSecurityFiles(dir: string, rel = ""): { path: string; source: string }[] {
+    const files: { path: string; source: string }[] = [];
+    for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (entry.name !== "generated") files.push(...widenedSecurityFiles(dir, relPath));
+      } else if (entry.name.endsWith(".ts")) {
+        const source = readFileSync(join(dir, relPath), "utf8");
+        if (touchesSecurityPath(relPath) || touchesTenantSupabasePath(source)) files.push({ path: relPath, source });
+      }
+    }
+    return files;
+  }
+
   it("catches every planted M4 positive and stays silent on every M4 negative", { timeout: 30_000 }, () => {
-    const authDir = join(dupDir, "auth");
-    const securityFiles = readdirSync(authDir)
-      .filter((f) => f.endsWith(".ts"))
-      .map((f) => ({ path: `auth/${f}`, source: readFileSync(join(authDir, f), "utf8") }));
+    const securityFiles = widenedSecurityFiles(dupDir);
     const findings = [...jscpdToFindings(runJscpdLive()), ...divergedCloneFindings(securityFiles)];
     const m4Entries = m4m5Entries.filter((e) => e.module === "M4");
     expect(m4Entries.length).toBeGreaterThanOrEqual(7); // guards against the corpus silently shrinking
@@ -271,13 +328,16 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
     expect(sec?.severity).toBe("Medium");
     expect(sec?.impact).toContain("M1 authorization review");
 
-    // Same for #360: exactly ONE diverged pair exists in the fixture set — the require-tenant
-    // guards — and nothing else may pair (the session-check clones are a consistent Type-2
-    // rename; api-key-check.ts is structurally distinct).
+    // Same for #360/#399: exactly TWO diverged families exist in the fixture set — the
+    // require-tenant guards (v1, path-scoped) and the customer/order stores (v2, content-scoped)
+    // — and nothing else may pair (the session-check clones are a consistent Type-2 rename;
+    // api-key-check.ts is structurally distinct).
     const diverged = findings.filter((f) => f.id.startsWith("M4-DIV"));
-    expect(diverged).toHaveLength(1);
-    expect(diverged[0]?.location).toContain("require-tenant-api.ts");
-    expect(diverged[0]?.location).toContain("require-tenant-admin.ts");
+    expect(diverged).toHaveLength(2);
+    const tenantGuard = diverged.find((f) => f.location.includes("require-tenant-api.ts"));
+    expect(tenantGuard?.location).toContain("require-tenant-admin.ts");
+    const tenantStore = diverged.find((f) => f.location.includes("customer.store.ts"));
+    expect(tenantStore?.location).toContain("order.store.ts");
   });
 });
 
