@@ -10,10 +10,13 @@ import { b11CryptoEntries } from "./calibration/b11-crypto.entries.js";
 import { b12NextconfigEntries } from "./calibration/b12-nextconfig.entries.js";
 import { b13SupaEntries } from "./calibration/b13-supa.entries.js";
 import { b14AppLogicEntries } from "./calibration/b14-applogic.entries.js";
+import { b15NextjsAuthzEntries } from "./calibration/b15-nextjs-authz.entries.js";
+import { b17RaceUnscopedEntries } from "./calibration/b17-race-unscoped.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { m9AuthzEntries } from "./calibration/m9-authz.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
+import { scanCounterRace } from "./counter-race.js";
 import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
@@ -596,6 +599,50 @@ describe("Batch B14 app-logic heuristics corpus (real leftover-auth greps → ti
     expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(5);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
+  });
+});
+
+describe("#353/#354 mechanical graduations (real detectors over the committed fixtures)", () => {
+  // Like the #221/#374 blocks: the REAL detectors against the REAL committed fixtures, so the answer
+  // key can't drift from what the scanner emits. Covers the two #353 graduations (unscoped-write
+  // grep + counter-race AST) and the two #354 graduations lifted out of b15 (matcher + draftMode).
+  const CAL = join(import.meta.dirname, "../../targets/calibration");
+  const read = (p: string) => ({ path: p, content: readFileSync(join(CAL, p), "utf8") });
+  const leftoverFixtures = [
+    "pages/api/profile/update.js",
+    "pages/api/profile/update-safe.js",
+    "middleware.ts",
+    "lib/middleware-matcher-safe.ts",
+    "pages/api/preview/enable.js",
+    "pages/api/preview/enable-safe.js",
+  ].map(read);
+  const findings = [...leftoverFixtures.flatMap((f) => classifyLeftoverAuth(f)), ...scanCounterRace(CAL)];
+
+  const graduated = [
+    ...b17RaceUnscopedEntries,
+    ...b15NextjsAuthzEntries.filter((e) =>
+      ["P-MW-MATCHER-EXCLUDES-API", "N-MW-MATCHER-INCLUDES-API", "P-DRAFTMODE-NO-SECRET", "N-DRAFTMODE-SECRET-CHECKED"].includes(e.id),
+    ),
+  ];
+
+  it("catches each graduated positive at review and clears its benign sibling", () => {
+    for (const e of graduated) {
+      const row = scoreEntry(e, findings);
+      expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
+      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe("review");
+      else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("keeps every graduation at review tier — a heuristic rule never inflates the free count", () => {
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every((f) => f.precisionTier === "review")).toBe(true);
+  });
+
+  it("the counter-race AST fires once (the positive) and stays silent on the atomic RPC sibling", () => {
+    const race = scanCounterRace(CAL).filter((f) => f.taxonomy === "Non-atomic read-modify-write race condition");
+    expect(race).toHaveLength(1);
+    expect(race[0]?.location).toContain("counter/increment.js");
   });
 });
 

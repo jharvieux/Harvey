@@ -1085,13 +1085,15 @@ new `leftover-auth.test.ts` heuristic unit tests.
 
 Six classes from the roadmap's §4a excluded-tier backlog (`docs/design/corpus-roadmap-to-100.md`
 §4a "Semantic (LLM/whole-program — paid M-series)"): each needs request+identity context, matcher-
-vs-route-inventory reasoning, or control-flow reasoning a grep/AST rule can't do reliably, so none
-is mechanically detected — these are LLM/paid-tier (M-series) detection, never promoted into the
-free count. Unlike every other `review`-tier batch in this file (B9-B14), **no new scanner or rule
-was added**: this batch seeds the corpus/GROUND-TRUTH answer key with planted vulns + benign
-lookalikes so the paid-tier LLM pass has fixtures to be measured against later (tracked as a
-follow-up, per each issue's acceptance criteria — not a blocker for closing the fixture work). Built
-incrementally, one issue per commit. Answer key: `src/scan/calibration/b15-nextjs-authz.entries.ts`.
+vs-route-inventory reasoning, or control-flow reasoning. When B15 landed, none was mechanically
+detected and no new scanner was added — the batch seeded the corpus/GROUND-TRUTH answer key so the
+paid-tier LLM pass had fixtures to measure against later. **Updated by #354 (see §B17):** the
+re-triage found two of the six were mechanically detectable at review tier after all —
+`P-MW-MATCHER-EXCLUDES-API` (the matcher's api-lookahead is a textual fact) and
+`P-DRAFTMODE-NO-SECRET` (a shallow intra-file "enable with no secret gate" check) — and both
+graduated to `leftover-auth` grep rules. The remaining four (`P-BOLA-BODY-OWNER`, `P-MW-SOLE-AUTHZ`,
+`P-HOST-HEADER-URL`, `P-CLIENT-RENDER-AUTHZ`) stay LLM/paid-tier as measured. Built incrementally,
+one issue per commit. Answer key: `src/scan/calibration/b15-nextjs-authz.entries.ts`.
 
 ### B15 positives — planted bugs (semantic tier; NOT expected to be caught by the offline mechanical gate)
 
@@ -1844,3 +1846,35 @@ high — no change to the existing high-tier count. `pnpm verify` (offline) is g
 `secrets.test.ts` gained pure-function coverage of the clear/down-rank/impact-text logic and
 `calibration.test.ts` scores the new fixtures against recorded gitleaks output with no binary
 invoked.
+
+## Batch B17 (#353) — the three never-covered dry-run planted bugs, re-triaged
+
+Operator-directed (#353): build FP-safe mechanical rules for the three "Planted bugs" table rows
+(above) that had never been covered — `WEBHOOK-REPLAY`, `COUNTER-RACE`, `UPDATE-UNSCOPED`. Per-bug
+MEASURED verdict:
+
+| bug | verdict | rule / reason |
+|---|---|---|
+| UPDATE-UNSCOPED | **graduated (review)** | `leftover-auth` `unscoped-write` grep: a raw `UPDATE`/`DELETE` string with no `WHERE` handed to a `.query()`/`.execute()` sink in a route file. Discriminator: the missing `WHERE` (a textual fact, like `USING (true)`, #333). FP shape: a deliberate admin reset/backfill — why it's review, not free-count. |
+| COUNTER-RACE | **graduated (review)** | `detectCounterRaceFindings` (`src/scan/counter-race.ts`) AST: a `.select()` of a table whose value is written back via `.update()` on the SAME table after a `+`/`-` derivation. Discriminator: the read→arithmetic→write DATAFLOW, not mere table co-occurrence. FP shape (read-then-write of an unrelated fresh value) is cleared by the arithmetic-derived-from-read gate. |
+| WEBHOOK-REPLAY | **stays LLM-tier (measured, does not graduate)** | Proving no replay guard exists is proving a negative across the whole handler and its callees. A rule flagging every HMAC-verifying webhook without a recognised nonce/timestamp would FP on correct handlers that dedupe via an idempotency key, provider-side dedupe, or a DB unique constraint — no FP-safe discriminator. Recorded on `src/cli/dry-run-scorecard.ts`. |
+
+### B17 benign siblings (new — the negatives are the deliverable)
+
+| id | location | why benign |
+|---|---|---|
+| N-UPDATE-SCOPED | `pages/api/profile/update-safe.js` | same raw-`pool` UPDATE, scoped with `WHERE id = $2` on the caller's id — the rule re-checks the matched DML for a `WHERE` and skips it. |
+| N-COUNTER-ATOMIC | `pages/api/counter/increment-safe.js` | atomic increment via a server-side RPC (`increment_counter`) — no select-then-update read-modify-write pair for the AST to flag. |
+
+WEBHOOK-REPLAY gets no benign sibling here — no rule ships for it, so there is no rule to FP-pin.
+
+### B17 live result
+
+`pnpm validate:calibration`: **GATE PASS — zero free-count false positives; every high-tier rule
+fired on its positive.** Both graduated positives (`P-UPDATE-UNSCOPED`, `P-COUNTER-RACE`) fire at
+review and both new negatives are cleared; the two #354 graduations (`P-MW-MATCHER-EXCLUDES-API`,
+`P-DRAFTMODE-NO-SECRET`) also fire at review with their negatives cleared. Corpus totals after
+B17/#354: **153/157 static positives caught (61 at high/free-count, 15 connected N/A); 137/137
+static negatives cleared.** Four review-tier recall gaps remain, all measured LLM-tier:
+`P-BOLA-BODY-OWNER`, `P-MW-SOLE-AUTHZ`, `P-HOST-HEADER-URL`, `P-CLIENT-RENDER-AUTHZ`. The dry-run
+scorecard now reads **7 caught / 1 missed (WEBHOOK-REPLAY) / 4 requires-live-run**.

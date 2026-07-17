@@ -1,8 +1,8 @@
 {
   "summary": {
     "asserted": 2,
-    "surfaced-for-review": 3,
-    "missed": 3,
+    "surfaced-for-review": 5,
+    "missed": 1,
     "requires-live-run": 4
   },
   "bugs": [
@@ -46,25 +46,27 @@
       "id": "WEBHOOK-REPLAY",
       "severity": "Medium",
       "location": "pages/api/webhook.js:20-24",
-      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) but no rule targets missing replay/nonce protection",
+      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) but no rule can FP-safely target missing replay/nonce protection — proving the guard's absence is whole-handler+callee reasoning (measured LLM-tier, #353)",
       "status": "missed",
-      "note": "Semgrep ran (src/scan/semgrep.ts) but no rule targets missing replay/nonce protection ran but produced no finding matching this bug."
+      "note": "Semgrep ran (src/scan/semgrep.ts) but no rule can FP-safely target missing replay/nonce protection — proving the guard's absence is whole-handler+callee reasoning (measured LLM-tier, #353) ran but produced no finding matching this bug."
     },
     {
       "id": "COUNTER-RACE",
       "severity": "Medium",
       "location": "pages/api/counter/increment.js:11-31",
-      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) but no rule targets non-atomic read-modify-write races",
-      "status": "missed",
-      "note": "Semgrep ran (src/scan/semgrep.ts) but no rule targets non-atomic read-modify-write races ran but produced no finding matching this bug."
+      "expectedModule": "detectCounterRaceFindings (src/scan/counter-race.ts, #353) ran inside runMechanicalScan and matched the non-atomic read-modify-write on counters — review tier",
+      "status": "caught",
+      "tier": "review",
+      "note": "Surfaced for review by \"Non-atomic read-modify-write race condition\" at pages/api/counter/increment.js:20 — review tier, a human must still adjudicate this verdict."
     },
     {
       "id": "UPDATE-UNSCOPED",
       "severity": "High",
       "location": "pages/api/profile/update.js:11-14",
-      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) but no rule targets an unscoped service-role .update() call",
-      "status": "missed",
-      "note": "Semgrep ran (src/scan/semgrep.ts) but no rule targets an unscoped service-role .update() call ran but produced no finding matching this bug."
+      "expectedModule": "scanLeftoverAuth (src/scan/leftover-auth.ts, #353) ran inside runMechanicalScan and matched the raw UPDATE/DELETE with no WHERE clause in this route handler — review tier",
+      "status": "caught",
+      "tier": "review",
+      "note": "Surfaced for review by \"Unscoped service-role UPDATE/DELETE (no WHERE)\" at pages/api/profile/update.js — review tier, a human must still adjudicate this verdict."
     },
     {
       "id": "OPEN-REDIRECT",

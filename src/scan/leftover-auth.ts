@@ -71,6 +71,39 @@ const WEBHOOK_PATH = /webhook/i;
 const WEBHOOK_PRIVILEGED_WRITE = /\.(insert|update|delete|upsert|rpc)\s*\(|admin\.from|supabaseAdmin/i;
 const WEBHOOK_SIG_HINT = /createHmac|constructEvent|timingSafeEqual|verif\w*Signature|x-signature|stripe-signature|hub-signature|svix|webhook[_-]?secret/i;
 
+// #353 UPDATE-UNSCOPED: a raw UPDATE/DELETE SQL string with no WHERE clause, handed to a raw-SQL
+// sink (`.query(`/`.execute(`/`.unsafe(`/`.raw(`) in a route handler. The SQL either scopes the
+// write with a WHERE or it does not — a textual fact, like USING (true) (#333). The benign sibling
+// adds `WHERE id = $2`. Review tier: a deliberate whole-table reset/backfill in a route is
+// legitimate, so a grep can't prove intent — discriminator is the missing WHERE, FP shape the admin
+// reset. Captures ONLY the string literal argument to the sink (not surrounding comments), so a
+// nearby comment that says "WHERE" can't mask an actually-unscoped statement.
+const SQL_SINK_ARG = /\.\s*(?:query|execute|unsafe|raw)\s*\(\s*(["'`])((?:(?!\1)[\s\S])*?)\1/gi;
+const DML_STATEMENT = /^\s*(?:update\s+\S[\s\S]*?\bset\b|delete\s+from\b)/i;
+
+// #354 P-MW-MATCHER-EXCLUDES-API: an exported Next.js middleware `config.matcher` whose
+// negative-lookahead excludes `/api`, so the middleware (the app's auth layer) never runs for API
+// routes. The benign sibling's matcher lists no `api` token in its lookahead. Review tier: excluding
+// /api is correct when the API routes guard themselves — the discriminator is the api-in-lookahead
+// contradiction with middleware presented as the gate, the FP shape is a self-guarded API surface.
+const MW_MATCHER_EXCLUDES_API = /matcher\s*:\s*[\s\S]{0,200}?\(\?![^)]*\bapi\b/;
+
+// #354 P-DRAFTMODE-NO-SECRET: `draftMode().enable()` reachable with no preceding secret/token
+// comparison in the handler — any caller flips on preview mode. The benign sibling compares
+// req.query.secret against process.env.*SECRET first. Review tier, shallow intra-file: a grep sees
+// the enable call and the absence of a secret gate in THIS file, not a gate in a wrapper it can't
+// see — discriminator is enable-without-secret, FP shape is an out-of-file guard.
+const DRAFTMODE_ENABLE = /draftMode\s*\(\s*\)\s*\.\s*enable\s*\(/;
+const DRAFTMODE_SECRET_HINT = /process\.env\.\w*(SECRET|TOKEN)|(req|request)\.(query|body|headers)[\s\S]{0,60}?secret|secret[\s\S]{0,20}?(===|!==|==|!=)/i;
+
+function hasUnscopedDml(content: string): boolean {
+  for (const m of content.matchAll(SQL_SINK_ARG)) {
+    const sql = m[2] ?? "";
+    if (DML_STATEMENT.test(sql) && !/\bwhere\b/i.test(sql)) return true;
+  }
+  return false;
+}
+
 function slug(path: string): string {
   return path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
@@ -175,6 +208,57 @@ export function classifyLeftoverAuth(file: SourceFile): Finding[] {
         evidence: `Heuristic "webhook-no-sig" matched a webhook-path route with a privileged write and no HMAC/signature check in ${file.path}.`,
         impact: "Anyone who finds the URL can forge events and drive the privileged side effect.",
         fix: "Verify the provider signature (HMAC / constructEvent) against a shared secret before any write.",
+        precisionTier: "review",
+      }),
+    );
+  }
+  // #353 — raw UPDATE/DELETE with no WHERE, on a raw-SQL sink in a route handler.
+  if (ROUTE_FILE.test(file.path) && hasUnscopedDml(file.content)) {
+    findings.push(
+      mechanicalFinding({
+        id: `AUTH-unscoped-write-${slug(file.path)}`,
+        title: `${file.path} runs a raw UPDATE/DELETE with no WHERE clause`,
+        severity: "High",
+        category: "Broken access control",
+        taxonomy: "Unscoped service-role UPDATE/DELETE (no WHERE)",
+        location: file.path,
+        evidence: `Heuristic "unscoped-write" matched a raw-SQL UPDATE/DELETE string literal with no WHERE clause passed to a .query()/.execute() sink in ${file.path}.`,
+        impact: "The write hits every row in the table (every tenant), not just the caller's — a single request rewrites or deletes all rows.",
+        fix: "Scope the statement with a WHERE clause parameterised on the authenticated caller's id/tenant (e.g. `WHERE id = $2`).",
+        precisionTier: "review",
+      }),
+    );
+  }
+  // #354 — Next.js middleware matcher whose lookahead excludes /api routes.
+  if (MW_MATCHER_EXCLUDES_API.test(file.content)) {
+    findings.push(
+      mechanicalFinding({
+        id: `AUTH-mw-matcher-excludes-api-${slug(file.path)}`,
+        title: `${file.path} — middleware matcher excludes /api routes`,
+        severity: "High",
+        category: "Broken access control",
+        taxonomy: "Middleware matcher excludes /api routes",
+        location: file.path,
+        evidence: `Heuristic "mw-matcher-excludes-api" matched an exported config.matcher whose negative-lookahead excludes paths beginning with "api" in ${file.path}.`,
+        impact: "Every /api/* route is exempt from this middleware, so any auth/gate it enforces never runs for API routes — they are reachable directly.",
+        fix: "Remove `api` from the matcher's exclusion lookahead, or confirm every API route enforces its own auth independently of the middleware.",
+        precisionTier: "review",
+      }),
+    );
+  }
+  // #354 — draftMode().enable() reachable with no secret/token comparison in the same file.
+  if (DRAFTMODE_ENABLE.test(file.content) && !DRAFTMODE_SECRET_HINT.test(file.content)) {
+    findings.push(
+      mechanicalFinding({
+        id: `AUTH-draftmode-no-secret-${slug(file.path)}`,
+        title: `${file.path} — draftMode().enable() with no secret check`,
+        severity: "Medium",
+        category: "Broken access control",
+        taxonomy: "draftMode().enable() reachable with no secret",
+        location: file.path,
+        evidence: `Heuristic "draftmode-no-secret" matched a draftMode().enable() call with no secret/token comparison (process.env.*SECRET / req.*.secret) anywhere in ${file.path}.`,
+        impact: "Any caller can flip on Next.js Draft/Preview mode and read unpublished/draft content on every page that honours it.",
+        fix: "Compare a shared secret (e.g. req.query.secret against process.env.PREVIEW_SECRET) and return 401 before calling draftMode().enable().",
         precisionTier: "review",
       }),
     );
