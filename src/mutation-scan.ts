@@ -90,6 +90,13 @@ interface MutationSummary {
   byModule: ModuleMutationSummary[];
   survivingMutants: SurvivingMutant[];
   mutatorBreakdown: FileMutatorBreakdown[];
+  // #319: the files Stryker actually mutated — its `mutate` scope, read straight from the report.
+  // The overall score is a percentage OF THIS SET, not of the repo. When the set is a handful of
+  // files a scoped config named (the corpus's launch.ts/server-common.ts case), a high score is
+  // "the covered files are tested well", not "the repo is tested" — and that distinction is only
+  // legible if the covered scope travels with the score. Callers that surface the score MUST
+  // surface this alongside it (see coveredScopeLine); the deliverable renderer requires it.
+  coveredScope: string[];
 }
 
 const NOT_VALID: ReadonlySet<MutantStatus> = new Set(["Ignored", "CompileError", "Pending"]);
@@ -193,7 +200,18 @@ export function summarizeMutationReport(report: StrykerReport, hotspotFiles: rea
     byModule,
     survivingMutants,
     mutatorBreakdown,
+    coveredScope: Object.keys(report.files).sort(),
   };
+}
+
+// #319: the sentence that keeps the overall score honest wherever it is printed — the score is a
+// percentage of the mutated file set, never a repo-level coverage claim, and that is only obvious
+// once the reader sees how few files it covers. A one-file scope reading 100% is exactly the
+// misrepresentation this guards against (proposit in the corpus).
+export function coveredScopeLine(summary: MutationSummary): string {
+  const n = summary.coveredScope.length;
+  const files = n <= 3 ? summary.coveredScope.join(", ") : `${summary.coveredScope.slice(0, 3).join(", ")} +${n - 3} more`;
+  return `score is over ${n} mutated file(s) (${files}) — a scoped subset, NOT a whole-repo coverage claim`;
 }
 
 interface ReportRow {
