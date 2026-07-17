@@ -9,8 +9,14 @@
 
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
+import { findFreshPass, ranFromPass } from "./audit-pass-artifact.js";
 import type { ModuleRunner, ProbeOutcome, RunContext } from "./audit-runner.js";
 import type { Finding } from "./findings.js";
+
+// #416: fold a rejected-pass reason (wrong target, stale, malformed) into a probe's not-run reason,
+// so a pass artifact that was present but rejected fails loud rather than being silently ignored.
+const withRejectedPass = (base: string, reason: string | undefined): string =>
+  reason ? `${base} A pass artifact was found but rejected: ${reason}` : base;
 
 const trimOut = (output: string): string => output.trim().slice(0, 200);
 
@@ -116,10 +122,15 @@ const m1: ModuleRunner = {
   run: (ctx) => {
     const { ok, output } = ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir]);
     if (!ok) return { status: "requires-live-run", reason: `pnpm quick-scan exited non-zero: ${trimOut(output)}` };
+    // #416: a fresh semantic/live pass artifact is the evidence #311 said `ran` needs. With it, the
+    // flagship LLM/live work is proven (and its triage findings flow into the deliverable); without
+    // it, M1 stays honestly partial on the mechanical tier alone.
+    const pass = findFreshPass(ctx, "M1");
+    if (pass.fresh) return ranFromPass(pass.artifact, "pnpm quick-scan (mechanical tier)");
     return {
       status: "partial",
       detail: "pnpm quick-scan (mechanical tier)",
-      reason: "mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). No M1 security findings are collected into this deliverable — the flagship findings are produced by that paid-LLM pass and src/cli/scan.ts, not the mechanical quick-scan, so absence here is not-collected, not clean (#420)",
+      reason: withRejectedPass("mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). No M1 security findings are collected into this deliverable — the flagship findings are produced by that paid-LLM pass and src/cli/scan.ts, not the mechanical quick-scan, so absence here is not-collected, not clean (#420)", pass.reason),
     };
   },
 };
@@ -135,10 +146,14 @@ const m1: ModuleRunner = {
 const m2: ModuleRunner = {
   module: "M2",
   run: (ctx) => {
-    const reason = ctx.env.dynamic
+    // #416: a fresh dynamic-pass artifact (pentest.ts explore/verify results written after a real
+    // run against a stood-up stack) is the reachable-stack evidence #356 said the flag was not.
+    const pass = findFreshPass(ctx, "M2");
+    if (pass.fresh) return ranFromPass(pass.artifact, "pnpm exec tsx src/cli/pentest.ts (dynamic)");
+    const base = ctx.env.dynamic
       ? "no local supabase stack confirmed — --dynamic asserts a stack exists but the orchestrator cannot reach or verify one; run `pnpm exec tsx src/cli/pentest.ts` directly against a stood-up two-tenant stack (docs/runbooks/m2-pentest-ops.md). A flag is not a reachable stack (#356; artifact path #416). No M2 findings are collected into this deliverable — they come from that live pen-test run, so absence here is not-collected, not clean (#420)"
       : "no local supabase stack in scope — M2 probes a running two-tenant stack (see CLAUDE.md's module table). No M2 findings are collected into this deliverable — they come from a live pen-test run (#420)";
-    return { status: "requires-live-run", reason };
+    return { status: "requires-live-run", reason: withRejectedPass(base, pass.reason) };
   },
 };
 
@@ -175,10 +190,19 @@ const m3: ModuleRunner = {
     const outPath = captureOut(ctx, "M3");
     const { ok, output } = ctx.exec("pnpm", ["exec", "tsx", "src/cli/hotspot-scan.ts", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
     const command = `pnpm exec tsx src/cli/hotspot-scan.ts ${ctx.targetDir}`;
-    if (!ok) return { status: "requires-live-run", reason: `vitals plugin unavailable or hotspot-scan failed: ${trimOut(output)}` };
-    if (!/M3 hotspot table/.test(output)) return { status: "requires-live-run", reason: `hotspot-scan produced no M3 table — vitals report empty or unrecognized: ${trimOut(output)}` };
-    const findings = artifactFindings(readArtifact(ctx, outPath));
-    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
+    if (ok && /M3 hotspot table/.test(output)) {
+      const findings = artifactFindings(readArtifact(ctx, outPath));
+      return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
+    }
+    // #416: vitals is not on PATH here (the common case — it's an external plugin). A fresh captured
+    // vitals pass artifact still proves M3 ran, so the orchestrator need not have vitals installed to
+    // record a real prior run.
+    const pass = findFreshPass(ctx, "M3");
+    if (pass.fresh) return ranFromPass(pass.artifact, "captured vitals report");
+    const base = !ok
+      ? `vitals plugin unavailable or hotspot-scan failed: ${trimOut(output)}`
+      : `hotspot-scan produced no M3 table — vitals report empty or unrecognized: ${trimOut(output)}`;
+    return { status: "requires-live-run", reason: withRejectedPass(base, pass.reason) };
   },
 };
 
@@ -218,10 +242,15 @@ const m5: ModuleRunner = {
 const m6: ModuleRunner = {
   module: "M6",
   run: (ctx) => {
-    if (!ctx.env.llm) return { status: "requires-live-run", reason: "paid LLM tier not in scope — M6's packet needs a reviewer to produce a verdict (#267). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass (#420)" };
+    // #416: a fresh verdict artifact is the recorded reviewed judgment #351 said a packet is not. It
+    // is the one thing that clears M6's never-run alarm — checked before the packet path so a real
+    // verdict reads `ran` regardless of whether the paid tier is flagged this run.
+    const pass = findFreshPass(ctx, "M6");
+    if (pass.fresh) return ranFromPass(pass.artifact, "pnpm simplify-scan (packet)");
+    if (!ctx.env.llm) return { status: "requires-live-run", reason: withRejectedPass("paid LLM tier not in scope — M6's packet needs a reviewer to produce a verdict (#267). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass (#420)", pass.reason) };
     const { ok, output, command } = runCli(ctx, "simplify-scan", [ctx.targetDir]);
     if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-    return { status: "partial", detail: command, reason: "review packet assembled, but M6's verdict is a human/LLM pass with no recorded output — a packet is not a verdict, so this does not clear M6's never-run status (#351; artifact path #416). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass over the packet, so absence here is not-collected, not clean (#420)" };
+    return { status: "partial", detail: command, reason: withRejectedPass("review packet assembled, but M6's verdict is a human/LLM pass with no recorded output — a packet is not a verdict, so this does not clear M6's never-run status (#351; artifact path #416). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass over the packet, so absence here is not-collected, not clean (#420)", pass.reason) };
   },
 };
 

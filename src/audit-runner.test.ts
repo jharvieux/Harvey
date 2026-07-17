@@ -266,6 +266,75 @@ describe("M3 derives ran from a real vitals parse, never a no-op exit (#314)", (
   });
 });
 
+// #416: the out-of-orchestrator passes (M1 semantic/live, M2 dynamic, M3 vitals, M6 verdict) leave
+// a dated <module>.pass.json; the probe derives `ran` ONLY from a fresh, target-matching one.
+describe("probes derive ran from a fresh pass artifact, never a flag (#416)", () => {
+  const NOW = Date.parse("2026-07-17T12:00:00Z");
+  const DAY = 24 * 60 * 60 * 1000;
+  const iso = (msAgo: number) => new Date(NOW - msAgo).toISOString();
+
+  // A context whose artifacts dir holds a <module>.pass.json for `module` with the given fields.
+  const withPass = (module: AuditModule, fields: Record<string, unknown>, over: Partial<RunContext> = {}) =>
+    ctx({
+      artifactsDir: "/artifacts",
+      now: NOW,
+      readArtifact: (p: string) =>
+        p.endsWith(`${module}.pass.json`) ? { module, target: "/target", pass: "results", generatedAt: iso(DAY), ...fields } : undefined,
+      ...over,
+    });
+
+  it("M1 reads ran when a fresh semantic-pass artifact proves the LLM/live tier ran", () => {
+    const m1 = status(AUDIT_RUNNERS, withPass("M1", { pass: "semantic" }), "M1");
+    expect(m1?.status).toBe("ran");
+    expect(m1?.detail).toMatch(/semantic pass/);
+  });
+
+  it("M1 carries the pass's triage findings into the deliverable", () => {
+    const withFindings = withPass("M1", { findings: [{ id: "TRIAGE-1" }] });
+    const { findings } = runAudit(AUDIT_RUNNERS, withFindings);
+    expect(findings.some((f) => (f as { id?: string }).id === "TRIAGE-1")).toBe(true);
+  });
+
+  it("M2 reads ran when a fresh dynamic pen-test artifact exists — the reachable-stack evidence #356 wanted", () => {
+    expect(status(AUDIT_RUNNERS, withPass("M2", { pass: "dynamic" }), "M2")?.status).toBe("ran");
+  });
+
+  it("M6 reads ran when a fresh verdict artifact exists — the one thing that clears its never-run alarm", () => {
+    // Note: no --llm flag. A recorded verdict is evidence; the flag is not.
+    expect(status(AUDIT_RUNNERS, withPass("M6", { pass: "verdict" }), "M6")?.status).toBe("ran");
+  });
+
+  it("M3 reads ran from a captured-vitals artifact when vitals is not on PATH", () => {
+    const vitalsDown = withPass("M3", { pass: "vitals" }, { exec: () => ({ ok: false, output: "vitals_cli.py not found" }) });
+    expect(status(AUDIT_RUNNERS, vitalsDown, "M3")?.status).toBe("ran");
+  });
+
+  // The core guard: a stale or mismatched artifact must NOT yield ran — the probe falls back to its
+  // honest not-run status and says the artifact was rejected.
+  it("a STALE artifact does not yield ran — M1 falls back to partial and reports the rejection", () => {
+    const stale = withPass("M1", { generatedAt: iso(400 * DAY) });
+    const m1 = status(AUDIT_RUNNERS, stale, "M1");
+    expect(m1?.status).toBe("partial");
+    expect(m1?.reason).toMatch(/rejected: pass artifact for M1 is stale/);
+  });
+
+  it("a WRONG-TARGET artifact does not yield ran — M2 stays requires-live-run and flags the mismatch", () => {
+    const wrong = withPass("M2", { target: "/some-other-app" });
+    const m2 = status(AUDIT_RUNNERS, wrong, "M2");
+    expect(m2?.status).toBe("requires-live-run");
+    expect(m2?.reason).toMatch(/rejected:.*not the audited target/);
+  });
+
+  it("no artifacts dir ⇒ the #311/#356/#351 behaviour is exactly unchanged", () => {
+    // Regression guard for the existing flag-is-not-evidence tests: without an artifacts dir the
+    // four probes must report precisely what they did before #416.
+    const bare = runAudit(AUDIT_RUNNERS, ctx({ env: { connected: true, dynamic: true, llm: true } })).recorded;
+    expect(bare.find((r) => r.module === "M1")?.status).toBe("partial");
+    expect(bare.find((r) => r.module === "M2")?.status).toBe("requires-live-run");
+    expect(bare.find((r) => r.module === "M6")?.status).toBe("partial");
+  });
+});
+
 describe("formatFailures", () => {
   it("names each crashed module and calls the crash a bug, not a tier", () => {
     const out = formatFailures([{ module: "M4", error: "jscpd binary missing" }]);

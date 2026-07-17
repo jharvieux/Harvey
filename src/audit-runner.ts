@@ -47,6 +47,14 @@ export interface RunContext {
   // demands. readArtifact parses that object without the array assertion so the probe can pull the
   // report-schema Finding[] it embeds — and, for M8, read the verdict --out diverts off stdout.
   readArtifact?: (path: string) => unknown;
+  // #416: where the out-of-orchestrator passes (M1 semantic/live, M2 dynamic, M3 vitals, M6 verdict)
+  // leave their durable results artifact. When set, a probe checks for a fresh, target-matching
+  // artifact and DERIVES `ran` from it (src/audit-pass-artifact.ts). Absent ⇒ those probes keep
+  // their honest partial/requires-live-run — no artifacts dir, no way to prove the pass ran.
+  artifactsDir?: string;
+  // #416: injected clock (epoch ms) for pass-artifact freshness. Injected so tests can pin "now";
+  // the real driver sets Date.now(). Absent ⇒ findFreshPass falls back to Date.now().
+  now?: number;
 }
 
 export interface ModuleRunner {
