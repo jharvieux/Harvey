@@ -1,0 +1,9 @@
+// The aliased client-import edge IS followed (the widget imports this via `@/lib/admin-client`),
+// but the `server-only` poison-pill is present, so the guard is satisfied — no finding.
+import "server-only";
+
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+export function createAdminClient() {
+  return { key: serviceRoleKey };
+}
