@@ -54,7 +54,9 @@ triggers like `select('*')`; the `issue_refund` SECURITY DEFINER grant is review
 ## Mechanical-scan calibration corpus (issues #61 / #52 / #9)
 
 The mechanical/static layer (`src/scan/mechanical.ts`) is tuned and gated against this corpus.
-The 8 planted bugs above stay the semantic/RLS ground truth; the rows below add the fixtures
+The planted bugs above stay the semantic/RLS ground truth — bugs 1–8 are statically reachable and
+scored by `dry-run-scorecard.ts`; bugs 9–12 are M2 dynamic replays scored by `src/pentest/verify.ts`
+(see the "Planted bugs" table above for the current count). The rows below add the fixtures
 that measure the mechanical layer's **precision** — every planted static vuln that must be caught,
 and every benign lookalike that must NOT be flagged in the free count. Scored by the calibration
 harness: `pnpm validate:calibration` (live binaries) / `src/scan/calibration.test.ts` (unit, CI).
