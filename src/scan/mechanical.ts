@@ -26,7 +26,7 @@ import {
   checkMigrationRlsStatic,
   type TenancyOverride,
 } from "./supabase-static.js";
-import { checkInstallScripts, checkKnownIoc, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
+import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
@@ -115,6 +115,8 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkNonRegistryDependencies(allDeps));
       findings.push(...checkInstallScripts(pkg.scripts ?? {}));
       findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
+      // #456 — license compliance (SPDX + copyleft/unknown flags).
+      findings.push(...(await checkLicenseCompliance(allDeps)));
     }
     findings.push(...checkLockfilePresence(scanDir));
 

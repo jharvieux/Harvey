@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkInstallScripts, checkKnownIoc, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies } from "./supply-chain.js";
+import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, classifyLicense } from "./supply-chain.js";
 
 describe("checkTyposquat", () => {
   it("flags a name one edit from a popular package", () => {
@@ -149,6 +149,82 @@ describe("checkSlopsquat", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fetchImpl = vi.fn(async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
     const findings = await checkSlopsquat(["react"], fetchImpl);
+    expect(findings).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("indeterminate"));
+    warn.mockRestore();
+  });
+});
+
+describe("classifyLicense", () => {
+  it("classifies a plain permissive SPDX id as permissive", () => {
+    expect(classifyLicense("MIT")).toBe("permissive");
+    expect(classifyLicense("Apache-2.0")).toBe("permissive");
+  });
+
+  it("classifies a strong-copyleft SPDX id as copyleft", () => {
+    expect(classifyLicense("GPL-3.0")).toBe("copyleft");
+    expect(classifyLicense("AGPL-3.0-only")).toBe("copyleft");
+    expect(classifyLicense("LGPL-2.1")).toBe("copyleft");
+  });
+
+  it("treats missing/UNLICENSED/unrecognized as unknown, never a permissive default", () => {
+    expect(classifyLicense(undefined)).toBe("unknown");
+    expect(classifyLicense("")).toBe("unknown");
+    expect(classifyLicense("UNLICENSED")).toBe("unknown");
+    expect(classifyLicense("Some-Made-Up-License")).toBe("unknown");
+  });
+
+  it("an OR expression is permissive if any alternative is (the chooser picks the permissive one)", () => {
+    expect(classifyLicense("(MIT OR GPL-2.0)")).toBe("permissive");
+    expect(classifyLicense("GPL-3.0 OR MIT")).toBe("permissive");
+  });
+
+  it("an OR expression of only copyleft alternatives stays copyleft", () => {
+    expect(classifyLicense("GPL-2.0 OR AGPL-3.0")).toBe("copyleft");
+  });
+});
+
+describe("checkLicenseCompliance", () => {
+  const packument = (body: unknown, status = 200) =>
+    vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+
+  it("does not flag a dependency under a permissive license", async () => {
+    const fetchImpl = packument({ license: "MIT" });
+    const findings = await checkLicenseCompliance({ react: "^18.2.0" }, fetchImpl);
+    expect(findings).toEqual([]);
+  });
+
+  it("flags a copyleft-licensed dependency at high precision with the SPDX id in evidence", async () => {
+    const fetchImpl = packument({ license: "GPL-3.0" });
+    const findings = await checkLicenseCompliance({ "gpl-lib": "1.0.0" }, fetchImpl);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe("SUP-LICENSE-COPYLEFT-gpl-lib");
+    expect(findings[0]?.category).toBe("License compliance");
+    expect(findings[0]?.evidence).toContain("GPL-3.0");
+    expect(findings[0]?.precisionTier).toBe("high");
+  });
+
+  it("flags a missing license field as review-tier, never a silent skip", async () => {
+    const fetchImpl = packument({});
+    const findings = await checkLicenseCompliance({ "no-license-lib": "1.0.0" }, fetchImpl);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe("SUP-LICENSE-UNKNOWN-no-license-lib");
+    expect(findings[0]?.precisionTier).toBe("review");
+  });
+
+  it("flags npm's UNLICENSED marker the same as a missing license — never a permissive default", async () => {
+    const fetchImpl = packument({ license: "UNLICENSED" });
+    const findings = await checkLicenseCompliance({ "private-lib": "1.0.0" }, fetchImpl);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe("SUP-LICENSE-UNKNOWN-private-lib");
+  });
+
+  it("degrades gracefully (no finding, no throw) on a network error", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("getaddrinfo ENOTFOUND registry.npmjs.org");
+    }) as unknown as typeof fetch;
+    const findings = await checkLicenseCompliance({ react: "^18.2.0" }, fetchImpl);
     expect(findings).toEqual([]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("indeterminate"));
     warn.mockRestore();
