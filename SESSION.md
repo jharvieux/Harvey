@@ -2,7 +2,25 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-16 (the M6 #267/#406 build-out, below. Everything from 2026-07-15 still stands: **#349 is still the one a client sees**, disclosure still BLOCKED on #245.)_
+_Last updated: 2026-07-16 (the coverage-honesty + calibration issue-sweep, below — it CLOSED the 2026-07-15 "START HERE" items #349/#350/#351/#352. The M6 #267/#406 build-out is further down and still stands.)_
+
+## 2026-07-16 issue-sweep — coverage honesty, calibration hardening, detection rules (14 PRs merged, 30 issues closed)
+
+A full `/issue-sweep` (operator-approved) cleared the P1 coverage-honesty backlog and most of the P2/P3 calibration work. Net-negative on the tracker. Highlights of what changed on `main`:
+
+- **The 2026-07-15 engagement-path defects are CLOSED.** #350 (probes trusting `exit 0`) — M5/M8/M9 now derive status from the tool's machine-readable output; zero-file scans record `partial`/`requires-live-run`, never `ran`. #351 (M6 packet clears never-run alarm) — M6 reports `partial` until a reviewed verdict exists. #349 (ledger no path to report) — `run-audit --findings-out` assembles the derived ledger into findings.json and `report-template` renders per-module coverage; a never-run module shows a "Not run" row, not silence. #352 (`assertComplete` unwired) — wired into `pentest --mode=coverage`. #311/#356/#314 (M1/M2/M3 flag-vs-evidence) resolved (M1 permanently `partial`, M2 `requires-live-run` under the orchestrator).
+- **Calibration/scorecard hardening:** per-module census + a **parity minimum of 2 positives/module enforced in the gate** (#341/#427); tier-aware scorecard summary — review-tier catches are no longer laundered as asserted verdicts (#342); detector findings now require `precisionTier` (#327); the **dry-run detection is unified onto the single gated corpus** — the parallel hand-keyed matcher is gone, and a new `ExpectedTier "none"` scores an intended mechanical gap that flips loud if a rule ever catches it (#339/#425). WEBHOOK-REPLAY is the sole `none` entry; UPDATE-UNSCOPED and COUNTER-RACE **graduated to mechanical review-tier rules** with benign siblings (#353), plus P-MW-MATCHER-EXCLUDES-API and P-DRAFTMODE-NO-SECRET (#354).
+- **Secrets:** finding evidence now **redacts the matched secret value** to a short prefix+length at construction (#308), so findings never quote a live credential into `dry-run/`, `report-template/`, or a rendered report.
+- **Dry-run drift guard:** a scheduled CI check (`dry-run-drift.yml`, operator-approved) regenerates and diffs `dry-run/findings.json`, so a rule/fixture landing without a regeneration can no longer silently age it (#336/#343/#355).
+- **Measured, not recalled:** the live gate now reads **153/157 static positives, 137/137 negatives, GATE PASS** (was 147/153 on 2026-07-15) — still ~85% M1 by design; run `validate-calibration.ts`, never quote this.
+
+### Still open after the sweep (queued for the operator / future work)
+- **#416** — orchestrator derive-`ran`-from-artifact mechanism for the M1/M2/M3/M6 paid/live passes (operator deferred; blocked on those passes writing durable artifacts).
+- **#420 remainder → #434/#435/#436** — M1/M2/M6/M10 findings still surface as coverage rows, not captured findings; M3/M8 capture + explicit non-collection landed.
+- **#433** — P-BOLA-BODY-OWNER: mechanically achievable but needs M9 wired into the mechanical gate.
+- **#432** — boxyhq M8 mutation baseline drift (committed 7/35 vs CI 8/35) — decide stable-rebaseline vs flaky-tolerance.
+- **#320** — proposit's 85 M5-knip findings: needs a machine with the corpus checkouts to triage honestly (self-gated, not faked).
+- **Operator/manual:** GitGuardian dashboard-side ignores for the fake fixture paths (#70, operator closed after handling). CLAUDE.md was updated this sweep (operator-authorized) to reconcile the `assertComplete`, exit-0/ledger "Known gaps", `#321`, `147/153`, and `moduleRan` sentences the sweep falsified.
 
 ## M6 build-out (2026-07-16) — #267 closed out, #406 executed, M6 now has a measured mechanical tier
 
@@ -14,9 +32,9 @@ Eleven PRs (#404–#412, #414 + the operator-authorized CLAUDE.md row fix #407),
 - **Ops fix worth knowing:** `.claude/` agent worktrees broke local `pnpm verify` (ESLint walked them) — ignored in eslint+vitest (#411). Local verify is trustworthy again during parallel-agent sessions.
 - **Supervised drift owed to the operator:** `docs/quality-extras.txt` lines 29–34 ("MECHANICAL SUBSET … " listing 5 classes) are stale — 13 classes now; recommended wording is in PR #414's body. Human edit required.
 
-## ⚠️ START HERE (2026-07-15, end of session) — what the engagement path actually does
+## ⚠️ (2026-07-15) — engagement-path audit — ALL FOUR ITEMS CLOSED by the 2026-07-16 sweep (kept for provenance)
 
-**Read `#349` before any client engagement.** An execution-based audit of `run-audit.ts` → `audit-coverage.ts` → `report-template/` found:
+**RESOLVED:** #349, #350, #351, #352 all closed on 2026-07-16 (see the sweep section at the top). The historical findings below are preserved for the reasoning trail; the code has since changed — verify against `main`, don't act on this section as current. An execution-based audit of `run-audit.ts` → `audit-coverage.ts` → `report-template/` found:
 
 1. **#349 (client-facing, worst).** The coverage ledger has **NO path into the report**. `grep` for any coverage symbol across `report-template/` returns nothing. The only disclosure is `meta.outOfScope` — **a hand-typed string**, i.e. the hand-kept ledger #284 abolished, reintroduced at the last mile. **A module that never ran reaches the client as silence, and silence reads as clean.** Until this lands, fixing the probes just makes an accurate ledger nobody reads.
 2. **#350.** Nine of ten probes equate `exit 0` with `ran`, and the tools deliberately exit 0 when they scan nothing. **Proven:** M5 records `ran` while its own tool prints *"M5 dead-code scan (knip) did not run"* (and per #223 that is the COMMON case); M8 records `ran` while its runner returns `status: partial, "mutation scan could not run"`; M9 records `ran` against an empty dir having loaded 0 files. **In two, the tool hands the probe a correct verdict and the probe discards it.**
@@ -33,9 +51,9 @@ Instances found in one day: boxyhq's M10 not-run reason (fixed by #299) · #300'
 
 **And I reproduced it five times while documenting it** — see "Supervisor errors" below. The rule now in memory: **run the thing that measures it; never let a stored number become an argument's premise.**
 
-## Calibration — the real numbers (measured 2026-07-15, never quote from memory)
+## Calibration — the real numbers (⚠️ 2026-07-15 snapshot, SUPERSEDED — re-measured 153/157 on 2026-07-16; never quote either from memory, run the tool)
 
-- **`pnpm exec tsx src/cli/validate-calibration.ts` → 147/153 positives, 131/131 negatives, GATE PASS.** The 6 uncaught are all `expectedTier: "review"` — deliberate LLM-tier splits.
+- **`pnpm exec tsx src/cli/validate-calibration.ts` → (2026-07-16) 153/157 positives, 137/137 negatives, GATE PASS + per-module parity check (#427).** (2026-07-15 was 147/153.) The uncaught remainder are `expectedTier: "review"`/`"none"` — deliberate LLM-tier or no-mechanical-rule-by-design splits.
 - **⚠️ That number is ~85% M1 and covers EIGHT modules, not ten (#341).** M1 ~130 · M10 6 · M4-M5 4 · M7 3 · M3 2 · **M8 1** · **M9-authz 1** · **M2 0** · **M6 0**. M2 (needs a live stack) and M6 (paid LLM packet) have **no fixtures and are structurally ungateable** — defensible individually, but **"147/153 GATE PASS" is a security-gate number wearing a ten-module label.**
 - **`dry-run/scorecard.json` → 12 bugs: 5 caught / 3 missed / 4 requires-live-run.** Internal only — **it never touches an external app** (verified: `GROUND_TRUTH_BUGS` is hardcoded to our fixtures; `corpus-drift.ts` uses `scoreExternalBaseline`; `run-audit.ts` never references it).
 - **THREE measurement surfaces, not one** (#339): the gated 153-corpus (rule fires on shape) · the dry-run (pipeline catches bug, with exploitability) · the external corpus of 6 real repos (holds on code we didn't write). They cannot collapse — self-authored fixtures **structurally cannot** measure real-world precision (#326's lesson).
