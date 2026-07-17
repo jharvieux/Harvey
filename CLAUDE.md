@@ -67,6 +67,8 @@ Run it before every push. If it fails, fix and re-verify before pushing. If a fa
 
 Other checks, run on demand: `pnpm check:duplication` (jscpd), `pnpm validate:findings <file>`.
 
+**Regenerate the committed dry-run artifacts after any change to a detector, semgrep rule, finding schema, or calibration fixture.** Run `pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out dry-run` and commit BOTH `dry-run/findings.json` AND `dry-run/pii-data-map.json`. The `dry-run-drift` CI gate diffs ONLY `findings.json` and is non-required (it will not block a merge), so a stale artifact reaches `main` silently — and `pii-data-map.json` has no gate at all. Regenerate on a networked machine with the mechanical-tier binaries installed (semgrep/trufflehog/osv-scanner/gitleaks): the scan now also makes live npm-registry calls (`checkLicenseCompliance`/`checkSlopsquat`), so a binary-less or offline run silently under-produces findings.
+
 ## Session log
 
 `SESSION.md` (repo root) is the running "where we left off" log, refreshed toward the end of a
