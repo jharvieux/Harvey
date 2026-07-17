@@ -27,6 +27,7 @@
     "simplify-scan": "tsx src/cli/simplify-scan.ts",
     "corpus-drift": "tsx src/cli/corpus-drift.ts",
     "handrolled-frequency": "tsx src/cli/handrolled-frequency.ts",
+    "detector-census": "tsx src/cli/detector-census.ts",
     "audit-coverage": "tsx src/cli/audit-coverage.ts",
     "pii-classify": "tsx tools/pii-classify.mjs",
     "epic": "tsx src/cli/epic.ts",
