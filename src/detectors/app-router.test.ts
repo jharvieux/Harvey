@@ -48,6 +48,22 @@ describe("server → client data leak", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("server-client-leak/negative"));
     expect(taxonomies(findings)).not.toContain("M9 — Server→client data leak");
   });
+
+  // #380: the client component is imported via the create-next-app `@/*` path alias, not a
+  // relative specifier. Before the tsconfig `paths` resolution, the leak was invisible.
+  it("follows a tsconfig `@/*` path alias to identify the imported Client Component", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("server-client-leak/positive-aliased"));
+    const leaks = findings.filter((f) => f.taxonomy === "M9 — Server→client data leak");
+
+    expect(leaks).toHaveLength(1);
+    expect(leaks[0]?.location).toBe("app/dashboard/page.tsx:7");
+    expect(leaks[0]?.evidence).toContain("user={user}");
+  });
+
+  it("stays silent when an aliased import resolves to a Server (non-'use client') Component", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("server-client-leak/negative-aliased"));
+    expect(taxonomies(findings)).not.toContain("M9 — Server→client data leak");
+  });
 });
 
 describe("missing server-only guard", () => {
@@ -67,6 +83,21 @@ describe("missing server-only guard", () => {
     // a module that never touches a secret at all, and (#231) a secret-touching
     // module nothing on the client side ever imports.
     const findings = detectAppRouterFindings(loadFixtureDir("missing-server-only/negative"));
+    expect(findings.filter((f) => f.taxonomy === "M9 — Missing server-only guard")).toHaveLength(0);
+  });
+
+  // #380: the client component reaches the secret module through a `@/lib/...` aliased edge, so
+  // the real-client-import-path graph must follow tsconfig `paths`, not just relative imports.
+  it("follows a tsconfig `@/*` aliased import edge in the real-client-import-path graph", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("missing-server-only/positive-aliased"));
+    const hits = findings.filter((f) => f.taxonomy === "M9 — Missing server-only guard");
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ severity: "High", category: "Security", location: "lib/admin-client.ts:1" });
+  });
+
+  it("stays silent when the aliased-imported secret module already imports 'server-only'", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("missing-server-only/negative-aliased"));
     expect(findings.filter((f) => f.taxonomy === "M9 — Missing server-only guard")).toHaveLength(0);
   });
 
@@ -283,6 +314,55 @@ describe("accidental dynamic rendering (MED, best-effort)", () => {
     const hits = findings.filter((f) => f.taxonomy === "M9 — Accidental dynamic rendering");
     expect(hits).toHaveLength(1);
     expect(hits[0]?.title).toContain("cookies()");
+  });
+});
+
+const SSR_API = "M9 — SSR-only API misuse";
+
+// #381. `window`/`document`/`localStorage`/... read on the SSR render path crashes or
+// hydration-mismatches. The FP boundary is the two standard safe idioms: a useEffect/handler
+// (deferred, browser-only) and a `typeof window` guard.
+describe("SSR-only browser API misuse (#381)", () => {
+  it("flags a Server Component that reads window.innerWidth directly in its render body", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"));
+    const hits = findings.filter((f) => f.taxonomy === SSR_API);
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ severity: "Low", location: "app/page.tsx:3" });
+    expect(hits[0]?.evidence).toContain("window.innerWidth");
+  });
+
+  it("does not flag browser-API reads inside a useEffect callback in a 'use client' component", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/negative-effect"));
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
+
+  it("does not flag reads guarded by `typeof window/localStorage !== 'undefined'`", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/negative-typeof"));
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
+
+  it("does not flag a browser-API read inside a class method (e.g. a Lexical node's client-only createDOM)", () => {
+    // Measured FP on proposit: Lexical DecoratorNode.createDOM reads document.createElement but is
+    // a client-only lifecycle method, not the App Router render path. Class members are off-path.
+    const findings = detectAppRouterFindings([
+      {
+        path: "components/editor/nodes/ImageNode.tsx",
+        text: `import { DecoratorNode } from "lexical";\nexport class ImageNode extends DecoratorNode<JSX.Element> {\n  createDOM(): HTMLElement {\n    return document.createElement("span");\n  }\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
+
+  it("does not flag a property access on a local variable that shadows a browser global", () => {
+    // `document` here is a DB record, not the DOM global — the shadow check keeps it silent.
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/report/page.tsx",
+        text: `export default async function Page() {\n  const document = await db.from("documents").select("*").single();\n  return <div>{document.title}</div>;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SSR_API);
   });
 });
 

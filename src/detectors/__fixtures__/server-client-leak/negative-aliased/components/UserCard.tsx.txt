@@ -1,0 +1,10 @@
+// No 'use client' directive: a Server Component. The aliased import resolves, but the
+// target is not a Client Component, so passing the row whole is not a client leak.
+interface RawUser {
+  id: string;
+  name: string;
+}
+
+export function UserCard({ user }: { user: RawUser }) {
+  return <div>{user.name}</div>;
+}

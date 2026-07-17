@@ -7,7 +7,10 @@ import { join, relative, sep } from "node:path";
 import type { SourceInput } from "./common.js";
 
 const SOURCE_FILE = /\.(ts|tsx|jsx|mjs)$/;
-const CONFIG_FILE = /^(next\.config\.(js|mjs|cjs|ts)|\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs)|package\.json)$/;
+// tsconfig/jsconfig are loaded so the M9 App Router pass can resolve `paths` aliases
+// (`@/…` imports) — without the file that defines what `@/` maps to, aliased imports are
+// invisible to the server→client-leak and server-only-guard cross-file resolution (#380).
+const CONFIG_FILE = /^(next\.config\.(js|mjs|cjs|ts)|\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs)|package\.json|tsconfig\.json|jsconfig\.json)$/;
 const EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out)$/;
 
 // Test/story/fixture files — excluded from the product-code detectors (perf, boundary, and

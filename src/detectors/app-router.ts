@@ -4,9 +4,11 @@
 // Finding[] (src/findings.ts) for §3 (security) / §3b (performance).
 //
 // Method: TypeScript compiler API (already a devDependency; no ts-morph in
-// this repo). Cross-file resolution (server→client leak) only follows
-// relative imports — path-aliased imports (`@/components/...`) aren't
-// resolved. See docs/m9-app-router.md for full per-check limitations.
+// this repo). Cross-file resolution (server→client leak, server-only graph)
+// follows both relative imports and tsconfig/jsconfig `paths` aliases
+// (`@/components/...`), falling back to the create-next-app `@/*`→root default
+// when no config is present (#380). See docs/m9-app-router.md for full
+// per-check limitations.
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
@@ -78,18 +80,80 @@ function makeFinding(
 
 // --- Server → Client data leak [HIGH] -------------------------------------
 
+function normalizeRepoPath(p: string): string {
+  const out: string[] = [];
+  for (const part of p.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") out.pop();
+    else out.push(part);
+  }
+  return out.join("/");
+}
+
+function candidatePaths(base: string): string[] {
+  return [base, `${base}.tsx`, `${base}.ts`, `${base}/index.tsx`, `${base}/index.ts`];
+}
+
+// A tsconfig/jsconfig `compilerOptions.paths` alias reduced to its literal specifier prefix
+// (`@/*` → `@/`) and the repo-relative directory it maps to (`["./src/*"]` under baseUrl "." →
+// `src`). Only wildcard (`*`) entries are modelled — the create-next-app convention and the
+// overwhelmingly common real-world shape.
+interface PathAlias {
+  prefix: string;
+  baseDir: string;
+}
+
+// Parse the source set's tsconfig/jsconfig for `paths` aliases (#380). The shallowest config in
+// the set wins (the repo-root tsconfig defines the app-wide alias); ts.parseConfigFileTextToJson
+// tolerates the comments/trailing commas tsconfig commonly carries. With no config paths in the
+// set, fall back to Next.js's own `@/*`→root default rather than giving up — the vast majority of
+// otherwise-unresolved specifiers are exactly that scaffolding default.
+function collectPathAliases(files: SourceInput[]): PathAlias[] {
+  const configs = files
+    .filter((f) => /(^|\/)(tsconfig|jsconfig)\.json$/.test(f.path))
+    .sort((a, b) => a.path.split("/").length - b.path.split("/").length);
+  const aliases: PathAlias[] = [];
+  for (const cfg of configs) {
+    const { config } = ts.parseConfigFileTextToJson(cfg.path, cfg.text);
+    const opts = config?.compilerOptions;
+    if (!opts?.paths) continue;
+    const cfgDir = cfg.path.includes("/") ? cfg.path.slice(0, cfg.path.lastIndexOf("/")) : "";
+    const baseUrl = typeof opts.baseUrl === "string" ? opts.baseUrl : "";
+    for (const [key, targets] of Object.entries(opts.paths)) {
+      const target = Array.isArray(targets) ? targets[0] : undefined;
+      if (!key.endsWith("/*") || typeof target !== "string" || !target.endsWith("/*")) continue;
+      aliases.push({ prefix: key.slice(0, -1), baseDir: normalizeRepoPath(`${cfgDir}/${baseUrl}/${target.slice(0, -1)}`) });
+    }
+    if (aliases.length > 0) break;
+  }
+  if (aliases.length === 0) aliases.push({ prefix: "@/", baseDir: "" });
+  return aliases;
+}
+
 function resolveRelativeImport(fromPath: string, specifier: string, allPaths: Set<string>): string | undefined {
   if (!specifier.startsWith(".")) return undefined;
-  const fromDir = fromPath.split("/").slice(0, -1);
-  const stack = [...fromDir];
+  const stack = fromPath.split("/").slice(0, -1);
   for (const part of specifier.split("/")) {
     if (part === "" || part === ".") continue;
     if (part === "..") stack.pop();
     else stack.push(part);
   }
-  const base = stack.join("/");
-  const candidates = [base, `${base}.tsx`, `${base}.ts`, `${base}/index.tsx`, `${base}/index.ts`];
-  return candidates.find((c) => allPaths.has(c));
+  return candidatePaths(stack.join("/")).find((c) => allPaths.has(c));
+}
+
+function resolveAliasedImport(specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
+  for (const { prefix, baseDir } of aliases) {
+    if (!specifier.startsWith(prefix)) continue;
+    const rest = specifier.slice(prefix.length);
+    const base = normalizeRepoPath(baseDir ? `${baseDir}/${rest}` : rest);
+    const hit = candidatePaths(base).find((c) => allPaths.has(c));
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+function resolveImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
+  return resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(specifier, allPaths, aliases);
 }
 
 function collectRawRowNames(sf: ts.SourceFile): Set<string> {
@@ -114,11 +178,11 @@ function collectRawRowNames(sf: ts.SourceFile): Set<string> {
   return rawRowNames;
 }
 
-function collectClientComponentImports(sf: ts.SourceFile, path: string, clientPaths: Set<string>, allPaths: Set<string>): Map<string, string> {
+function collectClientComponentImports(sf: ts.SourceFile, path: string, clientPaths: Set<string>, allPaths: Set<string>, aliases: PathAlias[]): Map<string, string> {
   const imports = new Map<string, string>();
   for (const stmt of sf.statements) {
     if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier) || !stmt.importClause) continue;
-    const resolved = resolveRelativeImport(path, stmt.moduleSpecifier.text, allPaths);
+    const resolved = resolveImport(path, stmt.moduleSpecifier.text, allPaths, aliases);
     if (!resolved || !clientPaths.has(resolved)) continue;
     const clause = stmt.importClause;
     if (clause.name) imports.set(clause.name.text, resolved);
@@ -129,14 +193,14 @@ function collectClientComponentImports(sf: ts.SourceFile, path: string, clientPa
   return imports;
 }
 
-function detectServerClientLeak(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+function detectServerClientLeak(sources: Map<string, ts.SourceFile>, nextId: NextId, aliases: PathAlias[]): Finding[] {
   const findings: Finding[] = [];
   const allPaths = new Set(sources.keys());
   const clientPaths = new Set([...sources].filter(([, sf]) => leadingDirective(sf) === "use client").map(([p]) => p));
 
   for (const [path, sf] of sources) {
     if (leadingDirective(sf) === "use client") continue;
-    const clientImports = collectClientComponentImports(sf, path, clientPaths, allPaths);
+    const clientImports = collectClientComponentImports(sf, path, clientPaths, allPaths, aliases);
     if (clientImports.size === 0) continue;
     const rawRowNames = collectRawRowNames(sf);
     if (rawRowNames.size === 0) continue;
@@ -228,13 +292,13 @@ function hasRealClientImportPath(targetPath: string, importGraph: ReadonlyMap<st
   return false;
 }
 
-function buildImportGraph(sources: Map<string, ts.SourceFile>, allPaths: Set<string>): Map<string, string[]> {
+function buildImportGraph(sources: Map<string, ts.SourceFile>, allPaths: Set<string>, aliases: PathAlias[]): Map<string, string[]> {
   const graph = new Map<string, string[]>();
   for (const [path, sf] of sources) {
     const edges: string[] = [];
     for (const stmt of sf.statements) {
       if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
-      const resolved = resolveRelativeImport(path, stmt.moduleSpecifier.text, allPaths);
+      const resolved = resolveImport(path, stmt.moduleSpecifier.text, allPaths, aliases);
       if (resolved) edges.push(resolved);
     }
     graph.set(path, edges);
@@ -242,13 +306,13 @@ function buildImportGraph(sources: Map<string, ts.SourceFile>, allPaths: Set<str
   return graph;
 }
 
-function detectMissingServerOnly(sources: Map<string, ts.SourceFile>, nextId: NextId, pagesRouterOnly: boolean): Finding[] {
+function detectMissingServerOnly(sources: Map<string, ts.SourceFile>, nextId: NextId, pagesRouterOnly: boolean, aliases: PathAlias[]): Finding[] {
   if (pagesRouterOnly) return []; // App-Router-only check (see isPagesRouterOnly)
 
   const findings: Finding[] = [];
   const allPaths = new Set(sources.keys());
   const clientPaths = new Set([...sources].filter(([, sf]) => leadingDirective(sf) === "use client").map(([p]) => p));
-  const importGraph = buildImportGraph(sources, allPaths);
+  const importGraph = buildImportGraph(sources, allPaths, aliases);
 
   for (const [path, sf] of sources) {
     if (leadingDirective(sf) !== undefined) continue; // 'use client' can't hold secrets like this meaningfully; 'use server' modules are already server-exclusive by the Next compiler
@@ -311,10 +375,22 @@ function collectServerActions(sf: ts.SourceFile): ServerAction[] {
 
 // --- Client-supplied owner id trusted by an authenticated action [HIGH] ----
 //
-// #221's narrow, mechanical half. The three proposit instances share one shape the
-// missing-auth check above is blind to BY CONSTRUCTION: auth IS called, so AUTH_PATTERN
-// is satisfied and nothing fires — yet the mutation is scoped by an owner id the CLIENT
-// supplied, so the session is authenticated but never actually authorizes the row.
+// #221's narrow, mechanical half: an action that DOES authenticate in-body (satisfying the
+// missing-auth check above) yet scopes its mutation by an owner id the CLIENT supplied — so the
+// session is authenticated but never actually authorizes the row.
+//
+// MEASURED against proposit (#326, 2026-07-17): recall on the three named instances is 0/3 with
+// 0 false positives — but NOT because the detector is broken. The actual proposit files
+// (user-actions.ts, invitation-actions.ts, create-organisation/actions.ts, all at HEAD) match
+// NEITHER of this detector's two gates: they make no in-body auth call at all (they call the
+// service-role client directly), and they scope by bare `.eq("id", userId)` or by an INSERT value
+// (`.insert({ user_id: userId })`), not by an ownership-column `.eq()`. So they are the
+// no-authorization class, and detectServerActionAuthAndValidation already flags all four as
+// "M1 — Server Action missing authorization check" — the more accurate finding for them. The
+// earlier claim that "the three proposit instances share one shape [where] auth IS called" was a
+// stale reading of the code; corrected here. Widening this detector to reach them (bare `id`,
+// insert-values, no-auth) would collide with that check and wreck precision — see the #326
+// follow-up for the deferred design question.
 //
 // Deliberately narrow (docs/fp-rules.txt: a finding must be evidence-backed). All four
 // must hold: an ownership-column `.eq()` (never bare `id`), on a mutating chain, whose
@@ -324,12 +400,11 @@ function collectServerActions(sf: ts.SourceFile): ServerAction[] {
 // cross-file and business-context reasoning and stays semantic/paid-tier: see the B15
 // corpus entries and docs/design/corpus-roadmap-to-100.md §4a.
 //
-// PRECISION IS UNMEASURED AGAINST A REAL TARGET (#221). The dogfood repos can't measure it:
-// ATC and AoP contain zero 'use server' files, so this check has no surface there and its
-// silence on them says nothing about its FP rate. Precision is currently pinned only by the
-// corpus pair + the near-miss negatives in app-router.test.ts — i.e. by shapes we chose. That
-// is why every finding here is `review`/`Likely`, never free-count. Validating it against
-// proposit (the codebase the class was found in) is tracked in the #221 follow-up.
+// FP rate on this narrow shape is still unpinned by a real target: proposit produced 0 instances
+// OF THIS SHAPE (see above), so its clean run is no-input, not measured precision — the same
+// no-surface caveat that holds for the ATC/AoP dogfood (zero 'use server' files). Precision stays
+// pinned only by the corpus pair + the near-miss negatives in app-router.test.ts — shapes we
+// chose — which is why every finding here is `review`/`Likely`, never free-count.
 const OWNERSHIP_COLUMN = /^(user|owner|tenant|account|org|organisation|organization|customer|workspace|member|profile|created_by|author)(_id)?$/i;
 
 // Every identifier a binding introduces: `user` → {user}; `{ data: { user } }` → {user}.
@@ -801,6 +876,124 @@ function detectAccidentalDynamicRendering(sources: Map<string, ts.SourceFile>, n
   return findings;
 }
 
+// --- SSR-only browser API misuse [LOW] -------------------------------------
+//
+// `window`/`document`/`localStorage`/`sessionStorage`/`navigator` referenced on a path that
+// runs during SSR → "ReferenceError: window is not defined" or a hydration mismatch (#381,
+// docs/scan-extras.txt M9 "SSR-ONLY API MISUSE"). App Router components server-render by
+// default, so the read fires on the server unless it is deferred to the browser. The two
+// standard SSR-safe idioms are the FP boundary and must stay silent:
+//   - inside a useEffect/useLayoutEffect callback or an event handler (browser-only, deferred),
+//   - guarded by `typeof window !== "undefined"` (or any browser global).
+const BROWSER_GLOBALS = new Set(["window", "document", "localStorage", "sessionStorage", "navigator"]);
+const TYPEOF_GUARD = /typeof\s+(window|document|localStorage|sessionStorage|navigator)\b/;
+
+// Names bound anywhere in the file (imports, params, variable/function/class declarations). If a
+// browser-global name is also a local binding, the access is not the DOM global — skip it, so an
+// app with a variable named `document` (a DB record, say) isn't flagged. Conservative by design.
+function fileDeclaredNames(sf: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  const visit = (node: ts.Node) => {
+    if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && ts.isIdentifier(node.name)) names.add(node.name.text);
+    else if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name) names.add(node.name.text);
+    else if (ts.isImportClause(node) && node.name) names.add(node.name.text);
+    else if (ts.isImportSpecifier(node)) names.add(node.name.text);
+    else if (ts.isNamespaceImport(node)) names.add(node.name.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return names;
+}
+
+function isFunctionScope(node: ts.Node): boolean {
+  return (
+    ts.isFunctionDeclaration(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isArrowFunction(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isConstructorDeclaration(node) ||
+    ts.isGetAccessorDeclaration(node) ||
+    ts.isSetAccessorDeclaration(node)
+  );
+}
+
+// Whether the access is on the synchronous SSR render path. The nearest enclosing function tells
+// deferred (effect/handler/callback — browser-only) from render-path code:
+//   0 enclosing functions → module top-level: runs during SSR → on path.
+//   1, and it's a free function / arrow → a component or module-level helper render body → on path.
+//   1, but it's a CLASS MEMBER (method/accessor/ctor) → not the App Router render path but an
+//     OO/framework lifecycle method (e.g. a Lexical node's client-only `createDOM`) → off path.
+//   ≥2 → nested in a deferred closure (effect callback, event handler) → off path.
+function isOnSsrRenderPath(node: ts.Node): boolean {
+  const fns: ts.Node[] = [];
+  for (let cur = node.parent; cur; cur = cur.parent) {
+    if (isFunctionScope(cur)) fns.push(cur);
+  }
+  if (fns.length >= 2) return false;
+  const nearest = fns[0];
+  if (nearest && (ts.isMethodDeclaration(nearest) || ts.isConstructorDeclaration(nearest) || ts.isGetAccessorDeclaration(nearest) || ts.isSetAccessorDeclaration(nearest))) {
+    return false;
+  }
+  return true;
+}
+
+// True when a `typeof <global>` check gates this node — an enclosing `if`, ternary, or `&&`/`||`
+// whose condition/left operand tests a browser global. The standard SSR-safe guard.
+function isTypeofGuarded(node: ts.Node, sf: ts.SourceFile): boolean {
+  for (let cur = node.parent; cur; cur = cur.parent) {
+    if (ts.isIfStatement(cur) && TYPEOF_GUARD.test(cur.expression.getText(sf))) return true;
+    if (ts.isConditionalExpression(cur) && TYPEOF_GUARD.test(cur.condition.getText(sf))) return true;
+    if (
+      ts.isBinaryExpression(cur) &&
+      (cur.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken || cur.operatorToken.kind === ts.SyntaxKind.BarBarToken) &&
+      TYPEOF_GUARD.test(cur.left.getText(sf))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    const declared = fileDeclaredNames(sf);
+    const visit = (node: ts.Node) => {
+      const onGlobal =
+        (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+        ts.isIdentifier(node.expression) &&
+        BROWSER_GLOBALS.has(node.expression.text) &&
+        !declared.has(node.expression.text);
+      if (onGlobal) {
+        const global = (node.expression as ts.Identifier).text;
+        if (isOnSsrRenderPath(node) && !isTypeofGuarded(node, sf)) {
+          const atModuleTop = !ts.findAncestor(node.parent, isFunctionScope);
+          findings.push(
+            makeFinding(nextId, {
+              title: `\`${global}\` read on the SSR render path`,
+              severity: "Low",
+              confidence: "Review",
+              category: "Performance",
+              taxonomy: "M9 — SSR-only API misuse",
+              location: loc(path, sf, node),
+              evidence: `\`${node.getText(sf)}\` is read ${atModuleTop ? "at module top level" : "in a component's render body"}, not inside a useEffect callback, an event handler, or a \`typeof ${global} !== "undefined"\` guard — so it executes during server-side rendering.`,
+              impact: `Browser globals are undefined on the server: this throws "${global} is not defined" on first render, or hydration-mismatches when the server and client HTML disagree.`,
+              fix: `Move the read into a \`useEffect\`/event handler (client-only), or guard it with \`typeof ${global} !== "undefined"\`; make the component a Client Component if it genuinely needs the browser.`,
+              value: 3,
+              ease: 4,
+              safety: 4,
+            }),
+          );
+          return; // one finding per access; don't descend into an already-flagged expression
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return findings;
+}
+
 // --- Orchestrator ------------------------------------------------------------
 
 /**
@@ -812,16 +1005,18 @@ function detectAccidentalDynamicRendering(sources: Map<string, ts.SourceFile>, n
 export function detectAppRouterFindings(files: SourceInput[]): Finding[] {
   const sources = new Map(files.map((f) => [f.path, parse(f.path, f.text)]));
   const pagesRouterOnly = isPagesRouterOnly(files);
+  const aliases = collectPathAliases(files);
   let n = 0;
   const nextId: NextId = () => `M9-${String(++n).padStart(2, "0")}`;
 
   return [
-    ...detectServerClientLeak(sources, nextId),
-    ...detectMissingServerOnly(sources, nextId, pagesRouterOnly),
+    ...detectServerClientLeak(sources, nextId, aliases),
+    ...detectMissingServerOnly(sources, nextId, pagesRouterOnly, aliases),
     ...detectServerActionAuthAndValidation(sources, nextId),
     ...detectClientSuppliedOwnerId(sources, nextId),
     ...detectUnsafeCacheConfig(sources, nextId),
     ...detectDataFetchingWaterfalls(sources, nextId),
     ...detectAccidentalDynamicRendering(sources, nextId),
+    ...detectSsrBrowserApiMisuse(sources, nextId),
   ];
 }
