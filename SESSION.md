@@ -2,23 +2,30 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-17 (per-module detector-count work + five PRs below — all OPEN, awaiting operator merge. The 2026-07-16 sweep is further down and still stands.)_
+_Last updated: 2026-07-17 (detector census + orchestrator artifact path + dynamic-validation harness — NINE PRs all MERGED this session; new backlog #455–#457 at the end of this section. The 2026-07-16 sweep is further down and still stands.)_
 
-## 2026-07-17 — detector census, hotspot→LLM wiring, orchestrator artifact path (5 PRs OPEN)
+## 2026-07-17 — detector census, hotspot→LLM, orchestrator artifact path, dynamic-validation harness (9 PRs merged)
 
-Prompted by an operator question — "what's our detection coverage per module?" — which had no clean answer because detectors live in two engines (semgrep `harvey-*` rules + TS `taxonomy:` detectors) and M1/M2/M3/M4 don't tag findings with a module. Fixed the measurement, then cleared adjacent backlog. **All five PRs pass `pnpm verify`; none merged yet — merge order note below.**
+Started from an operator question — "detection coverage per module?" — which had no clean answer (detectors live in two engines and M1/M2/M3/M4 don't tag findings with a module). Fixed the measurement, then worked outward through the orchestrator's artifact path and the free/validation/paid run model. **Everything below is MERGED on `main`.**
 
-- **#443** (closes M6 half of #442) — `pnpm detector-census` derives the per-module detector count from source by owning-file map (currently **M1 129 · M2 3 · M3 3 · M4 1 · M5 16 · M6 13 · M7 25 · M8 7 · M9 6 · M10 32 = 235**; counts DETECTORS, not recall — only M1 has a scored gate). Run it, never quote it. Also: `simplify-scan --hotspots` orders the M6 review packet by M3 hotspot rank. CLAUDE.md: new detector-census bullet + M3-row consumer note.
-- **#444** (closes #382) — `harvey-route-noauth` widened to all App Router mutation verbs (was POST-only; missed PUT/DELETE/PATCH). Gate re-measured **155/159** static, 139/139 negatives. Carries the coupled CLAUDE.md 153/157→155/159 update so the number lands with the code that makes it true.
-- **#445** (closes #366/#367/#368) — three new M2 probes: IDOR/BOLA dynamic-id sweep, blanket missing/forged-auth sweep (deny-by-default allowlist), mass-assignment. Fixture-tested only; live validation is still #159/#161.
-- **#446** (closes #416) — the orchestrator's **derive-`ran`-from-artifact** mechanism (read side). `run-audit --artifacts-dir <dir>` reads a dated `<module>.pass.json` and derives `ran` for M1/M2/M3/M6 ONLY when it's fresh (30-day window) and target-matching; a stale/mismatched artifact does NOT yield `ran`. Schema: `docs/design/audit-pass-artifacts.md`.
-- **#447** (closes M1 half of #442) — `pnpm scan-focus <m3-hotspots>` renders a hotspot-priority focus brief for the `/vuln-scan --extra` semantic pass. CLAUDE.md M1-row documents the flow.
+- **#443** — `pnpm detector-census`: per-module detector count derived from source by owning-file map (**M1 129 · M2 3 · M3 3 · M4 1 · M5 16 · M6 13 · M7 25 · M8 7 · M9 6 · M10 32 = 235** at merge; counts DETECTORS, not recall — run it, never quote it). Plus `simplify-scan --hotspots` (M3→M6 ordering). CLAUDE.md now names detector-census as the canonical count source.
+- **#444** — `harvey-route-noauth` widened to all App Router mutation verbs. Gate **155/159** static, 139/139 negatives. (Needed a dry-run regen at merge — the calibration-PR tax.)
+- **#445** — three M2 probes: IDOR/BOLA dynamic-id sweep, missing/forged-auth sweep (deny-by-default allowlist), mass-assignment. Fixture-tested; live is #159/#161.
+- **#446 (#416) + #451 (#448)** — the orchestrator's **derive-`ran`-from-artifact** path, read + write. `run-audit --artifacts-dir <dir>` derives `ran` for the out-of-orchestrator passes (M1 semantic/live, M2 dynamic, M3 vitals, M6 verdict) from a fresh, target-matching `<module>.pass.json`; `pnpm record-pass` emits one from any pass. Schema: `docs/design/audit-pass-artifacts.md`.
+- **#447** — `pnpm scan-focus <m3-hotspots>` → hotspot-priority brief for the `/vuln-scan --extra` semantic pass (the M1 half of the M3→LLM wiring).
+- **#453 (#450)** — dynamic-validation harness core: `pnpm dynamic-validate <repo>` assesses stand-up-ability (GO/NO-GO + coverage + disclosed limitations); `--execute` runs the live pipeline and emits `M2.pass.json`. Decision logic + emission tested; the live Docker/supabase pipeline is operator-run (#159/#161).
+- **#454** — CLAUDE.md: fixed the stale "#416 is open" claim and added the **Run modes** note (free / validation / paid = one orchestrator gated by env flags; validation = source + LLM-over-source + local-stack dynamic, no client DB, via the pass-artifact flow).
 
-### Merge order + follow-ups
-- **#443, #444, #447 all edit CLAUDE.md on different lines** — GitHub reports all mergeable; whichever merges last may want a trivial rebase on CLAUDE.md.
-- **#442 closes only when both #443 and #447 merge** — neither PR auto-closes the issue; close it by hand once both land.
-- **#448 (NEW, open)** — the #416 **emit side**: make each pass actually write its `<module>.pass.json` (advances #434/#435/#420). #446 is only the read/derive side.
-- **Still yours:** #159/#161 (need a live deployed app/seams), and the target-commit-binding tightening noted in #446's body.
+### Backlog this session opened (all yours to prioritize)
+- **#448 emit side is DONE (#451)**; what remains is each pass emitting its artifact routinely end-to-end.
+- **#450 harness**: the live pipeline (Docker + Supabase CLI) has never run end-to-end against a real public repo — the remaining live work, alongside #159/#161.
+- **#455** — label findings with CWE/OWASP IDs (schema field + populate from semgrep metadata; Harvey runs `p/owasp-top-ten` but findings carry no CWE). `sonnet`.
+- **#456** — dependency LICENSE compliance (SPDX + GPL/AGPL); the supply-chain scan is CVE-only today. `sonnet`.
+- **#457** — engagement baseline diff (resolved-vs-new across re-audits); crux is a stable finding-identity model. `opus`.
+- **Idea, unfiled:** a `--validation` preset (`--llm --dynamic --artifacts-dir`, asserting the pass artifacts are present) so validation is one flag, not a combination to remember.
+- **Still operator/live:** #159/#161 (deployed app / seams), the #446 target-commit-binding tightening.
+
+**Merge mechanics learned (in the [[harvey-sweep-merge-mechanics]] memory):** branch protection requires up-to-date branches → sequential merges each need `update-branch` + a CI cycle; a stacked PR auto-closes when its base merges and must be reopened as a fresh PR to `main`; adjacent CLAUDE.md bullet edits across PRs conflict despite "different lines."
 
 ## 2026-07-16 issue-sweep — coverage honesty, calibration hardening, detection rules (14 PRs merged, 30 issues closed)
 
