@@ -33,9 +33,13 @@ function makeFinding(
     value: number;
     ease: number;
     safety: number;
+    // Defaults to "review" (below): every M7 code detector here is a heuristic, never
+    // ~100%-precision, so review is the conservative floor. It must never reach the calibration
+    // scorer untiered — an untiered finding silently mis-scores, so scoreEntry fails loud (#327).
+    precisionTier?: Finding["precisionTier"];
   },
 ): Finding {
-  return { id: nextId(), status: "Open", category: "Performance", ...input };
+  return { id: nextId(), status: "Open", category: "Performance", precisionTier: "review", ...input };
 }
 
 // Render-once contexts — email templates and PDF documents render exactly once per send/

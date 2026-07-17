@@ -323,4 +323,10 @@ describe("finding shape", () => {
       expect(f.status).toBe("Open");
     });
   });
+
+  it("sets an explicit precisionTier on every finding so none mis-scores as untiered (#327)", () => {
+    const findings = detectPerfCodeFindings(loadFixtureDir("whole-lib-import/positive"));
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every((f) => f.precisionTier === "review")).toBe(true);
+  });
 });

@@ -66,12 +66,14 @@ function makeFinding(
     value: number;
     ease: number;
     safety: number;
-    // Left unset by most M9 checks (they aren't scored by the calibration corpus). Set it where
-    // a check IS corpus-scored, so scoreEntry can tell free-count from triage-tier (#221).
+    // Defaults to "review" (below) — these AST heuristics are never ~100%-precision, so review is
+    // the correct conservative floor. A check overrides it only to go LOWER-trust or to state its
+    // tier explicitly; it must never reach the calibration scorer untiered, which silently
+    // mis-scores (a positive → miss, a negative FP → invisible) — scoreEntry now fails loud (#327).
     precisionTier?: Finding["precisionTier"];
   },
 ): Finding {
-  return { id: nextId(), status: "Open", ...input };
+  return { id: nextId(), status: "Open", precisionTier: "review", ...input };
 }
 
 // --- Server → Client data leak [HIGH] -------------------------------------
