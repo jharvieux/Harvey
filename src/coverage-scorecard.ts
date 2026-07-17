@@ -6,6 +6,7 @@
 // executed in that pass — this module never guesses whether something ran. A bug whose detecting
 // module didn't run is scored "requires-live-run", never silently "missed".
 
+import type { PrecisionTier } from "./findings.js";
 import type { ProbeScore } from "./pentest/scorecard.js";
 
 type CoverageStatus = "caught" | "missed" | "requires-live-run";
@@ -50,51 +51,65 @@ interface ScoredBug {
   location: string;
   expectedModule: string;
   status: CoverageStatus;
+  // The matched finding's precision tier (caught only). "high" = the mechanical tier ASSERTED a
+  // verdict; "review" (or any non-high) = it surfaced a shape for a HUMAN to adjudicate. Kept
+  // distinct so "caught" never launders a review-tier surfacing into an autonomous detection — two
+  // of the calibration Criticals are review-tier catches a person must still rule on (#342).
+  tier?: PrecisionTier;
   note: string;
 }
 
 export interface ScorableFinding {
   taxonomy: string;
   location: string;
+  precisionTier?: PrecisionTier;
+}
+
+function isAsserted(bug: ScoredBug): boolean {
+  return bug.status === "caught" && bug.tier === "high";
 }
 
 export function scoreCoverage(bugs: GroundTruthBug[], findings: ScorableFinding[]): ScoredBug[] {
   return bugs.map((bug) => {
+    const base = { id: bug.id, severity: bug.severity, location: bug.location, expectedModule: bug.expectedModule };
     if (!bug.moduleRan) {
       return {
-        id: bug.id,
-        severity: bug.severity,
-        location: bug.location,
-        expectedModule: bug.expectedModule,
+        ...base,
         status: "requires-live-run",
         note: `${bug.expectedModule} did not execute in this pass — no caught/missed verdict possible.`,
       };
     }
     const hit = findings.find((f) => bug.matches(f));
     if (hit) {
+      const asserted = hit.precisionTier === "high";
       return {
-        id: bug.id,
-        severity: bug.severity,
-        location: bug.location,
-        expectedModule: bug.expectedModule,
+        ...base,
         status: "caught",
-        note: `Matched by finding "${hit.taxonomy}" at ${hit.location}.`,
+        tier: hit.precisionTier,
+        note: asserted
+          ? `Asserted by high-precision rule "${hit.taxonomy}" at ${hit.location}.`
+          : `Surfaced for review by "${hit.taxonomy}" at ${hit.location} — ${hit.precisionTier ?? "untiered"} tier, a human must still adjudicate this verdict.`,
       };
     }
     return {
-      id: bug.id,
-      severity: bug.severity,
-      location: bug.location,
-      expectedModule: bug.expectedModule,
+      ...base,
       status: "missed",
       note: `${bug.expectedModule} ran but produced no finding matching this bug.`,
     };
   });
 }
 
-export function summarizeCoverage(scored: ScoredBug[]): Record<CoverageStatus, number> {
+export interface CoverageSummary {
+  asserted: number;
+  "surfaced-for-review": number;
+  missed: number;
+  "requires-live-run": number;
+}
+
+export function summarizeCoverage(scored: ScoredBug[]): CoverageSummary {
   return {
-    caught: scored.filter((s) => s.status === "caught").length,
+    asserted: scored.filter(isAsserted).length,
+    "surfaced-for-review": scored.filter((s) => s.status === "caught" && !isAsserted(s)).length,
     missed: scored.filter((s) => s.status === "missed").length,
     "requires-live-run": scored.filter((s) => s.status === "requires-live-run").length,
   };

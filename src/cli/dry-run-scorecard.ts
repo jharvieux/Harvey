@@ -1,7 +1,10 @@
 // Coverage scorecard for the calibration dry run (issue #34): maps the planted bugs in
 // targets/calibration/GROUND-TRUTH.md's §"Planted bugs" to the module expected to catch each, and
-// scores caught/missed/requires-live-run against dry-run/findings.json (src/cli/dry-run.ts's real
-// output — this script does not invent results, it only classifies what's already there).
+// scores each against dry-run/findings.json (src/cli/dry-run.ts's real output — this script does
+// not invent results, it only classifies what's already there). A catch is split by the matching
+// finding's precision tier: an "asserted" verdict (high-precision rule) vs a "surfaced-for-review"
+// shape a human must still adjudicate — so the summary never launders review-tier surfacing into
+// autonomous detection (#342).
 //
 // SCOPE, per GROUND-TRUTH's own split: the 8 statically-reachable bugs are this scorecard's
 // semantic/RLS ground truth and the only ones a static dry run can return a verdict on. The other
@@ -21,7 +24,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type GroundTruthBug, scoreCoverage, type ScorableFinding, summarizeCoverage } from "../coverage-scorecard.js";
+import { type CoverageSummary, type GroundTruthBug, scoreCoverage, type ScorableFinding, summarizeCoverage } from "../coverage-scorecard.js";
 
 // A catch must be the right RULE at the right FILE. `location` is an absolute path into a scratch
 // scan copy, so anchor on the target-relative file suffix; `taxonomy` must name a rule that
@@ -184,16 +187,22 @@ function main(): void {
   const findingsPath = arg("--findings", "dry-run/findings.json");
   const outDir = arg("--out", "dry-run");
 
-  const rawFindings = JSON.parse(readFileSync(findingsPath, "utf8")) as { taxonomy: string; location: string }[];
-  const findings: ScorableFinding[] = rawFindings.map((f) => ({ taxonomy: f.taxonomy, location: f.location }));
+  const rawFindings = JSON.parse(readFileSync(findingsPath, "utf8")) as { taxonomy: string; location: string; precisionTier?: ScorableFinding["precisionTier"] }[];
+  const findings: ScorableFinding[] = rawFindings.map((f) => ({ taxonomy: f.taxonomy, location: f.location, precisionTier: f.precisionTier }));
 
   const scored = scoreCoverage(GROUND_TRUTH_BUGS, findings);
-  const summary = summarizeCoverage(scored);
+  const summary: CoverageSummary = summarizeCoverage(scored);
 
   writeFileSync(join(outDir, "scorecard.json"), JSON.stringify({ summary, bugs: scored }, null, 2));
 
-  console.log(`Coverage scorecard: ${summary.caught} caught, ${summary.missed} missed, ${summary["requires-live-run"]} require a live run (of ${scored.length} planted bugs)`);
-  for (const b of scored) console.log(`  [${b.status.padEnd(17)}] ${b.id.padEnd(16)} (${b.severity})`);
+  console.log(
+    `Coverage scorecard: ${summary.asserted} asserted, ${summary["surfaced-for-review"]} surfaced for review, ` +
+      `${summary.missed} missed, ${summary["requires-live-run"]} require a live run (of ${scored.length} planted bugs)`,
+  );
+  for (const b of scored) {
+    const label = b.status === "caught" ? (b.tier === "high" ? "asserted" : "surfaced-for-review") : b.status;
+    console.log(`  [${label.padEnd(19)}] ${b.id.padEnd(16)} (${b.severity})`);
+  }
 }
 
 // Guarded so dry-run-scorecard.test.ts can import GROUND_TRUTH_BUGS without writing scorecard.json.
