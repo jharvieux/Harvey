@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { checkKnownDependencyCVEs, checkNextVersionCVEs, CURATED_CLAIMS, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
+import {
+  assertDisclosedDivergence,
+  checkKnownDependencyCVEs,
+  checkNextVersionCVEs,
+  type CuratedDepCve,
+  CURATED_CLAIMS,
+  parseOsvFindings,
+  type OsvScanResult,
+} from "./dependencies.js";
 
 // The staleness check (src/cli/osv-staleness.ts, #247) verifies CURATED_CLAIMS against OSV over the
 // network, so it can't run in verify. These offline tests guard the list it reads: an advisory
@@ -296,6 +304,71 @@ describe("checkKnownDependencyCVEs", () => {
   it("cites the specific matched range in the evidence for a multi-range entry", () => {
     const finding = checkKnownDependencyCVEs({ undici: "6.6.0" }).find((f) => f.id === "DEP-CVE-2024-24758");
     expect(finding?.evidence).toContain(">= 6.0.0 < 6.6.1");
+  });
+});
+
+// #255: a curated severity may diverge from OSV's own database_specific rating when we have a
+// reasoned basis, but the divergence must never ship silently. assertDisclosedDivergence is the
+// mechanical guard; these tests exercise it directly rather than only asserting the current
+// corpus is clean, so a future entry that re-rates without disclosing fails here first.
+describe("assertDisclosedDivergence (#255 — diverge, but disclose)", () => {
+  const base: CuratedDepCve = {
+    name: "example-pkg",
+    ranges: [{ fixed: "2.0.0" }],
+    id: "CVE-0000-00000",
+    severity: "High",
+    tier: "high",
+    summary: "test fixture",
+    fix: "upgrade",
+    source: "https://osv.dev/vulnerability/GHSA-0000-0000-0000",
+  };
+
+  it("passes an entry with no osvSeverity set (no claimed divergence)", () => {
+    expect(() => assertDisclosedDivergence(base)).not.toThrow();
+  });
+
+  it("passes an entry whose divergence carries a reason", () => {
+    expect(() =>
+      assertDisclosedDivergence({ ...base, osvSeverity: "Medium", divergenceReason: "auth-focused context raises impact" }),
+    ).not.toThrow();
+  });
+
+  it("throws when osvSeverity diverges from severity with no divergenceReason", () => {
+    expect(() => assertDisclosedDivergence({ ...base, osvSeverity: "Medium" })).toThrow(/requires disclosure/);
+  });
+
+  it("throws when divergenceReason is only whitespace", () => {
+    expect(() => assertDisclosedDivergence({ ...base, osvSeverity: "Medium", divergenceReason: "   " })).toThrow(/requires disclosure/);
+  });
+
+  it("throws when osvSeverity is set equal to severity (not an actual divergence)", () => {
+    expect(() => assertDisclosedDivergence({ ...base, osvSeverity: "High", divergenceReason: "redundant" })).toThrow(/not a divergence/);
+  });
+});
+
+describe("jsonwebtoken CVE-2022-23540 severity disclosure (#255)", () => {
+  it("rates the finding High while disclosing OSV's Moderate rating and the reason", () => {
+    const finding = checkKnownDependencyCVEs({ jsonwebtoken: "8.5.1" }).find((f) => f.id === "DEP-CVE-2022-23540");
+    expect(finding?.severity).toBe("High");
+    expect(finding?.evidence).toContain("Harvey rates this High; OSV rates Medium because");
+  });
+
+  it("does not append a divergence disclosure to a non-diverging entry (minimist)", () => {
+    const finding = checkKnownDependencyCVEs({ minimist: "1.2.5" }).find((f) => f.id === "DEP-CVE-2021-44906");
+    expect(finding?.evidence).not.toContain("Harvey rates this");
+  });
+
+  // #255 corpus audit: these four entries were unexplained drift (no reasoned basis recorded),
+  // so they were aligned to OSV's own rating rather than kept-and-disclosed like jsonwebtoken.
+  it.each([
+    ["next-auth", "4.19.0", "DEP-CVE-2023-27490", "High"],
+    ["undici", "5.7.0", "DEP-CVE-2022-35949", "Medium"],
+    ["undici", "5.7.0", "DEP-CVE-2024-24758", "Low"],
+    ["ws", "7.4.5", "DEP-CVE-2021-32640", "Medium"],
+  ])("%s@%s (%s) is aligned to OSV's severity (%s), no disclosure needed", (name, vuln, id, severity) => {
+    const finding = checkKnownDependencyCVEs({ [name]: vuln }).find((f) => f.id === id);
+    expect(finding?.severity).toBe(severity);
+    expect(finding?.evidence).not.toContain("Harvey rates this");
   });
 });
 
