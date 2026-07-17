@@ -110,9 +110,12 @@ quoted.
 
 The audit is a ten-module product (M1–M10, `docs/audit-modules.md`). A delivery is only complete
 when **every** module is accounted for — run, or explicitly recorded as unable to run with a reason.
-This is enforced mechanically by `assertAuditComplete` (`src/audit-coverage.ts`, run it with
-`pnpm audit-coverage --coverage <file.json>`), the same completeness discipline the target gate
-applies to apps/backends/seams. Record each module before delivery:
+The preferred path is the full-audit runner (`pnpm exec tsx src/cli/run-audit.ts <target>`, #229/#310),
+which **derives** the coverage ledger from what each probe actually reported. `assertAuditComplete`
+(`src/audit-coverage.ts`, run it with `pnpm audit-coverage --coverage <file.json>`) remains for
+engagements whose modules run outside the orchestrator — there the ledger is caller-supplied, the
+same completeness discipline the target gate applies to apps/backends/seams. Record each module
+before delivery:
 
 - **ran** — **all** of the module's in-scope classes executed. "No tests exist" is a *ran* result
   (it's the M8 finding), not a skip.
@@ -129,6 +132,8 @@ applies to apps/backends/seams. Record each module before delivery:
 
 A module in `MODULES_NEVER_EXECUTED` (today: M6) is stronger than a gap: it has never produced
 output in **any** engagement, so no reason clears it and the gate throws until it is run once.
+This set is **derived**, not hand-kept (#284) — it's the complement of `audit-execution-log.json`,
+the record the full-audit runner writes from what actually executed.
 
 A "test *database*" is not a test *environment*: M2's app-route and seam probes need a deployed
 non-prod **app**, so a DB-only engagement runs M2's RLS class and marks M2 **partial**, not ran.
