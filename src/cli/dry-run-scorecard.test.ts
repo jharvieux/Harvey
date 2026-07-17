@@ -5,13 +5,15 @@
 // claim), but the claim "no mechanical module reaches this bug" is falsifiable against the real
 // findings the scan produced.
 //
-// KNOWN CEILING, stated rather than implied: the location-anchored guard only catches drift where a
-// new rule fires AT the bug's planted location. It caught RLS-AUTH-ROLE's stale mapping (rls.sql:38)
-// and would have caught RLS-USING-TRUE's (#337 fires at rls.sql:31); it did NOT catch RLS-DISABLED's,
-// because checkMigrationRlsStatic reports an absence at the CREATE site (schema.sql:35) while
-// GROUND-TRUTH addresses the bug at the absence site (rls.sql:41-43). An address-mismatched rule
-// still needs a human to notice. Making that automatic would mean matching on bug CLASS rather than
-// location — tracked as a follow-up.
+// Two complementary guards. The LOCATION guard catches drift where a rule fires AT a bug's planted
+// line. The CLASS guard (#335) closes its ceiling: it keys on a bug's `classMatch` (an exact rule
+// taxonomy, address-independent), so a rule that proves the bug at a DIFFERENT address than planted
+// still falsifies a "no rule reaches this class" claim. That was the hole in the location guard:
+// checkMigrationRlsStatic proves RLS-DISABLED at the CREATE site (schema.sql:35) while GROUND-TRUTH
+// addresses it at the absence site (rls.sql:41-43), so a location guard anchored on the planted
+// line sees nothing — the class guard sees the rule firing and would catch a stale re-key (the
+// mutation test below demonstrates this on RLS-DISABLED). classMatch is precise by construction: a
+// loose word regex would false-match a same-word rule for an unrelated class (#246).
 //
 // It also guards the failure mode one level up, which no amount of per-bug checking can see: a bug
 // that GROUND-TRUTH plants but the scorecard never maps at all is absent from scorecard.json rather
@@ -20,7 +22,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { Finding } from "../findings.js";
 import { AUTOMATED_REPLAY_IDS } from "../pentest/verify.js";
+import { scoreEntry } from "../scan/calibration.js";
+import { rlsStaticSemanticsEntries } from "../scan/calibration/rls-static-semantics.entries.js";
 import { GROUND_TRUTH_BUGS } from "./dry-run-scorecard.js";
 
 interface RawFinding {
@@ -83,6 +88,43 @@ describe("GROUND_TRUTH_BUGS mappings vs. the findings the scan really produced",
     },
   );
 
+  // #335 — the CLASS guard. A bug that claims "no mechanical rule reaches this class" (the accepted
+  // Semgrep-ran-but-no-rule gaps, and any not-run-mechanical bug) is falsified against real findings
+  // by its own class, wherever the rule would fire — not only at its planted line. If a rule for the
+  // class ever lands, this fails and forces a re-key to caught, closing the honest→caught drift the
+  // location guard structurally cannot see.
+  const claimsNoRuleReaches = GROUND_TRUTH_BUGS.filter((b) => b.classMatch && (b.expectedModule.includes("but no rule") || (!b.moduleRan && !dynamic.includes(b))));
+
+  it.each(claimsNoRuleReaches.map((b) => [b.id, b] as const))(
+    "%s claims no rule reaches its class — no mechanical finding of that class fires ANYWHERE (address-independent)",
+    (_id, bug) => {
+      const reached = findings.filter((f) => f.mechanical === true && bug.classMatch!({ taxonomy: f.taxonomy, location: f.location }));
+      expect(
+        reached,
+        `${bug.id} is mapped as reached by no mechanical rule ("${bug.expectedModule}") but a mechanical finding of its class fired: ` +
+          `${reached.map((f) => `"${f.taxonomy}" at ${f.location}`).join("; ")}. A rule now reaches this class — re-key to caught.`,
+      ).toEqual([]);
+    },
+  );
+
+  it("class guard catches address-mismatched staleness the location guard misses (#335, RLS-DISABLED)", () => {
+    // RLS-DISABLED is the absence-shaped case: planted at rls.sql:41-43 but proved by
+    // checkMigrationRlsStatic at schema.sql:35. Simulate the stale re-key this guard must catch —
+    // the bug wrongly remapped to "no mechanical rule reaches this."
+    const rlsDisabled = GROUND_TRUTH_BUGS.find((b) => b.id === "RLS-DISABLED")!;
+    expect(rlsDisabled.classMatch, "RLS-DISABLED needs a classMatch for the class guard to protect it").toBeDefined();
+
+    // The LOCATION guard looks only at the planted absence lines and sees nothing — it would bless
+    // the stale mapping, exactly the ceiling #335 documents.
+    const plantedAbsence = plantedAt(rlsDisabled.location)!;
+    expect(mechanicalFindingsAt(plantedAbsence.file, plantedAbsence.lines)).toEqual([]);
+
+    // The CLASS guard keys on the taxonomy and finds the rule firing at its create site — the
+    // contradiction the location guard could not see, now caught automatically.
+    const byClass = findings.filter((f) => f.mechanical === true && rlsDisabled.classMatch!({ taxonomy: f.taxonomy, location: f.location }));
+    expect(byClass.length, "class guard must see the rule firing at schema.sql:35 despite the address mismatch").toBeGreaterThan(0);
+  });
+
   // Guards the two files against drifting apart, which is how rows 9–12 went unlisted: they were
   // added to GROUND-TRUTH (#145–#148) and nothing required the scorecard to acknowledge them, so
   // `requires-live-run: 0` kept claiming nothing awaited a live run. A bug this pass can't judge
@@ -110,5 +152,40 @@ describe("GROUND_TRUTH_BUGS mappings vs. the findings the scan really produced",
     // RAN_SEMGREP_NO_RULE bugs are excluded above: they are the tier's honest, known ceiling.
     const notFiring = claimedCaught.filter((b) => !findings.some((f) => b.matches(f)));
     expect(notFiring.map((b) => b.id)).toEqual([]);
+  });
+});
+
+// #339 (partial — the full single-key migration is #425). The dry-run and the gated corpus
+// answered "does a rule catch this?" from two independent keys; the dry-run's key drifted for weeks
+// (#332, then #337). This binds the two over the SAME committed findings the dry-run produced:
+// the gated corpus (which cannot drift, it fails `pnpm verify`) is scored against dry-run/findings.
+// json, and the scorecard's verdict for the same bug must agree. If a rule stops firing, the corpus
+// side fails; if the scorecard under-reports a class the corpus proves caught (exactly #332/#337),
+// this fails. The remaining hand-keyed `matches` is not yet removed — that's the remainder issue.
+describe("dry-run detection verdicts are bound to the gated corpus, not a parallel key (#339)", () => {
+  const fullFindings = JSON.parse(
+    readFileSync(join(import.meta.dirname, "..", "..", "dry-run", "findings.json"), "utf8"),
+  ) as Finding[];
+
+  // The static-RLS classes that were the observed drift (#332 RLS-AUTH-ROLE, #337 RLS-USING-TRUE):
+  // each gated corpus positive paired with the scorecard bug it corresponds to.
+  const bound = [
+    { corpusId: "P-RLS-USING-TRUE-STATIC", bugId: "RLS-USING-TRUE" },
+    { corpusId: "P-RLS-AUTH-ROLE-STATIC", bugId: "RLS-AUTH-ROLE" },
+  ];
+
+  it.each(bound)("corpus $corpusId proves the class on the committed findings, and $bugId scores caught to match", ({ corpusId, bugId }) => {
+    const entry = rlsStaticSemanticsEntries.find((e) => e.id === corpusId)!;
+    expect(entry, `${corpusId} is no longer in the gated corpus — the binding is stale`).toBeDefined();
+
+    // Corpus side (gated on every verify): the rule fires on the dry-run's own committed output.
+    const row = scoreEntry(entry, fullFindings);
+    expect(row.pass, `${corpusId}: ${row.detail}`).toBe(true);
+
+    // Scorecard side must not drift below it: a class the corpus proves detectable cannot be
+    // reported requires-live-run/missed — the exact under-selling #332/#337 did.
+    const bug = GROUND_TRUTH_BUGS.find((b) => b.id === bugId)!;
+    const hit = fullFindings.some((f) => bug.matches(f));
+    expect(hit, `corpus proves ${corpusId} caught on these findings, but scorecard bug ${bugId}'s matcher no longer fires — the two keys have drifted apart`).toBe(true);
   });
 });

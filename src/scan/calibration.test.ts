@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildCoverageMatrix, CORPUS, scoreEntry, type CorpusEntry } from "./calibration.js";
+import { buildCoverageMatrix, CORPUS, moduleCensus, scoreEntry, type CorpusEntry } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
@@ -106,6 +106,15 @@ describe("scoreEntry", () => {
     const row = scoreEntry(e, []);
     expect(row.pass).toBe(true);
     expect(row.detail).toContain("connected");
+  });
+
+  it("fails loud when a relevant finding reaches the scorer with no precisionTier (#327)", () => {
+    // The latent bug: a detector finding with no tier scored as "no tier at all" — a positive
+    // registered as an outright miss and an untiered FP was invisible to precision, both silently.
+    // An untiered finding relevant to an entry must now THROW, never score as a quiet miss/clear.
+    const e = entry({ id: "P-UNTIERED", kind: "positive", cls: "x", location: "search.js", match: ["sql"], expectedTier: "review", note: "" });
+    const untiered: Finding = { ...finding({ location: "pages/api/search.js:11", taxonomy: "SQL injection", precisionTier: "high" }), precisionTier: undefined };
+    expect(() => scoreEntry(e, [untiered])).toThrow(/precisionTier/);
   });
 
   it("does not let an environment-dependent checkout path leak a match keyword into the haystack (issue #86)", () => {
@@ -637,6 +646,31 @@ describe("#353/#354 mechanical graduations (real detectors over the committed fi
   });
 });
 
+describe("moduleCensus (#341 — per-module legibility so a blended count can't imply uniform coverage)", () => {
+  it("tallies each module's fixtures and keeps thin modules visible, not averaged away", () => {
+    const census = moduleCensus(CORPUS);
+    const byModule = new Map(census.map((c) => [c.module, c]));
+
+    // Every module the corpus tags must appear as its own row.
+    const modulesInCorpus = new Set(CORPUS.map((e) => e.module ?? "M1"));
+    expect(new Set(census.map((c) => c.module))).toEqual(modulesInCorpus);
+
+    // The census must equal a direct recount — a thin module reads as thin, not blended into M1.
+    for (const m of modulesInCorpus) {
+      const entries = CORPUS.filter((e) => (e.module ?? "M1") === m);
+      const row = byModule.get(m)!;
+      expect(row.negatives).toBe(entries.filter((e) => e.kind === "negative").length);
+      expect(row.positivesConnected).toBe(entries.filter((e) => e.kind === "positive" && e.expectedTier === "connected").length);
+      expect(row.positivesStatic).toBe(entries.filter((e) => e.kind === "positive" && e.expectedTier !== "connected").length);
+    }
+
+    // M1 rows first, then ascending module number.
+    expect(census[0]?.module).toBe("M1");
+    const nums = census.map((c) => Number(c.module.replace(/^M/, "")));
+    expect(nums).toEqual([...nums].sort((a, b) => a - b));
+  });
+});
+
 describe("buildCoverageMatrix", () => {
   it("excludes connected-tier entries from the static positive/negative totals", () => {
     const m = buildCoverageMatrix([], CORPUS);
@@ -691,6 +725,11 @@ describe("#221 authz corpus (live detectAppRouterFindings output over the commit
       if (e.kind === "positive") expect(row.caughtTier, e.id).toBe(e.expectedTier);
       else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
     }
+  });
+
+  it("emits every finding with an explicit precisionTier — none reach the scorer untiered (#327)", () => {
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.every((f) => f.precisionTier !== undefined)).toBe(true);
   });
 
   it("draws exactly one finding of this class on the fixture — the two benign siblings are silent", () => {

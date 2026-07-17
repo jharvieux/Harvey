@@ -1,6 +1,7 @@
 {
   "summary": {
-    "caught": 7,
+    "asserted": 2,
+    "surfaced-for-review": 5,
     "missed": 1,
     "requires-live-run": 4
   },
@@ -11,7 +12,8 @@
       "location": "supabase/migrations/20260708000002_rls.sql:31-32",
       "expectedModule": "usingTrueReview (src/rls-policy-review.ts, #337) ran inside runMechanicalScan via checkMigrationPolicySemantics and reviewed documents_select_all's USING (true) at the planted line — review tier, so the tier surfaces it for adjudication rather than asserting the verdict",
       "status": "caught",
-      "note": "Matched by finding \"M1 — Multi-tenant security\" at supabase/migrations/20260708000002_rls.sql:31 (public.documents.documents_select_all)."
+      "tier": "review",
+      "note": "Surfaced for review by \"M1 — Multi-tenant security\" at supabase/migrations/20260708000002_rls.sql:31 (public.documents.documents_select_all) — review tier, a human must still adjudicate this verdict."
     },
     {
       "id": "RLS-AUTH-ROLE",
@@ -19,7 +21,8 @@
       "location": "supabase/migrations/20260708000002_rls.sql:38-39",
       "expectedModule": "checkMigrationPolicySemantics (src/scan/supabase-static.ts, #220) ran inside runMechanicalScan and reviewed invoices_select_authenticated's predicate at the planted line",
       "status": "caught",
-      "note": "Matched by finding \"M1 — Multi-tenant security\" at supabase/migrations/20260708000002_rls.sql:38 (public.invoices.invoices_select_authenticated)."
+      "tier": "review",
+      "note": "Surfaced for review by \"M1 — Multi-tenant security\" at supabase/migrations/20260708000002_rls.sql:38 (public.invoices.invoices_select_authenticated) — review tier, a human must still adjudicate this verdict."
     },
     {
       "id": "RLS-DISABLED",
@@ -27,7 +30,8 @@
       "location": "supabase/migrations/20260708000002_rls.sql:41-43",
       "expectedModule": "checkMigrationRlsStatic (src/scan/supabase-static.ts) ran inside runMechanicalScan and proved audit_logs never gets RLS enabled in ANY migration",
       "status": "caught",
-      "note": "Matched by finding \"Migration table without RLS (static)\" at supabase/migrations/20260708000001_schema.sql:35."
+      "tier": "high",
+      "note": "Asserted by high-precision rule \"Migration table without RLS (static)\" at supabase/migrations/20260708000001_schema.sql:35."
     },
     {
       "id": "SQLI-SERVICE",
@@ -35,7 +39,8 @@
       "location": "pages/api/search.js:9",
       "expectedModule": "Semgrep ran (src/scan/semgrep.ts) and harvey-sql-injection-template matched the raw-SQL-concat pattern in search.js",
       "status": "caught",
-      "note": "Matched by finding \"src.scan.rules.semgrep.harvey-sql-injection-template\" at pages/api/search.js:11."
+      "tier": "high",
+      "note": "Asserted by high-precision rule \"src.scan.rules.semgrep.harvey-sql-injection-template\" at pages/api/search.js:11."
     },
     {
       "id": "WEBHOOK-REPLAY",
@@ -51,7 +56,8 @@
       "location": "pages/api/counter/increment.js:11-31",
       "expectedModule": "detectCounterRaceFindings (src/scan/counter-race.ts, #353) ran inside runMechanicalScan and matched the non-atomic read-modify-write on counters — review tier",
       "status": "caught",
-      "note": "Matched by finding \"Non-atomic read-modify-write race condition\" at pages/api/counter/increment.js:20."
+      "tier": "review",
+      "note": "Surfaced for review by \"Non-atomic read-modify-write race condition\" at pages/api/counter/increment.js:20 — review tier, a human must still adjudicate this verdict."
     },
     {
       "id": "UPDATE-UNSCOPED",
@@ -59,7 +65,8 @@
       "location": "pages/api/profile/update.js:11-14",
       "expectedModule": "scanLeftoverAuth (src/scan/leftover-auth.ts, #353) ran inside runMechanicalScan and matched the raw UPDATE/DELETE with no WHERE clause in this route handler — review tier",
       "status": "caught",
-      "note": "Matched by finding \"Unscoped service-role UPDATE/DELETE (no WHERE)\" at pages/api/profile/update.js."
+      "tier": "review",
+      "note": "Surfaced for review by \"Unscoped service-role UPDATE/DELETE (no WHERE)\" at pages/api/profile/update.js — review tier, a human must still adjudicate this verdict."
     },
     {
       "id": "OPEN-REDIRECT",
@@ -67,7 +74,8 @@
       "location": "pages/api/redirect.js:9",
       "expectedModule": "Semgrep ran (src/scan/semgrep.ts) and the harvey-open-redirect custom rule (src/scan/rules/semgrep/base.yml) matched at redirect.js",
       "status": "caught",
-      "note": "Matched by finding \"src.scan.rules.semgrep.harvey-open-redirect\" at pages/api/redirect.js:18."
+      "tier": "review",
+      "note": "Surfaced for review by \"src.scan.rules.semgrep.harvey-open-redirect\" at pages/api/redirect.js:18 — review tier, a human must still adjudicate this verdict."
     },
     {
       "id": "SHADOW-API-VERSION",

@@ -125,6 +125,23 @@ function topTier(findings: Finding[]): PrecisionTier | undefined {
   return undefined;
 }
 
+// A mechanical finding reaching the corpus scorer MUST declare its precisionTier. An untiered
+// finding scores as "no tier" in BOTH directions silently: a detector true-positive registers as
+// an outright MISS, and a negative's untiered false-positive is indistinguishable from a clean
+// clear (it never counts against precision). Detectors set an explicit conservative default, but
+// a finding that still arrives untiered is a bug in whatever produced it — fail loud here rather
+// than let it corrupt the numbers unseen (#327).
+function assertTiered(entry: CorpusEntry, relevant: Finding[]): void {
+  const untiered = relevant.filter((f) => f.precisionTier === undefined);
+  if (untiered.length === 0) return;
+  throw new Error(
+    `Corpus entry ${entry.id} matched ${untiered.length} finding(s) with no precisionTier ` +
+      `(${untiered.map((f) => `${f.id} @ ${f.location}`).join(", ")}). A mechanical finding reaching ` +
+      `the calibration scorer must set precisionTier — an untiered finding silently mis-scores. ` +
+      `Set it on the detector that produced it.`,
+  );
+}
+
 export interface MatrixRow {
   id: string;
   kind: CorpusEntry["kind"];
@@ -143,6 +160,7 @@ export interface MatrixRow {
 //             (it gets triaged out of the count) but recorded. A "connected"-tier negative is N/A.
 export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
   const relevant = relevantFindings(entry, findings);
+  assertTiered(entry, relevant);
   const highFlagged = relevant.some((f) => f.precisionTier === "high");
   const reviewFlagged = relevant.some((f) => f.precisionTier === "review");
   const caughtTier = topTier(relevant);
@@ -178,6 +196,36 @@ interface CoverageMatrix {
   negativesCleared: number;
   connectedNa: number;
   ok: boolean; // every static positive caught AND every static negative cleared
+}
+
+// A module whose entries omit `module` is the original M1 mechanical-scan corpus (base+secrets+
+// b2–b16+…). Everything else carries an explicit M3/M4/M5/M7/M8/M9/M10 label.
+function moduleOf(entry: CorpusEntry): string {
+  return entry.module ?? "M1";
+}
+
+interface ModuleCensusRow {
+  module: string;
+  positivesStatic: number; // static positives (excludes connected tier)
+  positivesConnected: number; // connected-tier positives (live-DB only, N/A statically)
+  negatives: number;
+}
+
+// Per-module fixture census over the corpus, so a blended recall count can never imply uniform
+// coverage: a module standing on 1 positive is visibly thin here rather than averaged into the
+// M1-dominated total (#341). Purely counts the answer key — says nothing about what any gate runs.
+export function moduleCensus(corpus: CorpusEntry[] = CORPUS): ModuleCensusRow[] {
+  const rows = new Map<string, ModuleCensusRow>();
+  for (const e of corpus) {
+    const m = moduleOf(e);
+    const row = rows.get(m) ?? { module: m, positivesStatic: 0, positivesConnected: 0, negatives: 0 };
+    if (e.kind === "negative") row.negatives++;
+    else if (e.expectedTier === "connected") row.positivesConnected++;
+    else row.positivesStatic++;
+    rows.set(m, row);
+  }
+  const numOf = (m: string) => Number(m.replace(/^M/, "")) || 0;
+  return [...rows.values()].sort((a, b) => numOf(a.module) - numOf(b.module));
 }
 
 export function buildCoverageMatrix(findings: Finding[], corpus: CorpusEntry[] = CORPUS): CoverageMatrix {
