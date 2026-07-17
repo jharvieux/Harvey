@@ -2,7 +2,23 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-16 (the coverage-honesty + calibration issue-sweep, below — it CLOSED the 2026-07-15 "START HERE" items #349/#350/#351/#352. The M6 #267/#406 build-out is further down and still stands.)_
+_Last updated: 2026-07-17 (per-module detector-count work + five PRs below — all OPEN, awaiting operator merge. The 2026-07-16 sweep is further down and still stands.)_
+
+## 2026-07-17 — detector census, hotspot→LLM wiring, orchestrator artifact path (5 PRs OPEN)
+
+Prompted by an operator question — "what's our detection coverage per module?" — which had no clean answer because detectors live in two engines (semgrep `harvey-*` rules + TS `taxonomy:` detectors) and M1/M2/M3/M4 don't tag findings with a module. Fixed the measurement, then cleared adjacent backlog. **All five PRs pass `pnpm verify`; none merged yet — merge order note below.**
+
+- **#443** (closes M6 half of #442) — `pnpm detector-census` derives the per-module detector count from source by owning-file map (currently **M1 129 · M2 3 · M3 3 · M4 1 · M5 16 · M6 13 · M7 25 · M8 7 · M9 6 · M10 32 = 235**; counts DETECTORS, not recall — only M1 has a scored gate). Run it, never quote it. Also: `simplify-scan --hotspots` orders the M6 review packet by M3 hotspot rank. CLAUDE.md: new detector-census bullet + M3-row consumer note.
+- **#444** (closes #382) — `harvey-route-noauth` widened to all App Router mutation verbs (was POST-only; missed PUT/DELETE/PATCH). Gate re-measured **155/159** static, 139/139 negatives. Carries the coupled CLAUDE.md 153/157→155/159 update so the number lands with the code that makes it true.
+- **#445** (closes #366/#367/#368) — three new M2 probes: IDOR/BOLA dynamic-id sweep, blanket missing/forged-auth sweep (deny-by-default allowlist), mass-assignment. Fixture-tested only; live validation is still #159/#161.
+- **#446** (closes #416) — the orchestrator's **derive-`ran`-from-artifact** mechanism (read side). `run-audit --artifacts-dir <dir>` reads a dated `<module>.pass.json` and derives `ran` for M1/M2/M3/M6 ONLY when it's fresh (30-day window) and target-matching; a stale/mismatched artifact does NOT yield `ran`. Schema: `docs/design/audit-pass-artifacts.md`.
+- **#447** (closes M1 half of #442) — `pnpm scan-focus <m3-hotspots>` renders a hotspot-priority focus brief for the `/vuln-scan --extra` semantic pass. CLAUDE.md M1-row documents the flow.
+
+### Merge order + follow-ups
+- **#443, #444, #447 all edit CLAUDE.md on different lines** — GitHub reports all mergeable; whichever merges last may want a trivial rebase on CLAUDE.md.
+- **#442 closes only when both #443 and #447 merge** — neither PR auto-closes the issue; close it by hand once both land.
+- **#448 (NEW, open)** — the #416 **emit side**: make each pass actually write its `<module>.pass.json` (advances #434/#435/#420). #446 is only the read/derive side.
+- **Still yours:** #159/#161 (need a live deployed app/seams), and the target-commit-binding tightening noted in #446's body.
 
 ## 2026-07-16 issue-sweep — coverage honesty, calibration hardening, detection rules (14 PRs merged, 30 issues closed)
 
