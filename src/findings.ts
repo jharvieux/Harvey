@@ -55,6 +55,13 @@ export interface Finding {
   // as opposed to a human/LLM-authored engagement finding.
   mechanical?: boolean;
   precisionTier?: PrecisionTier;
+  // M10 (#459): columns flagged by the OPAQUE_JSON_BLOB review class (#377) — a container column
+  // whose name suggests nested PII, not asserted. reviewFlagOnly is true when a table has ONLY
+  // review-flagged columns and no asserted classification, so the renderer never shows it as an
+  // asserted PII holding; reviewFlagColumns lists the flagged column names (present even on a
+  // finding that also has asserted columns, so the renderer can surface those too).
+  reviewFlagOnly?: boolean;
+  reviewFlagColumns?: string[];
   // A finding's own claim that it is more than a version/pattern match — that exploitability in
   // THIS codebase has actually been confirmed, not just a fact about which CVE range a dependency
   // falls in. Grading logic (src/quick-scan.ts NON_GRADING_CATEGORIES) treats a whole category as
@@ -197,6 +204,14 @@ export function validateFindings(data: unknown): ValidationResult {
     }
     if (f.precisionTier !== undefined && !PRECISION_TIERS.includes(f.precisionTier as PrecisionTier)) {
       errors.push(`${at}.precisionTier: "${String(f.precisionTier)}" not one of ${PRECISION_TIERS.join("/")}`);
+    }
+    if (f.reviewFlagOnly !== undefined && typeof f.reviewFlagOnly !== "boolean") {
+      errors.push(`${at}.reviewFlagOnly: expected boolean`);
+    }
+    if (f.reviewFlagColumns !== undefined) {
+      if (!Array.isArray(f.reviewFlagColumns) || f.reviewFlagColumns.some((c) => typeof c !== "string")) {
+        errors.push(`${at}.reviewFlagColumns: expected an array of strings`);
+      }
     }
   });
 
