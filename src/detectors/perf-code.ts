@@ -105,10 +105,15 @@ function reactCompilerFlag(files: SourceInput[]): CompilerFlagValue {
 }
 
 // True when the target enables React Compiler (next.config `reactCompiler: true|{...}` under
-// experimental or top-level, or babel-plugin-react-compiler in a babel config). Auto-memoization
-// then covers the manual-memo classes below, so they report as Info instead of Perf/Low.
-// A variable/env-derived flag is NOT treated as "on" here — see reactCompilerFlag above and
-// detectUnresolvableCompilerFlag, which surfaces that case instead of silently assuming false.
+// experimental or top-level, or babel-plugin-react-compiler in a babel config).
+//
+// #248: the micro-render classes (context-value literal, inline literal prop, index-as-key) are
+// EMITTED ONLY when this is true, and suppressed entirely otherwise. #230 measured them ~0% real
+// as work items; with the compiler ON they at least document shapes the compiler is auto-fixing
+// (Info), but with it OFF they were a pure FP tail (proposit 11 / saas-lite 19 / boxyhq 12 on the
+// external corpus) counted at Perf/Low. A variable/env-derived flag is NOT treated as "on" here —
+// see reactCompilerFlag above and detectUnresolvableCompilerFlag, which surfaces that case
+// (and the suppression it implies) instead of silently assuming false.
 export function reactCompilerEnabled(files: SourceInput[]): boolean {
   return reactCompilerFlag(files).status === "on";
 }
@@ -132,8 +137,8 @@ function detectUnresolvableCompilerFlag(files: SourceInput[], nextId: NextId): F
       taxonomy: "M7 — React Compiler flag unresolvable",
       location: `${flag.file}:${line}`,
       evidence: `\`reactCompiler: ${flag.raw}\` reads its value from a variable/env rather than a literal \`true\`/\`false\`/object, so this scan can't confirm at scan time whether React Compiler is actually enabled at build/runtime.`,
-      impact: "If this resolves to true in the deployed build, the manual-memo findings below (context value / inline literal props) are auto-fixed by the compiler and shouldn't count as outstanding work. Until confirmed, this audit conservatively keeps them at counted severity rather than assuming the flag is off.",
-      fix: "Confirm the resolved value of this flag for the deployed build (check the variable/env var's actual value) and re-triage the manual-memo M7 findings accordingly.",
+      impact: "The micro-render manual-memo classes (context value / inline literal props / index-as-key) are only reported when the compiler is confirmed ON (#248 — measured ~0% real as work items without it), so with this flag unresolvable they are suppressed the same as compiler-off. This watch row is the disclosure that the flag itself could not be read, not a graded finding.",
+      fix: "Confirm the resolved value of this flag for the deployed build (check the variable/env var's actual value); if it resolves to true, re-run the scan with the literal so the compiler-covered shapes are reported informationally.",
       value: 1,
       ease: 5,
       safety: 5,
@@ -173,6 +178,7 @@ function isLocallyDefinedContext(contextName: string, sources: Map<string, ts.So
 }
 
 function detectContextValueLiteral(sources: Map<string, ts.SourceFile>, nextId: NextId, compilerOn: boolean): Finding[] {
+  if (!compilerOn) return []; // #248: without the compiler this class measured ~0% real — suppressed, not counted
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
@@ -229,6 +235,7 @@ function isTranslationCallArray(expr: ts.Expression): boolean {
 }
 
 function detectInlinePropLiterals(sources: Map<string, ts.SourceFile>, nextId: NextId, compilerOn: boolean): Finding[] {
+  if (!compilerOn) return []; // #248: without the compiler this class measured ~0% real — suppressed, not counted
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
@@ -357,7 +364,12 @@ function isStaticListSource(sf: ts.SourceFile, source: ts.Expression): boolean {
   return isStatic;
 }
 
-function detectIndexAsKey(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+// #248: part of the micro-render tail — emitted only when React Compiler is on. Unlike the two
+// literal-prop classes above the compiler does NOT auto-fix key identity, so when it does emit it
+// keeps its Low severity rather than the Info demotion; the gate is precision-driven (the class
+// measured ~0% real on the corpus without the compiler), not a compiler-covers-it demotion.
+function detectIndexAsKey(sources: Map<string, ts.SourceFile>, nextId: NextId, compilerOn: boolean): Finding[] {
+  if (!compilerOn) return [];
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
@@ -1353,7 +1365,7 @@ export function detectPerfCodeFindings(files: SourceInput[]): Finding[] {
     ...detectContextValueLiteral(sources, nextId, compilerOn),
     ...detectInlinePropLiterals(sources, nextId, compilerOn),
     ...detectRawImgElement(sources, nextId),
-    ...detectIndexAsKey(sources, nextId),
+    ...detectIndexAsKey(sources, nextId, compilerOn),
     ...detectSortInJsx(sources, nextId),
     ...detectStateSprawl(sources, nextId),
     ...detectAwaitInLoop(sources, nextId),

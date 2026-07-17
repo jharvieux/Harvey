@@ -432,6 +432,24 @@ describe("dataMapToFindings — report-schema Finding[] emitter (#436)", () => {
     const live = dataMapToFindings(buildDataMap(columns), { tier: "live" });
     expect(live[0]?.evidence).toMatch(/live information_schema/i);
   });
+
+  it("#459: marks a review-flag-only table so the renderer never shows it as an asserted PII holding", () => {
+    const prefs = findings.find((f) => f.location === "prefs");
+    expect(prefs?.reviewFlagOnly).toBe(true);
+    expect(prefs?.reviewFlagColumns).toEqual(["metadata"]);
+  });
+
+  it("#459: a mixed table (asserted + review flag) stays asserted but still lists its flagged columns", () => {
+    const users = findings.find((f) => f.location === "users");
+    expect(users?.reviewFlagOnly).toBe(false);
+    expect(users?.reviewFlagColumns).toEqual(["profile"]);
+  });
+
+  it("#459: a table with no review-flagged columns reports an empty reviewFlagColumns list", () => {
+    const payments = findings.find((f) => f.location === "payments");
+    expect(payments?.reviewFlagOnly).toBe(false);
+    expect(payments?.reviewFlagColumns).toEqual([]);
+  });
 });
 
 describe("classifyWithFallback — LLM semantic-pass hook", () => {

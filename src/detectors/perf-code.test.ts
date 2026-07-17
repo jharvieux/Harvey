@@ -34,41 +34,59 @@ function byTaxonomy(relDir: string, taxonomy: string) {
   return detectPerfCodeFindings(loadFixtureDir(relDir)).filter((f) => f.taxonomy === taxonomy);
 }
 
+// #248: the micro-render classes (context value / inline literal prop / index-as-key) only emit
+// when React Compiler is enabled, so their positives AND negatives run with this config appended —
+// a negative that passes only because the whole class is suppressed would be vacuous.
+const COMPILER_ON: SourceInput = {
+  path: "next.config.mjs",
+  text: "const nextConfig = { experimental: { reactCompiler: true } };\nexport default nextConfig;\n",
+};
+
+function byTaxonomyCompilerOn(relDir: string, taxonomy: string) {
+  return detectPerfCodeFindings([...loadFixtureDir(relDir), COMPILER_ON]).filter((f) => f.taxonomy === taxonomy);
+}
+
 describe("context value recreated every render", () => {
   const TAX = "M7 — Context value recreated every render";
-  it("flags an inline object literal as a Provider value", () => {
-    const hits = byTaxonomy("ctx-value/positive", TAX);
+  it("flags an inline object literal as a Provider value (Info — compiler-covered) when React Compiler is on", () => {
+    const hits = byTaxonomyCompilerOn("ctx-value/positive", TAX);
     expect(hits).toHaveLength(1);
-    expect(hits[0]).toMatchObject({ severity: "Perf", confidence: "Likely", category: "Performance" });
+    expect(hits[0]).toMatchObject({ severity: "Info", confidence: "Likely", category: "Performance" });
     expect(hits[0]?.location).toBe("components/theme-provider.tsx:9");
   });
+  it("suppresses the class entirely when React Compiler is off (#248 — measured ~0% real without it)", () => {
+    expect(byTaxonomy("ctx-value/positive", TAX)).toHaveLength(0);
+  });
   it("does not flag a useMemo-stabilized value", () => {
-    expect(byTaxonomy("ctx-value/negative", TAX)).toHaveLength(0);
+    expect(byTaxonomyCompilerOn("ctx-value/negative", TAX)).toHaveLength(0);
   });
   it("does not flag a Provider whose Context isn't created in this project's own sources (a library/shadcn primitive, #230)", () => {
-    expect(byTaxonomy("ctx-value/negative-library-context", TAX)).toHaveLength(0);
+    expect(byTaxonomyCompilerOn("ctx-value/negative-library-context", TAX)).toHaveLength(0);
   });
 });
 
 describe("inline literal props", () => {
   const TAX = "M7 — Inline literal prop";
-  it("flags inline object/array literals passed to components, one rolled-up finding per file", () => {
-    const hits = byTaxonomy("inline-prop/positive", TAX);
+  it("flags inline object/array literals passed to components (Info — compiler-covered), one rolled-up finding per file, when React Compiler is on", () => {
+    const hits = byTaxonomyCompilerOn("inline-prop/positive", TAX);
     expect(hits).toHaveLength(1);
     expect(hits[0]?.title).toContain("2×");
-    expect(hits[0]).toMatchObject({ severity: "Low", confidence: "Review" });
+    expect(hits[0]).toMatchObject({ severity: "Info", confidence: "Review" });
+  });
+  it("suppresses the class entirely when React Compiler is off (#248)", () => {
+    expect(byTaxonomy("inline-prop/positive", TAX)).toHaveLength(0);
   });
   it("does not flag hoisted constants or style objects on DOM elements", () => {
-    expect(byTaxonomy("inline-prop/negative", TAX)).toHaveLength(0);
+    expect(byTaxonomyCompilerOn("inline-prop/negative", TAX)).toHaveLength(0);
   });
   it("does not flag framer-motion animation props (animate/initial/transition) — the library diffs by value, not reference (#230)", () => {
-    expect(byTaxonomy("inline-prop/negative-framer-motion", TAX)).toHaveLength(0);
+    expect(byTaxonomyCompilerOn("inline-prop/negative-framer-motion", TAX)).toHaveLength(0);
   });
   it("does not flag an inline `style` object prop — idiomatic and near-zero cost (#230)", () => {
-    expect(byTaxonomy("inline-prop/negative-style", TAX)).toHaveLength(0);
+    expect(byTaxonomyCompilerOn("inline-prop/negative-style", TAX)).toHaveLength(0);
   });
   it("does not flag an array built entirely from live i18n t(...) calls (#230)", () => {
-    expect(byTaxonomy("inline-prop/negative-i18n-array", TAX)).toHaveLength(0);
+    expect(byTaxonomyCompilerOn("inline-prop/negative-i18n-array", TAX)).toHaveLength(0);
   });
 });
 
@@ -90,16 +108,20 @@ describe("raw <img> instead of next/image", () => {
 
 describe("index as list key", () => {
   const TAX = "M7 — Index used as list key";
-  it("flags key={i} bound to the map callback's index parameter", () => {
-    const hits = byTaxonomy("index-key/positive", TAX);
+  it("flags key={i} bound to the map callback's index parameter when React Compiler is on (Low — keys aren't compiler-fixed)", () => {
+    const hits = byTaxonomyCompilerOn("index-key/positive", TAX);
     expect(hits).toHaveLength(1);
+    expect(hits[0]?.severity).toBe("Low");
     expect(hits[0]?.location).toBe("components/todo-list.tsx:7");
   });
+  it("suppresses the class entirely when React Compiler is off (#248)", () => {
+    expect(byTaxonomy("index-key/positive", TAX)).toHaveLength(0);
+  });
   it("does not flag a stable-id key even when the index is used elsewhere", () => {
-    expect(byTaxonomy("index-key/negative", TAX)).toHaveLength(0);
+    expect(byTaxonomyCompilerOn("index-key/negative", TAX)).toHaveLength(0);
   });
   it("does not flag a hardcoded const array literal (Footer/FAQ/Stepper-style static list) — it never reorders/inserts/deletes (#230)", () => {
-    expect(byTaxonomy("index-key/negative-static-list", TAX)).toHaveLength(0);
+    expect(byTaxonomyCompilerOn("index-key/negative-static-list", TAX)).toHaveLength(0);
   });
 });
 
@@ -296,17 +318,22 @@ describe("React Compiler gate", () => {
     expect(hits[0]?.severity).toBe("Info");
     expect(hits[0]?.evidence).toContain("React Compiler is enabled");
   });
-  it("keeps the same shape at Perf severity when no compiler config is present", () => {
-    const hits = byTaxonomy("ctx-value/positive", "M7 — Context value recreated every render");
-    expect(hits[0]?.severity).toBe("Perf");
+  it("suppresses the micro-render classes entirely when no compiler config is present (#248)", () => {
+    expect(byTaxonomy("ctx-value/positive", "M7 — Context value recreated every render")).toHaveLength(0);
   });
   it("surfaces (never silently assumes false) a variable/env-derived reactCompiler flag, e.g. saas-lite's `reactCompiler: ENABLE_REACT_COMPILER` (#249)", () => {
     const files = loadFixtureDir("react-compiler-unresolvable/positive");
-    expect(reactCompilerEnabled(files)).toBe(false); // can't prove it's on — gating stays conservative (#248 is out of scope)
+    expect(reactCompilerEnabled(files)).toBe(false); // can't prove it's on
     const hits = byTaxonomy("react-compiler-unresolvable/positive", "M7 — React Compiler flag unresolvable");
     expect(hits).toHaveLength(1);
     expect(hits[0]?.severity).toBe("Watch");
     expect(hits[0]?.evidence).toContain("ENABLE_REACT_COMPILER");
+  });
+  it("treats an unresolvable flag like compiler-off for the micro-render classes — suppressed, with the Watch row as the disclosure (#248)", () => {
+    const unresolvableConfig = loadFixtureDir("react-compiler-unresolvable/positive").filter((f) => /next\.config/.test(f.path));
+    const findings = detectPerfCodeFindings([...loadFixtureDir("ctx-value/positive"), ...unresolvableConfig]);
+    expect(findings.filter((f) => f.taxonomy === "M7 — Context value recreated every render")).toHaveLength(0);
+    expect(findings.filter((f) => f.taxonomy === "M7 — React Compiler flag unresolvable")).toHaveLength(1);
   });
   it("does not flag an explicit literal `reactCompiler: false`", () => {
     expect(byTaxonomy("react-compiler-unresolvable/negative", "M7 — React Compiler flag unresolvable")).toHaveLength(0);

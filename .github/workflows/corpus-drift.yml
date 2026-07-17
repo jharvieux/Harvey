@@ -15,6 +15,11 @@
 # On failure: the job names the module and target that drifted. A drift is EITHER an intended
 # precision fix — rebaseline that target in src/scan/external-corpus.ts with the measured note —
 # OR a regression, which is a scanner bug to fix. It is never something to silence.
+#
+# M8 mutation scoring is NOT this job's work (#470): no Stryker is provisioned here, corpus-drift
+# invokes mutation-scan --detect-only (suite-absent finding only), and each mutation-baseline
+# target gets an explicit "deferred to corpus-m8.yml" row. So this job goes green when M8's
+# mutation tier can't run here — while a real M4/M5/M7/M9/M10 baseline drift still fails it.
 
 name: corpus-drift
 

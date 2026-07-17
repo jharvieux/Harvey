@@ -32,6 +32,7 @@
     "audit-coverage": "tsx src/cli/audit-coverage.ts",
     "record-pass": "tsx src/cli/record-pass.ts",
     "dynamic-validate": "tsx src/cli/dynamic-validate.ts",
+    "run-audit": "tsx src/cli/run-audit.ts",
     "pii-classify": "tsx tools/pii-classify.mjs",
     "epic": "tsx src/cli/epic.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip"

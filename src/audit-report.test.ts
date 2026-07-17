@@ -98,8 +98,10 @@ describe("runAudit findings capture (#312/#420)", () => {
   it("collects findings from the emitting modules (bare-array AND object-artifact) and nothing from the non-emitters", () => {
     const captured = runAudit(AUDIT_RUNNERS, capturingCtx);
     // M4/M5/M9/M10 emit a bare Finding[] (M10 since #436); M3/M8 embed findings in an object
-    // artifact (#420). M1/M2/M6/M7 collect nothing — their findings come from a paid/live/human
-    // pass this run cannot observe.
+    // artifact (#420). M1/M2/M7 collect nothing — their findings come from a paid/live/human pass
+    // this run cannot observe. M6's free indicator layer CAN collect (#397), filtered to the
+    // `M6 — Indicator: …` taxonomy — this fixture's generic "tx" taxonomy doesn't match, so it
+    // collects nothing here too, but for a different (mock-fidelity) reason.
     expect(captured.findings.map((f) => f.id).sort()).toEqual(["M10", "M3", "M4", "M5", "M8", "M9"]);
   });
 
@@ -109,14 +111,14 @@ describe("runAudit findings capture (#312/#420)", () => {
     expect(findings.map((f) => f.id)).toContain("M8");
   });
 
-  it("assembles M3/M8/M10 findings into the deliverable, keeping M1/M2/M6 non-collection legible", () => {
+  it("assembles M3/M8/M10 findings into the deliverable, keeping M1/M2 non-collection legible", () => {
     const { recorded, findings } = runAudit(AUDIT_RUNNERS, capturingCtx);
     const doc = assembleEngagementDocument(recorded, capturingCtx.env, findings, meta);
     expect(validateFindings(doc).ok).toBe(true);
     expect(doc.findings.map((f) => f.id)).toEqual(expect.arrayContaining(["M3", "M8", "M10"]));
     // Non-collection is not silence: each non-emitting module is a non-"ran" row whose reason says
     // the findings are not collected and names the source — distinguishable from "ran, found nothing".
-    for (const m of ["M1", "M2", "M6"]) {
+    for (const m of ["M1", "M2"]) {
       const row = doc.coverage?.find((r) => r.module === m);
       expect(row?.status, `${m} must not read as a clean ran`).not.toBe("ran");
       expect(row?.reason, `${m} must say findings are not collected`).toMatch(/collected into this deliverable/i);
@@ -127,6 +129,14 @@ describe("runAudit findings capture (#312/#420)", () => {
     expect(m10?.status).toBe("partial");
     expect(m10?.reason).toMatch(/schema tier only/);
     expect(m10?.reason).not.toMatch(/collected into this deliverable/i);
+    // #397: M6 also left the non-collection group — this mocked context makes detect-static
+    // report a positive file count, so the free indicator layer reads `partial` (ran, no verdict)
+    // rather than requires-live-run. The mock's generic taxonomy ("tx") doesn't match the real
+    // `M6 — Indicator: …` prefix, so no finding is actually collected here — that's a fixture
+    // artifact, not a claim about product behavior (a real run's indicator findings DO collect).
+    const m6 = doc.coverage?.find((r) => r.module === "M6");
+    expect(m6?.status).toBe("partial");
+    expect(m6?.reason).toMatch(/free indicator layer ran/i);
   });
 
   it("captures nothing when the context is not capturing — coverage-only runs are unchanged", () => {
