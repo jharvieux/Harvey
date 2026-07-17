@@ -22,6 +22,12 @@ export const m4m5Entries: CorpusEntry[] = [
   // (src/diverged-clones.ts), review tier: it is an adjudication request, not a verdict.
   { module: "M4", id: "M4-P-DIVERGED-TENANT", kind: "positive", cls: "Diverged copy-pasted tenant-scoping guard", location: "require-tenant-api.ts", match: ["diverged"], expectedTier: "review", note: "dup/auth/require-tenant-api.ts and require-tenant-admin.ts hold structurally-identical guards that disagree on the scoping literal ('tenant_id' vs 'owner_id') plus drifted error strings — jscpd's exact match sees only sub-threshold fragments, never the pair. divergedCloneFindings -> M4-DIV-* reviewFinding (High severity, review tier) naming the drifted literals." },
 
+  // #399: the v2 widening — a per-entity store file whose PATH says nothing about security
+  // (touchesSecurityPath is false) but whose BODY scopes a supabase query by a tenant key
+  // (touchesTenantSupabasePath). Same diverged-guard shape as M4-P-DIVERGED-TENANT, just outside
+  // the v1 path vocabulary — proves the widened file selection, not just the detector.
+  { module: "M4", id: "M4-P-DIVERGED-TENANT-WIDENED", kind: "positive", cls: "Diverged tenant-scoped supabase query outside the security path vocabulary", location: "customer.store.ts", match: ["diverged"], expectedTier: "review", note: "dup/stores/customer.store.ts and order.store.ts hold structurally-identical supabase queries that disagree on the tenant-scoping literal ('organisation_id' vs 'org_id') — neither path matches touchesSecurityPath, so only touchesTenantSupabasePath's content-based admission (#399) puts them in front of divergedCloneFindings at all. divergedCloneFindings -> M4-DIV-* reviewFinding (High severity, review tier)." },
+
   // #365: the "genuine small clone" boundary pair — one fixture, two contracts. The 9-line
   // pricing-tier ladder is real logic (not boilerplate) under MIN_SIGNIFICANT_LINES: it must NOT
   // become an individual finding (M4-N-SMALL-FLOOR) and MUST be counted by the aggregate M4-00

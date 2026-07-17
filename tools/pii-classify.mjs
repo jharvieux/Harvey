@@ -21,7 +21,7 @@
 // every hit goes through an exclusion pass before it's returned, and ambiguous names get "low"
 // confidence rather than an assertion, so they're flagged for review, not treated as fact.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseColumns } from "../src/migration-sql-parse.js";
 
@@ -34,15 +34,34 @@ const RULES = [
   [/(^|_)fax(_|$)/, "FAX", "PII", "high"],
   [/passport/, "PASSPORT", "SENSITIVE_PII", "high"],
   [/(driver_?licen[cs]e|license_number)/, "DRIVERS_LICENSE", "SENSITIVE_PII", "high"],
+  // #379: generic national/government-ID catch-all — the identifier shape non-US schemas use
+  // (DLP/Presidio ship per-country recognizers; this is the fallback infotype for the rest).
+  // Medium, not high: "ID card number" schemes vary widely, so it's a catch-all, not a validated
+  // per-country pattern. Deliberately NOT matching bare `id`/`_id` — the compound names are the
+  // guard against flooding every PK/FK column.
+  [/(national_id|government_id|citizen_id|resident_id|id_card_number)/, "NATIONAL_ID", "SENSITIVE_PII", "medium"],
   [/(medical_record_number|(^|_)mrn(_|$))/, "MEDICAL_RECORD_NUMBER", "PHI", "high"],
   [/(health_plan|insurance_(id|number|policy))/, "HEALTH_PLAN_ID", "PHI", "high"],
-  [/(^|_)(device_id|imei|udid)(_|$)/, "DEVICE_ID", "SENSITIVE_PII", "medium"],
-  [/(^|_)(vin|vehicle_identification)(_|$)/, "VEHICLE_ID", "PII", "medium"],
+  // #378: mac_address/mac_addr and license_plate/plate_number are HIPAA Safe Harbor identifiers
+  // #13 (device identifiers) and #12 (vehicle identifiers) the original alternatives missed.
+  [/(^|_)(device_id|imei|udid|mac_address|mac_addr)(_|$)/, "DEVICE_ID", "SENSITIVE_PII", "medium"],
+  [/(^|_)(vin|vehicle_identification|license_plate|plate_number)(_|$)/, "VEHICLE_ID", "PII", "medium"],
   [/(biometric|fingerprint|retina|iris_scan|face_?id|faceprint|voiceprint)/, "BIOMETRIC", "SENSITIVE_PII", "high"],
+  // #378: HIPAA Safe Harbor identifier #17 — full-face photographs and comparable images.
+  // Medium, not high: many avatar_url columns are low-sensitivity app furniture, but under
+  // HIPAA/GDPR they are worth a review-tier flag rather than silence.
+  [/(photo_url|headshot|mugshot|profile_pic(ture)?|avatar_url|face_image|signature_image)/, "PHOTO", "PII", "medium"],
   // --- PCI-DSS cardholder / sensitive authentication data ---
   // CVV/CVC is "sensitive authentication data" — PCI-DSS forbids storing it post-authorization
   // at all, so a hit here is a compliance violation by itself (see INFOTYPE_POINT_OVERRIDES).
   [/(^|_)(cvv|cvc|card_verification|card_security_code)(_|$)/, "CVV", "PCI", "high"],
+  // #376: PIN/PIN-block and full track/magstripe data are the other two members of PCI-DSS's
+  // "sensitive authentication data, never store post-authorization" category CVV belongs to —
+  // a hit is a compliance violation by itself (INFOTYPE_POINT_OVERRIDES scores each Critical
+  // alone). Deliberately NO bare `pin` alternative: it collides with `pinned`/`is_pinned`
+  // feature-flag naming and India's postal "PIN code", so only compound card/ATM names match.
+  [/(^|_)(pin_block|pin_verification|atm_pin|card_pin)(_|$)/, "PIN", "PCI", "high"],
+  [/(track_?1|track_?2|track_data|mag_?stripe)/, "TRACK_DATA", "PCI", "high"],
   [/(card_expir|card_exp_(month|year))/, "CARD_EXPIRY", "PCI", "medium"],
   [/(credit_?card|card_number|cc_num|(^|_)pan(_|$)|card_last4|card_brand)/, "CARD", "PCI", "high"],
   [/(^|_)(iban|account_number|routing|swift)(_|$)/, "BANK_ACCT", "PCI", "medium"],
@@ -130,6 +149,21 @@ const PHONE_CONTEXT_TABLE_PATTERN = /(phone|contact|sms|call|dial)/;
 const OPAQUE_STORE_TABLE_PATTERN = /(_store|_config|_secrets?|_credentials?)$/;
 const OPAQUE_STORE_COLUMN_PATTERN = /^(value|data|payload|blob|secret|config)$/;
 
+// #377: denormalizing PII into a jsonb `profile`/`metadata` column instead of first-class columns
+// is a common convention (no migration needed to extend — a frequent AI-scaffolded-schema
+// shortcut), and a name-only matcher is blind to the nested keys. A jsonb/json column whose name
+// matches this denormalization-container vocabulary — on ANY table, unlike the `_store`-scoped
+// SECRET rule above — gets a LOW-confidence OPAQUE_JSON_BLOB hit: "review this column's contents
+// for nested PII", a flag, never an assertion. Vocabulary rationale: these are the names schemas
+// use for catch-all person/entity data containers. Deliberately OUT: bare state/cache/flags names
+// (`ui_state`, `feature_flags`) and "any jsonb column" — too aggressive floods every schema that
+// legitimately uses jsonb for non-PII settings with noise; this list repeats today's silent miss
+// nowhere the container convention applies. Value inspection stays out entirely ("detect, don't
+// ask" — names and types only).
+const JSON_CONTAINER_TYPE_PATTERN = /^jsonb?$/;
+const JSON_CONTAINER_NAME_PATTERN =
+  /(^|_)(metadata|profile|details|custom_fields|extra_data|settings|preferences|raw_data|payload|attributes|info)(_|$)/;
+
 /**
  * @typedef {{infotype: string, category: "PII"|"SENSITIVE_PII"|"PHI"|"PCI"|"SECRET", confidence: "high"|"medium"|"low"}} ClassifyResult
  */
@@ -159,6 +193,11 @@ export function classifyColumn(column, sqlType, tableName) {
       return { infotype: "OPAQUE_ENCRYPTED_STORE", category: "SECRET", confidence: "medium" };
     }
   }
+  // #377: checked AFTER the table-scoped opaque-store rule so a `payload` column on a
+  // `*_store`/`*_config` table keeps its higher-signal SECRET classification.
+  if (sqlType && JSON_CONTAINER_TYPE_PATTERN.test(String(sqlType).toLowerCase()) && JSON_CONTAINER_NAME_PATTERN.test(c)) {
+    return { infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" };
+  }
   return null;
 }
 
@@ -168,7 +207,9 @@ export function classifyColumn(column, sqlType, tableName) {
 // storing it post-auth at all, so its presence alone should read Critical.
 const CATEGORY_POINTS = { PII: 1, SENSITIVE_PII: 4, PHI: 6, PCI: 6, SECRET: 6 };
 const CONFIDENCE_WEIGHT = { high: 1, medium: 0.6, low: 0.3 };
-const INFOTYPE_POINT_OVERRIDES = { CVV: 12 };
+// #376: PIN and track data share CVV's override — all three are PCI-DSS "sensitive
+// authentication data", forbidden to store post-authorization under any circumstance.
+const INFOTYPE_POINT_OVERRIDES = { CVV: 12, PIN: 12, TRACK_DATA: 12 };
 
 function pointsFor(hit) {
   const base = INFOTYPE_POINT_OVERRIDES[hit.infotype] ?? CATEGORY_POINTS[hit.category];
@@ -252,6 +293,102 @@ export async function classifyWithFallback(columns, semanticClassifier) {
   });
 }
 
+// #436: the data-map → report-schema Finding[] mapper, shared by the schema and live paths, so
+// M10's classification reaches the engagement doc instead of dying in a console summary. One
+// finding per PII/PHI/PCI-bearing table; severity is the table's scoreToSeverity label;
+// confidence is always "Review" — name/type classification is heuristic on BOTH tiers (the tier
+// changes what the schema evidence is, not the classification method), so a hit is a triage
+// input, never an assertion. #377's OPAQUE_JSON_BLOB review flags are surfaced as a distinct
+// "review for nested PII" sentence, never blended into the classified-column claim.
+const SEVERITY_VALUE = { Critical: 5, High: 4, Medium: 3, Low: 2, Info: 1 };
+const PCI_NEVER_STORE = new Set(["CVV", "PIN", "TRACK_DATA"]);
+
+/**
+ * @param {ReturnType<typeof buildDataMap>} dataMap
+ * @param {{tier: "schema"|"live"}} opts
+ */
+export function dataMapToFindings(dataMap, { tier }) {
+  const source =
+    tier === "live"
+      ? "live information_schema.columns inventory (read-only)"
+      : "static migration-SQL schema parse (no DB connection)";
+  const tables = Object.keys(dataMap).sort(
+    (a, b) => dataMap[b].severityScore - dataMap[a].severityScore || a.localeCompare(b),
+  );
+  return tables.map((table, i) => {
+    const t = dataMap[table];
+    const asserted = t.columns.filter((c) => c.infotype !== "OPAQUE_JSON_BLOB");
+    const reviewFlags = t.columns.filter((c) => c.infotype === "OPAQUE_JSON_BLOB");
+    const neverStore = t.infotypes.filter((x) => PCI_NEVER_STORE.has(x));
+    const compliance = [
+      t.phi && "PHI — HIPAA applicability",
+      t.pci && "PCI-DSS cardholder/sensitive-authentication data",
+      t.secret && "stored credentials/secrets readable by any query path that reaches the table",
+    ].filter(Boolean);
+    return {
+      id: `M10-${String(i + 1).padStart(2, "0")}`,
+      title: asserted.length
+        ? `Table \`${table}\` holds ${t.categories.join("/")} data (${[...new Set(asserted.map((c) => c.infotype))].join(", ")})`
+        : `Table \`${table}\` has JSON container column(s) to review for nested PII`,
+      severity: t.severity,
+      confidence: "Review",
+      category: "Data classification",
+      taxonomy: "M10 — Data classification (PII/PHI/PCI)",
+      location: table,
+      status: "Open",
+      evidence: [
+        `${source}; name/type classification only — no values were read.`,
+        asserted.length
+          ? `Classified columns: ${asserted.map((c) => `${c.column} → ${c.infotype} (${c.category}, ${c.confidence})`).join("; ")}.`
+          : "",
+        reviewFlags.length
+          ? `Review for nested PII (flagged, not asserted — #377): ${reviewFlags.map((c) => c.column).join(", ")} — denormalization-container json column(s); inspect their keys.`
+          : "",
+        `Severity score ${t.severityScore} → ${t.severity}.`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      impact: [
+        `Any over-broad read path (RLS gap, leaked service key, injectable query) on \`${table}\` exposes ${t.categories.join("/")} data.`,
+        compliance.length ? `Compliance surface: ${compliance.join("; ")}.` : "",
+        neverStore.length
+          ? `Stores PCI sensitive authentication data (${neverStore.join(", ")}) — PCI-DSS forbids storing it post-authorization at all, so its presence is a violation independent of exposure.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      fix: [
+        "Confirm each classified column is genuinely needed and that the table's RLS/grants scope reads to the owning tenant/user.",
+        neverStore.length ? "Remove the sensitive-authentication-data column(s) — they may not be stored post-authorization under PCI-DSS." : "",
+        t.secret ? "Move stored credentials to a secret manager or encrypt them with keys the DB role cannot read." : "",
+        reviewFlags.length ? "Inspect the flagged JSON container(s); promote any nested PII to first-class columns so it is classified and protected explicitly." : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      value: SEVERITY_VALUE[t.severity] ?? 1,
+      ease: 3,
+      safety: 4,
+      mechanical: true,
+      precisionTier: "review",
+    };
+  });
+}
+
+// --out <path> (#436): write the report-schema Finding[] the orchestrator's M10 probe captures
+// (run-audit --findings-out). No --out → console summary only, exactly as before.
+function writeFindingsOut(dataMap, tier) {
+  const i = process.argv.indexOf("--out");
+  if (i < 0) return;
+  const outPath = process.argv[i + 1];
+  if (!outPath || outPath.startsWith("--")) {
+    console.error("--out requires a file path");
+    process.exit(1);
+  }
+  const findings = dataMapToFindings(dataMap, { tier });
+  writeFileSync(outPath, `${JSON.stringify(findings, null, 2)}\n`);
+  console.log(`\n${findings.length} report-schema finding(s) → ${outPath}`);
+}
+
 // Each case is [column, expectedCategory (null = no match), expectedConfidence, sqlType,
 // tableName] — sqlType/tableName are only needed by the exclusion/table-context checks below
 // and default to undefined when omitted.
@@ -293,6 +430,25 @@ function selftest() {
     // #233: opaquely-named encrypted secret store (BoxyHQ jackson_store.value)
     ["value", null, null, undefined, "widgets"],
     ["value", "SECRET", "medium", undefined, "jackson_store"],
+    // #376: PCI sensitive auth data — PIN block and track/magstripe data
+    ["pin_block", "PCI", "high"],
+    ["track2", "PCI", "high"],
+    ["is_pinned", null, null],
+    // #378: HIPAA device/vehicle/image identifiers
+    ["mac_address", "SENSITIVE_PII", "medium"],
+    ["license_plate", "PII", "medium"],
+    ["avatar_url", "PII", "medium"],
+    ["has_photo", null, null, "boolean"],
+    // #379: generic national/government ID — and bare/FK `id` columns stay out
+    ["national_id", "SENSITIVE_PII", "medium"],
+    ["id", null, null],
+    ["user_id", null, null],
+    // #377: jsonb denormalization containers are review-flagged at low confidence; a jsonb
+    // column outside the vocabulary, or a vocabulary name on a non-json type, stays silent
+    ["profile", "PII", "low", "jsonb", "users"],
+    ["metadata", "PII", "low", "jsonb"],
+    ["ui_state", null, null, "jsonb"],
+    ["profile", null, null, "text"],
   ];
   let ok = 0;
   for (const [col, cat, conf, sqlType, tableName] of cases) {
@@ -309,7 +465,11 @@ function selftest() {
 function report(cols) {
   const dataMap = buildDataMap(cols);
   const tables = Object.keys(dataMap);
-  const hitCount = tables.reduce((n, t) => n + dataMap[t].columns.length, 0);
+  // #377: OPAQUE_JSON_BLOB hits are review flags ("look inside this container"), not asserted
+  // PII — they get their own list below and stay out of the asserted headline count, mirroring
+  // how low-confidence hits stay out of the calibration free/high count.
+  const reviewFlags = tables.flatMap((t) => dataMap[t].columns.filter((c) => c.infotype === "OPAQUE_JSON_BLOB").map((c) => `${t}.${c.column}`));
+  const hitCount = tables.reduce((n, t) => n + dataMap[t].columns.length, 0) - reviewFlags.length;
   const byCat = {};
   for (const t of tables) for (const c of dataMap[t].categories) byCat[c] = (byCat[c] || 0) + 1;
 
@@ -319,6 +479,11 @@ function report(cols) {
   for (const t of tables.sort((a, b) => dataMap[b].severityScore - dataMap[a].severityScore)) {
     console.log(`  ${t} → ${dataMap[t].severity} (${dataMap[t].severityScore}): ${dataMap[t].infotypes.join(", ")}`);
   }
+  if (reviewFlags.length) {
+    console.log(`\nReview for nested PII — ${reviewFlags.length} JSON container column(s), flagged not asserted (#377):`);
+    for (const f of reviewFlags) console.log(`  ${f} — denormalization-container name on a json/jsonb column; inspect its keys for nested PII`);
+  }
+  return dataMap;
 }
 
 async function inventory() {
@@ -327,7 +492,7 @@ async function inventory() {
   const cols =
     await sql`SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, ordinal_position`;
   await sql.end();
-  report(cols);
+  writeFindingsOut(report(cols), "live");
 }
 
 /**
@@ -371,7 +536,7 @@ function classifyFromSchema() {
     console.error(`No \`create table\` columns found via ${target} — check the path (expects supabase/migrations/*.sql shape).`);
     process.exit(1);
   }
-  report(columns);
+  writeFindingsOut(report(columns), "schema");
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

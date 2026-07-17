@@ -131,6 +131,26 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     expect(runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M5")?.status).toBe("ran");
   });
 
+  // #401: the free-tier test-intent detectors are source-only AST passes (src/detectors/test-intent.ts)
+  // — no installed deps needed — so a target without node_modules should read partial (source tier
+  // covered), not the blanket requires-live-run StrykerJS alone would justify.
+  it("M8 falls back to the test-intent tier without node_modules, reporting partial not requires-live-run", () => {
+    const noDeps = ctx({ exists: (p) => !p.endsWith("node_modules") });
+    const m8 = runAudit(AUDIT_RUNNERS, noDeps).recorded.find((r) => r.module === "M8");
+    expect(m8?.status).toBe("partial");
+    expect(m8?.reason).toMatch(/test-intent/i);
+  });
+
+  it("M8 stays requires-live-run without node_modules when the test-intent pass itself found nothing to scan", () => {
+    const emptyNoDeps = ctx({
+      exists: (p) => !p.endsWith("node_modules"),
+      exec: (_c, argv) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files (0 product-code) from /empty" } : { ok: true, output: cleanOutput(argv) }),
+    });
+    const m8 = runAudit(AUDIT_RUNNERS, emptyNoDeps).recorded.find((r) => r.module === "M8");
+    expect(m8?.status).toBe("requires-live-run");
+    expect(m8?.reason).toMatch(/no node_modules/);
+  });
+
   it("M2 is requires-live-run without a dynamic stack, and never silently absent", () => {
     const m2 = runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M2");
     expect(m2?.status).toBe("requires-live-run");
@@ -141,6 +161,25 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     const m7 = runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M7");
     expect(m7?.status).toBe("partial");
     expect(m7?.reason).toMatch(/advisors/);
+  });
+
+  // #434: --connected is intent, not a reachable project — perf-scan needs a ref as its positional
+  // arg. Without one threaded through ctx.supabaseRef, the advisor call has nothing to reach.
+  it("M7 with --connected but no project ref stays partial, naming the missing ref", () => {
+    const connectedNoRef = ctx({ env: { connected: true, dynamic: false, llm: false } });
+    const m7 = runAudit(AUDIT_RUNNERS, connectedNoRef).recorded.find((r) => r.module === "M7");
+    expect(m7?.status).toBe("partial");
+    expect(m7?.reason).toMatch(/project ref/);
+  });
+
+  it("M7 threads ctx.supabaseRef through to perf-scan's positional arg, reaching ran", () => {
+    const connectedWithRef = ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRef: "my-project-ref",
+      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: argv.includes("my-project-ref"), output: "" } : { ok: true, output: cleanOutput(argv) }),
+    });
+    const m7 = runAudit(AUDIT_RUNNERS, connectedWithRef).recorded.find((r) => r.module === "M7");
+    expect(m7?.status).toBe("ran");
   });
 
   // A non-zero exit is the tool saying it produced nothing. Recording that as "ran" is precisely
@@ -332,6 +371,36 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     expect(bare.find((r) => r.module === "M1")?.status).toBe("partial");
     expect(bare.find((r) => r.module === "M2")?.status).toBe("requires-live-run");
     expect(bare.find((r) => r.module === "M6")?.status).toBe("partial");
+  });
+});
+
+// #436: pii-classify emits report-schema Finding[] to --out, so a capturing run collects M10
+// findings; the live tier can finally read `ran`, and the schema tier's partial reason shrinks to
+// the honest gap that remains (rows not sampled), not a collection gap.
+describe("M10 captures its classification findings (#436)", () => {
+  const capture: Partial<RunContext> = {
+    captureDir: "/cap",
+    readFindings: (p: string) => (p.endsWith("M10.json") ? [{ id: "M10-01" } as never] : []),
+  };
+
+  it("schema tier stays partial for the live-DB gap alone, with its findings captured", () => {
+    const { recorded, findings } = runAudit(AUDIT_RUNNERS, ctx(capture));
+    const m10 = recorded.find((r) => r.module === "M10");
+    expect(m10?.status).toBe("partial");
+    expect(m10?.reason).toMatch(/schema tier only/);
+    expect(m10?.reason).not.toMatch(/collected into this deliverable/);
+    expect(findings.some((f) => (f as { id?: string }).id === "M10-01")).toBe(true);
+  });
+
+  it("live tier reads ran once its findings are captured — the #420 non-collection partial is retired", () => {
+    const m10 = status(AUDIT_RUNNERS, { ...capture, env: { connected: true, dynamic: false, llm: false } }, "M10");
+    expect(m10?.status).toBe("ran");
+  });
+
+  it("a coverage-only run (no capture) still discloses that findings were not collected", () => {
+    const m10 = status(AUDIT_RUNNERS, {}, "M10");
+    expect(m10?.status).toBe("partial");
+    expect(m10?.reason).toMatch(/not-collected, not clean/);
   });
 });
 

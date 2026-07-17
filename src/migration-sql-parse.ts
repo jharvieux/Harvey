@@ -45,10 +45,15 @@ interface ParsedRlsTable {
   hasPolicy: boolean;
 }
 
+// #375: inet/cidr/citext/bytea/geography/geometry matter to the M10 PII feed specifically — an
+// `ip_address inet` or `email citext` column that never reaches classifyColumn is an invisible
+// PII column, not an under-extraction. geography/geometry are PostGIS; bytea sometimes holds
+// encrypted PII blobs. Same failure shape as #307 (SERIAL).
 const SQL_TYPES = [
   "uuid", "text", "timestamptz", "timestamp", "integer", "bigint", "boolean",
   "numeric", "jsonb", "json", "date", "smallint", "varchar", "real", "double precision",
   "serial", "bigserial", "smallserial",
+  "inet", "cidr", "citext", "bytea", "geography", "geometry",
 ];
 
 // #299: Prisma-generated migrations (prisma/migrations/**/migration.sql) double-quote every
