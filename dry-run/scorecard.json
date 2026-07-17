@@ -10,104 +10,104 @@
       "id": "RLS-USING-TRUE",
       "severity": "Critical",
       "location": "supabase/migrations/20260708000002_rls.sql:31-32",
-      "expectedModule": "usingTrueReview (src/rls-policy-review.ts, #337) ran inside runMechanicalScan via checkMigrationPolicySemantics and reviewed documents_select_all's USING (true) at the planted line — review tier, so the tier surfaces it for adjudication rather than asserting the verdict",
+      "expectedModule": "usingTrueReview (src/rls-policy-review.ts, #337) via checkMigrationPolicySemantics — reviews documents_select_all's USING (true), surfaced for adjudication at review tier.",
       "status": "caught",
       "tier": "review",
-      "note": "Surfaced for review by \"M1 — Multi-tenant security\" at supabase/migrations/20260708000002_rls.sql:31 (public.documents.documents_select_all) — review tier, a human must still adjudicate this verdict."
+      "note": "Detected via gated corpus P-RLS-USING-TRUE-STATIC at review tier (caught at review)."
     },
     {
       "id": "RLS-AUTH-ROLE",
       "severity": "Critical",
       "location": "supabase/migrations/20260708000002_rls.sql:38-39",
-      "expectedModule": "checkMigrationPolicySemantics (src/scan/supabase-static.ts, #220) ran inside runMechanicalScan and reviewed invoices_select_authenticated's predicate at the planted line",
+      "expectedModule": "checkMigrationPolicySemantics (src/scan/supabase-static.ts, #220) — reviews invoices_select_authenticated's predicate at review tier.",
       "status": "caught",
       "tier": "review",
-      "note": "Surfaced for review by \"M1 — Multi-tenant security\" at supabase/migrations/20260708000002_rls.sql:38 (public.invoices.invoices_select_authenticated) — review tier, a human must still adjudicate this verdict."
+      "note": "Detected via gated corpus P-RLS-AUTH-ROLE-STATIC at review tier (caught at review)."
     },
     {
       "id": "RLS-DISABLED",
       "severity": "High",
       "location": "supabase/migrations/20260708000002_rls.sql:41-43",
-      "expectedModule": "checkMigrationRlsStatic (src/scan/supabase-static.ts) ran inside runMechanicalScan and proved audit_logs never gets RLS enabled in ANY migration",
+      "expectedModule": "checkMigrationRlsStatic (src/scan/supabase-static.ts) — proves audit_logs never gets RLS enabled in any migration, at high tier.",
       "status": "caught",
       "tier": "high",
-      "note": "Asserted by high-precision rule \"Migration table without RLS (static)\" at supabase/migrations/20260708000001_schema.sql:35."
+      "note": "Detected via gated corpus P-RLS-MISSING-STATIC at high tier (caught at high)."
     },
     {
       "id": "SQLI-SERVICE",
       "severity": "Critical",
       "location": "pages/api/search.js:9",
-      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) and harvey-sql-injection-template matched the raw-SQL-concat pattern in search.js",
+      "expectedModule": "Semgrep harvey-sql-injection-template matched the raw-SQL-concat in search.js, at high tier.",
       "status": "caught",
       "tier": "high",
-      "note": "Asserted by high-precision rule \"src.scan.rules.semgrep.harvey-sql-injection-template\" at pages/api/search.js:11."
+      "note": "Detected via gated corpus P-SQLI-CONCAT at high tier (caught at high)."
     },
     {
       "id": "WEBHOOK-REPLAY",
       "severity": "Medium",
       "location": "pages/api/webhook.js:20-24",
-      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) but no rule can FP-safely target missing replay/nonce protection — proving the guard's absence is whole-handler+callee reasoning (measured LLM-tier, #353)",
+      "expectedModule": "No mechanical rule by design (measured LLM-tier, #353): proving a replay guard's absence is whole-handler+callee reasoning no FP-safe grep/AST can do — corpus P-WEBHOOK-REPLAY-NO-RULE ('none' tier).",
       "status": "missed",
-      "note": "Semgrep ran (src/scan/semgrep.ts) but no rule can FP-safely target missing replay/nonce protection — proving the guard's absence is whole-handler+callee reasoning (measured LLM-tier, #353) ran but produced no finding matching this bug."
+      "note": "Accepted gap — no mechanical rule reaches this class by design (measured LLM-tier); gated corpus P-WEBHOOK-REPLAY-NO-RULE scores it an intended gap."
     },
     {
       "id": "COUNTER-RACE",
       "severity": "Medium",
       "location": "pages/api/counter/increment.js:11-31",
-      "expectedModule": "detectCounterRaceFindings (src/scan/counter-race.ts, #353) ran inside runMechanicalScan and matched the non-atomic read-modify-write on counters — review tier",
+      "expectedModule": "detectCounterRaceFindings (src/scan/counter-race.ts, #353) matched the non-atomic read-modify-write on counters, at review tier.",
       "status": "caught",
       "tier": "review",
-      "note": "Surfaced for review by \"Non-atomic read-modify-write race condition\" at pages/api/counter/increment.js:20 — review tier, a human must still adjudicate this verdict."
+      "note": "Detected via gated corpus P-COUNTER-RACE at review tier (caught at review)."
     },
     {
       "id": "UPDATE-UNSCOPED",
       "severity": "High",
       "location": "pages/api/profile/update.js:11-14",
-      "expectedModule": "scanLeftoverAuth (src/scan/leftover-auth.ts, #353) ran inside runMechanicalScan and matched the raw UPDATE/DELETE with no WHERE clause in this route handler — review tier",
+      "expectedModule": "scanLeftoverAuth (src/scan/leftover-auth.ts, #353) matched the raw UPDATE with no WHERE in this route handler, at review tier.",
       "status": "caught",
       "tier": "review",
-      "note": "Surfaced for review by \"Unscoped service-role UPDATE/DELETE (no WHERE)\" at pages/api/profile/update.js — review tier, a human must still adjudicate this verdict."
+      "note": "Detected via gated corpus P-UPDATE-UNSCOPED at review tier (caught at review)."
     },
     {
       "id": "OPEN-REDIRECT",
       "severity": "Low",
       "location": "pages/api/redirect.js:9",
-      "expectedModule": "Semgrep ran (src/scan/semgrep.ts) and the harvey-open-redirect custom rule (src/scan/rules/semgrep/base.yml) matched at redirect.js",
+      "expectedModule": "Semgrep harvey-open-redirect (src/scan/rules/semgrep/base.yml) matched at redirect.js, at review tier.",
       "status": "caught",
       "tier": "review",
-      "note": "Surfaced for review by \"src.scan.rules.semgrep.harvey-open-redirect\" at pages/api/redirect.js:18 — review tier, a human must still adjudicate this verdict."
+      "note": "Detected via gated corpus P-OPEN-REDIRECT at review tier (caught at review)."
     },
     {
       "id": "SHADOW-API-VERSION",
       "severity": "High",
       "location": "pages/api/v1/export.js",
-      "expectedModule": "replayShadowApiVersion (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayShadowApiVersion GETs each discovered versioned route as anon and proves the bug only when the deprecated route answers 200 with rows the current route gates. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase",
+      "expectedModule": "SHADOW-API-VERSION (src/pentest/verify.ts) — M2 dynamic pen-test replay: GETs each discovered versioned route as anon and proves the bug only when the deprecated route answers 200 with rows the current route gates. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase.",
       "status": "requires-live-run",
-      "note": "replayShadowApiVersion (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayShadowApiVersion GETs each discovered versioned route as anon and proves the bug only when the deprecated route answers 200 with rows the current route gates. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase did not execute in this pass — no caught/missed verdict possible."
+      "note": "SHADOW-API-VERSION (src/pentest/verify.ts) — M2 dynamic pen-test replay: GETs each discovered versioned route as anon and proves the bug only when the deprecated route answers 200 with rows the current route gates. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase. did not execute in this pass — no caught/missed verdict possible."
     },
     {
       "id": "NO-RATE-LIMIT",
       "severity": "High",
       "location": "pages/api/coupon/redeem.js",
-      "expectedModule": "replayNoRateLimit (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayNoRateLimit POSTs the same coupon 5× and proves the bug only when all 5 are accepted (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase",
+      "expectedModule": "NO-RATE-LIMIT (src/pentest/verify.ts) — M2 dynamic pen-test replay: POSTs the same coupon 5× and proves the bug only when all 5 are accepted (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase.",
       "status": "requires-live-run",
-      "note": "replayNoRateLimit (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayNoRateLimit POSTs the same coupon 5× and proves the bug only when all 5 are accepted (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase did not execute in this pass — no caught/missed verdict possible."
+      "note": "NO-RATE-LIMIT (src/pentest/verify.ts) — M2 dynamic pen-test replay: POSTs the same coupon 5× and proves the bug only when all 5 are accepted (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase. did not execute in this pass — no caught/missed verdict possible."
     },
     {
       "id": "CACHE-CROSS-USER",
       "severity": "High",
       "location": "pages/api/me/summary.js",
-      "expectedModule": "replayCacheCrossUser (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayCacheCrossUser warms the route as Tenant A then re-reads it as anon, proving the bug only when anon is served A's tenant_id from a public/s-maxage cache. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase",
+      "expectedModule": "CACHE-CROSS-USER (src/pentest/verify.ts) — M2 dynamic pen-test replay: warms the route as Tenant A then re-reads it as anon, proving the bug only when anon is served A's tenant_id from a public/s-maxage cache. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase.",
       "status": "requires-live-run",
-      "note": "replayCacheCrossUser (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayCacheCrossUser warms the route as Tenant A then re-reads it as anon, proving the bug only when anon is served A's tenant_id from a public/s-maxage cache. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase did not execute in this pass — no caught/missed verdict possible."
+      "note": "CACHE-CROSS-USER (src/pentest/verify.ts) — M2 dynamic pen-test replay: warms the route as Tenant A then re-reads it as anon, proving the bug only when anon is served A's tenant_id from a public/s-maxage cache. Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase. did not execute in this pass — no caught/missed verdict possible."
     },
     {
       "id": "ANON-PRIVILEGED-RPC",
       "severity": "Critical",
       "location": "supabase/migrations/20260710000002_dynamic_probes.sql",
-      "expectedModule": "replayAnonPrivilegedRpc (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayAnonPrivilegedRpc POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase",
+      "expectedModule": "ANON-PRIVILEGED-RPC (src/pentest/verify.ts) — M2 dynamic pen-test replay: POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase.",
       "status": "requires-live-run",
-      "note": "replayAnonPrivilegedRpc (src/pentest/verify.ts) — M2 dynamic pen-test replay: replayAnonPrivilegedRpc POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase did not execute in this pass — no caught/missed verdict possible."
+      "note": "ANON-PRIVILEGED-RPC (src/pentest/verify.ts) — M2 dynamic pen-test replay: POSTs /rest/v1/rpc/issue_refund with only the anon key and proves the bug only on a 2xx (side-effecting, so it additionally needs allowDestructive). Requires a running app plus a local `supabase start` stack seeded with two tenants (`pnpm exec tsx src/cli/pentest.ts`); this dry run is static and executed no M2 phase. did not execute in this pass — no caught/missed verdict possible."
     }
   ]
 }

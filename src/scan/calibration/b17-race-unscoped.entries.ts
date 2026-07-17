@@ -5,8 +5,10 @@
 // scored by validate-calibration here; both stay review (a grep can't prove a whole-table write is
 // unintended, and the AST can't see a DB-side lock/transaction), never free-count. The third bug
 // WEBHOOK-REPLAY does NOT graduate — proving the absence of a replay guard needs whole-handler +
-// callee reasoning a mechanical rule can't do FP-safely; its verdict is recorded on the dry-run
-// scorecard (src/cli/dry-run-scorecard.ts), not here. See #353 and GROUND-TRUTH.md.
+// callee reasoning a mechanical rule can't do FP-safely. As of #425 it is a corpus entry too, at
+// the "none" tier (no mechanical rule by design): the single answer key now owns ALL three
+// dry-run verdicts, and if a replay/nonce rule ever fires at webhook.js the gate flips it loud.
+// See #353, #425, and GROUND-TRUTH.md.
 
 import type { CorpusEntry } from "./types.js";
 
@@ -16,4 +18,12 @@ export const b17RaceUnscopedEntries: CorpusEntry[] = [
 
   { id: "P-COUNTER-RACE", kind: "positive", cls: "non-atomic read-modify-write on a counter (lost-update race)", location: "pages/api/counter/increment.js", match: ["read-modify-write"], expectedTier: "review", note: "#353: pages/api/counter/increment.js selects counters.value into `current`, computes `next = (current?.value ?? 0) + 1`, then updates counters with `value: next` — two concurrent requests both read the old value and one increment is lost. detectCounterRaceFindings (src/scan/counter-race.ts) proves the dataflow (a .select() of a table whose value is written back via .update() after a +/- derivation on the same table) → review. Discriminator: the read→arithmetic→write dataflow, not mere table co-occurrence. FP shape (read-then-write of an UNRELATED fresh value) is cleared by the arithmetic-derived-from-read gate. Stays review: can't see a DB-side lock/transaction." },
   { id: "N-COUNTER-ATOMIC", kind: "negative", cls: "atomic increment via a server-side RPC (value = value + 1 in one statement)", location: "pages/api/counter/increment-safe.js", match: ["read-modify-write"], note: "#353: pages/api/counter/increment-safe.js calls admin.rpc(\"increment_counter\", …) — one server-side statement, no select-then-update read-modify-write pair for the detector to flag. Cleared (no select+update on the same table). Recorded to complete the corpus pair." },
+
+  // #425: WEBHOOK-REPLAY joins the corpus at the "none" tier — no mechanical rule by design. This
+  // is the single-key home for the "accepted gap" the dry-run scorecard used to assert by hand: it
+  // is anchored at the planted handler (webhook.js) and matched on the class (replay/nonce), so the
+  // gap holds while nothing of that class fires there, and the gate FAILS LOUD the moment a rule
+  // does — the whole point of encoding the gap rather than trusting a comment. No negative sibling:
+  // there is no rule to prove FP-safe, so there is nothing to pin a benign lookalike against.
+  { id: "P-WEBHOOK-REPLAY-NO-RULE", kind: "positive", cls: "HMAC-verified webhook with no replay/nonce protection", location: "pages/api/webhook.js", match: ["replay", "nonce"], expectedTier: "none", note: "#353/#425: pages/api/webhook.js verifies the HMAC signature but never checks a timestamp/nonce, so a captured signed request replays forever (GROUND-TRUTH row 5). MEASURED LLM-tier: proving a replay guard's ABSENCE is a whole-handler+callee negative — a rule flagging every HMAC webhook without a recognised nonce would FP on handlers that dedupe via an idempotency key, provider-side dedupe, or a DB unique constraint. So no mechanical rule by design: scored an intended gap statically, and if a replay/nonce finding ever fires at webhook.js this entry flips the gate loud, forcing a re-tier to review/high." },
 ];

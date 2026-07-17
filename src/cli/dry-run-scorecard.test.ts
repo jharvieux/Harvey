@@ -1,138 +1,56 @@
-// Guards the hand-kept mappings in dry-run-scorecard.ts against the drift that this file exists to
-// catch: a rule lands (e.g. #220's checkMigrationPolicySemantics), nobody re-keys the answer key,
-// and a bug the mechanical tier now catches keeps scoring "requires-live-run" — under-reporting our
-// own lead module on a Critical. The scorecard can't self-check (moduleRan is by design a human
-// claim), but the claim "no mechanical module reaches this bug" is falsifiable against the real
-// findings the scan produced.
-//
-// Two complementary guards. The LOCATION guard catches drift where a rule fires AT a bug's planted
-// line. The CLASS guard (#335) closes its ceiling: it keys on a bug's `classMatch` (an exact rule
-// taxonomy, address-independent), so a rule that proves the bug at a DIFFERENT address than planted
-// still falsifies a "no rule reaches this class" claim. That was the hole in the location guard:
-// checkMigrationRlsStatic proves RLS-DISABLED at the CREATE site (schema.sql:35) while GROUND-TRUTH
-// addresses it at the absence site (rls.sql:41-43), so a location guard anchored on the planted
-// line sees nothing — the class guard sees the rule firing and would catch a stale re-key (the
-// mutation test below demonstrates this on RLS-DISABLED). classMatch is precise by construction: a
-// loose word regex would false-match a same-word rule for an unrelated class (#246).
-//
-// It also guards the failure mode one level up, which no amount of per-bug checking can see: a bug
-// that GROUND-TRUTH plants but the scorecard never maps at all is absent from scorecard.json rather
-// than reported as a gap. That is how rows 9–12 stayed invisible through every prior scorecard.
+// Guards the SINGLE-KEY link between the dry-run scorecard and the gated corpus (#425). The dry-run
+// no longer holds a second matcher: each planted bug names a corpus entry (corpusId) or an M2 replay
+// (replayId), and detection is derived from the gated corpus — which cannot drift, it fails
+// `pnpm verify`. These tests prove the link is intact and can't rot silently:
+//   - every bug GROUND-TRUTH plants has an entry here (an unmapped bug is invisible, not "missed");
+//   - every static bug's corpusId resolves to a real gated corpus entry (a dangling FK throws);
+//   - every dynamic bug's replayId is a registered M2 replay (a live-run promise no code can keep);
+//   - the corpus-derived verdicts on the committed findings are the expected ones — the historically
+//     drifted RLS classes (#332/#337) score caught, the accepted WEBHOOK-REPLAY gap scores missed.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
 import { AUTOMATED_REPLAY_IDS } from "../pentest/verify.js";
-import { scoreEntry } from "../scan/calibration.js";
-import { rlsStaticSemanticsEntries } from "../scan/calibration/rls-static-semantics.entries.js";
-import { GROUND_TRUTH_BUGS } from "./dry-run-scorecard.js";
+import { scoreCoverage } from "../coverage-scorecard.js";
+import { CORPUS, scoreEntry } from "../scan/calibration.js";
+import { GROUND_TRUTH_BUGS, resolveDetection } from "./dry-run-scorecard.js";
 
-interface RawFinding {
-  taxonomy: string;
-  location: string;
-  mechanical?: boolean;
-}
+const findings = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "dry-run", "findings.json"), "utf8")) as Finding[];
 
-const findings = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "dry-run", "findings.json"), "utf8")) as RawFinding[];
-
-// "supabase/migrations/…_rls.sql:41-43" → the file and every line the bug is planted across, so a
-// finding anchored anywhere in that span counts as reaching it.
-function plantedAt(bugLocation: string): { file: string; lines: number[] } | null {
-  const m = /^(.*):(\d+)(?:-(\d+))?$/.exec(bugLocation);
-  if (!m) return null;
-  const start = Number(m[2]);
-  const end = m[3] ? Number(m[3]) : start;
-  return { file: m[1]!, lines: Array.from({ length: end - start + 1 }, (_, i) => start + i) };
-}
-
-function mechanicalFindingsAt(file: string, lines: number[]): RawFinding[] {
-  return findings.filter((f) => f.mechanical === true && lines.some((n) => f.location.startsWith(`${file}:${n}`)));
-}
-
-describe("GROUND_TRUTH_BUGS mappings vs. the findings the scan really produced", () => {
-  // The moduleRan:false population is the M2 dynamic-tier bugs (GROUND-TRUTH rows 9–12). Their
-  // claim is NOT "no mechanical rule fires at my line" — it is "my detection is a live-behavior
-  // probe that this static pass never ran", so the location guard below is the wrong instrument for
-  // them (their GROUND-TRUTH locations are whole files, with no line to anchor on, precisely
-  // because the bug is in the route's runtime behavior rather than at a specific statement). Each
-  // claim type therefore gets the check that can actually falsify it: dynamic bugs must name a real
-  // registered M2 replay, and the rest must have no mechanical finding at their planted line.
-  const dynamic = GROUND_TRUTH_BUGS.filter((b) => !b.moduleRan && b.expectedModule.includes("M2 dynamic pen-test replay"));
-  const notRunMechanical = GROUND_TRUTH_BUGS.filter((b) => !b.moduleRan && !dynamic.includes(b));
-
-  it.each(dynamic.map((b) => [b.id, b] as const))(
-    "%s claims an M2 replay detects it — src/pentest/verify.ts really registers a replay under that id",
-    (id, bug) => {
-      // Falsifies the excuse rather than trusting it: "needs a live run" is only honest while a
-      // probe for this bug actually exists. Delete the replay (or typo the id) and the bug becomes
-      // undetectable by ANY tier — which must fail here, not sit in scorecard.json as a live-run
-      // promise no code can keep.
-      expect(AUTOMATED_REPLAY_IDS, `${bug.id} is mapped to an M2 replay ("${bug.expectedModule}") but no replay is registered under that id in src/pentest/verify.ts`).toContain(id);
-    },
-  );
-
-  it.each(notRunMechanical.map((b) => [b.id, b] as const))(
-    "%s claims no mechanical module reaches it — no mechanical finding is anchored at its planted location",
-    (_id, bug) => {
-      const planted = plantedAt(bug.location);
-      expect(planted, `${bug.id}'s location is not a file:line — the guard cannot check it`).not.toBeNull();
-
-      const reached = mechanicalFindingsAt(planted!.file, planted!.lines);
-      expect(
-        reached,
-        `${bug.id} is mapped moduleRan:false ("${bug.expectedModule}") but the mechanical tier drew a finding at its planted location: ` +
-          `${reached.map((f) => `"${f.taxonomy}" at ${f.location}`).join("; ")}. ` +
-          `If that rule reasons about this bug's class, re-key the mapping to moduleRan:true with an honest matcher.`,
-      ).toEqual([]);
-    },
-  );
-
-  // #335 — the CLASS guard. A bug that claims "no mechanical rule reaches this class" (the accepted
-  // Semgrep-ran-but-no-rule gaps, and any not-run-mechanical bug) is falsified against real findings
-  // by its own class, wherever the rule would fire — not only at its planted line. If a rule for the
-  // class ever lands, this fails and forces a re-key to caught, closing the honest→caught drift the
-  // location guard structurally cannot see.
-  const claimsNoRuleReaches = GROUND_TRUTH_BUGS.filter((b) => b.classMatch && (b.expectedModule.includes("but no rule") || (!b.moduleRan && !dynamic.includes(b))));
-
-  it.each(claimsNoRuleReaches.map((b) => [b.id, b] as const))(
-    "%s claims no rule reaches its class — no mechanical finding of that class fires ANYWHERE (address-independent)",
-    (_id, bug) => {
-      const reached = findings.filter((f) => f.mechanical === true && bug.classMatch!({ taxonomy: f.taxonomy, location: f.location }));
-      expect(
-        reached,
-        `${bug.id} is mapped as reached by no mechanical rule ("${bug.expectedModule}") but a mechanical finding of its class fired: ` +
-          `${reached.map((f) => `"${f.taxonomy}" at ${f.location}`).join("; ")}. A rule now reaches this class — re-key to caught.`,
-      ).toEqual([]);
-    },
-  );
-
-  it("class guard catches address-mismatched staleness the location guard misses (#335, RLS-DISABLED)", () => {
-    // RLS-DISABLED is the absence-shaped case: planted at rls.sql:41-43 but proved by
-    // checkMigrationRlsStatic at schema.sql:35. Simulate the stale re-key this guard must catch —
-    // the bug wrongly remapped to "no mechanical rule reaches this."
-    const rlsDisabled = GROUND_TRUTH_BUGS.find((b) => b.id === "RLS-DISABLED")!;
-    expect(rlsDisabled.classMatch, "RLS-DISABLED needs a classMatch for the class guard to protect it").toBeDefined();
-
-    // The LOCATION guard looks only at the planted absence lines and sees nothing — it would bless
-    // the stale mapping, exactly the ceiling #335 documents.
-    const plantedAbsence = plantedAt(rlsDisabled.location)!;
-    expect(mechanicalFindingsAt(plantedAbsence.file, plantedAbsence.lines)).toEqual([]);
-
-    // The CLASS guard keys on the taxonomy and finds the rule firing at its create site — the
-    // contradiction the location guard could not see, now caught automatically.
-    const byClass = findings.filter((f) => f.mechanical === true && rlsDisabled.classMatch!({ taxonomy: f.taxonomy, location: f.location }));
-    expect(byClass.length, "class guard must see the rule firing at schema.sql:35 despite the address mismatch").toBeGreaterThan(0);
+describe("dry-run planted bugs are keyed to the single gated answer key (#425)", () => {
+  it("keys each bug to exactly one detection source — a static corpus entry XOR a dynamic replay", () => {
+    for (const b of GROUND_TRUTH_BUGS) {
+      expect(Boolean(b.corpusId) !== Boolean(b.replayId), `${b.id} must set exactly one of corpusId / replayId`).toBe(true);
+    }
   });
 
-  // Guards the two files against drifting apart, which is how rows 9–12 went unlisted: they were
-  // added to GROUND-TRUTH (#145–#148) and nothing required the scorecard to acknowledge them, so
-  // `requires-live-run: 0` kept claiming nothing awaited a live run. A bug this pass can't judge
-  // still needs an entry saying so; an unmapped bug isn't `missed`, it's invisible. Parsing the
-  // answer key is the only check that fails when a row is added or removed rather than drifting
-  // along with it. Note this demands an ENTRY per planted bug, not a static verdict per bug — a
-  // dynamic bug satisfies it with moduleRan:false and a reason.
-  it("has an entry for every bug GROUND-TRUTH plants — an unmapped bug is invisible in scorecard.json, not 'missed'", () => {
+  // A static bug's corpusId is a foreign key into the gated corpus. resolveDetection throws on a
+  // dangling id, so this fails loud if a corpus entry is renamed/removed without re-keying here —
+  // the drift the parallel matcher used to allow is now structurally impossible.
+  it("every static bug's corpusId resolves to a gated corpus entry", () => {
+    for (const b of GROUND_TRUTH_BUGS.filter((x) => x.corpusId)) {
+      expect(CORPUS.find((e) => e.id === b.corpusId), `${b.id} → ${b.corpusId} is not in the gated corpus`).toBeDefined();
+      expect(() => resolveDetection(b, findings)).not.toThrow();
+    }
+  });
+
+  it.each(GROUND_TRUTH_BUGS.filter((b) => b.replayId).map((b) => [b.id, b.replayId!] as const))(
+    "dynamic bug %s names a real registered M2 replay (%s)",
+    (id, replayId) => {
+      // "needs a live run" is only honest while a probe for this bug exists. Delete the replay (or
+      // typo the id) and the bug becomes undetectable by any tier — which must fail here, not sit in
+      // scorecard.json as a live-run promise no code can keep.
+      expect(AUTOMATED_REPLAY_IDS, `${id} maps to replay "${replayId}" but no replay is registered under it`).toContain(replayId);
+    },
+  );
+
+  // Guards the two files against drifting apart, which is how GROUND-TRUTH rows 9–12 once went
+  // unlisted: they were planted and nothing required the scorecard to acknowledge them, so
+  // `requires-live-run: 0` kept claiming nothing awaited a live run. Parsing the answer key is the
+  // only check that fails when a row is added or removed rather than drifting along with it.
+  it("has an entry for every bug GROUND-TRUTH plants — an unmapped bug is invisible, not 'missed'", () => {
     const groundTruth = readFileSync(join(import.meta.dirname, "..", "..", "targets", "calibration", "GROUND-TRUTH.md"), "utf8");
     // The planted-bug tables are the only ones keyed by a leading row NUMBER (`| 9 | SHADOW-API… |`);
     // every later corpus table is keyed by a string id, so this can't over-collect from them.
@@ -142,50 +60,47 @@ describe("GROUND_TRUTH_BUGS mappings vs. the findings the scan really produced",
     const mapped = new Set(GROUND_TRUTH_BUGS.map((b) => b.id));
     expect(
       planted.filter((id) => !mapped.has(id)),
-      "GROUND-TRUTH plants these bugs but GROUND_TRUTH_BUGS has no entry, so scorecard.json omits them entirely. " +
-        "Add an entry: if no module in this pass detects it, map moduleRan:false with the reason and matches:()=>false — never leave it out.",
+      "GROUND-TRUTH plants these bugs but GROUND_TRUTH_BUGS has no entry, so scorecard.json omits them entirely.",
     ).toEqual([]);
-  });
-
-  it("scores every bug mapped moduleRan:true as caught — a matcher that no longer fires is drift too", () => {
-    const claimedCaught = GROUND_TRUTH_BUGS.filter((b) => b.moduleRan && !b.expectedModule.includes("but no rule"));
-    // RAN_SEMGREP_NO_RULE bugs are excluded above: they are the tier's honest, known ceiling.
-    const notFiring = claimedCaught.filter((b) => !findings.some((f) => b.matches(f)));
-    expect(notFiring.map((b) => b.id)).toEqual([]);
   });
 });
 
-// #339 (partial — the full single-key migration is #425). The dry-run and the gated corpus
-// answered "does a rule catch this?" from two independent keys; the dry-run's key drifted for weeks
-// (#332, then #337). This binds the two over the SAME committed findings the dry-run produced:
-// the gated corpus (which cannot drift, it fails `pnpm verify`) is scored against dry-run/findings.
-// json, and the scorecard's verdict for the same bug must agree. If a rule stops firing, the corpus
-// side fails; if the scorecard under-reports a class the corpus proves caught (exactly #332/#337),
-// this fails. The remaining hand-keyed `matches` is not yet removed — that's the remainder issue.
-describe("dry-run detection verdicts are bound to the gated corpus, not a parallel key (#339)", () => {
-  const fullFindings = JSON.parse(
-    readFileSync(join(import.meta.dirname, "..", "..", "dry-run", "findings.json"), "utf8"),
-  ) as Finding[];
+describe("corpus-derived verdicts over the committed dry-run findings (#425)", () => {
+  const scored = scoreCoverage(
+    GROUND_TRUTH_BUGS.map((b) => ({
+      id: b.id,
+      severity: b.severity,
+      location: b.location,
+      expectedModule: b.expectedModule,
+      detection: resolveDetection(b, findings),
+    })),
+  );
+  const statusOf = (id: string) => scored.find((s) => s.id === id)!.status;
 
-  // The static-RLS classes that were the observed drift (#332 RLS-AUTH-ROLE, #337 RLS-USING-TRUE):
-  // each gated corpus positive paired with the scorecard bug it corresponds to.
-  const bound = [
-    { corpusId: "P-RLS-USING-TRUE-STATIC", bugId: "RLS-USING-TRUE" },
-    { corpusId: "P-RLS-AUTH-ROLE-STATIC", bugId: "RLS-AUTH-ROLE" },
-  ];
+  // The exact under-selling #332 (RLS-AUTH-ROLE) and #337 (RLS-USING-TRUE) did: a class the gated
+  // corpus proves detectable must not score requires-live-run/missed. Bound over the SAME committed
+  // findings the corpus is scored against, so the two keys cannot disagree.
+  it.each([
+    ["RLS-USING-TRUE", "P-RLS-USING-TRUE-STATIC"],
+    ["RLS-AUTH-ROLE", "P-RLS-AUTH-ROLE-STATIC"],
+  ])("%s scores caught, matching its gated corpus entry %s on the same findings", (bugId, corpusId) => {
+    const entry = CORPUS.find((e) => e.id === corpusId)!;
+    expect(scoreEntry(entry, findings).pass, `${corpusId} must fire on the committed findings`).toBe(true);
+    expect(statusOf(bugId)).toBe("caught");
+  });
 
-  it.each(bound)("corpus $corpusId proves the class on the committed findings, and $bugId scores caught to match", ({ corpusId, bugId }) => {
-    const entry = rlsStaticSemanticsEntries.find((e) => e.id === corpusId)!;
-    expect(entry, `${corpusId} is no longer in the gated corpus — the binding is stale`).toBeDefined();
+  it("WEBHOOK-REPLAY is the accepted no-mechanical-rule gap — scores missed, corpus entry is 'none' tier", () => {
+    expect(statusOf("WEBHOOK-REPLAY")).toBe("missed");
+    const bug = GROUND_TRUTH_BUGS.find((b) => b.id === "WEBHOOK-REPLAY")!;
+    expect(CORPUS.find((e) => e.id === bug.corpusId)!.expectedTier).toBe("none");
+  });
 
-    // Corpus side (gated on every verify): the rule fires on the dry-run's own committed output.
-    const row = scoreEntry(entry, fullFindings);
-    expect(row.pass, `${corpusId}: ${row.detail}`).toBe(true);
+  it("every dynamic (M2) bug scores requires-live-run — deferred with a reason, never absent", () => {
+    for (const b of GROUND_TRUTH_BUGS.filter((x) => x.replayId)) expect(statusOf(b.id)).toBe("requires-live-run");
+  });
 
-    // Scorecard side must not drift below it: a class the corpus proves detectable cannot be
-    // reported requires-live-run/missed — the exact under-selling #332/#337 did.
-    const bug = GROUND_TRUTH_BUGS.find((b) => b.id === bugId)!;
-    const hit = fullFindings.some((f) => bug.matches(f));
-    expect(hit, `corpus proves ${corpusId} caught on these findings, but scorecard bug ${bugId}'s matcher no longer fires — the two keys have drifted apart`).toBe(true);
+  it("classifies all twelve planted bugs — none silently dropped", () => {
+    expect(scored).toHaveLength(GROUND_TRUTH_BUGS.length);
+    expect(GROUND_TRUTH_BUGS).toHaveLength(12);
   });
 });
