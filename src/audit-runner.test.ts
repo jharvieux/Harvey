@@ -131,6 +131,26 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     expect(runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M5")?.status).toBe("ran");
   });
 
+  // #401: the free-tier test-intent detectors are source-only AST passes (src/detectors/test-intent.ts)
+  // — no installed deps needed — so a target without node_modules should read partial (source tier
+  // covered), not the blanket requires-live-run StrykerJS alone would justify.
+  it("M8 falls back to the test-intent tier without node_modules, reporting partial not requires-live-run", () => {
+    const noDeps = ctx({ exists: (p) => !p.endsWith("node_modules") });
+    const m8 = runAudit(AUDIT_RUNNERS, noDeps).recorded.find((r) => r.module === "M8");
+    expect(m8?.status).toBe("partial");
+    expect(m8?.reason).toMatch(/test-intent/i);
+  });
+
+  it("M8 stays requires-live-run without node_modules when the test-intent pass itself found nothing to scan", () => {
+    const emptyNoDeps = ctx({
+      exists: (p) => !p.endsWith("node_modules"),
+      exec: (_c, argv) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files (0 product-code) from /empty" } : { ok: true, output: cleanOutput(argv) }),
+    });
+    const m8 = runAudit(AUDIT_RUNNERS, emptyNoDeps).recorded.find((r) => r.module === "M8");
+    expect(m8?.status).toBe("requires-live-run");
+    expect(m8?.reason).toMatch(/no node_modules/);
+  });
+
   it("M2 is requires-live-run without a dynamic stack, and never silently absent", () => {
     const m2 = runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M2");
     expect(m2?.status).toBe("requires-live-run");

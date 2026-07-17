@@ -288,3 +288,37 @@ export function noTestSuiteFinding(reason: string): Finding {
 export function noTestSuiteModuleRecord(reason: string): { status: "partial"; note: string } {
   return { status: "partial", note: `No automated test suite found (${reason}) — mutation scan could not run.` };
 }
+
+// #435: a real Stryker run's { summary, reportRows } carries no report-schema Finding[], so it
+// contributed nothing to the engagement deliverable — only the no-test-suite branch's M8-00 did
+// (#224/#420). Surviving mutants are noisy at the individual-mutant level (a repo can have hundreds),
+// so this maps the signal §3b's console warning already calls out: files where survivors CONCENTRATE
+// in the denial/boundary mutator families (mutatorBreakdown.denialBoundaryConcentrated) — "the denial
+// branch was never tested", one finding per file, not one per mutant. Distinct id family from M8-00
+// (no suite) and M8-01-* (stub-check, src/stub-check.ts): M8-02-*.
+export function survivingMutantFindings(summary: MutationSummary): Finding[] {
+  let n = 0;
+  return summary.mutatorBreakdown
+    .filter((b) => b.denialBoundaryConcentrated)
+    .map((b) => {
+      const hotspot = summary.survivingMutants.some((s) => s.file === b.file && s.hotspot);
+      const total = b.boundarySurvivors + b.otherSurvivors;
+      const mutators = Object.entries(b.survivorsByMutator).map(([k, v]) => `${k}: ${v}`).join(", ");
+      return {
+        id: `M8-02-${String(++n).padStart(2, "0")}`,
+        status: "Open",
+        category: "Test quality",
+        title: `Denial/boundary path untested: ${b.file}`,
+        severity: hotspot ? "High" : "Medium",
+        confidence: "Confirmed",
+        taxonomy: "M8 — Denial/boundary path untested",
+        location: b.file,
+        evidence: `${b.boundarySurvivors}/${total} surviving mutant(s) are boundary/negation mutants (${mutators})${hotspot ? " — this file is a flagged M1/M3 hotspot" : ""}.`,
+        impact: "The suite never proved itself against the negation/boundary condition here (e.g. an inverted comparison or off-by-one) — a real defect on that path would pass every existing test.",
+        fix: "Add test cases that exercise the boundary/negation condition directly (e.g. equal-to, just-over, just-under, and the inverted branch) for the mutators listed above.",
+        value: 4,
+        ease: 3,
+        safety: 5,
+      } satisfies Finding;
+    });
+}

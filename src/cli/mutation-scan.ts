@@ -42,6 +42,7 @@ import {
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
   summarizeMutationReport,
+  survivingMutantFindings,
   toReportRows,
   type PackageJsonForTestDetection,
   type StrykerReport,
@@ -222,7 +223,10 @@ for (const b of summary.mutatorBreakdown.filter((x) => x.denialBoundaryConcentra
   console.error(`⚠ ${b.file}: ${b.boundarySurvivors}/${b.boundarySurvivors + b.otherSurvivors} survivors are boundary/negation mutants (ConditionalExpression/EqualityOperator/BooleanLiteral) — denial/boundary path looks untested`);
 }
 
-const output = { summary, reportRows: toReportRows(summary) };
+// #435: findings from the denial/boundary-concentration mapper — a real Stryker run's survivors
+// contribute report-schema findings the same way the no-test-suite branch's M8-00 already does.
+const findings = survivingMutantFindings(summary);
+const output = { summary, reportRows: toReportRows(summary), findings };
 const json = JSON.stringify(output, null, 2);
 if (outPath) {
   writeFileSync(outPath, json + "\n");

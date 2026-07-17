@@ -6,6 +6,7 @@ import {
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
   summarizeMutationReport,
+  survivingMutantFindings,
   toReportRows,
   type StrykerMutant,
   type StrykerReport,
@@ -243,6 +244,36 @@ describe("M8 calibration corpus — live Stryker capture (#72 §M8)", () => {
       denialBoundaryConcentrated: true,
     });
     expect(summary.mutatorBreakdown.some((b) => b.file === "authz.ts")).toBe(false);
+  });
+});
+
+// #435: a real Stryker run's { summary, reportRows } carried no report-schema Finding[] — only
+// the no-test-suite branch's M8-00 contributed to the deliverable. This maps the ONE signal §3b's
+// console warning already calls out (denial/boundary concentration), one finding per file, not one
+// per surviving mutant (a repo can have hundreds of the latter).
+describe("survivingMutantFindings (#435)", () => {
+  it("emits one finding for discount.ts (denial/boundary-concentrated) and none for authz.ts (strong suite)", () => {
+    const summary = summarizeMutationReport(m8Report);
+    const findings = survivingMutantFindings(summary);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      id: "M8-02-01",
+      category: "Test quality",
+      taxonomy: "M8 — Denial/boundary path untested",
+      location: "discount.ts",
+      severity: "Medium",
+    });
+  });
+
+  it("raises severity to High when the concentrated file is a flagged M1/M3 hotspot", () => {
+    const summary = summarizeMutationReport(m8Report, ["discount.ts"]);
+    const findings = survivingMutantFindings(summary);
+    expect(findings[0]?.severity).toBe("High");
+    expect(findings[0]?.evidence).toMatch(/flagged M1\/M3 hotspot/);
+  });
+
+  it("emits nothing when no file's survivors concentrate in the boundary/negation families", () => {
+    expect(survivingMutantFindings(summarizeMutationReport(report))).toEqual([]);
   });
 });
 
