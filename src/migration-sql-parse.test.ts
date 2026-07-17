@@ -127,6 +127,29 @@ create table audit_trail (
       { table_name: "audit_trail", column_name: "action", data_type: "smallserial" },
     ]);
   });
+
+  it("extracts inet/cidr/citext/bytea/geography/geometry columns — PII-relevant types the M10 feed must see (#375)", () => {
+    const cols = parseColumns(`
+create table sessions (
+    id uuid primary key,
+    ip_address inet,
+    subnet cidr,
+    email citext not null,
+    biometric_template bytea,
+    last_location geography(point, 4326),
+    service_area geometry
+);
+`);
+    expect(cols.filter((c) => c.table_name === "sessions")).toEqual([
+      { table_name: "sessions", column_name: "id", data_type: "uuid" },
+      { table_name: "sessions", column_name: "ip_address", data_type: "inet" },
+      { table_name: "sessions", column_name: "subnet", data_type: "cidr" },
+      { table_name: "sessions", column_name: "email", data_type: "citext" },
+      { table_name: "sessions", column_name: "biometric_template", data_type: "bytea" },
+      { table_name: "sessions", column_name: "last_location", data_type: "geography" },
+      { table_name: "sessions", column_name: "service_area", data_type: "geometry" },
+    ]);
+  });
 });
 
 describe("parseTableNames — quoted vs unquoted identifiers (#299)", () => {

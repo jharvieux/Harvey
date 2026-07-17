@@ -264,6 +264,22 @@ describe("classifyMigrationSql — static-schema entry point (#250)", () => {
     expect(dataMap).toEqual({});
   });
 
+  it("classifies columns declared with inet/citext — types the parser used to drop silently (#375)", () => {
+    // Before #375 widened migration-sql-parse's SQL_TYPES, an `ip_address inet` or `email citext`
+    // column never reached classifyColumn at all in --schema mode — the dictionary rules for IP
+    // and EMAIL existed but the parser extraction gate made the columns invisible.
+    const sql = `
+      create table public.sessions (
+        id uuid primary key,
+        ip_address inet,
+        email citext not null
+      );
+    `;
+    const { dataMap } = classifyMigrationSql(sql);
+    expect(dataMap.sessions.columns).toContainEqual({ column: "email", infotype: "EMAIL", category: "PII", confidence: "high" });
+    expect(dataMap.sessions.columns).toContainEqual({ column: "ip_address", infotype: "IP", category: "PII", confidence: "medium" });
+  });
+
   it("classifies a stored secret across multiple migration files concatenated together", () => {
     const sql = [
       "create table public.organisations (\n  id uuid primary key,\n  ai_api_key text\n);",
