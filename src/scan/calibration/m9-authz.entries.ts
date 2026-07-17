@@ -23,6 +23,15 @@
 // DELETE = delete/account_id) let the census fail on a PARTIAL regression of either surface,
 // where a single positive fails only on a total outage. These are genuine distinct instances of
 // the one real class, not fabricated new classes — the other #221 shapes stay semantic/paid-tier.
+//
+// #465 widening (operator ruling, 2026-07-17): the detector now also fires on the three shapes
+// proposit's real instances take — bare `.eq("id", …)`, INSERT-value owner ids, and no-in-body-
+// auth — but ONLY when the chain roots in the RLS-bypassing service/admin client (the measured
+// precision boundary; on the RLS client the generic missing-auth finding owns the defect).
+// MEASURED against proposit HEAD (286 source files): recall 3/3 on the #221-catalogued
+// instances, 0 false positives; the RLS-client near-miss (updateOrganisationLogo) stays silent.
+// The P-SVC-NOAUTH-* / N-* entries below pin those shapes; the no-auth positives also pin the
+// #465 dedupe (the generic missing-auth finding is subsumed — one code defect, one finding).
 
 import type { CorpusEntry } from "./types.js";
 
@@ -49,6 +58,44 @@ export const m9AuthzEntries: CorpusEntry[] = [
     match: ["Client-supplied owner id"],
     expectedTier: "review",
     note: `client-owner-id/positive-delete/app/actions.ts deleteAccount(): a SECOND real instance of the #221 class, distinct from P-AUTHN-CLIENT-OWNER's .update()/user_id shape — it exercises the DELETE verb and the account_id ownership column (both otherwise seen only on the negatives). It is N-AUTHN-OWNER-COMPARED minus its currentUser.id !== accountId guard, so that negative is exactly its boundary. Caught by detectClientSuppliedOwnerId at review tier; gated live by app-router.test.ts ("flags a second instance … delete verb and the account_id column"). Its purpose is PARITY (#427): two positives across different MUTATION_PATTERN/OWNERSHIP_COLUMN surfaces fail on a partial regression, where one positive fails only on a total outage.`,
+  },
+  {
+    id: "P-SVC-NOAUTH-BARE-ID",
+    kind: "positive",
+    cls: "no-auth service-role mutation scoped by a bare client-supplied id",
+    module: "M9",
+    location: "app/actions-svc-bareid.ts",
+    match: ["Client-supplied owner id"],
+    expectedTier: "review",
+    note: `app/actions-svc-bareid.ts updateUserProfile(): no auth call anywhere, the service-role client (RLS bypassed), and bare .eq("id", userId) with the CLIENT's userId picks the row — anyone can rename any user. The #465-widened bare-id shape, modelled on proposit's updateUserProfileAction (measured recall 3/3, 0 FP on proposit HEAD). Fires only on service-rooted chains; the RLS-client near-miss is N-RLS-CLIENT-BARE-ID. Also pins the #465 dedupe: the generic missing-auth finding for this action is subsumed by this more specific one.`,
+  },
+  {
+    id: "P-SVC-NOAUTH-INSERT-OWNER",
+    kind: "positive",
+    cls: "no-auth service-role insert whose owner column value is client-supplied",
+    module: "M9",
+    location: "app/actions-svc-insert.ts",
+    match: ["Client-supplied owner id"],
+    expectedTier: "review",
+    note: `app/actions-svc-insert.ts addMember(): no auth call, service-role client, and the new row's owner comes from the client (user_id: userId) — the caller says who the membership belongs to and nothing checks it. The #465-widened INSERT-value shape, modelled on proposit's acceptInvitationAction/createOrganisationAction. INSERT_OWNER_COLUMN restricts this shape to identity columns (user/owner/member/…): the client-chosen organisation_id on the same insert is deliberately NOT a hit. Near-miss: N-SVC-INSERT-SESSION-OWNER.`,
+  },
+  {
+    id: "N-RLS-CLIENT-BARE-ID",
+    kind: "negative",
+    cls: "same bare-id syntax on the plain RLS client — policies still gate the write",
+    module: "M9",
+    location: "app/actions-rls-bareid.ts",
+    match: ["Client-supplied owner id"],
+    note: `app/actions-rls-bareid.ts updateOrganisationLogo(): identical no-auth + bare .eq("id", …) syntax as P-SVC-NOAUTH-BARE-ID but on the PLAIN (RLS-enforced) client — row policies still gate the write, so the widened shape stays silent (the service-root requirement is the measured precision boundary; proposit's updateOrganisationLogo is the real-world instance). The file's actual defect draws the generic missing-auth finding, which does not carry this entry's match keyword.`,
+  },
+  {
+    id: "N-SVC-INSERT-SESSION-OWNER",
+    kind: "negative",
+    cls: "service-role insert whose owner id reads off the session",
+    module: "M9",
+    location: "app/actions-svc-insert-session.ts",
+    match: ["Client-supplied owner id"],
+    note: `app/actions-svc-insert-session.ts joinOrganisation(): identical service-role insert shape as the positive, but user_id reads off the session binding (user.id) — the caller can only add itself. Also pins INSERT_OWNER_COLUMN's boundary: the client-chosen organisation_id on the same insert is a container column, not an owner-identity column, and must not fire.`,
   },
   {
     id: "N-AUTHN-SESSION-OWNER",
