@@ -183,6 +183,16 @@ const securityJscpdReport: JscpdReport = {
       firstFile: { name: "src/blog/authors.ts", start: 1, end: 25 },
       secondFile: { name: "src/blog/contributors.ts", start: 1, end: 25 },
     },
+    // #400: a test naming an auth path (tests/e2e/auth/*.spec.ts) is not a per-handler
+    // authorization drift risk — must NOT elevate, even though touchesSecurityPath matches "auth".
+    {
+      format: "typescript",
+      lines: 11,
+      tokens: 120,
+      fragment: "await page.goto('/auth/idp-initiated');",
+      firstFile: { name: "tests/e2e/auth/idp-initiated.spec.ts", start: 1, end: 11 },
+      secondFile: { name: "tests/e2e/auth/idp-initiated-2.spec.ts", start: 1, end: 11 },
+    },
   ],
 };
 
@@ -218,8 +228,40 @@ describe("jscpdToFindings — security-path elevation (#361)", () => {
     expect(f?.impact).not.toContain("M1 authorization review");
   });
 
+  it("does not elevate a clone confined to test/e2e files even though the path contains 'auth' (#400)", () => {
+    const f = byFile("tests/e2e/auth/idp-initiated.spec.ts");
+    expect(f?.severity).toBe("Info"); // plain 11-line severity, no elevation
+    expect(f?.title).not.toContain("security-relevant path");
+    expect(f?.impact).not.toContain("M1 authorization review");
+  });
+
   it("raises the BFTB value alongside the elevated severity", () => {
     expect(byFile("dup/auth/session-check-api.ts")?.value).toBe(4);
+  });
+});
+
+// #399: the v2 widening of the #360 diverged-clone pass's file selection — content-based, not
+// path-based, so it needs both signals present (not either alone) to stay defensible.
+describe("touchesTenantSupabasePath (#399)", () => {
+  it("admits a file that both scopes by a tenant key AND queries supabase", () => {
+    const source = `
+      const { data } = await supabase.from("customers").select("*").eq("organisation_id", orgId);
+    `;
+    expect(touchesTenantSupabasePath(source)).toBe(true);
+  });
+
+  it("does not admit a tenant-key literal with no supabase query", () => {
+    const source = `const filters = { organisation_id: orgId, status: "active" };`;
+    expect(touchesTenantSupabasePath(source)).toBe(false);
+  });
+
+  it("does not admit a supabase query with no tenant-key literal", () => {
+    const source = `const { data } = await supabase.from("public_settings").select("*");`;
+    expect(touchesTenantSupabasePath(source)).toBe(false);
+  });
+
+  it("does not admit plain source with neither signal", () => {
+    expect(touchesTenantSupabasePath("export function add(a: number, b: number) { return a + b; }")).toBe(false);
   });
 });
 
