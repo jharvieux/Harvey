@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildCoverageMatrix, CORPUS, moduleCensus, scoreEntry, type CorpusEntry } from "./calibration.js";
+import { buildCoverageMatrix, CORPUS, mechanicalCorpus, moduleCensus, scoreEntry, type CorpusEntry } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
@@ -671,6 +671,35 @@ describe("moduleCensus (#341 — per-module legibility so a blended count can't 
     expect(census[0]?.module).toBe("M1");
     const nums = census.map((c) => Number(c.module.replace(/^M/, "")));
     expect(nums).toEqual([...nums].sort((a, b) => a - b));
+  });
+});
+
+describe("mechanicalCorpus (#398 — a module-tagged entry must never go silently unscored)", () => {
+  // #398: validate-calibration.ts scores only entries with no `module` label (runMechanicalScan
+  // is M1-only, #341's recorded decision). The defect this guards against isn't the exclusion
+  // itself — it's an exclusion nobody can see: an entry dropped from the live gate AND absent
+  // from the per-module census reads as "never existed" rather than "gated elsewhere."
+  it("excludes exactly the module-tagged entries, keeps every M1 entry", () => {
+    const scored = mechanicalCorpus(CORPUS);
+    expect(scored.every((e) => e.module === undefined)).toBe(true);
+    expect(scored).toHaveLength(CORPUS.filter((e) => e.module === undefined).length);
+    // Canary: if a future edit stops tagging entries with `module`, this suite would pass
+    // vacuously (an empty exclusion looks identical to a correct one). The corpus must actually
+    // contain module-tagged entries for "excluded, not dropped" to mean anything.
+    expect(CORPUS.some((e) => e.module !== undefined)).toBe(true);
+    expect(scored.length).toBeLessThan(CORPUS.length);
+  });
+
+  it("every entry mechanicalCorpus excludes is still accounted for in the per-module census — excluded is not the same as gone", () => {
+    const excluded = CORPUS.filter((e) => e.module !== undefined);
+    const census = moduleCensus(CORPUS);
+    const censusModules = new Set(census.map((c) => c.module));
+    for (const e of excluded) {
+      // The entry's module must appear as its own census row (not folded into M1, not missing).
+      expect(censusModules.has(e.module as string), `${e.id} (module ${e.module}) missing from census`).toBe(true);
+      const row = census.find((c) => c.module === e.module)!;
+      expect(row.positivesStatic + row.positivesConnected + row.negatives, `${e.module} census row is empty`).toBeGreaterThan(0);
+    }
   });
 });
 

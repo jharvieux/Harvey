@@ -1,0 +1,14 @@
+'use client';
+
+import { useEffect, useState } from "react";
+
+export function ViewportWidget() {
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    setWidth(window.innerWidth);
+    document.title = `w=${window.innerWidth}`;
+  }, []);
+
+  return <div>{width}</div>;
+}

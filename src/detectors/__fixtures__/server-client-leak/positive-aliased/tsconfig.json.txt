@@ -1,0 +1,9 @@
+{
+  // create-next-app's default alias — comments are legal in tsconfig
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  }
+}

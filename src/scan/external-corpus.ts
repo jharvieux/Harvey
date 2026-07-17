@@ -76,6 +76,11 @@ export interface MutationBaseline {
   // #319: the files the score is measured over — Stryker's `mutate` scope, a subset of the repo,
   // NEVER the whole tree. Always non-empty; this is the denominator that keeps the score honest.
   coveredScope: string[];
+  // #432: the ± band on `killed` a Stryker re-run is allowed to land in and still count as a match.
+  // Defaults to 0 (exact match) — a target only earns a nonzero tolerance after being MEASURED
+  // flaky across multiple runs, never added defensively. See scoreMutationBaseline's header for why
+  // exact equality is the right default and what earns an exception.
+  tolerance?: number;
   note: string;
 }
 
@@ -90,7 +95,11 @@ function formatMutationClaim(b: MutationBaseline): string {
   const scope = b.coveredScope.length === 1
     ? b.coveredScope[0]
     : `${b.coveredScope.length} files (${b.coveredScope.join(", ")})`;
-  return `${b.mutationScore}% (${b.killed}/${b.valid} killed) over ${scope} — a scoped subset, NOT a whole-repo coverage claim`;
+  // #432: a nonzero tolerance means this baseline is a measured band, not a point value — say so
+  // wherever the claim is printed, so a reader doesn't read "20% (7/35 killed)" as more precise
+  // than it is.
+  const band = b.tolerance ? ` (±${b.tolerance} killed, measured flaky — see note)` : "";
+  return `${b.mutationScore}% (${b.killed}/${b.valid} killed)${band} over ${scope} — a scoped subset, NOT a whole-repo coverage claim`;
 }
 
 export interface ExternalTarget {
@@ -207,7 +216,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     m8: M8_CORPUS_CONFIGS.proposit,
     modules: {
       M4: { counted: 73, total: 105, note: "5.27% (2749/52165 lines), 203 raw clone clusters — 104 individual cross-file findings, 73 counted, plus the #365 M4-00 small-clone disclosure (44 sub-10-line clones, Info) for 105 total. Re-measured 2026-07-16: counted 68->73 because #361 elevates security-path clones one tier — 5 sub-15-line clones in components/auth/* + lib/supabase/server.ts moved Info->Low (10 clones total carry the elevation, the other 5 were already counted). Was 9.75%/199 clones pre-#232; the drop is that fix excluding generated/demo paths, NOT the repo changing. Per #232 ~75% of what remains is genuine per-entity copy-paste (CRUD forms, per-entity tool/store/service files) — the corpus's strongest real M4 signal and a factory-refactor case. #251 measured the install step inert for M4." },
-      "M4-diverged": { counted: 1, total: 1, note: "#360: measured 2026-07-16 — 20 security-path files, 1 diverged family (High, review tier). Small for the corpus's worst M4 target because its per-entity copies live under lib/ai/tools/* and lib/stores/*, which don't hit SECURITY_PATH_KEYWORDS — the pass is deliberately scoped to auth/guard/middleware/security paths." },
+      "M4-diverged": { counted: 12, total: 12, note: "#360: measured 2026-07-16 — 20 security-path files, 1 diverged family (High, review tier). Small for the corpus's worst M4 target because its per-entity copies live under lib/ai/tools/* and lib/stores/*, which don't hit SECURITY_PATH_KEYWORDS — the pass is deliberately scoped to auth/guard/middleware/security paths. Re-measured 2026-07-17 (#399): 1->12 after widening file selection to ALSO admit files whose BODY scopes a supabase query by a tenant key (touchesTenantSupabasePath) — this target's file count went 20->57 (37 more admitted via content, mostly exactly the predicted lib/ai/tools/*-tools.ts and lib/*-service.ts per-entity vein), surfacing 11 more diverged families in that vein." },
       "M5-knip": { counted: 85, total: 85, note: "#251: measured 2026-07-15 after `npm install --legacy-peer-deps` in the clone — the install step is what unblocked this, exactly the CLAUDE.md M5 prereq. 85 findings, 83 Low + 2 Medium, no Info tail (knip's dead-code findings are never Info unless the scan itself failed). 8 unused files + 77 files with unused exports: BY FAR the corpus's largest M5-knip surface (next is boxyhq at 12), consistent with proposit also being its worst M4 target (68) — the same per-entity copy-paste vein leaving unreferenced exports behind. Worth a triage pass to confirm the shape (see follow-up); recorded here as the measured drift baseline it is, not as a triaged verdict." },
       "M5-slop": { counted: 6, total: 16, note: "#278: measured 2026-07-15 via detect-static (previously excluded from scoring entirely to avoid double-counting M5-knip). 3 'Single-call wrapper' + 3 'Else after return' counted; 10 Info-tail (narrating comments, AI phrasing, decorative emoji, redundant JSDoc)." },
       M7: { counted: 49, total: 79, note: "30 of the 79 are the exhaustive-deps class #230 demoted to Info (~0 real), leaving 49 counted. The real vein is 26 'Unbounded select' on growable request-path lists (low-sev latent scalability). Residual FP tail still counted: 5 inline-literal, 4 context-value-recreated, 2 index-key — the micro-render shapes #230 judged ~0% real (see follow-up)." },
@@ -248,7 +257,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     // corpus-drift.ts's readMigrationSql had to read recursively too, not just this parser.
     schemaPath: "prisma/migrations",
     modules: {
-      M4: { counted: 48, total: 67, note: "4.93% (1148/23283 lines), 90 raw clusters -> 66 cross-file findings, 48 counted, plus the #365 M4-00 disclosure (3 small clones, Info) for 67 total. Re-measured 2026-07-16: counted 39->48, nine sub-15-line clones under pages/api/auth/*, pages/auth/*, components/auth/* (and one tests/e2e/auth spec) moved Info->Low under #361's security-path elevation. Per #232 the real signal is the API-handler envelope (a `createHandler` extraction candidate), lower severity than proposit's. #251 measured the install step inert for M4." },
+      M4: { counted: 47, total: 67, note: "4.93% (1148/23283 lines), 90 raw clusters -> 66 cross-file findings, 47 counted, plus the #365 M4-00 disclosure (3 small clones, Info) for 67 total. Re-measured 2026-07-16: counted 39->48, nine sub-15-line clones under pages/api/auth/*, pages/auth/*, components/auth/* (and one tests/e2e/auth spec) moved Info->Low under #361's security-path elevation. Re-measured again 2026-07-17 (#400): 48->47 — the tests/e2e/auth/idp-initiated.spec.ts clone no longer elevates, since a test/spec/e2e path merely naming 'auth' isn't a per-handler authorization drift risk (same exclusion the #360 diverged-clone pass's file selection already applied). Per #232 the real signal is the API-handler envelope (a `createHandler` extraction candidate), lower severity than proposit's. #251 measured the install step inert for M4." },
       "M4-diverged": { counted: 2, total: 2, note: "#360: measured 2026-07-16 — 38 security-path files, 2 diverged families (High, review tier). The larger family is the per-page getServerSideProps auth boilerplate (8 pages, one adjudication row thanks to family grouping — per-pair emission would have been 21 findings, the measured basis for grouping)." },
       "M5-knip": { counted: 12, total: 12, note: "#251: measured 2026-07-15 after `npm install --legacy-peer-deps` in the clone — 5 unused files + 7 files with unused exports. Modest for a 23k-line repo, matching this target's reputation as the corpus's best-maintained one (it is also the M8 upper reference point). Worth watching as an FP guard: a jump here on a well-kept repo is more likely a knip/config change than new dead code." },
       "M5-slop": { counted: 12, total: 13, note: "#278: measured 2026-07-15. 9 'Else after return' + 2 'Orphan TODO' + 1 'Single-call wrapper' counted; 1 Info. The corpus's highest slop count on a target with real test coverage — a real regression guard, not just the zero-test targets." },
@@ -256,7 +265,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       // #300: the manifest calls this target "the M8 upper reference point" — measurement says
       // otherwise, and that inversion is the whole reason to measure. It has the corpus's most
       // test FILES (8) but its jest suite is ONE unit spec; the other 7 are Playwright E2E.
-      M8: { mutationScore: 20, killed: 7, valid: 35, coveredScope: ["lib/server-common.ts"], note: "#300/#319: MEASURED 2026-07-15 — 20% (7/35 valid mutants) on lib/server-common.ts (its coveredScope), the file boxyhq's one jest unit spec (__tests__/lib/server-common.spec.ts) covers. 2 survived, 26 NoCoverage: the spec exercises generateToken but leaves most of the file's exports untouched. #277 predicted the Playwright specs would block this and they do NOT — the target's jest.config.js already sets testPathIgnorePatterns: ['<rootDir>/tests/e2e'], so jest never loads them; the prediction was never tested against the config. Note this reverses the manifest's 'best-tested target' framing: most test files, LOWEST measured mutation score in the corpus (proposit's thin suite scores 100 on what it covers) — which is exactly why #319 requires coveredScope: one covered file out of a 23k-line tree is not a repo-level 20%. Test-file count was never test quality — which is #263's lesson restated." },
+      M8: { mutationScore: 20, killed: 7, valid: 35, tolerance: 1, coveredScope: ["lib/server-common.ts"], note: "#300/#319: MEASURED 2026-07-15 — 20% (7/35 valid mutants) on lib/server-common.ts (its coveredScope), the file boxyhq's one jest unit spec (__tests__/lib/server-common.spec.ts) covers. 2 survived, 26 NoCoverage: the spec exercises generateToken but leaves most of the file's exports untouched. #277 predicted the Playwright specs would block this and they do NOT — the target's jest.config.js already sets testPathIgnorePatterns: ['<rootDir>/tests/e2e'], so jest never loads them; the prediction was never tested against the config. Note this reverses the manifest's 'best-tested target' framing: most test files, LOWEST measured mutation score in the corpus (proposit's thin suite scores 100 on what it covers) — which is exactly why #319 requires coveredScope: one covered file out of a 23k-line tree is not a repo-level 20%. Test-file count was never test quality — which is #263's lesson restated. #432: CI measured 8/35 (22.9%) on PR #431 — re-run 4x on 2026-07-17 (cloning + installing fresh each time, not just re-scoring one report) and got 7/35 three times, 8/35 once. Diffing the two runs' surviving-mutant lists pins it to ONE mutant flip-flopping: lib/server-common.ts:18's MethodExpression on `tokenBytes.toString('hex').slice(0, length)`. generateToken's own spec has a 'random length' test (`Math.round(Math.random() * 10) + 1`, unseeded) — when that length lands EVEN, the mutant's un-sliced hex output happens to already be that length (Math.ceil(length/2) bytes -> length hex chars when length is even), so the assertion can't tell the mutant from the original and it survives; an ODD length always kills it. This is the target's OWN test being flaky by construction, not our wrapper or Stryker — tolerance: 1 absorbs the ±1 wobble instead of picking a point value that fails exactly as often as it passes." },
       M9: { counted: 0, total: 0, note: "MEASURED zero, and it is the #231 fix working: this is a PAGES Router app, where the App-Router-only checks must not fire at all. Pre-#231 it drew a bogus server-only hit. Any non-zero M9 here is a straight regression of that fix." },
       M10: { counted: 8, total: 8, note: "#299: measured 2026-07-15 via m10FindingsFromSchema over the cloned prisma/migrations (95 columns parsed across 15 tables, 8 PII/secret-bearing). Headline is jackson_store: Medium (OPAQUE_ENCRYPTED_STORE, the must-not-miss SAML/SSO secret store also pinned directly in external-corpus.test.ts's classifyColumn assertion), plus Account/Session: High (AUTH_TOKEN) and User: High (NAME?/EMAIL/STORED_PASSWORD). Previously not-run — parseColumns matched unquoted \\w+ identifiers only and this target's Prisma-generated migration.sql double-quotes every one (\"Account\", \"userId\"); #299 extended the parser to read quoted identifiers too." },
     },
@@ -420,21 +429,28 @@ interface DriftRow {
 }
 
 // #300: scores a REAL Stryker run against a target's recorded MutationBaseline. Exact equality on
-// killed/valid rather than a band on the percentage: the target tree is pinned and the mutators are
-// deterministic, so the same suite against the same code kills the same mutants. Comparing the
-// counts, not just the rounded score, means a change that swaps a killed mutant for a survivor at
-// a constant percentage still fails — that is a real test-quality movement, and the percentage
-// alone would hide it.
+// killed/valid is the DEFAULT (tolerance 0): the target tree is pinned, so a change in the count
+// should mean something moved, and comparing counts (not just the rounded score) means a change
+// that swaps a killed mutant for a survivor at a constant percentage still fails — that is a real
+// test-quality movement, and the percentage alone would hide it.
 //
-// A drift here is EITHER the target's suite/config changing under us (rebaseline with the measured
-// note) OR our wrapper mis-reading Stryker's report (a scanner bug). As everywhere else in this
-// file, the scorer refuses to guess which — it just refuses to be quiet.
+// #432 corrected this comment's original claim that "the mutators are deterministic, so the same
+// suite against the same code kills the same mutants" — that is false in general. boxyhq's suite
+// includes a test that calls Math.random() itself (unseeded, in the TARGET's own spec, not in
+// Stryker), so which of two adjacent mutants gets killed depends on whether that call happens to
+// land even or odd — measured 2026-07-16 (issue #432) as a genuine ~50/50 split of 7/35 vs 8/35
+// killed across 4 runs, never anything outside that pair. `tolerance` exists for exactly this:
+// earned per-target by measuring instability across multiple runs, not applied defensively.
+//
+// A drift outside the tolerance band is EITHER the target's suite/config changing under us
+// (rebaseline with the measured note) OR our wrapper mis-reading Stryker's report (a scanner bug).
+// As everywhere else in this file, the scorer refuses to guess which — it just refuses to be quiet.
 export function scoreMutationBaseline(
   slug: string,
   baseline: MutationBaseline,
   actual: { mutationScore: number; killed: number; valid: number },
 ): DriftRow {
-  const pass = actual.killed === baseline.killed && actual.valid === baseline.valid;
+  const pass = Math.abs(actual.killed - baseline.killed) <= (baseline.tolerance ?? 0) && actual.valid === baseline.valid;
   return {
     slug,
     module: "M8",
