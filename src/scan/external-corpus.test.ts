@@ -226,6 +226,33 @@ describe("scoreMutationBaseline (#300)", () => {
     expect(scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 15.6, killed: 7, valid: 45 }))
       .toMatchObject({ pass: false });
   });
+
+  // #432: boxyhq's own spec calls Math.random() (unseeded) to pick generateToken's length, and
+  // that random length being even vs odd changes whether one specific mutant survives — measured
+  // 2026-07-16/17 as a genuine 7-vs-8-of-35 split across repeated clone+install+Stryker runs, not
+  // a one-off. A baseline earns `tolerance` only after being measured flaky like this.
+  it("passes within a target's measured tolerance without weakening the default (tolerance 0)", () => {
+    const flaky = (): MutationBaseline => ({ ...baseline(), tolerance: 1 });
+    expect(scoreMutationBaseline("boxyhq", flaky(), { mutationScore: 22.9, killed: 8, valid: 35 }))
+      .toMatchObject({ pass: true, drift: 1 });
+    expect(scoreMutationBaseline("boxyhq", flaky(), { mutationScore: 20, killed: 7, valid: 35 }))
+      .toMatchObject({ pass: true, drift: 0 });
+    // Still fails outside the measured band — tolerance absorbs the observed wobble, not any drift.
+    expect(scoreMutationBaseline("boxyhq", flaky(), { mutationScore: 25.7, killed: 9, valid: 35 }))
+      .toMatchObject({ pass: false });
+    expect(scoreMutationBaseline("boxyhq", flaky(), { mutationScore: 14.3, killed: 5, valid: 35 }))
+      .toMatchObject({ pass: false });
+    // The default (no tolerance field) is untouched: exact equality still applies to every other
+    // baseline, so this fix doesn't quietly loosen drift detection repo-wide.
+    expect(scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 22.9, killed: 8, valid: 35 }))
+      .toMatchObject({ pass: false });
+  });
+
+  it("names the measured tolerance in the printed claim so a reader doesn't read the number as exact", () => {
+    const flaky = (): MutationBaseline => ({ ...baseline(), tolerance: 1 });
+    const row = scoreMutationBaseline("boxyhq", flaky(), { mutationScore: 20, killed: 7, valid: 35 });
+    expect(row.detail).toContain("±1 killed");
+  });
 });
 
 describe("M8 manifest shape (#300)", () => {
@@ -250,6 +277,22 @@ describe("M8 manifest shape (#300)", () => {
       expect(m8.coveredScope.length, t.slug).toBeGreaterThan(0);
       expect([...m8.coveredScope].sort(), t.slug).toEqual([...(t.m8!.config.mutate as string[])].sort());
     }
+  });
+
+  // #432: boxyhq's baseline earned its tolerance by being measured flaky across repeated runs
+  // (see its note); proposit's suite has shown no such instability and keeps the default exact
+  // match — a tolerance appearing without a measured reason would be exactly the "defensive slack"
+  // CLAUDE.md's doctrine forbids.
+  it("only grants a mutation tolerance to a target measured flaky, with the reason in its note", () => {
+    const boxyhq = EXTERNAL_CORPUS.find((t) => t.slug === "boxyhq")!.modules.M8;
+    expect(isMutationBaseline(boxyhq)).toBe(true);
+    if (isMutationBaseline(boxyhq)) {
+      expect(boxyhq.tolerance).toBe(1);
+      expect(boxyhq.note).toMatch(/Math\.random/);
+    }
+    const proposit = EXTERNAL_CORPUS.find((t) => t.slug === "proposit")!.modules.M8;
+    expect(isMutationBaseline(proposit)).toBe(true);
+    if (isMutationBaseline(proposit)) expect(proposit.tolerance).toBeUndefined();
   });
 
   it("keeps a measured reason on every M8 that mutation testing does not score", () => {
