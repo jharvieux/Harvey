@@ -70,6 +70,37 @@ describe("renderPacket", () => {
   });
 });
 
+describe("buildPacket dependency manifest (#396)", () => {
+  const cwd = process.cwd();
+  const sourcePaths = [`${cwd}/package.json`]; // stands in for a source file under review
+
+  it("includes the manifest's own section, ahead of the source files", () => {
+    const packet = buildPacket(BRIEF, cwd, sourcePaths, [], [`${cwd}/package.json`]);
+    expect(packet.manifests).toEqual([{ path: "package.json", text: expect.any(String) }]);
+    const out = renderPacket(packet);
+    expect(out).toContain("## Dependency manifest");
+    expect(out).toContain('"devDependencies"'); // the target's actual manifest content made it in
+    // The manifest section must precede the source-under-review section.
+    expect(out.indexOf("## Dependency manifest")).toBeLessThan(out.indexOf("## The source under review"));
+  });
+
+  it("names a dependency that is actually installed, so the reviewer can apply the class", () => {
+    const packet = buildPacket(BRIEF, cwd, sourcePaths, [], [`${cwd}/package.json`]);
+    // vitest is a real devDependency of this repo — proves the manifest's real content is present,
+    // not just a placeholder section heading.
+    expect(renderPacket(packet)).toContain("vitest");
+  });
+
+  it("fails loud — not silently — when the target has no package.json", () => {
+    const packet = buildPacket(BRIEF, cwd, sourcePaths, [], []);
+    expect(packet.manifests).toEqual([]);
+    const out = renderPacket(packet);
+    expect(out).toContain("## Dependency manifest");
+    expect(out).toMatch(/no package\.json was found/i);
+    expect(out).toMatch(/unverifiable/i);
+  });
+});
+
 describe("buildPacket hotspot ordering (#442)", () => {
   const cwd = process.cwd();
   const paths = [`${cwd}/package.json`, `${cwd}/tsconfig.json`];
