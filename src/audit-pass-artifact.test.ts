@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { findFreshPass, MAX_PASS_AGE_MS, type PassArtifact, ranFromPass } from "./audit-pass-artifact.js";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import { buildPassArtifact, findFreshPass, MAX_PASS_AGE_MS, type PassArtifact, ranFromPass, writePassArtifact } from "./audit-pass-artifact.js";
 import type { RunContext } from "./audit-runner.js";
 
 const NOW = Date.parse("2026-07-17T12:00:00Z");
@@ -88,5 +91,65 @@ describe("ranFromPass", () => {
 
   it("omits findings when the pass produced none", () => {
     expect(ranFromPass(artifact(), "mech").findings).toBeUndefined();
+  });
+});
+
+describe("buildPassArtifact (#448 — validate at emit, not on the next audit)", () => {
+  it("rejects an empty target — the reader keys on it, so a blank one is a silent miss", () => {
+    expect(() => buildPassArtifact({ module: "M1", target: "  ", pass: "semantic", generatedAt: iso(0) })).toThrow(/non-empty target/);
+  });
+
+  it("rejects a non-ISO timestamp so freshness can always be judged", () => {
+    expect(() => buildPassArtifact({ module: "M1", target: "/t", pass: "semantic", generatedAt: "yesterday" })).toThrow(/generatedAt/);
+  });
+
+  it("drops empty findings/summary rather than writing hollow fields", () => {
+    const a = buildPassArtifact({ module: "M2", target: "/t", pass: "dynamic", generatedAt: iso(0), findings: [] });
+    expect(a.findings).toBeUndefined();
+    expect(a.summary).toBeUndefined();
+  });
+});
+
+describe("write → derive round-trip (#448 ↔ #416)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "harvey-pass-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  // A context that reads the real files writePassArtifact just wrote — the emit and derive sides
+  // meeting on disk, which is exactly how run-audit --artifacts-dir uses them.
+  const realFsCtx: RunContext = {
+    targetDir: "/engagement/target",
+    env: { connected: false, dynamic: false, llm: true },
+    exec: () => ({ ok: true, output: "" }),
+    exists: (p) => existsSync(p),
+    artifactsDir: dir,
+    readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),
+    now: NOW,
+  };
+
+  it("a written artifact is read back as fresh and derives ran, findings intact", () => {
+    const built = buildPassArtifact({
+      module: "M1",
+      target: "/engagement/target",
+      pass: "semantic",
+      generatedAt: iso(DAY),
+      summary: "triaged",
+      findings: [{ id: "TRIAGE-1" } as never],
+    });
+    const path = writePassArtifact(dir, built);
+    expect(path).toBe(join(dir, "M1.pass.json"));
+
+    const r = findFreshPass(realFsCtx, "M1");
+    expect(r.fresh).toBe(true);
+    if (r.fresh) {
+      expect(r.artifact.findings).toHaveLength(1);
+      expect(ranFromPass(r.artifact, "mech").status).toBe("ran");
+    }
+  });
+
+  it("an artifact written for a different target is rejected on read", () => {
+    writePassArtifact(dir, buildPassArtifact({ module: "M2", target: "/some/other/app", pass: "dynamic", generatedAt: iso(DAY) }));
+    const r = findFreshPass(realFsCtx, "M2");
+    expect(r.fresh).toBe(false);
+    if (!r.fresh) expect(r.reason).toMatch(/not the audited target/);
   });
 });

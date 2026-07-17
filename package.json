@@ -30,6 +30,7 @@
     "handrolled-frequency": "tsx src/cli/handrolled-frequency.ts",
     "detector-census": "tsx src/cli/detector-census.ts",
     "audit-coverage": "tsx src/cli/audit-coverage.ts",
+    "record-pass": "tsx src/cli/record-pass.ts",
     "pii-classify": "tsx tools/pii-classify.mjs",
     "epic": "tsx src/cli/epic.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip"
