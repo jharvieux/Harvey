@@ -1,0 +1,5 @@
+// Server Component (no 'use client'): this renders on the server, where `window` is undefined.
+export default function HomePage() {
+  const width = window.innerWidth;
+  return <div>Viewport: {width}px</div>;
+}
