@@ -270,13 +270,16 @@ const m7: ModuleRunner = {
     if (!ok) return { status: "requires-live-run", reason: `pnpm detect-static exited non-zero: ${trimOut(output)}` };
     if (!filesScanned(output)) return { status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — no code tier to run (empty or non-source target) (#350)` };
     if (!ctx.env.connected) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: "code tier only — no DB creds for the advisors (pnpm perf-scan)" };
+    // #434: perf-scan needs a project ref as its positional arg (SUPABASE_ACCESS_TOKEN travels via
+    // the inherited process env — perf-scan reads that itself). --connected is intent, not a reachable
+    // project; without a ref threaded through run-audit ctx.supabaseRef there is nothing to call, so
+    // this stays partial with that reason instead of shelling out to a usage error.
+    if (!ctx.supabaseRef) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: "connected tier flagged but no Supabase project ref was given (run-audit --supabase <ref>) — perf-scan needs a project ref to reach the advisors API (#434)" };
     // #420: perf-scan writes a bare Finding[] to --out, so the advisor-tier findings are captured
     // when the connected pass succeeds (M7's code-tier findings already arrive via the shared
-    // detect-static capture under M9). NB: the orchestrator does not yet thread a project-ref/token
-    // into perf-scan, so this success branch is not reachable end-to-end here (follow-up #434) — the
-    // capture is wired so it is correct the moment that ref is threaded.
+    // detect-static capture under M9).
     const advisorsOut = captureOut(ctx, "M7");
-    const advisors = ctx.exec("pnpm", ["perf-scan", ...(advisorsOut ? ["--out", advisorsOut] : [])]);
+    const advisors = ctx.exec("pnpm", ["perf-scan", ctx.supabaseRef, ...(advisorsOut ? ["--out", advisorsOut] : [])]);
     if (!advisors.ok) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: `advisors failed: ${trimOut(advisors.output)}` };
     const findings = readCaptured(ctx, advisorsOut);
     return findings.length

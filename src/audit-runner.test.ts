@@ -143,6 +143,25 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     expect(m7?.reason).toMatch(/advisors/);
   });
 
+  // #434: --connected is intent, not a reachable project — perf-scan needs a ref as its positional
+  // arg. Without one threaded through ctx.supabaseRef, the advisor call has nothing to reach.
+  it("M7 with --connected but no project ref stays partial, naming the missing ref", () => {
+    const connectedNoRef = ctx({ env: { connected: true, dynamic: false, llm: false } });
+    const m7 = runAudit(AUDIT_RUNNERS, connectedNoRef).recorded.find((r) => r.module === "M7");
+    expect(m7?.status).toBe("partial");
+    expect(m7?.reason).toMatch(/project ref/);
+  });
+
+  it("M7 threads ctx.supabaseRef through to perf-scan's positional arg, reaching ran", () => {
+    const connectedWithRef = ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRef: "my-project-ref",
+      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: argv.includes("my-project-ref"), output: "" } : { ok: true, output: cleanOutput(argv) }),
+    });
+    const m7 = runAudit(AUDIT_RUNNERS, connectedWithRef).recorded.find((r) => r.module === "M7");
+    expect(m7?.status).toBe("ran");
+  });
+
   // A non-zero exit is the tool saying it produced nothing. Recording that as "ran" is precisely
   // the false-positive coverage claim the gate exists to prevent.
   it("records a module whose CLI exits non-zero as requires-live-run, not ran", () => {
