@@ -60,9 +60,12 @@ rules:
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
-      # #455: CWE-601 is the standard identifier for this exact bug shape. No owasp mapping —
-      # open redirect has no dedicated OWASP Top-10-2021 category (unlike CWE, not unambiguous).
+      # #493: CWE-601 is the standard identifier for this exact bug shape. Verified against OWASP's
+      # official Top-10-2021 CWE mapping (owasp.org/Top10/2021/A01_2021-Broken_Access_Control/) —
+      # CWE-601 IS in A01's mapped-CWE list, so the #455 "no dedicated category" call was wrong;
+      # corrected to add the owasp field.
       cwe: ["CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"]
+      owasp: ["A01:2021 - Broken Access Control"]
     message: >
       Redirect target derives from a request-controlled value with no host allowlist — a
       classic open-redirect primitive for phishing (and SSRF-shaped if fetched server-side).

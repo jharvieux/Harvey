@@ -131,9 +131,11 @@ rules:
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
-      # #455: CWE-352 is definitional. No owasp mapping — CSRF has no dedicated OWASP
-      # Top-10-2021 category (folded elsewhere), so a category id here would be a guess.
+      # #493: CWE-352 is definitional. Verified against OWASP's official Top-10-2021 CWE mapping
+      # (owasp.org/Top10/2021/A01_2021-Broken_Access_Control/) — CWE-352 IS in A01's mapped-CWE
+      # list, so the #455 "no dedicated category" call was wrong; corrected to add the owasp field.
       cwe: ["CWE-352: Cross-Site Request Forgery (CSRF)"]
+      owasp: ["A01:2021 - Broken Access Control"]
     message: >
       This 'use server' Server Action mutates data with no Origin/CSRF check. Cookie-based auth
       is submitted automatically by the browser on cross-site requests too — without an Origin
