@@ -256,6 +256,21 @@ function isTestPath(path: string): boolean {
   return /(\.test\.|\.spec\.)|(^|\/)(__tests__|e2e)(\/|$)/.test(path);
 }
 
+// #399: v2 widening of the #360 diverged-clone pass's file-selection scope. touchesSecurityPath
+// is deliberately narrow (auth/guard/middleware/security path vocabulary) and misses the AI-
+// duplication vein #399 measured on proposit: per-entity copies (lib/ai/tools/*-tools.ts,
+// lib/stores/*.store.ts) whose paths say nothing about security but whose bodies scope a supabase
+// query by a tenant key (organisation_id, tenant_id, ...) — the same "patched one copy, missed
+// the other" risk #360 targets, just outside the path vocabulary. Requires BOTH signals (not
+// either alone) to keep the pass's false-positive rate defensible: a tenant-key literal alone is
+// common in plain data shapes, and a supabase call alone is most of the app.
+const TENANT_KEY_RE = /\b(tenant_id|tenantId|organisation_id|organizationId|organization_id|org_id|orgId|workspace_id|workspaceId)\b/;
+const SUPABASE_QUERY_RE = /\.(from|rpc)\(|supabase\.(from|rpc|auth)\b|createClient\(|createServerClient\(|createClientComponentClient\(/;
+
+export function touchesTenantSupabasePath(source: string): boolean {
+  return TENANT_KEY_RE.test(source) && SUPABASE_QUERY_RE.test(source);
+}
+
 // fileLineCounts is caller-supplied (read from disk) so this stays a pure,
 // testable transform — and so the reported line count is measured, not guessed.
 export function knipToFindings(report: KnipReport, fileLineCounts: Record<string, number> = {}): Finding[] {

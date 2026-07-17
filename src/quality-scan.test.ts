@@ -11,6 +11,8 @@ import {
   jscpdToFindings,
   knipToFindings,
   knipUnavailableFinding,
+  touchesSecurityPath,
+  touchesTenantSupabasePath,
   type JscpdReport,
   type KnipReport,
 } from "./quality-scan.js";
@@ -295,11 +297,24 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
     }
   }
 
+  // Mirrors src/cli/quality-scan.ts's securityPathFiles exactly: admit on EITHER
+  // touchesSecurityPath (path, #360) OR touchesTenantSupabasePath (content, #399).
+  function widenedSecurityFiles(dir: string, rel = ""): { path: string; source: string }[] {
+    const files: { path: string; source: string }[] = [];
+    for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (entry.name !== "generated") files.push(...widenedSecurityFiles(dir, relPath));
+      } else if (entry.name.endsWith(".ts")) {
+        const source = readFileSync(join(dir, relPath), "utf8");
+        if (touchesSecurityPath(relPath) || touchesTenantSupabasePath(source)) files.push({ path: relPath, source });
+      }
+    }
+    return files;
+  }
+
   it("catches every planted M4 positive and stays silent on every M4 negative", { timeout: 30_000 }, () => {
-    const authDir = join(dupDir, "auth");
-    const securityFiles = readdirSync(authDir)
-      .filter((f) => f.endsWith(".ts"))
-      .map((f) => ({ path: `auth/${f}`, source: readFileSync(join(authDir, f), "utf8") }));
+    const securityFiles = widenedSecurityFiles(dupDir);
     const findings = [...jscpdToFindings(runJscpdLive()), ...divergedCloneFindings(securityFiles)];
     const m4Entries = m4m5Entries.filter((e) => e.module === "M4");
     expect(m4Entries.length).toBeGreaterThanOrEqual(7); // guards against the corpus silently shrinking
@@ -313,13 +328,16 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
     expect(sec?.severity).toBe("Medium");
     expect(sec?.impact).toContain("M1 authorization review");
 
-    // Same for #360: exactly ONE diverged pair exists in the fixture set — the require-tenant
-    // guards — and nothing else may pair (the session-check clones are a consistent Type-2
-    // rename; api-key-check.ts is structurally distinct).
+    // Same for #360/#399: exactly TWO diverged families exist in the fixture set — the
+    // require-tenant guards (v1, path-scoped) and the customer/order stores (v2, content-scoped)
+    // — and nothing else may pair (the session-check clones are a consistent Type-2 rename;
+    // api-key-check.ts is structurally distinct).
     const diverged = findings.filter((f) => f.id.startsWith("M4-DIV"));
-    expect(diverged).toHaveLength(1);
-    expect(diverged[0]?.location).toContain("require-tenant-api.ts");
-    expect(diverged[0]?.location).toContain("require-tenant-admin.ts");
+    expect(diverged).toHaveLength(2);
+    const tenantGuard = diverged.find((f) => f.location.includes("require-tenant-api.ts"));
+    expect(tenantGuard?.location).toContain("require-tenant-admin.ts");
+    const tenantStore = diverged.find((f) => f.location.includes("customer.store.ts"));
+    expect(tenantStore?.location).toContain("order.store.ts");
   });
 });
 
