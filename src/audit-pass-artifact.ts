@@ -7,6 +7,7 @@
 // to passes that outlive the orchestrator process: a tier flag is intent, an artifact is evidence
 // (#311/#356/#351 each refused to bank `ran` off a flag for exactly this reason).
 
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
 import type { RunContext } from "./audit-runner.js";
@@ -70,4 +71,40 @@ export function findFreshPass(ctx: RunContext, module: AuditModule): PassLookup 
 export function ranFromPass(artifact: PassArtifact, mechanicalDetail: string): { status: "ran"; detail: string; findings?: Finding[] } {
   const detail = `${mechanicalDetail} + ${artifact.pass} pass (${artifact.generatedAt}${artifact.summary ? `: ${artifact.summary}` : ""})`;
   return artifact.findings?.length ? { status: "ran", detail, findings: artifact.findings } : { status: "ran", detail };
+}
+
+// ---- The write side (#448): passes emit the artifact findFreshPass reads. ----
+
+// Assemble a PassArtifact from parts, validating the two fields the reader gates on (a non-empty
+// target and a real ISO timestamp) at construction — so a malformed artifact fails at the emitting
+// pass, not silently on the next audit. generatedAt is passed in (not stamped here) so the caller
+// owns the clock; the record-pass CLI stamps `new Date().toISOString()`.
+export function buildPassArtifact(parts: {
+  module: AuditModule;
+  target: string;
+  pass: string;
+  generatedAt: string;
+  summary?: string;
+  findings?: Finding[];
+}): PassArtifact {
+  if (!parts.target.trim()) throw new Error("pass artifact needs a non-empty target (the audited directory)");
+  if (!parts.pass.trim()) throw new Error("pass artifact needs a non-empty pass name (e.g. semantic, dynamic, verdict)");
+  if (Number.isNaN(Date.parse(parts.generatedAt))) throw new Error(`pass artifact generatedAt is not a valid ISO-8601 timestamp: ${parts.generatedAt}`);
+  return {
+    module: parts.module,
+    target: parts.target,
+    pass: parts.pass,
+    generatedAt: parts.generatedAt,
+    ...(parts.summary ? { summary: parts.summary } : {}),
+    ...(parts.findings?.length ? { findings: parts.findings } : {}),
+  };
+}
+
+// Write the artifact to <dir>/<module>.pass.json, creating the dir if needed. Returns the path.
+// The counterpart to findFreshPass: what a pass calls so the orchestrator can later derive `ran`.
+export function writePassArtifact(dir: string, artifact: PassArtifact): string {
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, passArtifactName(artifact.module));
+  writeFileSync(path, `${JSON.stringify(artifact, null, 2)}\n`);
+  return path;
 }
