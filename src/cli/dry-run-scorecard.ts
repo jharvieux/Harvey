@@ -29,12 +29,13 @@ import { type GroundTruthBug, scoreCoverage, type ScorableFinding, summarizeCove
 const at = (file: RegExp, rule: RegExp) => (f: ScorableFinding) => file.test(f.location) && rule.test(f.taxonomy);
 
 // A KNOWN, ACCEPTED coverage gap — not a regression. The mechanical tier scans the file and no
-// rule has ever claimed this bug's class, so the bug scores `missed` by design: this is the
-// scorecard measuring the mechanical tier's real ceiling, which is what it exists to do. Verified
-// for all three users of this text (#286): `missed` in EVERY committed scorecard.json back to the
-// original #34 baseline, and `git log -S` finds no rule for any of these classes in any semgrep
-// rule file, ever. These bugs are the paid semantic tier's job (docs/free-tier-scope.md).
-// A `caught` here would mean a NEW rule genuinely fires — never relax a `matches` to manufacture it.
+// rule claims this bug's class, so the bug scores `missed` by design: this is the scorecard
+// measuring the mechanical tier's real ceiling. As of #353 only WEBHOOK-REPLAY still uses this
+// text — its sibling classes UPDATE-UNSCOPED and COUNTER-RACE graduated to real review-tier rules
+// (see their entries below). WEBHOOK-REPLAY stays missed because it is a MEASURED LLM-tier class,
+// not merely an unbuilt one (#353): proving a replay guard is absent needs whole-handler + callee
+// reasoning no FP-safe grep/AST can do. A `caught` here would mean a NEW rule genuinely fires —
+// never relax a `matches` to manufacture it.
 const RAN_SEMGREP_NO_RULE = (why: string) => `Semgrep ran (src/scan/semgrep.ts) but ${why}`;
 
 // GROUND-TRUTH rows 9–12 (§"Dynamic-tier probes", #145–#148) are live-BEHAVIOR classes: only a
@@ -101,7 +102,11 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     id: "WEBHOOK-REPLAY",
     severity: "Medium",
     location: "pages/api/webhook.js:20-24",
-    expectedModule: RAN_SEMGREP_NO_RULE("no rule targets missing replay/nonce protection"),
+    // MEASURED LLM-tier (#353): does NOT graduate. Proving no replay guard exists means proving a
+    // negative across the whole handler and its callees; a rule flagging every HMAC-verifying
+    // webhook without a recognised nonce/timestamp would FP on correct handlers that dedupe via an
+    // idempotency key, provider-side dedupe, or a DB unique constraint — no FP-safe discriminator.
+    expectedModule: RAN_SEMGREP_NO_RULE("no rule can FP-safely target missing replay/nonce protection — proving the guard's absence is whole-handler+callee reasoning (measured LLM-tier, #353)"),
     moduleRan: true,
     matches: at(/webhook\.js/, /replay|nonce/i),
   },
@@ -109,7 +114,9 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     id: "COUNTER-RACE",
     severity: "Medium",
     location: "pages/api/counter/increment.js:11-31",
-    expectedModule: RAN_SEMGREP_NO_RULE("no rule targets non-atomic read-modify-write races"),
+    // GRADUATED (#353): detectCounterRaceFindings (src/scan/counter-race.ts) proves the
+    // select→arithmetic→update read-modify-write dataflow on one table, at review tier.
+    expectedModule: "detectCounterRaceFindings (src/scan/counter-race.ts, #353) ran inside runMechanicalScan and matched the non-atomic read-modify-write on counters — review tier",
     moduleRan: true,
     matches: at(/increment\.js/, /race|atomic/i),
   },
@@ -117,7 +124,9 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     id: "UPDATE-UNSCOPED",
     severity: "High",
     location: "pages/api/profile/update.js:11-14",
-    expectedModule: RAN_SEMGREP_NO_RULE("no rule targets an unscoped service-role .update() call"),
+    // GRADUATED (#353): leftover-auth's unscoped-write grep (src/scan/leftover-auth.ts) matched the
+    // raw UPDATE string with no WHERE on a .query() sink in a route file, at review tier.
+    expectedModule: "scanLeftoverAuth (src/scan/leftover-auth.ts, #353) ran inside runMechanicalScan and matched the raw UPDATE/DELETE with no WHERE clause in this route handler — review tier",
     moduleRan: true,
     matches: at(/profile.(\/|\\)?update\.js/, /unscoped|service.?role/i),
   },
