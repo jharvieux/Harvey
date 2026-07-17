@@ -115,8 +115,8 @@ Classes (severity / confidence — see the detector for per-check evidence and l
 
 | Class | Detects | Sev / Conf |
 |---|---|---|
-| Context value recreated every render | inline object/array/arrow as `<X.Provider value={…}>` (only when the Context is created in the project's own sources, not a library/shadcn primitive) | Perf / Likely |
-| Inline literal prop | object/array literal props on components, rolled up one finding per file (excludes framer-motion animation props, inline `style` objects, and i18n `t(...)`-built arrays) | Low / Review |
+| Context value recreated every render | inline object/array/arrow as `<X.Provider value={…}>` (only when the Context is created in the project's own sources, not a library/shadcn primitive) | Info / Likely |
+| Inline literal prop | object/array literal props on components, rolled up one finding per file (excludes framer-motion animation props, inline `style` objects, and i18n `t(...)`-built arrays) | Info / Review |
 | Raw `<img>` | `<img>` instead of `next/image`, rolled up per file (excludes `data:`/`blob:` one-shot sources) | Perf / Likely |
 | Index as list key | `key={i}` bound to the `.map()` index parameter (excludes hardcoded/literal lists that never reorder/insert/delete) | Low / Likely |
 | Sort in render body | `.sort()`/`.toSorted()` directly inside JSX | Low / Review |
@@ -135,10 +135,10 @@ Classes (severity / confidence — see the detector for per-check evidence and l
 | Unoptimized barrel import | named imports from known-heavy barrels (`lucide-react`, `@mui/material`, …) on Next < 13.5 with no `optimizePackageImports` — version-gated so modern Next (auto-optimized) is never flagged | Perf / Likely |
 | Oversized committed images / media | filesystem walk (`src/detectors/asset-weight.ts`, ids `M7A-*`): images > 500 KB, media > 5 MB, grouped worst-first into one finding per class | Perf / Review |
 
-**React Compiler gate:** when the target's `next.config`/babel config enables React Compiler,
-the manual-memo classes (context value, inline literal props) are auto-memoized at build time —
-they're downgraded to `Info` (visible, not counted as work) instead of crying wolf on a
-compiled codebase.
+**React Compiler gate:** these three micro-render classes emit ONLY when React Compiler is
+confirmed enabled (#248): context value / inline literal at Info (compiler-covered), index-as-key
+at Low. With the flag off or unresolvable they are suppressed entirely — #230 measured them ~0%
+real without the compiler; the A0 Watch finding discloses the unresolvable case.
 
 **Not in this module (deliberate):** the [B] bundle-stats classes live in §2b's separate
 build-input module, and the [L] review-tier judgment calls (virtualization, lazy-load
