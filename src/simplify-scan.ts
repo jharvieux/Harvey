@@ -40,13 +40,25 @@ interface SimplifyPacket {
   brief: string;
   files: { path: string; source: string; hotspotRank?: number }[];
   hotspotRanked: boolean;
+  manifests: { path: string; text: string }[];
 }
 
 // hotspots: M3 hotspot ranking (repo-relative paths, hottest first — the same newline list M8's
 // `pnpm mutation-scan --hotspots` consumes). When supplied, files that are hotspots lead the packet
 // in rank order (#442) so the reviewer starts on the highest-churn×complexity code — the prime
 // refactoring candidates M6 exists to name — instead of walking the tree in readdir order.
-export function buildPacket(briefText: string, targetDir: string, filePaths: string[], hotspots: string[] = []): SimplifyPacket {
+//
+// manifestPaths: package.json file(s) under the target (root, plus workspace manifests) — #396.
+// The rubric's "already in the dependency tree" class needs the reviewer to know what's installed;
+// without this, every dep-tree claim in a packet is a guess (the miss that #396 measured: a hedge
+// against `@supabase/ssr`, a library that was NOT in the target's tree, went unflagged as a guess).
+export function buildPacket(
+  briefText: string,
+  targetDir: string,
+  filePaths: string[],
+  hotspots: string[] = [],
+  manifestPaths: string[] = [],
+): SimplifyPacket {
   const rankOf = new Map(hotspots.map((h, i) => [h, i + 1]));
   const files = filePaths.map((p) => {
     const path = relative(targetDir, p);
@@ -56,7 +68,8 @@ export function buildPacket(briefText: string, targetDir: string, filePaths: str
     // Stable sort (V8): hotspots ascending by rank, then non-hotspots in their original order.
     files.sort((a, b) => (a.hotspotRank ?? Infinity) - (b.hotspotRank ?? Infinity));
   }
-  return { brief: extractM6Brief(briefText), files, hotspotRanked: rankOf.size > 0 };
+  const manifests = manifestPaths.map((p) => ({ path: relative(targetDir, p), text: readFileSync(p, "utf8") }));
+  return { brief: extractM6Brief(briefText), files, hotspotRanked: rankOf.size > 0, manifests };
 }
 
 export function renderPacket(packet: SimplifyPacket): string {
@@ -66,11 +79,18 @@ export function renderPacket(packet: SimplifyPacket): string {
   const hotspotNote = packet.hotspotRanked
     ? "\nFiles are ordered by M3 hotspot rank (churn × complexity × coupling); the `[hotspot #N]`\nfiles are the highest-value refactoring candidates — review them first.\n"
     : "";
+  // #396: fail loud rather than silently omit — a packet reviewer must be told when there is no
+  // manifest to check, not left to assume dependency-tree claims are unverifiable for some other
+  // reason (or worse, not notice at all).
+  const manifestSection = packet.manifests.length
+    ? packet.manifests.map((m) => `### ${m.path}\n\n\`\`\`json\n${m.text}\n\`\`\``).join("\n\n")
+    : "No package.json was found under the scanned target. Treat every \"already in the dependency " +
+      "tree\" claim as unverifiable and do not assert one.";
   return `# M6 — simplification / reuse review pass
 
 You are the reviewer. Apply the rubric below to the source that follows.
 
-Two standing rules, from docs/design/m6-simplification-eval.md:
+Three standing rules, from docs/design/m6-simplification-eval.md:
 
 1. Reason about WHY the code is shaped the way it is, not just what shape it has. A hand-rolled
    primitive with a comment recording a deliberate tradeoff, and an abstraction a framework
@@ -78,10 +98,17 @@ Two standing rules, from docs/design/m6-simplification-eval.md:
 2. M6's verdict is an opinion, not a fact. Say what you'd replace each item with and why; if you
    are not confident, say so rather than asserting. This output goes through human review before
    any client sees it.
+3. The "already in the dependency tree" class is only appliable against the Dependency manifest
+   section below — it is what's actually installed, not what a framework commonly implies. Don't
+   assert dependency-tree membership from memory or convention.
 
 ## The rubric
 
 ${packet.brief}
+
+## Dependency manifest
+
+${manifestSection}
 
 ## The source under review (${packet.files.length} file${packet.files.length === 1 ? "" : "s"})
 ${hotspotNote}
