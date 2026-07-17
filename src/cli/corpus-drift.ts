@@ -42,6 +42,7 @@ import {
   isMutationBaseline,
   isNotRun,
   m10FindingsFromSchema,
+  revalidateNotRunReasons,
   scoreExternalBaseline,
   scoreFreeTierExpectation,
   scoreMutationBaseline,
@@ -215,6 +216,13 @@ for (const target of targets) {
 
     for (const row of scoreExternalBaseline(target, findings)) {
       rows.push({ slug: row.slug, check: `${row.module} baseline`, pass: row.pass, detail: row.detail });
+    }
+
+    // #321: the standard pass already re-attempted every source-tier module above. If a module the
+    // manifest records as not-run nonetheless produced real findings, its reason has decayed — fail
+    // loud so the stale excuse gets replaced by a baseline rather than silently costing coverage.
+    for (const row of revalidateNotRunReasons(target, findings)) {
+      rows.push({ slug: row.slug, check: `${row.module} not-run reason still valid`, pass: row.pass, detail: row.detail });
     }
 
     // #261: the free-tier invariant, scored against a REAL quick-scan of this pinned tree rather
