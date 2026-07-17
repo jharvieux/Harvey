@@ -133,3 +133,21 @@ describe("runAudit findings capture (#312/#420)", () => {
     expect(runAudit(AUDIT_RUNNERS, ctx()).findings).toEqual([]);
   });
 });
+
+// #435: a real Stryker run's --out artifact now carries a `findings` array (denial/boundary-
+// concentrated survivors, src/mutation-scan.ts's survivingMutantFindings) alongside its
+// { summary, reportRows } shape — this is the "ran" branch, distinct from capturingCtx's fixture
+// above which exercises M8's no-test-suite ("partial") branch.
+describe("M8 captures findings from a real Stryker run (#435)", () => {
+  it("reads the mutation-scan --out artifact's `findings` array and reports ran with findings", () => {
+    const realRunCtx = ctx({
+      exec: (_c, argv) => ({ ok: true, output: argv.includes("detect-static") ? "loaded 42 source files (30 product-code) from /target" : "" }),
+      captureDir: "/cap",
+      readFindings: () => [],
+      readArtifact: (p) => (basename(p, ".json") === "M8" ? { summary: { overall: {} }, reportRows: [], findings: [finding("M8-DENIAL")] } : undefined),
+    });
+    const { recorded, findings } = runAudit(AUDIT_RUNNERS, realRunCtx);
+    expect(recorded.find((r) => r.module === "M8")?.status).toBe("ran");
+    expect(findings.map((f) => f.id)).toContain("M8-DENIAL");
+  });
+});

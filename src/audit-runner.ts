@@ -55,6 +55,11 @@ export interface RunContext {
   // #416: injected clock (epoch ms) for pass-artifact freshness. Injected so tests can pin "now";
   // the real driver sets Date.now(). Absent ⇒ findFreshPass falls back to Date.now().
   now?: number;
+  // #434: the connected Supabase project ref for M7's DB advisor tier (`pnpm perf-scan <ref>`).
+  // SUPABASE_ACCESS_TOKEN travels via the inherited process env, not this context — perf-scan reads
+  // it itself. Absent ⇒ the advisor tier has no ref to call with, so M7 stays partial even when
+  // --connected is set (a flag alone was never evidence — same rule #311/#356 apply to the ref).
+  supabaseRef?: string;
 }
 
 export interface ModuleRunner {

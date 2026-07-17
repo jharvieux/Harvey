@@ -13,7 +13,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { buildCoverageMatrix, CORPUS, moduleCensus, type MatrixRow } from "../scan/calibration.js";
+import { buildCoverageMatrix, CORPUS, mechanicalCorpus, moduleCensus, type MatrixRow } from "../scan/calibration.js";
 import type { Finding } from "../findings.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "../scan/dependencies.js";
 import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
@@ -64,11 +64,19 @@ function scanManifestFixtures(targetDir: string): Finding[] {
 // CORPUS also carries modules with their own live pipeline outside runMechanicalScan (e.g.
 // M10's name/type classifier, fed from parsed migration SQL — see calibration/m10.entries.ts and
 // src/cli/dry-run.ts). Score only the mechanical-scan modules here so this gate isn't spuriously
-// broken by a module runMechanicalScan was never going to detect.
-const mechanicalCorpus = CORPUS.filter((e) => e.module === undefined);
+// broken by a module runMechanicalScan was never going to detect. The filter itself lives in
+// mechanicalCorpus() (src/scan/calibration.ts), not re-implemented here, so calibration.test.ts
+// can hold the ONE exclusion rule accountable — see its "#398 mechanicalCorpus" block, which
+// fails loud if a module-tagged entry ever leaks into this scored subset or drops out of the
+// per-module census below (the two things that make an exclusion silent instead of documented).
+const scoredCorpus = mechanicalCorpus(CORPUS);
+console.log(
+  `Scoring ${scoredCorpus.length}/${CORPUS.length} corpus entries against runMechanicalScan (M1 mechanical); ` +
+    `${CORPUS.length - scoredCorpus.length} module-tagged entries are excluded by design — see the per-module census below for where each is gated instead.`,
+);
 
 const findings = [...(await runMechanicalScan({ dir })), ...scanManifestFixtures(dir)];
-const matrix = buildCoverageMatrix(findings, mechanicalCorpus);
+const matrix = buildCoverageMatrix(findings, scoredCorpus);
 
 if (process.argv.includes("--json")) {
   console.log(JSON.stringify(matrix, null, 2));

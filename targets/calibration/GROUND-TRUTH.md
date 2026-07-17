@@ -54,7 +54,9 @@ triggers like `select('*')`; the `issue_refund` SECURITY DEFINER grant is review
 ## Mechanical-scan calibration corpus (issues #61 / #52 / #9)
 
 The mechanical/static layer (`src/scan/mechanical.ts`) is tuned and gated against this corpus.
-The 8 planted bugs above stay the semantic/RLS ground truth; the rows below add the fixtures
+The planted bugs above stay the semantic/RLS ground truth — bugs 1–8 are statically reachable and
+scored by `dry-run-scorecard.ts`; bugs 9–12 are M2 dynamic replays scored by `src/pentest/verify.ts`
+(see the "Planted bugs" table above for the current count). The rows below add the fixtures
 that measure the mechanical layer's **precision** — every planted static vuln that must be caught,
 and every benign lookalike that must NOT be flagged in the free count. Scored by the calibration
 harness: `pnpm validate:calibration` (live binaries) / `src/scan/calibration.test.ts` (unit, CI).
@@ -1214,6 +1216,7 @@ negatives below are exactly that configuration.
 | M4-P-CLONE-SEC | `dup/auth/session-check-api.ts` ↔ `dup/auth/session-check-action.ts` | genuine 25-line copy-pasted session/tenant validation block (246 tokens) in an auth path; jscpd clone cluster; `touchesSecurityPath` fires (#361) → severity elevated Low→Medium + M1 cross-check note in impact | high |
 | M4-P-SMALL-DISCLOSED | `dup/pricing-tier-a.ts` ↔ `dup/pricing-tier-b.ts` | genuine 9-line volume-discount ladder (129 tokens) — real logic under `MIN_SIGNIFICANT_LINES`; must be counted (and named in evidence) by the aggregate `M4-00` sub-threshold disclosure finding (#365) | high |
 | M4-P-DIVERGED-TENANT | `dup/auth/require-tenant-api.ts` ↔ `dup/auth/require-tenant-admin.ts` | copy-pasted tenant guard whose copies have DIVERGED (`'tenant_id'` vs `'owner_id'` scoping literal + drifted error strings) — jscpd's exact token match sees only sub-threshold fragments, never the pair; the #360 near-miss pass (`src/diverged-clones.ts`) emits an `M4-DIV-*` review finding (High) naming the drifted literals | review |
+| M4-P-DIVERGED-TENANT-WIDENED | `dup/stores/customer.store.ts` ↔ `dup/stores/order.store.ts` | copy-pasted per-entity supabase query whose copies have DIVERGED on the tenant-scoping literal (`'organisation_id'` vs `'org_id'`) — neither path matches `touchesSecurityPath`, so only the #399 content-based widening (`touchesTenantSupabasePath`: a tenant-key literal AND a supabase query in the same file) puts them in front of the #360 near-miss pass at all; emits an `M4-DIV-*` review finding (High) | review |
 
 **Negatives — benign lookalikes (must NOT be flagged)**
 
@@ -1878,3 +1881,27 @@ B17/#354: **153/157 static positives caught (61 at high/free-count, 15 connected
 static negatives cleared.** Four review-tier recall gaps remain, all measured LLM-tier:
 `P-BOLA-BODY-OWNER`, `P-MW-SOLE-AUTHZ`, `P-HOST-HEADER-URL`, `P-CLIENT-RENDER-AUTHZ`. The dry-run
 scorecard now reads **7 caught / 1 missed (WEBHOOK-REPLAY) / 4 requires-live-run**.
+
+## Batch M9-authz (#221/#318) — client-supplied owner id trusted by an authenticated action
+
+#221 catalogued one recurring class three ways; only the first proved mechanically detectable at
+acceptable precision (the other two stay semantic/paid-tier — see below). `detectClientSuppliedOwnerId`
+(`src/detectors/app-router.ts`, taxonomy `M1 — Client-supplied owner id trusted by authenticated
+action`) fires when a mutating chain (`insert`/`update`/`upsert`/`delete`/`rpc`) is scoped by an
+ownership-column `.eq()` whose value roots in a parameter rather than a session binding, with no
+session-vs-client comparison in the body. Entries in `src/scan/calibration/m9-authz.entries.ts`,
+tagged `module: "M9"` (runs in `static-detect`, not `runMechanicalScan`, so it stays out of
+`validate:calibration`'s M1 gate — its own gate is `app-router.test.ts`).
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-AUTHN-CLIENT-OWNER | `app/actions-owner.ts` | `detectClientSuppliedOwnerId` — `updateProfileName()` authenticates and schema-validates, then `.eq("user_id", userId)` with the client's `userId` instead of the session's | review |
+| P-AUTHN-CLIENT-OWNER-DELETE | `app/actions-delete.ts` | same detector, a second real instance exercising the DELETE verb and the `account_id` ownership column (#427 parity — two positives across different mutation-verb/column surfaces) | review |
+| N-AUTHN-SESSION-OWNER | `app/actions-owner-session.ts` | negative — identical shape, but the `.eq("user_id", …)` value reads off `currentUser.id` (session-bound), so `collectSessionBoundNames` clears it | — |
+| N-AUTHN-OWNER-COMPARED | `app/actions-owner-compared.ts` | negative — the client-supplied `accountId` IS used in `.eq()`, but `currentUser.id !== accountId` throws first; `hasOwnershipComparison` clears it | — |
+
+The other two #221 shapes stay semantic (business/whole-program context an AST pass doesn't have)
+and were already seeded before #221 in earlier batches, not new here: trusting a client-supplied
+security-relevant value is `P-CLIENT-PAYMENT-AMOUNT`/`P-CLIENT-PRIV-HEADER` (Batch B14 above); a
+permission check present only in the UI is `P-CLIENT-RENDER-AUTHZ`/`P-MW-SOLE-AUTHZ` (Batch B15
+above) — both got a matching LLM-prompt lens added to `docs/scan-extras.txt`'s HIGH section (#328).

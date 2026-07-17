@@ -270,13 +270,16 @@ const m7: ModuleRunner = {
     if (!ok) return { status: "requires-live-run", reason: `pnpm detect-static exited non-zero: ${trimOut(output)}` };
     if (!filesScanned(output)) return { status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — no code tier to run (empty or non-source target) (#350)` };
     if (!ctx.env.connected) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: "code tier only — no DB creds for the advisors (pnpm perf-scan)" };
+    // #434: perf-scan needs a project ref as its positional arg (SUPABASE_ACCESS_TOKEN travels via
+    // the inherited process env — perf-scan reads that itself). --connected is intent, not a reachable
+    // project; without a ref threaded through run-audit ctx.supabaseRef there is nothing to call, so
+    // this stays partial with that reason instead of shelling out to a usage error.
+    if (!ctx.supabaseRef) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: "connected tier flagged but no Supabase project ref was given (run-audit --supabase <ref>) — perf-scan needs a project ref to reach the advisors API (#434)" };
     // #420: perf-scan writes a bare Finding[] to --out, so the advisor-tier findings are captured
     // when the connected pass succeeds (M7's code-tier findings already arrive via the shared
-    // detect-static capture under M9). NB: the orchestrator does not yet thread a project-ref/token
-    // into perf-scan, so this success branch is not reachable end-to-end here (follow-up #434) — the
-    // capture is wired so it is correct the moment that ref is threaded.
+    // detect-static capture under M9).
     const advisorsOut = captureOut(ctx, "M7");
-    const advisors = ctx.exec("pnpm", ["perf-scan", ...(advisorsOut ? ["--out", advisorsOut] : [])]);
+    const advisors = ctx.exec("pnpm", ["perf-scan", ctx.supabaseRef, ...(advisorsOut ? ["--out", advisorsOut] : [])]);
     if (!advisors.ok) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: `advisors failed: ${trimOut(advisors.output)}` };
     const findings = readCaptured(ctx, advisorsOut);
     return findings.length
@@ -284,6 +287,11 @@ const m7: ModuleRunner = {
       : { status: "ran", detail: "pnpm detect-static (code) + pnpm perf-scan (advisors)" };
   },
 };
+
+// M8-taxonomy findings out of a mixed detect-static Finding[] (which also carries M6/M7/M9 findings
+// from the same source pass) — see src/detectors/test-intent.ts, taxonomy strings "M8 — ...".
+const M8_TAXONOMY_PREFIX = "M8 — ";
+const testIntentFindings = (findings: Finding[]): Finding[] => findings.filter((f) => f.taxonomy.startsWith(M8_TAXONOMY_PREFIX));
 
 // M8 (#224/#350): a target with no tests is a zero-coverage FINDING, not a skipped module — and
 // mutation-scan says so in a machine-readable moduleRecord while exiting 0. The probe reads that
@@ -294,12 +302,33 @@ const m7: ModuleRunner = {
 // that object. So when capturing, this probe reads BOTH its status verdict and its findings from the
 // object (readArtifact) rather than stdout: the no-test-suite branch's zero-coverage `finding` (M8-00)
 // is captured into the deliverable, and a real Stryker run reads `ran`. When not capturing, the
-// stdout verdict path (#350) is unchanged. A real Stryker run carries no report-schema Finding[]
-// (only summary/reportRows), so surviving-mutant findings are not yet collected (follow-up #435).
+// stdout verdict path (#350) is unchanged.
+// #435: a real Stryker run's --out now also carries a `findings` array (denial/boundary-concentrated
+// survivors, src/mutation-scan.ts's survivingMutantFindings) — artifactFindings picks it up the same
+// way it already does M3's `findings` key, so a real run is no longer a zero-finding "ran".
 const m8: ModuleRunner = {
   module: "M8",
   run: (ctx) => {
-    if (!hasNodeModules(ctx)) return { status: "requires-live-run", reason: "target has no node_modules — StrykerJS needs the target's installed deps and test suite" };
+    // #401: the free-tier test-intent detectors (src/detectors/test-intent.ts) are source-only AST
+    // passes — they need no installed deps, so a target without node_modules still gets real M8
+    // coverage instead of a blanket requires-live-run. Run this first so its status/findings are
+    // available whether or not the mutation tier below can proceed.
+    const staticOutPath = ctx.captureDir ? join(ctx.captureDir, "M8-static.json") : undefined;
+    const staticCmd = `pnpm detect-static ${ctx.targetDir}`;
+    const staticRun = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(staticOutPath ? ["--out", staticOutPath] : [])]);
+    const staticScanned = staticRun.ok ? filesScanned(staticRun.output) : undefined;
+    const staticFindings = staticScanned ? testIntentFindings(readCaptured(ctx, staticOutPath)) : [];
+
+    if (!hasNodeModules(ctx)) {
+      if (!staticScanned) return { status: "requires-live-run", reason: `target has no node_modules — StrykerJS needs the target's installed deps and test suite; the source-only test-intent pass also could not confirm a scan: ${trimOut(staticRun.output)}` };
+      return {
+        status: "partial",
+        detail: `${staticCmd} (test-intent tier)`,
+        reason: "source (test-intent) tier only — target has no node_modules, so StrykerJS mutation testing could not run (`npm install` in the target to unlock it) (#401)",
+        ...(staticFindings.length ? { findings: staticFindings } : {}),
+      };
+    }
+
     const outPath = captureOut(ctx, "M8");
     const command = `pnpm mutation-scan ${ctx.targetDir}`;
     const { ok, output } = ctx.exec("pnpm", ["mutation-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
@@ -307,11 +336,12 @@ const m8: ModuleRunner = {
     const artifact = readArtifact(ctx, outPath);
     const verdict = mutationVerdict(artifact ?? output);
     if (verdict.kind === "no-suite") {
-      const findings = artifactFindings(artifact);
+      const findings = [...artifactFindings(artifact), ...staticFindings];
       return findings.length ? { status: "partial", detail: command, reason: verdict.note, findings } : { status: "partial", detail: command, reason: verdict.note };
     }
     if (verdict.kind === "unknown") return { status: "requires-live-run", reason: `mutation-scan produced no recognizable verdict — cannot confirm M8 ran: ${trimOut(output)}` };
-    return { status: "ran", detail: command };
+    const findings = [...artifactFindings(artifact), ...staticFindings];
+    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
   },
 };
 

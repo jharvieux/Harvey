@@ -89,6 +89,19 @@ OK-when / NOT-OK-when so they can self-resolve. Never assert; never silently dro
   and triggers that mutate across tenants. `SECURITY INVOKER` is the safe default;
   a definer function needs an explicit in-function authorization check.
 
+- CLIENT-SUPPLIED SECURITY-RELEVANT VALUE TRUSTED SERVER-SIDE. A server handler
+  that uses a client-supplied price, discount, trial length, role, or other
+  privilege-bearing value directly (`req.body.amount`, `?trial_days=`, a
+  client-set `x-role`/privilege header) instead of re-deriving it from the
+  database or session. Schema-valid isn't the same as authoritative — a
+  well-formed value from the wrong party is still untrusted.
+
+- PERMISSION CHECK PRESENT ONLY IN THE UI. A gate that exists purely in
+  client-rendered logic (`if (!isAdmin) return null`, a hidden nav item, a
+  disabled button) with no matching server-side check on the route, the RSC
+  data fetch, or the API it calls. The data or mutation is already reachable
+  by anyone who calls the underlying endpoint directly, RSC payload included.
+
 ## MEDIUM — integrity / concurrency / SSRF
 
 - UNCHECKED SUPABASE MUTATIONS. supabase-js v2 does NOT throw. Flag
