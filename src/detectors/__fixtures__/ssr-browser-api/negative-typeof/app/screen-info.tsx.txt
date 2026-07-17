@@ -1,0 +1,6 @@
+// Guarded by the standard `typeof window` idiom, so the read is skipped during SSR.
+export function ScreenInfo() {
+  const width = typeof window !== "undefined" ? window.innerWidth : 0;
+  const hasStorage = typeof localStorage !== "undefined" && localStorage.getItem("theme");
+  return <div>{width} {hasStorage}</div>;
+}
