@@ -53,6 +53,14 @@ function ownerBound(clause: string | null): boolean {
   return clause != null && OWNER_BINDING.test(clause);
 }
 
+// #338 — the `USING (true)` shape usingTrueReview ASSESSES on a per-tenant table and SPARES on a
+// table with no recognised tenant key (per-user). Exported so the static reviewer can DISCLOSE the
+// spared tables: a spared policy returns null exactly like a correct one, so "not assessable" and
+// "assessed clean" are indistinguishable unless the sparing is named.
+export function isUsingTrueGated(policy: LivePolicy): boolean {
+  return USING_GATED_CMDS.has(policy.cmd.toUpperCase()) && policy.qual !== null && CLAUSE_TRUE.test(policy.qual);
+}
+
 interface PolicyReview {
   policy: string;
   reason: string;
@@ -149,6 +157,17 @@ export function reviewPolicy(policy: LivePolicy, model: TenancyModel): PolicyRev
   const qualKey = refsWord(policy.qual, key);
   const checkKey = refsWord(policy.withCheck, key);
 
+  // #257 — a per-user own-row policy (`id = auth.uid()`) on a table that ALSO declares tenant_id
+  // trips this rule (the profiles_select_self shape): it references the caller but never the tenant
+  // key. That is a residual FALSE POSITIVE for a table genuinely owner-scoped by its identity that
+  // merely carries tenant_id for joins — but it is NOT statically separable from a real tenant table
+  // wrongly keyed on the user (the #206 wrong-column bug this rule exists to catch). The same clause
+  // is correct on profiles and a leak on a tenant data table, and only facts the SQL text lacks tell
+  // them apart. So we deliberately do NOT narrow the rule (attempting that broke four #206-intent
+  // tests in PR #244 and was reverted): the shape stays a review-tier surfacing — loud, triaged out
+  // of the free count, never graded — rather than being silently eliminated or silently miscounted.
+  // N-RLS-OWNROW-WITH-TENANTID (rls-static-semantics.entries.ts) pins that it never becomes a
+  // free-count FP.
   if (callerRef && !qualKey && !checkKey) {
     return {
       policy: name,
