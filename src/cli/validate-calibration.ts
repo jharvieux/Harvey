@@ -13,7 +13,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { buildCoverageMatrix, CORPUS, type MatrixRow } from "../scan/calibration.js";
+import { buildCoverageMatrix, CORPUS, moduleCensus, type MatrixRow } from "../scan/calibration.js";
 import type { Finding } from "../findings.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "../scan/dependencies.js";
 import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
@@ -91,11 +91,27 @@ const negFps = matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged)
 const highMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "high" && !r.highFlagged);
 const reviewMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "review" && !r.pass);
 
+// DECISION (#341): this live gate is security-weighted BY CONSTRUCTION — it scores only the M1
+// mechanical corpus (entries with no `module` label) because runMechanicalScan produces only M1
+// findings, and M1 is the credibility-critical lead where a wrong Critical is fatal. The other
+// nine modules are gated by their OWN suites (calibration.test.ts's recorded-output + live-detector
+// blocks, mutation-scan.test.ts, etc.), not by this number. So the recall count below is M1's, not
+// the suite's — labelled as such, and preceded by a per-module census so a 1-positive module reads
+// as visibly thin rather than being averaged into the M1-dominated total. Per-module fixture PARITY
+// (thickening M8/M9/M3) is a separate fixture-authoring effort tracked as a follow-up, not this gate.
+console.log("\nPer-module corpus census (fixture counts only — this gate scores M1; other modules are gated by their own suites):");
+for (const c of moduleCensus(CORPUS)) {
+  const connected = c.positivesConnected ? ` +${c.positivesConnected} connected` : "";
+  const where = c.module === "M1" ? "SCORED BY THIS GATE" : "own unit suite (src/scan/calibration/*.entries.ts)";
+  console.log(`  ${c.module.padEnd(4)} positives=${String(c.positivesStatic).padEnd(3)}${connected.padEnd(14)} negatives=${String(c.negatives).padEnd(3)}  ${where}`);
+}
+
 console.log(
-  `\nPositives caught: ${matrix.positivesCaught}/${matrix.positivesTotal} static ` +
-    `(${matrix.positivesCaughtHigh} at high/free-count; ${matrix.connectedNa} connected-tier N/A)`,
+  `\nM1 mechanical corpus — positives caught: ${matrix.positivesCaught}/${matrix.positivesTotal} static ` +
+    `(${matrix.positivesCaughtHigh} at high/free-count; ${matrix.connectedNa} connected-tier N/A). ` +
+    `This is M1 recall, NOT suite recall — see the census above.`,
 );
-console.log(`Negatives cleared: ${matrix.negativesCleared}/${matrix.negativesTotal} static`);
+console.log(`M1 negatives cleared: ${matrix.negativesCleared}/${matrix.negativesTotal} static`);
 if (reviewMisses.length) console.log(`Review-tier recall gaps (non-fatal, tracked): ${reviewMisses.map((r) => r.id).join(", ")}`);
 
 // P-SECRET-GIT-HISTORY (#129): a dedicated pass, not part of the matrix above — TruffleHog's

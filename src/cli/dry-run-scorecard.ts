@@ -1,7 +1,10 @@
 // Coverage scorecard for the calibration dry run (issue #34): maps the planted bugs in
 // targets/calibration/GROUND-TRUTH.md's §"Planted bugs" to the module expected to catch each, and
-// scores caught/missed/requires-live-run against dry-run/findings.json (src/cli/dry-run.ts's real
-// output — this script does not invent results, it only classifies what's already there).
+// scores each against dry-run/findings.json (src/cli/dry-run.ts's real output — this script does
+// not invent results, it only classifies what's already there). A catch is split by the matching
+// finding's precision tier: an "asserted" verdict (high-precision rule) vs a "surfaced-for-review"
+// shape a human must still adjudicate — so the summary never launders review-tier surfacing into
+// autonomous detection (#342).
 //
 // SCOPE, per GROUND-TRUTH's own split: the 8 statically-reachable bugs are this scorecard's
 // semantic/RLS ground truth and the only ones a static dry run can return a verdict on. The other
@@ -27,6 +30,11 @@ import { type GroundTruthBug, scoreCoverage, type ScorableFinding, summarizeCove
 // scan copy, so anchor on the target-relative file suffix; `taxonomy` must name a rule that
 // actually reasons about this bug's class, not merely fire somewhere in the same file.
 const at = (file: RegExp, rule: RegExp) => (f: ScorableFinding) => file.test(f.location) && rule.test(f.taxonomy);
+
+// Location-independent class predicate (#335): matches any finding whose taxonomy targets a class,
+// wherever it fires. Precise by construction — an exact rule taxonomy, never a loose word regex
+// (e.g. /service.?role/ would false-match harvey-service-role-in-client, a different class).
+const ofClass = (rule: RegExp) => (f: ScorableFinding) => rule.test(f.taxonomy);
 
 // A KNOWN, ACCEPTED coverage gap — not a regression. The mechanical tier scans the file and no
 // rule has ever claimed this bug's class, so the bug scores `missed` by design: this is the
@@ -88,6 +96,10 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     // bug's class for exactly this table, and audit_logs is the only table this rule reports in
     // schema.sql, so the match cannot be earned by a finding about some other table.
     matches: at(/schema\.sql:35/, /Migration table without RLS/),
+    // The exact address mismatch #335 is about: planted at the absence site (rls.sql:41-43) but
+    // proved at the create site (schema.sql:35). classMatch keys on the rule's class so a
+    // re-key to "not reached" is falsified wherever the rule fires, not only at the planted line.
+    classMatch: ofClass(/Migration table without RLS/),
   },
   {
     id: "SQLI-SERVICE",
@@ -104,6 +116,9 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     expectedModule: RAN_SEMGREP_NO_RULE("no rule targets missing replay/nonce protection"),
     moduleRan: true,
     matches: at(/webhook\.js/, /replay|nonce/i),
+    // The "no rule for this class" claim, made falsifiable: if a rule ever emits a replay/nonce
+    // taxonomy anywhere, this fails and forces a re-key to caught (#335, honest→caught drift).
+    classMatch: ofClass(/replay|nonce/i),
   },
   {
     id: "COUNTER-RACE",
@@ -112,6 +127,7 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     expectedModule: RAN_SEMGREP_NO_RULE("no rule targets non-atomic read-modify-write races"),
     moduleRan: true,
     matches: at(/increment\.js/, /race|atomic/i),
+    classMatch: ofClass(/race|atomic/i),
   },
   {
     id: "UPDATE-UNSCOPED",
@@ -120,6 +136,9 @@ export const GROUND_TRUTH_BUGS: GroundTruthBug[] = [
     expectedModule: RAN_SEMGREP_NO_RULE("no rule targets an unscoped service-role .update() call"),
     moduleRan: true,
     matches: at(/profile.(\/|\\)?update\.js/, /unscoped|service.?role/i),
+    // Deliberately /unscoped/ only — the /service.?role/ half of `matches` false-matches
+    // harvey-service-role-in-client (a different class), so the class guard must not reuse it.
+    classMatch: ofClass(/unscoped/i),
   },
   {
     id: "OPEN-REDIRECT",
@@ -184,16 +203,23 @@ function main(): void {
   const findingsPath = arg("--findings", "dry-run/findings.json");
   const outDir = arg("--out", "dry-run");
 
-  const rawFindings = JSON.parse(readFileSync(findingsPath, "utf8")) as { taxonomy: string; location: string }[];
-  const findings: ScorableFinding[] = rawFindings.map((f) => ({ taxonomy: f.taxonomy, location: f.location }));
+  const rawFindings = JSON.parse(readFileSync(findingsPath, "utf8")) as { taxonomy: string; location: string; precisionTier?: ScorableFinding["precisionTier"] }[];
+  const findings: ScorableFinding[] = rawFindings.map((f) => ({ taxonomy: f.taxonomy, location: f.location, precisionTier: f.precisionTier }));
 
   const scored = scoreCoverage(GROUND_TRUTH_BUGS, findings);
   const summary = summarizeCoverage(scored);
 
   writeFileSync(join(outDir, "scorecard.json"), JSON.stringify({ summary, bugs: scored }, null, 2));
 
-  console.log(`Coverage scorecard: ${summary.caught} caught, ${summary.missed} missed, ${summary["requires-live-run"]} require a live run (of ${scored.length} planted bugs)`);
-  for (const b of scored) console.log(`  [${b.status.padEnd(17)}] ${b.id.padEnd(16)} (${b.severity})`);
+  console.log(
+    `Coverage scorecard: ${summary.asserted} asserted, ${summary["surfaced-for-review"]} surfaced for review, ` +
+      `${summary.missed} missed, ${summary["requires-live-run"]} require a live run (of ${scored.length} planted bugs)`,
+  );
+  // A caught bug prints its tier so a review-tier surfacing is never read as an asserted verdict.
+  for (const b of scored) {
+    const label = b.status === "caught" ? (b.tier === "high" ? "asserted" : "surfaced-for-review") : b.status;
+    console.log(`  [${label.padEnd(19)}] ${b.id.padEnd(16)} (${b.severity})`);
+  }
 }
 
 // Guarded so dry-run-scorecard.test.ts can import GROUND_TRUTH_BUGS without writing scorecard.json.
