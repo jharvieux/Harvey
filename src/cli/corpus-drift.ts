@@ -19,13 +19,22 @@
 // (update that target's baseline in the same PR, with the measured note) OR a regression (fix the
 // scanner) — the run does not guess which, it just refuses to be quiet about the movement.
 //
-// Modules scored here are the source-only tier: M4/M5 (quality-scan), M7/M9 (detect-static), M8
-// (mutation-scan, only where the absence of a suite IS the finding), M10 (classifyMigrationSql
-// over the target's own cloned SQL migrations, #279 — a target with no schemaPath in the manifest
-// is skipped here and stays not-run. #299 closed the one target that used to hit this: boxyhq's
-// Prisma migrations parse fine now that parseColumns/parseTableNames read quoted identifiers.).
+// Modules scored here are the source-only tier: M4/M5 (quality-scan), M7/M8-intent/M9
+// (detect-static), M8 (mutation-scan --detect-only: only where the absence of a suite IS the
+// finding — #470: this pass NEVER invokes Stryker; real mutation scoring is corpus-m8.yml's job,
+// and a target whose M8 is a mutation baseline gets an explicit deferred row here rather than a
+// crash or a silent skip), M10 (classifyMigrationSql over the target's own cloned SQL migrations,
+// #279 — a target with no schemaPath in the manifest is skipped here and stays not-run. #299
+// closed the one target that used to hit this: boxyhq's Prisma migrations parse fine now that
+// parseColumns/parseTableNames read quoted identifiers.).
 // Anything a target can't run is recorded not-run WITH THE REASON in the manifest and skipped by
 // the scorer — never scored 0.
+//
+// #322: a target may carry per-module scan roots (today: mvp-boilerplate's M5-knip at nextjs/,
+// the only place its Next app's package.json lives). The scoped module measures a DIFFERENT tree
+// than the whole-repo modules, so every scored row for such a target states its scanned scope —
+// the disagreement is recorded in the output, never silent, and cross-module comparisons on such
+// a target are scope-invalid by construction.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -42,6 +51,7 @@ import {
   isMutationBaseline,
   isNotRun,
   m10FindingsFromSchema,
+  moduleMatches,
   revalidateNotRunReasons,
   scoreExternalBaseline,
   scoreFreeTierExpectation,
@@ -196,11 +206,30 @@ for (const target of targets) {
     // return, single-call wrappers). #278 split the manifest's single M5 into M5-knip and
     // M5-slop, each with its own baseline, and scoreExternalBaseline's moduleMatches tells them
     // apart by taxonomy — so both scanners' output is scored now instead of filtering one out.
-    const findings = [
+    // mutation-scan runs --detect-only (#470): this job provisions no Stryker, so it must only
+    // ever contribute the suite-absent finding (#224/#252), never attempt a mutation run that
+    // dies on a missing binary mid-corpus.
+    let findings = [
       ...runScanner("detect-static", [dir]),
       ...runScanner("quality-scan", [dir]),
-      ...runScanner("mutation-scan", [dir]),
+      ...runScanner("mutation-scan", [dir, "--detect-only"]),
     ];
+
+    // #322: a per-module scan root — the module measures the subtree it needs (knip requires the
+    // tree with the package.json), while every other module keeps the whole repo. The scoped
+    // measurement REPLACES the whole-tree pass's M5-knip output (which for such a target is only
+    // ever the #223 "did not run" sentinel from the root-level knip failure); the scored rows for
+    // this target then carry the per-module scope so the difference is explicit.
+    const m5Root = target.scanRoots?.["M5-knip"];
+    if (m5Root) {
+      const rootDir = join(dir, m5Root);
+      if (!existsSync(rootDir)) {
+        throw new Error(`${target.slug}: M5-knip scan root "${m5Root}" not found in the cloned tree — the manifest's scan root is stale`);
+      }
+      if (install) installTargetDeps(rootDir, []);
+      const scoped = runScanner("quality-scan", [rootDir]).filter((f) => moduleMatches(f.taxonomy, "M5-knip"));
+      findings = [...findings.filter((f) => !moduleMatches(f.taxonomy, "M5-knip")), ...scoped];
+    }
 
     // #279: M10 over the target's own cloned migrations. A target with no schemaPath (boxyhq —
     // Prisma migrations this parser can't read) is skipped here and stays not-run in the manifest,
@@ -216,6 +245,20 @@ for (const target of targets) {
 
     for (const row of scoreExternalBaseline(target, findings)) {
       rows.push({ slug: row.slug, check: `${row.module} baseline`, pass: row.pass, detail: row.detail });
+    }
+
+    // #470: this pass runs no Stryker, so a target whose M8 is a mutation baseline is not
+    // scoreable here — that is a DEFERRAL to corpus-m8.yml, and it gets a row saying so. A
+    // passing-but-explicit row, not a failure: the module's absence from the tally is the
+    // silent-skip failure mode this job exists to prevent, and before this row the M8 step
+    // crashed on "stryker binary not found" instead (issue #470).
+    if (isMutationBaseline(target.modules.M8)) {
+      rows.push({
+        slug: target.slug,
+        check: "M8 mutation baseline",
+        pass: true,
+        detail: "deferred — mutation scoring needs a provisioned Stryker install and is corpus-m8.yml's job (pnpm corpus-drift --m8); recorded here so the M8 mutation tier is never silently absent from this scorecard",
+      });
     }
 
     // #321: the standard pass already re-attempted every source-tier module above. If a module the

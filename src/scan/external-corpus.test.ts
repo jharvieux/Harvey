@@ -67,11 +67,11 @@ describe("external corpus manifest", () => {
     // knip without the target's `npm install` yields a knip-FAILED artifact, not a dead-code
     // measurement (#223) — recorded not-run, never a zero that would read as "no dead code".
     // Which targets those are is MEASURED, not assumed. #251 added the install step the CLAUDE.md
-    // M5 row calls for, which took this from 2 scored to 4: the two that remain unrun now fail for
-    // reasons no install can fix (saas-lite's eslint-config-next patch error, mvp-boilerplate's
-    // missing root package.json), each measured 2026-07-15.
+    // M5 row calls for (2 scored -> 4), and #322's per-module scan root gave mvp-boilerplate a
+    // scoped measurement over nextjs/ (4 -> 5). The one that remains unrun fails for a reason no
+    // install or scan root can fix: saas-lite's upstream eslint-config-next patch error.
     const scored = EXTERNAL_CORPUS.filter((t) => !isNotRun(t.modules["M5-knip"]!)).map((t) => t.slug);
-    expect(scored.sort()).toEqual(["boxyhq", "multi-tenant-starter", "proposit", "subscription-payments"]);
+    expect(scored.sort()).toEqual(["boxyhq", "multi-tenant-starter", "mvp-boilerplate", "proposit", "subscription-payments"]);
     for (const t of EXTERNAL_CORPUS.filter((x) => !scored.includes(x.slug))) {
       expect(isNotRun(t.modules["M5-knip"]!), t.slug).toBe(true);
     }
@@ -108,13 +108,13 @@ describe("scoreExternalBaseline", () => {
   });
 
   it("FAILS on a new over-match — the regression this corpus exists to catch", () => {
-    // boxyhq is a Pages Router app: #231 requires the App-Router checks to stay silent. A single
-    // M9 finding here is the pre-#231 misfire coming back.
-    const rows = scoreExternalBaseline(target("boxyhq"), [finding("M9 — Accidental dynamic rendering")]);
-    const m9 = rows.find((r) => r.module === "M9")!;
-    expect(m9.pass).toBe(false);
-    expect(m9.drift).toBe(1);
-    expect(m9.detail).toContain("DRIFT +1");
+    // multi-tenant-starter's M7 is a MEASURED zero on a 3.1k-line repo with no perf surface —
+    // its baseline note calls any M7 finding here "almost certainly a new over-match".
+    const rows = scoreExternalBaseline(target("multi-tenant-starter"), [finding("M7 — Unbounded select")]);
+    const m7 = rows.find((r) => r.module === "M7")!;
+    expect(m7.pass).toBe(false);
+    expect(m7.drift).toBe(1);
+    expect(m7.detail).toContain("DRIFT +1");
   });
 
   it("FAILS when a real detection stops firing", () => {
@@ -124,14 +124,16 @@ describe("scoreExternalBaseline", () => {
 
   it("ignores Info findings, so the demoted exhaustive-deps class can't re-enter the count", () => {
     // #230 demoted exhaustive-deps to Info rather than deleting it. If a future change promotes
-    // it back to a graded severity, proposit's M7 jumps 49 -> 79 and this scorer must catch it.
+    // it back to a graded severity, proposit's M7 jumps 42 -> 72 and this scorer must catch it.
     const rows = scoreExternalBaseline(target("mvp-boilerplate"), [
       finding("M7 — Unbounded select"),
-      finding("M7 — Index used as list key"),
       finding("M7 — State sprawl"),
+      finding("M7 — Client fetch in useEffect"),
+      finding("M7 — Client fetch in useEffect"),
+      finding("M7 — Nested-loop join"),
       finding("M7 — Missing hook dependencies", "Info"),
     ]);
-    expect(rows.find((r) => r.module === "M7")).toMatchObject({ pass: true, actual: 3 });
+    expect(rows.find((r) => r.module === "M7")).toMatchObject({ pass: true, actual: 5 });
   });
 
   it("keeps the #360 diverged-clone pass out of M4's jscpd baseline — shared 'M4 —' prefix, separate modules", () => {
@@ -176,7 +178,7 @@ describe("scoreExternalBaseline", () => {
     ];
     const rows = scoreExternalBaseline(target("subscription-payments"), findings);
     expect(rows.find((r) => r.module === "M5-knip")).toMatchObject({ expected: 8, actual: 1, pass: false });
-    expect(rows.find((r) => r.module === "M5-slop")).toMatchObject({ expected: 10, actual: 2, pass: false });
+    expect(rows.find((r) => r.module === "M5-slop")).toMatchObject({ expected: 14, actual: 2, pass: false });
   });
 });
 
@@ -315,9 +317,50 @@ describe("M8 manifest shape (#300)", () => {
   it("still scores the zero-test targets by finding count — #224's finding IS the measurement", () => {
     // The other half of the split: where a target has no suite at all, M8 is a plain ModuleBaseline
     // and must keep being scored from findings, not skipped along with the mutation ones.
-    const zeroCoverage = finding("M8 — Test quality", "High");
+    const zeroCoverage = finding("M8 — No automated test suite", "High");
     expect(scoreExternalBaseline(target("subscription-payments"), [zeroCoverage]).find((r) => r.module === "M8"))
       .toMatchObject({ pass: true, actual: 1 });
+  });
+
+  it("keeps detect-static's test-intent findings out of the mutation-tier M8 count — shared 'M8 —' prefix, separate modules", () => {
+    // The #372 test-intent detectors and the mutation tier (M8-00 suite-absent, M8-01 stub-check,
+    // M8-02 surviving mutants) are different measurements. Before the split, a test-intent finding
+    // moved the M8 finding-count baseline (and falsely flagged mutation not-run reasons as stale —
+    // the 2026-07-17 saas-lite drift failure).
+    const rows = scoreExternalBaseline(target("subscription-payments"), [
+      finding("M8 — No automated test suite", "High"),
+      finding("M8 — Happy-path-only tests on security-critical code", "Medium"),
+    ]);
+    expect(rows.find((r) => r.module === "M8")).toMatchObject({ actual: 1 });
+    expect(rows.find((r) => r.module === "M8-intent")).toMatchObject({ actual: 1 });
+  });
+});
+
+// #322 — per-module scan roots. The mechanism must never let two modules' numbers describe
+// different trees silently: a target that declares any scan root gets the scanned scope stamped
+// on every scored row.
+describe("per-module scan roots (#322)", () => {
+  it("records mvp-boilerplate's M5-knip root in the manifest — the only per-module root today", () => {
+    expect(target("mvp-boilerplate").scanRoots).toEqual({ "M5-knip": "nextjs" });
+    for (const t of EXTERNAL_CORPUS.filter((x) => x.slug !== "mvp-boilerplate")) {
+      expect(t.scanRoots, t.slug).toBeUndefined();
+    }
+  });
+
+  it("stamps the scanned scope on every row of a target whose modules disagree on scope", () => {
+    const rows = scoreExternalBaseline(target("mvp-boilerplate"), []);
+    const knip = rows.find((r) => r.module === "M5-knip")!;
+    expect(knip.scope).toBe("nextjs");
+    expect(knip.detail).toContain("scanned scope: nextjs");
+    const m4 = rows.find((r) => r.module === "M4")!;
+    expect(m4.scope).toBe("whole-repo");
+    expect(m4.detail).toContain("scanned scope: whole-repo");
+  });
+
+  it("leaves scope out of the detail on targets whose modules all scan the same tree", () => {
+    const rows = scoreExternalBaseline(target("proposit"), []);
+    expect(rows.every((r) => r.scope === "whole-repo")).toBe(true);
+    expect(rows.every((r) => !r.detail.includes("scanned scope"))).toBe(true);
   });
 });
 
@@ -353,6 +396,17 @@ describe("revalidateNotRunReasons (#321)", () => {
 
   it("does not fire on a target whose modules all ran — nothing to re-validate", () => {
     expect(revalidateNotRunReasons(target("subscription-payments"), [knipFinding("M5-07")])).toEqual([]);
+  });
+
+  it("does not read a test-intent finding as evidence against an M8 MUTATION not-run reason", () => {
+    // The 2026-07-17 false alarm: saas-lite's M8 mutation tier is not-run (E2E-only suite), and
+    // detect-static's #372 test-intent pass produced a real "M8 —" finding — a different
+    // measurement that says nothing about whether Stryker can run. The M8/M8-intent split keeps
+    // it from decaying the mutation reason.
+    const t = EXTERNAL_CORPUS.find((x) => x.slug === "saas-lite")!;
+    expect(isNotRun(t.modules.M8)).toBe(true);
+    const intent = finding("M8 — Happy-path-only tests on security-critical code", "Medium");
+    expect(revalidateNotRunReasons(t, [intent]).filter((r) => r.module === "M8")).toEqual([]);
   });
 });
 
