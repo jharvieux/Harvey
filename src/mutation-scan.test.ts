@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   coveredScopeLine,
   detectNoTestSuite,
+  isPlaceholderSpec,
   mutationScore,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
@@ -306,6 +307,72 @@ describe("detectNoTestSuite", () => {
   it("is not missing when a Stryker config already exists, even with no test script/dep detected", () => {
     const result = detectNoTestSuite(undefined, true);
     expect(result.missing).toBe(false);
+  });
+});
+
+// #252: harness present but suite absent — the agreed threshold is "zero test files, or a single
+// placeholder/smoke spec". A single MEANINGFUL spec still counts as a suite (proposit's one real
+// vitest spec must keep its mutation baseline; multi-tenant-starter's one real RLS test must keep
+// its Docker not-run reason rather than being reclassified as no-suite).
+describe("detectNoTestSuite — #252 harness-but-no-suite threshold", () => {
+  const harness = { scripts: { test: "vitest run" }, devDependencies: { vitest: "^3.0.0" } };
+  const realSpec = {
+    path: "src/thing.test.ts",
+    text: `import { it, expect } from "vitest";\nimport { add } from "./thing";\nit("adds", () => { expect(add(1, 2)).toBe(3); });\nit("rejects negatives", () => { expect(() => add(-1, 2)).toThrow(); });\n`,
+  };
+
+  it("reports missing when a harness is configured but the tree has zero test files", () => {
+    const result = detectNoTestSuite(harness, false, []);
+    expect(result.missing).toBe(true);
+    expect(result.reason).toContain("ZERO test files");
+  });
+
+  it("reports missing when the only test file is a placeholder (no test cases)", () => {
+    const result = detectNoTestSuite(harness, false, [{ path: "smoke.test.ts", text: "// TODO write tests\n" }]);
+    expect(result.missing).toBe(true);
+    expect(result.reason).toContain("smoke.test.ts");
+    expect(result.reason).toContain("placeholder");
+  });
+
+  it("reports missing when the only test file asserts nothing", () => {
+    const result = detectNoTestSuite(harness, false, [
+      { path: "app.spec.ts", text: `it("boots", async () => { await import("./app"); });\n` },
+    ]);
+    expect(result.missing).toBe(true);
+    expect(result.reason).toContain("zero assertions");
+  });
+
+  it("reports missing when the only test file's assertions are constant tautologies", () => {
+    const result = detectNoTestSuite(harness, false, [
+      { path: "sanity.test.ts", text: `it("works", () => { expect(true).toBe(true); });\ntest("still works", () => { expect(1).toBe(1); });\n` },
+    ]);
+    expect(result.missing).toBe(true);
+    expect(result.reason).toContain("tautological");
+  });
+
+  it("does NOT report missing for a single meaningful spec — the threshold is ≤1 placeholder, not ≤1 file", () => {
+    expect(detectNoTestSuite(harness, false, [realSpec]).missing).toBe(false);
+  });
+
+  it("does NOT report missing for two files even if one is a placeholder", () => {
+    const placeholder = { path: "smoke.test.ts", text: `it("is alive", () => {});\n` };
+    expect(detectNoTestSuite(harness, false, [realSpec, placeholder]).missing).toBe(false);
+  });
+
+  it("keeps the pre-#252 behavior when no census is supplied", () => {
+    expect(detectNoTestSuite(harness, false).missing).toBe(false);
+  });
+});
+
+describe("isPlaceholderSpec (#252)", () => {
+  it("calls a real assertion over computed values meaningful", () => {
+    expect(isPlaceholderSpec(`it("x", () => { expect(compute(4)).toEqual({ total: 8 }); });`).placeholder).toBe(false);
+  });
+  it("handles node:test style assert calls as real assertions", () => {
+    expect(isPlaceholderSpec(`test("rls", async () => { assert.ok(rows.length > 0); });`).placeholder).toBe(false);
+  });
+  it("treats a nested constant-only expectation as tautological", () => {
+    expect(isPlaceholderSpec(`it("x", () => { expect(true).toBe(true); });`)).toMatchObject({ placeholder: true });
   });
 });
 

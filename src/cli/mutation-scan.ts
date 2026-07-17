@@ -15,7 +15,14 @@
 //
 //   pnpm mutation-scan <target-dir> [--config <path>] [--concurrency <n>] [--incremental]
 //                       [--report <path>] [--hotspots <file>] [--out <file>]
-//                       [--stub-check [--test-cmd "<cmd>"]]
+//                       [--stub-check [--test-cmd "<cmd>"]] [--detect-only]
+//
+// --detect-only (#470) runs ONLY the suite-absent detection (#224/#252) and never invokes
+// Stryker: if the target has no meaningful suite it emits the M8-00 zero-coverage finding
+// exactly as a full run would; if a suite is present it writes an empty findings array and
+// says so on stderr. This is what corpus-drift.ts calls — that job deliberately does not
+// provision a Stryker install (mutation scoring is corpus-m8.yml's job), and before this flag
+// it crashed mid-run on "stryker binary not found" for every target with a real suite.
 //
 // --stub-check (#373) runs the fast pre-Stryker deletion-survival pass INSTEAD of Stryker:
 // each covered exported function is stubbed to `return undefined` in place (backed up and
@@ -66,6 +73,7 @@ if (!targetArg) {
 
 const targetDir = resolve(targetArg);
 const stubCheck = process.argv.includes("--stub-check");
+const detectOnly = process.argv.includes("--detect-only");
 const configPath = arg("--config");
 const concurrency = arg("--concurrency");
 const incremental = process.argv.includes("--incremental");
@@ -97,13 +105,36 @@ function readTargetPackageJson(): PackageJsonForTestDetection | undefined {
   }
 }
 
+// #252: the census behind the suite-absent threshold — every test file in the tree
+// (*.test.*/*.spec.* or under __tests__/), with text, so detectNoTestSuite can tell a harness
+// with a meaningful suite from one with zero test files or a single placeholder spec.
+const TEST_FILE = /(\.(test|spec)\.[cm]?[jt]sx?$)/;
+const WALK_EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out|reports|stryker-tmp)$/;
+
+function collectTestFiles(root: string): { path: string; text: string }[] {
+  const files: { path: string; text: string }[] = [];
+  const walk = (dir: string, inTestsDir: boolean) => {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        if (!WALK_EXCLUDED_DIR.test(entry)) walk(full, inTestsDir || entry === "__tests__");
+      } else if (TEST_FILE.test(entry) || (inTestsDir && /\.[cm]?[jt]sx?$/.test(entry))) {
+        files.push({ path: relative(root, full).split(sep).join("/"), text: readFileSync(full, "utf8") });
+      }
+    }
+  };
+  walk(root, false);
+  return files;
+}
+
 // #224: no test script / no known test-runner dep / no Stryker config means Stryker literally
 // can't run here — that's itself a High-severity M8 finding (zero automated coverage on a
 // codebase in an audit's scope), not a wrapper failure. Report it and mark M8 coverage partial
-// instead of falling through to runStryker()'s "binary not found"-shaped error.
+// instead of falling through to runStryker()'s "binary not found"-shaped error. #252 widens the
+// same finding to a harness with no meaningful suite: zero test files, or one placeholder spec.
 if (!reportPath) {
   const hasStrykerConfig = configPath ? existsSync(resolve(configPath)) : STRYKER_CONFIG_NAMES.some((f) => existsSync(join(targetDir, f)));
-  const { missing, reason } = detectNoTestSuite(readTargetPackageJson(), hasStrykerConfig);
+  const { missing, reason } = detectNoTestSuite(readTargetPackageJson(), hasStrykerConfig, collectTestFiles(targetDir));
   if (missing) {
     const why = reason ?? "no automated test suite detected";
     console.error(`✗ ${targetDir}: no automated test suite detected (${why}) — mutation testing has nothing to run against.`);
@@ -120,18 +151,28 @@ if (!reportPath) {
   }
 }
 
+// #470: detect-only stops here when a suite IS present — the caller (corpus-drift) wants the
+// suite-absent finding when it applies, never a Stryker invocation. An empty findings array,
+// not silence: the caller can tell "suite present, mutation deferred" from a crashed run.
+if (detectOnly) {
+  console.error(`✓ ${targetDir}: test suite detected — mutation scoring skipped (--detect-only; a real run needs a provisioned Stryker install)`);
+  const json = "[]";
+  if (outPath) writeFileSync(outPath, json + "\n");
+  else console.log(json);
+  process.exit(0);
+}
+
 // #373: the fast pre-Stryker deletion-survival pass. Everything below (Stryker invocation,
 // report shaping) is bypassed — this mode's output is stub-check runs + M8-01 findings.
 if (stubCheck) {
   const SOURCE_FILE = /\.([cm]?[jt]s|[jt]sx)$/;
-  const EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out|reports|stryker-tmp)$/;
   const loadSources = (root: string): SourceInput[] => {
     const files: SourceInput[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir)) {
         const full = join(dir, entry);
         if (statSync(full).isDirectory()) {
-          if (!EXCLUDED_DIR.test(entry)) walk(full);
+          if (!WALK_EXCLUDED_DIR.test(entry)) walk(full);
         } else if (SOURCE_FILE.test(entry)) {
           files.push({ path: relative(root, full).split(sep).join("/"), text: readFileSync(full, "utf8") });
         }

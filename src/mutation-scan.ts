@@ -251,19 +251,85 @@ const KNOWN_TEST_RUNNER_DEPS = ["vitest", "jest", "mocha", "ava", "tape", "jasmi
 // npm/pnpm init's default placeholder — present but not a real test suite.
 const PLACEHOLDER_TEST_SCRIPT = /Error: no test specified/;
 
-export function detectNoTestSuite(pkg: PackageJsonForTestDetection | undefined, hasStrykerConfig: boolean): { missing: boolean; reason?: string } {
+// #252: the boundary between "has a test suite" and "has a harness but no suite". A configured
+// runner with zero test files, or with a single spec that is itself a placeholder (no test cases,
+// no assertions, or only constant-literal assertions like `expect(true).toBe(true)`) is NOT a
+// suite — it must draw #224's zero-coverage finding, not pass as covered. A single MEANINGFUL
+// spec (proposit's one real vitest spec, multi-tenant-starter's one real RLS test) still counts
+// as a suite: the ruling's threshold is "≤1 placeholder", not "≤1 file".
+const TEST_CASE_RE = /\b(?:it|test)(?:\.\w+)*\s*\(/g;
+const ASSERTION_HEAD_RE = /\b(?:expect|assert(?:\.\w+)*)\s*\(/g;
+const CONSTANT_ASSERTION_ARG = /^(?:|true|false|null|undefined|-?\d+(?:\.\d+)?|'[^']*'|"[^"]*"|`[^`]*`)$/;
+
+// First (balanced-paren) argument of every expect(...)/assert.*(...) call in the file.
+function assertionArgs(text: string): string[] {
+  const args: string[] = [];
+  for (const m of text.matchAll(ASSERTION_HEAD_RE)) {
+    let depth = 1;
+    let arg = "";
+    for (let i = m.index + m[0].length; i < text.length && depth > 0 && arg.length < 200; i++) {
+      const c = text[i]!;
+      if (c === "(") depth++;
+      else if (c === ")") depth--;
+      if (depth > 0 && !(depth === 1 && c === ",")) arg += c;
+      if (depth === 1 && c === ",") break;
+    }
+    args.push(arg.trim());
+  }
+  return args;
+}
+
+export function isPlaceholderSpec(text: string): { placeholder: boolean; why?: string } {
+  const cases = text.match(TEST_CASE_RE)?.length ?? 0;
+  if (cases === 0) return { placeholder: true, why: "it declares no test cases (no it()/test() calls)" };
+  const args = assertionArgs(text);
+  if (args.length === 0) return { placeholder: true, why: `its ${cases} test case(s) contain zero assertions` };
+  if (args.every((a) => CONSTANT_ASSERTION_ARG.test(a))) {
+    return { placeholder: true, why: "every assertion is over a constant literal (e.g. expect(true)) — tautological" };
+  }
+  return { placeholder: false };
+}
+
+export interface TestFileInput {
+  path: string;
+  text: string;
+}
+
+// `testFiles` is the census of the target's actual test files (paths matching *.test.*/*.spec.*
+// or living under __tests__/). Omit it to get the pre-#252 harness-only detection (used by unit
+// tests that only exercise the package.json rules); the CLI always passes it.
+export function detectNoTestSuite(
+  pkg: PackageJsonForTestDetection | undefined,
+  hasStrykerConfig: boolean,
+  testFiles?: readonly TestFileInput[],
+): { missing: boolean; reason?: string } {
   const testScript = pkg?.scripts?.test;
   const hasRealTestScript = !!testScript && !PLACEHOLDER_TEST_SCRIPT.test(testScript);
   const deps = { ...pkg?.dependencies, ...pkg?.devDependencies };
   const hasRunnerDep = KNOWN_TEST_RUNNER_DEPS.some((d) => d in deps) || (testScript?.includes("--test") ?? false);
-  if (hasRealTestScript || hasRunnerDep || hasStrykerConfig) return { missing: false };
+  if (!hasRealTestScript && !hasRunnerDep && !hasStrykerConfig) {
+    const reason = [
+      pkg ? (testScript ? `"scripts.test" is the npm-init placeholder ("${testScript}")` : `no "scripts.test" in package.json`) : "no package.json found",
+      "no known test-runner dependency (vitest/jest/mocha/ava/...)",
+      "no stryker.conf.* found",
+    ].join("; ");
+    return { missing: true, reason };
+  }
 
-  const reason = [
-    pkg ? (testScript ? `"scripts.test" is the npm-init placeholder ("${testScript}")` : `no "scripts.test" in package.json`) : "no package.json found",
-    "no known test-runner dependency (vitest/jest/mocha/ava/...)",
-    "no stryker.conf.* found",
-  ].join("; ");
-  return { missing: true, reason };
+  // #252: harness present — now check it has a meaningful suite behind it.
+  if (testFiles) {
+    if (testFiles.length === 0) {
+      return { missing: true, reason: "a test harness is configured (test script / runner dependency / stryker config) but the tree contains ZERO test files — a runner with nothing to run counts as suite absent (#252)" };
+    }
+    if (testFiles.length === 1) {
+      const only = testFiles[0]!;
+      const verdict = isPlaceholderSpec(only.text);
+      if (verdict.placeholder) {
+        return { missing: true, reason: `the harness's ONLY test file (${only.path}) is a placeholder/smoke spec: ${verdict.why} — a single placeholder counts as suite absent (#252)` };
+      }
+    }
+  }
+  return { missing: false };
 }
 
 export function noTestSuiteFinding(reason: string): Finding {
