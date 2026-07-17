@@ -69,3 +69,34 @@ describe("renderPacket", () => {
     expect(out).toMatch(/human review/i);
   });
 });
+
+describe("buildPacket hotspot ordering (#442)", () => {
+  const cwd = process.cwd();
+  const paths = [`${cwd}/package.json`, `${cwd}/tsconfig.json`];
+
+  it("leads with the hottest file and annotates its rank when hotspots are supplied", () => {
+    // tsconfig.json is listed second but ranked hottest — it must come first, tagged #1.
+    const packet = buildPacket(BRIEF, cwd, paths, ["tsconfig.json", "package.json"]);
+    expect(packet.hotspotRanked).toBe(true);
+    expect(packet.files[0]?.path).toBe("tsconfig.json");
+    expect(packet.files[0]?.hotspotRank).toBe(1);
+    const out = renderPacket(packet);
+    expect(out).toContain("### [hotspot #1] tsconfig.json");
+    expect(out).toMatch(/ordered by M3 hotspot rank/i);
+  });
+
+  it("leaves order untouched and adds no hotspot note when none are supplied", () => {
+    const packet = buildPacket(BRIEF, cwd, paths);
+    expect(packet.hotspotRanked).toBe(false);
+    expect(packet.files[0]?.path).toBe("package.json");
+    expect(renderPacket(packet)).not.toMatch(/hotspot/i);
+  });
+
+  it("ranks known hotspots ahead of files absent from the list", () => {
+    // Only package.json is a hotspot; tsconfig.json (not listed) sorts after it.
+    const packet = buildPacket(BRIEF, cwd, paths, ["package.json"]);
+    expect(packet.files[0]?.path).toBe("package.json");
+    expect(packet.files[0]?.hotspotRank).toBe(1);
+    expect(packet.files[1]?.hotspotRank).toBeUndefined();
+  });
+});

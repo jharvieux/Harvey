@@ -1,6 +1,10 @@
 // M6 (simplification / reuse) runner — assembles a review packet for a target directory.
 //
-//   pnpm simplify-scan <target-dir> [--out packet.md]
+//   pnpm simplify-scan <target-dir> [--out packet.md] [--hotspots <m3-hotspot-file>]
+//
+// --hotspots takes the newline-ranked file list M3 emits (`hotspot-scan.ts --hotspots-out`, the
+// same file M8's mutation-scan consumes): the packet then leads with the hottest files so the
+// reviewer starts on the prime refactoring candidates (#442).
 //
 // Prints the packet (brief + source) to stdout. It does NOT invoke a model: M6's verdict is a paid
 // human-reviewed judgment (docs/design/m6-simplification-eval.md §5), and `pnpm verify` must stay
@@ -31,9 +35,11 @@ const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
 const outIdx = args.indexOf("--out");
 const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
+const hotspotsIdx = args.indexOf("--hotspots");
+const hotspotsPath = hotspotsIdx >= 0 ? args[hotspotsIdx + 1] : undefined;
 
 if (!targetArg) {
-  console.error("usage: pnpm simplify-scan <target-dir> [--out packet.md]");
+  console.error("usage: pnpm simplify-scan <target-dir> [--out packet.md] [--hotspots <m3-hotspot-file>]");
   process.exit(2);
 }
 
@@ -44,7 +50,15 @@ if (!files.length) {
   process.exit(1);
 }
 
-const packet = renderPacket(buildPacket(readFileSync(briefPath, "utf8"), targetDir, files));
+const hotspots = hotspotsPath
+  ? readFileSync(hotspotsPath, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)
+  : [];
+
+const packet = renderPacket(buildPacket(readFileSync(briefPath, "utf8"), targetDir, files, hotspots));
+if (hotspotsPath) {
+  const matched = files.filter((f) => hotspots.includes(f.replace(`${targetDir}/`, ""))).length;
+  console.error(`M6: ordered packet by ${hotspots.length} M3 hotspot(s); ${matched} matched a source file under review.`);
+}
 
 if (outPath) {
   writeFileSync(outPath, packet);

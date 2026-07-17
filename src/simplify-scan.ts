@@ -38,18 +38,34 @@ export function extractM6Brief(briefText: string): string {
 
 interface SimplifyPacket {
   brief: string;
-  files: { path: string; source: string }[];
+  files: { path: string; source: string; hotspotRank?: number }[];
+  hotspotRanked: boolean;
 }
 
-export function buildPacket(briefText: string, targetDir: string, filePaths: string[]): SimplifyPacket {
-  return {
-    brief: extractM6Brief(briefText),
-    files: filePaths.map((p) => ({ path: relative(targetDir, p), source: readFileSync(p, "utf8") })),
-  };
+// hotspots: M3 hotspot ranking (repo-relative paths, hottest first — the same newline list M8's
+// `pnpm mutation-scan --hotspots` consumes). When supplied, files that are hotspots lead the packet
+// in rank order (#442) so the reviewer starts on the highest-churn×complexity code — the prime
+// refactoring candidates M6 exists to name — instead of walking the tree in readdir order.
+export function buildPacket(briefText: string, targetDir: string, filePaths: string[], hotspots: string[] = []): SimplifyPacket {
+  const rankOf = new Map(hotspots.map((h, i) => [h, i + 1]));
+  const files = filePaths.map((p) => {
+    const path = relative(targetDir, p);
+    return { path, source: readFileSync(p, "utf8"), hotspotRank: rankOf.get(path) };
+  });
+  if (rankOf.size) {
+    // Stable sort (V8): hotspots ascending by rank, then non-hotspots in their original order.
+    files.sort((a, b) => (a.hotspotRank ?? Infinity) - (b.hotspotRank ?? Infinity));
+  }
+  return { brief: extractM6Brief(briefText), files, hotspotRanked: rankOf.size > 0 };
 }
 
 export function renderPacket(packet: SimplifyPacket): string {
-  const files = packet.files.map((f) => `### ${f.path}\n\n\`\`\`ts\n${f.source}\n\`\`\``).join("\n\n");
+  const files = packet.files
+    .map((f) => `### ${f.hotspotRank ? `[hotspot #${f.hotspotRank}] ` : ""}${f.path}\n\n\`\`\`ts\n${f.source}\n\`\`\``)
+    .join("\n\n");
+  const hotspotNote = packet.hotspotRanked
+    ? "\nFiles are ordered by M3 hotspot rank (churn × complexity × coupling); the `[hotspot #N]`\nfiles are the highest-value refactoring candidates — review them first.\n"
+    : "";
   return `# M6 — simplification / reuse review pass
 
 You are the reviewer. Apply the rubric below to the source that follows.
@@ -68,7 +84,7 @@ Two standing rules, from docs/design/m6-simplification-eval.md:
 ${packet.brief}
 
 ## The source under review (${packet.files.length} file${packet.files.length === 1 ? "" : "s"})
-
+${hotspotNote}
 ${files}
 `;
 }
