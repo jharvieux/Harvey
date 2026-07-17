@@ -42,6 +42,11 @@ export interface RunContext {
   // (the default) means no capture — coverage-only runs keep their prior behaviour.
   captureDir?: string;
   readFindings?: (path: string) => Finding[];
+  // #420: some module CLIs write an OBJECT artifact to --out (M3's { findings, ... }, M8's
+  // { finding, moduleRecord } | { summary, ... }) rather than the bare Finding[] readFindings
+  // demands. readArtifact parses that object without the array assertion so the probe can pull the
+  // report-schema Finding[] it embeds — and, for M8, read the verdict --out diverts off stdout.
+  readArtifact?: (path: string) => unknown;
 }
 
 export interface ModuleRunner {
