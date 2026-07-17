@@ -95,6 +95,19 @@ describe("external corpus manifest", () => {
       expect(isNotRun(t.modules["M5-slop"]!), t.slug).toBe(false);
     }
   });
+
+  it("#483: M6-indicator is scored on every target (detect-static needs no npm install, same as M5-slop)", () => {
+    for (const t of EXTERNAL_CORPUS) {
+      expect(isNotRun(t.modules["M6-indicator"]!), t.slug).toBe(false);
+    }
+  });
+
+  it("#483: every M6-indicator baseline has counted === total — the findings are Info-only by design (#267), so the two can never diverge", () => {
+    for (const t of EXTERNAL_CORPUS) {
+      const m6 = t.modules["M6-indicator"]!;
+      if (!isNotRun(m6)) expect(m6.counted, t.slug).toBe(m6.total);
+    }
+  });
 });
 
 describe("scoreExternalBaseline", () => {
@@ -165,6 +178,29 @@ describe("scoreExternalBaseline", () => {
       .toMatchObject({ pass: true, actual: 2 });
     expect(scoreExternalBaseline(target("multi-tenant-starter"), [dead()]).find((r) => r.module === "M5-knip"))
       .toMatchObject({ pass: false, drift: -1 });
+  });
+
+  it("#483: M6-indicator counts Info findings — excluding them the way every other module does would score every target's baseline as a permanent 0", () => {
+    // handrolled.ts's indicators are severity "Info" by construction (#267's non-grading ruling).
+    // The generic countedFor path (severity !== "Info") would read 0 regardless of what the
+    // detector actually produced, so the drift check could never fail — the opposite of the point.
+    const rows = scoreExternalBaseline(target("boxyhq"), [
+      finding("M6 — Indicator: email-shape regex", "Info"),
+      finding("M6 — Indicator: cookie serialization", "Info"),
+    ]);
+    expect(rows.find((r) => r.module === "M6-indicator")).toMatchObject({ pass: true, actual: 2 });
+  });
+
+  it("#483: M6-indicator FAILS when the detector stops firing, same as every other counted module", () => {
+    const rows = scoreExternalBaseline(target("boxyhq"), []);
+    expect(rows.find((r) => r.module === "M6-indicator")).toMatchObject({ pass: false, drift: -2 });
+  });
+
+  it("#483: M6-indicator doesn't pick up a lookalike M6 taxonomy that isn't the indicator pass", () => {
+    // Namespaced explicitly ("M6 — Indicator: …") rather than by the generic "M6 " prefix so a
+    // future non-indicator M6 class (the paid triage tier) can't silently fall into this module.
+    const rows = scoreExternalBaseline(target("boxyhq"), [finding("M6 — Some future paid-tier class", "Medium")]);
+    expect(rows.find((r) => r.module === "M6-indicator")).toMatchObject({ actual: 0 });
   });
 
   it("#278: M5-knip and M5-slop don't double-count each other, the bug that started the split", () => {
