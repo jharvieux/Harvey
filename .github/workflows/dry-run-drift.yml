@@ -1,10 +1,12 @@
-# Regenerates the calibration dry run (src/cli/dry-run.ts, #34) and diffs its findings.json
-# against the committed copy (#336). Nobody runs the harness by hand when a rule or fixture
-# lands, so dry-run/findings.json silently ages behind the scanner's real output — a 2026-07-16
-# regeneration alone turned up 7 findings main's own code already emits that the committed
-# artifact didn't have (a new auth_rls_initplan detector, #374). timing.json is deliberately
-# excluded: it churns by design every run (wall-clock numbers), and only findings.json is
-# meant to be deterministic across machines (issue #285/#302 — stable ids via sorted inputs).
+# Regenerates the calibration dry run (src/cli/dry-run.ts, #34) and diffs its findings.json AND
+# pii-data-map.json against their committed copies (#336). Nobody runs the harness by hand when a
+# rule or fixture lands, so the artifacts silently age behind the scanner's real output — a
+# 2026-07-16 regeneration alone turned up 7 findings main's own code already emits that the
+# committed findings.json didn't have (a new auth_rls_initplan detector, #374). pii-data-map.json
+# had no gate at all and drifted after #461 undetected until caught by hand. timing.json is
+# deliberately excluded: it churns by design every run (wall-clock numbers), and only
+# findings.json/pii-data-map.json are meant to be deterministic across machines (issue #285/#302
+# — stable ids via sorted inputs).
 #
 # Deliberately NOT part of `pnpm verify`: dry-run.ts's mechanical scan shells out to
 # gitleaks/trufflehog/semgrep/osv-scanner, none of them npm dependencies — verify stays
@@ -12,7 +14,8 @@
 # install list as corpus-drift.yml, scoped to the one target this harness actually runs against.
 #
 # On failure: regenerate locally (`pnpm exec tsx src/cli/dry-run.ts`) and commit the corrected
-# findings.json — see this file's own header comment for why that's tool-driven, not a hand-edit.
+# findings.json/pii-data-map.json — see this file's own header comment for why that's tool-driven,
+# not a hand-edit.
 
 name: dry-run-drift
 
@@ -26,6 +29,7 @@ on:
       - "src/scan/**"
       - "targets/calibration/**"
       - "dry-run/findings.json"
+      - "dry-run/pii-data-map.json"
       - ".github/workflows/dry-run-drift.yml"
 
 # A scheduled drift check has no reason to run twice concurrently, and a re-dispatch means the
@@ -74,5 +78,12 @@ jobs:
         run: |
           if ! diff -u dry-run/findings.json /tmp/dry-run-regen/findings.json; then
             echo "::error::dry-run/findings.json has drifted from the scanner's real output — regenerate it (pnpm exec tsx src/cli/dry-run.ts) and commit the result. timing.json is excluded by design (#302)."
+            exit 1
+          fi
+
+      - name: Diff regenerated pii-data-map.json against the committed artifact
+        run: |
+          if ! diff -u dry-run/pii-data-map.json /tmp/dry-run-regen/pii-data-map.json; then
+            echo "::error::dry-run/pii-data-map.json has drifted from the scanner's real output — regenerate it (pnpm exec tsx src/cli/dry-run.ts) and commit the result. timing.json is excluded by design (#302)."
             exit 1
           fi
