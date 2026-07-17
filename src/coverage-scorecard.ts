@@ -1,10 +1,12 @@
-// Scores a dry-run's actual findings against a target's known ground truth (issue #34).
-// Pure mapping/scoring logic — src/cli/dry-run.ts supplies the ground-truth list (transcribed
-// from targets/calibration/GROUND-TRUTH.md) and the Finding[] a real scan run produced.
+// Classifies a dry-run's planted-bug ground truth into a coverage tally (issue #34). DETECTION is
+// NOT decided here: the caller resolves each bug's verdict from the ONE gated answer key — the
+// calibration corpus for a static bug, a committed M2 pen-test record for a dynamic one — and
+// hands it in as a BugDetection (#425). This module only classifies (caught / missed /
+// requires-live-run) and counts. It holds no matcher of its own, so there is no second answer key
+// here that could drift from the corpus.
 //
-// Every bug's `liveRunRequired` and `moduleRan` fields are set by the CALLER from what actually
-// executed in that pass — this module never guesses whether something ran. A bug whose detecting
-// module didn't run is scored "requires-live-run", never silently "missed".
+// A bug whose detecting tier did not run this pass arrives with detection === null and is scored
+// "requires-live-run", never silently "missed" — this module never guesses that something ran.
 
 import type { PrecisionTier } from "./findings.js";
 import type { ProbeScore } from "./pentest/scorecard.js";
@@ -28,29 +30,28 @@ export function statusFromDynamicProbe(status: ProbeScore["status"]): CoverageSt
   }
 }
 
+// A bug's DETECTION verdict, resolved by the caller from the single gated answer key. `caught` is
+// the corpus entry's (or M2 replay's) verdict on the evidence; `tier` is the matched finding's
+// precision tier (caught only). Distinguishing the tier is load-bearing: "high" means the tier
+// ASSERTED a verdict, anything else means it SURFACED a shape a human must still adjudicate, so a
+// review-tier catch never launders into an autonomous detection (#342).
+export interface BugDetection {
+  caught: boolean;
+  tier?: PrecisionTier;
+  note: string;
+}
+
 export interface GroundTruthBug {
   id: string;
   severity: string;
   location: string;
   expectedModule: string;
-  // False when the module that would catch this bug did not execute in this pass (e.g. needs
-  // a live DB, a missing skill package, or a binary unavailable in the sandbox).
-  moduleRan: boolean;
-  // True when this finding is a genuine catch of this bug — supplied by the caller per-bug since
-  // the match signal differs by module (mechanical findings carry file:line locations; classifier
-  // verdicts carry a function/table name). Receives the WHOLE finding, so a predicate can require
-  // both the right file AND the right rule: an earlier taxonomy-OR-location signature could only
-  // ever see one field at a time, which scored COUNTER-RACE "caught" off /race/i matching the
-  // dependency `braces@2.3.2` in a lockfile (#246).
-  matches: (finding: ScorableFinding) => boolean;
-  // Location-INDEPENDENT class predicate: true for any finding whose taxonomy targets this bug's
-  // CLASS, wherever it fires. `matches` is anchored to the planted address, so it can't catch a
-  // rule that proves the bug at a DIFFERENT address (an absence-shaped bug proved at its create
-  // site, not its absence site) — the drift the location guard structurally misses (#335). Must be
-  // precise (an exact taxonomy/rule-id), never a loose word regex, or it false-matches a
-  // same-word rule for an unrelated class. The drift guard uses this to falsify a "no mechanical
-  // rule reaches this class" claim against the real findings.
-  classMatch?: (finding: ScorableFinding) => boolean;
+  // Resolved by the CALLER from the ONE gated answer key (the calibration corpus for a static bug;
+  // a committed M2 replay for a dynamic one). null = the detecting tier did not run this pass → the
+  // bug is scored requires-live-run, never missed. There is deliberately no matcher on this type:
+  // "does a rule catch this?" is answered once, in the corpus, so it cannot drift into a second
+  // hand-maintained key here (#425 — replaces the former per-bug `matches`/`classMatch`).
+  detection: BugDetection | null;
 }
 
 interface ScoredBug {
@@ -59,54 +60,31 @@ interface ScoredBug {
   location: string;
   expectedModule: string;
   status: CoverageStatus;
-  // The matched finding's precision tier (caught only). "high" = the mechanical tier ASSERTED a
-  // verdict; "review" (or any non-high) = it surfaced a shape for a HUMAN to adjudicate. Kept
-  // distinct so "caught" never launders a review-tier surfacing into an autonomous detection — two
-  // of the calibration Criticals are review-tier catches a person must still rule on (#342).
   tier?: PrecisionTier;
   note: string;
 }
 
-export interface ScorableFinding {
-  taxonomy: string;
-  location: string;
-  precisionTier?: PrecisionTier;
-}
-
-// A catch is "asserted" only when the matching finding is high-precision. Anything else caught
+// A catch is "asserted" only when the matched finding is high-precision. Anything else caught
 // (review tier, or an untiered finding whose trust we can't vouch for) is surfaced-for-review — the
 // conservative direction: never claim the mechanical tier decided unless it actually did.
 function isAsserted(bug: ScoredBug): boolean {
   return bug.status === "caught" && bug.tier === "high";
 }
 
-export function scoreCoverage(bugs: GroundTruthBug[], findings: ScorableFinding[]): ScoredBug[] {
+export function scoreCoverage(bugs: GroundTruthBug[]): ScoredBug[] {
   return bugs.map((bug) => {
     const base = { id: bug.id, severity: bug.severity, location: bug.location, expectedModule: bug.expectedModule };
-    if (!bug.moduleRan) {
+    if (bug.detection === null) {
       return {
         ...base,
         status: "requires-live-run",
         note: `${bug.expectedModule} did not execute in this pass — no caught/missed verdict possible.`,
       };
     }
-    const hit = findings.find((f) => bug.matches(f));
-    if (hit) {
-      const asserted = hit.precisionTier === "high";
-      return {
-        ...base,
-        status: "caught",
-        tier: hit.precisionTier,
-        note: asserted
-          ? `Asserted by high-precision rule "${hit.taxonomy}" at ${hit.location}.`
-          : `Surfaced for review by "${hit.taxonomy}" at ${hit.location} — ${hit.precisionTier ?? "untiered"} tier, a human must still adjudicate this verdict.`,
-      };
+    if (bug.detection.caught) {
+      return { ...base, status: "caught", tier: bug.detection.tier, note: bug.detection.note };
     }
-    return {
-      ...base,
-      status: "missed",
-      note: `${bug.expectedModule} ran but produced no finding matching this bug.`,
-    };
+    return { ...base, status: "missed", note: bug.detection.note };
   });
 }
 
