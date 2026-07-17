@@ -88,7 +88,7 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
   every time. `src/audit-coverage.ts` (`MODULES_NEVER_EXECUTED`) now fails loud on this until M6 runs
   against a real target. `MODULES_NEVER_EXECUTED` is itself **derived**, not hand-kept (#284): it's the
   complement of `audit-execution-log.json`, the record the full-audit runner
-  (`pnpm exec tsx src/cli/run-audit.ts <target>`, #229/#310) writes from what actually executed. Until M6
+  (`pnpm run-audit <target>`, #229/#310) writes from what actually executed. Until M6
   runs once, treat the "lower your maintenance cost" pitch below as **unproven by our
   own tooling** — it is a claim about a module that has never run.
 - **Report:** maintainability recommendations — each "reinvented wheel" with the suggested
@@ -173,7 +173,7 @@ severity, so it runs before the security pass) + M1 static security scan → 3. 
 → 4. M2 local pen test to **prove** the high-severity M1/M9 findings → 5. assemble into the ranked report
 (`audit-report-skeleton.md`), cross-referencing hotspots and surviving mutants against findings → 6. remediation plan + retest offer.
 
-**Running it:** one orchestrator, `pnpm exec tsx src/cli/run-audit.ts <target>` (#229/#310), drives all ten
+**Running it:** one orchestrator, `pnpm run-audit <target>` (#229/#310), drives all ten
 modules per the run-mode/env-flag table in `CLAUDE.md` and derives the coverage ledger from what each probe
 actually reported, rather than trusting a caller-supplied record. `src/audit-coverage.ts` (`pnpm audit-coverage`)
 remains for engagements whose modules run outside the orchestrator.

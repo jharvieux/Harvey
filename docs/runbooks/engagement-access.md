@@ -110,7 +110,7 @@ quoted.
 
 The audit is a ten-module product (M1–M10, `docs/audit-modules.md`). A delivery is only complete
 when **every** module is accounted for — run, or explicitly recorded as unable to run with a reason.
-The preferred path is the full-audit runner (`pnpm exec tsx src/cli/run-audit.ts <target>`, #229/#310),
+The preferred path is the full-audit runner (`pnpm run-audit <target>`, #229/#310),
 which **derives** the coverage ledger from what each probe actually reported. `assertAuditComplete`
 (`src/audit-coverage.ts`, run it with `pnpm audit-coverage --coverage <file.json>`) remains for
 engagements whose modules run outside the orchestrator — there the ledger is caller-supplied, the
