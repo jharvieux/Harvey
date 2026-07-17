@@ -14,15 +14,30 @@ import type { Finding } from "./findings.js";
 
 const trimOut = (output: string): string => output.trim().slice(0, 200);
 
-// #312 findings capture. When the run context is capturing, a module whose CLI emits a report-schema
-// Finding[] to --out writes it to <captureDir>/<module>.json and reads it back onto the outcome so
-// run-audit can assemble one engagement findings.json. Absent capture (the default) → no --out, no
-// read: coverage-only runs are unchanged.
+// #312 findings capture. When the run context is capturing, a module whose CLI emits findings to
+// --out writes them to <captureDir>/<module>.json and reads them back onto the outcome so run-audit
+// can assemble one engagement findings.json. Absent capture (the default) → no --out, no read:
+// coverage-only runs are unchanged.
 const captureOut = (ctx: RunContext, module: AuditModule): string | undefined =>
-  ctx.captureDir && ctx.readFindings ? join(ctx.captureDir, `${module}.json`) : undefined;
+  ctx.captureDir ? join(ctx.captureDir, `${module}.json`) : undefined;
 
+// Bare-Finding[] emitters (M4/M5/M7-advisors/M9).
 const readCaptured = (ctx: RunContext, outPath: string | undefined): Finding[] =>
   outPath && ctx.readFindings ? ctx.readFindings(outPath) : [];
+
+// #420: object-artifact emitters (M3, M8). Reads the { ... } --out shape and pulls out the
+// report-schema Finding[] it embeds — `findings` (M3's fact findings) or a single `finding` (M8's
+// no-test-suite disclosure). No object / no capture → []. Kept separate from readCaptured so the
+// bare-array emitters keep their strict "not a Finding[]" guard.
+const readArtifact = (ctx: RunContext, outPath: string | undefined): Record<string, unknown> | undefined =>
+  outPath && ctx.readArtifact ? (ctx.readArtifact(outPath) as Record<string, unknown> | undefined) : undefined;
+
+const artifactFindings = (artifact: Record<string, unknown> | undefined): Finding[] => {
+  if (!artifact) return [];
+  if (Array.isArray(artifact.findings)) return artifact.findings as Finding[];
+  if (artifact.finding && typeof artifact.finding === "object") return [artifact.finding as Finding];
+  return [];
+};
 
 // Runs a module's CLI and returns the raw result plus a printable command for the ledger's detail.
 const runCli = (ctx: RunContext, script: string, argv: string[]): { ok: boolean; output: string; command: string } => {
@@ -30,27 +45,15 @@ const runCli = (ctx: RunContext, script: string, argv: string[]): { ok: boolean;
   return { ok, output, command: `pnpm ${script} ${argv.join(" ")}`.trim() };
 };
 
-// Shells out to a module's CLI and maps the exit status onto the probe's own vocabulary. A non-zero
-// exit is `requires-live-run` WITH the tool's stderr as the reason, never a silent pass: the module
-// produced no usable output, and the reason says so in the tool's own words.
+// For a module whose CLI emits a report-schema Finding[] to --out: when the run context is capturing
+// (#312), append `--out <captureDir>/<module>.json`, then read the emitted findings back onto the
+// outcome so run-audit can assemble them. Shared CLIs (quality-scan feeds M4+M5, detect-static feeds
+// M7+M9) get captured under each module key; the assembler de-dupes.
 //
 // #350: exit 0 alone is NOT evidence a module ran — several tools deliberately exit 0 when they
-// scanned nothing (knip on unresolved deps, mutation-scan on a target with no test suite,
-// detect-static on an empty dir). This helper is therefore reserved for probes whose tool genuinely
-// executes whenever it exits 0 (jscpd for M4, pii-classify for M10-live). Probes over the exit-0
-// no-op tools DERIVE their status from the machine-readable verdict the tool printed instead.
-const viaCli = (module: AuditModule, script: string, args: (ctx: RunContext) => string[]) => ({
-  module,
-  run: (ctx: RunContext): ProbeOutcome => {
-    const { ok, output, command } = runCli(ctx, script, args(ctx));
-    return ok ? { status: "ran", detail: command } : { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-  },
-});
-
-// Like viaCli, but for a module whose CLI emits a report-schema Finding[] to --out: when the run
-// context is capturing (#312), append `--out <captureDir>/<module>.json`, then read the emitted
-// findings back onto the outcome so run-audit can assemble them. Shared CLIs (quality-scan feeds
-// M4+M5, detect-static feeds M7+M9) get captured under each module key; the assembler de-dupes.
+// scanned nothing. This factory is used only by M4 (jscpd), whose tool genuinely executes whenever
+// it exits 0; probes over the exit-0 no-op tools DERIVE their status from the machine-readable
+// verdict the tool printed instead.
 const capturing = (module: AuditModule, script: string, args: (ctx: RunContext) => string[]) => ({
   module,
   run: (ctx: RunContext): ProbeOutcome => {
@@ -80,10 +83,12 @@ const parseFindings = (output: string): { id?: string }[] | undefined => {
 
 // mutation-scan's no-test-suite branch emits { finding, moduleRecord: { status:"partial", note } }
 // and exits 0 (#224); a real Stryker run emits { summary, reportRows }. The moduleRecord is the
-// machine-readable verdict #350 says to read instead of the exit code.
-const mutationVerdict = (output: string): { kind: "ran" } | { kind: "no-suite"; note: string } | { kind: "unknown" } => {
+// machine-readable verdict #350 says to read instead of the exit code. #420: --out diverts this
+// verdict off stdout into the object artifact, so a capturing run passes the parsed object here
+// instead of the stdout string.
+const mutationVerdict = (input: string | Record<string, unknown>): { kind: "ran" } | { kind: "no-suite"; note: string } | { kind: "unknown" } => {
   try {
-    const parsed = JSON.parse(output) as { moduleRecord?: { note?: string }; summary?: unknown };
+    const parsed = (typeof input === "string" ? JSON.parse(input) : input) as { moduleRecord?: { note?: string }; summary?: unknown };
     if (parsed.moduleRecord && typeof parsed.moduleRecord.note === "string") return { kind: "no-suite", note: parsed.moduleRecord.note };
     if (parsed.summary) return { kind: "ran" };
     return { kind: "unknown" };
@@ -114,7 +119,7 @@ const m1: ModuleRunner = {
     return {
       status: "partial",
       detail: "pnpm quick-scan (mechanical tier)",
-      reason: "mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416)",
+      reason: "mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). No M1 security findings are collected into this deliverable — the flagship findings are produced by that paid-LLM pass and src/cli/scan.ts, not the mechanical quick-scan, so absence here is not-collected, not clean (#420)",
     };
   },
 };
@@ -131,8 +136,8 @@ const m2: ModuleRunner = {
   module: "M2",
   run: (ctx) => {
     const reason = ctx.env.dynamic
-      ? "no local supabase stack confirmed — --dynamic asserts a stack exists but the orchestrator cannot reach or verify one; run `pnpm exec tsx src/cli/pentest.ts` directly against a stood-up two-tenant stack (docs/runbooks/m2-pentest-ops.md). A flag is not a reachable stack (#356; artifact path #416)"
-      : "no local supabase stack in scope — M2 probes a running two-tenant stack (see CLAUDE.md's module table)";
+      ? "no local supabase stack confirmed — --dynamic asserts a stack exists but the orchestrator cannot reach or verify one; run `pnpm exec tsx src/cli/pentest.ts` directly against a stood-up two-tenant stack (docs/runbooks/m2-pentest-ops.md). A flag is not a reachable stack (#356; artifact path #416). No M2 findings are collected into this deliverable — they come from that live pen-test run, so absence here is not-collected, not clean (#420)"
+      : "no local supabase stack in scope — M2 probes a running two-tenant stack (see CLAUDE.md's module table). No M2 findings are collected into this deliverable — they come from a live pen-test run (#420)";
     return { status: "requires-live-run", reason };
   },
 };
@@ -159,12 +164,11 @@ const m2: ModuleRunner = {
 // exit-code pattern (#350), not measurement. Do not upgrade that to a verified claim without a
 // real vitals run.
 //
-// #312 capture: hotspot-scan prints the ranked table to stdout (the status evidence above) AND, with
-// --out, writes an M3 artifact. That artifact is an OBJECT ({ hotspots, findings, ... }), not the
-// bare Finding[] the assembler's readFindings accepts, so real capturing runs will not yield M3
-// findings through this path — M3 reaches the report via its coverage-ledger row until the sidecar
-// is reconciled (#420). The readCaptured call is kept for symmetry and is exercised by the assembler
-// test's mocked readFindings.
+// #312/#420 capture: hotspot-scan prints the ranked table to stdout (the status evidence above) AND,
+// with --out, writes an M3 artifact. That artifact is an OBJECT ({ hotspots, findings, ... }), not a
+// bare Finding[], so the M3 findings are read via readArtifact (which pulls `findings` out) rather
+// than readCaptured. The stdout table still gates the `ran` status, so a no-op vitals exit cannot
+// slip through.
 const m3: ModuleRunner = {
   module: "M3",
   run: (ctx) => {
@@ -173,7 +177,7 @@ const m3: ModuleRunner = {
     const command = `pnpm exec tsx src/cli/hotspot-scan.ts ${ctx.targetDir}`;
     if (!ok) return { status: "requires-live-run", reason: `vitals plugin unavailable or hotspot-scan failed: ${trimOut(output)}` };
     if (!/M3 hotspot table/.test(output)) return { status: "requires-live-run", reason: `hotspot-scan produced no M3 table — vitals report empty or unrecognized: ${trimOut(output)}` };
-    const findings = readCaptured(ctx, outPath);
+    const findings = artifactFindings(readArtifact(ctx, outPath));
     return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
   },
 };
@@ -214,10 +218,10 @@ const m5: ModuleRunner = {
 const m6: ModuleRunner = {
   module: "M6",
   run: (ctx) => {
-    if (!ctx.env.llm) return { status: "requires-live-run", reason: "paid LLM tier not in scope — M6's packet needs a reviewer to produce a verdict (#267)" };
+    if (!ctx.env.llm) return { status: "requires-live-run", reason: "paid LLM tier not in scope — M6's packet needs a reviewer to produce a verdict (#267). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass (#420)" };
     const { ok, output, command } = runCli(ctx, "simplify-scan", [ctx.targetDir]);
     if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-    return { status: "partial", detail: command, reason: "review packet assembled, but M6's verdict is a human/LLM pass with no recorded output — a packet is not a verdict, so this does not clear M6's never-run status (#351; artifact path #416)" };
+    return { status: "partial", detail: command, reason: "review packet assembled, but M6's verdict is a human/LLM pass with no recorded output — a packet is not a verdict, so this does not clear M6's never-run status (#351; artifact path #416). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass over the packet, so absence here is not-collected, not clean (#420)" };
   },
 };
 
@@ -237,10 +241,18 @@ const m7: ModuleRunner = {
     if (!ok) return { status: "requires-live-run", reason: `pnpm detect-static exited non-zero: ${trimOut(output)}` };
     if (!filesScanned(output)) return { status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — no code tier to run (empty or non-source target) (#350)` };
     if (!ctx.env.connected) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: "code tier only — no DB creds for the advisors (pnpm perf-scan)" };
-    const advisors = ctx.exec("pnpm", ["perf-scan"]);
-    return advisors.ok
-      ? { status: "ran", detail: "pnpm detect-static (code) + pnpm perf-scan (advisors)" }
-      : { status: "partial", detail: "pnpm detect-static (code tier)", reason: `advisors failed: ${trimOut(advisors.output)}` };
+    // #420: perf-scan writes a bare Finding[] to --out, so the advisor-tier findings are captured
+    // when the connected pass succeeds (M7's code-tier findings already arrive via the shared
+    // detect-static capture under M9). NB: the orchestrator does not yet thread a project-ref/token
+    // into perf-scan, so this success branch is not reachable end-to-end here (follow-up #434) — the
+    // capture is wired so it is correct the moment that ref is threaded.
+    const advisorsOut = captureOut(ctx, "M7");
+    const advisors = ctx.exec("pnpm", ["perf-scan", ...(advisorsOut ? ["--out", advisorsOut] : [])]);
+    if (!advisors.ok) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: `advisors failed: ${trimOut(advisors.output)}` };
+    const findings = readCaptured(ctx, advisorsOut);
+    return findings.length
+      ? { status: "ran", detail: "pnpm detect-static (code) + pnpm perf-scan (advisors)", findings }
+      : { status: "ran", detail: "pnpm detect-static (code) + pnpm perf-scan (advisors)" };
   },
 };
 
@@ -248,11 +260,13 @@ const m7: ModuleRunner = {
 // mutation-scan says so in a machine-readable moduleRecord while exiting 0. The probe reads that
 // verdict rather than the exit code: no test suite → partial (the zero-coverage finding), a real
 // Stryker report → ran.
-// #312 capture note: mutation-scan's --out artifact is an OBJECT ({ summary, ... } or { finding,
-// moduleRecord }), not the bare Finding[] the assembler reads, and --out silences the stdout verdict
-// this probe derives its status from — so real capturing runs surface M8 through its coverage-ledger
-// row, not captured findings, until the sidecar is reconciled (#420). readCaptured is kept for
-// symmetry and exercised by the assembler test's mocked readFindings.
+// #312/#420 capture note: mutation-scan's --out artifact is an OBJECT ({ summary, ... } or
+// { finding, moduleRecord }), not a bare Finding[], AND --out diverts the verdict off stdout into
+// that object. So when capturing, this probe reads BOTH its status verdict and its findings from the
+// object (readArtifact) rather than stdout: the no-test-suite branch's zero-coverage `finding` (M8-00)
+// is captured into the deliverable, and a real Stryker run reads `ran`. When not capturing, the
+// stdout verdict path (#350) is unchanged. A real Stryker run carries no report-schema Finding[]
+// (only summary/reportRows), so surviving-mutant findings are not yet collected (follow-up #435).
 const m8: ModuleRunner = {
   module: "M8",
   run: (ctx) => {
@@ -261,11 +275,14 @@ const m8: ModuleRunner = {
     const command = `pnpm mutation-scan ${ctx.targetDir}`;
     const { ok, output } = ctx.exec("pnpm", ["mutation-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
     if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-    const verdict = mutationVerdict(output);
-    if (verdict.kind === "no-suite") return { status: "partial", detail: command, reason: verdict.note };
+    const artifact = readArtifact(ctx, outPath);
+    const verdict = mutationVerdict(artifact ?? output);
+    if (verdict.kind === "no-suite") {
+      const findings = artifactFindings(artifact);
+      return findings.length ? { status: "partial", detail: command, reason: verdict.note, findings } : { status: "partial", detail: command, reason: verdict.note };
+    }
     if (verdict.kind === "unknown") return { status: "requires-live-run", reason: `mutation-scan produced no recognizable verdict — cannot confirm M8 ran: ${trimOut(output)}` };
-    const findings = readCaptured(ctx, outPath);
-    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
+    return { status: "ran", detail: command };
   },
 };
 
@@ -291,19 +308,29 @@ const m9: ModuleRunner = {
 // M10 classifies live columns, or parses migration SQL when there is no DB (#250) — two tiers, so
 // a schema-only pass is partial rather than a skip.
 //
-// #357 (untestable in CI): the `connected` branch below (live pii-classify → `ran`) needs real DB
-// creds and has only been exercised in its failure path here. Whether a live classify that sampled
-// nothing would read as `ran` is unverified — the schema-tier (partial) path is the only one this
-// environment can exercise.
+// #420: pii-classify emits a per-table data map / console summary, not report-schema Finding[], and
+// ignores --out — so neither tier contributes findings to the engagement doc. Both tiers therefore
+// report `partial` with a reason that says so explicitly, so a reader tells "M10 findings not
+// collected" from "M10 found no PII" (the live tier is `partial`, not `ran`, precisely so the ledger
+// can carry that reason — a `ran` outcome has no reason slot). A data-map → Finding[] emitter that
+// makes M10 a captured module is follow-up #436.
+//
+// #357 (untestable in CI): the `connected` branch needs real DB creds and has only ever been
+// exercised in its failure path here.
 const m10: ModuleRunner = {
   module: "M10",
   run: (ctx) => {
-    if (ctx.env.connected) return viaCli("M10", "pii-classify", () => []).run(ctx);
+    if (ctx.env.connected) {
+      const { ok, output } = ctx.exec("pnpm", ["pii-classify"]);
+      return ok
+        ? { status: "partial", detail: "pnpm pii-classify (live)", reason: "live classification ran, but pii-classify emits a data map, not report-schema findings, so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (follow-up #436; #420)" }
+        : { status: "requires-live-run", reason: `pnpm pii-classify exited non-zero: ${output.trim().slice(0, 200)}` };
+    }
     const migrations = join(ctx.targetDir, "supabase", "migrations");
     if (!ctx.exists(migrations)) return { status: "requires-live-run", reason: `no live DB and no migrations at ${migrations} — nothing to classify` };
     const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", migrations]);
     return ok
-      ? { status: "partial", detail: `pnpm pii-classify --schema ${migrations}`, reason: "schema tier only — no live DB, so row-level data was not sampled" }
+      ? { status: "partial", detail: `pnpm pii-classify --schema ${migrations}`, reason: "schema tier only — no live DB, so row-level data was not sampled. And pii-classify emits a data map, not report-schema findings, so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (follow-up #436; #420)" }
       : { status: "requires-live-run", reason: `pnpm pii-classify --schema exited non-zero: ${output.trim().slice(0, 200)}` };
   },
 };

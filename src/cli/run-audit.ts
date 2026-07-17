@@ -90,6 +90,9 @@ const ctx: RunContext = {
     if (!Array.isArray(parsed)) throw new Error(`captured findings at ${p} is not a Finding[] array`);
     return parsed as Finding[];
   },
+  // #420: the object-artifact reader — no array assertion, so M3/M8's { ... } --out shapes parse
+  // instead of throwing. Missing file → undefined (the CLI declined to write one).
+  readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),
 };
 
 console.log(`\nFull audit — ${targetDir}`);
