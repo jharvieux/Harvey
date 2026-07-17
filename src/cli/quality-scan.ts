@@ -20,6 +20,7 @@ import {
   knipToFindings,
   knipUnavailableFinding,
   touchesSecurityPath,
+  touchesTenantSupabasePath,
   type JscpdReport,
   type KnipReport,
 } from "../quality-scan.js";
@@ -81,10 +82,13 @@ function lineCount(dir: string, relPath: string): number | undefined {
   }
 }
 
-// #360: collect the security-relevant source subset for the diverged-clone pass. Skips the same
-// generated/vendored/build shapes JSCPD_IGNORE_GLOBS excludes from M4, plus tests — a drifted
-// copy inside a test file is not a per-handler authorization drift, and test suites legitimately
-// repeat near-identical setup.
+// #360/#399: collect the security-relevant source subset for the diverged-clone pass. Skips the
+// same generated/vendored/build shapes JSCPD_IGNORE_GLOBS excludes from M4, plus tests — a
+// drifted copy inside a test file is not a per-handler authorization drift, and test suites
+// legitimately repeat near-identical setup. A file is admitted on EITHER signal: its path names
+// an auth/guard/middleware/security concern (touchesSecurityPath, v1/#360), or its body scopes a
+// supabase query by a tenant key regardless of path (touchesTenantSupabasePath, v2/#399) — the
+// per-entity lib/ai/tools/*/lib/stores/* copy-paste vein #399 measured outside the v1 vocabulary.
 const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".next", ".git", "generated", "vendor", "patches", "__tests__", "e2e"]);
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const SKIP_FILE = /(\.gen\.ts|\.test\.|\.spec\.)|^(database\.types|types_db)\.ts$/;
@@ -95,8 +99,13 @@ function securityPathFiles(dir: string, rel = ""): SecurityPathFile[] {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...securityPathFiles(dir, relPath));
-    } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name) && touchesSecurityPath(relPath)) {
-      files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
+    } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
+      if (touchesSecurityPath(relPath)) {
+        files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
+      } else {
+        const source = readFileSync(join(dir, relPath), "utf8");
+        if (touchesTenantSupabasePath(source)) files.push({ path: relPath, source });
+      }
     }
   }
   return files;
@@ -104,8 +113,9 @@ function securityPathFiles(dir: string, rel = ""): SecurityPathFile[] {
 
 const jscpdReport = runJscpd(targetDir);
 
-// #360: the Type-3 near-miss layer jscpd structurally cannot provide — diverged copies of
-// security checks. Scoped to touchesSecurityPath files only.
+// #360/#399: the Type-3 near-miss layer jscpd structurally cannot provide — diverged copies of
+// security checks. Scoped to securityPathFiles's admitted subset (touchesSecurityPath OR
+// touchesTenantSupabasePath).
 const divergedFindings = divergedCloneFindings(securityPathFiles(targetDir));
 
 // #223: M4 has no dependency on M5 — a knip failure (most commonly the target's own

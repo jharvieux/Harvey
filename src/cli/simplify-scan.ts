@@ -31,6 +31,19 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
+// #396: package.json manifests under the target (root, plus any workspace packages) — the packet's
+// only evidence for the rubric's "already in the dependency tree" class.
+function manifestFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    if (SKIP_DIRS.has(entry)) continue;
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...manifestFiles(full));
+    else if (entry === "package.json") out.push(full);
+  }
+  return out;
+}
+
 const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
 const outIdx = args.indexOf("--out");
@@ -54,7 +67,12 @@ const hotspots = hotspotsPath
   ? readFileSync(hotspotsPath, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)
   : [];
 
-const packet = renderPacket(buildPacket(readFileSync(briefPath, "utf8"), targetDir, files, hotspots));
+const manifests = manifestFiles(targetDir);
+if (!manifests.length) {
+  console.error(`M6: no package.json found under ${targetDir} — the packet will say the dependency-tree class is unverifiable.`);
+}
+
+const packet = renderPacket(buildPacket(readFileSync(briefPath, "utf8"), targetDir, files, hotspots, manifests));
 if (hotspotsPath) {
   const matched = files.filter((f) => hotspots.includes(f.replace(`${targetDir}/`, ""))).length;
   console.error(`M6: ordered packet by ${hotspots.length} M3 hotspot(s); ${matched} matched a source file under review.`);
