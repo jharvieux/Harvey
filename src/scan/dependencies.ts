@@ -220,7 +220,7 @@ interface CuratedRange {
   fixed: string; // exclusive upper bound (first patched version)
 }
 
-interface CuratedDepCve {
+export interface CuratedDepCve {
   name: string;
   // Every affected range OSV lists for this package, transcribed exactly. An advisory often has
   // more than one (a maintained line and an old line each get their own fix), and the ranges are
@@ -235,6 +235,27 @@ interface CuratedDepCve {
   // OSV advisory URL the id and range were verified against (#212). Carried into the finding's
   // evidence so a client can check our provenance rather than take the CVE id on faith.
   source: string;
+  // Set ONLY when `severity` diverges from the advisory's own database_specific severity at
+  // `source` (verified against api.osv.dev, not recalled — #255). Both fields are required
+  // together: assertDisclosedDivergence below throws at import time if a divergent osvSeverity
+  // has no reason, or if osvSeverity is set but equal to `severity` (not a divergence — remove
+  // it). The operator ruling on #255 is "diverge, but disclose": a curated severity MAY differ
+  // from OSV's when we have a reasoned basis, but the finding text must say so, never silently
+  // re-rate. Prompted by CVE-2022-23540 shipping High against OSV's MODERATE with no disclosure.
+  osvSeverity?: Severity;
+  divergenceReason?: string;
+}
+
+// #255: throws at import time if any curated entry's divergence from OSV is unrecorded or
+// mis-recorded, so a silent (or self-contradictory) re-rating can never ship.
+export function assertDisclosedDivergence(cve: CuratedDepCve): void {
+  if (cve.osvSeverity === undefined) return;
+  if (cve.osvSeverity === cve.severity) {
+    throw new Error(`${cve.id}: osvSeverity equals severity (${cve.severity}) — not a divergence, remove osvSeverity/divergenceReason`);
+  }
+  if (!cve.divergenceReason?.trim()) {
+    throw new Error(`${cve.id}: severity (${cve.severity}) diverges from OSV's ${cve.osvSeverity} with no divergenceReason — #255 requires disclosure`);
+  }
 }
 
 const CURATED_DEP_CVES: CuratedDepCve[] = [
@@ -272,13 +293,25 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
     summary: "jwt.verify() with no `algorithms` option defaults to accepting `none` / a caller-controlled algorithm, allowing signature-verification bypass (GHSA-qwph-4952-7xr6). All versions below 9.0.0 are affected; 9.0.0 makes `algorithms` mandatory.",
     fix: "Upgrade jsonwebtoken to >= 9.0.0 and pass an explicit `algorithms` allowlist to jwt.verify().",
     source: "https://osv.dev/vulnerability/GHSA-qwph-4952-7xr6",
+    // #255 (originally raised as #212 follow-up): OSV's database_specific severity for this
+    // advisory is MODERATE, re-verified against api.osv.dev on 2026-07-17. We keep High: an
+    // undetected signature-verification bypass on the auth token itself is full account
+    // takeover in Harvey's multi-tenant-auth context, worse than the advisory's general-purpose
+    // rating assumes.
+    osvSeverity: "Medium",
+    divergenceReason: "a signature-verification bypass on the auth token is full account takeover in a multi-tenant-auth context, higher-impact than the advisory's general-purpose rating assumes",
   },
   {
     name: "next-auth",
     // OSV lists one unbounded range — every version below 4.20.1, not just the 4.x line (#271).
     ranges: [{ fixed: "4.20.1" }],
     id: "CVE-2023-27490",
-    severity: "Medium",
+    // Was "Medium"; corrected to match OSV's HIGH database_specific severity (#255 corpus
+    // audit, verified against api.osv.dev on 2026-07-17). Unlike jsonwebtoken's CVE-2022-23540,
+    // no reasoned basis for the old rating exists anywhere in this repo's history — it reads as
+    // unexplained drift rather than a deliberate judgment call, so it is aligned rather than
+    // kept-and-disclosed.
+    severity: "High",
     tier: "high",
     summary: "OAuth sign-in CSRF: a missing/replayed state check lets an attacker link a victim's session to the attacker's OAuth account (GHSA-7r7x-4c4q-c4qf). Every version below 4.20.1 is affected.",
     fix: "Upgrade next-auth to >= 4.20.1.",
@@ -324,7 +357,10 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
     // One unbounded range below 5.8.2 — no 6.x range, unlike CVE-2024-24758 below (#271).
     ranges: [{ fixed: "5.8.2" }],
     id: "CVE-2022-35949",
-    severity: "High",
+    // Was "High"; corrected to match OSV's MODERATE database_specific severity (#255 corpus
+    // audit, verified against api.osv.dev on 2026-07-17) — same unexplained-drift reasoning as
+    // CVE-2023-27490 above.
+    severity: "Medium",
     tier: "high",
     summary: "SSRF via an absolute URL supplied on `pathname`: `undici.request` sends the request to the absolute host instead of resolving against the intended origin (GHSA-8qr4-xgw6-wmr3). Every version below 5.8.2 is affected.",
     fix: "Upgrade undici to >= 5.8.2.",
@@ -335,7 +371,10 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
     // The 6.x line has its own fix, so a patched 5.28.3 must not be swept up by the 6.6.1 boundary.
     ranges: [{ fixed: "5.28.3" }, { introduced: "6.0.0", fixed: "6.6.1" }],
     id: "CVE-2024-24758",
-    severity: "Medium",
+    // Was "Medium"; corrected to match OSV's LOW database_specific severity (#255 corpus audit,
+    // verified against api.osv.dev on 2026-07-17) — same unexplained-drift reasoning as
+    // CVE-2023-27490 above.
+    severity: "Low",
     tier: "high",
     summary: "The Proxy-Authorization header is not cleared on a cross-origin redirect, leaking proxy credentials to the redirect target (GHSA-3787-6prv-h9w3). Affects every version below 5.28.3 and the 6.x line below 6.6.1.",
     fix: "Upgrade undici to >= 5.28.3 (or >= 6.6.1 on the 6.x line).",
@@ -362,7 +401,10 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
       { introduced: "7.0.0", fixed: "7.4.6" },
     ],
     id: "CVE-2021-32640",
-    severity: "High",
+    // Was "High"; corrected to match OSV's MODERATE database_specific severity (#255 corpus
+    // audit, verified against api.osv.dev on 2026-07-17) — same unexplained-drift reasoning as
+    // CVE-2023-27490 above.
+    severity: "Medium",
     tier: "high",
     summary: "ReDoS: a crafted `Sec-Websocket-Protocol` header value triggers catastrophic backtracking, stalling the server (GHSA-6fc8-4gx4-v693). Affects the 5.x line below 5.2.3, the 6.x line below 6.2.2, and the 7.x line below 7.4.6.",
     fix: "Upgrade ws to >= 7.4.6 (or >= 6.2.2 / >= 5.2.3 on the 6.x / 5.x lines).",
@@ -379,6 +421,8 @@ const CURATED_DEP_CVES: CuratedDepCve[] = [
     source: "https://osv.dev/vulnerability/GHSA-54xq-cgqr-rpm3",
   },
 ];
+
+for (const cve of CURATED_DEP_CVES) assertDisclosedDivergence(cve);
 
 // Every hardcoded advisory claim in this file, as data an automated check can re-verify against
 // OSV (#247). The curated tables above stay the source of truth for scanning; this list restates
@@ -435,6 +479,10 @@ export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestP
     // The ranges are disjoint, so at most one matches — the matching one names the fix to cite.
     const hit = cve.ranges.find((r) => (r.introduced ? gte(version, r.introduced) : true) && lt(version, r.fixed));
     if (!hit) continue;
+    // #255: a curated severity that diverges from the advisory's own rating must say so in the
+    // finding text, never silently — assertDisclosedDivergence (run over CURATED_DEP_CVES above)
+    // already guarantees divergenceReason is set whenever osvSeverity differs from severity.
+    const disclosure = cve.osvSeverity !== undefined ? ` Harvey rates this ${cve.severity}; OSV rates ${cve.osvSeverity} because ${cve.divergenceReason}.` : "";
     findings.push(
       mechanicalFinding({
         id: `DEP-${cve.id}`,
@@ -443,7 +491,7 @@ export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestP
         category: "Dependency CVE",
         taxonomy: "Known-vulnerable dependency",
         location: `${manifestPath} (${cve.name})`,
-        evidence: `Declared ${cve.name}@${declared} falls in the ${cve.id} affected range (${hit.introduced ? `>= ${hit.introduced} ` : ""}< ${hit.fixed}), per ${cve.source}.`,
+        evidence: `Declared ${cve.name}@${declared} falls in the ${cve.id} affected range (${hit.introduced ? `>= ${hit.introduced} ` : ""}< ${hit.fixed}), per ${cve.source}.${disclosure}`,
         impact: cve.summary,
         fix: cve.fix,
         precisionTier: cve.tier,
