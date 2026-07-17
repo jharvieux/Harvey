@@ -10,11 +10,8 @@
 // `review` tier. The `location` is the column name, matching the spec's "location = column"
 // convention (§3b.3) for a future Finding-emitting adapter.
 //
-// Fixture parity: the original six positives + four negatives are planted in the fixture
-// migration above. The #376/#378/#379/#377 entries below are validated by Layer 1
-// (tools/pii-classify.test.ts + the selftest, both in `pnpm verify`) but NOT yet planted in the
-// fixture SQL — migration files are operator-owned for automated sweeps; planting them there is
-// a tracked follow-up, not a silent omission.
+// Fixture parity: every entry below (the original six positives + four negatives, plus the
+// #376/#378/#379/#377 additions) is planted as a column in the fixture migration above (#460).
 //
 // NOT wired into runMechanicalScan (that's gitleaks/semgrep/OSV/leftover-auth — M1's tools; the
 // PII classifier runs on parsed migration SQL via a separate static path, e.g. src/cli/dry-run.ts
