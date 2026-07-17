@@ -30,6 +30,9 @@ interface MechanicalFindingInput {
   precisionTier: PrecisionTier;
   confidence?: Finding["confidence"];
   bftb?: { value: number; ease: number; safety: number };
+  // #455 — CWE/OWASP identifiers, threaded through from the source (e.g. semgrep rule metadata).
+  cwe?: Finding["cwe"];
+  owasp?: Finding["owasp"];
 }
 
 // "high" precision-tier findings are ground-truth (verified secret, decoded service-role
@@ -51,5 +54,7 @@ export function mechanicalFinding(input: MechanicalFindingInput): Finding {
     ...(input.bftb ?? DEFAULT_BFTB[input.severity]),
     mechanical: true,
     precisionTier: input.precisionTier,
+    ...(input.cwe ? { cwe: input.cwe } : {}),
+    ...(input.owasp ? { owasp: input.owasp } : {}),
   };
 }

@@ -65,6 +65,42 @@ describe("validateFindings — mechanical scan fields", () => {
   });
 });
 
+describe("validateFindings — cwe/owasp (#455)", () => {
+  it("accepts a finding with cwe/owasp arrays set", () => {
+    const doc = {
+      ...example,
+      findings: [{ ...example.findings[0], cwe: ["CWE-89"], owasp: ["A03:2021 - Injection"] }],
+    };
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+
+  it("existing findings with no cwe/owasp still validate — the fields are optional", () => {
+    const doc = { ...example, findings: [{ ...example.findings[0] }] };
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+
+  it("rejects a non-array cwe/owasp", () => {
+    const doc = {
+      ...example,
+      findings: [{ ...example.findings[0], cwe: "CWE-89", owasp: 42 }],
+    };
+    const { ok, errors } = validateFindings(doc);
+    expect(ok).toBe(false);
+    expect(errors).toContainEqual(expect.stringContaining("findings[0].cwe"));
+    expect(errors).toContainEqual(expect.stringContaining("findings[0].owasp"));
+  });
+
+  it("rejects a cwe array containing a non-string element", () => {
+    const doc = {
+      ...example,
+      findings: [{ ...example.findings[0], cwe: ["CWE-89", 42] }],
+    };
+    const { ok, errors } = validateFindings(doc);
+    expect(ok).toBe(false);
+    expect(errors).toContainEqual(expect.stringContaining("findings[0].cwe"));
+  });
+});
+
 describe("validateFindings — coverage ledger (#349)", () => {
   const ledger = [
     { module: "M4", name: "Duplication", status: "ran", detail: "pnpm quality-scan /t" },

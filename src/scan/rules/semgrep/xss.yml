@@ -24,6 +24,10 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: High
+      # #455: standard, unambiguous CWE/OWASP mapping — same bug class as
+      # harvey-dangerously-set-inner-html (base.yml).
+      cwe: ["CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"]
+      owasp: ["A03:2021 - Injection"]
     message: >
       A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS.
       Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.
@@ -55,6 +59,10 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: High
+      # #455: standard, unambiguous CWE/OWASP mapping — same bug class as
+      # harvey-dangerously-set-inner-html (base.yml).
+      cwe: ["CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"]
+      owasp: ["A03:2021 - Injection"]
     message: >
       document.write() is called with a request/URL-controlled value — DOM XSS (document.write
       executes any script in its argument). Remove document.write, or sanitize and use a safe
@@ -81,6 +89,10 @@ rules:
       confidence: MEDIUM
       category: security
       harveySeverity: High
+      # #455: standard, unambiguous CWE/OWASP mapping — same bug class as
+      # harvey-dangerously-set-inner-html (base.yml).
+      cwe: ["CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"]
+      owasp: ["A03:2021 - Injection"]
     message: >
       A database-read value (Supabase select result) reaches dangerouslySetInnerHTML unsanitized
       — stored XSS (the payload was persisted by an earlier write, e.g. a comment body). Sanitize
