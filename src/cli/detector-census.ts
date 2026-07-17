@@ -29,6 +29,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/supabase.ts": "M1",
   "src/scan/leftover-auth.ts": "M1",
   "src/scan/counter-race.ts": "M1",
+  "src/scan/bola-owner.ts": "M1",
   "src/scan/secrets.ts": "M1",
   "src/scan/dependencies.ts": "M1",
   "src/scan/supply-chain.ts": "M1",

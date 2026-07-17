@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
+import { scanBolaOwner } from "./bola-owner.js";
 import { scanCounterRace } from "./counter-race.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
@@ -122,6 +123,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
 
     // #353 — non-atomic read-modify-write race (AST dataflow over source files, incl. plain .js).
     findings.push(...scanCounterRace(scanDir));
+
+    // #433 — authenticated pages/api handler scoping a service-role query by a request-supplied
+    // owner id (BOLA). AST dataflow, incl. plain .js.
+    findings.push(...scanBolaOwner(scanDir));
 
     // M6 free-tier indicators (#267) — product code only; test/fixture files aren't audit
     // findings. package.json stays in the set: the class-merge dep-gate reads it.
