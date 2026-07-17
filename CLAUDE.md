@@ -17,7 +17,7 @@ The productized audit service extracted from `jharvieux/atc` (ATC issue 1527, no
 
 | # | Module | Run it with | Tier / prereq |
 |---|--------|-------------|---------------|
-| M1 | Multi-tenant security (lead) | `pnpm quick-scan --dir <t>` (mechanical) + `pnpm exec tsx src/cli/scan.ts --supabase <ref\|local>` (config) + LLM `/vuln-scan --extra docs/scan-extras.txt` → `/triage --fp-rules docs/fp-rules.txt` (semantic) + `pnpm detect-deeper` (live RLS/policy review) | free → connected → paid-LLM |
+| M1 | Multi-tenant security (lead) | `pnpm quick-scan --dir <t>` (mechanical) + `pnpm exec tsx src/cli/scan.ts --supabase <ref\|local>` (config) + LLM `/vuln-scan --extra docs/scan-extras.txt --extra <pnpm scan-focus M3-hotspots.txt>` → `/triage --fp-rules docs/fp-rules.txt` (semantic; the M3 hotspot focus prioritizes review on the hottest files, #442) + `pnpm detect-deeper` (live RLS/policy review) | free → connected → paid-LLM |
 | M2 | Local pen-test (dynamic) | `pnpm exec tsx src/cli/pentest.ts` against a local `supabase start` stack seeded with two tenants | needs live stack; `assertComplete` gates target coverage |
 | M3 | Hotspot analysis | `pnpm exec tsx src/cli/hotspot-scan.ts <t>` — wraps `vitals_cli.py report --json` (pass `--report <capture>` when vitals is off PATH, #314; `--hotspots-out` feeds M8's `--hotspots`) | external plugin; run, don't build |
 | M4 | Duplication | `pnpm check:duplication` or `pnpm quality-scan <t>` (jscpd + diverged-clone near-miss pass, #360) | source-only |
