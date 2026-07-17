@@ -1,0 +1,13 @@
+"use server";
+
+import { createClient } from "../lib/supabase";
+
+// Modelled on proposit's updateOrganisationLogo (#465): the same no-auth + bare `.eq("id", …)`
+// syntax as positive-svc-bareid, but on the PLAIN (RLS-enforced) client — row policies still
+// gate the write, so the widened owner-id shape must stay silent here. The generic
+// missing-auth finding is the one that fires (and is NOT subsumed).
+export async function updateOrganisationLogo(organisationId: string, logoPath: string) {
+  const supabase = await createClient();
+
+  await supabase.from("organisations").update({ logo: logoPath }).eq("id", organisationId);
+}

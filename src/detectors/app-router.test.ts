@@ -217,6 +217,63 @@ describe("client-supplied owner id trusted by an authenticated action (#221)", (
       },
     ]);
     expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID_NOAUTH);
+  });
+});
+
+const CLIENT_OWNER_ID_NOAUTH = "M1 — Client-supplied owner id trusted by unauthenticated service-role action";
+const MISSING_AUTH = "M1 — Server Action missing authorization check";
+
+// #465 widening (operator ruling): the three shapes proposit's real instances take — bare-id,
+// INSERT-value, and no-in-body-auth — fire when (and only when) the chain roots in the
+// RLS-bypassing service/admin client. Measured against proposit HEAD, 286 source files:
+// recall 3/3 on the #221-catalogued instances, 0 false positives, and the RLS-client near-miss
+// (updateOrganisationLogo) stays on the generic missing-auth finding.
+describe("client-supplied owner id — widened service-role shapes (#465)", () => {
+  it("flags a no-auth service-role mutation scoped by a bare client-supplied `id`, subsuming the generic missing-auth finding", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("client-owner-id/positive-svc-bareid"));
+    const hits = findings.filter((f) => f.taxonomy === CLIENT_OWNER_ID_NOAUTH);
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ severity: "High", category: "Security", confidence: "Likely", precisionTier: "review" });
+    expect(hits[0]?.title).toContain("updateUserProfile");
+    expect(hits[0]?.title).toContain("with no auth check");
+    // Dedupe (#465): one code defect, one finding — the generic missing-auth finding for the
+    // SAME action is subsumed by this more specific one.
+    expect(taxonomies(findings)).not.toContain(MISSING_AUTH);
+  });
+
+  it("flags a no-auth service-role insert whose owner column value is client-supplied (INSERT-value shape), subsuming missing-auth", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("client-owner-id/positive-svc-insert"));
+    const hits = findings.filter((f) => f.taxonomy === CLIENT_OWNER_ID_NOAUTH);
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("addMember");
+    expect(hits[0]?.evidence).toContain("user_id");
+    expect(taxonomies(findings)).not.toContain(MISSING_AUTH);
+  });
+
+  it("does not flag the same bare-id syntax on the plain RLS client — the generic missing-auth finding fires instead, unsubsumed", () => {
+    // proposit's updateOrganisationLogo, the measured near-miss: row policies still gate the
+    // write, so the owner-id class stays silent and the defect stays one (generic) finding.
+    const findings = detectAppRouterFindings(loadFixtureDir("client-owner-id/negative-rls-bareid"));
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID_NOAUTH);
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
+    expect(taxonomies(findings)).toContain(MISSING_AUTH);
+  });
+
+  it("does not flag a service-role insert whose owner id reads off the session", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("client-owner-id/negative-svc-insert-session"));
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID_NOAUTH);
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
+  });
+
+  it("does not flag a token-exchange flow that compares the client id against a row the server fetched before writing", () => {
+    // The comparison against a DB-bound value IS the authorization check (collectDbBoundNames);
+    // without it this exact fixture is the positive-svc-insert shape.
+    const findings = detectAppRouterFindings(loadFixtureDir("client-owner-id/negative-svc-compared-dbrow"));
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID_NOAUTH);
+    expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);
   });
 });
 

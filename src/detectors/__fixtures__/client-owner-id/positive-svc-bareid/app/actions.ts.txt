@@ -1,0 +1,12 @@
+"use server";
+
+import { createServiceClient } from "../lib/supabase";
+
+// Modelled on proposit's user-actions.ts updateUserProfileAction (#465): NO auth call anywhere,
+// the service-role client (RLS bypassed), and the row is chosen by bare `.eq("id", userId)` with
+// the CLIENT's userId — anyone can rename any profile. The widened bare-id shape.
+export async function updateUserProfile(userId: string, displayName: string) {
+  const supabaseService = createServiceClient();
+
+  await supabaseService.from("users").update({ display_name: displayName }).eq("id", userId);
+}

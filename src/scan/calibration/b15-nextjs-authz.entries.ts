@@ -3,8 +3,11 @@
 // `review` tier. Originally NONE had a matching mechanical rule; the #354 re-triage graduated TWO
 // to a leftover-auth grep (still review, not free-count): P-MW-MATCHER-EXCLUDES-API (the matcher's
 // api-lookahead is a textual fact) and P-DRAFTMODE-NO-SECRET (a shallow intra-file "enable with no
-// secret gate" check). The remaining FOUR (P-BOLA-BODY-OWNER, P-MW-SOLE-AUTHZ, P-HOST-HEADER-URL,
-// P-CLIENT-RENDER-AUTHZ) stay LLM/paid-tier — they need request+identity context, table-sensitivity
+// secret gate" check). #433 graduated a THIRD: P-BOLA-BODY-OWNER is now caught by the bola-owner
+// AST pass (src/scan/bola-owner.ts, runs in runMechanicalScan) — session-bound handler +
+// service-rooted `.eq(<ownership col>, <request-rooted value>)` + no session-vs-client comparison
+// is a dataflow fact, not identity reasoning. The remaining THREE (P-MW-SOLE-AUTHZ,
+// P-HOST-HEADER-URL, P-CLIENT-RENDER-AUTHZ) stay LLM/paid-tier — they need table-sensitivity
 // judgment, cross-function taint, or a server→client boundary a grep/AST can't do FP-safely, so the
 // offline mechanical gate is expected to leave them uncaught (reviewMisses, non-fatal — see
 // src/cli/validate-calibration.ts). The acceptance bar for THIS batch is precision, not recall:
@@ -14,8 +17,8 @@ import type { CorpusEntry } from "./types.js";
 
 export const b15NextjsAuthzEntries: CorpusEntry[] = [
   // #131 — object/function-level authz gap (BOLA/BFLA)
-  { id: "P-BOLA-BODY-OWNER", kind: "positive", cls: "object/function-level authz gap: route trusts body.tenantId for the query (BOLA/BFLA)", location: "pages/api/billing/invoice.js", match: ["bola-body-owner"], expectedTier: "review", note: "#131: pages/api/billing/invoice.js authenticates the caller but scopes the invoices query to req.body.tenantId — a client-supplied value — instead of the tenant id on the verified session. No mechanical rule targets this (needs request+identity reasoning); semantic/paid-tier per roadmap §4a (missing-object-property-level-authz). Expected to stay uncaught in the offline gate (non-fatal reviewMiss)." },
-  { id: "N-BOLA-SESSION-OWNER", kind: "negative", cls: "invoice query scoped to the session's tenant id, not a client-supplied field", location: "pages/api/billing/invoice-safe.js", match: ["bola-body-owner"], note: "#131: pages/api/billing/invoice-safe.js scopes the query to session.user.tenantId — req.body.tenantId is never read. No mechanical rule targets this shape, so it's cleared trivially; recorded to complete the corpus pair." },
+  { id: "P-BOLA-BODY-OWNER", kind: "positive", cls: "object/function-level authz gap: route trusts body.tenantId for the query (BOLA/BFLA)", location: "pages/api/billing/invoice.js", match: ["bola-body-owner"], expectedTier: "review", note: "#131/#433: pages/api/billing/invoice.js authenticates the caller but scopes the invoices query to req.body.tenantId — a client-supplied value — instead of the tenant id on the verified session. GRADUATED to a mechanical rule (#433): the bola-owner AST pass (src/scan/bola-owner.ts, in runMechanicalScan) proves the session binding, the service-rooted chain, the request-rooted .eq value, and the absence of a session-vs-client comparison — dataflow facts, not identity reasoning. Review, never free-count: the AST can't see a wrapper's gate. Discriminator vs the sibling: the .eq value's ROOT (req vs session); session-precedence keeps `const session = await getServerSession(req)` server-derived." },
+  { id: "N-BOLA-SESSION-OWNER", kind: "negative", cls: "invoice query scoped to the session's tenant id, not a client-supplied field", location: "pages/api/billing/invoice-safe.js", match: ["bola-body-owner"], note: "#131/#433: pages/api/billing/invoice-safe.js scopes the query to session.user.tenantId — req.body.tenantId is never read. The #433 bola-owner pass stays fully silent here (measured, not trivial since #433): session is bound FROM req, so this pins the session-precedence rule that keeps a session-derived value out of the client set." },
 
   // #132 — middleware matcher regex silently excludes /api/*
   { id: "P-MW-MATCHER-EXCLUDES-API", kind: "positive", cls: "Next.js middleware matcher regex excludes /api/*, leaving API routes unprotected", location: "middleware.ts", match: ["mw-matcher-excludes-api"], expectedTier: "review", note: "#132/#354: middleware.ts's config.matcher (`/((?!api|_next/static|_next/image|favicon.ico).*)`) excludes every /api/* path from ever running the middleware, so pages/api/admin/dashboard.js is reachable with zero gate. GRADUATED to a mechanical rule (#354): leftover-auth's mw-matcher-excludes-api grep matches an exported config.matcher whose negative-lookahead lists an `api` token → review. Discriminator: the api-in-lookahead contradiction with middleware presented as the gate; FP shape: a self-guarded API surface, why it's review not free-count. The negative (matcher with no api exclusion) is cleared." },

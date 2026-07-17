@@ -1093,7 +1093,10 @@ paid-tier LLM pass had fixtures to measure against later. **Updated by #354 (see
 re-triage found two of the six were mechanically detectable at review tier after all —
 `P-MW-MATCHER-EXCLUDES-API` (the matcher's api-lookahead is a textual fact) and
 `P-DRAFTMODE-NO-SECRET` (a shallow intra-file "enable with no secret gate" check) — and both
-graduated to `leftover-auth` grep rules. The remaining four (`P-BOLA-BODY-OWNER`, `P-MW-SOLE-AUTHZ`,
+graduated to `leftover-auth` grep rules. **Updated by #433:** `P-BOLA-BODY-OWNER` graduated to the
+`bola-owner` AST pass (`src/scan/bola-owner.ts`, runs in `runMechanicalScan`, review tier) —
+session-bound handler + service-rooted `.eq(<ownership col>, <request-rooted value>)` + no
+session-vs-client comparison is a dataflow fact. The remaining three (`P-MW-SOLE-AUTHZ`,
 `P-HOST-HEADER-URL`, `P-CLIENT-RENDER-AUTHZ`) stay LLM/paid-tier as measured. Built incrementally,
 one issue per commit. Answer key: `src/scan/calibration/b15-nextjs-authz.entries.ts`.
 
@@ -1101,7 +1104,7 @@ one issue per commit. Answer key: `src/scan/calibration/b15-nextjs-authz.entries
 
 | id | location | class | issue |
 |---|---|---|---|
-| P-BOLA-BODY-OWNER | `pages/api/billing/invoice.js:14` | route scopes the query to `req.body.tenantId` (client-supplied) instead of the session's tenant id — object/function-level authz gap (BOLA/BFLA) | #131 |
+| P-BOLA-BODY-OWNER | `pages/api/billing/invoice.js:14` | route scopes the query to `req.body.tenantId` (client-supplied) instead of the session's tenant id — object/function-level authz gap (BOLA/BFLA). **Graduated (#433)**: caught at review by `bola-owner` (`src/scan/bola-owner.ts`) | #131 |
 | P-MW-MATCHER-EXCLUDES-API | `middleware.ts` (`config.matcher`) | matcher `/((?!api\|_next/static\|_next/image\|favicon.ico).*)` excludes every `/api/*` path from the middleware entirely | #132 |
 | P-MW-SOLE-AUTHZ | `pages/api/admin/dashboard.js:11` | reads `admin_metrics` with no session/role check of its own — relies entirely on `middleware.ts`, no defense in depth | #133 |
 | P-DRAFTMODE-NO-SECRET | `pages/api/preview/enable.js:8` | `draftMode().enable()` runs unconditionally, no secret/token check | #134 |
@@ -1878,27 +1881,47 @@ fired on its positive.** Both graduated positives (`P-UPDATE-UNSCOPED`, `P-COUNT
 review and both new negatives are cleared; the two #354 graduations (`P-MW-MATCHER-EXCLUDES-API`,
 `P-DRAFTMODE-NO-SECRET`) also fire at review with their negatives cleared. Corpus totals after
 B17/#354: **153/157 static positives caught (61 at high/free-count, 15 connected N/A); 137/137
-static negatives cleared.** Four review-tier recall gaps remain, all measured LLM-tier:
+static negatives cleared.** Four review-tier recall gaps remained then, all measured LLM-tier:
 `P-BOLA-BODY-OWNER`, `P-MW-SOLE-AUTHZ`, `P-HOST-HEADER-URL`, `P-CLIENT-RENDER-AUTHZ`. The dry-run
 scorecard now reads **7 caught / 1 missed (WEBHOOK-REPLAY) / 4 requires-live-run**.
 
-## Batch M9-authz (#221/#318) — client-supplied owner id trusted by an authenticated action
+**Updated by #433/#465 (live gate re-run 2026-07-17): GATE PASS — `P-BOLA-BODY-OWNER` graduated**
+(caught at review by the `bola-owner` AST pass in `runMechanicalScan`; `N-BOLA-SESSION-OWNER`
+stays fully silent), so the review-tier recall gaps are down to THREE (`P-MW-SOLE-AUTHZ`,
+`P-HOST-HEADER-URL`, `P-CLIENT-RENDER-AUTHZ`). Corpus totals after #433/#465: **156/159 static
+positives caught (61 at high/free-count, 15 connected N/A); 139/139 M1 static negatives cleared;
+M9 census 4 positives / 4 negatives** (the #465-widened server-action shapes — see Batch
+M9-authz below). The dry-run scorecard is unchanged (the 12 planted bugs are a separate ledger).
+
+## Batch M9-authz (#221/#318, widened by #465) — client-supplied owner id trusted by a server action
 
 #221 catalogued one recurring class three ways; only the first proved mechanically detectable at
 acceptable precision (the other two stay semantic/paid-tier — see below). `detectClientSuppliedOwnerId`
-(`src/detectors/app-router.ts`, taxonomy `M1 — Client-supplied owner id trusted by authenticated
-action`) fires when a mutating chain (`insert`/`update`/`upsert`/`delete`/`rpc`) is scoped by an
-ownership-column `.eq()` whose value roots in a parameter rather than a session binding, with no
-session-vs-client comparison in the body. Entries in `src/scan/calibration/m9-authz.entries.ts`,
-tagged `module: "M9"` (runs in `static-detect`, not `runMechanicalScan`, so it stays out of
-`validate:calibration`'s M1 gate — its own gate is `app-router.test.ts`).
+(`src/detectors/app-router.ts`) originally fired only when an AUTHENTICATED action's mutating chain
+(`insert`/`update`/`upsert`/`delete`/`rpc`) was scoped by an ownership-column `.eq()` whose value
+roots in a parameter rather than a session binding, with no session-vs-client comparison in the
+body. **Widened by #465 (operator ruling)** to the three shapes proposit's real instances take —
+bare `.eq("id", …)`, INSERT-value owner ids (`.insert({ user_id: <argument> })`), and
+no-in-body-auth — all gated on the chain rooting in the RLS-bypassing service/admin client (the
+measured precision boundary; on the RLS client the generic missing-auth finding owns the defect).
+Measured against proposit HEAD (286 files): recall 3/3 on the #221 instances, 0 FP. When a widened
+shape fires on a no-auth action, the generic `M1 — Server Action missing authorization check`
+finding for that action is SUBSUMED (one code defect, one finding). Entries in
+`src/scan/calibration/m9-authz.entries.ts`, tagged `module: "M9"` (runs in `static-detect`, not
+`runMechanicalScan`, so it stays out of `validate:calibration`'s M1 gate — its own gate is
+`app-router.test.ts`; the pages/api surface of the same class DOES run mechanically — see
+`P-BOLA-BODY-OWNER`/#433 in §B15).
 
 | id | location | detection | tier |
 |---|---|---|---|
 | P-AUTHN-CLIENT-OWNER | `app/actions-owner.ts` | `detectClientSuppliedOwnerId` — `updateProfileName()` authenticates and schema-validates, then `.eq("user_id", userId)` with the client's `userId` instead of the session's | review |
 | P-AUTHN-CLIENT-OWNER-DELETE | `app/actions-delete.ts` | same detector, a second real instance exercising the DELETE verb and the `account_id` ownership column (#427 parity — two positives across different mutation-verb/column surfaces) | review |
+| P-SVC-NOAUTH-BARE-ID | `app/actions-svc-bareid.ts` | #465 bare-id shape — no auth, service-role client, `.eq("id", userId)` with the client's `userId` (proposit's `updateUserProfileAction`); subsumes the generic missing-auth finding | review |
+| P-SVC-NOAUTH-INSERT-OWNER | `app/actions-svc-insert.ts` | #465 INSERT-value shape — no auth, service-role client, `.insert({ user_id: userId })` (proposit's `acceptInvitationAction`); subsumes the generic missing-auth finding | review |
 | N-AUTHN-SESSION-OWNER | `app/actions-owner-session.ts` | negative — identical shape, but the `.eq("user_id", …)` value reads off `currentUser.id` (session-bound), so `collectSessionBoundNames` clears it | — |
 | N-AUTHN-OWNER-COMPARED | `app/actions-owner-compared.ts` | negative — the client-supplied `accountId` IS used in `.eq()`, but `currentUser.id !== accountId` throws first; `hasOwnershipComparison` clears it | — |
+| N-RLS-CLIENT-BARE-ID | `app/actions-rls-bareid.ts` | negative — same no-auth + bare `.eq("id", …)` syntax as P-SVC-NOAUTH-BARE-ID but on the plain RLS client (proposit's `updateOrganisationLogo`); the widened shape stays silent, the generic missing-auth finding fires unsubsumed | — |
+| N-SVC-INSERT-SESSION-OWNER | `app/actions-svc-insert-session.ts` | negative — same service-role insert shape but `user_id: user.id` reads off the session; also pins `INSERT_OWNER_COLUMN`'s boundary (the client-chosen `organisation_id` is a container column, not an owner-identity column) | — |
 
 The other two #221 shapes stay semantic (business/whole-program context an AST pass doesn't have)
 and were already seeded before #221 in earlier batches, not new here: trusting a client-supplied

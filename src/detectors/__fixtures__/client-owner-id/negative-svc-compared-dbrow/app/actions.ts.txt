@@ -1,0 +1,26 @@
+"use server";
+
+import { createServiceClient } from "../lib/supabase";
+
+// A token-exchange flow: the client DOES supply userId and the insert IS service-role, but the
+// body compares it against a row the server itself fetched (`invitation.invited_user_id !==
+// userId`) before writing — that comparison is the authorization check, so the widened
+// INSERT-value shape must stay silent (collectDbBoundNames + hasOwnershipComparison).
+export async function acceptInvitation(token: string, userId: string) {
+  const supabaseService = createServiceClient();
+
+  const { data: invitation } = await supabaseService
+    .from("organisation_invitations")
+    .select("*")
+    .eq("token", token)
+    .single();
+
+  if (!invitation) throw new Error("Invitation not found");
+  if (invitation.invited_user_id !== userId) throw new Error("Not your invitation");
+
+  await supabaseService.from("organisation_users").insert({
+    organisation_id: invitation.organisation_id,
+    user_id: userId,
+    role: "member",
+  });
+}

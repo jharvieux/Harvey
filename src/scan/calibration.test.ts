@@ -16,6 +16,7 @@ import { knownPublicCredsEntries } from "./calibration/known-public-creds.entrie
 import { m9AuthzEntries } from "./calibration/m9-authz.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
+import { scanBolaOwner } from "./bola-owner.js";
 import { scanCounterRace } from "./counter-race.js";
 import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
@@ -602,10 +603,11 @@ describe("Batch B14 app-logic heuristics corpus (real leftover-auth greps → ti
   });
 });
 
-describe("#353/#354 mechanical graduations (real detectors over the committed fixtures)", () => {
+describe("#353/#354/#433 mechanical graduations (real detectors over the committed fixtures)", () => {
   // Like the #221/#374 blocks: the REAL detectors against the REAL committed fixtures, so the answer
   // key can't drift from what the scanner emits. Covers the two #353 graduations (unscoped-write
-  // grep + counter-race AST) and the two #354 graduations lifted out of b15 (matcher + draftMode).
+  // grep + counter-race AST), the two #354 graduations lifted out of b15 (matcher + draftMode),
+  // and the #433 graduation (bola-owner AST — P-BOLA-BODY-OWNER).
   const CAL = join(import.meta.dirname, "../../targets/calibration");
   const read = (p: string) => ({ path: p, content: readFileSync(join(CAL, p), "utf8") });
   const leftoverFixtures = [
@@ -616,12 +618,12 @@ describe("#353/#354 mechanical graduations (real detectors over the committed fi
     "pages/api/preview/enable.js",
     "pages/api/preview/enable-safe.js",
   ].map(read);
-  const findings = [...leftoverFixtures.flatMap((f) => classifyLeftoverAuth(f)), ...scanCounterRace(CAL)];
+  const findings = [...leftoverFixtures.flatMap((f) => classifyLeftoverAuth(f)), ...scanCounterRace(CAL), ...scanBolaOwner(CAL)];
 
   const graduated = [
     ...b17RaceUnscopedEntries,
     ...b15NextjsAuthzEntries.filter((e) =>
-      ["P-MW-MATCHER-EXCLUDES-API", "N-MW-MATCHER-INCLUDES-API", "P-DRAFTMODE-NO-SECRET", "N-DRAFTMODE-SECRET-CHECKED"].includes(e.id),
+      ["P-MW-MATCHER-EXCLUDES-API", "N-MW-MATCHER-INCLUDES-API", "P-DRAFTMODE-NO-SECRET", "N-DRAFTMODE-SECRET-CHECKED", "P-BOLA-BODY-OWNER", "N-BOLA-SESSION-OWNER"].includes(e.id),
     ),
   ];
 
@@ -646,6 +648,17 @@ describe("#353/#354 mechanical graduations (real detectors over the committed fi
     const race = scanCounterRace(CAL).filter((f) => f.taxonomy === "Non-atomic read-modify-write race condition");
     expect(race).toHaveLength(1);
     expect(race[0]?.location).toContain("counter/increment.js");
+  });
+
+  it("the #433 bola-owner AST fires exactly once across the whole target — every other pages/api fixture stays silent", () => {
+    // One hit total pins more than the corpus pair: the session-scoped sibling (invoice-safe),
+    // the no-session handlers (order/get.js P-IDOR-PARAM, admin/dashboard.js P-MW-SOLE-AUTHZ —
+    // whose by-design LLM-tier status this pass must not swallow), and the bare-id IDOR shape
+    // (order/scoped.js) are all non-hits, measured, not assumed.
+    const bola = scanBolaOwner(CAL);
+    expect(bola).toHaveLength(1);
+    expect(bola[0]?.location).toContain("pages/api/billing/invoice.js");
+    expect(bola[0]?.precisionTier).toBe("review");
   });
 });
 
@@ -797,12 +810,27 @@ describe("#221 authz corpus (live detectAppRouterFindings output over the commit
     expect(findings.every((f) => f.precisionTier !== undefined)).toBe(true);
   });
 
-  it("draws one finding per planted positive and stays silent on the benign siblings (#427: update + delete shapes)", () => {
-    const hits = findings.filter((f) => f.taxonomy === "M1 — Client-supplied owner id trusted by authenticated action");
-    expect(hits).toHaveLength(2);
-    const titles = hits.map((h) => h.title).join(" | ");
-    expect(titles).toContain("updateProfileName");
-    expect(titles).toContain("deleteAccount");
+  it("draws one finding per planted positive and stays silent on the benign siblings (#427 update + delete; #465 bare-id + insert-value)", () => {
+    const authed = findings.filter((f) => f.taxonomy === "M1 — Client-supplied owner id trusted by authenticated action");
+    expect(authed).toHaveLength(2);
+    const authedTitles = authed.map((h) => h.title).join(" | ");
+    expect(authedTitles).toContain("updateProfileName");
+    expect(authedTitles).toContain("deleteAccount");
+
+    const noauth = findings.filter((f) => f.taxonomy === "M1 — Client-supplied owner id trusted by unauthenticated service-role action");
+    expect(noauth).toHaveLength(2);
+    const noauthTitles = noauth.map((h) => h.title).join(" | ");
+    expect(noauthTitles).toContain("updateUserProfile");
+    expect(noauthTitles).toContain("addMember");
+  });
+
+  it("subsumes the generic missing-auth finding on the #465 no-auth positives, but NOT on the RLS-client negative", () => {
+    // One code defect, one finding: the widened owner-id finding carries the no-auth fact for
+    // the service-role fixtures, while the RLS-client near-miss keeps the generic finding
+    // (its defect really is just "no visible auth check").
+    const missingAuth = findings.filter((f) => f.taxonomy === "M1 — Server Action missing authorization check");
+    expect(missingAuth.map((f) => f.location).join(" | ")).toContain("actions-rls-bareid.ts");
+    expect(missingAuth.filter((f) => f.location.includes("actions-svc-"))).toHaveLength(0);
   });
 
   it("keeps the class out of the free count — the AST cannot prove authorization is absent elsewhere", () => {
