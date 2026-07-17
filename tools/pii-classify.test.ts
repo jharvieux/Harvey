@@ -177,6 +177,34 @@ describe("classifyColumn — table-context-only detections (#233)", () => {
     expect(classifyColumn("number")).toBeNull();
   });
 
+  it("review-flags a jsonb denormalization container on ANY table at low confidence — never an assertion (#377)", () => {
+    // profile jsonb holding {"email": ..., "phone": ...} on an ordinary users table is the
+    // common denormalized-PII shape the name-only dictionary is blind to.
+    expect(classifyColumn("profile", "jsonb", "users")).toEqual({ infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" });
+    expect(classifyColumn("metadata", "jsonb", "customers")).toEqual({ infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" });
+    expect(classifyColumn("custom_fields", "json")).toEqual({ infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" });
+    expect(classifyColumn("preferences", "jsonb")).toEqual({ infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" });
+  });
+
+  it("does not flag every jsonb column — the vocabulary is the guard (#377)", () => {
+    // A jsonb column named outside the denormalization-container vocabulary stays silent...
+    expect(classifyColumn("ui_state", "jsonb")).toBeNull();
+    expect(classifyColumn("feature_flags", "jsonb")).toBeNull();
+    // ...and a vocabulary name on a non-json type is not a container at all.
+    expect(classifyColumn("profile", "text")).toBeNull();
+    expect(classifyColumn("details", "text")).toBeNull();
+  });
+
+  it("keeps the table-scoped SECRET store rule ahead of the jsonb review flag (#377 precedence)", () => {
+    // payload on a *_store table is the higher-signal credential-store hit, not a PII review flag.
+    expect(classifyColumn("payload", "jsonb", "jackson_store")).toEqual({
+      infotype: "OPAQUE_ENCRYPTED_STORE",
+      category: "SECRET",
+      confidence: "medium",
+    });
+    expect(classifyColumn("payload", "jsonb", "events")).toEqual({ infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" });
+  });
+
   it("classifies an opaquely-named value/data/payload column as an encrypted secret store only on a *_store/*_config table", () => {
     // BoxyHQ SAML/SSO's jackson_store.value — a name-based matcher skips a column called "value".
     expect(classifyColumn("value", undefined, "jackson_store")).toEqual({

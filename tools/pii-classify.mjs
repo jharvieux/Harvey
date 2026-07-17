@@ -149,6 +149,21 @@ const PHONE_CONTEXT_TABLE_PATTERN = /(phone|contact|sms|call|dial)/;
 const OPAQUE_STORE_TABLE_PATTERN = /(_store|_config|_secrets?|_credentials?)$/;
 const OPAQUE_STORE_COLUMN_PATTERN = /^(value|data|payload|blob|secret|config)$/;
 
+// #377: denormalizing PII into a jsonb `profile`/`metadata` column instead of first-class columns
+// is a common convention (no migration needed to extend — a frequent AI-scaffolded-schema
+// shortcut), and a name-only matcher is blind to the nested keys. A jsonb/json column whose name
+// matches this denormalization-container vocabulary — on ANY table, unlike the `_store`-scoped
+// SECRET rule above — gets a LOW-confidence OPAQUE_JSON_BLOB hit: "review this column's contents
+// for nested PII", a flag, never an assertion. Vocabulary rationale: these are the names schemas
+// use for catch-all person/entity data containers. Deliberately OUT: bare state/cache/flags names
+// (`ui_state`, `feature_flags`) and "any jsonb column" — too aggressive floods every schema that
+// legitimately uses jsonb for non-PII settings with noise; this list repeats today's silent miss
+// nowhere the container convention applies. Value inspection stays out entirely ("detect, don't
+// ask" — names and types only).
+const JSON_CONTAINER_TYPE_PATTERN = /^jsonb?$/;
+const JSON_CONTAINER_NAME_PATTERN =
+  /(^|_)(metadata|profile|details|custom_fields|extra_data|settings|preferences|raw_data|payload|attributes|info)(_|$)/;
+
 /**
  * @typedef {{infotype: string, category: "PII"|"SENSITIVE_PII"|"PHI"|"PCI"|"SECRET", confidence: "high"|"medium"|"low"}} ClassifyResult
  */
@@ -177,6 +192,11 @@ export function classifyColumn(column, sqlType, tableName) {
     if (OPAQUE_STORE_COLUMN_PATTERN.test(c) && OPAQUE_STORE_TABLE_PATTERN.test(t)) {
       return { infotype: "OPAQUE_ENCRYPTED_STORE", category: "SECRET", confidence: "medium" };
     }
+  }
+  // #377: checked AFTER the table-scoped opaque-store rule so a `payload` column on a
+  // `*_store`/`*_config` table keeps its higher-signal SECRET classification.
+  if (sqlType && JSON_CONTAINER_TYPE_PATTERN.test(String(sqlType).toLowerCase()) && JSON_CONTAINER_NAME_PATTERN.test(c)) {
+    return { infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" };
   }
   return null;
 }
@@ -327,6 +347,12 @@ function selftest() {
     ["national_id", "SENSITIVE_PII", "medium"],
     ["id", null, null],
     ["user_id", null, null],
+    // #377: jsonb denormalization containers are review-flagged at low confidence; a jsonb
+    // column outside the vocabulary, or a vocabulary name on a non-json type, stays silent
+    ["profile", "PII", "low", "jsonb", "users"],
+    ["metadata", "PII", "low", "jsonb"],
+    ["ui_state", null, null, "jsonb"],
+    ["profile", null, null, "text"],
   ];
   let ok = 0;
   for (const [col, cat, conf, sqlType, tableName] of cases) {
@@ -343,7 +369,11 @@ function selftest() {
 function report(cols) {
   const dataMap = buildDataMap(cols);
   const tables = Object.keys(dataMap);
-  const hitCount = tables.reduce((n, t) => n + dataMap[t].columns.length, 0);
+  // #377: OPAQUE_JSON_BLOB hits are review flags ("look inside this container"), not asserted
+  // PII — they get their own list below and stay out of the asserted headline count, mirroring
+  // how low-confidence hits stay out of the calibration free/high count.
+  const reviewFlags = tables.flatMap((t) => dataMap[t].columns.filter((c) => c.infotype === "OPAQUE_JSON_BLOB").map((c) => `${t}.${c.column}`));
+  const hitCount = tables.reduce((n, t) => n + dataMap[t].columns.length, 0) - reviewFlags.length;
   const byCat = {};
   for (const t of tables) for (const c of dataMap[t].categories) byCat[c] = (byCat[c] || 0) + 1;
 
@@ -353,6 +383,11 @@ function report(cols) {
   for (const t of tables.sort((a, b) => dataMap[b].severityScore - dataMap[a].severityScore)) {
     console.log(`  ${t} → ${dataMap[t].severity} (${dataMap[t].severityScore}): ${dataMap[t].infotypes.join(", ")}`);
   }
+  if (reviewFlags.length) {
+    console.log(`\nReview for nested PII — ${reviewFlags.length} JSON container column(s), flagged not asserted (#377):`);
+    for (const f of reviewFlags) console.log(`  ${f} — denormalization-container name on a json/jsonb column; inspect its keys for nested PII`);
+  }
+  return dataMap;
 }
 
 async function inventory() {
