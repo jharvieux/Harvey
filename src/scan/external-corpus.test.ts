@@ -19,6 +19,7 @@ import {
   isMutationBaseline,
   isNotRun,
   m10FindingsFromSchema,
+  revalidateNotRunReasons,
   scoreExternalBaseline,
   scoreFreeTierExpectation,
   scoreMutationBaseline,
@@ -274,6 +275,41 @@ describe("M8 manifest shape (#300)", () => {
     const zeroCoverage = finding("M8 — Test quality", "High");
     expect(scoreExternalBaseline(target("subscription-payments"), [zeroCoverage]).find((r) => r.module === "M8"))
       .toMatchObject({ pass: true, actual: 1 });
+  });
+});
+
+// #321 — the standard drift pass re-attempts every source-tier module each run; these prove the
+// re-validation notices when a not-run reason has stopped being true (the module now produces real
+// findings), and stays quiet while the reason still holds. The signature defect this closes: a
+// stale excuse silently costing coverage that only someone stumbling into it would catch.
+describe("revalidateNotRunReasons (#321)", () => {
+  // saas-lite records M5-knip not-run for an upstream eslint-patch bug that may resolve on a dep bump.
+  const notRunTarget = (): ExternalTarget => {
+    const t = EXTERNAL_CORPUS.find((x) => x.slug === "saas-lite");
+    if (!t || !isNotRun(t.modules["M5-knip"]!)) throw new Error("saas-lite/M5-knip is expected to be recorded not-run");
+    return t;
+  };
+  const knipFinding = (id: string): Finding => ({ ...finding("M5 — Slop / dead code", "Low"), id });
+
+  it("stays quiet while the reason holds — knip still emits only its #223 M5-00 did-not-run finding", () => {
+    // The sentinel is the tool saying it STILL couldn't run; it must not read as the module working.
+    const rows = revalidateNotRunReasons(notRunTarget(), [knipFinding("M5-00")]);
+    expect(rows).toEqual([]);
+  });
+
+  it("stays quiet when nothing at all was produced for the not-run module", () => {
+    expect(revalidateNotRunReasons(notRunTarget(), [])).toEqual([]);
+  });
+
+  it("fails loud when the not-run module produces real findings — the reason has decayed", () => {
+    const rows = revalidateNotRunReasons(notRunTarget(), [knipFinding("M5-42"), knipFinding("M5-43")]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ module: "M5-knip", pass: false, actual: 2 });
+    expect(rows[0]?.detail).toContain("STALE");
+  });
+
+  it("does not fire on a target whose modules all ran — nothing to re-validate", () => {
+    expect(revalidateNotRunReasons(target("subscription-payments"), [knipFinding("M5-07")])).toEqual([]);
   });
 });
 

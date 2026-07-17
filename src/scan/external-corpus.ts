@@ -471,6 +471,40 @@ function countedFor(findings: Finding[], module: string): number {
   return findings.filter((f) => moduleMatches(f.taxonomy, module) && f.severity !== "Info").length;
 }
 
+// #321: the coverage guard fails loud on SILENCE (a module omitted with no reason) but is trusting
+// of stated REASONS — and a not-run reason is a claim about the world that decays. saas-lite's
+// M5-knip is blocked by an upstream eslint-patch bug that may resolve on a dependency bump; boxyhq's
+// M10 was recorded not-run for "Prisma unparseable" long after #299 made it parseable, and only got
+// caught because someone happened to work the parser. Nothing re-tested these.
+//
+// This closes that blind spot cheaply: the drift run ALREADY re-attempts every source-tier module
+// on each pass (quality-scan runs knip whether or not the manifest thinks it can). So a module
+// recorded not-run that nonetheless PRODUCES real findings this run is a reason that has outlived
+// its truth — the run now says so, loudly, as a failing row. The scheduled job installs each
+// target's deps first (corpus-drift.yml --install), so saas-lite's knip is re-tested exactly when
+// its dependency tree moves, which is #321's specific ask.
+//
+// "did not run" disclosures (knip's #223 M5-00, mutation-scan's #224 M8-00) are NOT evidence the
+// module now runs — they are the tool reporting it still couldn't — so they don't count as output.
+const DID_NOT_RUN_SENTINELS = new Set(["M5-00", "M8-00"]);
+
+export function revalidateNotRunReasons(target: ExternalTarget, findings: Finding[]): DriftRow[] {
+  return Object.entries(target.modules).flatMap(([module, baseline]) => {
+    if (!isNotRun(baseline)) return [];
+    const produced = findings.filter((f) => moduleMatches(f.taxonomy, module) && !DID_NOT_RUN_SENTINELS.has(f.id));
+    if (produced.length === 0) return []; // reason still holds — the module produced no real output this run
+    return [{
+      slug: target.slug,
+      module,
+      expected: 0,
+      actual: produced.length,
+      drift: produced.length,
+      pass: false,
+      detail: `NOT-RUN REASON MAY BE STALE: ${module} is recorded not-run ("${baseline.reason.slice(0, 90)}…") but this run produced ${produced.length} real ${module} finding(s) — the reason has outlived its truth. Re-verify, then measure a baseline for this module (replacing the not-run reason) or correct the reason.`,
+    }];
+  });
+}
+
 // Scores a real scan of `target`'s pinned commit against its recorded baseline. Exact equality:
 // these are deterministic AST/text passes over a frozen tree, so any movement is a real change in
 // scanner behavior and should be looked at — either a precision fix (update the baseline in the
