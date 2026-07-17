@@ -3,6 +3,12 @@
 //
 //   pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm]
 //       [--out coverage.json] [--findings-out engagement.json] [--meta meta.json]
+//       [--artifacts-dir dir]
+//
+// --artifacts-dir (#416): where the out-of-orchestrator passes leave their dated results artifact
+// (<module>.pass.json — see docs/design/audit-pass-artifacts.md). When a fresh, target-matching
+// artifact is present, the M1/M2/M3/M6 probes DERIVE `ran` from it instead of reporting partial/
+// requires-live-run. Omit it and those passes stay honestly not-run under the orchestrator.
 //
 // (No `pnpm run-audit` alias yet — adding one edits package.json, which is operator-owned.)
 //
@@ -51,9 +57,10 @@ const flagValue = (flag: string): string | undefined => {
 const outPath = flagValue("--out");
 const findingsOut = flagValue("--findings-out");
 const metaPath = flagValue("--meta");
+const artifactsDir = flagValue("--artifacts-dir");
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json]");
+  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir]");
   process.exit(2);
 }
 
@@ -93,6 +100,10 @@ const ctx: RunContext = {
   // #420: the object-artifact reader — no array assertion, so M3/M8's { ... } --out shapes parse
   // instead of throwing. Missing file → undefined (the CLI declined to write one).
   readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),
+  // #416: where the out-of-orchestrator passes leave <module>.pass.json, and the clock the probes
+  // judge freshness against. Undefined artifactsDir ⇒ those probes stay honestly not-run.
+  artifactsDir: artifactsDir ? resolve(artifactsDir) : undefined,
+  now: Date.now(),
 };
 
 console.log(`\nFull audit — ${targetDir}`);
