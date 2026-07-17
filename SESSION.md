@@ -2,9 +2,33 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-17 (issue-sweep — 11 PRs merged, 25 issues closed, net −20; new backlog #459/#460/#465/#470/#472/#474. Two OPERATOR-RELAY items below. The earlier 2026-07-17 detector-census work and the 2026-07-16 sweep are further down and still stand.)_
+_Last updated: 2026-07-17 (SECOND issue-sweep — 7 PRs merged, 12 issues closed, net −11; only #483 filed. OPERATOR-RELAY items grew — see below. Earlier same-day sweep + detector-census work further down still stand.)_
 
-## 2026-07-17 issue-sweep (11 PRs merged, 25 issues closed — net −20)
+## 2026-07-17 issue-sweep #2 — the backlog + earlier-deferred rulings (7 PRs merged, 12 issues closed — net −11)
+
+Swept the six issues the first sweep opened, and — at the operator's request — put the product rulings deferred at the earlier plan gate as explicit questions, which unblocked five more. Fable on the two judgment-heavy batches (corpus/calibration honesty + the M9 owner-id detector); both came back exemplary. Everything below is MERGED on `main`.
+
+- **#478 (M9 owner-id, Fable) — #465 + #433.** Widened `detectClientSuppliedOwnerId` to the bare-id / INSERT-value / no-in-body-auth shapes, **measured 0/3 → 3/3 recall with 0 FP** on proposit, gated on the RLS-bypassing service client (the precision boundary), and **deduped against the M1 no-auth finding** (one code defect → one finding). Wired the BOLA class into the mechanical gate via new `src/scan/bola-owner.ts` (#433) — fires exactly once across the calibration corpus; `P-BOLA-BODY-OWNER` graduated. Live gate **PASS 156/159** (was 155). Operator chose the higher-risk widen-and-wire path; the honesty gate held (real measurement, not a forced number).
+- **#479 (corpus/calibration, Fable) — #470 + #322 + #252 + #248.** **#470:** corpus-drift now runs `mutation-scan --detect-only` so the `stryker binary not found` crash is gone *by construction*; M8 mutation scoring stays in corpus-m8.yml. **The drift gate is green again — first passing corpus-drift run since 2026-07-15, confirmed on the PR's own CI.** **#322:** per-module scan roots with a recorded `[scanned scope: …]` stamp so two modules can't silently describe different trees (mvp-boilerplate M5-knip not-run→22). **#252:** ≤1 placeholder/smoke spec counts as suite-absent → M8-00 zero-coverage finding. **#248:** micro-render M7 findings emit only when React Compiler is confirmed ON. All six targets' baselines re-measured from fresh clones (table in the PR); also fixed an M8/M8-intent taxonomy split that had been faking a stale-reason alarm every CI run.
+- **#476 (#397)** — M6 free indicator layer now records `partial` coverage (derived from detect-static's output, not exit code), never silently `requires-live-run`; `ran` still gated on a reviewed verdict. (Decision 2 — an M6-indicator drift baseline — was scoped out → **#483**.)
+- **#477 (#255)** — CVE severity may diverge from OSV but the finding must state it. Live-audited all 12 curated CVE entries against api.osv.dev: kept jsonwebtoken High with a disclosed reason, found **4 more undisclosed divergences** (next-auth/undici×2/ws) with no recorded rationale and aligned them to OSV rather than invent post-hoc justifications.
+- **#481 (M10) — #459 + #460.** Dedicated report-template section for the JSONB "review for nested PII" flags (excluded from asserted tallies); planted the new PCI/HIPAA/national-ID/JSONB columns in the fixture migration — end-to-end 13/13 positives detected, 9/9 negatives clean.
+- **#480 (#474)** — replaced the NUL delimiter in `diverged-clones.ts` with the `\x1f` unit separator (git treats it as text again; a first attempt used `|` which was collision-unsafe — caught in review and fixed).
+- **#482 (#472)** — `pnpm run-audit` alias for the orchestrator + doc references.
+
+### ⚠ OPERATOR-RELAY (agents can't edit these — supervised/human-owned)
+1. **CLAUDE.md** now has THREE stale spots: (a) the earlier sweep's "Known gaps → Still open" sentence (#434/#435/#436 all landed); (b) the "Measure, don't recall" bullet says "155/159 static" — now **156/159** after #433 graduated P-BOLA-BODY-OWNER (recommended wording in PR #478); (c) the module table + coverage-guard spell the long `pnpm exec tsx src/cli/run-audit.ts` form — could mention the new `pnpm run-audit` alias (optional; PR #482). Best handled in one pass.
+2. **docs/m7-performance.md** — the micro-render class table + "React Compiler gate" paragraph need to say those three classes now emit ONLY when the compiler is confirmed on, suppressed otherwise (recommended wording in PR #479).
+3. **docs/m8-test-quality.md** — the "No test suite at all (#224)" section needs the widened M8-00 trigger (harness present but ≤1 placeholder spec) per #252 (wording in PR #479).
+4. **#168 disclosure** (still from sweep #1) — don't send until its finding text is corrected to only CVE-2026-44578.
+
+### New backlog opened this sweep
+- **#483** — M6 corpus-drift indicator baseline (decision 2 of #397; now unblocked since the drift gate is green).
+
+### Still deferred (need operator / live / design)
+- **#402** — re-measure M5 baselines: now that #322 (scan roots) and #470 (drift gate) landed, this is a good candidate for the next sweep. · Disclosure sends #168/#214–#219 · live M2 #159/#161 · real-target #283 · design-heavy M6/M7 #267/#387/#406/#413 · business/GTM #2/#4/#10–#13 · #301.
+
+## 2026-07-17 issue-sweep #1 (11 PRs merged, 25 issues closed — net −20)
 
 Operator-approved `/issue-sweep`, 4-in-flight, Fable on the two judgment-heavy P1 batches (M10 dictionary + CVE re-check). Everything below is MERGED on `main`.
 
