@@ -34,6 +34,26 @@ describe("classifyColumn — true positives across the taxonomy", () => {
     expect(classifyColumn("iban").category).toBe("PCI");
   });
 
+  it("matches PCI sensitive authentication data — PIN block and track/magstripe data (#376)", () => {
+    expect(classifyColumn("pin_block")).toEqual({ infotype: "PIN", category: "PCI", confidence: "high" });
+    expect(classifyColumn("atm_pin")).toEqual({ infotype: "PIN", category: "PCI", confidence: "high" });
+    expect(classifyColumn("card_pin")).toEqual({ infotype: "PIN", category: "PCI", confidence: "high" });
+    expect(classifyColumn("pin_verification_value")).toEqual({ infotype: "PIN", category: "PCI", confidence: "high" });
+    expect(classifyColumn("track2")).toEqual({ infotype: "TRACK_DATA", category: "PCI", confidence: "high" });
+    expect(classifyColumn("track_1_data")).toEqual({ infotype: "TRACK_DATA", category: "PCI", confidence: "high" });
+    expect(classifyColumn("magstripe")).toEqual({ infotype: "TRACK_DATA", category: "PCI", confidence: "high" });
+  });
+
+  it("does not read pinned/PIN-code lookalikes as a payment-card PIN (#376 FP guard)", () => {
+    // is_pinned is a UI feature flag; a bare `pin`/`pin_code` is deliberately not in the
+    // dictionary (postal PIN code, app-level "pin this item" concepts) — only compound
+    // card/ATM names assert the PCI infotype.
+    expect(classifyColumn("is_pinned")).toBeNull();
+    expect(classifyColumn("pinned_at")).toBeNull();
+    expect(classifyColumn("pin")).toBeNull();
+    expect(classifyColumn("pin_code")).toBeNull();
+  });
+
   it("flags ambiguous names as low confidence rather than asserting PII", () => {
     expect(classifyColumn("product_name")).toEqual({ infotype: "NAME?", category: "PII", confidence: "low" });
   });
@@ -168,6 +188,11 @@ describe("buildDataMap — severity weighting", () => {
   it("treats a stored CVV as critical by itself — PCI-DSS forbids storing it post-auth", () => {
     const map = buildDataMap([{ table_name: "payments", column_name: "cvv", data_type: "text" }]);
     expect(map.payments.severity).toBe("Critical");
+  });
+
+  it("treats a stored PIN block or track data as Critical alone — same PCI-DSS never-store category as CVV (#376)", () => {
+    expect(buildDataMap([{ table_name: "cards", column_name: "pin_block", data_type: "text" }]).cards.severity).toBe("Critical");
+    expect(buildDataMap([{ table_name: "cards", column_name: "track2", data_type: "text" }]).cards.severity).toBe("Critical");
   });
 
   it("flags a table storing a plaintext API key + password as Critical, above a lone contact-PII table — the ATC dogfood headline case", () => {

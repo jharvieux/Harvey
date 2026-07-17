@@ -43,6 +43,13 @@ const RULES = [
   // CVV/CVC is "sensitive authentication data" — PCI-DSS forbids storing it post-authorization
   // at all, so a hit here is a compliance violation by itself (see INFOTYPE_POINT_OVERRIDES).
   [/(^|_)(cvv|cvc|card_verification|card_security_code)(_|$)/, "CVV", "PCI", "high"],
+  // #376: PIN/PIN-block and full track/magstripe data are the other two members of PCI-DSS's
+  // "sensitive authentication data, never store post-authorization" category CVV belongs to —
+  // a hit is a compliance violation by itself (INFOTYPE_POINT_OVERRIDES scores each Critical
+  // alone). Deliberately NO bare `pin` alternative: it collides with `pinned`/`is_pinned`
+  // feature-flag naming and India's postal "PIN code", so only compound card/ATM names match.
+  [/(^|_)(pin_block|pin_verification|atm_pin|card_pin)(_|$)/, "PIN", "PCI", "high"],
+  [/(track_?1|track_?2|track_data|mag_?stripe)/, "TRACK_DATA", "PCI", "high"],
   [/(card_expir|card_exp_(month|year))/, "CARD_EXPIRY", "PCI", "medium"],
   [/(credit_?card|card_number|cc_num|(^|_)pan(_|$)|card_last4|card_brand)/, "CARD", "PCI", "high"],
   [/(^|_)(iban|account_number|routing|swift)(_|$)/, "BANK_ACCT", "PCI", "medium"],
@@ -168,7 +175,9 @@ export function classifyColumn(column, sqlType, tableName) {
 // storing it post-auth at all, so its presence alone should read Critical.
 const CATEGORY_POINTS = { PII: 1, SENSITIVE_PII: 4, PHI: 6, PCI: 6, SECRET: 6 };
 const CONFIDENCE_WEIGHT = { high: 1, medium: 0.6, low: 0.3 };
-const INFOTYPE_POINT_OVERRIDES = { CVV: 12 };
+// #376: PIN and track data share CVV's override — all three are PCI-DSS "sensitive
+// authentication data", forbidden to store post-authorization under any circumstance.
+const INFOTYPE_POINT_OVERRIDES = { CVV: 12, PIN: 12, TRACK_DATA: 12 };
 
 function pointsFor(hit) {
   const base = INFOTYPE_POINT_OVERRIDES[hit.infotype] ?? CATEGORY_POINTS[hit.category];
@@ -293,6 +302,10 @@ function selftest() {
     // #233: opaquely-named encrypted secret store (BoxyHQ jackson_store.value)
     ["value", null, null, undefined, "widgets"],
     ["value", "SECRET", "medium", undefined, "jackson_store"],
+    // #376: PCI sensitive auth data — PIN block and track/magstripe data
+    ["pin_block", "PCI", "high"],
+    ["track2", "PCI", "high"],
+    ["is_pinned", null, null],
   ];
   let ok = 0;
   for (const [col, cat, conf, sqlType, tableName] of cases) {

@@ -5,9 +5,16 @@
 // (`pii_calibration_fixture`, column names/types only — no seeded data, privacy-safe by
 // construction). classifyColumn is pure name/type matching, no live DB needed.
 //
-// Tiering (locked preamble): every M10 positive here classifies at HIGH confidence, so all six
-// are `high` tier. The `location` is the column name, matching the spec's "location = column"
+// Tiering (locked preamble): a positive's tier mirrors its classify confidence — high-confidence
+// classifications are `high` tier; medium/low-confidence ones (review-flag detections) are
+// `review` tier. The `location` is the column name, matching the spec's "location = column"
 // convention (§3b.3) for a future Finding-emitting adapter.
+//
+// Fixture parity: the original six positives + four negatives are planted in the fixture
+// migration above. The #376/#378/#379/#377 entries below are validated by Layer 1
+// (tools/pii-classify.test.ts + the selftest, both in `pnpm verify`) but NOT yet planted in the
+// fixture SQL — migration files are operator-owned for automated sweeps; planting them there is
+// a tracked follow-up, not a silent omission.
 //
 // NOT wired into runMechanicalScan (that's gitleaks/semgrep/OSV/leftover-auth — M1's tools; the
 // PII classifier runs on parsed migration SQL via a separate static path, e.g. src/cli/dry-run.ts
@@ -29,10 +36,13 @@ export const m10Entries: CorpusEntry[] = [
   { id: "M10-P-PASSPORT", kind: "positive", cls: "SENSITIVE_PII — passport number", module: "M10", location: "passport_number", expectedTier: "high", note: `${FIXTURE}.passport_number → PASSPORT/SENSITIVE_PII/high.` },
   { id: "M10-P-CVV", kind: "positive", cls: "PCI — CVV / sensitive authentication data", module: "M10", location: "cvv", expectedTier: "high", note: `${FIXTURE}.cvv → CVV/PCI/high; buildDataMap's INFOTYPE_POINT_OVERRIDES scores a lone CVV column Critical (PCI-DSS forbids storing it post-auth at all).` },
   { id: "M10-P-CARD", kind: "positive", cls: "PCI — cardholder data (PAN fragment)", module: "M10", location: "card_last4", expectedTier: "high", note: `${FIXTURE}.card_last4 → CARD/PCI/high.` },
+  { id: "M10-P-PIN", kind: "positive", cls: "PCI — PIN block / sensitive authentication data", module: "M10", location: "pin_block", expectedTier: "high", note: `pin_block → PIN/PCI/high; INFOTYPE_POINT_OVERRIDES scores a lone PIN column Critical — same PCI-DSS never-store-post-auth category as CVV (#376).` },
+  { id: "M10-P-TRACK", kind: "positive", cls: "PCI — track/magstripe data / sensitive authentication data", module: "M10", location: "track2", expectedTier: "high", note: `track2 → TRACK_DATA/PCI/high; scored Critical alone, same never-store category (#376).` },
 
   // --- NEGATIVES (must NOT be flagged in the free/high count) ---
   { id: "M10-N-EMAIL-CAT", kind: "negative", cls: "descriptor suffix, not the value", module: "M10", location: "email_category", note: `${FIXTURE}.email_category → excluded (DESCRIPTOR_SUFFIX_PATTERN, "categorizes the concept, isn't the value"); classifyColumn returns null.` },
   { id: "M10-N-DOB-FLAG", kind: "negative", cls: "boolean flag naming, not a data value", module: "M10", location: "awaiting_dob_reprompt", note: `${FIXTURE}.awaiting_dob_reprompt (boolean) → excluded (sql type boolean, and BOOLEAN_FLAG_NAME_PATTERN "awaiting_" prefix); classifyColumn returns null.` },
   { id: "M10-N-VENDOR-HEALTH", kind: "negative", cls: "infra/system health, not medical health", module: "M10", location: "vendor_health", note: `${FIXTURE}.vendor_health → excluded (INFRA_HEALTH_PATTERN); classifyColumn returns null despite the HEALTH rule otherwise matching.` },
   { id: "M10-N-NAME-AMBIG", kind: "negative", cls: "ambiguous NAME?, review-tier only", module: "M10", location: "product_name", note: `${FIXTURE}.product_name → NAME?/PII/low. Not excluded outright, but low confidence keeps it out of the free/high count — an assertion, not a review-tier flag.` },
+  { id: "M10-N-PINNED-FLAG", kind: "negative", cls: "UI pinned-flag, not a payment-card PIN", module: "M10", location: "is_pinned", note: `is_pinned → null: no bare \`pin\` alternative exists by design (pinned flags, postal PIN codes), only compound card/ATM names match the PIN rule (#376).` },
 ];
