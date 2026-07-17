@@ -3,7 +3,13 @@
 //
 //   pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm]
 //       [--out coverage.json] [--findings-out engagement.json] [--meta meta.json]
-//       [--artifacts-dir dir]
+//       [--artifacts-dir dir] [--supabase <project-ref>]
+//
+// --supabase (#434): the connected project ref for M7's DB advisor tier (`pnpm perf-scan <ref>`).
+// Only meaningful alongside --connected; SUPABASE_ACCESS_TOKEN still comes from the environment
+// (perf-scan reads it itself, and it travels through the inherited child-process env unchanged).
+// Without it, --connected is recorded intent but M7's advisor call has no project to reach, so M7
+// stays partial on the code tier.
 //
 // --artifacts-dir (#416): where the out-of-orchestrator passes leave their dated results artifact
 // (<module>.pass.json — see docs/design/audit-pass-artifacts.md). When a fresh, target-matching
@@ -58,9 +64,10 @@ const outPath = flagValue("--out");
 const findingsOut = flagValue("--findings-out");
 const metaPath = flagValue("--meta");
 const artifactsDir = flagValue("--artifacts-dir");
+const supabaseRef = flagValue("--supabase");
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir]");
+  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>]");
   process.exit(2);
 }
 
@@ -104,6 +111,7 @@ const ctx: RunContext = {
   // judge freshness against. Undefined artifactsDir ⇒ those probes stay honestly not-run.
   artifactsDir: artifactsDir ? resolve(artifactsDir) : undefined,
   now: Date.now(),
+  supabaseRef,
 };
 
 console.log(`\nFull audit — ${targetDir}`);
