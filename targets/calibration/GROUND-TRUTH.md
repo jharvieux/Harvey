@@ -1880,3 +1880,27 @@ B17/#354: **153/157 static positives caught (61 at high/free-count, 15 connected
 static negatives cleared.** Four review-tier recall gaps remain, all measured LLM-tier:
 `P-BOLA-BODY-OWNER`, `P-MW-SOLE-AUTHZ`, `P-HOST-HEADER-URL`, `P-CLIENT-RENDER-AUTHZ`. The dry-run
 scorecard now reads **7 caught / 1 missed (WEBHOOK-REPLAY) / 4 requires-live-run**.
+
+## Batch M9-authz (#221/#318) — client-supplied owner id trusted by an authenticated action
+
+#221 catalogued one recurring class three ways; only the first proved mechanically detectable at
+acceptable precision (the other two stay semantic/paid-tier — see below). `detectClientSuppliedOwnerId`
+(`src/detectors/app-router.ts`, taxonomy `M1 — Client-supplied owner id trusted by authenticated
+action`) fires when a mutating chain (`insert`/`update`/`upsert`/`delete`/`rpc`) is scoped by an
+ownership-column `.eq()` whose value roots in a parameter rather than a session binding, with no
+session-vs-client comparison in the body. Entries in `src/scan/calibration/m9-authz.entries.ts`,
+tagged `module: "M9"` (runs in `static-detect`, not `runMechanicalScan`, so it stays out of
+`validate:calibration`'s M1 gate — its own gate is `app-router.test.ts`).
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-AUTHN-CLIENT-OWNER | `app/actions-owner.ts` | `detectClientSuppliedOwnerId` — `updateProfileName()` authenticates and schema-validates, then `.eq("user_id", userId)` with the client's `userId` instead of the session's | review |
+| P-AUTHN-CLIENT-OWNER-DELETE | `app/actions-delete.ts` | same detector, a second real instance exercising the DELETE verb and the `account_id` ownership column (#427 parity — two positives across different mutation-verb/column surfaces) | review |
+| N-AUTHN-SESSION-OWNER | `app/actions-owner-session.ts` | negative — identical shape, but the `.eq("user_id", …)` value reads off `currentUser.id` (session-bound), so `collectSessionBoundNames` clears it | — |
+| N-AUTHN-OWNER-COMPARED | `app/actions-owner-compared.ts` | negative — the client-supplied `accountId` IS used in `.eq()`, but `currentUser.id !== accountId` throws first; `hasOwnershipComparison` clears it | — |
+
+The other two #221 shapes stay semantic (business/whole-program context an AST pass doesn't have)
+and were already seeded before #221 in earlier batches, not new here: trusting a client-supplied
+security-relevant value is `P-CLIENT-PAYMENT-AMOUNT`/`P-CLIENT-PRIV-HEADER` (Batch B14 above); a
+permission check present only in the UI is `P-CLIENT-RENDER-AUTHZ`/`P-MW-SOLE-AUTHZ` (Batch B15
+above) — both got a matching LLM-prompt lens added to `docs/scan-extras.txt`'s HIGH section (#328).
