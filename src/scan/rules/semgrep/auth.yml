@@ -103,10 +103,20 @@ rules:
             ...
           }
 
-  # A route handler (Pages Router `export default async function handler(req, res)` or an
-  # App Router route `export async function POST(req)`) mutates data with no auth-check call
+  # A route handler (Pages Router `export default async function handler(req, res)` or an App
+  # Router route `export async function <VERB>(req)`) mutates data with no auth-check call
   # (session read / supabase.auth.getUser()) anywhere in the function. See the file header for
   # the intentional overlap with other named bugs that share this shape.
+  #
+  # #382: the App Router half matches ANY mutation verb — GET/POST/PUT/DELETE/PATCH — via a single
+  # $M metavariable constrained to the verb set, not POST alone. REST-conventional handlers split
+  # mutations across PUT/PATCH (update) and DELETE (delete), reserving POST for create; keying on
+  # POST caught roughly a third of the mutation-verb space by construction. The verb-name regex is
+  # declared once (in the route-handler gate below) and unifies across the mutation-inside and
+  # pattern-not-inside blocks, so a guard living in a PUT/DELETE body suppresses the match exactly
+  # as it does for POST. GET is included deliberately: the rule already gates on "contains a
+  # mutation call" rather than the verb's REST semantics, so a state-changing GET is caught for
+  # free rather than being a blind spot.
   - id: harvey-route-noauth
     languages: [javascript, typescript]
     severity: WARNING
@@ -125,10 +135,14 @@ rules:
               export default async function $H($REQ, $RES) {
                 ...
               }
-          - pattern: |
-              export async function POST($REQ) {
-                ...
-              }
+          - patterns:
+              - pattern: |
+                  export async function $M($REQ) {
+                    ...
+                  }
+              - metavariable-regex:
+                  metavariable: $M
+                  regex: ^(GET|POST|PUT|DELETE|PATCH)$
       - pattern-either:
           - pattern-inside: |
               export default async function $H($REQ, $RES) {
@@ -149,19 +163,19 @@ rules:
                 ...
               }
           - pattern-inside: |
-              export async function POST($REQ) {
+              export async function $M($REQ) {
                 ...
                 $DB.from($T).insert(...)
                 ...
               }
           - pattern-inside: |
-              export async function POST($REQ) {
+              export async function $M($REQ) {
                 ...
                 $DB.from($T).update(...)
                 ...
               }
           - pattern-inside: |
-              export async function POST($REQ) {
+              export async function $M($REQ) {
                 ...
                 $DB.from($T).delete(...)
                 ...
@@ -179,13 +193,13 @@ rules:
             ...
           }
       - pattern-not-inside: |
-          export async function POST($REQ) {
+          export async function $M($REQ) {
             ...
             getServerSession(...)
             ...
           }
       - pattern-not-inside: |
-          export async function POST($REQ) {
+          export async function $M($REQ) {
             ...
             $SUP.auth.getUser(...)
             ...
