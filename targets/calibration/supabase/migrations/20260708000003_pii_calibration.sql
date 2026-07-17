@@ -14,11 +14,25 @@ create table public.pii_calibration_fixture (
   passport_number text,           -- M10-P-PASSPORT   -> PASSPORT / SENSITIVE_PII / high
   cvv text,                       -- M10-P-CVV        -> CVV / PCI / high (severity-override -> Critical)
   card_last4 text,                -- M10-P-CARD       -> CARD / PCI / high
+  -- M10-P-* planted positives (#376 PCI never-store: PIN block / track data)
+  pin_block text,                 -- M10-P-PIN        -> PIN / PCI / high (severity-override -> Critical)
+  track2 text,                    -- M10-P-TRACK      -> TRACK_DATA / PCI / high (same never-store category)
+  -- M10-P-* planted positives (#378 HIPAA identifiers: device / vehicle / photo)
+  mac_address text,               -- M10-P-MAC        -> DEVICE_ID / SENSITIVE_PII / medium (review tier)
+  license_plate text,             -- M10-P-PLATE      -> VEHICLE_ID / PII / medium (review tier)
+  avatar_url text,                -- M10-P-PHOTO      -> PHOTO / PII / medium (review tier)
+  -- M10-P-* planted positive (#379 generic national/government ID)
+  national_id text,               -- M10-P-NATIONAL-ID -> NATIONAL_ID / SENSITIVE_PII / medium (review tier)
+  -- M10-P-* planted positive (#377 denormalized-PII JSON container review flag)
+  profile jsonb,                  -- M10-P-JSON-BLOB  -> OPAQUE_JSON_BLOB / PII / low (review flag, not asserted)
   -- M10-N-* benign lookalikes (the classifier's own exclusion pass must clear these)
   email_category text,            -- M10-N-EMAIL-CAT     -> descriptor suffix, not the value
   awaiting_dob_reprompt boolean,  -- M10-N-DOB-FLAG      -> boolean flag, not a DOB value
   vendor_health text,             -- M10-N-VENDOR-HEALTH -> infra health, not medical health
   product_name text,              -- M10-N-NAME-AMBIG    -> ambiguous NAME?, low confidence only
+  is_pinned boolean,              -- M10-N-PINNED-FLAG   -> UI pinned flag, not a payment-card PIN (#376)
+  has_photo boolean,              -- M10-N-HAS-PHOTO     -> boolean photo flag, not an image column (#378)
+  ui_state jsonb,                 -- M10-N-UI-STATE      -> jsonb outside the container vocabulary (#377)
   created_at timestamptz not null default now()
 );
 

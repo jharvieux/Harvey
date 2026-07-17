@@ -32,3 +32,10 @@ evidence, impact, fix, status, note`
   architecture). N/A findings are excluded from the severity counts, Top-BFTB, and Action Plan, and rendered in a
   separate **"Checked & ruled out"** section (with `note` explaining why) — so context-blind false positives never
   reach the action plan but are still shown for transparency.
+- **reviewFlagOnly / reviewFlagColumns** (#459, M10-specific): a finding whose only PII signal is an
+  `OPAQUE_JSON_BLOB` review flag (#377 — a JSON/JSONB container column named like a denormalization
+  bucket) sets `reviewFlagOnly: true` and is excluded from the asserted findings list, severity
+  counts, Top-BFTB, and Action Plan — it renders instead in a dedicated **"Review for nested PII"**
+  section, never as an asserted PII holding. `reviewFlagColumns` lists the flagged column name(s);
+  a finding that also has asserted columns keeps `reviewFlagOnly: false` but still lists its
+  flagged columns there, so no review-flag content is dropped from the report.
