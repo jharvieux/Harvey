@@ -2,7 +2,15 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-17 (THIRD issue-sweep — 5 PRs merged, 6 issues closed, net −4; filed #488, #493. Backlog now drained to non-agent work only: disclosure sends, live-infra, business/GTM, and the design-heavy M6-corpus trio. CLAUDE.md relay items APPLIED (#491). Earlier sweeps further down still stand.)_
+_Last updated: 2026-07-17 (THIRD issue-sweep + follow-ons — 6 PRs merged, 7 issues closed; #493 landed (corrected 3 wrong OWASP mappings). Executable backlog is EMPTY. Next session = the M6-corpus trio. Earlier sweeps further down still stand.)_
+
+## NEXT SESSION — the M6-corpus trio (#267 / #406 / #413)
+
+The one substantial piece of product work left. It is a design/build session, not a sweep. The blocker for all three is: **the frequency of a hand-rolled pattern can only be measured against a corpus of AI-GENERATED code, and today's external corpus is curated starter kits.** Sequence: source an AI-generated corpus → measure per-pattern frequency (#413) → graduate the catalogue's YES column + wire the mechanical subset (#406) → the top-100 build-out (#267). Also needs a free/paid ruling (spec-72 currently locks M6 to LLM-only) and supervised brief edits (docs/quality-extras.txt, docs/design/*). #283 (run M6 against a real target) is adjacent.
+
+**Operator question — "can we run it against ATC?" (answer, to act on next session):**
+- **As a real engagement target: yes, and we should.** ATC (jharvieux/atc, the app Harvey was extracted from) is a real multi-tenant Supabase/Next.js app the operator owns — the ideal first real-target run. It directly clears **#283** (M6 never run against a real target) and gives every module real signal. The `[[atc-supabase-topology]]` memory records read-only prod DB access via the `supabase-main` MCP — **VERIFY that access first (measure, don't recall)** before relying on it.
+- **As the AI-generated CORPUS for #413/#267/#406: only a seed, not the whole answer.** Those issues need to measure how *frequently* a pattern recurs *across many* AI-generated repos — one repo can't measure frequency. IF ATC was itself AI-built (operator knows), it's a valuable first corpus member and a great validation target for the detectors, but the frequency work still needs a multi-repo AI-generated corpus sourced alongside it. So: run M6 against ATC to clear #283 and sanity-check the detectors qualitatively; treat the multi-repo corpus sourcing as the separate, larger task the trio actually turns on.
 
 ## 2026-07-17 issue-sweep #3 — drain (5 PRs merged, 6 issues closed — net −4)
 
