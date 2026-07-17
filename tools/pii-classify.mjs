@@ -34,6 +34,12 @@ const RULES = [
   [/(^|_)fax(_|$)/, "FAX", "PII", "high"],
   [/passport/, "PASSPORT", "SENSITIVE_PII", "high"],
   [/(driver_?licen[cs]e|license_number)/, "DRIVERS_LICENSE", "SENSITIVE_PII", "high"],
+  // #379: generic national/government-ID catch-all — the identifier shape non-US schemas use
+  // (DLP/Presidio ship per-country recognizers; this is the fallback infotype for the rest).
+  // Medium, not high: "ID card number" schemes vary widely, so it's a catch-all, not a validated
+  // per-country pattern. Deliberately NOT matching bare `id`/`_id` — the compound names are the
+  // guard against flooding every PK/FK column.
+  [/(national_id|government_id|citizen_id|resident_id|id_card_number)/, "NATIONAL_ID", "SENSITIVE_PII", "medium"],
   [/(medical_record_number|(^|_)mrn(_|$))/, "MEDICAL_RECORD_NUMBER", "PHI", "high"],
   [/(health_plan|insurance_(id|number|policy))/, "HEALTH_PLAN_ID", "PHI", "high"],
   // #378: mac_address/mac_addr and license_plate/plate_number are HIPAA Safe Harbor identifiers
@@ -317,6 +323,10 @@ function selftest() {
     ["license_plate", "PII", "medium"],
     ["avatar_url", "PII", "medium"],
     ["has_photo", null, null, "boolean"],
+    // #379: generic national/government ID — and bare/FK `id` columns stay out
+    ["national_id", "SENSITIVE_PII", "medium"],
+    ["id", null, null],
+    ["user_id", null, null],
   ];
   let ok = 0;
   for (const [col, cat, conf, sqlType, tableName] of cases) {

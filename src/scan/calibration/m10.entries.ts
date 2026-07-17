@@ -41,6 +41,7 @@ export const m10Entries: CorpusEntry[] = [
   { id: "M10-P-MAC", kind: "positive", cls: "HIPAA #13 — device identifier (MAC address)", module: "M10", location: "mac_address", expectedTier: "review", note: `mac_address → DEVICE_ID/SENSITIVE_PII/medium (#378).` },
   { id: "M10-P-PLATE", kind: "positive", cls: "HIPAA #12 — vehicle identifier (license plate)", module: "M10", location: "license_plate", expectedTier: "review", note: `license_plate → VEHICLE_ID/PII/medium (#378).` },
   { id: "M10-P-PHOTO", kind: "positive", cls: "HIPAA #17 — full-face photograph / comparable image", module: "M10", location: "avatar_url", expectedTier: "review", note: `avatar_url → PHOTO/PII/medium — review-tier by design; many avatar columns are app furniture, but HIPAA/GDPR context makes silence the wrong default (#378).` },
+  { id: "M10-P-NATIONAL-ID", kind: "positive", cls: "SENSITIVE_PII — generic national/government ID", module: "M10", location: "national_id", expectedTier: "review", note: `national_id → NATIONAL_ID/SENSITIVE_PII/medium — the catch-all for non-US government-ID schemes; compound names only, bare id/_id never matches (#379).` },
 
   // --- NEGATIVES (must NOT be flagged in the free/high count) ---
   { id: "M10-N-EMAIL-CAT", kind: "negative", cls: "descriptor suffix, not the value", module: "M10", location: "email_category", note: `${FIXTURE}.email_category → excluded (DESCRIPTOR_SUFFIX_PATTERN, "categorizes the concept, isn't the value"); classifyColumn returns null.` },

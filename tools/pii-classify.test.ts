@@ -34,6 +34,21 @@ describe("classifyColumn — true positives across the taxonomy", () => {
     expect(classifyColumn("iban").category).toBe("PCI");
   });
 
+  it("matches generic national/government-ID columns beyond the US-specific shapes (#379)", () => {
+    expect(classifyColumn("national_id")).toEqual({ infotype: "NATIONAL_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("government_id_number")).toEqual({ infotype: "NATIONAL_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("citizen_id")).toEqual({ infotype: "NATIONAL_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("resident_id")).toEqual({ infotype: "NATIONAL_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("id_card_number")).toEqual({ infotype: "NATIONAL_ID", category: "SENSITIVE_PII", confidence: "medium" });
+  });
+
+  it("keeps bare id/PK/FK columns out of the national-ID catch-all (#379 FP guard)", () => {
+    expect(classifyColumn("id")).toBeNull();
+    expect(classifyColumn("user_id")).toBeNull();
+    expect(classifyColumn("tenant_id")).toBeNull();
+    expect(classifyColumn("order_id")).toBeNull();
+  });
+
   it("matches PCI sensitive authentication data — PIN block and track/magstripe data (#376)", () => {
     expect(classifyColumn("pin_block")).toEqual({ infotype: "PIN", category: "PCI", confidence: "high" });
     expect(classifyColumn("atm_pin")).toEqual({ infotype: "PIN", category: "PCI", confidence: "high" });
