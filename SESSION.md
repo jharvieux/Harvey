@@ -2,7 +2,33 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-17 (detector census + orchestrator artifact path + dynamic-validation harness — NINE PRs all MERGED this session; new backlog #455–#457 at the end of this section. The 2026-07-16 sweep is further down and still stands.)_
+_Last updated: 2026-07-17 (issue-sweep — 11 PRs merged, 25 issues closed, net −20; new backlog #459/#460/#465/#470/#472/#474. Two OPERATOR-RELAY items below. The earlier 2026-07-17 detector-census work and the 2026-07-16 sweep are further down and still stand.)_
+
+## 2026-07-17 issue-sweep (11 PRs merged, 25 issues closed — net −20)
+
+Operator-approved `/issue-sweep`, 4-in-flight, Fable on the two judgment-heavy P1 batches (M10 dictionary + CVE re-check). Everything below is MERGED on `main`.
+
+- **#461 (M10)** — parser now admits `inet/cidr/citext/bytea/geography/geometry` (#375); PCI PIN/track-data (#376), HIPAA MAC/plate/photo (#378), generic national-ID (#379) dictionary rules; **#377** JSONB "review for nested PII" low-confidence flag (report-template presentation split → **#459**); **#436** `dataMapToFindings` emits report-schema `Finding[]` from pii-classify. Calibration entries not yet planted in fixture SQL (supervised) → **#460**.
+- **#462 (M4)** — test-file clones no longer elevated to security severity (#400); diverged-clone scope widened to tenant-key/supabase-query heuristics (#399). Baselines re-measured (boxyhq M4 48→47, proposit M4-diverged 1→12).
+- **#464 (runners)** — M8 free-tier wiring reports `partial` not `requires-live-run` (#401); surviving-mutants → `Finding[]` (#435); M7 advisor project-ref threaded (#434). #390 (M3 artifact path) closed stale — already landed via #349/#420.
+- **#466 (M9)** — path-aliased `@/…` imports now resolved in the leak/server-only checks (#380); new SSR browser-API misuse detector (#381). #326 validated: `detectClientSuppliedOwnerId` recall 0/3 on proposit — a shape mismatch (those are the no-auth class M1 already catches), not a bug; stale header comment corrected; widening design → **#465**.
+- **#467 (M6)** — simplify-scan packet now carries the target dependency manifest, so the "already-in-the-dependency-tree" rubric class is appliable (#396).
+- **#468 (calibration)** — #398 core was already fixed by #341/#427; added the missing regression test (module-tagged entries never silently dropped).
+- **#469 (M8)** — boxyhq's 7-vs-8/35 drift is a genuine unseeded-`Math.random()` Stryker flake in boxyhq's own suite; fixed with a per-baseline tolerance band, not a point rebaseline (#432).
+- **#463** — proposit's 85 M5-knip findings measured (fresh clone+install): 0 are config artifacts, ~41 real dead code vs 44 low-value; 2 auth-adjacent dead-code items flagged, neither a live vuln (#320).
+- **#471 (#450)** — dynamic-validation harness: #453 delivered the core; added the two missing tests (fixture-repo layouts + emitted-artifact round-trip). Live run stays operator-side (#159/#161).
+- **#473 (docs)** — planted-bug count truthed-up (#348), #221 briefs/taxonomy/ground-truth filled (#328), stale boxyhq "upper reference" framing corrected (#323), coverage-runner docs de-staled (#313). `package.json run-audit` alias was a product ruling not made → split to **#472**.
+- **#245** — CVE re-check before disclosure: 7 open threads verified against the corrected corpus; only #168 needs a prose fix (drop CVE-2025-55182 + fabricated CVE-2025-66478, keep CVE-2026-44578) before sending — corrected on-thread. No corpus bug. Comment-only, closed.
+
+### ⚠ OPERATOR-RELAY (agents can't do these)
+1. **CLAUDE.md is now stale** — the coverage-guard "Known gaps → Still open" sentence lists M7 advisors (#434), M8 surviving-mutants (#435), and M10 data-map→`Finding[]` (#436) as open finding-capture gaps. **All three landed this sweep (#464, #461).** Recommended replacement: drop #434/#435/#436 from "Still open" and note "M7 advisors (#434), M8 surviving-mutants (#435), and M10 data-map→`Finding[]` (#436) landed 2026-07-17; live tiers derive `ran` when captured, schema/source tiers stay `partial` for the rows-not-sampled reason." Also `docs/m9-app-router.md` (~lines 44-45, 73-75) has aliased-import "false negative" claims now false after #466, and needs a "Checks" entry for the new SSR detector — recommended wording is in PR #466's comments. `docs/design/m6-simplification-eval.md` §3.4 wants a note that eval packets now include the target manifest (PR #467 body).
+2. **#168 disclosure** — do not send until its DEP-NEXT finding text is corrected per the #168 comment (only CVE-2026-44578 is real).
+
+### New backlog opened
+- **#459** M10 JSONB nested-PII report-template presentation · **#460** M10 calibration fixture parity (plant entries in migration SQL) · **#465** M9 client-owner detector widening design · **#470** corpus-drift CI job crashes on `stryker binary not found` (the Layer-2 drift gate is blind since ~2026-07-16 — non-required check, real fail-loud gap) · **#472** `pnpm run-audit` package.json alias (product ruling) · **#474** `diverged-clones.ts` NUL bytes make git treat it as binary.
+
+### Still open, not swept (need operator / live / design)
+- Disclosure sends #168/#214–#219 (operator action) · live M2 #159/#161 (deployed app + local stack) · #283 (needs a real engagement target) · design-heavy M6/M7 #267/#387/#406/#413 (blocked on supervised briefs + rulings) · #4/#10–#13/#2 (business/GTM/epic) · #301 (deferred by design) · product rulings #248/#252/#255/#322/#397/#433 and #402 (corpus re-measure) — all deferred at this sweep's plan gate.
 
 ## 2026-07-17 — detector census, hotspot→LLM, orchestrator artifact path, dynamic-validation harness (9 PRs merged)
 
