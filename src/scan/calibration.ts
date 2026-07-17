@@ -241,6 +241,16 @@ export function moduleCensus(corpus: CorpusEntry[] = CORPUS): ModuleCensusRow[] 
   return [...rows.values()].sort((a, b) => numOf(a.module) - numOf(b.module));
 }
 
+// The M1-only slice validate-calibration.ts scores against runMechanicalScan output (#341,
+// #398): every entry that omits `module` (moduleOf() => "M1"). A module-tagged entry has its own
+// live pipeline outside runMechanicalScan (see each *.entries.ts file's header) and is gated by
+// its own suite instead — moduleCensus() is what keeps that exclusion visible rather than silent.
+// Centralized here (not re-filtered inline in the CLI script) so the exclusion rule has exactly
+// one implementation for calibration.test.ts to hold accountable.
+export function mechanicalCorpus(corpus: CorpusEntry[] = CORPUS): CorpusEntry[] {
+  return corpus.filter((e) => e.module === undefined);
+}
+
 export function buildCoverageMatrix(findings: Finding[], corpus: CorpusEntry[] = CORPUS): CoverageMatrix {
   const rows = corpus.map((e) => scoreEntry(e, findings));
   const staticPos = rows.filter((r) => r.kind === "positive" && r.expectedTier !== "connected" && r.expectedTier !== "none");
