@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildDataMap, classifyColumn, classifyMigrationSql, classifyWithFallback } from "./pii-classify.mjs";
+import { validateFindings } from "../src/findings.js";
+import { buildDataMap, classifyColumn, classifyMigrationSql, classifyWithFallback, dataMapToFindings } from "./pii-classify.mjs";
 
 describe("classifyColumn — true positives across the taxonomy", () => {
   it("matches HIPAA/GDPR contact & identity PII at high confidence", () => {
@@ -32,6 +33,63 @@ describe("classifyColumn — true positives across the taxonomy", () => {
     expect(classifyColumn("card_last4")).toEqual({ infotype: "CARD", category: "PCI", confidence: "high" });
     expect(classifyColumn("cvv")).toEqual({ infotype: "CVV", category: "PCI", confidence: "high" });
     expect(classifyColumn("iban").category).toBe("PCI");
+  });
+
+  it("matches generic national/government-ID columns beyond the US-specific shapes (#379)", () => {
+    expect(classifyColumn("national_id")).toEqual({ infotype: "NATIONAL_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("government_id_number")).toEqual({ infotype: "NATIONAL_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("citizen_id")).toEqual({ infotype: "NATIONAL_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("resident_id")).toEqual({ infotype: "NATIONAL_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("id_card_number")).toEqual({ infotype: "NATIONAL_ID", category: "SENSITIVE_PII", confidence: "medium" });
+  });
+
+  it("keeps bare id/PK/FK columns out of the national-ID catch-all (#379 FP guard)", () => {
+    expect(classifyColumn("id")).toBeNull();
+    expect(classifyColumn("user_id")).toBeNull();
+    expect(classifyColumn("tenant_id")).toBeNull();
+    expect(classifyColumn("order_id")).toBeNull();
+  });
+
+  it("matches PCI sensitive authentication data — PIN block and track/magstripe data (#376)", () => {
+    expect(classifyColumn("pin_block")).toEqual({ infotype: "PIN", category: "PCI", confidence: "high" });
+    expect(classifyColumn("atm_pin")).toEqual({ infotype: "PIN", category: "PCI", confidence: "high" });
+    expect(classifyColumn("card_pin")).toEqual({ infotype: "PIN", category: "PCI", confidence: "high" });
+    expect(classifyColumn("pin_verification_value")).toEqual({ infotype: "PIN", category: "PCI", confidence: "high" });
+    expect(classifyColumn("track2")).toEqual({ infotype: "TRACK_DATA", category: "PCI", confidence: "high" });
+    expect(classifyColumn("track_1_data")).toEqual({ infotype: "TRACK_DATA", category: "PCI", confidence: "high" });
+    expect(classifyColumn("magstripe")).toEqual({ infotype: "TRACK_DATA", category: "PCI", confidence: "high" });
+  });
+
+  it("does not read pinned/PIN-code lookalikes as a payment-card PIN (#376 FP guard)", () => {
+    // is_pinned is a UI feature flag; a bare `pin`/`pin_code` is deliberately not in the
+    // dictionary (postal PIN code, app-level "pin this item" concepts) — only compound
+    // card/ATM names assert the PCI infotype.
+    expect(classifyColumn("is_pinned")).toBeNull();
+    expect(classifyColumn("pinned_at")).toBeNull();
+    expect(classifyColumn("pin")).toBeNull();
+    expect(classifyColumn("pin_code")).toBeNull();
+  });
+
+  it("matches HIPAA device/vehicle/image identifiers — MAC address, license plate, photo columns (#378)", () => {
+    // Safe Harbor #13 (device identifiers), #12 (vehicle identifiers incl. license plates),
+    // #17 (full-face photographs and comparable images).
+    expect(classifyColumn("mac_address")).toEqual({ infotype: "DEVICE_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("mac_addr")).toEqual({ infotype: "DEVICE_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("license_plate")).toEqual({ infotype: "VEHICLE_ID", category: "PII", confidence: "medium" });
+    expect(classifyColumn("plate_number")).toEqual({ infotype: "VEHICLE_ID", category: "PII", confidence: "medium" });
+    expect(classifyColumn("photo_url")).toEqual({ infotype: "PHOTO", category: "PII", confidence: "medium" });
+    expect(classifyColumn("avatar_url")).toEqual({ infotype: "PHOTO", category: "PII", confidence: "medium" });
+    expect(classifyColumn("profile_picture")).toEqual({ infotype: "PHOTO", category: "PII", confidence: "medium" });
+    expect(classifyColumn("signature_image")).toEqual({ infotype: "PHOTO", category: "PII", confidence: "medium" });
+  });
+
+  it("does not read photo/avatar boolean flags as image PII (#378 FP guard)", () => {
+    expect(classifyColumn("has_photo", "boolean")).toBeNull();
+    expect(classifyColumn("avatar_enabled")).toBeNull();
+    // A bare `photo`/`avatar`/`signature` is deliberately not in the dictionary — webhook
+    // signatures and loosely-named app concepts would flood the map; the compound image-bearing
+    // names above are the guard.
+    expect(classifyColumn("signature")).toBeNull();
   });
 
   it("flags ambiguous names as low confidence rather than asserting PII", () => {
@@ -120,6 +178,34 @@ describe("classifyColumn — table-context-only detections (#233)", () => {
     expect(classifyColumn("number")).toBeNull();
   });
 
+  it("review-flags a jsonb denormalization container on ANY table at low confidence — never an assertion (#377)", () => {
+    // profile jsonb holding {"email": ..., "phone": ...} on an ordinary users table is the
+    // common denormalized-PII shape the name-only dictionary is blind to.
+    expect(classifyColumn("profile", "jsonb", "users")).toEqual({ infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" });
+    expect(classifyColumn("metadata", "jsonb", "customers")).toEqual({ infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" });
+    expect(classifyColumn("custom_fields", "json")).toEqual({ infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" });
+    expect(classifyColumn("preferences", "jsonb")).toEqual({ infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" });
+  });
+
+  it("does not flag every jsonb column — the vocabulary is the guard (#377)", () => {
+    // A jsonb column named outside the denormalization-container vocabulary stays silent...
+    expect(classifyColumn("ui_state", "jsonb")).toBeNull();
+    expect(classifyColumn("feature_flags", "jsonb")).toBeNull();
+    // ...and a vocabulary name on a non-json type is not a container at all.
+    expect(classifyColumn("profile", "text")).toBeNull();
+    expect(classifyColumn("details", "text")).toBeNull();
+  });
+
+  it("keeps the table-scoped SECRET store rule ahead of the jsonb review flag (#377 precedence)", () => {
+    // payload on a *_store table is the higher-signal credential-store hit, not a PII review flag.
+    expect(classifyColumn("payload", "jsonb", "jackson_store")).toEqual({
+      infotype: "OPAQUE_ENCRYPTED_STORE",
+      category: "SECRET",
+      confidence: "medium",
+    });
+    expect(classifyColumn("payload", "jsonb", "events")).toEqual({ infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" });
+  });
+
   it("classifies an opaquely-named value/data/payload column as an encrypted secret store only on a *_store/*_config table", () => {
     // BoxyHQ SAML/SSO's jackson_store.value — a name-based matcher skips a column called "value".
     expect(classifyColumn("value", undefined, "jackson_store")).toEqual({
@@ -168,6 +254,11 @@ describe("buildDataMap — severity weighting", () => {
   it("treats a stored CVV as critical by itself — PCI-DSS forbids storing it post-auth", () => {
     const map = buildDataMap([{ table_name: "payments", column_name: "cvv", data_type: "text" }]);
     expect(map.payments.severity).toBe("Critical");
+  });
+
+  it("treats a stored PIN block or track data as Critical alone — same PCI-DSS never-store category as CVV (#376)", () => {
+    expect(buildDataMap([{ table_name: "cards", column_name: "pin_block", data_type: "text" }]).cards.severity).toBe("Critical");
+    expect(buildDataMap([{ table_name: "cards", column_name: "track2", data_type: "text" }]).cards.severity).toBe("Critical");
   });
 
   it("flags a table storing a plaintext API key + password as Critical, above a lone contact-PII table — the ATC dogfood headline case", () => {
@@ -264,6 +355,22 @@ describe("classifyMigrationSql — static-schema entry point (#250)", () => {
     expect(dataMap).toEqual({});
   });
 
+  it("classifies columns declared with inet/citext — types the parser used to drop silently (#375)", () => {
+    // Before #375 widened migration-sql-parse's SQL_TYPES, an `ip_address inet` or `email citext`
+    // column never reached classifyColumn at all in --schema mode — the dictionary rules for IP
+    // and EMAIL existed but the parser extraction gate made the columns invisible.
+    const sql = `
+      create table public.sessions (
+        id uuid primary key,
+        ip_address inet,
+        email citext not null
+      );
+    `;
+    const { dataMap } = classifyMigrationSql(sql);
+    expect(dataMap.sessions.columns).toContainEqual({ column: "email", infotype: "EMAIL", category: "PII", confidence: "high" });
+    expect(dataMap.sessions.columns).toContainEqual({ column: "ip_address", infotype: "IP", category: "PII", confidence: "medium" });
+  });
+
   it("classifies a stored secret across multiple migration files concatenated together", () => {
     const sql = [
       "create table public.organisations (\n  id uuid primary key,\n  ai_api_key text\n);",
@@ -272,6 +379,58 @@ describe("classifyMigrationSql — static-schema entry point (#250)", () => {
     const { dataMap } = classifyMigrationSql(sql);
     expect(dataMap.organisations.secret).toBe(true);
     expect(dataMap.contacts.categories).toEqual(["PII"]);
+  });
+});
+
+describe("dataMapToFindings — report-schema Finding[] emitter (#436)", () => {
+  const columns = [
+    { table_name: "payments", column_name: "cvv", data_type: "text" },
+    { table_name: "payments", column_name: "card_last4", data_type: "text" },
+    { table_name: "users", column_name: "email", data_type: "text" },
+    { table_name: "users", column_name: "profile", data_type: "jsonb" },
+    { table_name: "prefs", column_name: "metadata", data_type: "jsonb" },
+  ];
+  const findings = dataMapToFindings(buildDataMap(columns), { tier: "schema" });
+
+  it("emits one valid report-schema finding per PII-bearing table, severity from the data map, confidence Review", () => {
+    expect(findings).toHaveLength(3);
+    const meta = {
+      client: "c", subtitle: "s", date: "d", commit: "x", auditor: "a", confidential: true,
+      overallHealth: 5, tenantIsolation: "t", authModel: "m", headline: "h", scope: "sc",
+      methodology: "me", outOfScope: "o",
+    };
+    expect(validateFindings({ meta, findings })).toEqual({ ok: true, errors: [] });
+    const payments = findings.find((f) => f.location === "payments");
+    expect(payments?.severity).toBe("Critical"); // lone CVV → Critical via the point override
+    expect(findings.every((f) => f.confidence === "Review")).toBe(true);
+    expect(findings.every((f) => f.mechanical === true && f.precisionTier === "review")).toBe(true);
+  });
+
+  it("orders findings by table severity, worst first, with deterministic ids", () => {
+    expect(findings[0]?.location).toBe("payments");
+    expect(findings.map((f) => f.id)).toEqual(["M10-01", "M10-02", "M10-03"]);
+  });
+
+  it("names the PCI never-store violation — a stored CVV is a violation independent of exposure", () => {
+    const payments = findings.find((f) => f.location === "payments");
+    expect(payments?.impact).toMatch(/forbids storing it post-authorization/);
+    expect(payments?.fix).toMatch(/may not be stored post-authorization/);
+  });
+
+  it("keeps #377 review flags distinct from asserted columns — flagged in evidence, never claimed in the title", () => {
+    const users = findings.find((f) => f.location === "users");
+    expect(users?.title).toMatch(/holds PII data \(EMAIL\)/); // profile (jsonb) not asserted in the title
+    expect(users?.evidence).toMatch(/Review for nested PII \(flagged, not asserted/);
+    // A table with ONLY review flags never claims to hold PII — it asks for review.
+    const prefs = findings.find((f) => f.location === "prefs");
+    expect(prefs?.title).toMatch(/review for nested PII/i);
+    expect(prefs?.title).not.toMatch(/holds/);
+  });
+
+  it("records which tier produced the evidence", () => {
+    expect(findings[0]?.evidence).toMatch(/static migration-SQL schema parse/i);
+    const live = dataMapToFindings(buildDataMap(columns), { tier: "live" });
+    expect(live[0]?.evidence).toMatch(/live information_schema/i);
   });
 });
 

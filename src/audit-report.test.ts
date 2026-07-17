@@ -97,9 +97,10 @@ const capturingCtx = ctx({
 describe("runAudit findings capture (#312/#420)", () => {
   it("collects findings from the emitting modules (bare-array AND object-artifact) and nothing from the non-emitters", () => {
     const captured = runAudit(AUDIT_RUNNERS, capturingCtx);
-    // M4/M5/M9 emit a bare Finding[]; M3/M8 embed findings in an object artifact (#420). M1/M2/M6/
-    // M7/M10 collect nothing — their findings come from a paid/live/human pass this run cannot observe.
-    expect(captured.findings.map((f) => f.id).sort()).toEqual(["M3", "M4", "M5", "M8", "M9"]);
+    // M4/M5/M9/M10 emit a bare Finding[] (M10 since #436); M3/M8 embed findings in an object
+    // artifact (#420). M1/M2/M6/M7 collect nothing — their findings come from a paid/live/human
+    // pass this run cannot observe.
+    expect(captured.findings.map((f) => f.id).sort()).toEqual(["M10", "M3", "M4", "M5", "M8", "M9"]);
   });
 
   it("captures M8's zero-coverage finding out of its object artifact, as a partial (not ran)", () => {
@@ -108,18 +109,24 @@ describe("runAudit findings capture (#312/#420)", () => {
     expect(findings.map((f) => f.id)).toContain("M8");
   });
 
-  it("assembles M3/M8 findings into the deliverable, keeping M1/M2/M6/M10 non-collection legible", () => {
+  it("assembles M3/M8/M10 findings into the deliverable, keeping M1/M2/M6 non-collection legible", () => {
     const { recorded, findings } = runAudit(AUDIT_RUNNERS, capturingCtx);
     const doc = assembleEngagementDocument(recorded, capturingCtx.env, findings, meta);
     expect(validateFindings(doc).ok).toBe(true);
-    expect(doc.findings.map((f) => f.id)).toEqual(expect.arrayContaining(["M3", "M8"]));
+    expect(doc.findings.map((f) => f.id)).toEqual(expect.arrayContaining(["M3", "M8", "M10"]));
     // Non-collection is not silence: each non-emitting module is a non-"ran" row whose reason says
     // the findings are not collected and names the source — distinguishable from "ran, found nothing".
-    for (const m of ["M1", "M2", "M6", "M10"]) {
+    for (const m of ["M1", "M2", "M6"]) {
       const row = doc.coverage?.find((r) => r.module === m);
       expect(row?.status, `${m} must not read as a clean ran`).not.toBe("ran");
       expect(row?.reason, `${m} must say findings are not collected`).toMatch(/collected into this deliverable/i);
     }
+    // #436: M10 left that list — its schema-tier findings ARE captured now, and its remaining
+    // partial reason is the honest tier gap (rows not sampled), not a collection gap.
+    const m10 = doc.coverage?.find((r) => r.module === "M10");
+    expect(m10?.status).toBe("partial");
+    expect(m10?.reason).toMatch(/schema tier only/);
+    expect(m10?.reason).not.toMatch(/collected into this deliverable/i);
   });
 
   it("captures nothing when the context is not capturing — coverage-only runs are unchanged", () => {

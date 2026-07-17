@@ -367,30 +367,37 @@ const m9: ModuleRunner = {
 // M10 classifies live columns, or parses migration SQL when there is no DB (#250) — two tiers, so
 // a schema-only pass is partial rather than a skip.
 //
-// #420: pii-classify emits a per-table data map / console summary, not report-schema Finding[], and
-// ignores --out — so neither tier contributes findings to the engagement doc. Both tiers therefore
-// report `partial` with a reason that says so explicitly, so a reader tells "M10 findings not
-// collected" from "M10 found no PII" (the live tier is `partial`, not `ran`, precisely so the ledger
-// can carry that reason — a `ran` outcome has no reason slot). A data-map → Finding[] emitter that
-// makes M10 a captured module is follow-up #436.
+// #436 (closes the #420 non-collection gap): pii-classify now emits report-schema Finding[] to
+// --out (dataMapToFindings — one finding per PII/PHI/PCI-bearing table, confidence Review), so a
+// capturing run collects M10 findings like any other emitter: the live tier reads `ran`, the
+// schema tier stays `partial` for the honest reason that remains (no live DB, rows not sampled).
+// A coverage-only run (no capture) keeps the explicit not-collected disclosure — findings exist
+// only when a capture path was given, and absence must never read as clean.
 //
 // #357 (untestable in CI): the `connected` branch needs real DB creds and has only ever been
 // exercised in its failure path here.
 const m10: ModuleRunner = {
   module: "M10",
   run: (ctx) => {
+    const outPath = captureOut(ctx, "M10");
+    const notCollected =
+      "this run captured no findings (coverage-only, no --findings-out), so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (#436/#420)";
     if (ctx.env.connected) {
-      const { ok, output } = ctx.exec("pnpm", ["pii-classify"]);
-      return ok
-        ? { status: "partial", detail: "pnpm pii-classify (live)", reason: "live classification ran, but pii-classify emits a data map, not report-schema findings, so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (follow-up #436; #420)" }
-        : { status: "requires-live-run", reason: `pnpm pii-classify exited non-zero: ${output.trim().slice(0, 200)}` };
+      const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : [])]);
+      if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify exited non-zero: ${trimOut(output)}` };
+      if (!outPath) return { status: "partial", detail: "pnpm pii-classify (live)", reason: `live classification ran, but ${notCollected}` };
+      const findings = readCaptured(ctx, outPath);
+      return findings.length ? { status: "ran", detail: "pnpm pii-classify (live)", findings } : { status: "ran", detail: "pnpm pii-classify (live)" };
     }
     const migrations = join(ctx.targetDir, "supabase", "migrations");
     if (!ctx.exists(migrations)) return { status: "requires-live-run", reason: `no live DB and no migrations at ${migrations} — nothing to classify` };
-    const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", migrations]);
-    return ok
-      ? { status: "partial", detail: `pnpm pii-classify --schema ${migrations}`, reason: "schema tier only — no live DB, so row-level data was not sampled. And pii-classify emits a data map, not report-schema findings, so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (follow-up #436; #420)" }
-      : { status: "requires-live-run", reason: `pnpm pii-classify --schema exited non-zero: ${output.trim().slice(0, 200)}` };
+    const detail = `pnpm pii-classify --schema ${migrations}`;
+    const schemaOnly = "schema tier only — no live DB, so row-level data was not sampled";
+    const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", migrations, ...(outPath ? ["--out", outPath] : [])]);
+    if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify --schema exited non-zero: ${trimOut(output)}` };
+    if (!outPath) return { status: "partial", detail, reason: `${schemaOnly}. And ${notCollected}` };
+    const findings = readCaptured(ctx, outPath);
+    return findings.length ? { status: "partial", detail, reason: schemaOnly, findings } : { status: "partial", detail, reason: schemaOnly };
   },
 };
 
