@@ -22,7 +22,7 @@ import { join, relative } from "node:path";
 import { definerReviewFindings } from "../definer-review.js";
 import type { Finding } from "../findings.js";
 import { parseDefinerFunctions, parsePolicies } from "../migration-sql-parse.js";
-import { policyReviewFindings, type LivePolicy, type TenancyModel } from "../rls-policy-review.js";
+import { isUsingTrueGated, policyReviewFindings, type LivePolicy, type TenancyModel } from "../rls-policy-review.js";
 import { reviewFinding } from "../review-tier.js";
 import { mechanicalFinding } from "./common.js";
 
@@ -180,6 +180,34 @@ function tenancyModelFinding(models: Map<string, TenancyModel>, unrecognised: Ma
   });
 }
 
+// #338 — usingTrueReview SPARES `USING (true)` on a table with no recognised tenant key, which is
+// what protects the intentional public-catalog case (a published price list). But a spared policy
+// returns null exactly like a correct one, so a genuinely leaky reference-shaped table is silent in
+// the same way a catalog is: nothing separates "assessed and cleared" from "not assessable". This
+// names every table where a `USING (true)` was spared for want of a tenant key, so a reader can
+// confirm the sparing rather than infer safety from the absence of a finding. Info + review tier:
+// an assumption disclosure, never graded and never in the free count (same contract as #258's
+// SB-RLS-TENANCY-MODEL, one level down).
+function usingTrueUnassessedFinding(spared: Map<string, string[]>): Finding {
+  const list = [...spared].map(([t, names]) => `${t} (${names.join(", ")})`).join("; ");
+  return mechanicalFinding({
+    id: "SB-RLS-USING-TRUE-UNASSESSED",
+    title: "USING (true) policies left unassessed — no recognised tenant key to judge them against",
+    severity: "Info",
+    category: "Multi-tenant security",
+    taxonomy: "M1 — Multi-tenant security",
+    location: "supabase/migrations/",
+    evidence:
+      `These policies open every row of their table (USING is "true") on a table that declares no recognised tenant key, so the tenant-scoped USING(true) rule did NOT assess them — an intentional public/reference table (a catalog) and a genuine cross-user leak look identical here, and only a declared tenant key would let the rule tell them apart. Named so the sparing can be checked rather than read as clean from the absence of a finding: ${list}.`,
+    impact:
+      "This is an assumption disclosure, not a defect. A spared USING(true) may be a correct world-readable catalog OR a reference-shaped table that is actually leaking rows across users — the static review cannot decide without a tenant key, and silence here is not evidence of safety.",
+    fix:
+      "Confirm each table above is intentionally world-readable (a published catalog/reference list). If it is really tenant- or owner-scoped under a column the review did not recognise, re-run with `--tenant-key <column>` so the USING(true) rule assesses it instead of sparing it.",
+    precisionTier: "review",
+    bftb: { value: 1, ease: 5, safety: 5 },
+  });
+}
+
 // The column list of `create table [schema.]<table> ( … )`, or null if this SQL never declares it.
 function tableBody(sql: string, table: string): string | null {
   const m = new RegExp(`create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:\\w+\\.)?${table}\\s*\\(`, "i").exec(sql);
@@ -253,10 +281,15 @@ export function checkMigrationPolicySemantics(dir: string, tenancyOverride?: Ten
   // call, and it's called once per table here.
   const models = new Map<string, TenancyModel>();
   const unrecognised = new Map<string, string[]>();
+  const usingTrueSpared = new Map<string, string[]>(); // table -> policy names whose USING(true) went unassessed (#338)
   for (const [table, policies] of byTable) {
     const model = inferTenancyModel(allSql, table, tenancyOverride);
     models.set(table, model);
-    if (model.mode === "per-user") unrecognised.set(table, unrecognisedScopeColumns(allSql, table));
+    if (model.mode === "per-user") {
+      unrecognised.set(table, unrecognisedScopeColumns(allSql, table));
+      const spared = policies.filter(isUsingTrueGated).map((p) => p.name);
+      if (spared.length > 0) usingTrueSpared.set(table, spared);
+    }
     for (const f of policyReviewFindings(policies, model)) {
       const site = sites.get(f.location);
       const id = `SB-RLS-POLICY-${f.location}`;
@@ -264,6 +297,9 @@ export function checkMigrationPolicySemantics(dir: string, tenancyOverride?: Ten
     }
   }
   if (models.size > 0) findings.push(tenancyModelFinding(models, unrecognised));
+  // #338 — only when the model was INFERRED per-user (no tenant key found), not when the operator
+  // DECLARED per-user globally: --tenant-mode per-user is an assertion, not an unassessed silence.
+  if (usingTrueSpared.size > 0 && tenancyOverride?.mode !== "per-user") findings.push(usingTrueUnassessedFinding(usingTrueSpared));
   return findings;
 }
 

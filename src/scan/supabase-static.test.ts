@@ -184,6 +184,22 @@ describe("checkMigrationPolicySemantics", () => {
     expect(reviews(dir)).toEqual([]);
   });
 
+  it("surfaces the own-row-with-tenant_id shape at REVIEW tier, not the free count (#257)", () => {
+    // profiles is owner-scoped by its identity (id = auth.uid()) yet declares tenant_id for joins,
+    // so it reviews per-tenant and the caller-identity rule fires. That FP is NOT statically
+    // separable from a tenant table wrongly keyed on the user (the #206 bug the rule must keep
+    // catching), so the honest resolution is to keep it at review tier — surfaced and triaged out,
+    // never a graded/free-count finding — rather than narrow the rule and break the #206 tests.
+    const dir = writeMigrations({
+      "0001.sql": "create table public.profiles (id uuid primary key, tenant_id uuid not null, email text);",
+      "0002.sql": "create policy profiles_select_self on public.profiles for select using (id = auth.uid());",
+    });
+    const flagged = reviews(dir).filter((f) => f.location.includes("profiles_select_self"));
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0]!.precisionTier).toBe("review");
+    expect(flagged[0]!.precisionTier).not.toBe("high");
+  });
+
   it("reports a policy it could not parse rather than passing over it in silence", () => {
     const dir = writeMigrations({
       "0001.sql": schema,
@@ -324,6 +340,67 @@ describe("checkMigrationPolicySemantics — tenancy-model disclosure (#258)", ()
       expect(model(dir)!.fix).toContain("--tenant-key");
       expect(model(dir)!.fix).toContain("quick-scan");
     });
+  });
+});
+
+// #338 — usingTrueReview spares `USING (true)` on a table with no recognised tenant key (the
+// public-catalog case), but a spared policy is silent exactly like a correct one. This disclosure
+// names the spared tables so a reader can falsify the sparing rather than infer safety from silence.
+describe("checkMigrationPolicySemantics — USING(true) unassessed disclosure (#338)", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function writeMigrations(sql: string): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-usingtrue-"));
+    const dir = join(root, "supabase", "migrations");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "0001.sql"), sql);
+    return root;
+  }
+
+  const disclosure = (dir: string, override?: TenancyOverride) =>
+    checkMigrationPolicySemantics(dir, override).find((f) => f.id === "SB-RLS-USING-TRUE-UNASSESSED");
+
+  it("names a table whose USING(true) was spared for want of a tenant key (the catalog shape)", () => {
+    const dir = writeMigrations(
+      "create table public.plans (id uuid primary key, name text);\n" +
+        "create policy plans_select_public on public.plans for select using (true);",
+    );
+    expect(disclosure(dir)!.evidence).toContain("plans (plans_select_public)");
+  });
+
+  it("is Info-tier and non-grading — an assumption disclosure, not a finding", () => {
+    const dir = writeMigrations(
+      "create table public.plans (id uuid primary key, name text);\n" +
+        "create policy plans_select_public on public.plans for select using (true);",
+    );
+    const f = disclosure(dir)!;
+    expect(f.severity).toBe("Info");
+    expect(f.precisionTier).toBe("review");
+  });
+
+  it("does not fire when the USING(true) table declares a tenant key — that shape is assessed and flagged, not spared", () => {
+    const dir = writeMigrations(
+      "create table public.documents (id uuid primary key, tenant_id uuid not null);\n" +
+        "create policy d_all on public.documents for select using (true);",
+    );
+    expect(disclosure(dir)).toBeUndefined();
+  });
+
+  it("does not fire when the operator DECLARED per-user globally — a declaration is not an unassessed silence", () => {
+    const dir = writeMigrations(
+      "create table public.plans (id uuid primary key, name text);\n" +
+        "create policy plans_select_public on public.plans for select using (true);",
+    );
+    expect(disclosure(dir, { mode: "per-user" })).toBeUndefined();
+  });
+
+  it("does not fire when no per-user table carries a USING(true) policy", () => {
+    const dir = writeMigrations(
+      "create table public.profiles (id uuid primary key, email text);\n" +
+        "create policy p_sel on public.profiles for select using (id = auth.uid());",
+    );
+    expect(disclosure(dir)).toBeUndefined();
   });
 });
 

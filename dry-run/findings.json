@@ -4170,6 +4170,24 @@
     "precisionTier": "review"
   },
   {
+    "id": "SB-RLS-USING-TRUE-UNASSESSED",
+    "title": "USING (true) policies left unassessed — no recognised tenant key to judge them against",
+    "severity": "Info",
+    "confidence": "Review",
+    "category": "Multi-tenant security",
+    "taxonomy": "M1 — Multi-tenant security",
+    "location": "supabase/migrations/",
+    "status": "Open",
+    "evidence": "These policies open every row of their table (USING is \"true\") on a table that declares no recognised tenant key, so the tenant-scoped USING(true) rule did NOT assess them — an intentional public/reference table (a catalog) and a genuine cross-user leak look identical here, and only a declared tenant key would let the rule tell them apart. Named so the sparing can be checked rather than read as clean from the absence of a finding: plans (plans_select_public).",
+    "impact": "This is an assumption disclosure, not a defect. A spared USING(true) may be a correct world-readable catalog OR a reference-shaped table that is actually leaking rows across users — the static review cannot decide without a tenant key, and silence here is not evidence of safety.",
+    "fix": "Confirm each table above is intentionally world-readable (a published catalog/reference list). If it is really tenant- or owner-scoped under a column the review did not recognise, re-run with `--tenant-key <column>` so the USING(true) rule assesses it instead of sparing it.",
+    "value": 1,
+    "ease": 5,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review"
+  },
+  {
     "id": "SB-DEFINER-AUTHZ-public.promote_to_admin(target_user_id)",
     "title": "SECURITY DEFINER public.promote_to_admin — caller-authorization review",
     "severity": "High",
