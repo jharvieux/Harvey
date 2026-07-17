@@ -1,0 +1,16 @@
+"use server";
+
+import { createServiceClient } from "../lib/supabase";
+
+// Modelled on proposit's acceptInvitationAction (#465): NO auth call, service-role client, and
+// the new row's OWNER comes from the client (`user_id: userId`) — the caller says who the
+// membership belongs to and nothing checks it. The widened INSERT-value shape.
+export async function addMember(organisationId: string, userId: string) {
+  const supabaseService = createServiceClient();
+
+  await supabaseService.from("organisation_users").insert({
+    organisation_id: organisationId,
+    user_id: userId,
+    role: "member",
+  });
+}

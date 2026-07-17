@@ -1,0 +1,17 @@
+"use server";
+
+import { createServiceClient } from "../lib/supabase";
+import { getCurrentUser } from "../lib/auth";
+
+// The near-miss to positive-svc-insert: identical service-role insert shape, but the owner id
+// reads off the SESSION (`user.id`), not the arguments — the caller can only ever add itself.
+export async function joinOrganisation(organisationId: string) {
+  const user = await getCurrentUser();
+  const supabaseService = createServiceClient();
+
+  await supabaseService.from("organisation_users").insert({
+    organisation_id: organisationId,
+    user_id: user.id,
+    role: "member",
+  });
+}
