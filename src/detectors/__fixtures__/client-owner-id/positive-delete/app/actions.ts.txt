@@ -1,0 +1,19 @@
+"use server";
+
+import { z } from "zod";
+import { admin } from "../lib/db";
+import { getCurrentUser } from "../lib/auth";
+
+const DeleteAccountSchema = z.object({ accountId: z.string().uuid() });
+
+// Second real instance of the #221 class, exercising the DELETE verb and the account_id
+// ownership column (the positive/ fixture is an .update() on user_id). It is the
+// negative-ownership-compared fixture with its `currentUser.id !== accountId` guard removed:
+// the action authenticates and validates, then deletes the row named by the CLIENT-supplied
+// accountId with no comparison against the session — any signed-in user can delete any account.
+export async function deleteAccount(input: unknown) {
+  const currentUser = await getCurrentUser();
+  const { accountId } = DeleteAccountSchema.parse(input);
+
+  await admin.from("accounts").delete().eq("account_id", accountId);
+}

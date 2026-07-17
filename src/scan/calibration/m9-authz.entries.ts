@@ -14,14 +14,21 @@
 // These entries carry `module: "M9"` because the detector runs in the static-detect AST pass
 // (src/cli/static-detect.ts), NOT runMechanicalScan — the same arrangement M7/M10 use to stay
 // out of validate-calibration.ts's `module === undefined` M1 gate, which would otherwise score
-// them as spurious misses. The detector's own gate is app-router.test.ts, where the two
-// negatives below are pinned as near-misses.
+// them as spurious misses. The detector's own gate is app-router.test.ts, where both positives
+// and both negatives below are pinned.
+//
+// #427 parity: the class is detected by ONE rule, but that rule has two configuration surfaces —
+// MUTATION_PATTERN (insert/update/upsert/delete/rpc) and OWNERSHIP_COLUMN. Two positives
+// exercising DIFFERENT surfaces (P-AUTHN-CLIENT-OWNER = update/user_id; P-AUTHN-CLIENT-OWNER-
+// DELETE = delete/account_id) let the census fail on a PARTIAL regression of either surface,
+// where a single positive fails only on a total outage. These are genuine distinct instances of
+// the one real class, not fabricated new classes — the other #221 shapes stay semantic/paid-tier.
 
 import type { CorpusEntry } from "./types.js";
 
-// Each entry gets its OWN fixture file: all three share one taxonomy, so a single shared file
-// would make every `match` keyword relevant to every entry and the negatives would collide with
-// the positive's location (the whole-corpus ambiguity guard in calibration.test.ts catches this).
+// Each entry gets its OWN fixture file: they share one taxonomy, so a single shared file would
+// make every `match` keyword relevant to every entry and the negatives would collide with the
+// positives' locations (the whole-corpus ambiguity guard in calibration.test.ts catches this).
 export const m9AuthzEntries: CorpusEntry[] = [
   {
     id: "P-AUTHN-CLIENT-OWNER",
@@ -32,6 +39,16 @@ export const m9AuthzEntries: CorpusEntry[] = [
     match: ["Client-supplied owner id"],
     expectedTier: "review",
     note: `app/actions-owner.ts updateProfileName(): authenticates via getCurrentUser() and schema-parses its input, then updates .eq("user_id", userId) with the CLIENT's userId instead of currentUser.id — any signed-in user can rename any profile. Caught by detectClientSuppliedOwnerId at review tier (Likely): the AST proves the .eq() value roots in a parameter and that no session-vs-client comparison exists, but not that authorization is absent from code it can't see (a wrapper, middleware), so it is triage-tier, never free-count. Modelled on proposit's user-actions.ts (#221).`,
+  },
+  {
+    id: "P-AUTHN-CLIENT-OWNER-DELETE",
+    kind: "positive",
+    cls: "authenticated server action deletes rows scoped by a client-supplied account id",
+    module: "M9",
+    location: "app/actions-delete.ts",
+    match: ["Client-supplied owner id"],
+    expectedTier: "review",
+    note: `client-owner-id/positive-delete/app/actions.ts deleteAccount(): a SECOND real instance of the #221 class, distinct from P-AUTHN-CLIENT-OWNER's .update()/user_id shape — it exercises the DELETE verb and the account_id ownership column (both otherwise seen only on the negatives). It is N-AUTHN-OWNER-COMPARED minus its currentUser.id !== accountId guard, so that negative is exactly its boundary. Caught by detectClientSuppliedOwnerId at review tier; gated live by app-router.test.ts ("flags a second instance … delete verb and the account_id column"). Its purpose is PARITY (#427): two positives across different MUTATION_PATTERN/OWNERSHIP_COLUMN surfaces fail on a partial regression, where one positive fails only on a total outage.`,
   },
   {
     id: "N-AUTHN-SESSION-OWNER",

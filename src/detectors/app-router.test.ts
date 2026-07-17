@@ -119,6 +119,20 @@ describe("client-supplied owner id trusted by an authenticated action (#221)", (
     expect(taxonomies(findings)).not.toContain("M9 — Server Action missing input validation");
   });
 
+  it("flags a second instance of the class exercising the delete verb and the account_id column", () => {
+    // The negative-ownership-compared shape with its session-vs-client guard removed: a real
+    // .delete() scoped by a client-supplied account_id. Guards a partial regression of the
+    // MUTATION_PATTERN (delete) / OWNERSHIP_COLUMN (account_id) surfaces the user_id/update
+    // positive never exercises.
+    const findings = detectAppRouterFindings(loadFixtureDir("client-owner-id/positive-delete"));
+    const hits = findings.filter((f) => f.taxonomy === CLIENT_OWNER_ID);
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ severity: "High", category: "Security", confidence: "Likely" });
+    expect(hits[0]?.title).toContain("deleteAccount");
+    expect(hits[0]?.evidence).toContain("account_id");
+  });
+
   it("does not flag the same shape when the owner id is read off the session binding", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("client-owner-id/negative-session-derived"));
     expect(taxonomies(findings)).not.toContain(CLIENT_OWNER_ID);

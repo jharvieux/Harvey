@@ -97,14 +97,26 @@ const reviewMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expect
 // nine modules are gated by their OWN suites (calibration.test.ts's recorded-output + live-detector
 // blocks, mutation-scan.test.ts, etc.), not by this number. So the recall count below is M1's, not
 // the suite's — labelled as such, and preceded by a per-module census so a 1-positive module reads
-// as visibly thin rather than being averaged into the M1-dominated total. Per-module fixture PARITY
-// (thickening M8/M9/M3) is a separate fixture-authoring effort tracked as a follow-up, not this gate.
+// as visibly thin rather than being averaged into the M1-dominated total.
+//
+// PARITY MINIMUM (#427): every module carries >= MIN_POSITIVES_PER_MODULE positive fixtures
+// (static + connected), each paired with >= 1 boundary negative. Rationale: a single positive
+// fails only on a TOTAL outage (its module's recall drops to 0); two positives exercising
+// DISTINCT rule surfaces let a PARTIAL regression — one shape breaks while another still fires —
+// show up as a drop, which is what the module's own suite must catch. This block enforces the
+// fixtures EXIST; the partial-regression detection itself lives in each module's suite. The
+// number is deliberately low: 2 is the floor at which partial and total become distinguishable.
+const MIN_POSITIVES_PER_MODULE = 2;
 console.log("\nPer-module corpus census (fixture counts only — this gate scores M1; other modules are gated by their own suites):");
-for (const c of moduleCensus(CORPUS)) {
+const census = moduleCensus(CORPUS);
+const parityThin = census.filter((c) => c.positivesStatic + c.positivesConnected < MIN_POSITIVES_PER_MODULE);
+for (const c of census) {
   const connected = c.positivesConnected ? ` +${c.positivesConnected} connected` : "";
   const where = c.module === "M1" ? "SCORED BY THIS GATE" : "own unit suite (src/scan/calibration/*.entries.ts)";
-  console.log(`  ${c.module.padEnd(4)} positives=${String(c.positivesStatic).padEnd(3)}${connected.padEnd(14)} negatives=${String(c.negatives).padEnd(3)}  ${where}`);
+  const parity = c.positivesStatic + c.positivesConnected < MIN_POSITIVES_PER_MODULE ? "  THIN (< parity min)" : "";
+  console.log(`  ${c.module.padEnd(4)} positives=${String(c.positivesStatic).padEnd(3)}${connected.padEnd(14)} negatives=${String(c.negatives).padEnd(3)}  ${where}${parity}`);
 }
+console.log(`  parity minimum: ${MIN_POSITIVES_PER_MODULE} positives/module (#427) — ${parityThin.length ? `THIN: ${parityThin.map((c) => c.module).join(", ")}` : "all modules meet it"}`);
 
 console.log(
   `\nM1 mechanical corpus — positives caught: ${matrix.positivesCaught}/${matrix.positivesTotal} static ` +
@@ -121,11 +133,12 @@ console.log("\nGIT-HISTORY SECRET GATE (#129, dedicated throwaway-repo fixture):
 const gitHistoryGate = runGitHistorySecretGate();
 console.log(`  ${gitHistoryGate.detail.replace(/\n/g, "\n  ")}`);
 
-const gatePass = negFps.length === 0 && highMisses.length === 0 && gitHistoryGate.pass;
+const gatePass = negFps.length === 0 && highMisses.length === 0 && gitHistoryGate.pass && parityThin.length === 0;
 if (!gatePass) {
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives: ${negFps.map((r) => r.id).join(", ")}`);
   if (highMisses.length) console.log(`GATE FAIL — high-tier positives not caught: ${highMisses.map((r) => r.id).join(", ")}`);
   if (!gitHistoryGate.pass) console.log("GATE FAIL — git-history secret gate (#129) did not pass, see detail above");
+  if (parityThin.length) console.log(`GATE FAIL — parity minimum (#427): ${parityThin.map((c) => c.module).join(", ")} below ${MIN_POSITIVES_PER_MODULE} positives`);
   process.exit(1);
 }
 console.log("\nGATE PASS — no free-count false positives; every high-tier rule fired on its positive.");

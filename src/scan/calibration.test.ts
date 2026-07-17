@@ -685,10 +685,12 @@ describe("#221 authz corpus (live detectAppRouterFindings output over the commit
     expect(findings.every((f) => f.precisionTier !== undefined)).toBe(true);
   });
 
-  it("draws exactly one finding of this class on the fixture — the two benign siblings are silent", () => {
+  it("draws one finding per planted positive and stays silent on the benign siblings (#427: update + delete shapes)", () => {
     const hits = findings.filter((f) => f.taxonomy === "M1 — Client-supplied owner id trusted by authenticated action");
-    expect(hits).toHaveLength(1);
-    expect(hits[0]?.title).toContain("updateProfileName");
+    expect(hits).toHaveLength(2);
+    const titles = hits.map((h) => h.title).join(" | ");
+    expect(titles).toContain("updateProfileName");
+    expect(titles).toContain("deleteAccount");
   });
 
   it("keeps the class out of the free count — the AST cannot prove authorization is absent elsewhere", () => {
