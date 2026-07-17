@@ -14,8 +14,10 @@
 // These entries carry `module: "M9"` because the detector runs in the static-detect AST pass
 // (src/cli/static-detect.ts), NOT runMechanicalScan — the same arrangement M7/M10 use to stay
 // out of validate-calibration.ts's `module === undefined` M1 gate, which would otherwise score
-// them as spurious misses. The detector's own gate is app-router.test.ts, where both positives
-// and both negatives below are pinned.
+// them as spurious misses. The detector's own gate is app-router.test.ts, where every positive
+// and negative below is pinned. (The pages/api surface of the same class is a SEPARATE pass that
+// DOES run mechanically — src/scan/bola-owner.ts, scored via b15's P-BOLA-BODY-OWNER, #433. The
+// surfaces are partitioned so a full audit never emits the same site from both probes.)
 //
 // #427 parity: the class is detected by ONE rule, but that rule has two configuration surfaces —
 // MUTATION_PATTERN (insert/update/upsert/delete/rpc) and OWNERSHIP_COLUMN. Two positives
