@@ -80,6 +80,48 @@
         "confidence": "high"
       },
       {
+        "column": "pin_block",
+        "infotype": "PIN",
+        "category": "PCI",
+        "confidence": "high"
+      },
+      {
+        "column": "track2",
+        "infotype": "TRACK_DATA",
+        "category": "PCI",
+        "confidence": "high"
+      },
+      {
+        "column": "mac_address",
+        "infotype": "DEVICE_ID",
+        "category": "SENSITIVE_PII",
+        "confidence": "medium"
+      },
+      {
+        "column": "license_plate",
+        "infotype": "VEHICLE_ID",
+        "category": "PII",
+        "confidence": "medium"
+      },
+      {
+        "column": "avatar_url",
+        "infotype": "PHOTO",
+        "category": "PII",
+        "confidence": "medium"
+      },
+      {
+        "column": "national_id",
+        "infotype": "NATIONAL_ID",
+        "category": "SENSITIVE_PII",
+        "confidence": "medium"
+      },
+      {
+        "column": "profile",
+        "infotype": "OPAQUE_JSON_BLOB",
+        "category": "PII",
+        "confidence": "low"
+      },
+      {
         "column": "product_name",
         "infotype": "NAME?",
         "category": "PII",
@@ -93,6 +135,13 @@
       "PASSPORT",
       "CVV",
       "CARD",
+      "PIN",
+      "TRACK_DATA",
+      "DEVICE_ID",
+      "VEHICLE_ID",
+      "PHOTO",
+      "NATIONAL_ID",
+      "OPAQUE_JSON_BLOB",
       "NAME?"
     ],
     "categories": [
@@ -100,7 +149,7 @@
       "SENSITIVE_PII",
       "PCI"
     ],
-    "severityScore": 28.3,
+    "severityScore": 58.6,
     "severity": "Critical",
     "phi": false,
     "pci": true,
