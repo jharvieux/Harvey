@@ -112,6 +112,37 @@ describe("parseGitleaksFindings", () => {
     expect(run3).toEqual(run1);
   });
 
+  it("redacts a matched secret value so a real-shaped credential never reaches evidence (#308)", () => {
+    const secret = "sk_test_51Qm2vXcW8rNpKdLhGfYsAe4Uo1Bx6Vt0Zi7Ny5Mw3Qr8Kp2Ld6Hj";
+    const results: GitleaksResult[] = [
+      { RuleID: "stripe-access-token", File: "lib/pay.ts", StartLine: 4, Match: secret },
+    ];
+    const evidence = parseGitleaksFindings(results, "source")[0]?.evidence ?? "";
+    expect(evidence).not.toContain(secret);
+    expect(evidence).toContain(`[redacted, ${secret.length} chars]`);
+    // A short prefix survives so triage can still distinguish two hits on the same rule+file.
+    expect(evidence).toContain("sk_test_51Qm");
+  });
+
+  it("redacts the password inside a matched connection-string URI (#308)", () => {
+    const uri = "postgres://appuser:S3cr3tP4ssZ9Qm2vXc@db.example.supabase.co";
+    const results: GitleaksResult[] = [
+      { RuleID: "harvey-db-uri-credentials", File: "supabase/migrations/001.sql", StartLine: 9, Match: uri },
+    ];
+    const evidence = parseGitleaksFindings(results, "source")[0]?.evidence ?? "";
+    expect(evidence).not.toContain("S3cr3tP4ssZ9Qm2vXc");
+    expect(evidence).not.toContain(uri);
+  });
+
+  it("keeps the structural service_role claim verbatim — it is not a secret (#308)", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "supabase-service-role-jwt", File: "lib/admin.ts", StartLine: 8, Match: '"role":"service_role"' },
+    ];
+    const evidence = parseGitleaksFindings(results, "source")[0]?.evidence ?? "";
+    expect(evidence).toContain('"role":"service_role"');
+    expect(evidence).not.toContain("[redacted");
+  });
+
   it("never surfaces the internal correlation marker rules as findings themselves", () => {
     const results: GitleaksResult[] = [
       { RuleID: "supabase-demo-key-marker", File: "supabase/seed.sql", StartLine: 2 },

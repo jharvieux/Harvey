@@ -1,9 +1,16 @@
 // The full-audit runner (#229) — runs all ten modules against a target and DERIVES the coverage
 // ledger from what actually executed.
 //
-//   pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json]
+//   pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm]
+//       [--out coverage.json] [--findings-out engagement.json] [--meta meta.json]
 //
 // (No `pnpm run-audit` alias yet — adding one edits package.json, which is operator-owned.)
+//
+// --findings-out (#312): assemble ONE engagement findings.json — each emitting module's captured
+// findings plus the derived coverage ledger — in the shape report-template/ and `pnpm
+// validate:findings` consume. Removes the manual "collect every module's output by hand" step.
+// --meta points at the engagement metadata (client, health, headline); omit it and the file carries
+// a placeholder meta with a loud warning to fill it before the report ships.
 //
 // The tier flags declare which environments the engagement HAS, not which modules to run: every
 // module is always attempted, and a module whose environment is absent is recorded
@@ -16,20 +23,37 @@
 // Exit 1 on any coverage gap, never-run module, or crashed runner.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { assembleEngagementDocument } from "../audit-report.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
 import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit-execution-log.js";
 import { formatFailures, runAudit, type RunContext } from "../audit-runner.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
+import { type Finding, type ReportMeta, validateFindings } from "../findings.js";
+
+// A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
+// Deliberately blank (not invented): the coverage ledger and findings are derived; client, health,
+// and headline are human judgements the operator fills before the report ships.
+const placeholderMeta = (target: string): ReportMeta => ({
+  client: "", subtitle: "", date: new Date().toISOString().slice(0, 10), commit: "", auditor: "",
+  confidential: true, overallHealth: 0, tenantIsolation: "", authModel: "", headline: "",
+  scope: target, methodology: "", outOfScope: "",
+});
 
 const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
-const outIdx = args.indexOf("--out");
-const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
+const flagValue = (flag: string): string | undefined => {
+  const i = args.indexOf(flag);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+const outPath = flagValue("--out");
+const findingsOut = flagValue("--findings-out");
+const metaPath = flagValue("--meta");
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json]");
+  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json]");
   process.exit(2);
 }
 
@@ -39,6 +63,10 @@ const env: EngagementEnv = {
   dynamic: args.includes("--dynamic"),
   llm: args.includes("--llm"),
 };
+
+// Capture is only wired when an engagement document is requested — a coverage-only run keeps its
+// prior behaviour and never asks the module CLIs for their --out artifacts.
+const captureDir = findingsOut ? mkdtempSync(join(tmpdir(), "harvey-audit-")) : undefined;
 
 const ctx: RunContext = {
   targetDir,
@@ -55,18 +83,43 @@ const ctx: RunContext = {
     }
   },
   exists: existsSync,
+  captureDir,
+  readFindings: (p) => {
+    if (!existsSync(p)) return [];
+    const parsed = JSON.parse(readFileSync(p, "utf8"));
+    if (!Array.isArray(parsed)) throw new Error(`captured findings at ${p} is not a Finding[] array`);
+    return parsed as Finding[];
+  },
 };
 
 console.log(`\nFull audit — ${targetDir}`);
 console.log(`Tiers in scope: source${env.connected ? " + connected" : ""}${env.dynamic ? " + dynamic" : ""}${env.llm ? " + llm" : ""}\n`);
 
-const { recorded, failures } = runAudit(AUDIT_RUNNERS, ctx);
+const { recorded, failures, findings } = runAudit(AUDIT_RUNNERS, ctx);
 const report = buildAuditCoverage(recorded, env);
 
 console.log(formatAuditCoverage(report));
 if (outPath) {
   writeFileSync(outPath, JSON.stringify(recorded, null, 2));
   console.log(`\nDerived coverage ledger → ${outPath}`);
+}
+
+// #312: assemble the single engagement findings.json — the captured findings plus the derived
+// coverage ledger, so a never-run module is visible in the deliverable rather than reading as
+// "no findings". Meta is engagement metadata run-audit cannot derive: take it from --meta, else
+// scaffold a placeholder and say loudly that it must be filled before the report ships.
+if (findingsOut) {
+  const meta: ReportMeta = metaPath ? (JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta) : placeholderMeta(targetDir);
+  const doc = assembleEngagementDocument(recorded, env, findings, meta);
+  const { ok, errors } = validateFindings(doc);
+  if (!ok) {
+    console.error(`\nAssembled findings document is invalid — refusing to write ${findingsOut}:`);
+    for (const e of errors) console.error(`  ✗ ${e}`);
+    process.exit(1);
+  }
+  writeFileSync(findingsOut, `${JSON.stringify(doc, null, 2)}\n`);
+  console.log(`\nEngagement findings (${doc.findings.length} finding(s) + coverage ledger) → ${findingsOut}`);
+  if (!metaPath) console.error("⚠ no --meta given: the deliverable carries a PLACEHOLDER meta — fill client/health/headline/scope before rendering the report.");
 }
 
 // #284: the never-run ledger is the complement of this log, so a module that genuinely ran here
