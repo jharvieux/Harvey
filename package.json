@@ -22,6 +22,7 @@
     "detect-deeper": "tsx src/cli/detect-deeper.ts",
     "mutation-scan": "tsx src/cli/mutation-scan.ts",
     "perf-scan": "tsx src/cli/perf-scan.ts",
+    "lighthouse-scan": "tsx src/cli/lighthouse-scan.ts",
     "detect-static": "tsx src/cli/static-detect.ts",
     "quick-scan": "tsx src/cli/quick-scan.ts",
     "simplify-scan": "tsx src/cli/simplify-scan.ts",
@@ -50,5 +51,9 @@
     "typescript": "^5.8.0",
     "typescript-eslint": "^8.35.0",
     "vitest": "^3.2.0"
+  },
+  "dependencies": {
+    "chrome-launcher": "^1.2.1",
+    "lighthouse": "^13.4.0"
   }
 }

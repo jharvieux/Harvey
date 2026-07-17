@@ -12,7 +12,7 @@
 |---|---|---|---|
 | **DB** | Unindexed FKs, unused/duplicate indexes, `auth_rls_initplan`, redundant permissive policies | `src/cli/perf-scan.ts` (`pnpm perf-scan`) — pulls the Supabase performance advisor and shapes it into `Finding[]` | Verify each fix against a test DB before recommending (index migrations, RLS rewrites) |
 | **API/data** | N+1 await-in-loop, unbounded `select("*")` (no `.range()`/`.limit()`), data-fetching waterfalls, accidental dynamic rendering, missing caching | **Wired (#170):** await-in-loop and unbounded-select are `src/detectors/perf-code.ts` (§2a), and so is the client-side fetch-in-useEffect waterfall (#383). *Server-side* waterfalls / cache-config / dynamic rendering stay with **M9** (`src/detectors/app-router.ts`) — M7's job is to pull M9's performance-tagged findings into the §3b rows, not re-implement them | Confirm unbounded-select candidates against table size (a 3-row config table is benign) |
-| **Client render/bundle** | React render waste (context value churn, inline literal props, index keys, raw `<img>`, sort-in-render, state sprawl), whole-library imports, heavy libs in client chunks, manual font links; **measured first-load JS per route / shared baseline** from a `next build` artifact | **Wired (#170):** `src/detectors/perf-code.ts` (§2a) incl. the React Compiler downgrade gate; bundle ground truth via `src/detectors/bundle-stats.ts` (§2b, ids `M7B-*`) | Turbopack builds (Next 16 default) carry no per-route manifest — the shared baseline is still measured and the attribution gap is emitted as an Info finding; per-route numbers need a bundle-analyzer stats artifact (`--stats`, §2b `M7B-06`). Core Web Vitals (`lighthouse`) remain documented-plan-only (§3) |
+| **Client render/bundle** | React render waste (context value churn, inline literal props, index keys, raw `<img>`, sort-in-render, state sprawl), whole-library imports, heavy libs in client chunks, manual font links; **measured first-load JS per route / shared baseline** from a `next build` artifact | **Wired (#170):** `src/detectors/perf-code.ts` (§2a) incl. the React Compiler downgrade gate; bundle ground truth via `src/detectors/bundle-stats.ts` (§2b, ids `M7B-*`) | Turbopack builds (Next 16 default) carry no per-route manifest — the shared baseline is still measured and the attribution gap is emitted as an Info finding; per-route numbers need a bundle-analyzer stats artifact (`--stats`, §2b `M7B-06`). Core Web Vitals via Lighthouse are **wired (#387)** — `pnpm lighthouse-scan`, ids `M7L-*` (§3) |
 | **Code hot-path** | Blocking sync I/O in request handlers, fetch-in-middleware, JSON deep-clones, nested-loop O(n·m) joins | **Wired (#170):** `src/detectors/perf-code.ts` (§2a), incl. the nested-loop-join shape (#385, Review tier) | Confirm nested-loop-join hits against collection sizes (only matters when both scale with data). Remaining algorithmic judgment ("is this computation expensive") stays an [L] review-tier read during the M6 pass; flag under M7 when the concern is *speed* at scale rather than *maintainability* |
 
 ## 1. Running the DB advisor scan
@@ -168,20 +168,51 @@ prints. `pnpm detect-static` picks the artifact up automatically (`<target>/.nex
   catches server-only deps shipped in client bundles), and `M7B-06` per-route first-load on
   Turbopack builds — closing exactly the per-route gap `M7B-03` discloses.
 
-## 3. Client: Core Web Vitals (documented plan — deferred)
+## 3. Client: Core Web Vitals — `src/lighthouse.ts` + `pnpm lighthouse-scan` (#387, [L] tier)
 
-- **Bundle weight: no longer deferred** — §2b measures first-load JS per route from a real
-  `next build` artifact (`M7B-01`/`M7B-02`/`M7B-03`) and, with a bundle-analyzer stats artifact,
-  the depth classes (`M7B-04`/`M7B-05`/`M7B-06`). Only Lighthouse remains documented-plan-only,
-  because it pulls in a dependency Harvey doesn't currently have installed (`lighthouse`), which
-  the issue scoping this module explicitly said to avoid unless a real run justifies it.
-- **Core Web Vitals / Lighthouse:** run the `lighthouse` CLI against a running instance of the
-  client's app (staging or authorized local), capture LCP/INP/CLS/TBT, and flag pages below
-  Google's "Good" thresholds. Requires `lighthouse` (npm) + a headless Chrome, and a running
-  target — meaningfully heavier than the rest of Harvey's toolchain (which mostly shells out to
-  already-installed CLIs or does static analysis). **Scoped out of this PR**; wire it once a real
-  client engagement needs it, following the `src/perf-scan.ts` pure-transform + thin-CLI-wrapper
-  pattern established here.
+Implemented (#387). This is M7's only DIRECT user-facing-speed measurement — every other M7 signal
+(code AST, DB advisors, bundle size) is a *proxy* for what a real page load costs.
+
+```bash
+# Local (operator decision #387): Harvey builds + serves the target itself, then audits it.
+pnpm lighthouse-scan <target-dir> --route / --route /dashboard --out findings.lh.json
+# Or point at an already-running instance (skips build/serve):
+pnpm lighthouse-scan --url http://localhost:3000 --route / --out findings.lh.json
+```
+
+- **Where it runs: LOCALLY.** `src/cli/lighthouse-scan.ts` runs `npm run build` then
+  `npm run start -- -p <port>` in the target, waits for the server, and drives Lighthouse against
+  `http://localhost:<port>`. Not a client staging URL — pass `--url` only to audit an instance
+  you already have running.
+- **Browser: `chrome-launcher`** (+ the `lighthouse` Node API). It auto-detects a system Chrome;
+  set `LIGHTHOUSE_CHROME_PATH` to reuse the Playwright chromium the repo already installs for
+  `report-template` — the CLI fills that in from `chromium.executablePath()` when the env var is
+  unset, so no second browser install is required.
+- **Pure transform:** `parseLighthouseFindings(pages)` (`src/lighthouse.ts`) reads
+  `categories.performance.score` and the `largest-contentful-paint` / `total-blocking-time` /
+  `cumulative-layout-shift` audits, and emits one `Finding` per failing metric (grouped across
+  pages, worst-first, count in the title — the same shape as the DB-advisor and bundle passes),
+  ids `M7L-01…`. Thresholds are Google's published "Good" boundaries: **LCP < 2.5s, CLS < 0.1,
+  TBT < 200ms.** A metric in the "Poor" bucket (LCP ≥ 4s, TBT ≥ 600ms, CLS ≥ 0.25, score < 0.5)
+  is scored `Perf`; a needs-improvement one is `Low`.
+- **INP:** a lab Lighthouse run does NOT produce INP (it is a field-only metric). **TBT is the
+  lab proxy** for the "INP < 200ms" intent — that is the audit `parseLighthouseFindings` measures
+  against, and the TBT finding's evidence says so.
+- **Lab, not field:** a single Lighthouse run uses simulated throttling and varies run-to-run.
+  These findings measure THIS run at confidence `Confirmed`, with the lab-vs-field caveat in every
+  evidence line — corroborate against field RUM or repeat runs before acting.
+- **Fail-loud degrade:** if the target can't be built, served, or driven (no `build` script, build
+  fails, no Chrome, port in use), `lighthouseUnavailableFinding(reason)` records the gap as an
+  `M7L-00` disclosure finding with the reason and the CLI exits 0 — the same "record, don't
+  silently skip" contract as `M5-00`/`M8-00`, per CLAUDE.md's coverage doctrine.
+- **Reachable, not orchestrator-inline:** like the M2 pen-test and the M1 semantic pass, the CWV
+  tier is a heavier operator-run pass (it needs a buildable/servable target + a browser), so it is
+  a registered opt-in CLI (`pnpm lighthouse-scan`) whose `Finding[]` merges into the engagement
+  `findings.json` (§4), NOT a step inside `run-audit`'s default M7 probe.
+- **Only a live run validates:** the end-to-end build → serve → Chrome → Lighthouse pipeline has
+  no unit coverage (no browser/target in CI) — `src/lighthouse.test.ts` covers the JSON→`Finding[]`
+  parse, the threshold/severity logic, and the degrade finding against a fixture LHR. The live
+  pipeline is exercised on the first real engagement.
 
 ## 4. Mapping into the report (§3b Performance of `docs/audit-report-skeleton.md`)
 
@@ -250,7 +281,9 @@ review pass says what the right structure would be.
 
 ### Deferred / scoped-out follow-ups
 
-- **Web Vitals (§3):** no `lighthouse` integration — needs a real client repo and a decision on
-  where it runs (staging vs. local) before it's worth the new dependency.
+- **Web Vitals (§3): implemented (#387)** — `pnpm lighthouse-scan` runs Lighthouse locally
+  (`chrome-launcher` + the `lighthouse` Node API) and shapes LCP/TBT/CLS + the performance score
+  into `M7L-*` findings. Remaining live-only validation: the build → serve → Chrome → Lighthouse
+  pipeline end-to-end against a real target (no browser/target in CI).
 - **`/advisors/performance` endpoint path:** inferred by analogy, not exercised live — verify on
   the first real engagement (§1).
