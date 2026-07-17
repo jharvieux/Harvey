@@ -290,18 +290,13 @@ export function isPlaceholderSpec(text: string): { placeholder: boolean; why?: s
   return { placeholder: false };
 }
 
-export interface TestFileInput {
-  path: string;
-  text: string;
-}
-
 // `testFiles` is the census of the target's actual test files (paths matching *.test.*/*.spec.*
 // or living under __tests__/). Omit it to get the pre-#252 harness-only detection (used by unit
 // tests that only exercise the package.json rules); the CLI always passes it.
 export function detectNoTestSuite(
   pkg: PackageJsonForTestDetection | undefined,
   hasStrykerConfig: boolean,
-  testFiles?: readonly TestFileInput[],
+  testFiles?: readonly { path: string; text: string }[],
 ): { missing: boolean; reason?: string } {
   const testScript = pkg?.scripts?.test;
   const hasRealTestScript = !!testScript && !PLACEHOLDER_TEST_SCRIPT.test(testScript);
