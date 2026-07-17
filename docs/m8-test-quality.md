@@ -80,6 +80,10 @@ M8 report content for that target — a security-critical codebase with zero aut
 coverage is itself the finding, not a reason the scan failed to run. This shape replaces the usual
 `{ summary, reportRows }` output (§2) for that run; the CLI still honors `--out` for it.
 
+Also fires when a harness IS configured but has no meaningful suite (#252): zero test files, or
+a single placeholder/smoke spec (no test cases, no assertions, or only constant-literal
+assertions). One meaningful spec still counts as a suite.
+
 **Report path assumption:** Stryker's `json` reporter writes to `reports/mutation/mutation.json`
 relative to the repo root by default — **confirmed against a real run** (#262, 2026-07-15,
 `@stryker-mutator/core@9.6.1`, see "Targets/calibration structure" below). Still **not
