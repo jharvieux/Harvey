@@ -97,7 +97,10 @@ const GATED_CAPABILITIES = [
 // is claiming confirmed exploitability, not just a version overlap, and grades despite its
 // category (#260) — the decision travels with the finding that knows its own evidence quality,
 // not a category-wide guess.
-const NON_GRADING_CATEGORIES = new Set(["Dependency CVE"]);
+// "License compliance" (#456) joins the set for the same reason: a copyleft SPDX match or a
+// missing-license disclosure is a legal judgment about redistribution terms, not a security
+// verdict — surfaced in full, never auto-failing the grade.
+const NON_GRADING_CATEGORIES = new Set(["Dependency CVE", "License compliance"]);
 
 const isNonGrading = (f: Finding): boolean => NON_GRADING_CATEGORIES.has(f.category) && !f.exploitabilityVerified;
 

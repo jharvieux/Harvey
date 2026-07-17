@@ -35,7 +35,9 @@ export interface SemgrepResult {
   extra?: {
     message?: string;
     severity?: string; // ERROR | WARNING | INFO
-    metadata?: { confidence?: string; harveySeverity?: string };
+    // cwe/owasp (#455): carried by both the registry p/owasp-top-ten pack and, where added, our
+    // harvey-* custom rules — see each rule's `metadata:` block in ./rules/semgrep/*.yml.
+    metadata?: { confidence?: string; harveySeverity?: string; cwe?: string[]; owasp?: string[] };
   };
 }
 
@@ -66,6 +68,9 @@ export function parseSemgrepFindings(output: SemgrepOutput): Finding[] {
       impact: r.extra?.message ?? "See the rule's message for the specific risk.",
       fix: "Review the matched code path against the rule's remediation guidance.",
       precisionTier: high ? "high" : "review",
+      // #455 — populate only from the rule's own declared metadata, never invented here.
+      cwe: meta?.cwe?.length ? meta.cwe : undefined,
+      owasp: meta?.owasp?.length ? meta.owasp : undefined,
     });
   });
 }

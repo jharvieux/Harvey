@@ -48,6 +48,44 @@ describe("parseSemgrepFindings", () => {
     expect(findings[0]?.precisionTier).toBe("review");
     expect(findings[0]?.severity).toBe("Medium");
   });
+
+  it("#455: threads cwe/owasp from a rule's metadata onto the finding", () => {
+    const output: SemgrepOutput = {
+      results: [
+        {
+          check_id: "python.django.security.injection.sql.sql-injection-using-db-cursor-execute",
+          path: "app.py",
+          extra: {
+            message: "sqli",
+            severity: "ERROR",
+            metadata: {
+              confidence: "HIGH",
+              cwe: ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"],
+              owasp: ["A03:2021 - Injection"],
+            },
+          },
+        },
+      ],
+    };
+    const findings = parseSemgrepFindings(output);
+    expect(findings[0]?.cwe).toEqual(["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"]);
+    expect(findings[0]?.owasp).toEqual(["A03:2021 - Injection"]);
+  });
+
+  it("#455: a finding whose rule carries no cwe/owasp metadata gets neither field — never invented", () => {
+    const output: SemgrepOutput = {
+      results: [
+        {
+          check_id: "harvey-service-role-in-client",
+          path: "app/components/Foo.tsx",
+          extra: { message: "leak", severity: "ERROR", metadata: { confidence: "HIGH" } },
+        },
+      ],
+    };
+    const findings = parseSemgrepFindings(output);
+    expect(findings[0]?.cwe).toBeUndefined();
+    expect(findings[0]?.owasp).toBeUndefined();
+  });
 });
 
 describe("checkMissingCsp", () => {

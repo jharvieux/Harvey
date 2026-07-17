@@ -29,6 +29,10 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: Critical
+      # #455: CWE/OWASP mapping added only where unambiguous — SQL injection's CWE and OWASP
+      # Top-10-2021 category are definitional, not inferred.
+      cwe: ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"]
+      owasp: ["A03:2021 - Injection"]
     message: >
       Untrusted request input is interpolated into a raw SQL string reaching .query(). Use
       parameterized queries ($1 placeholders with a params array), never string interpolation.
@@ -56,6 +60,9 @@ rules:
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
+      # #455: CWE-601 is the standard identifier for this exact bug shape. No owasp mapping —
+      # open redirect has no dedicated OWASP Top-10-2021 category (unlike CWE, not unambiguous).
+      cwe: ["CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"]
     message: >
       Redirect target derives from a request-controlled value with no host allowlist — a
       classic open-redirect primitive for phishing (and SSRF-shaped if fetched server-side).
@@ -86,6 +93,10 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: High
+      # #455: XSS's CWE and OWASP Top-10-2021 category (Injection, which explicitly folds in XSS)
+      # are standard, unambiguous mappings.
+      cwe: ["CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"]
+      owasp: ["A03:2021 - Injection"]
     message: >
       A request-controlled value reaches dangerouslySetInnerHTML unsanitized — reflected/stored
       XSS. Sanitize (e.g. DOMPurify.sanitize) before it reaches __html, or render as text.
@@ -156,6 +167,10 @@ rules:
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
+      # #455: OWASP A10:2021 is literally titled "Server-Side Request Forgery (SSRF)" — as
+      # unambiguous as an OWASP mapping gets.
+      cwe: ["CWE-918: Server-Side Request Forgery (SSRF)"]
+      owasp: ["A10:2021 - Server-Side Request Forgery (SSRF)"]
     message: >
       A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate
       the host against an allowlist and block internal/link-local ranges before fetching.

@@ -131,6 +131,9 @@ rules:
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
+      # #455: CWE-352 is definitional. No owasp mapping — CSRF has no dedicated OWASP
+      # Top-10-2021 category (folded elsewhere), so a category id here would be a guess.
+      cwe: ["CWE-352: Cross-Site Request Forgery (CSRF)"]
     message: >
       This 'use server' Server Action mutates data with no Origin/CSRF check. Cookie-based auth
       is submitted automatically by the browser on cross-site requests too — without an Origin

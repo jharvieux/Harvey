@@ -87,6 +87,17 @@ function bftbBars(items) {
   }).join("");
 }
 
+// CWE/OWASP identifiers (#455) — absent unless the scanner populated them, so a finding with no
+// defensible mapping renders exactly as before (no empty "CWE: —" line).
+function cweOwaspLine(f) {
+  const parts = [
+    ...(f.cwe ?? []).map((id) => esc(id)),
+    ...(f.owasp ?? []).map((id) => esc(id)),
+  ];
+  if (parts.length === 0) return "";
+  return `<div class="kv"><b>CWE/OWASP</b> ${parts.join(" · ")}</div>`;
+}
+
 function findingCard(f) {
   const s = bftb(f);
   const sc = SEV[f.severity]?.c ?? "#64748b";
@@ -101,6 +112,7 @@ function findingCard(f) {
     </div>
     <div class="finding-meta">${esc(f.category)} · ${esc(f.taxonomy)} · <code>${esc(f.location)}</code> · <span class="status">${esc(f.status)}</span>
       · <span class="vesc">V${f.value}·E${f.ease}·S${f.safety}</span></div>
+    ${cweOwaspLine(f)}
     <div class="kv"><b>Evidence</b> ${esc(f.evidence)}</div>
     <div class="kv"><b>Impact</b> ${esc(f.impact)}</div>
     <div class="kv"><b>Fix</b> ${esc(f.fix)}</div>

@@ -81,6 +81,12 @@ export interface Finding {
   // differed) — surfaced for a human to confirm, NEVER used to auto-merge (fail loud).
   baselineStatus?: BaselineStatus;
   lowConfidenceMatch?: string;
+  // CWE / OWASP Top-10 identifiers (#455), for ticket-routing/compliance mapping. Populated from
+  // the scanner's own metadata (semgrep rule `metadata.cwe`/`metadata.owasp` — both the external
+  // p/owasp-top-ten pack and, where the mapping is unambiguous, the harvey-* custom rules), never
+  // invented at report time. Absent on any finding with no defensible mapping.
+  cwe?: string[];
+  owasp?: string[];
 }
 
 // Engagement baseline diff summary (#457), attached to the deliverable when a --baseline is
@@ -262,6 +268,12 @@ export function validateFindings(data: unknown): ValidationResult {
     }
     if (f.lowConfidenceMatch !== undefined && typeof f.lowConfidenceMatch !== "string") {
       errors.push(`${at}.lowConfidenceMatch: expected string`);
+    }
+    for (const k of ["cwe", "owasp"] as const) {
+      const v = f[k];
+      if (v !== undefined && (!Array.isArray(v) || v.some((id) => typeof id !== "string"))) {
+        errors.push(`${at}.${k}: expected an array of strings`);
+      }
     }
   });
 

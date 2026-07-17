@@ -21,6 +21,10 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: Critical
+      # #455: signature-verification bypass is definitionally CWE-347; OWASP A02:2021
+      # (Cryptographic Failures) is where signature/verification bugs land in the 2021 mapping.
+      cwe: ["CWE-347: Improper Verification of Cryptographic Signature"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
     message: >
       jwt.verify() allows the "none" algorithm — an attacker can present an unsigned token with
       an arbitrary payload and it will verify successfully. Remove "none" from the algorithms
@@ -185,6 +189,10 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: Critical
+      # #455: CWE-295 is definitional; OWASP A02:2021 (Cryptographic Failures) explicitly covers
+      # certificate-validation failures in its 2021 mapping.
+      cwe: ["CWE-295: Improper Certificate Validation"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
     message: >
       TLS certificate verification is explicitly disabled (rejectUnauthorized: false, or
       NODE_TLS_REJECT_UNAUTHORIZED=0). Any man-in-the-middle can present an arbitrary certificate
@@ -243,6 +251,9 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: High
+      # #455: same underlying signature-verification weakness class as harvey-jwt-none-alg above.
+      cwe: ["CWE-347: Improper Verification of Cryptographic Signature"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
     message: >
       jwt.verify() is called with no `algorithms` allowlist. With an asymmetric key this enables the
       RS256/HS256 algorithm-confusion bypass. Always pass { algorithms: ['<your-alg>'] }.

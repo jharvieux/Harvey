@@ -22,6 +22,10 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: Critical
+      # #455: standard, unambiguous CWE/OWASP mapping — same underlying bug class as
+      # harvey-sql-injection-template (base.yml).
+      cwe: ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"]
+      owasp: ["A03:2021 - Injection"]
     message: >
       Request input reaches a raw-SQL-executor RPC (exec_sql/execute/run_sql). The value is run as
       SQL text, not a bound parameter — SQL injection. Use a parameterized RPC or bind arguments.
@@ -51,6 +55,9 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: Critical
+      # #455: standard, unambiguous CWE/OWASP mapping.
+      cwe: ["CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"]
+      owasp: ["A03:2021 - Injection"]
     message: >
       Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn
       with an argument array and no shell, and validate the input against an allowlist.
@@ -78,6 +85,9 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: Critical
+      # #455: standard, unambiguous CWE/OWASP mapping.
+      cwe: ["CWE-94: Improper Control of Generation of Code ('Code Injection')"]
+      owasp: ["A03:2021 - Injection"]
     message: >
       Request input reaches eval()/new Function() — arbitrary code execution. Parse the input as
       data (e.g. JSON.parse) or dispatch against an allowlist; never evaluate untrusted strings.
@@ -155,6 +165,10 @@ rules:
       confidence: MEDIUM
       category: security
       harveySeverity: High
+      # #455: CWE-502 is definitional for this bug shape; OWASP A08:2021 (Software and Data
+      # Integrity Failures) explicitly absorbed the old A8:2017 "Insecure Deserialization" category.
+      cwe: ["CWE-502: Deserialization of Untrusted Data"]
+      owasp: ["A08:2021 - Software and Data Integrity Failures"]
     message: >
       Request input is deserialized with an unsafe unserialize() (node-serialize executes embedded
       function bodies) — remote code execution. Use JSON.parse and validate the shape.
@@ -177,6 +191,10 @@ rules:
       confidence: MEDIUM
       category: security
       harveySeverity: High
+      # #455: CWE-611 is definitional; OWASP A05:2021 (Security Misconfiguration) is where OWASP
+      # relocated XXE from its own dedicated 2017 category.
+      cwe: ["CWE-611: Improper Restriction of XML External Entity Reference"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
     message: >
       An XML parser is configured to resolve external entities (noent/resolveEntities true) — XXE
       (file read / SSRF via DOCTYPE entities). Disable entity resolution when parsing untrusted XML.
@@ -195,6 +213,10 @@ rules:
       confidence: MEDIUM
       category: security
       harveySeverity: High
+      # #455: CWE-22 is definitional; OWASP's official A01:2021 mapping table lists CWE-22 among
+      # the CWEs rolled into Broken Access Control.
+      cwe: ["CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"]
+      owasp: ["A01:2021 - Broken Access Control"]
     message: >
       Request input is joined into a filesystem path and read/written — path traversal
       (../ escapes the intended directory). Sanitize with path.basename and confine to a base dir.
@@ -224,6 +246,10 @@ rules:
       confidence: MEDIUM
       category: security
       harveySeverity: High
+      # #455: zip-slip is a path-traversal variant — same CWE/OWASP mapping as
+      # harvey-path-traversal above.
+      cwe: ["CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"]
+      owasp: ["A01:2021 - Broken Access Control"]
     message: >
       An archive entry name is joined into a write path with no containment check — zip-slip
       (a ../ entry writes outside the extraction dir). Resolve and verify the path stays under it.

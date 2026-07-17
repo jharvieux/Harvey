@@ -228,6 +228,133 @@ export function checkKnownIoc(depNames: string[], manifestPath = "package.json")
   return findings;
 }
 
+// #456 — license compliance. SPDX identifiers a proprietary/commercial distribution can adopt
+// without a reciprocal source-disclosure obligation. Not exhaustive, but every id here is an
+// uncontroversial, widely-used permissive license.
+const PERMISSIVE_SPDX = new Set([
+  "MIT", "MIT-0", "ISC", "0BSD", "BSD-2-Clause", "BSD-3-Clause", "BSD-3-Clause-Clear",
+  "Apache-2.0", "Unlicense", "CC0-1.0", "WTFPL", "Zlib", "BlueOak-1.0.0", "Python-2.0",
+  "PostgreSQL", "OpenSSL", "Artistic-2.0",
+]);
+
+// Strong/network copyleft: reciprocal source-disclosure obligations that conflict with a closed,
+// proprietary distribution — the class the issue asks us to flag. LGPL is weaker (a dynamic-
+// linking carve-out) but a bundled Next.js/npm dependency doesn't get that carve-out in practice,
+// so it's included per the issue's "GPL/AGPL/LGPL and similar strong-copyleft" wording.
+const COPYLEFT_SPDX = new Set([
+  "GPL-1.0", "GPL-1.0-only", "GPL-1.0-or-later",
+  "GPL-2.0", "GPL-2.0-only", "GPL-2.0-or-later", "GPL-2.0+",
+  "GPL-3.0", "GPL-3.0-only", "GPL-3.0-or-later", "GPL-3.0+",
+  "AGPL-1.0", "AGPL-1.0-only", "AGPL-1.0-or-later",
+  "AGPL-3.0", "AGPL-3.0-only", "AGPL-3.0-or-later",
+  "LGPL-2.0", "LGPL-2.0-only", "LGPL-2.0-or-later",
+  "LGPL-2.1", "LGPL-2.1-only", "LGPL-2.1-or-later",
+  "LGPL-3.0", "LGPL-3.0-only", "LGPL-3.0-or-later",
+  "SSPL-1.0", "OSL-3.0", "EUPL-1.1", "EUPL-1.2", "CPAL-1.0",
+]);
+
+type LicenseClass = "permissive" | "copyleft" | "unknown";
+
+// A bare SPDX id, or a simple SPDX expression ("(MIT OR Apache-2.0)", "GPL-2.0 OR MIT"). An OR
+// expression is a CHOICE, so it's permissive if any alternative is; anything else (a single id,
+// or an AND-combined multi-license that must satisfy every term) is copyleft if any term is.
+// "UNLICENSED" is npm's own convention for "no grant to use this" — treated as unknown, never a
+// permissive default.
+export function classifyLicense(raw: string | undefined): LicenseClass {
+  const trimmed = raw?.trim();
+  if (!trimmed || /^UNLICENSED$/i.test(trimmed)) return "unknown";
+  const isOr = /\bOR\b/i.test(trimmed);
+  const terms = trimmed
+    .replace(/[()]/g, "")
+    .split(/\s+(?:OR|AND)\s+/i)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const classes = terms.map((t): LicenseClass => (PERMISSIVE_SPDX.has(t) ? "permissive" : COPYLEFT_SPDX.has(t) ? "copyleft" : "unknown"));
+  if (classes.every((c) => c === "unknown")) return "unknown";
+  if (isOr) return classes.includes("permissive") ? "permissive" : "copyleft";
+  return classes.includes("copyleft") ? "copyleft" : classes.includes("permissive") ? "permissive" : "unknown";
+}
+
+// npm registry packument shape (subset used here) — `license` is the modern field; `licenses`
+// (plural, an array) is the pre-npm5 format some older packages still carry.
+interface NpmPackument {
+  license?: string | { type?: string };
+  licenses?: { type?: string }[];
+}
+
+function extractLicenseId(pkg: NpmPackument): string | undefined {
+  if (typeof pkg.license === "string") return pkg.license;
+  if (pkg.license && typeof pkg.license.type === "string") return pkg.license.type;
+  if (Array.isArray(pkg.licenses)) {
+    const ids = pkg.licenses.map((l) => l.type).filter((t): t is string => typeof t === "string");
+    if (ids.length > 0) return ids.join(" OR "); // pre-npm5 array = a choice of alternatives
+  }
+  return undefined;
+}
+
+// Live npm-registry license lookup, same trust boundary as checkSlopsquat above: a name-only
+// request (no code egress), degrading silently (no finding, no throw) on network failure or a
+// non-OK status — indeterminate is not the same as "no license". `licenseTier` on each returned
+// finding is "high" for a copyleft match (the SPDX id itself is deterministic, self-declared
+// registry data) and "review" for an unknown/missing/UNLICENSED license (the registry's `license`
+// field can be simply absent from otherwise-fine metadata, so it needs a human look before
+// treating it as a real gap). Non-grading regardless of tier (src/quick-scan.ts) — a license
+// conflict is a legal judgment, not a security verdict.
+export async function checkLicenseCompliance(deps: DependencyMap, fetchImpl: typeof fetch = fetch): Promise<Finding[]> {
+  const findings: Finding[] = [];
+  for (const name of Object.keys(deps)) {
+    let body: NpmPackument;
+    try {
+      const res = await fetchImpl(`${NPM_REGISTRY}/${encodeURIComponent(name)}`);
+      if (!res.ok) {
+        console.warn(`checkLicenseCompliance: "${name}" indeterminate — npm registry returned ${res.status}`);
+        continue;
+      }
+      body = (await res.json()) as NpmPackument;
+    } catch (err) {
+      console.warn(`checkLicenseCompliance: "${name}" indeterminate — npm registry unreachable (${err instanceof Error ? err.message : String(err)})`);
+      continue;
+    }
+    const licenseId = extractLicenseId(body);
+    const cls = classifyLicense(licenseId);
+    if (cls === "permissive") continue;
+    if (cls === "unknown") {
+      findings.push(
+        mechanicalFinding({
+          id: `SUP-LICENSE-UNKNOWN-${name}`,
+          title: `Dependency "${name}" has no clear license — review`,
+          severity: "Low",
+          category: "License compliance",
+          taxonomy: "Unknown/missing dependency license",
+          location: `package.json (${name})`,
+          evidence: licenseId
+            ? `npm registry reports license "${licenseId}" for "${name}", which does not resolve to a recognized SPDX identifier.`
+            : `npm registry has no license field for "${name}".`,
+          impact: "A dependency with no confirmed license (missing, ambiguous, or npm's UNLICENSED marker) carries no confirmed grant to use, modify, or redistribute it — a legal exposure in a distributed/commercial product, distinct from a security bug.",
+          fix: `Confirm "${name}"'s actual license (its repository/README, or the maintainer directly) and record the finding; replace it if no usable license exists.`,
+          precisionTier: "review",
+        }),
+      );
+      continue;
+    }
+    findings.push(
+      mechanicalFinding({
+        id: `SUP-LICENSE-COPYLEFT-${name}`,
+        title: `Dependency "${name}" is licensed ${licenseId} — possible copyleft conflict`,
+        severity: "Medium",
+        category: "License compliance",
+        taxonomy: "Copyleft license conflict",
+        location: `package.json (${name})`,
+        evidence: `npm registry reports "${name}" under "${licenseId}" (SPDX), a strong-copyleft license.`,
+        impact: "Strong-copyleft licenses (GPL/AGPL/LGPL and similar) impose reciprocal source-disclosure obligations that typically conflict with a closed/proprietary distribution — this needs a legal review before shipping, not just a code fix.",
+        fix: `Confirm the actual distribution/linking model with counsel, or replace "${name}" with a permissively-licensed alternative.`,
+        precisionTier: "high",
+      }),
+    );
+  }
+  return findings;
+}
+
 export function checkLockfilePresence(projectDir: string, label = projectDir): Finding[] {
   const lockfiles = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"];
   const present = lockfiles.some((f) => existsSync(join(projectDir, f)));
