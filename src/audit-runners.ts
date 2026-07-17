@@ -233,12 +233,26 @@ const m5: ModuleRunner = {
   },
 };
 
+// M6's free indicator layer (src/detectors/handrolled.ts, taxonomy `M6 — Indicator: …`) runs INSIDE
+// detect-static, the same CLI M7/M9 shell out to — same pattern as M8_TAXONOMY_PREFIX below (M8's
+// test-intent findings out of the same mixed detect-static Finding[]).
+const M6_TAXONOMY_PREFIX = "M6 — Indicator: ";
+const handrolledFindings = (findings: Finding[]): Finding[] => findings.filter((f) => f.taxonomy.startsWith(M6_TAXONOMY_PREFIX));
+
 // M6 (#351): `simplify-scan` ASSEMBLES a review packet and exits 0 — it invokes no model and
 // produces no verdict (see simplify-scan.ts's header). A packet is the INPUT to a human/LLM pass,
 // not evidence one happened, so running it must NEVER clear M6's never-run alarm. M6 therefore never
 // reads `ran` under the orchestrator: with the paid tier it reports `partial` (packet built, verdict
 // still owed); without it, requires-live-run. Deriving `ran` needs a durable reviewed-verdict
 // artifact the probe can check (option 2, #416) — the same mechanism M1's semantic tier needs.
+//
+// #397: the free indicator layer (handrolled.ts) runs inside detect-static whenever M7/M9 do, but
+// until now the M6 row credited none of that — a source-only engagement produced real M6 Info
+// findings and still read requires-live-run, the exact "work ran but the ledger says nothing"
+// shape the coverage doctrine calls out. Operator ruling: the indicator layer alone is `partial`
+// coverage, never `ran` (that stays gated on a reviewed verdict, #351) and never a silent
+// requires-live-run when it demonstrably executed. Derived from detect-static's file count
+// (#350), not its exit code, so an empty/non-source target still reads requires-live-run honestly.
 const m6: ModuleRunner = {
   module: "M6",
   run: (ctx) => {
@@ -247,10 +261,32 @@ const m6: ModuleRunner = {
     // verdict reads `ran` regardless of whether the paid tier is flagged this run.
     const pass = findFreshPass(ctx, "M6");
     if (pass.fresh) return ranFromPass(pass.artifact, "pnpm simplify-scan (packet)");
-    if (!ctx.env.llm) return { status: "requires-live-run", reason: withRejectedPass("paid LLM tier not in scope — M6's packet needs a reviewer to produce a verdict (#267). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass (#420)", pass.reason) };
+
+    const indicatorOutPath = captureOut(ctx, "M6");
+    const indicatorCommand = `pnpm detect-static ${ctx.targetDir}`;
+    const indicatorRun = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(indicatorOutPath ? ["--out", indicatorOutPath] : [])]);
+    const indicatorScanned = indicatorRun.ok ? filesScanned(indicatorRun.output) : undefined;
+    const indicatorFindings = indicatorScanned ? handrolledFindings(readCaptured(ctx, indicatorOutPath)) : [];
+
+    if (!ctx.env.llm) {
+      if (indicatorScanned) {
+        return {
+          status: "partial",
+          detail: indicatorCommand,
+          reason: withRejectedPass("free indicator layer ran (M6 — Indicator: … taxonomy, #267); paid LLM tier not in scope, so no triage verdict was recorded — the paid M6 triage decides which indicators are genuine reinventions and names the replacement (#397)", pass.reason),
+          ...(indicatorFindings.length ? { findings: indicatorFindings } : {}),
+        };
+      }
+      return { status: "requires-live-run", reason: withRejectedPass("paid LLM tier not in scope, and detect-static could not confirm the free indicator layer ran either (scanned 0 source files or failed) — M6's packet needs a reviewer to produce a verdict (#267). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass (#420)", pass.reason) };
+    }
     const { ok, output, command } = runCli(ctx, "simplify-scan", [ctx.targetDir]);
     if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-    return { status: "partial", detail: command, reason: withRejectedPass("review packet assembled, but M6's verdict is a human/LLM pass with no recorded output — a packet is not a verdict, so this does not clear M6's never-run status (#351; artifact path #416). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass over the packet, so absence here is not-collected, not clean (#420)", pass.reason) };
+    return {
+      status: "partial",
+      detail: command,
+      reason: withRejectedPass("review packet assembled, but M6's verdict is a human/LLM pass with no recorded output — a packet is not a verdict, so this does not clear M6's never-run status (#351; artifact path #416). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass over the packet, so absence here is not-collected, not clean (#420)", pass.reason),
+      ...(indicatorFindings.length ? { findings: indicatorFindings } : {}),
+    };
   },
 };
 

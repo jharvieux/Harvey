@@ -292,6 +292,58 @@ describe("M6's never-run alarm is not cleared by a review packet (#351)", () => 
   });
 });
 
+// #397: the free indicator layer (src/detectors/handrolled.ts) runs inside detect-static whenever
+// M7/M9 do, but the M6 row previously credited none of it — a source-only engagement produced real
+// M6 Info findings and still read requires-live-run. Operator ruling: the indicator layer alone is
+// `partial` coverage, never a silent requires-live-run when it demonstrably ran, and never `ran`
+// (that stays gated on a reviewed verdict per #351).
+describe("M6 credits its free indicator layer without a --llm flag (#397)", () => {
+  it("reads partial, not requires-live-run, when detect-static confirms the indicator layer ran", () => {
+    // Default ctx()'s detect-static fake reports a positive file count (see cleanOutput above).
+    const m6 = status(AUDIT_RUNNERS, {}, "M6");
+    expect(m6?.status).toBe("partial");
+    expect(m6?.reason).toMatch(/free indicator layer ran/i);
+  });
+
+  it("never reads `ran` off the indicator layer alone — #351's never-run alarm still needs a verdict", () => {
+    const { recorded } = runAudit(AUDIT_RUNNERS, ctx());
+    expect(recorded.find((r) => r.module === "M6")?.status).not.toBe("ran");
+    expect(buildAuditCoverage(recorded).neverRun).toContain("M6");
+  });
+
+  it("stays requires-live-run when detect-static could not confirm a scan (0 files, no llm)", () => {
+    const emptyDir = { exec: () => ({ ok: true, output: "loaded 0 source files (0 product-code) from /empty\n\n0 findings across 0 classes:" }) };
+    const m6 = status(AUDIT_RUNNERS, emptyDir, "M6");
+    expect(m6?.status).toBe("requires-live-run");
+    expect(m6?.reason).toMatch(/could not confirm the free indicator layer ran/i);
+  });
+
+  it("stays requires-live-run when detect-static's CLI itself fails, no llm", () => {
+    const failing = { exec: () => ({ ok: false, output: "detect-static crashed" }) };
+    const m6 = status(AUDIT_RUNNERS, failing, "M6");
+    expect(m6?.status).toBe("requires-live-run");
+    expect(m6?.reason).toMatch(/paid LLM tier not in scope/);
+  });
+
+  it("collects the captured M6 — Indicator findings into the deliverable when the layer ran", () => {
+    const capturing = ctx({
+      captureDir: "/cap",
+      readFindings: (p) =>
+        p.endsWith("M6.json")
+          ? [
+              { id: "M6IND-01", title: "t", severity: "Info", confidence: "Confirmed", category: "Maintainability", taxonomy: "M6 — Indicator: JSON deep-equal", location: "l", status: "Open", evidence: "e", impact: "i", fix: "f", value: 1, ease: 1, safety: 1 },
+              { id: "OTHER-01", title: "t", severity: "Info", confidence: "Confirmed", category: "c", taxonomy: "not-an-indicator", location: "l", status: "Open", evidence: "e", impact: "i", fix: "f", value: 1, ease: 1, safety: 1 },
+            ]
+          : [],
+    });
+    const { recorded, findings } = runAudit(AUDIT_RUNNERS, capturing);
+    const m6 = recorded.find((r) => r.module === "M6");
+    expect(m6?.status).toBe("partial");
+    expect(findings.map((f) => f.id)).toContain("M6IND-01");
+    expect(findings.map((f) => f.id)).not.toContain("OTHER-01");
+  });
+});
+
 describe("M3 derives ran from a real vitals parse, never a no-op exit (#314)", () => {
   it("records ran when hotspot-scan emits the ranked table (vitals report parsed)", () => {
     expect(status(AUDIT_RUNNERS, {}, "M3")?.status).toBe("ran");
