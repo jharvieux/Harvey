@@ -335,6 +335,36 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
   });
 });
 
+// #436: pii-classify emits report-schema Finding[] to --out, so a capturing run collects M10
+// findings; the live tier can finally read `ran`, and the schema tier's partial reason shrinks to
+// the honest gap that remains (rows not sampled), not a collection gap.
+describe("M10 captures its classification findings (#436)", () => {
+  const capture: Partial<RunContext> = {
+    captureDir: "/cap",
+    readFindings: (p: string) => (p.endsWith("M10.json") ? [{ id: "M10-01" } as never] : []),
+  };
+
+  it("schema tier stays partial for the live-DB gap alone, with its findings captured", () => {
+    const { recorded, findings } = runAudit(AUDIT_RUNNERS, ctx(capture));
+    const m10 = recorded.find((r) => r.module === "M10");
+    expect(m10?.status).toBe("partial");
+    expect(m10?.reason).toMatch(/schema tier only/);
+    expect(m10?.reason).not.toMatch(/collected into this deliverable/);
+    expect(findings.some((f) => (f as { id?: string }).id === "M10-01")).toBe(true);
+  });
+
+  it("live tier reads ran once its findings are captured — the #420 non-collection partial is retired", () => {
+    const m10 = status(AUDIT_RUNNERS, { ...capture, env: { connected: true, dynamic: false, llm: false } }, "M10");
+    expect(m10?.status).toBe("ran");
+  });
+
+  it("a coverage-only run (no capture) still discloses that findings were not collected", () => {
+    const m10 = status(AUDIT_RUNNERS, {}, "M10");
+    expect(m10?.status).toBe("partial");
+    expect(m10?.reason).toMatch(/not-collected, not clean/);
+  });
+});
+
 describe("formatFailures", () => {
   it("names each crashed module and calls the crash a bug, not a tier", () => {
     const out = formatFailures([{ module: "M4", error: "jscpd binary missing" }]);

@@ -21,7 +21,7 @@
 // every hit goes through an exclusion pass before it's returned, and ambiguous names get "low"
 // confidence rather than an assertion, so they're flagged for review, not treated as fact.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseColumns } from "../src/migration-sql-parse.js";
 
@@ -293,6 +293,102 @@ export async function classifyWithFallback(columns, semanticClassifier) {
   });
 }
 
+// #436: the data-map → report-schema Finding[] mapper, shared by the schema and live paths, so
+// M10's classification reaches the engagement doc instead of dying in a console summary. One
+// finding per PII/PHI/PCI-bearing table; severity is the table's scoreToSeverity label;
+// confidence is always "Review" — name/type classification is heuristic on BOTH tiers (the tier
+// changes what the schema evidence is, not the classification method), so a hit is a triage
+// input, never an assertion. #377's OPAQUE_JSON_BLOB review flags are surfaced as a distinct
+// "review for nested PII" sentence, never blended into the classified-column claim.
+const SEVERITY_VALUE = { Critical: 5, High: 4, Medium: 3, Low: 2, Info: 1 };
+const PCI_NEVER_STORE = new Set(["CVV", "PIN", "TRACK_DATA"]);
+
+/**
+ * @param {ReturnType<typeof buildDataMap>} dataMap
+ * @param {{tier: "schema"|"live"}} opts
+ */
+export function dataMapToFindings(dataMap, { tier }) {
+  const source =
+    tier === "live"
+      ? "live information_schema.columns inventory (read-only)"
+      : "static migration-SQL schema parse (no DB connection)";
+  const tables = Object.keys(dataMap).sort(
+    (a, b) => dataMap[b].severityScore - dataMap[a].severityScore || a.localeCompare(b),
+  );
+  return tables.map((table, i) => {
+    const t = dataMap[table];
+    const asserted = t.columns.filter((c) => c.infotype !== "OPAQUE_JSON_BLOB");
+    const reviewFlags = t.columns.filter((c) => c.infotype === "OPAQUE_JSON_BLOB");
+    const neverStore = t.infotypes.filter((x) => PCI_NEVER_STORE.has(x));
+    const compliance = [
+      t.phi && "PHI — HIPAA applicability",
+      t.pci && "PCI-DSS cardholder/sensitive-authentication data",
+      t.secret && "stored credentials/secrets readable by any query path that reaches the table",
+    ].filter(Boolean);
+    return {
+      id: `M10-${String(i + 1).padStart(2, "0")}`,
+      title: asserted.length
+        ? `Table \`${table}\` holds ${t.categories.join("/")} data (${[...new Set(asserted.map((c) => c.infotype))].join(", ")})`
+        : `Table \`${table}\` has JSON container column(s) to review for nested PII`,
+      severity: t.severity,
+      confidence: "Review",
+      category: "Data classification",
+      taxonomy: "M10 — Data classification (PII/PHI/PCI)",
+      location: table,
+      status: "Open",
+      evidence: [
+        `${source}; name/type classification only — no values were read.`,
+        asserted.length
+          ? `Classified columns: ${asserted.map((c) => `${c.column} → ${c.infotype} (${c.category}, ${c.confidence})`).join("; ")}.`
+          : "",
+        reviewFlags.length
+          ? `Review for nested PII (flagged, not asserted — #377): ${reviewFlags.map((c) => c.column).join(", ")} — denormalization-container json column(s); inspect their keys.`
+          : "",
+        `Severity score ${t.severityScore} → ${t.severity}.`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      impact: [
+        `Any over-broad read path (RLS gap, leaked service key, injectable query) on \`${table}\` exposes ${t.categories.join("/")} data.`,
+        compliance.length ? `Compliance surface: ${compliance.join("; ")}.` : "",
+        neverStore.length
+          ? `Stores PCI sensitive authentication data (${neverStore.join(", ")}) — PCI-DSS forbids storing it post-authorization at all, so its presence is a violation independent of exposure.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      fix: [
+        "Confirm each classified column is genuinely needed and that the table's RLS/grants scope reads to the owning tenant/user.",
+        neverStore.length ? "Remove the sensitive-authentication-data column(s) — they may not be stored post-authorization under PCI-DSS." : "",
+        t.secret ? "Move stored credentials to a secret manager or encrypt them with keys the DB role cannot read." : "",
+        reviewFlags.length ? "Inspect the flagged JSON container(s); promote any nested PII to first-class columns so it is classified and protected explicitly." : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      value: SEVERITY_VALUE[t.severity] ?? 1,
+      ease: 3,
+      safety: 4,
+      mechanical: true,
+      precisionTier: "review",
+    };
+  });
+}
+
+// --out <path> (#436): write the report-schema Finding[] the orchestrator's M10 probe captures
+// (run-audit --findings-out). No --out → console summary only, exactly as before.
+function writeFindingsOut(dataMap, tier) {
+  const i = process.argv.indexOf("--out");
+  if (i < 0) return;
+  const outPath = process.argv[i + 1];
+  if (!outPath || outPath.startsWith("--")) {
+    console.error("--out requires a file path");
+    process.exit(1);
+  }
+  const findings = dataMapToFindings(dataMap, { tier });
+  writeFileSync(outPath, `${JSON.stringify(findings, null, 2)}\n`);
+  console.log(`\n${findings.length} report-schema finding(s) → ${outPath}`);
+}
+
 // Each case is [column, expectedCategory (null = no match), expectedConfidence, sqlType,
 // tableName] — sqlType/tableName are only needed by the exclusion/table-context checks below
 // and default to undefined when omitted.
@@ -396,7 +492,7 @@ async function inventory() {
   const cols =
     await sql`SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, ordinal_position`;
   await sql.end();
-  report(cols);
+  writeFindingsOut(report(cols), "live");
 }
 
 /**
@@ -440,7 +536,7 @@ function classifyFromSchema() {
     console.error(`No \`create table\` columns found via ${target} — check the path (expects supabase/migrations/*.sql shape).`);
     process.exit(1);
   }
-  report(columns);
+  writeFindingsOut(report(columns), "schema");
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

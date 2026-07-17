@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildDataMap, classifyColumn, classifyMigrationSql, classifyWithFallback } from "./pii-classify.mjs";
+import { validateFindings } from "../src/findings.js";
+import { buildDataMap, classifyColumn, classifyMigrationSql, classifyWithFallback, dataMapToFindings } from "./pii-classify.mjs";
 
 describe("classifyColumn — true positives across the taxonomy", () => {
   it("matches HIPAA/GDPR contact & identity PII at high confidence", () => {
@@ -378,6 +379,58 @@ describe("classifyMigrationSql — static-schema entry point (#250)", () => {
     const { dataMap } = classifyMigrationSql(sql);
     expect(dataMap.organisations.secret).toBe(true);
     expect(dataMap.contacts.categories).toEqual(["PII"]);
+  });
+});
+
+describe("dataMapToFindings — report-schema Finding[] emitter (#436)", () => {
+  const columns = [
+    { table_name: "payments", column_name: "cvv", data_type: "text" },
+    { table_name: "payments", column_name: "card_last4", data_type: "text" },
+    { table_name: "users", column_name: "email", data_type: "text" },
+    { table_name: "users", column_name: "profile", data_type: "jsonb" },
+    { table_name: "prefs", column_name: "metadata", data_type: "jsonb" },
+  ];
+  const findings = dataMapToFindings(buildDataMap(columns), { tier: "schema" });
+
+  it("emits one valid report-schema finding per PII-bearing table, severity from the data map, confidence Review", () => {
+    expect(findings).toHaveLength(3);
+    const meta = {
+      client: "c", subtitle: "s", date: "d", commit: "x", auditor: "a", confidential: true,
+      overallHealth: 5, tenantIsolation: "t", authModel: "m", headline: "h", scope: "sc",
+      methodology: "me", outOfScope: "o",
+    };
+    expect(validateFindings({ meta, findings })).toEqual({ ok: true, errors: [] });
+    const payments = findings.find((f) => f.location === "payments");
+    expect(payments?.severity).toBe("Critical"); // lone CVV → Critical via the point override
+    expect(findings.every((f) => f.confidence === "Review")).toBe(true);
+    expect(findings.every((f) => f.mechanical === true && f.precisionTier === "review")).toBe(true);
+  });
+
+  it("orders findings by table severity, worst first, with deterministic ids", () => {
+    expect(findings[0]?.location).toBe("payments");
+    expect(findings.map((f) => f.id)).toEqual(["M10-01", "M10-02", "M10-03"]);
+  });
+
+  it("names the PCI never-store violation — a stored CVV is a violation independent of exposure", () => {
+    const payments = findings.find((f) => f.location === "payments");
+    expect(payments?.impact).toMatch(/forbids storing it post-authorization/);
+    expect(payments?.fix).toMatch(/may not be stored post-authorization/);
+  });
+
+  it("keeps #377 review flags distinct from asserted columns — flagged in evidence, never claimed in the title", () => {
+    const users = findings.find((f) => f.location === "users");
+    expect(users?.title).toMatch(/holds PII data \(EMAIL\)/); // profile (jsonb) not asserted in the title
+    expect(users?.evidence).toMatch(/Review for nested PII \(flagged, not asserted/);
+    // A table with ONLY review flags never claims to hold PII — it asks for review.
+    const prefs = findings.find((f) => f.location === "prefs");
+    expect(prefs?.title).toMatch(/review for nested PII/i);
+    expect(prefs?.title).not.toMatch(/holds/);
+  });
+
+  it("records which tier produced the evidence", () => {
+    expect(findings[0]?.evidence).toMatch(/static migration-SQL schema parse/i);
+    const live = dataMapToFindings(buildDataMap(columns), { tier: "live" });
+    expect(live[0]?.evidence).toMatch(/live information_schema/i);
   });
 });
 
