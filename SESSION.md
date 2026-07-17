@@ -2,23 +2,27 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-17 (THIRD issue-sweep — 3 PRs merged, 4 issues closed, net −3; filed #488. The backlog is now nearly drained — what's left is disclosure sends, live-infra, business/GTM, and the design-heavy M6-corpus trio. New CLAUDE.md relay items below. Earlier sweeps further down still stand.)_
+_Last updated: 2026-07-17 (THIRD issue-sweep — 5 PRs merged, 6 issues closed, net −4; filed #488, #493. Backlog now drained to non-agent work only: disclosure sends, live-infra, business/GTM, and the design-heavy M6-corpus trio. CLAUDE.md relay items APPLIED (#491). Earlier sweeps further down still stand.)_
 
-## 2026-07-17 issue-sweep #3 — near-drain (3 PRs merged, 4 issues closed — net −3)
+## 2026-07-17 issue-sweep #3 — drain (5 PRs merged, 6 issues closed — net −4)
 
-Operator-approved. Excluded the findings-enrichment batch (#455/#456) per operator; ran the two feature builds + the corpus follow-up. Both opus builds came back clean.
+Operator-approved. Ran the two feature builds + the corpus follow-up; then the operator pulled the findings-enrichment batch (#455/#456) back in and had the CLAUDE.md relay items applied. All builds came back clean.
+
+- **#492 (#456 + #455) — M1 findings enrichment** (excluded at the gate, then operator pulled it back in). #456: `checkLicenseCompliance` does a live npm-registry SPDX lookup per dependency (same trust boundary as the existing slopsquat check), classifies permissive/copyleft/unknown, flags GPL/AGPL/LGPL/SSPL-family conflicts (high precision) and unknown/UNLICENSED as review disclosures — never defaulted to permissive. #455: added `cwe`/`owasp` fields to the Finding schema, threaded from real semgrep rule metadata (verified the `p/owasp-top-ten` shape live) + hand-mapped 18 harvey-* rules. **Caveat → #493:** those 18 OWASP-2021 category assignments are standard but recalled, not cross-checked against OWASP's official CWE→Top-10 table — hardening pass filed before client use.
+- **#491 — CLAUDE.md relay applied** (operator authorized): M7 table row now lists `pnpm lighthouse-scan`; run-modes note added for `run-audit --baseline`.
+
+### The three feature/corpus builds (all merged):
 
 - **#489 (#457) — engagement baseline diff.** New `src/audit-diff.ts` classifies each finding `resolved` / `persistent` / `new` across two audits of one client. Identity model (operator chose "executor decides"): `normalize(taxonomy||category) :: normalizeLocation(location)` — deliberately excludes raw line/snippet/severity so a finding that only moved stays `persistent`; a rename breaks the key and surfaces as `new` with a **low-confidence-match pointer** to the plausible prior (both sides flagged for human confirmation, never silently merged — fail loud). Consumed via `pnpm run-audit <t> --findings-out cur.json --baseline prior.json`; report leads with a progress banner + NEW/CARRIED-OVER badges + resolved-since-last-audit section. 12 intent tests.
 - **#487 (#387) — M7 Core Web Vitals / Lighthouse.** Was 0% implemented (doc paragraph only). New `pnpm lighthouse-scan` (`src/lighthouse.ts` pure parse + `src/cli/lighthouse-scan.ts`): **runs locally** — builds+serves the target (`next build && next start`) and drives Chrome via **`chrome-launcher` + `lighthouse`** (both deps added, operator-approved; can reuse the Playwright chromium). Emits M7L-* findings for LCP/TBT(as INP lab proxy)/CLS/perf-score vs Google "Good" thresholds; degrades to an M7L-00 disclosure finding (exit 0, never silent) when the target can't build/serve. Opt-in CLI (heavy live pass, not folded into run-audit's M7 probe). `docs/m7-performance.md` §3 updated (approved). Live end-to-end validation split to **#488**.
 - **#486 (#483) — M6-indicator corpus-drift baseline.** Measured per-target M6-indicator counts from fresh clones (proposit 10, boxyhq 2, saas-lite 2, others 0) and wired M6-indicator into the drift scorer. **Caught a real trap:** M6 indicators are `Info`-only by design (#267), and the scorer's `countedFor` excludes Info for every other module — so an un-special-cased baseline would score a permanent 0, making the drift check structurally unable to fail (the exact blind spot #483 exists to close). Special-cased M6-indicator to count Info, matched by the explicit `M6 — Indicator:` taxonomy. **#402 closed stale** — #479 had already re-baselined all M5-slop counts post-#391.
 
-### ⚠ OPERATOR-RELAY (CLAUDE.md — supervised, not edited)
-- The **M7 module-table row** is now incomplete — add `+ pnpm lighthouse-scan (Core Web Vitals / Lighthouse, local build+serve+browser, #387)` to the "Run it with" cell and `+ local-run (Lighthouse)` to the tier cell.
-- Optional: the run-modes section could mention the new `run-audit --baseline <prior findings.json>` flag (#457).
-- (Say the word and I'll apply both in a docs PR, as with the last sweep's relay batch.)
+### CLAUDE.md relay — DONE (#491)
+Both applied: the M7 module-table row now lists `pnpm lighthouse-scan` (#387), and the run-modes section notes `run-audit --baseline <prior findings.json>` (#457). No open CLAUDE.md relay items from this sweep.
 
 ### New backlog opened
 - **#488** — validate the Lighthouse build→serve→Chrome→Lighthouse pipeline end-to-end against a real target (live-only; joins #159/#161 as operator/live work).
+- **#493** — cross-check the 18 harvey-* rules' OWASP-2021 category mappings against OWASP's official CWE→Top-10 table before client use (#455 caveat).
 
 ### Still open (nothing agent-executable without operator input)
 - Disclosure sends #168/#214–#219 · live M2 #159/#161/#488 · real-target #283 · **design-heavy M6-corpus trio #267/#406/#413** (need an AI-generated-code corpus sourced + free/paid ruling + supervised brief edits — a dedicated session, not a sweep) · #301 (deferred-by-design per #281) · business/GTM #2/#4/#10–#13.
