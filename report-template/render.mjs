@@ -137,6 +137,28 @@ function coverageSection(rows, m) {
     <div class="kv" style="margin-top:10px"><b>Out of scope</b> ${esc(m.outOfScope)}</div>`;
 }
 
+// #319: a mutation score in the DELIVERABLE is never a bare percentage. A high score over a scoped
+// `mutate` set ("100% over lib/pdf/launch.ts" on an otherwise-untested repo) reads as a repo-level
+// test-quality claim and would be a misrepresentation — the same trust-budget risk as the security
+// wedge. So this block renders the score and its covered scope TOGETHER, and states the caveat
+// whenever the scope is not the whole repo. Optional: only renders when findings.<client>.json
+// carries a `testQuality` object, so existing engagements are unaffected until one is added.
+function testQualitySection(tq) {
+  const scope = Array.isArray(tq.coveredScope) ? tq.coveredScope : [];
+  const scopeText = scope.length ? scope.map((s) => `<code>${esc(s)}</code>`).join(", ") : "(scope not stated)";
+  const caveat = tq.wholeRepo
+    ? `Measured across the whole repository.`
+    : `<b style="color:#b3261e">This score is measured over the file(s) above only — a scoped subset, NOT a whole-repo coverage claim.</b> Untested files do not appear in this number.`;
+  return `<h2>Test quality (M8)</h2>
+    <div class="tq">
+      <div class="tq-score">${esc(String(tq.mutationScore))}<span class="tq-unit">% mutation</span></div>
+      <div class="tq-body">
+        <div><b>Covered scope</b> ${scopeText}</div>
+        <div style="margin-top:4px;font-size:11px;color:var(--muted)">${caveat}</div>
+      </div>
+    </div>`;
+}
+
 function buildHtml(data) {
   const all = data.findings.map((x) => ({ ...x, _bftb: bftb(x) }));
   const f = all.filter((x) => x.confidence !== "N/A"); // live findings
@@ -202,6 +224,10 @@ function buildHtml(data) {
   .crit .ok{color:#15803d;font-weight:700}.crit .notok{color:#b3261e;font-weight:700}
   .cov-badge{border-radius:5px;padding:1px 8px;font-size:10px;font-weight:700;letter-spacing:.3px;white-space:nowrap}
   table.cov td:first-child{white-space:nowrap;font-weight:800}
+  .tq{display:flex;gap:16px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-top:6px}
+  .tq-score{font-size:30px;font-weight:800;color:#0f172a;white-space:nowrap}
+  .tq-unit{font-size:12px;font-weight:700;color:var(--muted);margin-left:3px}
+  .tq-body code{background:#f1f5f9;border-radius:4px;padding:1px 5px}
   </style></head><body>
   <div class="cover-band"></div>
   <div class="page">
@@ -241,6 +267,7 @@ function buildHtml(data) {
     <div class="kv"><b>Reviewed</b> ${esc(m.scope)}</div>
     <div class="kv"><b>Tooling</b> ${esc(m.methodology)}</div>
     ${data.coverage?.length ? coverageSection(data.coverage, m) : `<div class="kv"><b>Out of scope</b> ${esc(m.outOfScope)}</div>`}
+    ${data.testQuality ? testQualitySection(data.testQuality) : ""}
     <h2>Findings</h2>
     ${sorted.map(findingCard).join("")}
     ${na.length ? `<h2>Checked &amp; ruled out (not applicable)</h2>

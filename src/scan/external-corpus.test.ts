@@ -183,11 +183,23 @@ describe("scoreExternalBaseline", () => {
 // on real test-quality movement; whether the two scoreable targets still hit their numbers needs
 // their cloned trees + Stryker, which is `pnpm corpus-drift --m8` (.github/workflows/corpus-m8.yml).
 describe("scoreMutationBaseline (#300)", () => {
-  const baseline = (): MutationBaseline => ({ mutationScore: 20, killed: 7, valid: 35, note: "boxyhq's measured baseline" });
+  const baseline = (): MutationBaseline => ({ mutationScore: 20, killed: 7, valid: 35, coveredScope: ["lib/server-common.ts"], note: "boxyhq's measured baseline" });
 
   it("passes when a Stryker run reproduces the recorded kill count", () => {
     expect(scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 20, killed: 7, valid: 35 }))
       .toMatchObject({ pass: true, drift: 0 });
+  });
+
+  it("states the covered scope on every drift line so the score never reads as repo-level (#319)", () => {
+    // The misrepresentation #319 guards against: "20%" (or "100%") quoted as a whole-repo test-
+    // quality claim. Whether it passes or drifts, the scored line must carry the file the score is
+    // measured over and the "NOT a whole-repo coverage claim" caveat.
+    const pass = scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 20, killed: 7, valid: 35 });
+    expect(pass.detail).toContain("lib/server-common.ts");
+    expect(pass.detail).toContain("NOT a whole-repo coverage claim");
+    const drift = scoreMutationBaseline("boxyhq", baseline(), { mutationScore: 17.1, killed: 6, valid: 35 });
+    expect(drift.detail).toContain("lib/server-common.ts");
+    expect(drift.detail).toContain("NOT a whole-repo coverage claim");
   });
 
   it("FAILS when the suite gets worse — a mutant that used to die now survives", () => {
@@ -224,6 +236,19 @@ describe("M8 manifest shape (#300)", () => {
       expect(t.m8 !== undefined, `${t.slug}: m8 config vs baseline`).toBe(isMutationBaseline(t.modules.M8));
     }
     expect(EXTERNAL_CORPUS.filter((t) => t.m8).map((t) => t.slug).sort()).toEqual(["boxyhq", "proposit"]);
+  });
+
+  it("carries a covered scope matching the Stryker mutate config on every mutation baseline (#319)", () => {
+    // The denominator that keeps the score honest must be present AND must be the exact files the
+    // job mutates — a coveredScope that drifted from the m8 config would describe a scope the
+    // score isn't actually over.
+    for (const t of EXTERNAL_CORPUS.filter((x) => x.m8)) {
+      const m8 = t.modules.M8;
+      expect(isMutationBaseline(m8), t.slug).toBe(true);
+      if (!isMutationBaseline(m8)) continue;
+      expect(m8.coveredScope.length, t.slug).toBeGreaterThan(0);
+      expect([...m8.coveredScope].sort(), t.slug).toEqual([...(t.m8!.config.mutate as string[])].sort());
+    }
   });
 
   it("keeps a measured reason on every M8 that mutation testing does not score", () => {

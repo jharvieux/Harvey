@@ -60,15 +60,37 @@ export interface ModuleNotRun {
 // every other scorer here as "100 findings" when it means "100% of mutants killed". The two
 // zero-test targets keep their ModuleBaseline: there the #224 finding IS the measurement, and a
 // finding count is exactly the right unit for it.
+//
+// #319: `coveredScope` is REQUIRED, not optional, and that is the whole point. A mutation score is
+// only ever measured over the files Stryker's `mutate` glob names (m8-corpus.ts scopes it to the
+// files the suite actually covers). proposit's 100% is 100% of ONE file in an otherwise-untested
+// repo; boxyhq's 20% is over one file out of a 23k-line tree. A bare percentage reads as a
+// repo-level test-quality claim and is a misrepresentation — the corpus's own trust-budget lesson
+// (#263) one level up. Making the covered files a required field means no MutationBaseline can be
+// constructed, and formatMutationClaim means no score can be printed, without the denominator that
+// makes "100% over one file" legible.
 export interface MutationBaseline {
   mutationScore: number; // percent, as summarizeMutationReport computes it
   killed: number;
   valid: number; // mutants Stryker could actually judge (excludes Ignored/CompileError)
+  // #319: the files the score is measured over — Stryker's `mutate` scope, a subset of the repo,
+  // NEVER the whole tree. Always non-empty; this is the denominator that keeps the score honest.
+  coveredScope: string[];
   note: string;
 }
 
 export function isMutationBaseline(m: ModuleBaseline | ModuleNotRun | MutationBaseline): m is MutationBaseline {
   return "mutationScore" in m;
+}
+
+// #319: the ONE way a mutation score is written into the manifest's drift output — score always
+// carried with the covered scope that makes it honest, never a bare percentage. scoreMutationBaseline
+// routes every pass/fail line through this so "20%" can't appear without "over lib/server-common.ts".
+function formatMutationClaim(b: MutationBaseline): string {
+  const scope = b.coveredScope.length === 1
+    ? b.coveredScope[0]
+    : `${b.coveredScope.length} files (${b.coveredScope.join(", ")})`;
+  return `${b.mutationScore}% (${b.killed}/${b.valid} killed) over ${scope} — a scoped subset, NOT a whole-repo coverage claim`;
 }
 
 export interface ExternalTarget {
@@ -189,7 +211,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       "M5-knip": { counted: 85, total: 85, note: "#251: measured 2026-07-15 after `npm install --legacy-peer-deps` in the clone — the install step is what unblocked this, exactly the CLAUDE.md M5 prereq. 85 findings, 83 Low + 2 Medium, no Info tail (knip's dead-code findings are never Info unless the scan itself failed). 8 unused files + 77 files with unused exports: BY FAR the corpus's largest M5-knip surface (next is boxyhq at 12), consistent with proposit also being its worst M4 target (68) — the same per-entity copy-paste vein leaving unreferenced exports behind. Worth a triage pass to confirm the shape (see follow-up); recorded here as the measured drift baseline it is, not as a triaged verdict." },
       "M5-slop": { counted: 6, total: 16, note: "#278: measured 2026-07-15 via detect-static (previously excluded from scoring entirely to avoid double-counting M5-knip). 3 'Single-call wrapper' + 3 'Else after return' counted; 10 Info-tail (narrating comments, AI phrasing, decorative emoji, redundant JSDoc)." },
       M7: { counted: 49, total: 79, note: "30 of the 79 are the exhaustive-deps class #230 demoted to Info (~0 real), leaving 49 counted. The real vein is 26 'Unbounded select' on growable request-path lists (low-sev latent scalability). Residual FP tail still counted: 5 inline-literal, 4 context-value-recreated, 2 index-key — the micro-render shapes #230 judged ~0% real (see follow-up)." },
-      M8: { mutationScore: 100, killed: 21, valid: 21, note: "#300: MEASURED 2026-07-15 by the real wrapper (not transcribed) — 21/21 mutants killed on lib/pdf/launch.ts, ~1s, via the vendored config in m8-corpus.ts after `npm install --legacy-peer-deps`. A perfect score on the corpus's THINNEST suite: this repo has exactly one spec, so 100% here means 'the one covered file is tested well', NOT that proposit is well-tested — its untested surface doesn't appear in this number at all (that gap is what M8's whole-repo story needs, see follow-up). Useful as drift detection regardless: any drop means the suite or the launch.ts logic moved." },
+      M8: { mutationScore: 100, killed: 21, valid: 21, coveredScope: ["lib/pdf/launch.ts"], note: "#300/#319: MEASURED 2026-07-15 by the real wrapper (not transcribed) — 21/21 mutants killed on lib/pdf/launch.ts (its coveredScope), ~1s, via the vendored config in m8-corpus.ts after `npm install --legacy-peer-deps`. A perfect score on the corpus's THINNEST suite: this repo has exactly one spec, so 100% here means 'the one covered file is tested well', NOT that proposit is well-tested — its untested surface doesn't appear in this number at all. #319 makes that non-negotiable: coveredScope is required and formatMutationClaim prints it, so this can never be quoted as a repo-level '100% tested'. Useful as drift detection regardless: any drop means the suite or the launch.ts logic moved." },
       M9: { counted: 8, total: 8, note: "4 'Server Action missing input validation' + 4 'Accidental dynamic rendering'. Distinct from the 4 M1 'Server Action missing authorization check' the same run emits — #231 routed the authz vein to M1/#221 rather than scoring it as M9 rendering, and this split is what that fix looks like on real code." },
       M10: { counted: 18, total: 18, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned supabase/migrations (205 columns parsed, 39 PII-bearing across 18 tables — one Finding per table). Headline is organisations: Critical, ADDRESS+API_KEY+STORED_PASSWORD — the #233 must-not-miss plaintext ai_api_key/smtp_pass case, now scored as a real drift check instead of only a unit assertion." },
     },
@@ -234,7 +256,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       // #300: the manifest calls this target "the M8 upper reference point" — measurement says
       // otherwise, and that inversion is the whole reason to measure. It has the corpus's most
       // test FILES (8) but its jest suite is ONE unit spec; the other 7 are Playwright E2E.
-      M8: { mutationScore: 20, killed: 7, valid: 35, note: "#300: MEASURED 2026-07-15 — 20% (7/35 valid mutants) on lib/server-common.ts, the file boxyhq's one jest unit spec (__tests__/lib/server-common.spec.ts) covers. 2 survived, 26 NoCoverage: the spec exercises generateToken but leaves most of the file's exports untouched. #277 predicted the Playwright specs would block this and they do NOT — the target's jest.config.js already sets testPathIgnorePatterns: ['<rootDir>/tests/e2e'], so jest never loads them; the prediction was never tested against the config. Note this reverses the manifest's 'best-tested target' framing: most test files, LOWEST measured mutation score in the corpus (proposit's thin suite scores 100 on what it covers). Test-file count was never test quality — which is #263's lesson restated." },
+      M8: { mutationScore: 20, killed: 7, valid: 35, coveredScope: ["lib/server-common.ts"], note: "#300/#319: MEASURED 2026-07-15 — 20% (7/35 valid mutants) on lib/server-common.ts (its coveredScope), the file boxyhq's one jest unit spec (__tests__/lib/server-common.spec.ts) covers. 2 survived, 26 NoCoverage: the spec exercises generateToken but leaves most of the file's exports untouched. #277 predicted the Playwright specs would block this and they do NOT — the target's jest.config.js already sets testPathIgnorePatterns: ['<rootDir>/tests/e2e'], so jest never loads them; the prediction was never tested against the config. Note this reverses the manifest's 'best-tested target' framing: most test files, LOWEST measured mutation score in the corpus (proposit's thin suite scores 100 on what it covers) — which is exactly why #319 requires coveredScope: one covered file out of a 23k-line tree is not a repo-level 20%. Test-file count was never test quality — which is #263's lesson restated." },
       M9: { counted: 0, total: 0, note: "MEASURED zero, and it is the #231 fix working: this is a PAGES Router app, where the App-Router-only checks must not fire at all. Pre-#231 it drew a bogus server-only hit. Any non-zero M9 here is a straight regression of that fix." },
       M10: { counted: 8, total: 8, note: "#299: measured 2026-07-15 via m10FindingsFromSchema over the cloned prisma/migrations (95 columns parsed across 15 tables, 8 PII/secret-bearing). Headline is jackson_store: Medium (OPAQUE_ENCRYPTED_STORE, the must-not-miss SAML/SSO secret store also pinned directly in external-corpus.test.ts's classifyColumn assertion), plus Account/Session: High (AUTH_TOKEN) and User: High (NAME?/EMAIL/STORED_PASSWORD). Previously not-run — parseColumns matched unquoted \\w+ identifiers only and this target's Prisma-generated migration.sql double-quotes every one (\"Account\", \"userId\"); #299 extended the parser to read quoted identifiers too." },
     },
@@ -420,9 +442,11 @@ export function scoreMutationBaseline(
     actual: actual.killed,
     drift: actual.killed - baseline.killed,
     pass,
+    // #319: even the drift line states the covered scope — the score never appears bare, so a
+    // reader of the scorecard sees "20% over lib/server-common.ts", not a repo-level "20%".
     detail: pass
-      ? `matches baseline (${baseline.killed}/${baseline.valid} killed, ${baseline.mutationScore}%)`
-      : `DRIFT: expected ${baseline.killed}/${baseline.valid} killed (${baseline.mutationScore}%), got ${actual.killed}/${actual.valid} (${actual.mutationScore}%) — the target's suite moved (rebaseline) or the wrapper mis-read the report (fix the scanner)`,
+      ? `matches baseline: ${formatMutationClaim(baseline)}`
+      : `DRIFT: expected ${formatMutationClaim(baseline)}, got ${actual.killed}/${actual.valid} (${actual.mutationScore}%) — the target's suite moved (rebaseline) or the wrapper mis-read the report (fix the scanner)`,
   };
 }
 
