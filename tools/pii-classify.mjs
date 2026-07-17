@@ -36,9 +36,15 @@ const RULES = [
   [/(driver_?licen[cs]e|license_number)/, "DRIVERS_LICENSE", "SENSITIVE_PII", "high"],
   [/(medical_record_number|(^|_)mrn(_|$))/, "MEDICAL_RECORD_NUMBER", "PHI", "high"],
   [/(health_plan|insurance_(id|number|policy))/, "HEALTH_PLAN_ID", "PHI", "high"],
-  [/(^|_)(device_id|imei|udid)(_|$)/, "DEVICE_ID", "SENSITIVE_PII", "medium"],
-  [/(^|_)(vin|vehicle_identification)(_|$)/, "VEHICLE_ID", "PII", "medium"],
+  // #378: mac_address/mac_addr and license_plate/plate_number are HIPAA Safe Harbor identifiers
+  // #13 (device identifiers) and #12 (vehicle identifiers) the original alternatives missed.
+  [/(^|_)(device_id|imei|udid|mac_address|mac_addr)(_|$)/, "DEVICE_ID", "SENSITIVE_PII", "medium"],
+  [/(^|_)(vin|vehicle_identification|license_plate|plate_number)(_|$)/, "VEHICLE_ID", "PII", "medium"],
   [/(biometric|fingerprint|retina|iris_scan|face_?id|faceprint|voiceprint)/, "BIOMETRIC", "SENSITIVE_PII", "high"],
+  // #378: HIPAA Safe Harbor identifier #17 — full-face photographs and comparable images.
+  // Medium, not high: many avatar_url columns are low-sensitivity app furniture, but under
+  // HIPAA/GDPR they are worth a review-tier flag rather than silence.
+  [/(photo_url|headshot|mugshot|profile_pic(ture)?|avatar_url|face_image|signature_image)/, "PHOTO", "PII", "medium"],
   // --- PCI-DSS cardholder / sensitive authentication data ---
   // CVV/CVC is "sensitive authentication data" — PCI-DSS forbids storing it post-authorization
   // at all, so a hit here is a compliance violation by itself (see INFOTYPE_POINT_OVERRIDES).
@@ -306,6 +312,11 @@ function selftest() {
     ["pin_block", "PCI", "high"],
     ["track2", "PCI", "high"],
     ["is_pinned", null, null],
+    // #378: HIPAA device/vehicle/image identifiers
+    ["mac_address", "SENSITIVE_PII", "medium"],
+    ["license_plate", "PII", "medium"],
+    ["avatar_url", "PII", "medium"],
+    ["has_photo", null, null, "boolean"],
   ];
   let ok = 0;
   for (const [col, cat, conf, sqlType, tableName] of cases) {

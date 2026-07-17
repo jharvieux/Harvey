@@ -54,6 +54,28 @@ describe("classifyColumn — true positives across the taxonomy", () => {
     expect(classifyColumn("pin_code")).toBeNull();
   });
 
+  it("matches HIPAA device/vehicle/image identifiers — MAC address, license plate, photo columns (#378)", () => {
+    // Safe Harbor #13 (device identifiers), #12 (vehicle identifiers incl. license plates),
+    // #17 (full-face photographs and comparable images).
+    expect(classifyColumn("mac_address")).toEqual({ infotype: "DEVICE_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("mac_addr")).toEqual({ infotype: "DEVICE_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("license_plate")).toEqual({ infotype: "VEHICLE_ID", category: "PII", confidence: "medium" });
+    expect(classifyColumn("plate_number")).toEqual({ infotype: "VEHICLE_ID", category: "PII", confidence: "medium" });
+    expect(classifyColumn("photo_url")).toEqual({ infotype: "PHOTO", category: "PII", confidence: "medium" });
+    expect(classifyColumn("avatar_url")).toEqual({ infotype: "PHOTO", category: "PII", confidence: "medium" });
+    expect(classifyColumn("profile_picture")).toEqual({ infotype: "PHOTO", category: "PII", confidence: "medium" });
+    expect(classifyColumn("signature_image")).toEqual({ infotype: "PHOTO", category: "PII", confidence: "medium" });
+  });
+
+  it("does not read photo/avatar boolean flags as image PII (#378 FP guard)", () => {
+    expect(classifyColumn("has_photo", "boolean")).toBeNull();
+    expect(classifyColumn("avatar_enabled")).toBeNull();
+    // A bare `photo`/`avatar`/`signature` is deliberately not in the dictionary — webhook
+    // signatures and loosely-named app concepts would flood the map; the compound image-bearing
+    // names above are the guard.
+    expect(classifyColumn("signature")).toBeNull();
+  });
+
   it("flags ambiguous names as low confidence rather than asserting PII", () => {
     expect(classifyColumn("product_name")).toEqual({ infotype: "NAME?", category: "PII", confidence: "low" });
   });
