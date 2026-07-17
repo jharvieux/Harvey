@@ -9,7 +9,12 @@ type CorpusKind = "positive" | "negative";
 
 // "high"/"review" mirror PrecisionTier; "connected" marks entries only detectable against a live
 // database (Supabase Advisor) — out of scope for a static run, reported as N/A, never a failure.
-type ExpectedTier = PrecisionTier | "connected";
+// "none" marks a planted positive with NO mechanical rule BY DESIGN (a measured LLM-tier class —
+// e.g. WEBHOOK-REPLAY, #353/#425): a static run scores it an INTENDED GAP, never a recall miss,
+// and if ANY mechanical rule ever fires on its class the gate FAILS LOUD, so a by-design gap can't
+// silently graduate into a claimed catch. Excluded from the recall denominator; still a real
+// fixture for the parity census.
+type ExpectedTier = PrecisionTier | "connected" | "none";
 
 export interface CorpusEntry {
   id: string;

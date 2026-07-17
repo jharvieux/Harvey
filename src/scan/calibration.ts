@@ -169,6 +169,17 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
     return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass: true, detail: "N/A — connected tier (live DB), not evaluated statically" };
   }
 
+  // "none": no mechanical rule by design (a measured LLM-tier class). The intended gap holds only
+  // while NOTHING of the class fires; a relevant finding means a rule graduated, so it flips loud
+  // (pass=false) rather than letting a by-design gap silently become a claimed catch (#425).
+  if (entry.expectedTier === "none") {
+    const held = relevant.length === 0;
+    const detail = held
+      ? "intended gap — no mechanical rule by design (measured LLM-tier); nothing fired"
+      : `REGRESSION: a mechanical rule now reaches this by-design gap — re-tier this entry. Fired: ${relevant.map((f) => f.taxonomy).join(", ")}`;
+    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass: held, detail };
+  }
+
   if (entry.kind === "positive") {
     const pass = caughtTier !== undefined;
     const detail = pass
@@ -189,13 +200,15 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
 
 interface CoverageMatrix {
   rows: MatrixRow[];
-  positivesTotal: number; // static positives (excludes connected tier)
+  positivesTotal: number; // static positives that MUST be caught (excludes connected AND none tiers)
   positivesCaught: number;
   positivesCaughtHigh: number;
   negativesTotal: number; // static negatives (excludes connected tier)
   negativesCleared: number;
   connectedNa: number;
-  ok: boolean; // every static positive caught AND every static negative cleared
+  noRuleTotal: number; // positives with no mechanical rule by design ("none" tier)
+  noRuleHeld: number; // ...of those, the intended gap still holds (nothing of the class fired)
+  ok: boolean; // every static positive caught, every negative cleared, every no-rule gap still held
 }
 
 // A module whose entries omit `module` is the original M1 mechanical-scan corpus (base+secrets+
@@ -230,10 +243,12 @@ export function moduleCensus(corpus: CorpusEntry[] = CORPUS): ModuleCensusRow[] 
 
 export function buildCoverageMatrix(findings: Finding[], corpus: CorpusEntry[] = CORPUS): CoverageMatrix {
   const rows = corpus.map((e) => scoreEntry(e, findings));
-  const staticPos = rows.filter((r) => r.kind === "positive" && r.expectedTier !== "connected");
+  const staticPos = rows.filter((r) => r.kind === "positive" && r.expectedTier !== "connected" && r.expectedTier !== "none");
   const staticNeg = rows.filter((r) => r.kind === "negative" && r.expectedTier !== "connected");
+  const noRule = rows.filter((r) => r.kind === "positive" && r.expectedTier === "none");
   const positivesCaught = staticPos.filter((r) => r.pass).length;
   const negativesCleared = staticNeg.filter((r) => r.pass).length;
+  const noRuleHeld = noRule.filter((r) => r.pass).length;
   return {
     rows,
     positivesTotal: staticPos.length,
@@ -242,6 +257,8 @@ export function buildCoverageMatrix(findings: Finding[], corpus: CorpusEntry[] =
     negativesTotal: staticNeg.length,
     negativesCleared,
     connectedNa: rows.filter((r) => r.expectedTier === "connected").length,
-    ok: positivesCaught === staticPos.length && negativesCleared === staticNeg.length,
+    noRuleTotal: noRule.length,
+    noRuleHeld,
+    ok: positivesCaught === staticPos.length && negativesCleared === staticNeg.length && noRuleHeld === noRule.length,
   };
 }

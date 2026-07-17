@@ -75,7 +75,7 @@ if (process.argv.includes("--json")) {
   process.exit(0);
 }
 
-const mark = (r: MatrixRow): string => (r.pass ? (r.expectedTier === "connected" ? "N/A " : "PASS") : "FAIL");
+const mark = (r: MatrixRow): string => (r.pass ? (r.expectedTier === "connected" ? "N/A " : r.expectedTier === "none" ? "GAP " : "PASS") : "FAIL");
 const line = (r: MatrixRow): string =>
   `  ${mark(r)}  ${r.id.padEnd(22)} ${(r.caughtTier ?? "-").padEnd(7)} ${r.detail}`;
 
@@ -90,6 +90,11 @@ for (const r of matrix.rows.filter((r) => r.kind === "negative")) console.log(li
 const negFps = matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged);
 const highMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "high" && !r.highFlagged);
 const reviewMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "review" && !r.pass);
+// A "none"-tier positive is an accepted no-mechanical-rule gap (e.g. WEBHOOK-REPLAY, #425). It
+// scores an intended gap while nothing of its class fires; a relevant finding means a rule
+// graduated — that is a GATE FAIL, forcing a re-tier so a by-design gap can't silently become a
+// claimed catch. It never fails while the gap holds, and never passes silently once a rule lands.
+const noRuleBroken = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "none" && !r.pass);
 
 // DECISION (#341): this live gate is security-weighted BY CONSTRUCTION — it scores only the M1
 // mechanical corpus (entries with no `module` label) because runMechanicalScan produces only M1
@@ -124,6 +129,7 @@ console.log(
     `This is M1 recall, NOT suite recall — see the census above.`,
 );
 console.log(`M1 negatives cleared: ${matrix.negativesCleared}/${matrix.negativesTotal} static`);
+if (matrix.noRuleTotal) console.log(`No-mechanical-rule gaps (by design, excluded from recall): ${matrix.noRuleHeld}/${matrix.noRuleTotal} held — a rule firing on one is a GATE FAIL`);
 if (reviewMisses.length) console.log(`Review-tier recall gaps (non-fatal, tracked): ${reviewMisses.map((r) => r.id).join(", ")}`);
 
 // P-SECRET-GIT-HISTORY (#129): a dedicated pass, not part of the matrix above — TruffleHog's
@@ -133,10 +139,11 @@ console.log("\nGIT-HISTORY SECRET GATE (#129, dedicated throwaway-repo fixture):
 const gitHistoryGate = runGitHistorySecretGate();
 console.log(`  ${gitHistoryGate.detail.replace(/\n/g, "\n  ")}`);
 
-const gatePass = negFps.length === 0 && highMisses.length === 0 && gitHistoryGate.pass && parityThin.length === 0;
+const gatePass = negFps.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0;
 if (!gatePass) {
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives: ${negFps.map((r) => r.id).join(", ")}`);
   if (highMisses.length) console.log(`GATE FAIL — high-tier positives not caught: ${highMisses.map((r) => r.id).join(", ")}`);
+  if (noRuleBroken.length) console.log(`GATE FAIL — a mechanical rule now fires on a by-design no-rule gap (re-tier it): ${noRuleBroken.map((r) => r.id).join(", ")}`);
   if (!gitHistoryGate.pass) console.log("GATE FAIL — git-history secret gate (#129) did not pass, see detail above");
   if (parityThin.length) console.log(`GATE FAIL — parity minimum (#427): ${parityThin.map((c) => c.module).join(", ")} below ${MIN_POSITIVES_PER_MODULE} positives`);
   process.exit(1);

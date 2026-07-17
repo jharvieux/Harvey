@@ -629,7 +629,10 @@ describe("#353/#354 mechanical graduations (real detectors over the committed fi
     for (const e of graduated) {
       const row = scoreEntry(e, findings);
       expect(row.pass, `${e.id}: ${row.detail}`).toBe(true);
-      if (e.kind === "positive") expect(row.caughtTier, e.id).toBe("review");
+      // The "none"-tier sibling (WEBHOOK-REPLAY, #425) did NOT graduate: it passes as an intended
+      // gap with no caught tier, and these leftover-auth/counter-race findings must not reach it.
+      if (e.expectedTier === "none") expect(row.caughtTier, e.id).toBeUndefined();
+      else if (e.kind === "positive") expect(row.caughtTier, e.id).toBe("review");
       else expect(row.highFlagged, `${e.id} must not be a free-count FP`).toBe(false);
     }
   });
@@ -672,11 +675,14 @@ describe("moduleCensus (#341 — per-module legibility so a blended count can't 
 });
 
 describe("buildCoverageMatrix", () => {
-  it("excludes connected-tier entries from the static positive/negative totals", () => {
+  it("excludes connected-tier AND no-rule-tier entries from the static positive total", () => {
     const m = buildCoverageMatrix([], CORPUS);
     const connected = CORPUS.filter((e) => e.expectedTier === "connected").length;
     expect(m.connectedNa).toBe(connected);
-    expect(m.positivesTotal).toBe(CORPUS.filter((e) => e.kind === "positive" && e.expectedTier !== "connected").length);
+    // positivesTotal is the "must be caught" denominator: connected (live DB) and "none" (no
+    // mechanical rule by design) are both out of it — neither is a recall miss when uncaught.
+    expect(m.positivesTotal).toBe(CORPUS.filter((e) => e.kind === "positive" && e.expectedTier !== "connected" && e.expectedTier !== "none").length);
+    expect(m.noRuleTotal).toBe(CORPUS.filter((e) => e.kind === "positive" && e.expectedTier === "none").length);
     expect(m.negativesTotal).toBe(CORPUS.filter((e) => e.kind === "negative" && e.expectedTier !== "connected").length);
   });
 
@@ -689,8 +695,10 @@ describe("buildCoverageMatrix", () => {
 
   it("ok is true only when every static positive is caught and every negative cleared", () => {
     // Synthesize one high-tier finding per static positive at its fixture location. A
-    // manifest-pinned entry gets the real dependency-finding shape, "<manifest> (<pkg>)".
-    const staticPositives = CORPUS.filter((e) => e.kind === "positive" && e.expectedTier !== "connected");
+    // manifest-pinned entry gets the real dependency-finding shape, "<manifest> (<pkg>)". A
+    // "none"-tier positive is EXCLUDED: fabricating a finding for it would (correctly) fail its
+    // by-design gap — that inverse behavior gets its own test below.
+    const staticPositives = CORPUS.filter((e) => e.kind === "positive" && e.expectedTier !== "connected" && e.expectedTier !== "none");
     const synth: Finding[] = staticPositives.map((e) =>
       finding({
         location: e.manifest ? `${e.manifest} (${e.location})` : `${e.location}:1`,
@@ -704,7 +712,35 @@ describe("buildCoverageMatrix", () => {
     // Negatives whose location substring collides with a synthesized positive location would
     // fail here; assert none do (guards against ambiguous corpus locations).
     expect(m.negativesCleared).toBe(m.negativesTotal);
+    // No-rule gaps hold (nothing was fabricated at their class), so ok stays true.
+    expect(m.noRuleHeld).toBe(m.noRuleTotal);
     expect(m.ok).toBe(true);
+  });
+
+  it("no-rule-tier positive: intended gap holds while silent, flips the gate loud once a rule fires", () => {
+    // The "none" tier encodes an accepted no-mechanical-rule gap (#425). With no relevant finding
+    // it passes as an intended gap and is kept OUT of the recall denominator — never a miss.
+    const noRule = CORPUS.filter((e) => e.kind === "positive" && e.expectedTier === "none");
+    expect(noRule.length, "expected at least one no-rule-tier corpus entry to exercise this path").toBeGreaterThan(0);
+    const entry = noRule[0]!;
+
+    const held = scoreEntry(entry, []);
+    expect(held.pass, "an unfired by-design gap must pass").toBe(true);
+    expect(held.detail).toContain("intended gap");
+
+    // A finding of the entry's class at its location = a rule graduated. The gap must flip loud:
+    // the entry fails, and buildCoverageMatrix.ok goes false so `pnpm verify` / the live gate catch
+    // it. This is the whole point — a by-design gap can never silently become a claimed catch.
+    const graduated = finding({
+      location: `${entry.location}:1`,
+      title: (entry.match ?? [""])[0],
+      taxonomy: (entry.match ?? [""])[0],
+      precisionTier: "review",
+    });
+    const flipped = scoreEntry(entry, [graduated]);
+    expect(flipped.pass, "a rule firing on a by-design gap must fail the entry").toBe(false);
+    expect(flipped.detail).toContain("REGRESSION");
+    expect(buildCoverageMatrix([graduated], [entry]).ok).toBe(false);
   });
 });
 
