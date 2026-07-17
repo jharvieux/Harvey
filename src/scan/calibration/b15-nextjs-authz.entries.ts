@@ -1,14 +1,14 @@
-// Batch B15 (#123, issues #131-#136) — Next.js/Supabase authz-shape classes routed to the
-// semantic/whole-program tier (roadmap `docs/design/corpus-roadmap-to-100.md` §4a: these six
-// classes need request+identity context, matcher-vs-route-inventory reasoning, or control-flow
-// reasoning that a grep/AST rule can't do reliably — they are LLM/paid-tier (M-series) detection,
-// never promoted into the mechanical count). Every entry here is `review` tier and — unlike B14 —
-// NONE has a matching mechanical rule: these fixtures seed the corpus/GROUND-TRUTH answer key so
-// the paid-tier LLM pass has planted vulns + benign lookalikes to be measured against; the offline
-// mechanical gate is expected to leave every positive uncaught (reviewMisses, non-fatal — see
+// Batch B15 (#123, issues #131-#136) — Next.js/Supabase authz-shape classes seeded for the
+// semantic/whole-program tier (roadmap `docs/design/corpus-roadmap-to-100.md` §4a). Every entry is
+// `review` tier. Originally NONE had a matching mechanical rule; the #354 re-triage graduated TWO
+// to a leftover-auth grep (still review, not free-count): P-MW-MATCHER-EXCLUDES-API (the matcher's
+// api-lookahead is a textual fact) and P-DRAFTMODE-NO-SECRET (a shallow intra-file "enable with no
+// secret gate" check). The remaining FOUR (P-BOLA-BODY-OWNER, P-MW-SOLE-AUTHZ, P-HOST-HEADER-URL,
+// P-CLIENT-RENDER-AUTHZ) stay LLM/paid-tier — they need request+identity context, table-sensitivity
+// judgment, cross-function taint, or a server→client boundary a grep/AST can't do FP-safely, so the
+// offline mechanical gate is expected to leave them uncaught (reviewMisses, non-fatal — see
 // src/cli/validate-calibration.ts). The acceptance bar for THIS batch is precision, not recall:
-// zero free-count (high-tier) false positives on the negatives from any EXISTING mechanical rule.
-// Built incrementally, one issue at a time; see GROUND-TRUTH.md §B15.
+// zero free-count (high-tier) false positives on the negatives. See GROUND-TRUTH.md §B15.
 
 import type { CorpusEntry } from "./types.js";
 
@@ -18,7 +18,7 @@ export const b15NextjsAuthzEntries: CorpusEntry[] = [
   { id: "N-BOLA-SESSION-OWNER", kind: "negative", cls: "invoice query scoped to the session's tenant id, not a client-supplied field", location: "pages/api/billing/invoice-safe.js", match: ["bola-body-owner"], note: "#131: pages/api/billing/invoice-safe.js scopes the query to session.user.tenantId — req.body.tenantId is never read. No mechanical rule targets this shape, so it's cleared trivially; recorded to complete the corpus pair." },
 
   // #132 — middleware matcher regex silently excludes /api/*
-  { id: "P-MW-MATCHER-EXCLUDES-API", kind: "positive", cls: "Next.js middleware matcher regex excludes /api/*, leaving API routes unprotected", location: "middleware.ts", match: ["mw-matcher-excludes-api"], expectedTier: "review", note: "#132: middleware.ts's config.matcher (`/((?!api|_next/static|_next/image|favicon.ico).*)`) excludes every /api/* path from ever running the middleware, so pages/api/admin/dashboard.js is reachable with zero gate. Needs matcher-regex-vs-route-inventory reasoning (roadmap §4a: middleware-matcher-excludes-api-routes) — no mechanical rule. Expected to stay uncaught in the offline gate." },
+  { id: "P-MW-MATCHER-EXCLUDES-API", kind: "positive", cls: "Next.js middleware matcher regex excludes /api/*, leaving API routes unprotected", location: "middleware.ts", match: ["mw-matcher-excludes-api"], expectedTier: "review", note: "#132/#354: middleware.ts's config.matcher (`/((?!api|_next/static|_next/image|favicon.ico).*)`) excludes every /api/* path from ever running the middleware, so pages/api/admin/dashboard.js is reachable with zero gate. GRADUATED to a mechanical rule (#354): leftover-auth's mw-matcher-excludes-api grep matches an exported config.matcher whose negative-lookahead lists an `api` token → review. Discriminator: the api-in-lookahead contradiction with middleware presented as the gate; FP shape: a self-guarded API surface, why it's review not free-count. The negative (matcher with no api exclusion) is cleared." },
   { id: "N-MW-MATCHER-INCLUDES-API", kind: "negative", cls: "middleware matcher has no /api exclusion", location: "lib/middleware-matcher-safe.ts", match: ["mw-matcher-excludes-api"], note: "#132: lib/middleware-matcher-safe.ts's config.matcher has no 'api' exclusion — /api/* still runs through the middleware auth check. Cleared trivially (no mechanical rule); recorded to complete the corpus pair." },
 
   // #133 — middleware is the sole authz layer, no defense in depth
@@ -26,7 +26,7 @@ export const b15NextjsAuthzEntries: CorpusEntry[] = [
   { id: "N-MW-DEFENSE-IN-DEPTH", kind: "negative", cls: "route re-checks session/role even though middleware also covers it", location: "pages/api/admin/dashboard-safe.js", match: ["mw-sole-authz"], note: "#133: pages/api/admin/dashboard-safe.js calls getServerSession() and checks the role before returning admin_metrics, in addition to whatever middleware.ts does. Cleared trivially (no mechanical rule); recorded to complete the corpus pair." },
 
   // #134 — draftMode().enable() reachable with no secret
-  { id: "P-DRAFTMODE-NO-SECRET", kind: "positive", cls: "draftMode().enable() reachable with no secret/token check", location: "pages/api/preview/enable.js", match: ["draftmode-no-secret"], expectedTier: "review", note: "#134: pages/api/preview/enable.js calls draftMode().enable() unconditionally — any caller can flip on preview mode. Needs control-flow reasoning (is the enable path guarded?) — roadmap §4a: draft-mode-enable-missing-secret, no mechanical rule. Expected to stay uncaught in the offline gate." },
+  { id: "P-DRAFTMODE-NO-SECRET", kind: "positive", cls: "draftMode().enable() reachable with no secret/token check", location: "pages/api/preview/enable.js", match: ["draftmode-no-secret"], expectedTier: "review", note: "#134/#354: pages/api/preview/enable.js calls draftMode().enable() unconditionally — any caller can flip on preview mode. The entry's old \"needs control-flow reasoning\" note overstated it: the fixture is seven lines and the enable() is the first statement (the #264 mislabel pattern). GRADUATED to a mechanical rule (#354): leftover-auth's draftmode-no-secret grep matches a draftMode().enable() with no secret/token comparison (process.env.*SECRET / req.*.secret) anywhere in the file → review. Shallow intra-file: can't see a wrapper's gate, so review not free-count. The negative (secret checked before enable) is cleared." },
   { id: "N-DRAFTMODE-SECRET-CHECKED", kind: "negative", cls: "draftMode().enable() gated by a secret check", location: "pages/api/preview/enable-safe.js", match: ["draftmode-no-secret"], note: "#134: pages/api/preview/enable-safe.js validates req.query.secret against process.env.PREVIEW_SECRET before draftMode().enable() runs. Cleared trivially (no mechanical rule); recorded to complete the corpus pair." },
 
   // #135 — Host header trusted to build an absolute URL (reset-link poisoning)

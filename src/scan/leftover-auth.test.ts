@@ -102,4 +102,44 @@ describe("classifyLeftoverAuth", () => {
   it("does not flag a non-webhook admin-write route as a missing-signature webhook", () => {
     expect(has(classifyLeftoverAuth({ path: "pages/api/settings/delete.js", content: "await admin.from('settings').delete().eq('key', req.body.key);" }), "Inbound webhook with no signature verification")).toBe(false);
   });
+
+  // #353 UPDATE-UNSCOPED
+  const UNSCOPED = "Unscoped service-role UPDATE/DELETE (no WHERE)";
+  it("flags a raw UPDATE with no WHERE on a query sink in a route file", () => {
+    expect(has(classifyLeftoverAuth({ path: "pages/api/profile/update.js", content: 'await pool.query("UPDATE public.profiles SET role = $1", [role]);' }), UNSCOPED)).toBe(true);
+  });
+
+  it("does not flag the same UPDATE once it is scoped with a WHERE clause", () => {
+    expect(has(classifyLeftoverAuth({ path: "pages/api/profile/update.js", content: 'await pool.query("UPDATE public.profiles SET role = $1 WHERE id = $2", [role, id]);' }), UNSCOPED)).toBe(false);
+  });
+
+  it("is not fooled by a comment that mentions WHERE next to an actually-unscoped UPDATE", () => {
+    // The FP the first regex hit: a nearby comment saying "WHERE" masked the missing clause.
+    const content = '// a correct version would scope with WHERE id = $2\nawait pool.query("DELETE FROM public.profiles", []);';
+    expect(has(classifyLeftoverAuth({ path: "pages/api/profile/purge.js", content }), UNSCOPED)).toBe(true);
+  });
+
+  it("does not flag an unscoped UPDATE string that is never handed to a query sink", () => {
+    expect(has(classifyLeftoverAuth({ path: "pages/api/x.js", content: 'const label = "UPDATE available";' }), UNSCOPED)).toBe(false);
+  });
+
+  // #354 P-MW-MATCHER-EXCLUDES-API
+  const MATCHER = "Middleware matcher excludes /api routes";
+  it("flags a middleware matcher whose lookahead excludes /api", () => {
+    expect(has(classifyLeftoverAuth({ path: "middleware.ts", content: 'export const config = { matcher: "/((?!api|_next/static).*)" };' }), MATCHER)).toBe(true);
+  });
+
+  it("does not flag a matcher whose lookahead has no api exclusion", () => {
+    expect(has(classifyLeftoverAuth({ path: "middleware.ts", content: 'export const config = { matcher: "/((?!_next/static|favicon.ico).*)" };' }), MATCHER)).toBe(false);
+  });
+
+  // #354 P-DRAFTMODE-NO-SECRET
+  const DRAFTMODE = "draftMode().enable() reachable with no secret";
+  it("flags draftMode().enable() with no secret check", () => {
+    expect(has(classifyLeftoverAuth({ path: "pages/api/preview/enable.js", content: "draftMode().enable(); res.json({ preview: true });" }), DRAFTMODE)).toBe(true);
+  });
+
+  it("does not flag draftMode().enable() gated by a secret comparison", () => {
+    expect(has(classifyLeftoverAuth({ path: "pages/api/preview/enable.js", content: "if (req.query.secret !== process.env.PREVIEW_SECRET) return; draftMode().enable();" }), DRAFTMODE)).toBe(false);
+  });
 });
