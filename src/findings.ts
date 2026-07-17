@@ -16,10 +16,16 @@ export const PRECISION_TIERS = ["high", "review"] as const;
 // prevent.
 export const COVERAGE_STATUSES = ["ran", "partial", "requires-live-run"] as const;
 
+// Engagement baseline diff (#457). A finding's standing relative to the prior audit of the same
+// client: "persistent" (matched by identity in both), "new" (only this run), "resolved" (only the
+// prior run). Set by src/audit-diff.ts, never hand-typed. Absent ⇒ no baseline was supplied.
+export const BASELINE_STATUSES = ["new", "persistent", "resolved"] as const;
+
 export type Severity = (typeof SEVERITIES)[number];
 export type Confidence = (typeof CONFIDENCES)[number];
 export type PrecisionTier = (typeof PRECISION_TIERS)[number];
 export type CoverageStatus = (typeof COVERAGE_STATUSES)[number];
+export type BaselineStatus = (typeof BASELINE_STATUSES)[number];
 
 export interface CoverageRow {
   module: string; // "M1".."M10"
@@ -69,6 +75,21 @@ export interface Finding {
   // verified finding in a non-grading category isn't silently un-graded (#260). Unset/false is the
   // safe default — set it explicitly, per finding, only when exploitability was actually confirmed.
   exploitabilityVerified?: boolean;
+  // Engagement baseline diff (#457), set by src/audit-diff.ts when a --baseline is supplied.
+  // baselineStatus classifies this finding against the prior audit; lowConfidenceMatch names the
+  // prior finding's id this MIGHT be the same as (same taxonomy + location basename, exact key
+  // differed) — surfaced for a human to confirm, NEVER used to auto-merge (fail loud).
+  baselineStatus?: BaselineStatus;
+  lowConfidenceMatch?: string;
+}
+
+// Engagement baseline diff summary (#457), attached to the deliverable when a --baseline is
+// supplied. resolved carries the prior findings absent from this run (each tagged baselineStatus
+// "resolved"); counts drives the report's progress banner.
+export interface BaselineSummary {
+  priorLabel?: string;
+  resolved: Finding[];
+  counts: { resolved: number; persistent: number; new: number };
 }
 
 export interface ReportMeta {
@@ -94,6 +115,9 @@ export interface FindingsDocument {
   // engagement docs; when present the renderer states coverage from it rather than from the
   // free-text meta.outOfScope.
   coverage?: CoverageRow[];
+  // The engagement baseline diff (#457). Present only when a re-audit consumed a prior baseline;
+  // the renderer leads with a resolved/persistent/new progress view when it is.
+  baseline?: BaselineSummary;
 }
 
 // Bang-for-the-buck score, 0–100. Mirrors the formula in report-template/render.mjs.
@@ -150,6 +174,25 @@ function validateCoverage(coverage: unknown, errors: string[]): void {
   });
 }
 
+function validateBaseline(baseline: unknown, errors: string[]): void {
+  if (!isRecord(baseline)) {
+    errors.push("baseline: expected an object");
+    return;
+  }
+  if (!Array.isArray(baseline.resolved)) errors.push("baseline.resolved: expected an array");
+  const c = baseline.counts;
+  if (!isRecord(c)) {
+    errors.push("baseline.counts: expected an object");
+    return;
+  }
+  for (const k of ["resolved", "persistent", "new"] as const) {
+    if (typeof c[k] !== "number" || !Number.isInteger(c[k])) errors.push(`baseline.counts.${k}: expected integer`);
+  }
+  if (baseline.priorLabel !== undefined && typeof baseline.priorLabel !== "string") {
+    errors.push("baseline.priorLabel: expected string");
+  }
+}
+
 export function validateFindings(data: unknown): ValidationResult {
   const errors: string[] = [];
 
@@ -167,6 +210,7 @@ export function validateFindings(data: unknown): ValidationResult {
   }
 
   if (data.coverage !== undefined) validateCoverage(data.coverage, errors);
+  if (data.baseline !== undefined) validateBaseline(data.baseline, errors);
 
   if (!Array.isArray(data.findings)) {
     errors.push("findings: missing or not an array");
@@ -212,6 +256,12 @@ export function validateFindings(data: unknown): ValidationResult {
       if (!Array.isArray(f.reviewFlagColumns) || f.reviewFlagColumns.some((c) => typeof c !== "string")) {
         errors.push(`${at}.reviewFlagColumns: expected an array of strings`);
       }
+    }
+    if (f.baselineStatus !== undefined && !BASELINE_STATUSES.includes(f.baselineStatus as BaselineStatus)) {
+      errors.push(`${at}.baselineStatus: "${String(f.baselineStatus)}" not one of ${BASELINE_STATUSES.join("/")}`);
+    }
+    if (f.lowConfidenceMatch !== undefined && typeof f.lowConfidenceMatch !== "string") {
+      errors.push(`${at}.lowConfidenceMatch: expected string`);
     }
   });
 

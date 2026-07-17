@@ -24,6 +24,11 @@
 // --meta points at the engagement metadata (client, health, headline); omit it and the file carries
 // a placeholder meta with a loud warning to fill it before the report ships.
 //
+// --baseline (#457): a prior engagement findings.json for the SAME client. When given (with
+// --findings-out), each current finding is classified resolved/persistent/new by stable finding
+// identity (src/audit-diff.ts) and the deliverable leads with a progress view. Omit it and behaviour
+// is unchanged.
+//
 // The tier flags declare which environments the engagement HAS, not which modules to run: every
 // module is always attempted, and a module whose environment is absent is recorded
 // requires-live-run with that reason. There is no flag that skips a module — that is the point.
@@ -40,10 +45,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { assembleEngagementDocument } from "../audit-report.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
+import { applyBaseline } from "../audit-diff.js";
 import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit-execution-log.js";
 import { formatFailures, runAudit, type RunContext } from "../audit-runner.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
-import { type Finding, type ReportMeta, validateFindings } from "../findings.js";
+import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
 // Deliberately blank (not invented): the coverage ledger and findings are derived; client, health,
@@ -65,9 +71,18 @@ const findingsOut = flagValue("--findings-out");
 const metaPath = flagValue("--meta");
 const artifactsDir = flagValue("--artifacts-dir");
 const supabaseRef = flagValue("--supabase");
+// #457: a prior engagement's findings.json to diff this run against (resolved/persistent/new).
+const baselinePath = flagValue("--baseline");
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>]");
+  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--baseline prior-findings.json]");
+  process.exit(2);
+}
+
+// The baseline diff is written INTO the engagement findings.json, so it only means something with
+// --findings-out. Fail loud rather than silently ignoring a --baseline the operator asked for.
+if (baselinePath && !findingsOut) {
+  console.error("--baseline requires --findings-out: the resolved/persistent/new diff is written into the engagement findings document.");
   process.exit(2);
 }
 
@@ -132,7 +147,22 @@ if (outPath) {
 // scaffold a placeholder and say loudly that it must be filled before the report ships.
 if (findingsOut) {
   const meta: ReportMeta = metaPath ? (JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta) : placeholderMeta(targetDir);
-  const doc = assembleEngagementDocument(recorded, env, findings, meta);
+  let doc = assembleEngagementDocument(recorded, env, findings, meta);
+
+  // #457: diff against a prior engagement so the deliverable leads with progress. The baseline is a
+  // full findings.json from a previous audit of the SAME client; we diff by finding identity
+  // (src/audit-diff.ts) and tag each current finding resolved/persistent/new.
+  if (baselinePath) {
+    const prior = JSON.parse(readFileSync(baselinePath, "utf8")) as FindingsDocument;
+    if (!Array.isArray(prior.findings)) {
+      console.error(`--baseline ${baselinePath} is not a findings document (no findings[] array).`);
+      process.exit(1);
+    }
+    const priorLabel = [prior.meta?.date, prior.meta?.commit].filter(Boolean).join(" @ ") || undefined;
+    doc = applyBaseline(doc, prior.findings, priorLabel);
+    console.log(`\nBaseline diff vs ${baselinePath}: ${doc.baseline?.counts.resolved} resolved, ${doc.baseline?.counts.persistent} persistent, ${doc.baseline?.counts.new} new`);
+  }
+
   const { ok, errors } = validateFindings(doc);
   if (!ok) {
     console.error(`\nAssembled findings document is invalid — refusing to write ${findingsOut}:`);
