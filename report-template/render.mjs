@@ -97,16 +97,57 @@ function findingCard(f) {
       <span class="badge" style="background:${sc}">${esc(f.severity)}</span>
       <span class="badge bftb" style="background:${bftbColor(s)}">BFTB ${s}</span>
       <span class="badge" style="background:${CONF[f.confidence] ?? "#94a3b8"};color:${readableOn(CONF[f.confidence] ?? "#94a3b8")}">${esc(f.confidence ?? "—")}</span>
+      ${baselineBadge(f)}
     </div>
     <div class="finding-meta">${esc(f.category)} · ${esc(f.taxonomy)} · <code>${esc(f.location)}</code> · <span class="status">${esc(f.status)}</span>
       · <span class="vesc">V${f.value}·E${f.ease}·S${f.safety}</span></div>
     <div class="kv"><b>Evidence</b> ${esc(f.evidence)}</div>
     <div class="kv"><b>Impact</b> ${esc(f.impact)}</div>
     <div class="kv"><b>Fix</b> ${esc(f.fix)}</div>
+    ${f.lowConfidenceMatch ? `<div class="crit"><div class="cu">⚠ Possible carry-over — confirm manually:</div>
+      <div>This looks like it might be the same issue as prior finding <b>${esc(f.lowConfidenceMatch)}</b>, but the match was not confident (a rename or re-label), so it is counted as <b>new</b> and that prior finding still shows as resolved. Confirm whether they are the same before reporting progress.</div></div>` : ""}
     ${f.okWhen || f.notOkWhen ? `<div class="crit"><div class="cu">When this is OK vs. not — confirm against your design:</div>
       ${f.okWhen ? `<div><span class="ok">✓ OK when</span> ${esc(f.okWhen)}</div>` : ""}
       ${f.notOkWhen ? `<div><span class="notok">✗ Not OK when</span> ${esc(f.notOkWhen)}</div>` : ""}</div>` : ""}
   </div>`;
+}
+
+// Engagement baseline diff (#457). A per-finding badge showing its standing vs the prior audit:
+// "new" this quarter, or "carried over" (persistent). Absent baselineStatus (no baseline supplied)
+// ⇒ no badge, so a first-time engagement renders exactly as before.
+const BASELINE_BADGE = {
+  new: { label: "NEW", c: "#fff", bg: "#b3261e" },
+  persistent: { label: "CARRIED OVER", c: "#334155", bg: "#e2e8f0" },
+};
+function baselineBadge(f) {
+  const b = BASELINE_BADGE[f.baselineStatus];
+  return b ? `<span class="badge" style="background:${b.bg};color:${b.c}">${b.label}</span>` : "";
+}
+
+// The progress banner — the client-facing lead when a re-audit consumed a baseline (#457). Resolved
+// is the good number and leads; new is the number to act on. A resolved count with no persistent/new
+// still renders, because "you closed everything" is the strongest possible progress statement.
+function baselineBanner(baseline) {
+  const { resolved, persistent, new: added } = baseline.counts;
+  const since = baseline.priorLabel ? ` since the prior audit (${esc(baseline.priorLabel)})` : " since the prior audit";
+  return `<div class="progress">
+    <div class="progress-title">Progress${since}</div>
+    <div class="progress-stats">
+      <div class="pstat"><div class="pnum" style="color:#15803d">${resolved}</div><div class="plabel">Resolved</div></div>
+      <div class="pstat"><div class="pnum" style="color:#334155">${persistent}</div><div class="plabel">Still open</div></div>
+      <div class="pstat"><div class="pnum" style="color:#b3261e">${added}</div><div class="plabel">New</div></div>
+    </div>
+  </div>`;
+}
+
+// Resolved findings — closed since the prior audit. Listed so the client sees exactly what improved,
+// not just a count. These come from the baseline, not the current run, and are not in the findings
+// body above.
+function resolvedSection(resolved) {
+  const rows = resolved.map((x) => `<div class="na"><span class="fid" style="color:#15803d">✓ ${esc(x.id)}</span> <b>${esc(x.title)}</b> — <span style="color:var(--muted)">${esc(x.category)} · ${esc(x.taxonomy)} · <code>${esc(x.location)}</code></span></div>`).join("");
+  return `<h2>Resolved since last audit</h2>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Findings from the prior audit that are absent from this run — matched by finding identity (rule/taxonomy + normalized location), robust to line-number churn.</div>
+    ${rows}`;
 }
 
 // Per-module coverage badge palette (#349). "Not assessed" is deliberately alarming: a module that
@@ -243,6 +284,12 @@ function buildHtml(data) {
   .tq-score{font-size:30px;font-weight:800;color:#0f172a;white-space:nowrap}
   .tq-unit{font-size:12px;font-weight:700;color:var(--muted);margin-left:3px}
   .tq-body code{background:#f1f5f9;border-radius:4px;padding:1px 5px}
+  .progress{display:flex;align-items:center;gap:28px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 20px;margin-top:14px}
+  .progress-title{font-size:12px;font-weight:800;color:#15803d;text-transform:uppercase;letter-spacing:.5px}
+  .progress-stats{display:flex;gap:26px}
+  .pstat{text-align:center}
+  .pnum{font-size:26px;font-weight:800;line-height:1}
+  .plabel{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
   </style></head><body>
   <div class="cover-band"></div>
   <div class="page">
@@ -265,6 +312,8 @@ function buildHtml(data) {
 
     <div class="headline">${esc(m.headline)}</div>
 
+    ${data.baseline ? baselineBanner(data.baseline) : ""}
+
     <h2>Top bang-for-the-buck</h2>
     ${bftbBars(top)}
 
@@ -285,6 +334,7 @@ function buildHtml(data) {
     ${data.testQuality ? testQualitySection(data.testQuality) : ""}
     <h2>Findings</h2>
     ${sorted.map(findingCard).join("")}
+    ${data.baseline?.resolved?.length ? resolvedSection(data.baseline.resolved) : ""}
     ${reviewFlagged.length ? reviewFlagSection(reviewFlagged) : ""}
     ${na.length ? `<h2>Checked &amp; ruled out (not applicable)</h2>
     <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Items a checklist would flag, suppressed by the applicability gate (relevant to this app's auth model / architecture). Shown for transparency.</div>
