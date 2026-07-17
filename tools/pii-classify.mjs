@@ -370,6 +370,10 @@ export function dataMapToFindings(dataMap, { tier }) {
       safety: 4,
       mechanical: true,
       precisionTier: "review",
+      // #459: lets the renderer give review flags a distinct "review for nested PII" section
+      // instead of interleaving them with asserted classification findings.
+      reviewFlagOnly: asserted.length === 0 && reviewFlags.length > 0,
+      reviewFlagColumns: reviewFlags.map((c) => c.column),
     };
   });
 }

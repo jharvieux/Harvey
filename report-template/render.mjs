@@ -159,10 +159,25 @@ function testQualitySection(tq) {
     </div>`;
 }
 
+// #459: M10's OPAQUE_JSON_BLOB review flags (#377) are a "look inside this container" prompt, not
+// an asserted PII holding. A reviewFlagOnly finding is excluded from the asserted findings list
+// (and from severity/BFTB/action-plan tallies, same treatment as N/A) and rendered here instead;
+// a finding that ALSO has asserted columns stays in the asserted list but still lists its flagged
+// columns here, so no review-flag content is silently dropped from the report.
+function reviewFlagSection(items) {
+  const rows = items.map((x) => `<tr><td class="b">${esc(x.location)}</td>
+    <td>${x.reviewFlagColumns.map(esc).join(", ")}</td>
+    <td>${x.reviewFlagOnly ? "No" : "Yes — see Findings"}</td></tr>`).join("");
+  return `<h2>Review for nested PII</h2>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">JSON/JSONB container column(s) whose name suggests they may hold nested PII (#377) — flagged for review, not asserted as classified PII, and excluded from the severity counts and action plan.</div>
+    <table class="cov"><tr><th>Table</th><th>Column(s) to review</th><th>Also holds asserted PII?</th></tr>${rows}</table>`;
+}
+
 function buildHtml(data) {
   const all = data.findings.map((x) => ({ ...x, _bftb: bftb(x) }));
-  const f = all.filter((x) => x.confidence !== "N/A"); // live findings
+  const f = all.filter((x) => x.confidence !== "N/A" && !x.reviewFlagOnly); // live findings
   const na = all.filter((x) => x.confidence === "N/A"); // checked & ruled out (applicability gate)
+  const reviewFlagged = all.filter((x) => (x.reviewFlagColumns?.length ?? 0) > 0); // #459
   const counts = {};
   for (const x of f) counts[x.severity] = (counts[x.severity] || 0) + 1;
   const sevCount = (s) => f.filter((x) => x.severity === s).length;
@@ -270,6 +285,7 @@ function buildHtml(data) {
     ${data.testQuality ? testQualitySection(data.testQuality) : ""}
     <h2>Findings</h2>
     ${sorted.map(findingCard).join("")}
+    ${reviewFlagged.length ? reviewFlagSection(reviewFlagged) : ""}
     ${na.length ? `<h2>Checked &amp; ruled out (not applicable)</h2>
     <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Items a checklist would flag, suppressed by the applicability gate (relevant to this app's auth model / architecture). Shown for transparency.</div>
     ${na.map((x) => `<div class="na"><span class="fid">${esc(x.id)}</span> <b>${esc(x.title)}</b> — ${esc(x.note ?? "Not applicable in context.")}</div>`).join("")}` : ""}
