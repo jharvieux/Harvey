@@ -28,6 +28,26 @@ describe("scoreCoverage", () => {
     expect(scored!.status).toBe("caught");
   });
 
+  // #342: a high-tier catch is an asserted verdict; a review-tier catch is a shape surfaced for a
+  // human. The tier must ride through onto the ScoredBug so the two are distinguishable in the
+  // scorecard without reading prose.
+  it("records the matched finding's tier — high asserts, review is surfaced for a human", () => {
+    const asserted = scoreCoverage(
+      [bug({ id: "SQLI", matches: () => true })],
+      [{ taxonomy: "sql-injection", location: "search.js:9", precisionTier: "high" }],
+    )[0]!;
+    expect(asserted.tier).toBe("high");
+    expect(asserted.note).toContain("Asserted");
+
+    const surfaced = scoreCoverage(
+      [bug({ id: "RLS-AUTH-ROLE", matches: () => true })],
+      [{ taxonomy: "M1 — Multi-tenant security", location: "rls.sql:38", precisionTier: "review" }],
+    )[0]!;
+    expect(surfaced.status).toBe("caught");
+    expect(surfaced.tier).toBe("review");
+    expect(surfaced.note).toContain("a human must still adjudicate");
+  });
+
   // The #246 regression: `matches` used to receive taxonomy and location as separate strings, so a
   // predicate could not require both. COUNTER-RACE scored "caught" off /race/i matching the
   // dependency `braces@2.3.2` in a lockfile — a different file AND a different rule.
@@ -57,13 +77,27 @@ describe("scoreCoverage", () => {
 });
 
 describe("summarizeCoverage", () => {
-  it("tallies each status independently so a 0-caught run isn't hidden inside a total", () => {
+  it("splits caught into asserted vs surfaced-for-review so a review catch is never a claimed verdict (#342)", () => {
     const bugs = [
       bug({ id: "A", moduleRan: false }),
       bug({ id: "B", moduleRan: true, matches: () => false }),
-      bug({ id: "C", moduleRan: true, matches: () => true }),
+      bug({ id: "C-HIGH", moduleRan: true, matches: (f) => f.location === "hi" }),
+      bug({ id: "D-REVIEW", moduleRan: true, matches: (f) => f.location === "rev" }),
     ];
-    const scored = scoreCoverage(bugs, [{ taxonomy: "x", location: "y" }]);
-    expect(summarizeCoverage(scored)).toEqual({ caught: 1, missed: 1, "requires-live-run": 1 });
+    const scored = scoreCoverage(bugs, [
+      { taxonomy: "x", location: "hi", precisionTier: "high" },
+      { taxonomy: "y", location: "rev", precisionTier: "review" },
+    ]);
+    expect(summarizeCoverage(scored)).toEqual({
+      asserted: 1,
+      "surfaced-for-review": 1,
+      missed: 1,
+      "requires-live-run": 1,
+    });
+  });
+
+  it("counts an untiered catch as surfaced-for-review, never asserted — the conservative direction", () => {
+    const scored = scoreCoverage([bug({ id: "U", matches: () => true })], [{ taxonomy: "x", location: "y" }]);
+    expect(summarizeCoverage(scored)).toEqual({ asserted: 0, "surfaced-for-review": 1, missed: 0, "requires-live-run": 0 });
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  coveredScopeLine,
   detectNoTestSuite,
   mutationScore,
   noTestSuiteFinding,
@@ -118,6 +119,29 @@ describe("mutatorBreakdown", () => {
   it("omits files with zero survivors entirely", () => {
     const summary = summarizeMutationReport(report);
     expect(summary.mutatorBreakdown.some((b) => b.file === "src/findings.ts")).toBe(false);
+  });
+});
+
+// #319: the overall score is a percentage of the mutated file set, never a repo-level claim. The
+// covered scope must travel with it so "100% over one file" can't read as "the repo is tested".
+describe("coveredScope (#319)", () => {
+  it("reports the mutated file set straight from the Stryker report", () => {
+    const summary = summarizeMutationReport(report);
+    expect(summary.coveredScope).toEqual(["src/findings.ts", "src/scan/secrets.ts", "src/scan/supabase.ts"]);
+  });
+
+  it("renders a scope line that names the files and disclaims a whole-repo claim", () => {
+    const line = coveredScopeLine(summarizeMutationReport(report));
+    expect(line).toContain("3 mutated file(s)");
+    expect(line).toContain("NOT a whole-repo coverage claim");
+  });
+
+  it("keeps a single-file scope legible — the proposit '100% over one file' case", () => {
+    const oneFile: StrykerReport = { schemaVersion: "1", files: { "lib/pdf/launch.ts": { mutants: [mutant({ status: "Killed" })] } } };
+    const summary = summarizeMutationReport(oneFile);
+    expect(summary.overall.mutationScore).toBe(100);
+    expect(coveredScopeLine(summary)).toContain("lib/pdf/launch.ts");
+    expect(coveredScopeLine(summary)).toContain("1 mutated file(s)");
   });
 });
 

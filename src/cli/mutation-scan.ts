@@ -37,6 +37,7 @@ import { join, relative, resolve, sep } from "node:path";
 import type { SourceInput } from "../detectors/common.js";
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
 import {
+  coveredScopeLine,
   detectNoTestSuite,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
@@ -211,6 +212,9 @@ const hotspotFiles = hotspotsPath
 const summary = summarizeMutationReport(report, hotspotFiles);
 
 console.error(`M8 mutation score: ${summary.overall.mutationScore}% (${summary.overall.killed + summary.overall.timeout}/${summary.overall.totalMutants - summary.overall.ignored - summary.overall.compileErrors} valid mutants killed)`);
+// #319: never print the score without its scope — a high percentage over a scoped `mutate` set is
+// "the covered files are tested well", not "the repo is tested".
+console.error(`  ${coveredScopeLine(summary)}`);
 console.error(`${summary.survivingMutants.length} surviving mutant(s), ${summary.survivingMutants.filter((m) => m.hotspot).length} on a flagged hotspot`);
 // #386: survivors concentrated in the boundary/negation mutator families mean "the denial
 // branch was never tested" — a sharper sentence than "some mutants survived".
