@@ -71,10 +71,16 @@ interface MechanicalScanOptions {
   // Opt-in: the free-report path (quick-scan) wants them; the calibration gate and the other
   // M1-scoring callers keep the M1-only default so their answer keys stay one-question keys.
   handrolledIndicators?: boolean;
+  // Skip checkLicenseCompliance/checkSlopsquat — the only two live npm-registry calls in this
+  // scan. Default false (real engagements always run both). The deterministic dry-run harness
+  // (src/cli/dry-run.ts) is the one caller that opts in: its committed findings.json is supposed
+  // to be reproducible across machines, and a registry-reachability dependency would let it drift
+  // on an offline/blipped CI run for reasons that have nothing to do with the scanner's own code.
+  skipNetworkChecks?: boolean;
 }
 
 export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Finding[]> {
-  const { dir, bundleDir, tenancyOverride, handrolledIndicators } = opts;
+  const { dir, bundleDir, tenancyOverride, handrolledIndicators, skipNetworkChecks } = opts;
 
   // Scope the walk to what should actually be scanned (issue #101): git-tracked files only
   // when dir is a git repo (excludes .env.local, .claude/worktrees/, node_modules, .next —
@@ -114,9 +120,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkUnpinnedDependencies(allDeps));
       findings.push(...checkNonRegistryDependencies(allDeps));
       findings.push(...checkInstallScripts(pkg.scripts ?? {}));
-      findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
-      // #456 — license compliance (SPDX + copyleft/unknown flags).
-      findings.push(...(await checkLicenseCompliance(allDeps)));
+      if (!skipNetworkChecks) {
+        findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
+        // #456 — license compliance (SPDX + copyleft/unknown flags).
+        findings.push(...(await checkLicenseCompliance(allDeps)));
+      }
     }
     findings.push(...checkLockfilePresence(scanDir));
 
