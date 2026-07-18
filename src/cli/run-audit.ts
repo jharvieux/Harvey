@@ -44,6 +44,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { assembleEngagementDocument } from "../audit-report.js";
+import { buildExecutionPlan, formatExecutionPlan } from "../audit-plan.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
 import { applyBaseline } from "../audit-diff.js";
 import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit-execution-log.js";
@@ -136,6 +137,11 @@ const { recorded, failures, findings } = runAudit(AUDIT_RUNNERS, ctx);
 const report = buildAuditCoverage(recorded, env);
 
 console.log(formatAuditCoverage(report));
+
+// #502: the flagship passes run OUTSIDE this process; print their correct dependency order so the
+// M3 → scan-focus → M1-semantic → triage chain is not left to tribal knowledge (it was violated on
+// the ATC engagement, silently un-prioritizing the semantic review).
+console.log(`\n${formatExecutionPlan(buildExecutionPlan(env))}`);
 if (outPath) {
   writeFileSync(outPath, JSON.stringify(recorded, null, 2));
   console.log(`\nDerived coverage ledger → ${outPath}`);

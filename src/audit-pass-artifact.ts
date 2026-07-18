@@ -24,6 +24,10 @@ export interface PassArtifact {
   generatedAt: string; // ISO-8601; older than the freshness window ⇒ stale, cannot prove THIS audit ran
   summary?: string; // one-line human note surfaced in the ledger detail
   findings?: Finding[]; // report-schema findings the pass produced, if any
+  // #502: for the M1 semantic pass, whether an M3 hotspot focus brief (scan-focus) was supplied to
+  // /vuln-scan. undefined ⇒ not recorded (treated as "no focus" — an un-prioritized semantic pass
+  // that must be surfaced, never silently assumed hotspot-focused).
+  hotspotFocus?: boolean;
 }
 
 // A pass older than this describes a prior state of the target, so it cannot prove the module ran
@@ -86,6 +90,7 @@ export function buildPassArtifact(parts: {
   generatedAt: string;
   summary?: string;
   findings?: Finding[];
+  hotspotFocus?: boolean;
 }): PassArtifact {
   if (!parts.target.trim()) throw new Error("pass artifact needs a non-empty target (the audited directory)");
   if (!parts.pass.trim()) throw new Error("pass artifact needs a non-empty pass name (e.g. semantic, dynamic, verdict)");
@@ -97,6 +102,7 @@ export function buildPassArtifact(parts: {
     generatedAt: parts.generatedAt,
     ...(parts.summary ? { summary: parts.summary } : {}),
     ...(parts.findings?.length ? { findings: parts.findings } : {}),
+    ...(parts.hotspotFocus !== undefined ? { hotspotFocus: parts.hotspotFocus } : {}),
   };
 }
 

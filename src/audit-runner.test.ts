@@ -386,6 +386,23 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     expect(findings.some((f) => (f as { id?: string }).id === "TRIAGE-1")).toBe(true);
   });
 
+  // #502: the M3→M1 hotspot focus is a designed dependency — an un-focused semantic pass silently
+  // degrades review to un-prioritized, so the ledger detail must make its presence/absence visible.
+  it("M1 flags a semantic pass that ran WITHOUT an M3 hotspot focus", () => {
+    const noFocus = withPass("M1", { pass: "semantic" }); // hotspotFocus absent
+    const m1 = status(AUDIT_RUNNERS, noFocus, "M1");
+    expect(m1?.status).toBe("ran");
+    expect(m1?.detail).toMatch(/no M3 hotspot focus/i);
+  });
+
+  it("M1 records a semantic pass that WAS hotspot-focused", () => {
+    const focused = withPass("M1", { pass: "semantic", hotspotFocus: true });
+    const m1 = status(AUDIT_RUNNERS, focused, "M1");
+    expect(m1?.status).toBe("ran");
+    expect(m1?.detail).toMatch(/hotspot-focused/i);
+    expect(m1?.detail).not.toMatch(/WARNING/);
+  });
+
   it("M2 reads ran when a fresh dynamic pen-test artifact exists — the reachable-stack evidence #356 wanted", () => {
     expect(status(AUDIT_RUNNERS, withPass("M2", { pass: "dynamic" }), "M2")?.status).toBe("ran");
   });

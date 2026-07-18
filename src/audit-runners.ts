@@ -126,7 +126,19 @@ const m1: ModuleRunner = {
     // flagship LLM/live work is proven (and its triage findings flow into the deliverable); without
     // it, M1 stays honestly partial on the mechanical tier alone.
     const pass = findFreshPass(ctx, "M1");
-    if (pass.fresh) return ranFromPass(pass.artifact, "pnpm quick-scan (mechanical tier)");
+    if (pass.fresh) {
+      const ran = ranFromPass(pass.artifact, "pnpm quick-scan (mechanical tier)");
+      // #502: the M3→M1 hotspot focus is a designed dependency; an un-focused semantic pass silently
+      // degrades the flagship review to un-prioritized. Surface it in the ledger detail either way so
+      // a missing focus is visible rather than assumed.
+      if (pass.artifact.pass === "semantic") {
+        const focusNote = pass.artifact.hotspotFocus
+          ? " [hotspot-focused: M3 → M1 (#502)]"
+          : " [WARNING: no M3 hotspot focus — the semantic pass was NOT hotspot-prioritized; run M3 first and feed `pnpm scan-focus` into /vuln-scan (#502)]";
+        return { ...ran, detail: `${ran.detail}${focusNote}` };
+      }
+      return ran;
+    }
     return {
       status: "partial",
       detail: "pnpm quick-scan (mechanical tier)",
