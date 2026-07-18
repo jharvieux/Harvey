@@ -4,7 +4,8 @@
 
 import { describe, expect, it } from "vitest";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
-import { MEASURED_SHAPES, SHIPPED_SHAPES, UNMEASURED_SHAPES } from "./handrolled-frequency.js";
+import { EXTERNAL_CORPUS } from "./external-corpus.js";
+import { AI_FREQUENCY_CORPUS, MEASURED_SHAPES, SHIPPED_SHAPES, UNMEASURED_SHAPES } from "./handrolled-frequency.js";
 
 describe("measured shapes count their canonical example", () => {
   for (const shape of MEASURED_SHAPES) {
@@ -30,6 +31,27 @@ describe("catalogue bookkeeping", () => {
     for (const s of [...MEASURED_SHAPES, ...UNMEASURED_SHAPES]) {
       expect(yes.includes(s.entry) ? "YES" : "MAYBE").toBe(s.verdict);
     }
+  });
+
+  // #413: the provenance-tagged AI frequency tier.
+  it("every corpus repo carries a provenance verdict with evidence", () => {
+    const tiers = new Set(["professional", "ai-assisted", "ai-generated", "unclear"]);
+    for (const t of [...EXTERNAL_CORPUS, ...AI_FREQUENCY_CORPUS]) {
+      expect(tiers, t.slug).toContain(t.provenance);
+      expect(t.provenanceNote.length, t.slug).toBeGreaterThan(0);
+    }
+  });
+
+  it("AI frequency targets are pinned to a full 40-hex commit and never duplicate a corpus slug", () => {
+    const corpusSlugs = new Set(EXTERNAL_CORPUS.map((t) => t.slug));
+    for (const t of AI_FREQUENCY_CORPUS) {
+      expect(t.commit, t.slug).toMatch(/^[0-9a-f]{40}$/);
+      expect(corpusSlugs.has(t.slug), t.slug).toBe(false);
+    }
+  });
+
+  it("has at least one genuinely AI-generated repo to answer the #413 question", () => {
+    expect(AI_FREQUENCY_CORPUS.some((t) => t.provenance === "ai-generated" && !t.curated)).toBe(true);
   });
 
   it("shipped taxonomies exist in the real detector's output vocabulary", () => {
