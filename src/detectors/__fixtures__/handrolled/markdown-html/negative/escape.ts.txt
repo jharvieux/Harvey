@@ -1,0 +1,9 @@
+// Replaces that produce entities and a slug — no HTML tags emitted, so this is not the
+// markdown-to-HTML conversion shape.
+export function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+export function slugify(t: string): string {
+  return t.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}

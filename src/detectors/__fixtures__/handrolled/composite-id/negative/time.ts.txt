@@ -1,0 +1,9 @@
+// Either call alone: a bare timestamp id and a standalone random number. Neither expression
+// combines both, so neither is the composite-id shape.
+export function stamp(): string {
+  return `id-${Date.now()}`;
+}
+
+export function roll(): number {
+  return Math.random();
+}

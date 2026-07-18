@@ -1,0 +1,14 @@
+import { Component } from "react";
+
+// An ordinary class component with no error-boundary lifecycle members.
+export class Counter extends Component<Record<string, never>, { n: number }> {
+  state = { n: 0 };
+
+  increment() {
+    this.setState({ n: this.state.n + 1 });
+  }
+
+  render() {
+    return null;
+  }
+}

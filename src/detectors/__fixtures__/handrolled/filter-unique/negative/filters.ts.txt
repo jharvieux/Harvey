@@ -1,0 +1,9 @@
+// Ordinary filters: a two-arg predicate and a three-arg callback that does NOT compare
+// indexOf back to the index. Neither is the de-duplication idiom.
+export function positives(arr: number[]): number[] {
+  return arr.filter((v, i) => v > i);
+}
+
+export function firstHalf<T>(arr: T[]): T[] {
+  return arr.filter((v, i, a) => i < a.length / 2);
+}

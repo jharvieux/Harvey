@@ -269,29 +269,32 @@ half-answer, not a graduation trigger). **23 (UUID-v4 template)** stayed zero ev
 unrankable — a bigger or differently-sourced AI corpus would be needed to see them, if they occur
 at all.
 
-## Graduation candidates (measured evidence, deferred to a follow-up)
+## Graduation candidates — SHIPPED 2026-07-18 (#542)
 
 Per #395's discipline, graduating an entry to a shipped detector requires the detector **plus**
-paired positive/negative fixtures — too much to fold into this measurement PR without diluting it.
-The measured evidence now exists to justify building these, in this order (organic-AI count,
-curated excluded):
+paired positive/negative fixtures. All 8 organic-AI-tier entries below graduated in #542 as
+mechanical M6 indicator classes (`src/detectors/handrolled.ts`, fixture-gated in
+`handrolled.test.ts`, vocabulary-lock extended), each confirmed to fire on a real positive and NOT
+on its paired negative:
 
-1. **24** — composite Date.now()+Math.random() ids (5, cravab) — a textbook non-crypto-id smell.
-2. **98** — markdown→HTML via regex replaces (5, cravab) — classic reinvention of a parser.
-3. **30** — month/day-name literal arrays (5: cravab+effective) — Intl.DateTimeFormat replacement.
-4. **61** — hand-rolled ErrorBoundary class (2: cravab+effective).
-5. **27** — non-crypto string-hash loop (2, effective).
-6. **3 / 53 / 89** — one organic-AI hit each; weakest evidence, build last if at all.
+1. **24** — composite Date.now()+Math.random() ids (5, cravab) — `M6 — Indicator: composite timestamp-random id`.
+2. **98** — markdown→HTML via regex replaces (5, cravab) — `M6 — Indicator: markdown-to-HTML by regex`.
+3. **30** — month/day-name literal arrays (5: cravab+effective) — `M6 — Indicator: month/day-name array`.
+4. **61** — hand-rolled ErrorBoundary class (2: cravab+effective) — `M6 — Indicator: hand-rolled ErrorBoundary`.
+5. **27** — non-crypto string-hash loop (2, effective) — `M6 — Indicator: non-crypto string hash`.
+6. **3 / 53 / 89** — one organic-AI hit each — `array-unique via filter` / `JWT decode by hand` / `thousands-separator regex`.
 
-Filed as a follow-up issue with these numbers; **entry 76 is explicitly NOT a graduation candidate
-yet** — its only evidence is the curated repo.
+**Entry 76 is explicitly NOT graduated** — its only evidence is the curated teardown repo, not
+organic AI code, so it stays a YES-not-yet-graduated candidate in the catalogue.
 
 ## Follow-ups this measurement creates
 
 1. **Full corpus-drift baselines for the 4 new AI repos.** They are frequency-only today (no
    M4/M5/M7/M8/M9/M10 baselines). Promoting any to a full `ExternalTarget` needs a measured scan +
    triage per module — the heavier follow-up #413 deferred.
-2. **Graduation of the 5-6 candidates above** under the #395 fixture discipline (separate issue).
+2. **Graduation of the 8 candidates above** — DONE 2026-07-18 (#542): all 8 organic-AI-tier YES
+   entries shipped as mechanical M6 indicators under the #395 fixture discipline. Entry 76 stays a
+   YES candidate (curated-only evidence).
 3. **ATC and a wider organic-AI sample.** ATC is private (excluded here); the ai-generated tier is
    3 repos. More organic vibe-coded repos on this exact stack (the AI code-gen platforms emit
    Vite/React without committed Supabase migrations, so the pool is Cursor/Claude-assisted) would
