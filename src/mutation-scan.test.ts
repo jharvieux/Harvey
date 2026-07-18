@@ -1,14 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
   coveredScopeLine,
+  detectDryRunFailure,
   detectNoTestSuite,
+  detectTestEnv,
+  detectTestRunner,
+  dryRunFailureFinding,
+  dryRunFailureModuleRecord,
   isPlaceholderSpec,
+  mutationNotRunModuleRecord,
   mutationScore,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
+  scaffoldStrykerConfig,
+  scopedRunModuleRecord,
   summarizeMutationReport,
   survivingMutantFindings,
   toReportRows,
+  verifyMutationScope,
   type StrykerMutant,
   type StrykerReport,
 } from "./mutation-scan.js";
@@ -387,5 +396,185 @@ describe("noTestSuiteFinding / noTestSuiteModuleRecord", () => {
     const record = noTestSuiteModuleRecord("no package.json found");
     expect(record).toMatchObject({ status: "partial" });
     expect(record.note).toContain("no package.json found");
+  });
+});
+
+describe("detectTestRunner / scaffoldStrykerConfig (#513)", () => {
+  it("detects vitest/jest/mocha from either dependency block, mapping to the Stryker runner plugin", () => {
+    expect(detectTestRunner({ devDependencies: { vitest: "^3.0.0" } })).toEqual({ runner: "vitest", plugin: "@stryker-mutator/vitest-runner" });
+    expect(detectTestRunner({ dependencies: { mocha: "^10.0.0" } })).toEqual({ runner: "mocha", plugin: "@stryker-mutator/mocha-runner" });
+  });
+
+  it("prefers vitest over jest when both are present, and detects nothing for unsupported runners", () => {
+    expect(detectTestRunner({ devDependencies: { jest: "^29.0.0", vitest: "^3.0.0" } })?.runner).toBe("vitest");
+    expect(detectTestRunner({ devDependencies: { ava: "^6.0.0" } })).toBeUndefined();
+    expect(detectTestRunner(undefined)).toBeUndefined();
+  });
+
+  it("scaffolds the minimal config the M8 wrapper needs: perTest coverage, json reporter, detected runner", () => {
+    const cfg = scaffoldStrykerConfig("jest", ["src"]);
+    expect(cfg).toMatchObject({ testRunner: "jest", coverageAnalysis: "perTest" });
+    expect(cfg.reporters).toContain("json");
+    expect(cfg.jsonReporter).toEqual({ fileName: "reports/mutation/mutation.json" });
+  });
+
+  it("builds mutate globs only from source dirs that exist, excluding tests/types/node_modules", () => {
+    const cfg = scaffoldStrykerConfig("vitest", ["src", "app"]);
+    expect(cfg.mutate).toEqual([
+      "src/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}",
+      "app/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}",
+      "!**/*.test.*",
+      "!**/*.spec.*",
+      "!**/__tests__/**",
+      "!**/*.d.ts",
+      "!**/node_modules/**",
+    ]);
+  });
+
+  it("omits mutate entirely when no known source dir exists — Stryker defaults, honestly unverifiable scope", () => {
+    const cfg = scaffoldStrykerConfig("vitest", []);
+    expect("mutate" in cfg).toBe(false);
+    expect(verifyMutationScope(["a.ts"], undefined, ["a.ts"]).verified).toBe(false);
+  });
+
+  it("scaffolded globs are evaluable by the #504 scope check — a scaffolded run's scope is always verifiable", () => {
+    const cfg = scaffoldStrykerConfig("vitest", ["src"]);
+    const scope = verifyMutationScope(["src/a.ts"], cfg.mutate as string[], ["src/a.ts", "src/b.ts", "src/a.test.ts", "src/types.d.ts"]);
+    expect(scope.verified).toBe(true);
+    expect(scope.scoped).toBe(true);
+    expect(scope.missing).toEqual(["src/b.ts"]);
+  });
+
+  it("mutationNotRunModuleRecord states the full degradation ladder and the reason — never a silent drop", () => {
+    const record = mutationNotRunModuleRecord("no recognized test runner");
+    expect(record.status).toBe("partial");
+    expect(record.note).toContain("no recognized test runner");
+    expect(record.note).toMatch(/full mutation.*--stub-check.*test-intent.*M8-00/s);
+  });
+});
+
+describe("verifyMutationScope (#504)", () => {
+  const SOURCES = ["src/auth.ts", "src/billing.ts", "src/util/dates.ts", "src/types.d.ts", "scripts/build.ts", "src/auth.test.ts"];
+  const GLOBS = ["src/**/*.ts", "!**/*.test.ts"];
+
+  it("verifies a run that covered every file the configured mutate globs match", () => {
+    const scope = verifyMutationScope(["src/auth.ts", "src/billing.ts", "src/util/dates.ts"], GLOBS, SOURCES);
+    expect(scope).toMatchObject({ verified: true, scoped: false, expectedFileCount: 3 });
+  });
+
+  it("flags a subset run as scoped, naming the count and the missing files — the ATC 263-file case in miniature", () => {
+    const scope = verifyMutationScope(["src/auth.ts"], GLOBS, SOURCES);
+    expect(scope.scoped).toBe(true);
+    expect(scope.missingCount).toBe(2);
+    expect(scope.missing).toEqual(["src/billing.ts", "src/util/dates.ts"]);
+    expect(scope.note).toContain("src/billing.ts");
+  });
+
+  it("excludes .d.ts files from the expected set — no executable code, no mutants, no false scoping", () => {
+    const scope = verifyMutationScope(["src/auth.ts", "src/billing.ts", "src/util/dates.ts"], ["src/**/*.ts", "!**/*.test.ts"], SOURCES);
+    expect(scope.scoped).toBe(false);
+  });
+
+  it("respects negation globs — test files the config excludes are not expected", () => {
+    const scope = verifyMutationScope(["src/auth.ts", "src/billing.ts", "src/util/dates.ts"], GLOBS, SOURCES);
+    expect(scope.scoped).toBe(false);
+  });
+
+  it("expands brace alternations like real Stryker configs use", () => {
+    const scope = verifyMutationScope(["src/auth.ts"], ["{src,lib}/**/*.{ts,tsx}", "!**/*.test.ts", "!**/*.d.ts"], ["src/auth.ts", "lib/x.tsx"]);
+    expect(scope.scoped).toBe(true);
+    expect(scope.missing).toEqual(["lib/x.tsx"]);
+  });
+
+  it("reports unverifiable (never guessing) when there are no statically readable mutate globs", () => {
+    const scope = verifyMutationScope(["src/auth.ts"], undefined, SOURCES);
+    expect(scope).toMatchObject({ verified: false, scoped: false });
+    expect(scope.note).toMatch(/not statically readable/);
+  });
+
+  it("reports unverifiable on glob syntax it cannot evaluate, naming the glob", () => {
+    const scope = verifyMutationScope(["src/auth.ts"], ["src/**/!(*.spec).ts"], SOURCES);
+    expect(scope).toMatchObject({ verified: false, scoped: false });
+    expect(scope.note).toContain("!(*.spec)");
+  });
+
+  it("scopedRunModuleRecord is partial and says a subset is never the module's measurement", () => {
+    const scope = verifyMutationScope(["src/auth.ts"], GLOBS, SOURCES);
+    const record = scopedRunModuleRecord(scope);
+    expect(record.status).toBe("partial");
+    expect(record.note).toMatch(/never ran \(#504\)/);
+    expect(record.note).toContain("src/billing.ts");
+  });
+});
+
+describe("detectTestEnv (#503)", () => {
+  it("reads a YAML env mapping from a CI workflow — the ATC TZ case", () => {
+    const env = detectTestEnv([{ path: ".github/workflows/ci.yml", text: "jobs:\n  test:\n    env:\n      TZ: Pacific/Honolulu\n" }]);
+    expect(env).toEqual([{ key: "TZ", value: "Pacific/Honolulu", source: ".github/workflows/ci.yml" }]);
+  });
+
+  it("reads an inline env prefix from a package.json test script", () => {
+    const env = detectTestEnv([{ path: "package.json (scripts)", text: JSON.stringify({ test: "TZ=UTC vitest run" }) }]);
+    expect(env).toEqual([{ key: "TZ", value: "UTC", source: "package.json (scripts)" }]);
+  });
+
+  it("reads a quoted env object entry from a vitest config", () => {
+    const env = detectTestEnv([{ path: "vitest.config.ts", text: `export default { test: { env: { TZ: "America/New_York", LANG: "en_US.UTF-8" } } };` }]);
+    expect(env).toContainEqual({ key: "TZ", value: "America/New_York", source: "vitest.config.ts" });
+    expect(env).toContainEqual({ key: "LANG", value: "en_US.UTF-8", source: "vitest.config.ts" });
+  });
+
+  it("reads a process.env assignment from a setup file — the runtime-reassignment pattern that needs process-start replication", () => {
+    const env = detectTestEnv([{ path: "vitest.setup.ts", text: `process.env.TZ = "Pacific/Honolulu";\n` }]);
+    expect(env).toEqual([{ key: "TZ", value: "Pacific/Honolulu", source: "vitest.setup.ts" }]);
+  });
+
+  it("first declaration per key wins across the caller-ordered file list (runner config beats workflow)", () => {
+    const env = detectTestEnv([
+      { path: "vitest.config.ts", text: `env: { TZ: "UTC" }` },
+      { path: ".github/workflows/ci.yml", text: "env:\n  TZ: Pacific/Honolulu\n" },
+    ]);
+    expect(env).toEqual([{ key: "TZ", value: "UTC", source: "vitest.config.ts" }]);
+  });
+
+  it("ignores env keys outside the locale/timezone allowlist — CI secrets must never be scraped", () => {
+    const env = detectTestEnv([{ path: ".github/workflows/ci.yml", text: "env:\n  DATABASE_URL: postgres://x\n  API_TOKEN: abc\n" }]);
+    expect(env).toEqual([]);
+  });
+});
+
+describe("detectDryRunFailure / dry-run-failure verdict (#503)", () => {
+  const STRYKER_FAIL = [
+    "12:01:02 (1234) ERROR Stryker Something went wrong",
+    "× src/format-date.test.ts > formats a negative-UTC-offset timezone",
+    "ConfigError: There were failed tests in the initial test run.",
+  ].join("\n");
+
+  it("recognizes Stryker's failed-initial-test-run abort and extracts the first failing test line", () => {
+    const verdict = detectDryRunFailure(STRYKER_FAIL);
+    expect(verdict.failed).toBe(true);
+    expect(verdict.detail).toContain("format-date.test.ts");
+  });
+
+  it("recognizes an initial-test-run timeout", () => {
+    expect(detectDryRunFailure("Initial test run timed out!").failed).toBe(true);
+  });
+
+  it("does not fire on ordinary Stryker output (break-threshold exit, score table)", () => {
+    expect(detectDryRunFailure("Final mutation score of 42.00 is lower than break threshold").failed).toBe(false);
+  });
+
+  it("emits an M8-03 finding naming the applied env and the failing test", () => {
+    const finding = dryRunFailureFinding("× format-date.test.ts > negative-UTC-offset", [{ key: "TZ", value: "UTC", source: "ci.yml" }]);
+    expect(finding.id).toBe("M8-03");
+    expect(finding.evidence).toContain("TZ=UTC");
+    expect(finding.evidence).toContain("format-date.test.ts");
+  });
+
+  it("marks the coverage record partial with a distinct, actionable note — never a generic void", () => {
+    const record = dryRunFailureModuleRecord("× format-date.test.ts", []);
+    expect(record.status).toBe("partial");
+    expect(record.note).toMatch(/dry run FAILED/);
+    expect(record.note).toContain("format-date.test.ts");
   });
 });
