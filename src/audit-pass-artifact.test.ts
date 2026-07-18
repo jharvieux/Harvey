@@ -108,6 +108,13 @@ describe("buildPassArtifact (#448 — validate at emit, not on the next audit)",
     expect(a.findings).toBeUndefined();
     expect(a.summary).toBeUndefined();
   });
+
+  // #502: hotspotFocus is three-valued — true/false is recorded, undefined is left off entirely so a
+  // reader can tell "recorded as un-focused" from "never recorded".
+  it("carries hotspotFocus:false through, and omits the key when unset", () => {
+    expect(buildPassArtifact({ module: "M1", target: "/t", pass: "semantic", generatedAt: iso(0), hotspotFocus: false }).hotspotFocus).toBe(false);
+    expect(buildPassArtifact({ module: "M1", target: "/t", pass: "semantic", generatedAt: iso(0) })).not.toHaveProperty("hotspotFocus");
+  });
 });
 
 describe("write → derive round-trip (#448 ↔ #416)", () => {

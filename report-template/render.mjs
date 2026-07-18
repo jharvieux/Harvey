@@ -109,6 +109,7 @@ function findingCard(f) {
       <span class="badge bftb" style="background:${bftbColor(s)}">BFTB ${s}</span>
       <span class="badge" style="background:${CONF[f.confidence] ?? "#94a3b8"};color:${readableOn(CONF[f.confidence] ?? "#94a3b8")}">${esc(f.confidence ?? "—")}</span>
       ${baselineBadge(f)}
+      ${f.onHotspot ? `<span class="badge" style="background:#7c3aed" title="On an M3 churn×complexity hotspot — higher remediation priority">🔥 Hotspot${f.hotspotRank ? ` #${f.hotspotRank}` : ""}</span>` : ""}
     </div>
     <div class="finding-meta">${esc(f.category)} · ${esc(f.taxonomy)} · <code>${esc(f.location)}</code> · <span class="status">${esc(f.status)}</span>
       · <span class="vesc">V${f.value}·E${f.ease}·S${f.safety}</span></div>
@@ -193,7 +194,10 @@ function coverageSection(rows, m) {
   const body = rows.map((r) => {
     const s = COV[r.status] ?? COV["requires-live-run"];
     const note = r.status === "ran" ? esc(r.detail ?? "") : esc(r.reason ?? "");
-    return `<tr><td class="b">${esc(r.module)}</td><td>${esc(r.name)}</td>
+    // #506: a per-app/per-DB row names its instance so a monorepo's second app/DB is a visible row,
+    // never folded into the module's headline.
+    const area = r.instance ? `${esc(r.name)} <span style="color:var(--muted)">· ${esc(r.instance)}</span>` : esc(r.name);
+    return `<tr><td class="b">${esc(r.module)}</td><td>${area}</td>
       <td><span class="cov-badge" style="color:${s.c};background:${s.bg};border:1px solid ${s.bd}">${s.label}</span></td>
       <td>${note}</td></tr>`;
   }).join("");
@@ -252,11 +256,15 @@ function buildHtml(data) {
   for (const x of f) counts[x.severity] = (counts[x.severity] || 0) + 1;
   const sevCount = (s) => f.filter((x) => x.severity === s).length;
   const top = [...f].sort((a, b) => b._bftb - a._bftb).slice(0, 6);
+  // #515: a finding on an M3 hotspot is up-ranked among its severity peers — a Critical still leads a
+  // hotspot Info, but within a band the hotspot one comes first (it sits in the churny, complex,
+  // most-coupled code). onHotspot is a secondary key after severity, ahead of the BFTB tiebreak.
+  const hot = (x) => (x.onHotspot ? 1 : 0);
   const action = [...f]
     .filter((x) => (x._bftb > 75 || ["Critical", "High"].includes(x.severity)) && !/^Completed/.test(x.status))
-    .sort((a, b) => (sevRank(b) - sevRank(a)) || (b._bftb - a._bftb));
-  // Findings lead with the most critical (severity desc), BFTB as the tiebreak.
-  const sorted = [...f].sort((a, b) => (sevRank(b) - sevRank(a)) || (b._bftb - a._bftb));
+    .sort((a, b) => (sevRank(b) - sevRank(a)) || (hot(b) - hot(a)) || (b._bftb - a._bftb));
+  // Findings lead with the most critical (severity desc), then hotspot, then BFTB as the tiebreak.
+  const sorted = [...f].sort((a, b) => (sevRank(b) - sevRank(a)) || (hot(b) - hot(a)) || (b._bftb - a._bftb));
 
   const legend = Object.entries(counts).sort((a, b) => SEV[a[0]].o - SEV[b[0]].o)
     .map(([s, n]) => `<span class="leg"><i style="background:${SEV[s].c}"></i>${s} ${n}</span>`).join("");

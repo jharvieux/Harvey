@@ -270,3 +270,56 @@ describe("formatAuditCoverage", () => {
     expect(out).not.toContain("COVERAGE FAIL");
   });
 });
+
+// #506: a monorepo per-app/per-DB tier records one row per (module × instance). Two instances of a
+// module is legitimate coverage, not the ambiguous double-record; only a duplicate (module,instance)
+// is. And an uncovered instance must be an explicit reasoned row, never absent.
+describe("per-instance coverage rows (#506)", () => {
+  const withM5 = (extra: ModuleCoverage[]): ModuleCoverage[] => [...AUDIT_MODULES.filter((m) => m !== "M5").map(ran), ...extra];
+
+  it("keeps two app instances of one module as two rows, not a gap", () => {
+    const report = buildAuditCoverage(withM5([
+      { module: "M5", status: "ran", detail: "a", instance: "apps/main" },
+      { module: "M5", status: "requires-live-run", reason: "no node_modules", instance: "apps/rag" },
+    ]));
+    expect(report.rows.filter((r) => r.module === "M5").map((r) => r.instance)).toEqual(["apps/main", "apps/rag"]);
+    expect(report.gaps).toEqual([]);
+  });
+
+  it("still flags a duplicate (module, instance) as ambiguous bookkeeping", () => {
+    const report = buildAuditCoverage(withM5([
+      { module: "M5", status: "ran", detail: "a", instance: "apps/main" },
+      { module: "M5", status: "ran", detail: "b", instance: "apps/main" },
+    ]));
+    expect(report.gaps.some((g) => /recorded twice/.test(g.problem))).toBe(true);
+  });
+
+  it("makes a reasonless non-ran instance row a gap that names the instance", () => {
+    const report = buildAuditCoverage(withM5([
+      { module: "M5", status: "ran", detail: "a", instance: "apps/main" },
+      { module: "M5", status: "partial", instance: "apps/rag" },
+    ]));
+    expect(report.gaps.some((g) => g.problem.includes("apps/rag"))).toBe(true);
+  });
+
+  it("counts a module ran-in-full only when EVERY instance ran", () => {
+    const full = buildAuditCoverage(withM5([
+      { module: "M5", status: "ran", detail: "a", instance: "apps/main" },
+      { module: "M5", status: "ran", detail: "b", instance: "apps/rag" },
+    ]));
+    expect(full.ranCount).toBe(AUDIT_MODULES.length);
+    const partial = buildAuditCoverage(withM5([
+      { module: "M5", status: "ran", detail: "a", instance: "apps/main" },
+      { module: "M5", status: "partial", reason: "no node_modules", instance: "apps/rag" },
+    ]));
+    expect(partial.ranCount).toBe(AUDIT_MODULES.length - 1);
+  });
+
+  it("renders the instance label in the coverage lines", () => {
+    const out = formatAuditCoverage(buildAuditCoverage(withM5([
+      { module: "M5", status: "ran", detail: "a", instance: "apps/main" },
+      { module: "M5", status: "ran", detail: "b", instance: "apps/rag" },
+    ])));
+    expect(out).toContain("[apps/rag]");
+  });
+});

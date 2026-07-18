@@ -29,9 +29,12 @@ const pass = flag("--pass");
 const out = flag("--out");
 const summary = flag("--summary");
 const findingsPath = flag("--findings");
+// #502: for an M1 semantic pass, record whether an M3 hotspot focus brief (scan-focus) was supplied
+// to /vuln-scan. Presence of the flag ⇒ true; absence ⇒ left unrecorded (surfaced as "no focus").
+const hotspotFocus = args.includes("--hotspot-focus") ? true : undefined;
 
 if (!module || !target || !pass || !out) {
-  console.error("usage: pnpm record-pass --module <M1..M10> --target <dir> --pass <name> --out <artifacts-dir> [--findings file.json] [--summary text]");
+  console.error("usage: pnpm record-pass --module <M1..M10> --target <dir> --pass <name> --out <artifacts-dir> [--findings file.json] [--summary text] [--hotspot-focus]");
   process.exit(2);
 }
 if (!AUDIT_MODULES.includes(module as AuditModule)) {
@@ -61,6 +64,7 @@ try {
     generatedAt: new Date().toISOString(),
     summary,
     findings,
+    hotspotFocus,
   });
   const path = writePassArtifact(resolve(out), artifact);
   console.error(`Recorded ${module} ${pass} pass for ${resolve(target)}${findings ? ` (${findings.length} finding(s))` : ""} → ${path}`);
