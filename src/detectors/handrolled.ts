@@ -794,6 +794,341 @@ function detectCookieSerialize(sf: ts.SourceFile, path: string, nextId: NextId):
   return findings;
 }
 
+// --- Batch 3 (#542): the eight organic-AI-tier YES entries -----------------------
+// Graduated from docs/design/m6-handrolled-catalogue.md after #413/#543 measured them firing on
+// organic AI-generated code (docs/design/m6-corpus-frequency.md, AI-tier section). Entry 76
+// (Supabase storage public-URL concat) is deliberately NOT here — its only evidence is the curated
+// teardown repo, so it stays a YES-not-yet-graduated candidate. Three entries carry a "+ M1 check"
+// in the catalogue (27 weak-hash inputs, 53 authz-gating decoded claims, 98 HTML sink): those are
+// paid/semantic-tier yield conditions on the INPUTS, not a mechanical double-count — verified
+// 2026-07-18 that no M1 semgrep/AST rule fires on these exact hand-rolled shapes (semgrep
+// weak-hash targets named md5/sha1 inputs; the JWT rule targets alg:none, not a hand-rolled
+// decode; XSS targets the dangerouslySetInnerHTML sink, not the replace). The M6 indicator stays
+// descriptive on the shape.
+
+// A CallExpression `Obj.method()` anywhere in the subtree (used for composite-id + hash-loop).
+function subtreeHasCall(node: ts.Node, obj: string, method: string): boolean {
+  let found = false;
+  const v = (n: ts.Node) => {
+    if (found) return;
+    if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === obj &&
+      n.expression.name.text === method
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, v);
+  };
+  v(node);
+  return found;
+}
+
+function subtreeHas(node: ts.Node, pred: (n: ts.Node) => boolean): boolean {
+  let found = false;
+  const v = (n: ts.Node) => {
+    if (found) return;
+    if (pred(n)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, v);
+  };
+  v(node);
+  return found;
+}
+
+// --- 14. Array-unique via filter + indexOf self-compare (catalogue 3) ------------
+// `arr.filter((v, i, a) => a.indexOf(v) === i)` — the three-arg callback comparing the array's
+// indexOf back to the element index. A two-arg filter or a different predicate never flags.
+
+function isIndexOfSelfCompare(expr: ts.Expression, val: string, idx: string, arr: string): boolean {
+  const e = unwrapParens(expr);
+  if (!ts.isBinaryExpression(e) || !EQUALITY_OPS.has(e.operatorToken.kind)) return false;
+  const indexOfOf = (side: ts.Expression) => {
+    const s = unwrapParens(side);
+    return (
+      ts.isCallExpression(s) &&
+      ts.isPropertyAccessExpression(s.expression) &&
+      s.expression.name.text === "indexOf" &&
+      ts.isIdentifier(s.expression.expression) &&
+      s.expression.expression.text === arr &&
+      s.arguments.length >= 1 &&
+      ts.isIdentifier(s.arguments[0] as ts.Expression) &&
+      (s.arguments[0] as ts.Identifier).text === val
+    );
+  };
+  const isIdx = (side: ts.Expression) => {
+    const s = unwrapParens(side);
+    return ts.isIdentifier(s) && s.text === idx;
+  };
+  return (indexOfOf(e.left) && isIdx(e.right)) || (indexOfOf(e.right) && isIdx(e.left));
+}
+
+function detectFilterIndexOfUnique(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "filter" &&
+      node.arguments.length === 1
+    ) {
+      const cb = node.arguments[0] as ts.Expression;
+      if ((ts.isArrowFunction(cb) || ts.isFunctionExpression(cb)) && cb.parameters.length === 3) {
+        const names = cb.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : undefined));
+        const [v, i, a] = names;
+        if (v && i && a && returnedExpressions(cb).some((r) => isIndexOfSelfCompare(r, v, i, a))) {
+          const f = makeIndicator(nextId, sf, path, node, {
+            title: "Looks hand-rolled: array de-duplication via filter + indexOf — may be worth investigating",
+            taxonomy: "M6 — Indicator: array-unique via filter",
+            evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — de-duplicates by scanning for each element's first index (quadratic, and NaN/object identity behave surprisingly).`,
+          });
+          if (f) findings.push(f);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 15. Composite timestamp + random id (catalogue 24) --------------------------
+// A template or string-concat expression combining Date.now() with Math.random() in one shape.
+// Either call alone (a bare timestamp, a standalone random number) never flags.
+
+function detectCompositeTimestampId(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const push = (node: ts.Node) => {
+    const f = makeIndicator(nextId, sf, path, node, {
+      title: "Looks hand-rolled: composite id from a timestamp and Math.random() — may be worth investigating",
+      taxonomy: "M6 — Indicator: composite timestamp-random id",
+      evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — builds an identifier by gluing Date.now() to Math.random(), which is neither collision-safe nor unpredictable.`,
+    });
+    if (f) findings.push(f);
+  };
+  const visit = (node: ts.Node) => {
+    const combining =
+      ts.isTemplateExpression(node) || (isPlusExpression(node) && !insidePlusChain(node));
+    if (combining && subtreeHasCall(node, "Date", "now") && subtreeHasCall(node, "Math", "random")) {
+      push(node);
+      return; // the combining node carries the flag; don't double-count nested spans
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 16. Non-crypto string-hash loop (catalogue 27, + M1 check) ------------------
+// A `<< 5` or `* 31` accumulate co-occurring with charCodeAt in the same scope — the djb2/FNV/
+// java-31 shape. The co-occurrence guard keeps a bare `days * 31` (no charCodeAt in scope) silent.
+// One flag per enclosing scope.
+
+function multiplyByOrShift(node: ts.Node): boolean {
+  if (!ts.isBinaryExpression(node)) return false;
+  if (node.operatorToken.kind === ts.SyntaxKind.LessThanLessThanToken) {
+    return numericValue(unwrapParens(node.right)) === 5;
+  }
+  if (node.operatorToken.kind === ts.SyntaxKind.AsteriskToken) {
+    return numericValue(unwrapParens(node.left)) === 31 || numericValue(unwrapParens(node.right)) === 31;
+  }
+  return false;
+}
+
+function detectNonCryptoHash(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const flaggedScopes = new Set<ts.Node>();
+  const isCharCodeAt = (n: ts.Node) =>
+    ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "charCodeAt";
+  const visit = (node: ts.Node) => {
+    if (multiplyByOrShift(node)) {
+      const scope = enclosingScope(node);
+      if (!flaggedScopes.has(scope) && subtreeHas(scope, isCharCodeAt)) {
+        flaggedScopes.add(scope);
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: non-cryptographic string hash loop — may be worth investigating",
+          taxonomy: "M6 — Indicator: non-crypto string hash",
+          evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — accumulates a hash over character codes by shift/multiply (collision-prone, and not a cryptographic digest).`,
+        });
+        if (f) findings.push(f);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 17. Month/day-name literal arrays (catalogue 30) ----------------------------
+// An array literal carrying >= 3 month names or >= 3 day names spelled out as string literals.
+
+const MONTH_NAMES = new Set([
+  "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
+  "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+]);
+const DAY_NAMES = new Set([
+  "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+  "sun", "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat",
+]);
+
+function detectNameArrays(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isArrayLiteralExpression(node)) {
+      const lits = node.elements.filter(ts.isStringLiteralLike).map((e) => e.text.trim().toLowerCase());
+      const months = lits.filter((t) => MONTH_NAMES.has(t)).length;
+      const days = lits.filter((t) => DAY_NAMES.has(t)).length;
+      if (months >= 3 || days >= 3) {
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: month/day-name literal array — may be worth investigating",
+          taxonomy: "M6 — Indicator: month/day-name array",
+          evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — spells out calendar names as string literals (locale and ordering are then all manual).`,
+        });
+        if (f) findings.push(f);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 18. JWT payload decode by hand (catalogue 53, + M1 check) --------------------
+// JSON.parse over an atob/Buffer decode of a `token.split(".")[n]` segment — the three-step
+// by-hand decode. Any single step alone stays silent (a file-extension split, a plain JSON.parse,
+// a bare atob). The authz half (trusting unverified claims) is M1's; this notes only the decode.
+
+function isSplitDotIndex(node: ts.Node): boolean {
+  if (!ts.isElementAccessExpression(node) || !ts.isNumericLiteral(node.argumentExpression)) return false;
+  const call = node.expression;
+  return (
+    ts.isCallExpression(call) &&
+    ts.isPropertyAccessExpression(call.expression) &&
+    call.expression.name.text === "split" &&
+    call.arguments.length >= 1 &&
+    ts.isStringLiteralLike(call.arguments[0] as ts.Expression) &&
+    (call.arguments[0] as ts.StringLiteralLike).text === "."
+  );
+}
+
+function isBase64Decode(node: ts.Node): boolean {
+  if (!ts.isCallExpression(node)) return false;
+  if (ts.isIdentifier(node.expression) && node.expression.text === "atob") return true;
+  return (
+    ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) &&
+    node.expression.expression.text === "Buffer" &&
+    node.expression.name.text === "from"
+  );
+}
+
+function detectJwtDecodeByHand(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (isJsonCall(node, "parse") && node.arguments.length >= 1) {
+      const arg = node.arguments[0] as ts.Node;
+      if (subtreeHas(arg, isSplitDotIndex) && subtreeHas(arg, isBase64Decode)) {
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: token payload decoded by hand — may be worth investigating",
+          taxonomy: "M6 — Indicator: JWT decode by hand",
+          evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — splits a token on ".", base64-decodes a segment, and parses it as JSON, with no signature verification.`,
+        });
+        if (f) findings.push(f);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 19. Hand-rolled ErrorBoundary class (catalogue 61) --------------------------
+// A class carrying the React error-boundary lifecycle members (componentDidCatch /
+// getDerivedStateFromError) — near-unique to error boundaries.
+
+const ERROR_BOUNDARY_MEMBERS = new Set(["componentDidCatch", "getDerivedStateFromError"]);
+
+function detectErrorBoundaryClass(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isClassLike(node)) {
+      const isBoundary = node.members.some(
+        (m) => m.name !== undefined && ts.isIdentifier(m.name) && ERROR_BOUNDARY_MEMBERS.has(m.name.text),
+      );
+      if (isBoundary) {
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: React error-boundary class — may be worth investigating",
+          taxonomy: "M6 — Indicator: hand-rolled ErrorBoundary",
+          evidence: `a class implementing the error-boundary lifecycle members by hand (framework and library error boundaries already handle the reset and fallback edges).`,
+        });
+        if (f) findings.push(f);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 20. Markdown-to-HTML via regex replaces (catalogue 98, + M1 check) -----------
+// A .replace/.replaceAll whose replacement literal emits an HTML tag (<strong>/<em>/<h1..6>/
+// <blockquote>) — the by-hand markdown converter. If the result feeds an HTML sink the XSS half
+// is M1's; this notes only the hand-rolled conversion.
+
+const MD_HTML_TAG_RE = /<\/?(?:strong|em|h[1-6]|blockquote)\b/i;
+
+function detectMarkdownToHtml(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      (node.expression.name.text === "replace" || node.expression.name.text === "replaceAll") &&
+      node.arguments.length === 2
+    ) {
+      const chunks = stringChunksOf(node.arguments[1] as ts.Expression);
+      if (chunks?.some((c) => MD_HTML_TAG_RE.test(c))) {
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: markdown-to-HTML via string replace — may be worth investigating",
+          taxonomy: "M6 — Indicator: markdown-to-HTML by regex",
+          evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — emits HTML tags from a string replace (nesting, escaping, and — if rendered as HTML — injection are all unhandled here).`,
+        });
+        if (f) findings.push(f);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 21. Thousands-separator lookahead regex (catalogue 89) ----------------------
+// The byte-exact `(\d{3})+(?!\d)` fragment — the copy-pasted Stack Overflow grouping regex.
+
+const THOUSANDS_REGEX_RE = /\(\\d\{3\}\)\+\(\?!\\d\)/;
+
+function detectThousandsRegex(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isRegularExpressionLiteral(node) && THOUSANDS_REGEX_RE.test(node.text)) {
+      const f = makeIndicator(nextId, sf, path, node, {
+        title: "Looks hand-rolled: thousands-separator grouping regex — may be worth investigating",
+        taxonomy: "M6 — Indicator: thousands-separator regex",
+        evidence: `\`${node.getText(sf).slice(0, 70)}\` — inserts digit-group separators with a lookahead regex (locale grouping and decimals are unhandled).`,
+      });
+      if (f) findings.push(f);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
 // --- Orchestrator ----------------------------------------------------------------
 
 /**
@@ -827,6 +1162,15 @@ export function detectHandrolledFindings(files: SourceInput[]): Finding[] {
       ...detectQueryStringBuild(sf, f.path, nextId),
       ...detectBase64UrlChain(sf, f.path, nextId),
       ...detectCookieSerialize(sf, f.path, nextId),
+      // Batch 3 (#542): the eight organic-AI-tier YES entries (docs/design/m6-corpus-frequency.md):
+      ...detectFilterIndexOfUnique(sf, f.path, nextId),
+      ...detectCompositeTimestampId(sf, f.path, nextId),
+      ...detectNonCryptoHash(sf, f.path, nextId),
+      ...detectNameArrays(sf, f.path, nextId),
+      ...detectJwtDecodeByHand(sf, f.path, nextId),
+      ...detectErrorBoundaryClass(sf, f.path, nextId),
+      ...detectMarkdownToHtml(sf, f.path, nextId),
+      ...detectThousandsRegex(sf, f.path, nextId),
     );
   }
   return findings;

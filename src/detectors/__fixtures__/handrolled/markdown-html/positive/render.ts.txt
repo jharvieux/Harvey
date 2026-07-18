@@ -1,0 +1,6 @@
+export function toHtml(md: string): string {
+  return md
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/^# (.+)$/gm, "<h1>$1</h1>");
+}

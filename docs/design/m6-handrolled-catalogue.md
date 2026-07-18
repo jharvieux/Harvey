@@ -16,7 +16,7 @@ that mechanically.
 
 | Verdict | Meaning |
 |---|---|
-| **SHIPPED** | A detector exists (`src/detectors/handrolled.ts` — batch 1 PR #395, batch 2 #406 item 2), fixture-gated. |
+| **SHIPPED** | A detector exists (`src/detectors/handrolled.ts` — batch 1 PR #395, batch 2 #406 item 2, batch 3 #542), fixture-gated. |
 | **BOUNDARY** | The shape is already another module's class (M1/M4/M5/M7/M9). Cross-reference it; never emit an M6 twin — the #278 double-count discipline. |
 | **YES** | Graduates as a free-indicator candidate: the shape is a syntactic fact a detector can state hedged. Ships only with a paired positive+negative fixture (#61) and the vocabulary-lock test extended. |
 | **MAYBE** | Plausibly mechanical but needs something first: cross-statement correlation, a dependency gate, a boundary check against another module, or shape work whose FP surface is unknown. Deferred, not rejected. |
@@ -53,7 +53,7 @@ email-shape regex (81).
 |---|---|---|---|---|
 | 1 | `JSON.parse(JSON.stringify(x))` deep clone | `structuredClone()` | **BOUNDARY → M7** | `perf-code.ts` `detectJsonDeepClone` (`M7 — JSON deep-clone`) fires on the same node; measured double-fire in #395 dogfood. |
 | 2 | `JSON.stringify(a) === JSON.stringify(b)` deep equal | `util.isDeepStrictEqual` / a deep-equal dep | **SHIPPED** | `M6 — Indicator: JSON deep-equal`. |
-| 3 | Unique via `arr.filter((v,i,a) => a.indexOf(v) === i)` | `[...new Set(arr)]` | **YES** | Exact three-argument-callback idiom; no justified-negative class identified. |
+| 3 | Unique via `arr.filter((v,i,a) => a.indexOf(v) === i)` | `[...new Set(arr)]` | **SHIPPED (batch 3, #542)** | `M6 — Indicator: array-unique via filter` — the exact three-argument callback comparing `a.indexOf(v)` to the index; a two-arg filter or a different predicate never flags. Graduated on organic-AI evidence (#413/#543: cravab=1). |
 | 4 | Flatten via `arr.reduce((a,b) => a.concat(b), [])` | `arr.flat()` | **YES** | Exact idiom. Negative: a genuine custom accumulator that happens to concat — the detector needs the empty-array seed + bare-concat body, which excludes it. |
 | 5 | Group-by via reduce pushing into `acc[key]` | `Object.groupBy` / `Map.groupBy` | **MAYBE** | Shape is real (corpus fixture `group.ts` plants it for the LLM eval) but accumulator-shape analysis is a step up from call-matching; replacement is ES2024 so the version question itself is paid-triage material. |
 | 6 | Chunk via `for` loop + `slice(i, i+n)` | `lodash.chunk` etc. — **dep-gate** | **MAYBE** | No stdlib replacement, so needs the dep-gate; loop+slice correlation not yet built. |
@@ -79,10 +79,10 @@ email-shape regex (81).
 | 21 | `Math.random().toString(36)` chain ids | `crypto.randomUUID()` | **SHIPPED** | `M6 — Indicator: random-string id` (radix > 10 required, so numeric formatting never flags). |
 | 22 | Char-loop id builder (charset string + `Math.random()` index loop) | `crypto.randomUUID()` / nanoid | **MAYBE** | Corpus fixture `id.ts` plants it for the LLM eval; a mechanical twin needs loop-shape correlation (random index into a charset accumulating a string). |
 | 23 | The `'xxxxxxxx-xxxx-4xxx…'.replace(/[xy]/g, …)` UUID-v4 template snippet | `crypto.randomUUID()` | **YES** | The template literal is unmistakable — the most copy-pasted id snippet on the internet. |
-| 24 | Composite `${Date.now()}-${Math.random()}` ids | `crypto.randomUUID()` | **YES** | Template combining both calls is exact; either call alone is NOT flagged (see 25). |
+| 24 | Composite `${Date.now()}-${Math.random()}` ids | `crypto.randomUUID()` | **SHIPPED (batch 3, #542)** | `M6 — Indicator: composite timestamp-random id` — a template or `+`-concat combining Date.now() with Math.random(); either call alone is NOT flagged (see 25). Graduated on organic-AI evidence (#413/#543: cravab=5). |
 | 25 | Timestamp-only ids (`Date.now().toString()`) | — | **EXCLUDED** | Usually a legitimate timestamp, not an id; indistinguishable without intent. |
 | 26 | Hand-rolled nanoid-alike over `crypto.getRandomValues` | nanoid | **NO** | The code already uses the right primitive; whether a lib is warranted is judgment. |
-| 27 | Non-crypto string-hash loops (djb2/FNV: `hash << 5` + `charCodeAt` accumulate) | `crypto.subtle.digest` / a hash dep | **YES + M1 check** | Shift-accumulate loop is crisp. If the input is a password/secret it is M1's weak-crypto class (b6/b11) — the detector must yield to M1 on those inputs, indicator otherwise. |
+| 27 | Non-crypto string-hash loops (djb2/FNV: `hash << 5` + `charCodeAt` accumulate) | `crypto.subtle.digest` / a hash dep | **SHIPPED (batch 3, #542)** | `M6 — Indicator: non-crypto string hash` — a `<< 5` or `* 31` accumulate co-occurring with `charCodeAt` in the same scope; the co-occurrence guard keeps a bare `days * 31` (no charCodeAt) silent. The "+ M1 check" is a paid/semantic-tier yield on password/secret inputs (b6/b11), NOT a mechanical double-count — verified 2026-07-18 that no M1 rule fires on the hand-rolled loop shape. Graduated on organic-AI evidence (#413/#543: effective=2). |
 
 ## C. Dates & times
 
@@ -90,7 +90,7 @@ email-shape regex (81).
 |---|---|---|---|---|
 | 28 | Date math on raw ms constants (`86400000`, `24*60*60*1000`) | `date-fns`/`dayjs` — **dep-gate** | **SHIPPED (batch 2, dep-gated)** | `M6 — Indicator: raw-millisecond date math` — bare hour/day constants and all-literal `*` chains whose product is a whole number of hours; dep-gated on date-fns/dayjs/luxon/moment (no date lib in tree = the dep-drop shape, gate stays shut). |
 | 29 | formatDate via `getFullYear()`/`getMonth()+1`/`getDate()` concat | `Intl.DateTimeFormat` / `toLocaleDateString` | **SHIPPED (batch 2)** | `M6 — Indicator: manual date formatting` — the three getters co-occurring in ONE template/concat expression; getters used separately never flag. (The corpus's one instance is the variable-mediated form — getters into named vars, formatted later — which is cross-statement and deliberately outside this detector.) |
-| 30 | Month/day-name literal arrays (`["January", …]`) | `Intl.DateTimeFormat` with `month: "long"` | **YES** | The literal array is exact. |
+| 30 | Month/day-name literal arrays (`["January", …]`) | `Intl.DateTimeFormat` with `month: "long"` | **SHIPPED (batch 3, #542)** | `M6 — Indicator: month/day-name array` — an array literal carrying ≥3 month names or ≥3 day names (long or short); an array with one or two never flags. Graduated on organic-AI evidence (#413/#543: cravab+effective=5). |
 | 31 | Relative "time ago" if-ladder (diff < 60 → "minutes ago"…) | `Intl.RelativeTimeFormat` | **MAYBE** | Needs a string-literal + division-ladder heuristic; FP surface unknown. |
 | 32 | Manual ISO-date parsing via `split("-")`/regex | `Date` / (eventually) Temporal | **MAYBE** | Splitting date-shaped strings is diffuse; the crisp subset needs definition. |
 | 33 | Timezone-offset arithmetic (`getTimezoneOffset() * 60000` …) | `date-fns-tz` etc. | **NO** | Sometimes genuinely required (UTC normalization); shape alone can't tell. |
@@ -128,7 +128,7 @@ email-shape regex (81).
 |---|---|---|---|---|
 | 51 | Cookie parsing (`document.cookie` splits, cookie-header splits) | `next/headers` `cookies()` / a cookie dep | **SHIPPED** | `M6 — Indicator: cookie parsing` (writes stay silent). |
 | 52 | Cookie **serialization** (building `"k=v; Path=/; Max-Age=…"`) | `cookies().set()` / a cookie dep | **SHIPPED (batch 2)** | `M6 — Indicator: cookie serialization` — attribute literals (case-insensitive) in built strings; an attribute literal used to PROBE an existing cookie string (includes/startsWith/split/…) stays the parse class's and never fires here, so the two classes split writes/reads without double-firing. |
-| 53 | JWT payload decode by hand (`token.split(".")[1]` + atob/Buffer + `JSON.parse`) | `jose` / `supabase.auth.getUser()` | **YES + M1 check** | The three-step chain is exact and rampant in AI Supabase glue (judgment, unmeasured). When decoded claims gate authz without verification it is M1's territory (#221's trusting-client-input family; b11 JWT-verify) — the M6 indicator notes only the hand-rolled decode. Supabase-token receivers are the same detector with more specific evidence text. |
+| 53 | JWT payload decode by hand (`token.split(".")[1]` + atob/Buffer + `JSON.parse`) | `jose` / `supabase.auth.getUser()` | **SHIPPED (batch 3, #542)** | `M6 — Indicator: JWT decode by hand` — `JSON.parse` over an atob/`Buffer.from` decode of a `token.split(".")[n]` segment; any single step alone (a file-extension split, a plain JSON.parse, a bare atob) stays silent. The "+ M1 check" (authz on unverified claims, #221/b11) is a paid/semantic-tier yield, NOT a mechanical double-count — verified 2026-07-18 that no M1 rule fires on the hand-rolled decode. Graduated on organic-AI evidence (#413/#543: flori-web=1). |
 | 54 | Bearer extraction (`authorization.split(" ")[1]`) | — | **EXCLUDED** | One line, no stdlib replacement. |
 | 55 | Hand-rolled Supabase session/Set-Cookie glue | `@supabase/ssr` | **NO** | Recorded non-candidate in the Phase-1 shortlist: `framework-adapter.ts` (a protected corpus negative) IS this shape — dep-presence is necessary but not sufficient. |
 | 56 | Basic-auth encode (`btoa(\`${u}:${p}\`)`) | — | **EXCLUDED** | That IS the standard way. |
@@ -141,7 +141,7 @@ email-shape regex (81).
 | 58 | Hand-rolled `useDebounce` hook | `use-debounce`/`usehooks-ts` — dep-gate | **MAYBE** | Hook-name + setTimeout body is crisp; a WHY-comment suppression (mechanically checkable: adjacent comment matching `/why:/i`) would buy the tone latitude the ruling asks for. Same open question as the `debounce.ts` corpus fixture, which stays LLM-judged today. |
 | 59 | The utility-hook family (`useLocalStorage`, `usePrevious`, `useInterval`, `useWindowSize`, `useMediaQuery`, `useOnClickOutside`, `useIntersectionObserver`…) | `usehooks-ts` etc. — dep-gate | **MAYBE** | Name-keyed detection over the family is one detector, but the volume risk is the ruling's own risk #2 in miniature — do not build before the rollup rule exists. |
 | 60 | Fetch-in-useEffect + loading/error state triple | SWR/React Query | **BOUNDARY → M7** | `detectClientFetchEffect` shipped 2026-07-16 under M7. Cross-reference; no M6 twin. |
-| 61 | Hand-rolled ErrorBoundary class | `react-error-boundary` / Next.js `error.tsx` | **YES** | `class … extends Component` + `componentDidCatch` is exact. Negative: a deliberately customized boundary — the hedged indicator stays honest on it. |
+| 61 | Hand-rolled ErrorBoundary class | `react-error-boundary` / Next.js `error.tsx` | **SHIPPED (batch 3, #542)** | `M6 — Indicator: hand-rolled ErrorBoundary` — a class carrying a `componentDidCatch`/`getDerivedStateFromError` member (near-unique to error boundaries); an ordinary class never flags. Graduated on organic-AI evidence (#413/#543: cravab+effective=2). |
 | 62 | Context+Provider+hook boilerplate for simple state | `zustand`/`jotai` — dep-gate | **NO** | Whether context is "too much" is the judgment M6's paid tier exists for. |
 | 63 | Manual form state (useState per field + handlers) | `react-hook-form` — dep-gate | **NO** | Diffuse; same. |
 | 64 | isMounted-ref / mounted-flag patterns | — | **NO** | Usually a symptom of a different problem; needs a human read. |
@@ -189,7 +189,7 @@ email-shape regex (81).
 | # | Shape | Standard replacement | Verdict | Reason / negative class |
 |---|---|---|---|---|
 | 88 | Currency via `"$" + (x/100).toFixed(2)` concat | `Intl.NumberFormat` | **SHIPPED (batch 2)** | `M6 — Indicator: currency formatting` — a `$`/`€`/`£` literal immediately before a `toFixed` call in a template or `+` concat (either operand order); bare toFixed numeric display never flags. The float-money adjacency stays a paid-triage correctness note. |
-| 89 | Thousands separator via `\B(?=(\d{3})+(?!\d))` regex | `toLocaleString()` | **YES** | The famous Stack Overflow regex, byte-exact. |
+| 89 | Thousands separator via `\B(?=(\d{3})+(?!\d))` regex | `toLocaleString()` | **SHIPPED (batch 3, #542)** | `M6 — Indicator: thousands-separator regex` — the byte-exact `(\d{3})+(?!\d)` fragment in a regex literal; other regexes never flag. Graduated on organic-AI evidence (#413/#543: flori-web=1). |
 | 90 | Byte-size KB/MB/GB ladder (`/1024` chains) | `Intl.NumberFormat` units / a filesize dep | **MAYBE** | Ladder shape crisp-ish; frequency judgment says moderate. |
 | 91 | Pluralization ternaries (`n === 1 ? "item" : "items"`) | `Intl.PluralRules` | **EXCLUDED** | A one-off ternary is fine code — flagging it is tone-deaf. (A hand-rolled pluralize *engine* would be NO/LLM-tier: recognising "engine" is judgment.) |
 | 92 | List joining with "a, b and c" logic | `Intl.ListFormat` | **MAYBE** | Low frequency; weak signature. |
@@ -203,7 +203,7 @@ email-shape regex (81).
 | 95 | Clipboard via `document.execCommand("copy")` + hidden textarea | `navigator.clipboard.writeText` | **YES** | Deprecated-API call is exact; the textarea dance is unmistakable. |
 | 96 | Smooth-scroll animation loops (rAF steppers) | `scrollIntoView({behavior: "smooth"})` / CSS | **MAYBE** | Loop-shape work; moderate frequency. |
 | 97 | File download via `createElement("a")` + `.click()` | — | **EXCLUDED** | That IS the standard idiom. |
-| 98 | Markdown→HTML via regex replaces | `react-markdown` etc. — dep-gate | **YES + M1 check** | Regexes emitting `<strong>`/`<em>` into strings are crisp; if the result feeds `dangerouslySetInnerHTML` the XSS half is M1's. |
+| 98 | Markdown→HTML via regex replaces | `react-markdown` etc. — dep-gate | **SHIPPED (batch 3, #542)** | `M6 — Indicator: markdown-to-HTML by regex` — a `.replace`/`.replaceAll` whose replacement literal emits an HTML tag (`<strong>`/`<em>`/`<h1..6>`/`<blockquote>`); a replace producing entities or a slug never flags. The "+ M1 check" (result feeding `dangerouslySetInnerHTML` is the XSS sink's half) is a paid/semantic-tier boundary, NOT a mechanical double-count — the M6 indicator sits on the replace node, M1 on the sink. Shipped WITHOUT the dep-gate: the reinvention shape is the by-hand HTML emission regardless of whether a markdown lib is in the tree. Graduated on organic-AI evidence (#413/#543: cravab=5). |
 | 99 | CSV assembly via `map` + `join(",")` + `join("\n")` | a csv dep | **MAYBE** | Same two-join-in-one-scope style as the shipped query-string class; quoting bugs make it worth eventual graduation. |
 | 100 | Regex-based HTML/XML parsing | `DOMParser` | **MAYBE** | Tag-shaped regex literals are crisp-ish; FP surface unknown. |
 | 101 | Hand-rolled semver compare (`split(".")` + numeric compare) | `semver` dep | **MAYBE** | Needs version-named-variable heuristics. |
@@ -223,8 +223,8 @@ failed one.
 
 | Verdict | Count | Entries |
 |---|---|---|
-| SHIPPED (batch 1 PR #395; batch 2 #406 item 2) | 13 | 2, 21, 28, 29, 36, 37, 41, 42, 51, 52, 57, 81, 88 |
-| YES — graduation candidates | 17 | 3, 4, 11, 13, 16, 23, 24, 27, 30, 44, 53, 61, 68, 76, 89, 95, 98 |
+| SHIPPED (batch 1 PR #395; batch 2 #406 item 2; batch 3 #542) | 21 | 2, 3, 21, 24, 27, 28, 29, 30, 36, 37, 41, 42, 51, 52, 53, 57, 61, 81, 88, 89, 98 |
+| YES — graduation candidates | 9 | 4, 11, 13, 16, 23, 44, 68, 76, 95 |
 | MAYBE — deferred, with the specific blocker named | 33 | 5, 6, 12, 15, 18, 19, 22, 31, 32, 34, 35, 39, 40, 43, 47, 58, 59, 65, 66, 67, 69, 72, 73, 75, 82, 83, 90, 92, 96, 99, 100, 101, 102 |
 | NO — stays LLM-tier (paid packet) | 21 | 7, 8, 17, 26, 33, 38, 45, 49, 50, 55, 62, 63, 64, 71, 77, 78, 80, 84, 93, 103, 104 |
 | BOUNDARY — another module's class | 9 | 1 (M7), 60 (M7), 70 (M7/ESLint), 74 (M7), 79 (M1), 86 (M1), 87 (M1), 105 (M7), 106 (M4) |
@@ -233,27 +233,32 @@ failed one.
 (Counting note: the 7 rows that carried an unresolved "+ M1/M7/M9 check" — 18, 47, 65, 67, 72,
 74, 102 — were settled 2026-07-16 in the #406 boundary pass: 74 moved to BOUNDARY → M7 (probed);
 the other six stayed MAYBE with the boundary verified absent and the remaining blocker named in
-their reason cells. Entries 27, 53, and 98 carry a "+ M1 check" of a different kind — a *runtime
-yield condition* on the eventual detector's inputs, not an unresolved ownership question — and
-are tallied under YES unchanged. Batch 2 (#406 item 2, 2026-07-16) moved the eight
-measured-nonzero YES entries — 28, 29, 37, 41, 42, 52, 81, 88 — to SHIPPED. Exact arithmetic:
-13 SHIPPED + 17 YES = 30 on the graduation track; 33 MAYBE + 21 NO + 9 BOUNDARY + 13 EXCLUDED
-= 76 not currently graduating. 30 + 76 = 106. Correction, recorded loud: the previous version of
-this note said "5 SHIPPED + 25 YES = 31 … 31 + 76 = 106" — an arithmetic slip; 5 + 25 = 30, and
-30 + 76 = 106 was always the true sum. The per-verdict row counts were and are correct.)
+their reason cells. Entries 27, 53, and 98 carried a "+ M1 check" of a different kind — a *runtime
+yield condition* on the detector's inputs (password/secret hash input; authz on unverified claims;
+HTML sink), not an unresolved ownership question. Batch 3 (#542, 2026-07-18) verified this is a
+paid/semantic-tier yield, NOT a mechanical double-count (no M1 rule fires on any of the three
+hand-rolled shapes), and shipped all three. Batch 2 (#406 item 2, 2026-07-16) moved the eight
+measured-nonzero YES entries — 28, 29, 37, 41, 42, 52, 81, 88 — to SHIPPED; Batch 3 (#542,
+2026-07-18) moved the eight organic-AI-tier YES entries — 3, 24, 27, 30, 53, 61, 89, 98 — to
+SHIPPED (entry 76, curated-only evidence, stayed YES). Exact arithmetic: 21 SHIPPED + 9 YES = 30
+on the graduation track; 33 MAYBE + 21 NO + 9 BOUNDARY + 13 EXCLUDED = 76 not currently
+graduating. 30 + 76 = 106. Correction, recorded loud: the previous version of this note said
+"5 SHIPPED + 25 YES = 31 … 31 + 76 = 106" — an arithmetic slip; 5 + 25 = 30, and 30 + 76 = 106 was
+always the true sum. The per-verdict row counts were and are correct.)
 
 **Reading the split honestly:**
 
-- The 17 remaining YES entries are *candidates*, not detectors. They measured zero on the original
-  six (mostly-professional) repos, but the #413 AI-tier measurement (2026-07-18, recorded in
-  `docs/design/m6-corpus-frequency.md`) found **9 of the 17 fire on AI-authored code** — 8 on
-  organic AI repos, entry 76 only on a curated repo. So 8 (3, 24, 27, 30, 53, 61, 89, 98) now have
-  measured graduation evidence, the other 8 (4, 11, 13, 16, 23, 44, 68, 95) remain unranked. Every
-  one still owes a paired positive+negative fixture (#61), an extension of the vocabulary-lock test,
-  and a dogfood run before it ships — the #395/#406 batches are the template. None of this
-  catalogue's verdicts is a precision claim; per #265's constraint,
-  **no precision number of any kind is claimed for any tier of M6**, including the shipped
-  classes.
+- The 9 remaining YES entries are *candidates*, not detectors. The #413 AI-tier measurement
+  (2026-07-18, recorded in `docs/design/m6-corpus-frequency.md`) found **9 of the original 17 fire
+  on AI-authored code** — 8 on organic AI repos, entry 76 only on a curated repo. Batch 3 (#542)
+  graduated the 8 organic-AI entries (3, 24, 27, 30, 53, 61, 89, 98) to SHIPPED under the #395
+  paired-fixture discipline + vocabulary-lock test. Entry 76 stays a YES candidate — its only
+  evidence is the curated teardown repo, not organic AI code, so it is honestly not-yet-graduated.
+  The other 8 (4, 11, 13, 16, 23, 44, 68, 95) remain measured-zero everywhere and unranked; each
+  still owes a paired positive+negative fixture (#61), an extension of the vocabulary-lock test,
+  and a dogfood run before it ships. None of this catalogue's verdicts is a precision claim; per
+  #265's constraint, **no precision number of any kind is claimed for any tier of M6**, including
+  the shipped classes.
 - The 33 MAYBEs are deferred for three named reasons: cross-statement correlation (73/75),
   dep-gates not yet generalized (6/15/40/47/58/59/82), or unknown FP/tone surface on a
   loop/heuristic shape (the rest — including 18/65/67/72/102, whose module boundaries were
@@ -288,12 +293,13 @@ unwound.
    ai-generated code carries the catalogue at ~3.4x professional density (measured, in
    `docs/design/m6-corpus-frequency.md`). Still true: no "common"/"rampant" claim may appear in
    client-facing text — the AI figure is grounded in 3 organic ai-generated repos, not a client's.
-2. **Next detector batch** — DONE 2026-07-16 (#406 item 2): the eight measured-nonzero YES
-   entries (28, 41, 88, 81, 29, 37, 42, 52) shipped in measured order, fixtures first, on the
-   `depGatePresent` gate from PR #409. Of the 17 measured-zero entries, the #413 AI-tier run gave
-   8 (3, 24, 27, 30, 53, 61, 89, 98) measured graduation evidence — building them under the #395
-   fixture discipline is the next batch (deferred to a #413 follow-up issue); the other 8 stay
-   unranked pending a wider AI corpus.
+2. **Next detector batch** — DONE. Batch 2 2026-07-16 (#406 item 2): the eight measured-nonzero
+   YES entries (28, 41, 88, 81, 29, 37, 42, 52) shipped in measured order, fixtures first, on the
+   `depGatePresent` gate from PR #409. Batch 3 2026-07-18 (#542): the eight organic-AI-tier YES
+   entries (3, 24, 27, 30, 53, 61, 89, 98) shipped under the #395 paired-fixture discipline +
+   vocabulary-lock test. Of the original 17 measured-zero entries, that leaves 8 (4, 11, 13, 16,
+   23, 44, 68, 95) still measured-zero everywhere and unranked, plus entry 76 (curated-only
+   evidence) — all pending a wider organic-AI corpus.
 3. **The boundary checks** — SETTLED 2026-07-16 (#406): 74 → BOUNDARY → M7 (`detectUnboundedSelect`
    fires on the fetch-all variant, probed); 18/47/65/67/72/102 verified non-overlapping — each
    stays MAYBE with the evidence and the remaining blocker recorded in its reason cell. One

@@ -53,6 +53,15 @@ const CASES: Case[] = [
   { name: "query-string building", dir: "querystring-build", taxonomy: "M6 — Indicator: query-string building", posCount: 1 },
   { name: "base64url conversion", dir: "base64url", taxonomy: "M6 — Indicator: base64url conversion", posCount: 2 },
   { name: "cookie serialization", dir: "cookie-serialize", taxonomy: "M6 — Indicator: cookie serialization", posCount: 2 },
+  // Batch 3 (#542): the eight organic-AI-tier YES entries (docs/design/m6-corpus-frequency.md):
+  { name: "array-unique via filter", dir: "filter-unique", taxonomy: "M6 — Indicator: array-unique via filter", posCount: 1 },
+  { name: "composite timestamp-random id", dir: "composite-id", taxonomy: "M6 — Indicator: composite timestamp-random id", posCount: 1 },
+  { name: "non-crypto string hash", dir: "string-hash", taxonomy: "M6 — Indicator: non-crypto string hash", posCount: 1 },
+  { name: "month/day-name array", dir: "name-arrays", taxonomy: "M6 — Indicator: month/day-name array", posCount: 2 },
+  { name: "JWT decode by hand", dir: "jwt-decode", taxonomy: "M6 — Indicator: JWT decode by hand", posCount: 1 },
+  { name: "hand-rolled ErrorBoundary", dir: "error-boundary", taxonomy: "M6 — Indicator: hand-rolled ErrorBoundary", posCount: 1 },
+  { name: "markdown-to-HTML by regex", dir: "markdown-html", taxonomy: "M6 — Indicator: markdown-to-HTML by regex", posCount: 3 },
+  { name: "thousands-separator regex", dir: "thousands", taxonomy: "M6 — Indicator: thousands-separator regex", posCount: 1 },
 ];
 
 for (const c of CASES) {
@@ -223,6 +232,15 @@ describe("free-tier language lock (#267 operator ruling)", () => {
     ...detectHandrolledFindings(loadFixtureDir("querystring-build/positive")),
     ...detectHandrolledFindings(loadFixtureDir("base64url/positive")),
     ...detectHandrolledFindings(loadFixtureDir("cookie-serialize/positive")),
+    // Batch 3 (#542):
+    ...detectHandrolledFindings(loadFixtureDir("filter-unique/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("composite-id/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("string-hash/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("name-arrays/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("jwt-decode/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("error-boundary/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("markdown-html/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("thousands/positive")),
   ];
   const REPLACEMENT_NAMES =
     /structuredClone|isDeepStrictEqual|fast-deep-equal|deep-equal|URLSearchParams|useSearchParams|next\/headers|cookies\(\)|cookie-parse|randomUUID|getRandomValues|nanoid|\buuid\b|clsx|tailwind-merge|\bclassnames\b|lodash|date-fns|dayjs|luxon|\bmoment\b|\bIntl\b|toLocale(?:Date|Time)?String|DateTimeFormat|NumberFormat|\bmime\b|\bzod\b|\bjose\b|padStart|base64url|fromBase64|should be replaced/i;

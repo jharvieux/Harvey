@@ -1,0 +1,5 @@
+// Ordinary string arrays: statuses, and a list that happens to contain one month name — below
+// the >= 3 threshold, so neither flags.
+export const STATUSES = ["active", "pending", "archived"];
+
+export const QUARTERS = ["Q1", "January", "start"];
