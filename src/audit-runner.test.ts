@@ -172,14 +172,19 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     expect(m7?.reason).toMatch(/project ref/);
   });
 
-  it("M7 threads ctx.supabaseRef through to perf-scan's positional arg, reaching ran", () => {
+  // #527: code + advisors both run, but the orchestrator never fires the Lighthouse/CWV tier, so a
+  // successful advisor run is `partial` naming the unmeasured tier — never a bare `ran`.
+  it("M7 threads ctx.supabaseRef to perf-scan and, on advisor success, is partial (Lighthouse tier not run)", () => {
     const connectedWithRef = ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRef: "my-project-ref",
       exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: argv.includes("my-project-ref"), output: "" } : { ok: true, output: cleanOutput(argv) }),
     });
     const m7 = runAudit(AUDIT_RUNNERS, connectedWithRef).recorded.find((r) => r.module === "M7");
-    expect(m7?.status).toBe("ran");
+    expect(m7?.status).toBe("partial");
+    expect(m7?.status).not.toBe("ran");
+    expect(m7?.reason).toMatch(/Lighthouse\/CWV tier not run/);
+    expect(m7?.detail).toMatch(/perf-scan my-project-ref/);
   });
 
   // A non-zero exit is the tool saying it produced nothing. Recording that as "ran" is precisely
@@ -283,6 +288,26 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m8?.status).toBe("partial");
     expect(m8?.reason).toMatch(/dry run FAILED/);
     expect(m8?.reason).toMatch(/format-date\.test\.ts/);
+  });
+
+  // #523: --install (provisioning Stryker into the target, running its npm lifecycle scripts) is
+  // gated on explicit operator consent threaded via ctx.allowTargetInstall. The flag decides whether
+  // the M8 probe appends --install to mutation-scan — consent unlocks the attempt, nothing else.
+  it("M8 appends --install to mutation-scan only when ctx.allowTargetInstall is set (#523)", () => {
+    const mutationArgv = (over: Partial<RunContext>): string[] => {
+      let seen: string[] = [];
+      runAudit(AUDIT_RUNNERS, ctx({
+        ...over,
+        exec: (_c, argv) => {
+          if (argv.includes("mutation-scan")) seen = argv;
+          return { ok: true, output: cleanOutput(argv) };
+        },
+      }));
+      return seen;
+    };
+    expect(mutationArgv({ allowTargetInstall: true })).toContain("--install");
+    expect(mutationArgv({})).not.toContain("--install");
+    expect(mutationArgv({ allowTargetInstall: false })).not.toContain("--install");
   });
 
   it("M9 — an empty directory (detect-static: loaded 0 source files, exit 0) is NOT recorded ran", () => {
@@ -472,6 +497,24 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     expect(status(AUDIT_RUNNERS, vitalsDown, "M3")?.status).toBe("ran");
   });
 
+  // #530: the vitals-off-PATH flow — M3 ran via a pass artifact carrying its top-K ranking, so the
+  // cross-module enrichment (#515) must fire here too, not only on the in-process capture path.
+  it("M3 surfaces the pass artifact's top-K ranking so run-audit hands it to the assembler", () => {
+    const withRanking = withPass(
+      "M3",
+      { pass: "vitals", hotspots: ["core/checkout.ts", "core/pay.ts"] },
+      { exec: () => ({ ok: false, output: "vitals_cli.py not found" }) },
+    );
+    const { recorded, hotspots } = runAudit(AUDIT_RUNNERS, withRanking);
+    expect(recorded.find((r) => r.module === "M3")?.status).toBe("ran");
+    expect(hotspots).toEqual(["core/checkout.ts", "core/pay.ts"]);
+  });
+
+  it("M3 pass artifact without a ranking yields no hotspots — enrichment simply does not fire", () => {
+    const noRanking = withPass("M3", { pass: "vitals" }, { exec: () => ({ ok: false, output: "vitals_cli.py not found" }) });
+    expect(runAudit(AUDIT_RUNNERS, noRanking).hotspots).toBeUndefined();
+  });
+
   // The core guard: a stale or mismatched artifact must NOT yield ran — the probe falls back to its
   // honest not-run status and says the artifact was rejected.
   it("a STALE artifact does not yield ran — M1 falls back to partial and reports the rejection", () => {
@@ -573,10 +616,12 @@ describe("monorepo per-instance fan-out (#506)", () => {
       exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : { ok: true, output: cleanOutput(argv) }),
     })).recorded.filter((r) => r.module === "M7");
     expect(m7.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
-    expect(m7.every((r) => r.status === "ran")).toBe(true);
+    // #527: advisor success is `partial` (Lighthouse/CWV tier unmeasured), never `ran`.
+    expect(m7.every((r) => r.status === "partial")).toBe(true);
+    expect(m7.every((r) => /Lighthouse\/CWV tier not run/.test(r.reason ?? ""))).toBe(true);
   });
 
-  it("a failed advisor for one project is a partial row for THAT project, the other still ran", () => {
+  it("a failed advisor for one project names the advisor failure; the other names the Lighthouse gap", () => {
     const m7 = runAudit(AUDIT_RUNNERS, ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main", "proj-rag"],
@@ -585,8 +630,12 @@ describe("monorepo per-instance fan-out (#506)", () => {
         return { ok: true, output: cleanOutput(argv) };
       },
     })).recorded.filter((r) => r.module === "M7");
+    // #527: both rows are partial now, but for different reasons — the coverage guard needs each row
+    // to say why it fell short, so distinguish by reason, not status.
     expect(m7.find((r) => r.instance === "proj-rag")?.status).toBe("partial");
-    expect(m7.find((r) => r.instance === "proj-main")?.status).toBe("ran");
+    expect(m7.find((r) => r.instance === "proj-rag")?.reason).toMatch(/advisors failed/);
+    expect(m7.find((r) => r.instance === "proj-main")?.status).toBe("partial");
+    expect(m7.find((r) => r.instance === "proj-main")?.reason).toMatch(/Lighthouse\/CWV tier not run/);
   });
 
   it("M10 live tier names every extra Supabase project it could not reach, never dropping one", () => {

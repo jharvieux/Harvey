@@ -115,6 +115,14 @@ describe("buildPassArtifact (#448 — validate at emit, not on the next audit)",
     expect(buildPassArtifact({ module: "M1", target: "/t", pass: "semantic", generatedAt: iso(0), hotspotFocus: false }).hotspotFocus).toBe(false);
     expect(buildPassArtifact({ module: "M1", target: "/t", pass: "semantic", generatedAt: iso(0) })).not.toHaveProperty("hotspotFocus");
   });
+
+  // #530: the M3 vitals pass carries its top-K ranking so cross-module enrichment fires in the
+  // vitals-off-PATH flow. A non-empty ranking is recorded; an empty/absent one omits the key.
+  it("carries the M3 top-K hotspot ranking through, and omits the key when empty", () => {
+    expect(buildPassArtifact({ module: "M3", target: "/t", pass: "vitals", generatedAt: iso(0), hotspots: ["a.ts", "b.ts"] }).hotspots).toEqual(["a.ts", "b.ts"]);
+    expect(buildPassArtifact({ module: "M3", target: "/t", pass: "vitals", generatedAt: iso(0), hotspots: [] })).not.toHaveProperty("hotspots");
+    expect(buildPassArtifact({ module: "M3", target: "/t", pass: "vitals", generatedAt: iso(0) })).not.toHaveProperty("hotspots");
+  });
 });
 
 describe("write → derive round-trip (#448 ↔ #416)", () => {
