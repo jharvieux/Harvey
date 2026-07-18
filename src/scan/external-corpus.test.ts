@@ -63,18 +63,15 @@ describe("external corpus manifest", () => {
     }
   });
 
-  it("records M5-knip as unrun on every target where knip could not resolve the config", () => {
+  it("scores M5-knip on every target — none remains unrun after #519's per-workspace knip", () => {
     // knip without the target's `npm install` yields a knip-FAILED artifact, not a dead-code
-    // measurement (#223) — recorded not-run, never a zero that would read as "no dead code".
-    // Which targets those are is MEASURED, not assumed. #251 added the install step the CLAUDE.md
-    // M5 row calls for (2 scored -> 4), and #322's per-module scan root gave mvp-boilerplate a
-    // scoped measurement over nextjs/ (4 -> 5). The one that remains unrun fails for a reason no
-    // install or scan root can fix: saas-lite's upstream eslint-config-next patch error.
+    // measurement (#223). Which targets are scored is MEASURED, not assumed. #251 added the install
+    // step the CLAUDE.md M5 row calls for (2 scored -> 4); #322's per-module scan root gave
+    // mvp-boilerplate a scoped measurement over nextjs/ (4 -> 5); and #544 gave saas-lite — the last
+    // holdout — a measured baseline once #519 made knip run PER WORKSPACE (the whole-repo run used
+    // to die loading apps/web's eslint config). All 6 now carry a real M5-knip baseline.
     const scored = EXTERNAL_CORPUS.filter((t) => !isNotRun(t.modules["M5-knip"]!)).map((t) => t.slug);
-    expect(scored.sort()).toEqual(["boxyhq", "multi-tenant-starter", "mvp-boilerplate", "proposit", "subscription-payments"]);
-    for (const t of EXTERNAL_CORPUS.filter((x) => !scored.includes(x.slug))) {
-      expect(isNotRun(t.modules["M5-knip"]!), t.slug).toBe(true);
-    }
+    expect(scored.sort()).toEqual(["boxyhq", "multi-tenant-starter", "mvp-boilerplate", "proposit", "saas-lite", "subscription-payments"]);
   });
 
   it("#251: neither remaining M5-knip gap blames a missing `npm install` — the install step exists now", () => {
@@ -161,11 +158,11 @@ describe("scoreExternalBaseline", () => {
   });
 
   it("skips not-run modules instead of scoring them 0 against a baseline", () => {
-    // saas-lite's M5-knip: knip dies loading the target's eslint config, so there is no dead-code
-    // measurement to compare. Scoring the absent findings as 0 would read as "no dead code" —
-    // the silent-skip inversion the coverage guard exists to prevent. (Was proposit until #251's
-    // install step gave proposit a real baseline.)
-    expect(scoreExternalBaseline(target("saas-lite"), []).map((r) => r.module)).not.toContain("M5-knip");
+    // multi-tenant-starter's M8: its only suite spawns a Docker Postgres per mutant, recorded
+    // not-run. Scoring the absent findings as 0 would read as "no test-quality problems" — the
+    // silent-skip inversion the coverage guard exists to prevent. (Was saas-lite's M5-knip until
+    // #544 gave it a measured per-workspace baseline.)
+    expect(scoreExternalBaseline(target("multi-tenant-starter"), []).map((r) => r.module)).not.toContain("M8");
   });
 
   it("scores M5-knip where knip ran, and catches the dead tenant-authz guard going missing", () => {
@@ -405,17 +402,19 @@ describe("per-module scan roots (#322)", () => {
 // findings), and stays quiet while the reason still holds. The signature defect this closes: a
 // stale excuse silently costing coverage that only someone stumbling into it would catch.
 describe("revalidateNotRunReasons (#321)", () => {
-  // saas-lite records M5-knip not-run for an upstream eslint-patch bug that may resolve on a dep bump.
+  // multi-tenant-starter records M8 not-run — its only suite spawns a Docker Postgres per mutant, a
+  // cost no CI budget justifies. (saas-lite's M5-knip, this block's prior example, gained a measured
+  // per-workspace baseline in #544 once #519 made knip run per workspace.)
   const notRunTarget = (): ExternalTarget => {
-    const t = EXTERNAL_CORPUS.find((x) => x.slug === "saas-lite");
-    if (!t || !isNotRun(t.modules["M5-knip"]!)) throw new Error("saas-lite/M5-knip is expected to be recorded not-run");
+    const t = EXTERNAL_CORPUS.find((x) => x.slug === "multi-tenant-starter");
+    if (!t || !isNotRun(t.modules.M8!)) throw new Error("multi-tenant-starter/M8 is expected to be recorded not-run");
     return t;
   };
-  const knipFinding = (id: string): Finding => ({ ...finding("M5 — Slop / dead code", "Low"), id });
+  const m8Finding = (id: string): Finding => ({ ...finding("M8 — Survives implementation deletion", "Medium"), id });
 
-  it("stays quiet while the reason holds — knip still emits only its #223 M5-00 did-not-run finding", () => {
+  it("stays quiet while the reason holds — mutation-scan still emits only its #224 M8-00 did-not-run finding", () => {
     // The sentinel is the tool saying it STILL couldn't run; it must not read as the module working.
-    const rows = revalidateNotRunReasons(notRunTarget(), [knipFinding("M5-00")]);
+    const rows = revalidateNotRunReasons(notRunTarget(), [{ ...finding("M8 — No automated test suite", "High"), id: "M8-00" }]);
     expect(rows).toEqual([]);
   });
 
@@ -424,14 +423,14 @@ describe("revalidateNotRunReasons (#321)", () => {
   });
 
   it("fails loud when the not-run module produces real findings — the reason has decayed", () => {
-    const rows = revalidateNotRunReasons(notRunTarget(), [knipFinding("M5-42"), knipFinding("M5-43")]);
+    const rows = revalidateNotRunReasons(notRunTarget(), [m8Finding("M8-42"), m8Finding("M8-43")]);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ module: "M5-knip", pass: false, actual: 2 });
+    expect(rows[0]).toMatchObject({ module: "M8", pass: false, actual: 2 });
     expect(rows[0]?.detail).toContain("STALE");
   });
 
   it("does not fire on a target whose modules all ran — nothing to re-validate", () => {
-    expect(revalidateNotRunReasons(target("subscription-payments"), [knipFinding("M5-07")])).toEqual([]);
+    expect(revalidateNotRunReasons(target("subscription-payments"), [m8Finding("M8-07")])).toEqual([]);
   });
 
   it("does not read a test-intent finding as evidence against an M8 MUTATION not-run reason", () => {
