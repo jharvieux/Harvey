@@ -28,6 +28,7 @@ export interface LighthouseResult {
   requestedUrl?: string;
   categories?: { performance?: { score?: number | null } };
   audits?: Record<string, LighthouseAudit>;
+  runtimeError?: { code?: string; message?: string };
 }
 
 export interface LighthousePageResult {
@@ -183,6 +184,23 @@ export function parseLighthouseFindings(pages: LighthousePageResult[]): Finding[
     (f): f is Finding => f !== undefined,
   );
   return findings.map((f, i) => ({ ...f, id: `M7L-${String(i + 1).padStart(2, "0")}` }));
+}
+
+// A Lighthouse run can return a result object that measured NOTHING — a runtimeError like NO_FCP
+// ("the page did not paint any content"), or a null performance score. Its metric audits then have
+// no numericValue, which parseLighthouseFindings reads as "every metric within Good" — a FALSE
+// clean, the exact failure the coverage doctrine forbids. This returns the human reason when a page
+// result did not actually measure, so the CLI records the fail-loud M7L-00 disclosure instead of an
+// empty (clean-looking) finding set. A successful run always carries a numeric performance score.
+// (#488 — observed live: the Playwright "Chrome for Testing" build yields NO_FCP.)
+export function lighthouseRunErrorReason(result: LighthouseResult): string | undefined {
+  if (result.runtimeError?.code) {
+    return result.runtimeError.message
+      ? `${result.runtimeError.code} — ${result.runtimeError.message}`
+      : result.runtimeError.code;
+  }
+  if (result.categories?.performance?.score == null) return "the run produced no performance score";
+  return undefined;
 }
 
 // The fail-loud disclosure the coverage doctrine requires: when the target can't be built, served,

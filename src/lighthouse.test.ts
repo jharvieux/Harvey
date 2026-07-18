@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { validateFindings } from "./findings.js";
 import {
+  lighthouseRunErrorReason,
   lighthouseUnavailableFinding,
   parseLighthouseFindings,
   type LighthouseResult,
@@ -92,6 +93,28 @@ describe("lighthouseUnavailableFinding", () => {
     expect(f.evidence).toContain("next build failed: exit 1");
     expect(f.confidence).toBe("N/A");
     expect(validateFindings({ meta: validMeta(), findings: [f] }).errors).toEqual([]);
+  });
+});
+
+describe("lighthouseRunErrorReason", () => {
+  it("reports a runtimeError (NO_FCP) so the CLI discloses instead of reading it as clean", () => {
+    const errored: LighthouseResult = {
+      categories: { performance: { score: null } },
+      audits: {},
+      runtimeError: { code: "NO_FCP", message: "The page did not paint any content." },
+    };
+    expect(lighthouseRunErrorReason(errored)).toBe("NO_FCP — The page did not paint any content.");
+  });
+
+  it("reports a null/absent performance score as unmeasured", () => {
+    expect(lighthouseRunErrorReason({ categories: { performance: { score: null } } })).toBe(
+      "the run produced no performance score",
+    );
+    expect(lighthouseRunErrorReason({ audits: {} })).toBe("the run produced no performance score");
+  });
+
+  it("returns undefined for a genuinely measured run (numeric score)", () => {
+    expect(lighthouseRunErrorReason(good)).toBeUndefined();
   });
 });
 
