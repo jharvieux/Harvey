@@ -7,24 +7,42 @@
 //   pnpm lighthouse-scan <target-dir> [--route /path]... [--port 3000] [--out findings.lh.json]
 //   pnpm lighthouse-scan --url http://localhost:3000 --route / --route /dashboard --out …
 //
-// Browser: chrome-launcher (per #387). It PREFERS a system Chrome (chrome-launcher auto-detects
-// one) and only falls back to the Playwright chromium the repo installs for report-template when no
-// system Chrome exists — because that Playwright build ("Chrome for Testing") fails Lighthouse with
-// NO_FCP ("the page did not paint any content"), verified live in #488. LIGHTHOUSE_CHROME_PATH
-// overrides both. A run that still measures nothing (NO_FCP on the fallback) is surfaced as the
+// Browser resolution (#387, #488, #556), in order:
+//   1. LIGHTHOUSE_CHROME_PATH — an explicit override, always wins.
+//   2. A system Chrome — chrome-launcher auto-detects one (skip via LIGHTHOUSE_SKIP_SYSTEM_CHROME=1,
+//      an operator/test seam to force steps 3/4 on a machine that does have one).
+//   3. A PROVISIONED Chrome-for-Testing build (#556) — on a machine with no system Chrome,
+//      `npm install --prefix <cache> @puppeteer/browsers` (runtime, --no-save; never a package.json
+//      dependency) then `browsers install chrome@stable`, cached under
+//      ~/.cache/harvey/chrome-for-testing so repeat runs skip the download. See
+//      docs/design/m7-chrome-provisioning.md.
+//   4. The Playwright chromium this repo already installs for report-template — last resort only:
+//      it is ALSO a Chrome-for-Testing build, but an older pinned one that reproduces Lighthouse's
+//      NO_FCP ("the page did not paint any content") live (#488, re-confirmed #556); provisioning
+//      step 3 exists specifically so this path is rarely reached.
+// A run that still measures nothing (NO_FCP on the last-resort fallback) is surfaced as the
 // fail-loud M7L-00 disclosure, never a silent clean.
+//
+// chrome-launcher spawns Chrome as a raw child_process; a bad path (e.g. a stale
+// LIGHTHOUSE_CHROME_PATH) makes Node emit an unhandled 'error' event on that child process, which
+// crashes the whole CLI before main()'s try/catch ever sees it (#556). safeLaunch() wraps every
+// launch() call with a scoped `uncaughtException` handler so that failure degrades through the same
+// M7L-00 disclosure as every other unmeasurable case, instead of an uncaught exit.
 //
 // Fail-loud (CLAUDE.md coverage doctrine): if the target can't be built, served, or driven, the
 // CWV tier is UNMEASURED — this writes lighthouseUnavailableFinding(reason) with the reason and
 // exits 0, the same "record the gap, don't silently skip" contract as M5-00/M8-00. It never
-// pretends a run happened. Untested thin I/O wrapper per the repo convention; the parse/threshold/
-// degrade logic it calls is unit-tested in src/lighthouse.test.ts.
+// pretends a run happened. The build/serve/parse path is an untested thin I/O wrapper per the repo
+// convention (the parse/threshold/degrade logic it calls is unit-tested in src/lighthouse.test.ts);
+// the browser-resolution error routing (#556) IS tested as a child process — see
+// lighthouse-scan.test.ts.
 
 import { spawn, spawnSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { writeFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { launch } from "chrome-launcher";
+import { existsSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { launch, type LaunchedChrome, type Options as LaunchOptions } from "chrome-launcher";
 import runLighthouse from "lighthouse";
 import type { Finding } from "../findings.js";
 import { lighthouseRunErrorReason, lighthouseUnavailableFinding, parseLighthouseFindings, type LighthousePageResult, type LighthouseResult } from "../lighthouse.js";
@@ -76,22 +94,111 @@ async function playwrightChromePath(): Promise<string | undefined> {
   }
 }
 
-// Launches Chrome for Lighthouse. Prefer a system Chrome (chrome-launcher auto-detects it); only
-// fall back to the Playwright chromium the repo installs when no system Chrome exists — that
-// "Chrome for Testing" build fails Lighthouse with NO_FCP (#488), so it is a last resort, not the
-// default. LIGHTHOUSE_CHROME_PATH overrides both.
-async function launchChrome() {
+function chromeCacheDir(): string {
+  return process.env.HARVEY_CHROME_CACHE_DIR || join(homedir(), ".cache", "harvey", "chrome-for-testing");
+}
+
+// Provisions a Lighthouse-compatible Chrome (#556) via the `@puppeteer/browsers` CLI, installed at
+// RUNTIME (npm install --prefix <cache> --no-save) rather than as a package.json dependency of this
+// repo — see docs/design/m7-chrome-provisioning.md for why. Cached under chromeCacheDir() so only
+// the first run on a machine pays the download; `browsers install` itself is idempotent (it skips
+// re-downloading a revision already present at --path), so this is cheap to call every run.
+// Returns undefined (never throws) on any failure — the caller falls back to the next resolution
+// step rather than treating a failed provision as fatal.
+async function provisionChrome(): Promise<string | undefined> {
+  const cacheDir = chromeCacheDir();
+  const cliBin = join(cacheDir, "node_modules", ".bin", "browsers");
+  try {
+    if (!existsSync(cliBin)) {
+      console.error(`no system Chrome found; provisioning the @puppeteer/browsers CLI into ${cacheDir} (one-time) …`);
+      const install = spawnSync("npm", ["install", "--prefix", cacheDir, "--no-save", "--no-audit", "--no-fund", "@puppeteer/browsers"], {
+        stdio: ["ignore", "pipe", "pipe"],
+        encoding: "utf8",
+        timeout: 180_000,
+      });
+      if (install.status !== 0) {
+        console.error(`provisioning @puppeteer/browsers failed: ${install.stderr || install.error?.message || `exit ${install.status}`}`);
+        return undefined;
+      }
+    }
+    const browsersDir = join(cacheDir, "browsers");
+    console.error(`provisioning a Lighthouse-compatible Chrome (chrome-for-testing) into ${browsersDir} …`);
+    const result = spawnSync(cliBin, ["install", "chrome@stable", "--path", browsersDir], { encoding: "utf8", timeout: 180_000 });
+    if (result.status !== 0) {
+      console.error(`chrome-for-testing provisioning failed: ${result.stderr || result.error?.message || `exit ${result.status}`}`);
+      return undefined;
+    }
+    // `browsers install` prints one line per install: "<id>@<version> <path-to-executable>".
+    const lastLine = result.stdout.trim().split("\n").pop() ?? "";
+    const chromePath = lastLine.split(/\s+/).slice(1).join(" ").trim();
+    if (!chromePath || !existsSync(chromePath)) {
+      console.error(`could not parse a Chrome executable path from \`browsers install\` output: ${JSON.stringify(lastLine)}`);
+      return undefined;
+    }
+    return chromePath;
+  } catch (err) {
+    console.error(`chrome-for-testing provisioning threw: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
+}
+
+// chrome-launcher's launch() spawns Chrome as a raw child_process; when that spawn itself fails
+// (e.g. ENOENT on a bad chromePath), Node emits an unhandled 'error' event on the ChildProcess
+// EventEmitter, which chrome-launcher never listens for — Node then throws it as an uncaughtException
+// that bypasses every promise .catch() in between, including main()'s try/catch (#556, observed live:
+// a bad LIGHTHOUSE_CHROME_PATH exits the whole CLI with ENOENT instead of degrading to M7L-00).
+// This wraps a launch() attempt with a SCOPED, single-use uncaughtException handler so that failure
+// surfaces as an ordinary rejected promise instead — the listener is removed as soon as launch()
+// settles either way, so it never swallows an unrelated error from later in the run.
+function safeLaunch(opts: LaunchOptions): Promise<LaunchedChrome> {
+  return new Promise((resolvePromise, reject) => {
+    let settled = false;
+    const onUncaught = (err: unknown) => {
+      if (settled) return;
+      settled = true;
+      process.removeListener("uncaughtException", onUncaught);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+    process.once("uncaughtException", onUncaught);
+    launch(opts).then(
+      (chrome) => {
+        if (settled) return;
+        settled = true;
+        process.removeListener("uncaughtException", onUncaught);
+        resolvePromise(chrome);
+      },
+      (err: unknown) => {
+        if (settled) return;
+        settled = true;
+        process.removeListener("uncaughtException", onUncaught);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
+}
+
+// Launches Chrome for Lighthouse — see the browser-resolution order in the header comment.
+async function launchChrome(): Promise<LaunchedChrome> {
   const chromeFlags = ["--headless=new", "--no-sandbox"];
   const override = process.env.LIGHTHOUSE_CHROME_PATH;
-  if (override) return launch({ chromeFlags, chromePath: override });
-  try {
-    return await launch({ chromeFlags });
-  } catch (systemErr) {
-    const fallback = await playwrightChromePath();
-    if (!fallback) throw systemErr;
-    console.error(`no system Chrome found; falling back to Playwright chromium at ${fallback} — it may fail with NO_FCP (#488)`);
-    return launch({ chromeFlags, chromePath: fallback });
+  if (override) return safeLaunch({ chromeFlags, chromePath: override });
+
+  let systemErr: Error = new Error("system Chrome auto-detect skipped (LIGHTHOUSE_SKIP_SYSTEM_CHROME)");
+  if (!process.env.LIGHTHOUSE_SKIP_SYSTEM_CHROME) {
+    try {
+      return await safeLaunch({ chromeFlags });
+    } catch (err) {
+      systemErr = err instanceof Error ? err : new Error(String(err));
+    }
   }
+
+  const provisioned = await provisionChrome();
+  if (provisioned) return safeLaunch({ chromeFlags, chromePath: provisioned });
+
+  const fallback = await playwrightChromePath();
+  if (!fallback) throw systemErr;
+  console.error(`falling back to Playwright chromium at ${fallback} — it may fail with NO_FCP (#488)`);
+  return safeLaunch({ chromeFlags, chromePath: fallback });
 }
 
 async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
@@ -176,3 +283,8 @@ async function main(): Promise<void> {
 }
 
 await main();
+// Explicit exit (repo convention, e.g. mutation-scan.ts/dynamic-validate.ts): chrome-launcher can
+// leave an orphaned connection-poll timer running after a launch failure already settled via
+// safeLaunch's uncaughtException route (#556) — without this the process lingers on that timer
+// instead of exiting once work is actually done.
+process.exit(0);
