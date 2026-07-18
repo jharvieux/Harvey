@@ -2,19 +2,31 @@
 // output into the summary shape docs/m8-test-quality.md documents (mutation score overall +
 // per module, ranked surviving-mutant list).
 //
-// StrykerJS is an EXTERNAL CLI TOOL, not an npm dependency of this repo — install it in (or
-// alongside) the client repo: `npm install --no-save -D @stryker-mutator/core <test-runner-plugin>`
-// (see https://stryker-mutator.io/docs/stryker-js/installation/). This wrapper shells out to the
-// `stryker` binary; it throws if the binary isn't found on PATH.
+// StrykerJS is an EXTERNAL CLI TOOL, not an npm dependency of this repo. The wrapper prefers the
+// target's own node_modules/.bin/stryker, falling back to PATH; it throws if neither exists.
 //
-// Prerequisite: the target repo needs a working Stryker config (`stryker.conf.json/.mjs/.cjs`)
-// for its own test runner (Jest/Vitest/Mocha/etc — Stryker can't infer this). The config MUST
-// set `coverageAnalysis: "perTest"` and enable the `json` reporter — this wrapper does not
-// generate a config from scratch (test-runner choice is too client-specific for a generic
-// wrapper) but will warn if a JSON config is missing `coverageAnalysis: "perTest"`.
+// Config (#513): a target that ships its own Stryker config (`stryker.conf.json/.mjs/...`) is run
+// under it (the config SHOULD set `coverageAnalysis: "perTest"` and enable the `json` reporter —
+// a JSON config missing perTest draws a warning). A target with a suite but NO config — most
+// third-party clients — gets a minimal config SCAFFOLDED for its detected test runner
+// (vitest/jest/mocha) into an off-tree temp dir. When the Stryker packages are absent too, they
+// are installed into the target via `npm install --no-save` ONLY under --install (an implicit
+// install runs package lifecycle scripts inside a client repo — operator consent, not a default);
+// without --install the run degrades loudly, naming the exact command. The M8 degradation ladder
+// (full mutation → --stub-check deletion survival → detect-static test-intent → M8-00) is always
+// stated in the machine-readable moduleRecord — a lower rung is recorded, never a silent drop.
+//
+// Env (#503): the wrapper detects the test env the target declares (TZ/LANG/LC_ALL in its runner
+// config/setup, test script, or CI workflow) and replicates it when invoking Stryker/stub-check.
+// A failed initial dry run — the suite failing unmutated — is surfaced as its own verdict (M8-03
+// finding + partial moduleRecord), never a generic void.
+//
+// Scope (#504): the report's covered file set is verified against the configured mutate globs;
+// a scoped subset run emits a partial moduleRecord alongside its summary so it can never be
+// recorded as the module's measurement.
 //
 //   pnpm mutation-scan <target-dir> [--config <path>] [--concurrency <n>] [--incremental]
-//                       [--report <path>] [--hotspots <file>] [--out <file>]
+//                       [--report <path>] [--hotspots <file>] [--out <file>] [--install]
 //                       [--stub-check [--test-cmd "<cmd>"]] [--detect-only]
 //
 // --detect-only (#470) runs ONLY the suite-absent detection (#224/#252) and never invokes
@@ -39,7 +51,8 @@
 // list), used to flag surviving mutants that sit on a security/perf hotspot as top priority.
 
 import { execSync, execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceInput } from "../detectors/common.js";
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
@@ -48,10 +61,14 @@ import {
   detectDryRunFailure,
   detectNoTestSuite,
   detectTestEnv,
+  detectTestRunner,
   dryRunFailureFinding,
   dryRunFailureModuleRecord,
+  mutationNotRunModuleRecord,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
+  SCAFFOLD_SOURCE_DIRS,
+  scaffoldStrykerConfig,
   scopedRunModuleRecord,
   summarizeMutationReport,
   survivingMutantFindings,
@@ -74,7 +91,7 @@ function arg(flag: string): string | undefined {
 const targetArg = args.find((a) => !a.startsWith("--"));
 
 if (!targetArg) {
-  console.error("usage: pnpm mutation-scan <target-dir> [--config <path>] [--concurrency <n>] [--incremental] [--report <path>] [--hotspots <file>] [--out <file>] [--stub-check [--test-cmd \"<cmd>\"]]");
+  console.error("usage: pnpm mutation-scan <target-dir> [--config <path>] [--concurrency <n>] [--incremental] [--report <path>] [--hotspots <file>] [--out <file>] [--install] [--stub-check [--test-cmd \"<cmd>\"]] [--detect-only]");
   process.exit(2);
 }
 
@@ -87,6 +104,7 @@ const incremental = process.argv.includes("--incremental");
 const reportPath = arg("--report");
 const hotspotsPath = arg("--hotspots");
 const outPath = arg("--out");
+const install = process.argv.includes("--install");
 
 function warnIfNotPerTest(cfgPath: string): void {
   if (!cfgPath.endsWith(".json")) return; // .mjs/.cjs configs aren't statically inspectable here
@@ -294,7 +312,46 @@ function runStryker(cfgPath: string | undefined): { dryRunFailure?: string } {
 }
 
 const defaultConfigPath = STRYKER_CONFIG_NAMES.map((f) => join(targetDir, f)).find(existsSync);
-const effectiveConfigPath = configPath ? resolve(configPath) : defaultConfigPath;
+let effectiveConfigPath = configPath ? resolve(configPath) : defaultConfigPath;
+
+function degradeExit(reason: string): never {
+  emitAndExit(
+    { moduleRecord: mutationNotRunModuleRecord(reason) },
+    `✗ M8 mutation tier did not run: ${reason}\nM8 coverage: partial (degraded ladder rung, #513) — emitting the machine-readable verdict instead.`,
+  );
+}
+
+// #513: no Stryker config anywhere — scaffold one for the target's detected test runner instead of
+// requiring the client to have Stryker set up. The config goes to an off-tree temp dir; the
+// packages, when missing, are installed --no-save ONLY under --install: an implicit `npm install`
+// runs the packages' lifecycle scripts inside a client repo mid-audit, which needs operator
+// consent, not a default (decision recorded on the issue). Without --install and without the
+// packages, the ladder degrades loudly with the exact command to unlock the rung.
+let scaffolded: { runner: string } | undefined;
+if (!reportPath && !effectiveConfigPath) {
+  const runner = detectTestRunner(readTargetPackageJson());
+  if (!runner) {
+    degradeExit("target has no Stryker config and no recognized test runner (vitest/jest/mocha) to scaffold one for");
+  }
+  const missingPkgs = ["@stryker-mutator/core", runner.plugin].filter((p) => !existsSync(join(targetDir, "node_modules", ...p.split("/"))));
+  if (missingPkgs.length && !install) {
+    degradeExit(`the target has a ${runner.runner} suite but no Stryker install (${missingPkgs.join(", ")} missing) — re-run with --install to provision them into the target via \`npm install --no-save\` and score mutation with a scaffolded config`);
+  }
+  if (missingPkgs.length) {
+    console.error(`#513: installing ${missingPkgs.join(" + ")} into the target (npm install --no-save)...`);
+    try {
+      execFileSync("npm", ["install", "--no-save", "--no-audit", "--no-fund", "-D", ...missingPkgs], { cwd: targetDir, stdio: ["ignore", "inherit", "inherit"] });
+    } catch (err) {
+      degradeExit(`could not install ${missingPkgs.join(" + ")} into the target (npm install --no-save failed: ${(err as Error).message.slice(0, 200)})`);
+    }
+  }
+  const cfg = scaffoldStrykerConfig(runner.runner, SCAFFOLD_SOURCE_DIRS.filter((d) => existsSync(join(targetDir, d))));
+  const scaffoldDir = mkdtempSync(join(tmpdir(), "harvey-stryker-scaffold-"));
+  effectiveConfigPath = join(scaffoldDir, "stryker.config.json");
+  writeFileSync(effectiveConfigPath, JSON.stringify(cfg, null, 2) + "\n");
+  scaffolded = { runner: runner.runner };
+  console.error(`#513: scaffolded minimal Stryker config for ${runner.runner} at ${effectiveConfigPath} (mutate: ${JSON.stringify(cfg.mutate ?? "stryker defaults")})`);
+}
 
 let resolvedReportPath: string;
 if (reportPath) {
@@ -311,6 +368,11 @@ if (reportPath) {
 }
 
 if (!existsSync(resolvedReportPath)) {
+  // A scaffolded run crashing without a report is a ladder degrade (#513) — the target never
+  // promised Stryker works there. A target-configured run doing the same is anomalous: fail hard.
+  if (scaffolded) {
+    degradeExit(`the scaffolded ${scaffolded.runner} Stryker run produced no report at ${resolvedReportPath} (see the Stryker output above)`);
+  }
   console.error(`✗ mutation report not found at ${resolvedReportPath} — pass --report <path> if Stryker wrote it elsewhere`);
   process.exit(1);
 }

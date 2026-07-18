@@ -4,12 +4,15 @@ import {
   detectDryRunFailure,
   detectNoTestSuite,
   detectTestEnv,
+  detectTestRunner,
   dryRunFailureFinding,
   dryRunFailureModuleRecord,
   isPlaceholderSpec,
+  mutationNotRunModuleRecord,
   mutationScore,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
+  scaffoldStrykerConfig,
   scopedRunModuleRecord,
   summarizeMutationReport,
   survivingMutantFindings,
@@ -393,6 +396,60 @@ describe("noTestSuiteFinding / noTestSuiteModuleRecord", () => {
     const record = noTestSuiteModuleRecord("no package.json found");
     expect(record).toMatchObject({ status: "partial" });
     expect(record.note).toContain("no package.json found");
+  });
+});
+
+describe("detectTestRunner / scaffoldStrykerConfig (#513)", () => {
+  it("detects vitest/jest/mocha from either dependency block, mapping to the Stryker runner plugin", () => {
+    expect(detectTestRunner({ devDependencies: { vitest: "^3.0.0" } })).toEqual({ runner: "vitest", plugin: "@stryker-mutator/vitest-runner" });
+    expect(detectTestRunner({ dependencies: { mocha: "^10.0.0" } })).toEqual({ runner: "mocha", plugin: "@stryker-mutator/mocha-runner" });
+  });
+
+  it("prefers vitest over jest when both are present, and detects nothing for unsupported runners", () => {
+    expect(detectTestRunner({ devDependencies: { jest: "^29.0.0", vitest: "^3.0.0" } })?.runner).toBe("vitest");
+    expect(detectTestRunner({ devDependencies: { ava: "^6.0.0" } })).toBeUndefined();
+    expect(detectTestRunner(undefined)).toBeUndefined();
+  });
+
+  it("scaffolds the minimal config the M8 wrapper needs: perTest coverage, json reporter, detected runner", () => {
+    const cfg = scaffoldStrykerConfig("jest", ["src"]);
+    expect(cfg).toMatchObject({ testRunner: "jest", coverageAnalysis: "perTest" });
+    expect(cfg.reporters).toContain("json");
+    expect(cfg.jsonReporter).toEqual({ fileName: "reports/mutation/mutation.json" });
+  });
+
+  it("builds mutate globs only from source dirs that exist, excluding tests/types/node_modules", () => {
+    const cfg = scaffoldStrykerConfig("vitest", ["src", "app"]);
+    expect(cfg.mutate).toEqual([
+      "src/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}",
+      "app/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}",
+      "!**/*.test.*",
+      "!**/*.spec.*",
+      "!**/__tests__/**",
+      "!**/*.d.ts",
+      "!**/node_modules/**",
+    ]);
+  });
+
+  it("omits mutate entirely when no known source dir exists — Stryker defaults, honestly unverifiable scope", () => {
+    const cfg = scaffoldStrykerConfig("vitest", []);
+    expect("mutate" in cfg).toBe(false);
+    expect(verifyMutationScope(["a.ts"], undefined, ["a.ts"]).verified).toBe(false);
+  });
+
+  it("scaffolded globs are evaluable by the #504 scope check — a scaffolded run's scope is always verifiable", () => {
+    const cfg = scaffoldStrykerConfig("vitest", ["src"]);
+    const scope = verifyMutationScope(["src/a.ts"], cfg.mutate as string[], ["src/a.ts", "src/b.ts", "src/a.test.ts", "src/types.d.ts"]);
+    expect(scope.verified).toBe(true);
+    expect(scope.scoped).toBe(true);
+    expect(scope.missing).toEqual(["src/b.ts"]);
+  });
+
+  it("mutationNotRunModuleRecord states the full degradation ladder and the reason — never a silent drop", () => {
+    const record = mutationNotRunModuleRecord("no recognized test runner");
+    expect(record.status).toBe("partial");
+    expect(record.note).toContain("no recognized test runner");
+    expect(record.note).toMatch(/full mutation.*--stub-check.*test-intent.*M8-00/s);
   });
 });
 

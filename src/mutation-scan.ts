@@ -454,14 +454,25 @@ function expandBraces(glob: string): string[] {
 }
 
 function globToRegExp(glob: string): RegExp {
-  const source = glob
-    .replace(/[.+^$()|\\]/g, "\\$&")
-    .replace(/\*\*\//g, "\u0001")
-    .replace(/\*\*/g, "\u0002")
-    .replace(/\*/g, "[^/]*")
-    .replace(/\?/g, "[^/]")
-    .replace(/\u0001/g, "(?:[^/]+/)*")
-    .replace(/\u0002/g, ".*");
+  let source = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        // "**/" spans zero or more whole segments; a bare "**" spans anything.
+        source += glob[i + 2] === "/" ? "(?:[^/]+/)*" : ".*";
+        i += glob[i + 2] === "/" ? 2 : 1;
+      } else {
+        source += "[^/]*";
+      }
+    } else if (c === "?") {
+      source += "[^/]";
+    } else if (/[.+^$()|\\]/.test(c)) {
+      source += `\\${c}`;
+    } else {
+      source += c;
+    }
+  }
   return new RegExp(`^${source}$`);
 }
 
@@ -475,7 +486,9 @@ function matchesMutateGlobs(path: string, globs: readonly string[]): boolean {
   return included;
 }
 
-export interface MutationScope {
+// Not exported (same rule as the summary shapes above): callers receive it as verifyMutationScope's
+// inferred return type.
+interface MutationScope {
   mutatedFileCount: number;
   configuredGlobs?: string[];
   expectedFileCount?: number;
@@ -526,6 +539,58 @@ export function scopedRunModuleRecord(scope: MutationScope): { status: "partial"
   return {
     status: "partial",
     note: `Scoped mutation run — ${scope.note}. A subset measurement is not M8's result: recorded partial, never ran (#504). Re-run over the full configured mutate scope for the module's measurement.`,
+  };
+}
+
+// #513: most third-party clients have a test suite but no Stryker setup — before this, M8's
+// headline metric (mutation score) was simply unavailable to them ("this wrapper does not
+// generate a config" was the old stance; ATC masked it by shipping its own config). Now the CLI
+// detects the target's test runner and scaffolds a minimal, off-tree Stryker config for it.
+// Test-runner choice IS still client-specific — which is why this detects rather than assumes,
+// and degrades loudly (mutationNotRunModuleRecord) when it cannot detect one.
+type ScaffoldRunner = "vitest" | "jest" | "mocha";
+const SCAFFOLD_RUNNERS: readonly ScaffoldRunner[] = ["vitest", "jest", "mocha"];
+
+export function detectTestRunner(pkg: PackageJsonForTestDetection | undefined): { runner: ScaffoldRunner; plugin: string } | undefined {
+  const deps = { ...pkg?.dependencies, ...pkg?.devDependencies };
+  const runner = SCAFFOLD_RUNNERS.find((r) => r in deps);
+  return runner ? { runner, plugin: `@stryker-mutator/${runner}-runner` } : undefined;
+}
+
+// Where a target's product code usually lives. Only dirs that actually exist go into the
+// scaffolded mutate globs; a target matching none gets no mutate key (Stryker's own defaults),
+// which verifyMutationScope then honestly reports as an unverifiable scope.
+export const SCAFFOLD_SOURCE_DIRS: readonly string[] = ["src", "app", "apps", "pages", "lib", "components", "server", "packages", "utils", "api"];
+
+// Deliberately the glob subset verifyMutationScope can evaluate (braces + ** + !-negation, no
+// extglobs) so a scaffolded run's scope is always verifiable.
+export function scaffoldStrykerConfig(runner: ScaffoldRunner, presentDirs: readonly string[]): Record<string, unknown> {
+  const mutate = presentDirs.length
+    ? [
+        ...presentDirs.map((d) => `${d}/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}`),
+        "!**/*.test.*",
+        "!**/*.spec.*",
+        "!**/__tests__/**",
+        "!**/*.d.ts",
+        "!**/node_modules/**",
+      ]
+    : undefined;
+  return {
+    testRunner: runner,
+    coverageAnalysis: "perTest",
+    reporters: ["json", "progress"],
+    jsonReporter: { fileName: "reports/mutation/mutation.json" },
+    tempDirName: "stryker-tmp",
+    ...(mutate ? { mutate } : {}),
+  };
+}
+
+// The explicit degradation ladder (#513): when the full-mutation rung cannot run, the ledger says
+// which rung this was, why it stopped, and what the next rung is — never a silent drop.
+export function mutationNotRunModuleRecord(reason: string): { status: "partial"; note: string } {
+  return {
+    status: "partial",
+    note: `Mutation scoring did not run: ${reason}. M8 degradation ladder (#513): full mutation (target or scaffolded Stryker config) → deletion-survival (pnpm mutation-scan <target> --stub-check) → source-only test-intent detectors (pnpm detect-static <target>) → M8-00 zero-coverage finding. The full-mutation rung stopped here; the drop to a lower rung is recorded, never silent.`,
   };
 }
 
