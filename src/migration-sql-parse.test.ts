@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseColumns, parseDefinerFunctions, parsePolicies, parseRlsState, parseTableNames } from "./migration-sql-parse.js";
+import { parseAuthUserRefs, parseColumns, parseDefinerFunctions, parsePolicies, parseRlsState, parseTableNames } from "./migration-sql-parse.js";
 
 // Fixtures are the real calibration-target migrations (targets/calibration/supabase/migrations) —
 // this test asserts the parser extracts exactly what GROUND-TRUTH.md says is there, so a change
@@ -9,6 +9,18 @@ import { parseColumns, parseDefinerFunctions, parsePolicies, parseRlsState, pars
 const TARGET_DIR = join(import.meta.dirname, "..", "targets", "calibration", "supabase", "migrations");
 const schemaSql = readFileSync(join(TARGET_DIR, "20260708000001_schema.sql"), "utf8");
 const rlsSql = readFileSync(join(TARGET_DIR, "20260708000002_rls.sql"), "utf8");
+
+describe("parseAuthUserRefs", () => {
+  it("finds the columns that FK to auth.users (the two-tenant seed must fill these with real user ids)", () => {
+    const refs = parseAuthUserRefs(schemaSql).map((r) => `${r.table_name}.${r.column_name}`);
+    expect(refs).toContain("profiles.id"); // id uuid primary key references auth.users (id)
+  });
+
+  it("does not match a plain uuid column with no auth.users reference", () => {
+    const refs = parseAuthUserRefs("create table t (\n  id uuid primary key,\n  tenant_id uuid not null\n);");
+    expect(refs).toHaveLength(0);
+  });
+});
 
 describe("parseTableNames", () => {
   it("finds every table in the calibration schema", () => {

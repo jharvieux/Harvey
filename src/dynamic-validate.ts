@@ -13,8 +13,9 @@
 // This module is the TESTABLE core: the "can we even stand this up?" assessment, the provisioning
 // plan, the seed derivation, the orchestration, and the M2 pass-artifact emission (#448). The actual
 // Docker/supabase/build execution is behind the injected StandUpRunner seam (like RunContext.exec)
-// so the decision logic runs offline; the live runner is operator-run (the same live-stack work
-// tracked in #159/#161).
+// so the decision logic runs offline. The live runner is now AUTONOMOUS — src/pentest/live-standup.ts
+// (createLiveStandUp) really does `supabase start`, applies the client migrations, creates two auth
+// users, seeds two tenants, and runs the PostgREST matrix with no operator step (#159/#161).
 
 import { type Dirent, existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
