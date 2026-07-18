@@ -280,12 +280,45 @@ describe("checkMigrationPolicySemantics — tenancy-model disclosure (#258)", ()
     expect(model(writeMigrations("create table public.notes (id uuid primary key);"))).toBeUndefined();
   });
 
-  it("states the check only recognises _id-suffixed columns, so an empty list isn't proof of a clean result (#281)", () => {
+  it("states the two recognised signals so an empty list isn't proof of a clean result (#281)", () => {
     const dir = writeMigrations(
       "create table public.notes (id uuid primary key, tenant_id uuid not null);\n" +
         "create policy n_all on public.notes for all using (tenant_id = current_tenant()) with check (tenant_id = current_tenant());",
     );
-    expect(model(dir)!.evidence).toContain('only matches column names ending in "_id"');
+    const evidence = model(dir)!.evidence;
+    expect(evidence).toContain('names a column when it ends in "_id" OR is a foreign key to a tenant-shaped table');
+    expect(evidence).toContain("is not proof");
+  });
+
+  // #301 — a bare (non-_id) scoping column with a novel name is invisible to the _id scan, but a
+  // FOREIGN KEY to a tenant-shaped table is structural evidence it is the tenant key under an
+  // off-list name. That FK, not the name, is what lets us surface it without flooding.
+  it("names a bare non-_id column that foreign-keys to a tenant-shaped table (#301)", () => {
+    const dir = writeMigrations(
+      "create table public.widgets (id uuid primary key, site uuid not null references public.tenants(id), label text);\n" +
+        "create policy w_sel on public.widgets for select using (site = current_tenant());",
+    );
+    const evidence = model(dir)!.evidence;
+    expect(evidence).toContain("NOT RECOGNISED");
+    expect(evidence).toContain("widgets (declares site)");
+  });
+
+  it("also recognises a table-level foreign-key constraint to a tenant table (#301)", () => {
+    const dir = writeMigrations(
+      "create table public.widgets (id uuid primary key, site uuid not null, label text, foreign key (site) references public.organizations(id));\n" +
+        "create policy w_sel on public.widgets for select using (site = current_tenant());",
+    );
+    expect(model(dir)!.evidence).toContain("widgets (declares site)");
+  });
+
+  // The precision boundary: a bare column of the SAME shape whose FK targets a NON-tenant table is
+  // an ordinary relation. Naming it is the false-positive flood that kept #301 open — it must not.
+  it("does NOT name a bare column whose foreign key targets a non-tenant table (#301 non-flood)", () => {
+    const dir = writeMigrations(
+      "create table public.gadgets (id uuid primary key, city uuid not null references public.cities(id), status text);\n" +
+        "create policy g_sel on public.gadgets for select using (id = auth.uid());",
+    );
+    expect(model(dir)!.evidence).not.toContain("NOT RECOGNISED");
   });
 
   // #280 — the static tier used to be able to SEE an off-list convention (via NOT RECOGNISED)

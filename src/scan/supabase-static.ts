@@ -124,14 +124,61 @@ function inferTenancyModel(sql: string, table: string | undefined, override?: Te
 const OWNER_COLUMNS = /^(id|user_id|owner_id|created_by|updated_by|author_id|profile_id)$/i;
 const SCOPE_COLUMN = /[(,\n]\s*([a-z0-9_]*_id)\s+\w/gi;
 
-// Foreign keys to a per-tenant table are how an off-list convention shows itself: a `site_id uuid`
-// on a policied table is either the tenant key under another name (#258's failure) or a plain
-// relation. We cannot tell statically — so we report the assumption instead of guessing.
+// Tables whose NAME marks them as the tenant/org/account root. A bare column (no `_id` suffix,
+// off the known tenant-key list) that FOREIGN-KEYs to one of these is the one precision-preserving
+// widening of the scope-column scan (#301): the FK to a tenant-shaped table is structural evidence
+// it is the tenant key under an off-list name, so we can name it WITHOUT widening the name match —
+// which would flood ordinary schemas, since nearly any column is a name candidate. An FK to any
+// other table (a `city → cities` lookup, a `plan → plans` catalog) is an ordinary relation and
+// stays silent. Deliberately tight: only names that are unambiguously a tenancy root.
+const TENANT_TABLE = /^(tenants?|orgs?|organi[sz]ations?|accounts?|workspaces?|companies|company)$/i;
+
+// Split a `create table (...)` body into its top-level, comma-separated column/constraint defs so
+// each can be inspected in isolation. `body` still carries the opening "(" from tableBody; strip it
+// so the outer paren doesn't hold depth at 1 forever and suppress every split.
+function columnDefs(body: string): string[] {
+  const s = body.replace(/^\s*\(/, "");
+  const defs: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "(") depth++;
+    else if (c === ")") depth--;
+    else if (c === "," && depth === 0) {
+      defs.push(s.slice(start, i));
+      start = i + 1;
+    }
+  }
+  defs.push(s.slice(start));
+  return defs;
+}
+
+// The [column, referencedTable] a column/constraint def foreign-keys to, or null. Handles both the
+// inline form (`site uuid references public.tenants (id)`) and the table-level constraint
+// (`foreign key (site) references public.tenants (id)`).
+function foreignKeyOf(def: string): [string, string] | null {
+  const ref = /\breferences\s+(?:"?\w+"?\.)?"?([a-z0-9_]+)"?/i.exec(def);
+  if (!ref) return null;
+  const constraint = /\bforeign\s+key\s*\(\s*"?([a-z0-9_]+)"?/i.exec(def);
+  const column = constraint ? constraint[1]! : def.trim().split(/\s+/)[0]!;
+  return [column.toLowerCase(), ref[1]!.toLowerCase()];
+}
+
+// A per-user table's scoping columns that the review did NOT recognise, so a reader can falsify the
+// per-user verdict. Two structural signals, both narrow enough to stay quiet on ordinary schemas:
+// a `*_id`-suffixed column (#258), and — #301 — a bare column that foreign-keys to a tenant-shaped
+// table. Owner columns and the known tenant keys are dropped: the first is per-user by design, the
+// second would have made the table per-tenant and never reached here.
 function unrecognisedScopeColumns(sql: string, table: string): string[] {
   const body = tableBody(sql, table);
   if (body === null) return [];
-  const cols = [...body.matchAll(SCOPE_COLUMN)].map((m) => m[1]!.toLowerCase());
-  return [...new Set(cols.filter((c) => !OWNER_COLUMNS.test(c) && !TENANT_KEY_CANDIDATES.includes(c)))];
+  const idCols = [...body.matchAll(SCOPE_COLUMN)].map((m) => m[1]!.toLowerCase());
+  const fkCols = columnDefs(body)
+    .map(foreignKeyOf)
+    .filter((fk): fk is [string, string] => fk !== null && TENANT_TABLE.test(fk[1]))
+    .map(([col]) => col);
+  return [...new Set([...idCols, ...fkCols].filter((c) => !OWNER_COLUMNS.test(c) && !TENANT_KEY_CANDIDATES.includes(c)))];
 }
 
 // #258 — the tenant-key inference is a fixed 6-name list, so an app using `site_id` reviews every
@@ -161,13 +208,14 @@ function tenancyModelFinding(models: Map<string, TenancyModel>, unrecognised: Ma
       (unknown
         ? ` NOT RECOGNISED — these tables declare a scoping column that is not on the known list, so they were reviewed as per-user and any cross-tenant policy bug in them WAS NOT LOOKED FOR: ${unknown}.`
         : "") +
-      // #281 — the NOT RECOGNISED scan only matches "*_id" columns (SCOPE_COLUMN), so a tenant
-      // column named without that suffix (tenant, site, account_slug, ...) is reviewed as per-user
-      // and never appears above — same invisible-miss shape this finding exists to surface, one
-      // level down. Stated rather than silently left, per #281's own acceptance criteria. Worded to
-      // avoid the literal phrase "NOT RECOGNISED" so it can't be mistaken for another entry in that
-      // list by a reader (or a test) scanning for the marker.
-      ` Coverage note: the scoping-column scan above only matches column names ending in "_id" — a tenant column named without that suffix (e.g. "tenant", "site", "account_slug") is reviewed as per-user and will not be named even though it is the same off-list convention. No such column named above means none was found ending in "_id"; it does not mean none exists.`,
+      // #281 / #301 — the NOT RECOGNISED scan names a column on two structural signals: a "*_id"
+      // suffix (#258), or a bare column that foreign-keys to a tenant-shaped table (#301). A bare
+      // tenant column with NEITHER — an off-list name like "tenant"/"site"/"region_slug" and no FK
+      // to a tenant table — is still reviewed as per-user and never appears above. Stated rather
+      // than silently left, per #281's acceptance criteria. Worded to avoid the literal phrase "NOT
+      // RECOGNISED" so it can't be mistaken for another entry in that list by a reader (or a test)
+      // scanning for the marker.
+      ` Coverage note: the scoping-column scan above names a column when it ends in "_id" OR is a foreign key to a tenant-shaped table (tenants/orgs/accounts/workspaces/companies). A bare tenant column with NEITHER signal — an off-list name (e.g. "tenant", "site", "region_slug") and no FK to a tenant table — is still reviewed as per-user and will not be named. An empty list above is not proof that no such column exists.`,
     impact:
       "This is the review's central assumption, not a defect. If a table listed as per-user is really tenant-scoped under a name the list does not know (e.g. site_id), its policies were judged against the wrong model and cross-tenant findings were silently missed — a failed inference is indistinguishable from a clean result unless it is stated.",
     // #280 — this used to point only at the connected tier ("buy the paid tier to fix it"). The
