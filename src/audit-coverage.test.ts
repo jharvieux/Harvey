@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertAuditComplete,
   AUDIT_MODULES,
+  type AuditModule,
   buildAuditCoverage,
   formatAuditCoverage,
   MODULES,
@@ -124,7 +125,8 @@ describe("buildAuditCoverage", () => {
   });
 
   it("does not mistake a genuine reason that merely mentions a TODO for a placeholder", () => {
-    // M3, not M6: M6 is in MODULES_NEVER_EXECUTED, which blocks `complete` regardless of reason.
+    // M3 (a genuine reason mentioning a TODO) rather than a never-run module, so `complete` turns
+    // purely on the placeholder check and not on the never-run ledger.
     const recorded: ModuleCoverage[] = [
       ...AUDIT_MODULES.filter((m) => m !== "M3").map(ran),
       { module: "M3", status: "requires-live-run", reason: "no hotspot budget for this engagement; TODO tracked in #123" },
@@ -177,19 +179,16 @@ describe("assertAuditComplete", () => {
 // while each individual record is correct. These pin the distinction: a well-reasoned excuse must
 // NOT be able to launder "never executed once" into routine.
 describe("never-run modules (#266)", () => {
-  // #284: these two facts are now DERIVED from audit-execution-log.json (the log has no M6 entry
-  // and does have an M10 one) rather than hand-curated here. The ledger's own derivation is pinned
-  // in audit-execution-log.test.ts; these assert the gate still reads the alarm it depends on.
-  it("M6 is in the never-executed ledger — the module absorbed as a routine excuse", () => {
-    expect(MODULES_NEVER_EXECUTED.has("M6")).toBe(true);
-  });
+  // A synthetic ledger so the fail-loud WIRING stays tested independent of the live log. Since #283
+  // cleared M6 (the last holdout), the derived live ledger is empty — no real module triggers the
+  // never-run path anymore, so the behavior is exercised through the injected set (#283).
+  const synthNeverRun: ReadonlySet<AuditModule> = new Set<AuditModule>(["M6"]);
 
-  it("M10 is NOT in the ledger — unlike M6, it has actually executed", () => {
-    // Established from evidence, not assumed (#275): the dry-run calibration ran M10 for real
-    // against parsed migration columns — 3 tables / 31 columns, artifact dry-run/pii-data-map.json,
-    // recorded in docs/runbooks/dry-run-calibration.md §2. A module with output is not never-run,
-    // and listing it here would be a false alarm — which costs the ledger the credibility that
-    // makes M6's entry worth throwing on.
+  // #284: this fact is DERIVED from audit-execution-log.json. #283 recorded M6's first real-target
+  // run (the reviewed simplify-scan verdict over stoimera/Cravab), so the ledger no longer flags it.
+  it("has no never-executed modules left — #283 cleared M6, the final holdout", () => {
+    expect([...MODULES_NEVER_EXECUTED]).toEqual([]);
+    expect(MODULES_NEVER_EXECUTED.has("M6")).toBe(false);
     expect(MODULES_NEVER_EXECUTED.has("M10")).toBe(false);
   });
 
@@ -198,19 +197,19 @@ describe("never-run modules (#266)", () => {
       ...AUDIT_MODULES.filter((m) => m !== "M6").map(ran),
       { module: "M6", status: "requires-live-run", reason: "paid LLM tier not in scope — a true and correct reason" },
     ];
-    const report = buildAuditCoverage(recorded);
+    const report = buildAuditCoverage(recorded, undefined, synthNeverRun);
     // The reason is valid, so this is NOT a gap — the gate without the ledger stopped here.
     expect(report.gaps).toEqual([]);
     // But it has never run in any engagement, so coverage is not complete and the gate throws.
     expect(report.neverRun).toEqual(["M6"]);
     expect(report.complete).toBe(false);
-    expect(() => assertAuditComplete(recorded)).toThrow(/NEVER executed/);
+    expect(() => assertAuditComplete(recorded, undefined, synthNeverRun)).toThrow(/NEVER executed/);
   });
 
   it("no reason clears never-run — only running the module does", () => {
-    expect(buildAuditCoverage(allTen()).neverRun).toEqual([]);
-    expect(buildAuditCoverage(allTen()).complete).toBe(true);
-    expect(() => assertAuditComplete(allTen())).not.toThrow();
+    expect(buildAuditCoverage(allTen(), undefined, synthNeverRun).neverRun).toEqual([]);
+    expect(buildAuditCoverage(allTen(), undefined, synthNeverRun).complete).toBe(true);
+    expect(() => assertAuditComplete(allTen(), undefined, synthNeverRun)).not.toThrow();
   });
 
   it("the never-run error names the runner, so the reader knows how to clear it", () => {
@@ -218,7 +217,7 @@ describe("never-run modules (#266)", () => {
       ...AUDIT_MODULES.filter((m) => m !== "M6").map(ran),
       { module: "M6", status: "requires-live-run", reason: "not purchased" },
     ];
-    expect(() => assertAuditComplete(recorded)).toThrow(/simplify-scan/);
+    expect(() => assertAuditComplete(recorded, undefined, synthNeverRun)).toThrow(/simplify-scan/);
   });
 
   it("does not double-count a never-run module as a gap (a gap is fixable by a reason; this isn't)", () => {
@@ -226,7 +225,7 @@ describe("never-run modules (#266)", () => {
       ...AUDIT_MODULES.filter((m) => m !== "M6").map(ran),
       { module: "M6", status: "requires-live-run", reason: "not purchased" },
     ];
-    expect(buildAuditCoverage(recorded).gaps).toEqual([]);
+    expect(buildAuditCoverage(recorded, undefined, synthNeverRun).gaps).toEqual([]);
   });
 });
 

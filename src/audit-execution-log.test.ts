@@ -45,14 +45,21 @@ describe("the committed execution log", () => {
     }
   });
 
-  it("does not record M6 — the module that has never produced output (#266)", () => {
-    expect(readExecutionLog().map((r) => r.module)).not.toContain("M6");
+  // #283: M6 was the last module with no execution record. Its first real-target run — the reviewed
+  // simplify-scan verdict over stoimera/Cravab, recorded via run-audit --record — banked an entry, so
+  // the log now covers all ten. The record is the ONLY thing that clears it (a reason never did).
+  it("records M6 now that it has run for real, against a real engagement target (#283)", () => {
+    const m6 = readExecutionLog().find((r) => r.module === "M6");
+    expect(m6, "M6 must have an execution record").toBeTruthy();
+    // Evidence of a real target, not the calibration fixtures the #265 eval used (that was contaminated).
+    expect(m6?.target).not.toMatch(/targets\/calibration/);
   });
 
-  // The behaviour the gate depends on: the derived Set must still make M6 fail loud.
-  it("derives the same alarm the hand-kept ledger asserted: M6 never-run, M10 not", () => {
-    expect(MODULES_NEVER_EXECUTED.has("M6")).toBe(true);
-    expect(MODULES_NEVER_EXECUTED.has("M10")).toBe(false);
+  // The derivation now clears every module — the alarm has served its purpose and is silent because
+  // all ten have executed, not because anyone edited a Set.
+  it("derives an empty never-run ledger once every module has an execution record", () => {
+    expect([...MODULES_NEVER_EXECUTED]).toEqual([]);
+    expect(MODULES_NEVER_EXECUTED.has("M6")).toBe(false);
   });
 });
 
