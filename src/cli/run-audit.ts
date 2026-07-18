@@ -4,11 +4,22 @@
 //   pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm]
 //       [--out coverage.json] [--findings-out engagement.json] [--meta meta.json]
 //       [--artifacts-dir dir] [--supabase <project-ref>]... [--allow-target-install]
-//       [--schema <path>]
+//       [--schema <path>]... | [--schema <app-name>=<path>]...
 //
-// --schema (#529): an explicit schema location for M10's schema tier (a migrations dir or a single
-// .sql file), tried ahead of the conventional-location probe. For a target whose schema is not at
-// supabase/migrations, prisma/migrations, drizzle/, db/, or schema.sql.
+// --schema (#529, per-app form #538): an explicit schema location for M10's schema tier (a
+// migrations dir or a single .sql file), tried ahead of the conventional-location probe. For a
+// target whose schema is not at supabase/migrations, prisma/migrations, drizzle/, db/, or
+// schema.sql. REPEATABLE, two forms:
+//   --schema <path>              a single-target hint (applies when the target enumerates ≤1 app —
+//                                 back-compat with #529's original single-value behavior).
+//   --schema <app-name>=<path>   a per-app hint on a monorepo, keyed by the app name run-audit
+//                                 discovers (printed at startup when apps are enumerated — see
+//                                 "Monorepo apps enumerated" below). One pair per app whose layout
+//                                 the conventional-location probe would not find; other apps still
+//                                 fall back to that probe.
+// Both forms may appear in the same invocation (bare paths and app=path pairs are independent), but
+// mixing them for the SAME app is not meaningful — the bare path never applies once >1 app is
+// enumerated.
 //
 // Per-DB M10 live classification (#520): on a multi-project connected run, each --supabase project's
 // live DB is classified against its own connection URL, read from `SUPABASE_DB_URL_<REF>` (the ref
@@ -67,6 +78,7 @@ import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit
 import { formatFailures, runAudit, type RunContext } from "../audit-runner.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
 import { discoverTargets } from "../pentest/targets.js";
+import { isGitRepoRoot } from "../scan/secrets.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
@@ -95,10 +107,20 @@ const supabaseRefsArg = flagValues("--supabase");
 const supabaseRef = supabaseRefsArg[0];
 // #457: a prior engagement's findings.json to diff this run against (resolved/persistent/new).
 const baselinePath = flagValue("--baseline");
-// #529: an explicit schema location for M10's schema tier, tried ahead of the conventional-location
-// probe (supabase/migrations, prisma/migrations, drizzle, db/, schema.sql). For non-Supabase or
-// unusually-laid-out targets whose schema the probe would not find.
-const schemaHint = flagValue("--schema");
+// #529 (per-app form #538): an explicit schema location for M10's schema tier, tried ahead of the
+// conventional-location probe (supabase/migrations, prisma/migrations, drizzle, db/, schema.sql).
+// --schema is repeatable: a bare path (no "=") is the single-target hint — back-compat with #529's
+// original single-value behavior, last bare value wins if more than one is given; an
+// "<app-name>=<path>" pair targets one specific app's schema tier on a monorepo, keyed by the app
+// name run-audit discovers below (appList).
+const schemaArgs = flagValues("--schema");
+let schemaHint: string | undefined;
+const schemaHints: Record<string, string> = {};
+for (const schemaArg of schemaArgs) {
+  const eq = schemaArg.indexOf("=");
+  if (eq > 0) schemaHints[schemaArg.slice(0, eq)] = schemaArg.slice(eq + 1);
+  else schemaHint = schemaArg;
+}
 
 // #520: per-Supabase-project DB connection URLs for M10's live tier. Convention: one env var per
 // project ref, `SUPABASE_DB_URL_<REF>` where <REF> is the ref uppercased with every non-alphanumeric
@@ -113,7 +135,7 @@ supabaseRefsArg.forEach((ref, i) => {
 });
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--schema <path>] [--allow-target-install] [--baseline prior-findings.json]");
+  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--schema <path> | --schema <app-name>=<path>] [--allow-target-install] [--baseline prior-findings.json]");
   process.exit(2);
 }
 
@@ -181,13 +203,16 @@ const ctx: RunContext = {
   apps: appList,
   allowTargetInstall: args.includes("--allow-target-install"),
   schemaHint,
+  schemaHints,
   supabaseDbUrls,
+  isGitRepoRoot,
 };
 
 console.log(`\nFull audit — ${targetDir}`);
 console.log(`Tiers in scope: source${env.connected ? " + connected" : ""}${env.dynamic ? " + dynamic" : ""}${env.llm ? " + llm" : ""}`);
 if (appList.length > 1) console.log(`Monorepo apps enumerated (per-app tiers fan out): ${appList.map((a) => a.name).join(", ")}`);
 if (supabaseRefsArg.length > 1) console.log(`Supabase projects enumerated (M7 advisors fan out): ${supabaseRefsArg.join(", ")}`);
+if (Object.keys(schemaHints).length) console.log(`Per-app schema hints (M10, #538): ${Object.entries(schemaHints).map(([app, path]) => `${app}=${path}`).join(", ")}`);
 console.log("");
 
 const { recorded, failures, findings, hotspots } = runAudit(AUDIT_RUNNERS, ctx);

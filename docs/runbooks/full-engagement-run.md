@@ -221,7 +221,19 @@ pnpm exec tsx src/cli/run-audit.ts <target-dir> --connected \
 
 For M10's **schema** tier, a target whose SQL is not at `supabase/migrations` is probed at the
 conventional locations (`prisma/migrations`, `drizzle/`, `db/`, `schema.sql`) automatically (#529);
-pass `--schema <path>` to point at an unconventional one.
+pass `--schema <path>` to point at an unconventional one. `--schema` is repeatable and, on a
+monorepo, takes a per-app form (#538): `--schema <app-name>=<path>`, keyed by the app name run-audit
+discovers (printed at startup as "Monorepo apps enumerated" — see below). Each app without its own
+`--schema <app-name>=<path>` still falls back to the conventional-location probe, so a two-backend
+run where only one app has an unconventional layout sets:
+
+```bash
+pnpm exec tsx src/cli/run-audit.ts <target-dir> \
+  --schema apps/rag=packages/rag-db/sql --findings-out engagement-findings.json
+```
+
+The bare `--schema <path>` form only applies on a single-target run (≤1 app enumerated) — it is
+never smeared across a monorepo's per-app fan-out.
 
 ## 6. Full M8 mutation run — correct env, full scope, every app
 

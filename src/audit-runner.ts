@@ -74,10 +74,17 @@ export interface RunContext {
   // never covered must surface as an explicit partial/requires-live-run row — never absent (#506).
   apps?: { name: string; path: string }[];
   supabaseRefs?: string[];
-  // #529: an operator-supplied schema location for M10's schema tier (run-audit --schema), tried
-  // ahead of the conventional-location probe (supabase/migrations, prisma/migrations, drizzle, …).
-  // Absent ⇒ probe the conventional locations only.
+  // #529: an operator-supplied schema location for M10's schema tier (run-audit --schema <path>),
+  // tried ahead of the conventional-location probe (supabase/migrations, prisma/migrations,
+  // drizzle, …), on a SINGLE-target run. Absent ⇒ probe the conventional locations only.
   schemaHint?: string;
+  // #538: per-app schema locations for a MONOREPO, keyed by the app name in `apps` below (run-audit
+  // --schema <app>=<path>, repeatable — one pair per app whose layout the conventional-location
+  // probe would not find). schemaHint (above) is a single path and only ever applies to a
+  // single-target run; on a monorepo fan-out, each app's hint (if any) comes from this map instead,
+  // so an app with an unconventional layout still gets real M10 schema classification instead of
+  // being limited to the conventional-location probe alone. Absent ⇒ no per-app hints supplied.
+  schemaHints?: Record<string, string>;
   // #520: per-Supabase-project DB connection URLs for M10's live tier, keyed by project ref. On a
   // multi-project connected run the M10 probe classifies each ref whose URL is present here and
   // records requires-live-run for any ref without one — so each enumerated project is either
@@ -92,6 +99,13 @@ export interface RunContext {
   // off and a cold target degrades to the loud "re-run with --install" partial. Consent unlocks the
   // attempt; the status is still derived from what actually ran.
   allowTargetInstall?: boolean;
+  // #537: whether ctx.targetDir is a git repository ROOT — the same signal quick-scan's mechanical
+  // scan uses internally (src/scan/secrets.ts's isGitRepoRoot, exported in #533) to decide whether
+  // the git-history secrets tier can run at all. Checking it directly lets the M1 probe disclose that
+  // sub-gap on every run, not only a capturing one with a raw findings feed to read back (#528's
+  // original fix only fired when ctx.captureDir was set). Absent ⇒ the probe cannot tell and stays
+  // silent on this sub-gap.
+  isGitRepoRoot?: (dir: string) => boolean;
 }
 
 export interface ModuleRunner {

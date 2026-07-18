@@ -113,26 +113,22 @@ const filesScanned = (output: string): number | undefined => {
 // exists to prevent, reintroduced inside the enforcer. The flags say which tiers the engagement
 // HAS; they are not evidence those passes executed. `ran` becomes reachable only once those passes
 // write a durable artifact the probe checks for (option 2, tracked in #416).
-// #528: the mechanical scan emits a SEC-TH-GH-00 coverage-disclosure finding when the git-history
-// secrets tier could not run (target is not a git repo root — an archive/subdirectory delivery). On
-// the capture path the M1 probe reads quick-scan's raw --findings-out feed for that id the same way
-// M4/M5 read for M4-99/M5-00, so the gap surfaces in the M1 ledger reason rather than staying a
-// buried Info finding in the deliverable.
-const GIT_HISTORY_DISCLOSURE_ID = "SEC-TH-GH-00";
+// #528/#537: the mechanical scan emits a SEC-TH-GH-00 coverage-disclosure finding when the
+// git-history secrets tier could not run (target is not a git repo root — an archive/subdirectory
+// delivery). #528 originally surfaced this by reading it back off quick-scan's raw --findings-out
+// feed, which only exists on a capturing run (ctx.captureDir set) — a coverage-only run stayed blind
+// to the sub-gap. quick-scan derives the SAME fact from isGitRepoRoot(ctx.targetDir) (src/scan/
+// secrets.ts, exported in #533), so the M1 probe checks that directly instead: no capture dir, no
+// raw-findings file, and it works on every run.
 const gitHistoryGapNote = (ctx: RunContext): string => {
-  const rawOut = ctx.captureDir ? join(ctx.captureDir, "M1.json") : undefined;
-  if (!rawOut) return "";
-  const found = readCaptured(ctx, rawOut).some((f) => (f as { id?: string }).id === GIT_HISTORY_DISCLOSURE_ID);
-  return found
-    ? " Coverage note: the git-history secret scan (TruffleHog) did not run — this target is not a git repository root (archive/subdirectory delivery), so committed-secret history was not assessed (SEC-TH-GH-00, #528)."
-    : "";
+  if (!ctx.isGitRepoRoot || ctx.isGitRepoRoot(ctx.targetDir)) return "";
+  return " Coverage note: the git-history secret scan (TruffleHog) did not run — this target is not a git repository root (archive/subdirectory delivery), so committed-secret history was not assessed (SEC-TH-GH-00, #528/#537).";
 };
 
 const m1: ModuleRunner = {
   module: "M1",
   run: (ctx) => {
-    const rawOut = ctx.captureDir ? join(ctx.captureDir, "M1.json") : undefined;
-    const { ok, output } = ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir, ...(rawOut ? ["--findings-out", rawOut] : [])]);
+    const { ok, output } = ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir]);
     if (!ok) return { status: "requires-live-run", reason: `pnpm quick-scan exited non-zero: ${trimOut(output)}` };
     // #416: a fresh semantic/live pass artifact is the evidence #311 said `ran` needs. With it, the
     // flagship LLM/live work is proven (and its triage findings flow into the deliverable); without
@@ -512,15 +508,17 @@ const SCHEMA_CANDIDATE_SUBPATHS = [
   "schema.sql",
 ];
 
-// #506: the schema tier is per-app — each app can carry its own schema layout. Runs against the
-// given app dir; `instance` is set only on a multi-app monorepo so a single-app target is one
-// untagged row exactly as before. The optional --schema hint (ctx.schemaHint) wins over the probe.
+// #506/#538: the schema tier is per-app — each app can carry its own schema layout. Runs against
+// the given app dir; `instance` is set only on a multi-app monorepo so a single-app target is one
+// untagged row exactly as before. A hint wins over the probe: on a single-target run (no
+// instanceName) that's ctx.schemaHint; on a monorepo fan-out, it's ctx.schemaHints[instanceName] —
+// its OWN app's hint, never smeared across the fan-out — so an app with an unconventional layout
+// still gets pointed at the right place.
 const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): ProbeOutcome => {
   const instance = instanceName ? { instance: instanceName } : {};
   const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
-  // The hint is a single path, so it applies only to the single-target run — never smeared across a
-  // monorepo's per-app fan-out, where each app probes its own conventional locations.
-  const hint = ctx.schemaHint && appPath === ctx.targetDir ? [ctx.schemaHint] : [];
+  const hintPath = instanceName ? ctx.schemaHints?.[instanceName] : ctx.schemaHint;
+  const hint = hintPath ? [hintPath] : [];
   const candidates = [...hint, ...SCHEMA_CANDIDATE_SUBPATHS.map((sub) => join(appPath, sub))];
   const schema = candidates.find((c) => ctx.exists(c));
   if (!schema) return { status: "requires-live-run", reason: `no live DB and no schema found — nothing to classify. Probed: ${candidates.join(", ")}. pii-classify --schema accepts a migrations dir (supabase/prisma/drizzle) or a schema.sql file (#529)`, ...instance };
