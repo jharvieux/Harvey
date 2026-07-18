@@ -26,13 +26,20 @@ create policy plans_select_public on public.plans
 -- table shape and same `for select` as the documents plant, but the USING clause constrains rows
 -- to the caller's tenant instead of admitting all of them. Guards against a rule matching the
 -- command rather than the clause.
-create table public.reports (
+--
+-- Named `tenant_reports` (not `reports`) to avoid colliding with the UNRELATED `public.reports`
+-- planted in 20260709000004_b8_connected_advisors.sql (P-RLS-ENABLED-NO-POLICY, a connected-tier
+-- Splinter fixture keyed on that literal live table name — #546). The policy name
+-- `reports_select_own_tenant` is kept unchanged: N-RLS-TENANT-SCOPED-READ
+-- (src/scan/calibration/rls-static-semantics.entries.ts) matches on the POLICY name, not the
+-- table name, so the answer key is unaffected by this rename.
+create table public.tenant_reports (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references public.tenants (id) on delete cascade,
   title text not null,
   created_at timestamptz not null default now()
 );
 
-alter table public.reports enable row level security;
-create policy reports_select_own_tenant on public.reports
+alter table public.tenant_reports enable row level security;
+create policy reports_select_own_tenant on public.tenant_reports
   for select using (tenant_id = public.current_tenant_id());

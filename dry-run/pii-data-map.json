@@ -259,5 +259,34 @@
     "phi": false,
     "pci": false,
     "secret": false
+  },
+  "legacy_accounts": {
+    "columns": [
+      {
+        "column": "email",
+        "infotype": "EMAIL",
+        "category": "PII",
+        "confidence": "high"
+      },
+      {
+        "column": "password_hash",
+        "infotype": "STORED_PASSWORD",
+        "category": "SECRET",
+        "confidence": "high"
+      }
+    ],
+    "infotypes": [
+      "EMAIL",
+      "STORED_PASSWORD"
+    ],
+    "categories": [
+      "PII",
+      "SECRET"
+    ],
+    "severityScore": 7,
+    "severity": "High",
+    "phi": false,
+    "pci": false,
+    "secret": true
   }
 }

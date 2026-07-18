@@ -20,7 +20,7 @@ create table public.widgets (
   label text
 );
 alter table public.widgets enable row level security;
-create policy widgets_select_own on public.widgets for select using (site = (select current_tenant()));
+create policy widgets_select_own on public.widgets for select using (site = (select public.current_tenant_id()));
 
 -- NEGATIVE (N-RLS-FK-NON-TENANT): same shape (a bare uuid FK column), but `city` references
 -- public.cities — an ordinary relation, not a tenancy root. Must stay unnamed; the row is correctly
