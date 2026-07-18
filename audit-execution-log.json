@@ -30,6 +30,12 @@
     "evidence": "pnpm quality-scan (knip dead code), run against the same target, 0 findings — docs/runbooks/dry-run-calibration.md §3, artifact dry-run/quality-findings.json"
   },
   {
+    "module": "M6",
+    "firstRan": "2026-07-18",
+    "target": "/private/tmp/cravab-m6",
+    "evidence": "First real-target M6 run (#283): reviewed simplification verdict over stoimera/Cravab's simplify-scan packet (357 files) — 6 findings incl. 2 duplicate rate limiters, 9 cache managers vs installed react-query, 3 error modules. Recorded via M6.pass.json (pass: verdict) + run-audit --record. Writeup: docs/design/m6-first-real-target-verdict.md"
+  },
+  {
     "module": "M7",
     "firstRan": "2026-06-27",
     "target": "jharvieux/atc",
