@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, MODULES_NEVER_EXECUTED, type AuditModule } from "./audit-coverage.js";
+import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type AuditModule } from "./audit-coverage.js";
 import { assertRegistryComplete, formatFailures, type ModuleRunner, type ProbeOutcome, type RunContext } from "./audit-runner.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
@@ -110,7 +110,8 @@ describe("runAudit derives the ledger from execution (#229/#284)", () => {
   it("produces a ledger the coverage gate accepts when every probe truly ran", () => {
     const { recorded, failures } = runAudit(allRan(), ctx());
     expect(failures).toEqual([]);
-    // M6 is in MODULES_NEVER_EXECUTED, so a real all-ran run is what clears it — see #284 below.
+    // Every module reports `ran`, so the coverage gate is satisfied and the never-run ledger (now
+    // empty since #283 cleared M6) has nothing to block on — see #284 below.
     expect(buildAuditCoverage(recorded).complete).toBe(true);
   });
 });
@@ -381,11 +382,13 @@ describe("M6's never-run alarm is not cleared by a review packet (#351)", () => 
     expect(m6?.reason).toMatch(/not a verdict/);
   });
 
-  it("M6 stays in the never-executed ledger after an --llm run — no `ran` was banked to clear it", () => {
-    // M6 is the one module absent from audit-execution-log.json; the packet run must not change that.
-    expect(MODULES_NEVER_EXECUTED.has("M6")).toBe(true);
+  it("a packet-only --llm run banks no `ran`, so it could never clear a never-run alarm", () => {
+    // #283 recorded a REAL reviewed verdict, so the live ledger no longer flags M6. The invariant
+    // #351 protects — that a bare packet run does NOT clear the alarm — is shown against a synthetic
+    // ledger: the probe reports a non-`ran` status, so a never-run M6 stays flagged.
     const { recorded } = runAudit(AUDIT_RUNNERS, ctx({ env: { connected: false, dynamic: false, llm: true } }));
-    expect(buildAuditCoverage(recorded).neverRun).toContain("M6");
+    expect(recorded.find((r) => r.module === "M6")?.status).not.toBe("ran");
+    expect(buildAuditCoverage(recorded, undefined, new Set<AuditModule>(["M6"])).neverRun).toContain("M6");
   });
 });
 
@@ -405,7 +408,9 @@ describe("M6 credits its free indicator layer without a --llm flag (#397)", () =
   it("never reads `ran` off the indicator layer alone — #351's never-run alarm still needs a verdict", () => {
     const { recorded } = runAudit(AUDIT_RUNNERS, ctx());
     expect(recorded.find((r) => r.module === "M6")?.status).not.toBe("ran");
-    expect(buildAuditCoverage(recorded).neverRun).toContain("M6");
+    // Against a synthetic never-run ledger (the live one is empty since #283), a non-`ran` indicator
+    // row leaves M6 flagged — the alarm still turns on the verdict, not the indicator layer.
+    expect(buildAuditCoverage(recorded, undefined, new Set<AuditModule>(["M6"])).neverRun).toContain("M6");
   });
 
   it("stays requires-live-run when detect-static could not confirm a scan (0 files, no llm)", () => {

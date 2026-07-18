@@ -130,7 +130,12 @@ interface AuditCoverageReport {
 // #506: a per-app/per-DB tier records ONE entry per enumerated instance, so a module may legitimately
 // appear more than once — keyed by (module, instance). Two entries with the SAME (module, instance),
 // though, are still the broken-bookkeeping case they always were.
-export function buildAuditCoverage(recorded: ModuleCoverage[], env?: EngagementEnv): AuditCoverageReport {
+// `neverExecuted` defaults to the live ledger derived from audit-execution-log.json. It is a
+// parameter, not a hard reference, so the fail-loud wiring (never-run ⇒ not a gap ⇒ blocks
+// `complete` ⇒ throws) can be exercised with a synthetic set once every real module has executed and
+// the live ledger is empty (#283 cleared M6, the last holdout) — the behavior must stay tested even
+// when no module currently triggers it.
+export function buildAuditCoverage(recorded: ModuleCoverage[], env?: EngagementEnv, neverExecuted: ReadonlySet<AuditModule> = MODULES_NEVER_EXECUTED): AuditCoverageReport {
   const byModule = new Map<AuditModule, ModuleCoverage[]>();
   const gaps: AuditCoverageGap[] = [];
 
@@ -173,7 +178,7 @@ export function buildAuditCoverage(recorded: ModuleCoverage[], env?: EngagementE
   // A module in the never-executed ledger that also didn't run here (on ANY instance) stays loud no
   // matter how well reasoned its excuse — that reason is exactly what has kept it invisible before.
   const ranAny = new Set(rows.filter((r) => r.status === "ran").map((r) => r.module));
-  const neverRun = [...MODULES_NEVER_EXECUTED].filter((module) => !ranAny.has(module));
+  const neverRun = [...neverExecuted].filter((module) => !ranAny.has(module));
   // "ran in full" is stricter than "ran on some instance": a module counts only when EVERY one of
   // its recorded instances ran — a monorepo where one app ran and another is partial has not.
   const ranCount = AUDIT_MODULES.filter((m) => {
@@ -199,8 +204,8 @@ export function buildAuditCoverage(recorded: ModuleCoverage[], env?: EngagementE
 // doesn't stop anything is the same silence with better paperwork. It is deliberately unsatisfiable
 // by reason-writing: the only way to clear it is to run the module once and drop it from
 // MODULES_NEVER_EXECUTED.
-export function assertAuditComplete(recorded: ModuleCoverage[], env?: EngagementEnv): void {
-  const { gaps, neverRun } = buildAuditCoverage(recorded, env);
+export function assertAuditComplete(recorded: ModuleCoverage[], env?: EngagementEnv, neverExecuted: ReadonlySet<AuditModule> = MODULES_NEVER_EXECUTED): void {
+  const { gaps, neverRun } = buildAuditCoverage(recorded, env, neverExecuted);
   if (gaps.length) {
     const detail = gaps.map((g) => `${g.module} (${MODULES[g.module].name}): ${g.problem}`).join("; ");
     throw new Error(`Incomplete audit coverage — ${gaps.length} of ${AUDIT_MODULES.length} module(s) unaccounted for: ${detail}`);
