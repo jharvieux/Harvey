@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { parseGitleaksFindings, parseTruffleHogFindings, type GitleaksResult, type TruffleHogResult } from "./secrets.js";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { gitHistorySecretsUnavailableFinding, isGitRepoRoot, parseGitleaksFindings, parseTruffleHogFindings, type GitleaksResult, type TruffleHogResult } from "./secrets.js";
 
 describe("parseTruffleHogFindings", () => {
   it("drops unverified hits — only a live-verified secret is ~100% precision", () => {
@@ -150,5 +154,49 @@ describe("parseGitleaksFindings", () => {
     ];
     const findings = parseGitleaksFindings(results, "source");
     expect(findings).toHaveLength(0);
+  });
+});
+
+// #528: previously the isGitRepoRoot guard just made the git-history pass return [] with no
+// disclosure — a cold engagement delivered as an archive/subdirectory had that tier silently
+// unassessed. isGitRepoRoot is what scanSecrets branches on to decide whether to emit
+// gitHistorySecretsUnavailableFinding, so exercising it directly proves the fail-loud contract
+// without depending on the trufflehog binary itself.
+describe("isGitRepoRoot (#528)", () => {
+  const scratchDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of scratchDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("is false for a non-git directory — the disclosure tier fires", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-secrets-nongit-"));
+    scratchDirs.push(dir);
+    expect(isGitRepoRoot(dir)).toBe(false);
+  });
+
+  it("is true for a real git repo root — no disclosure, behaves as today", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-secrets-gitroot-"));
+    scratchDirs.push(dir);
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    expect(isGitRepoRoot(dir)).toBe(true);
+  });
+
+  it("is false for a SUBDIRECTORY of a git repo — the disclosure tier fires, matching #55's original guard", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-secrets-gitsub-"));
+    scratchDirs.push(dir);
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    const sub = join(dir, "target");
+    mkdirSync(sub);
+    expect(isGitRepoRoot(sub)).toBe(false);
+  });
+});
+
+describe("gitHistorySecretsUnavailableFinding (#528)", () => {
+  it("discloses the coverage gap without claiming zero secrets, and never quotes a secret value (#308)", () => {
+    const finding = gitHistorySecretsUnavailableFinding("/some/path is not a git repository root");
+    expect(finding.id).toBe("SEC-TH-GH-00");
+    expect(finding.severity).toBe("Info");
+    expect(finding.evidence).not.toMatch(/ghp_|sk_|service_role/);
+    expect(finding.impact).toContain("not a finding of zero secrets");
   });
 });
