@@ -135,6 +135,28 @@ export function parseColumnDefaults(sql: string): { table_name: string; column_n
   return out;
 }
 
+// Columns constrained to an enum-like allow-list via `CHECK (col IN ('a','b',...))`, whether the
+// check is written inline on the column line or as a table-level constraint. The two-tenant seed
+// uses these to pick a LEGAL value for a NOT-NULL column with no default (a generic placeholder
+// like 'harvey-seed-a' would violate the CHECK and fail the INSERT — #547). Only the simple `IN
+// (literal, literal, …)` shape is derived; a CHECK using a function/expression stays in the seed's
+// fail-loud path. Values are returned unquoted (the '' escape collapsed to a single quote).
+const CHECK_IN = new RegExp(`\\bcheck\\s*\\(\\s*${IDENT}\\s+in\\s*\\(([^)]*)\\)`, "gi");
+const STRING_LITERAL = /'((?:[^']|'')*)'/g;
+
+export function parseCheckInConstraints(sql: string): { table_name: string; column_name: string; values: string[] }[] {
+  sql = stripLineComments(sql);
+  const out: { table_name: string; column_name: string; values: string[] }[] = [];
+  for (const m of sql.matchAll(CREATE_TABLE)) {
+    const table = identText(m[3], m[4]);
+    for (const cm of m[5]!.matchAll(CHECK_IN)) {
+      const values = [...cm[3]!.matchAll(STRING_LITERAL)].map((v) => v[1]!.replace(/''/g, "'"));
+      if (values.length) out.push({ table_name: table, column_name: identText(cm[1], cm[2]), values });
+    }
+  }
+  return out;
+}
+
 const DEFINER_FUNCTION =
   /create\s+(?:or\s+replace\s+)?function\s+(?:(\w+)\.)?(\w+)\s*\(([^)]*)\)[\s\S]*?security\s+definer[\s\S]*?as\s+\$(\w*)\$([\s\S]*?)\$\4\$/gi;
 

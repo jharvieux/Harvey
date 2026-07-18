@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseAuthUserRefs, parseColumns, parseDefinerFunctions, parsePolicies, parseRlsState, parseTableNames } from "./migration-sql-parse.js";
+import { parseAuthUserRefs, parseCheckInConstraints, parseColumns, parseDefinerFunctions, parsePolicies, parseRlsState, parseTableNames } from "./migration-sql-parse.js";
 
 // Fixtures are the real calibration-target migrations (targets/calibration/supabase/migrations) —
 // this test asserts the parser extracts exactly what GROUND-TRUTH.md says is there, so a change
@@ -43,6 +43,24 @@ describe("parseColumns", () => {
     const cols = parseColumns(schemaSql);
     const email = cols.find((c) => c.table_name === "profiles" && c.column_name === "email");
     expect(email?.data_type).toBe("text");
+  });
+});
+
+describe("parseCheckInConstraints (#547 — enum-like allow-lists the seed must satisfy)", () => {
+  it("reads an inline column-level CHECK (col IN (...)) allow-list", () => {
+    const sql = "create table subs (\n  id uuid primary key,\n  plan text not null check (plan in ('free','pro','enterprise'))\n);";
+    const checks = parseCheckInConstraints(sql);
+    expect(checks).toEqual([{ table_name: "subs", column_name: "plan", values: ["free", "pro", "enterprise"] }]);
+  });
+
+  it("reads a table-level CHECK constraint the same way", () => {
+    const sql = "create table orders (\n  id uuid primary key,\n  status text not null,\n  constraint status_ck check (status in ('pending','shipped'))\n);";
+    expect(parseCheckInConstraints(sql)[0]).toEqual({ table_name: "orders", column_name: "status", values: ["pending", "shipped"] });
+  });
+
+  it("ignores a CHECK that is not a simple IN allow-list (stays in the seed's fail-loud path)", () => {
+    const sql = "create table t (\n  id uuid primary key,\n  qty integer check (qty > 0)\n);";
+    expect(parseCheckInConstraints(sql)).toEqual([]);
   });
 });
 
