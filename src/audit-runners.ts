@@ -113,10 +113,26 @@ const filesScanned = (output: string): number | undefined => {
 // exists to prevent, reintroduced inside the enforcer. The flags say which tiers the engagement
 // HAS; they are not evidence those passes executed. `ran` becomes reachable only once those passes
 // write a durable artifact the probe checks for (option 2, tracked in #416).
+// #528: the mechanical scan emits a SEC-TH-GH-00 coverage-disclosure finding when the git-history
+// secrets tier could not run (target is not a git repo root — an archive/subdirectory delivery). On
+// the capture path the M1 probe reads quick-scan's raw --findings-out feed for that id the same way
+// M4/M5 read for M4-99/M5-00, so the gap surfaces in the M1 ledger reason rather than staying a
+// buried Info finding in the deliverable.
+const GIT_HISTORY_DISCLOSURE_ID = "SEC-TH-GH-00";
+const gitHistoryGapNote = (ctx: RunContext): string => {
+  const rawOut = ctx.captureDir ? join(ctx.captureDir, "M1.json") : undefined;
+  if (!rawOut) return "";
+  const found = readCaptured(ctx, rawOut).some((f) => (f as { id?: string }).id === GIT_HISTORY_DISCLOSURE_ID);
+  return found
+    ? " Coverage note: the git-history secret scan (TruffleHog) did not run — this target is not a git repository root (archive/subdirectory delivery), so committed-secret history was not assessed (SEC-TH-GH-00, #528)."
+    : "";
+};
+
 const m1: ModuleRunner = {
   module: "M1",
   run: (ctx) => {
-    const { ok, output } = ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir]);
+    const rawOut = ctx.captureDir ? join(ctx.captureDir, "M1.json") : undefined;
+    const { ok, output } = ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir, ...(rawOut ? ["--findings-out", rawOut] : [])]);
     if (!ok) return { status: "requires-live-run", reason: `pnpm quick-scan exited non-zero: ${trimOut(output)}` };
     // #416: a fresh semantic/live pass artifact is the evidence #311 said `ran` needs. With it, the
     // flagship LLM/live work is proven (and its triage findings flow into the deliverable); without
@@ -138,7 +154,7 @@ const m1: ModuleRunner = {
     return {
       status: "partial",
       detail: "pnpm quick-scan (mechanical tier)",
-      reason: withRejectedPass("mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). No M1 security findings are collected into this deliverable — the flagship findings are produced by that paid-LLM pass and src/cli/scan.ts, not the mechanical quick-scan, so absence here is not-collected, not clean (#420)", pass.reason),
+      reason: withRejectedPass("mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). No M1 security findings are collected into this deliverable — the flagship findings are produced by that paid-LLM pass and src/cli/scan.ts, not the mechanical quick-scan, so absence here is not-collected, not clean (#420)", pass.reason) + gitHistoryGapNote(ctx),
     };
   },
 };

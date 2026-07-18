@@ -6,6 +6,12 @@
 //
 //   pnpm quick-scan --dir <path> [--bundle <path>] [--tenant-key <column>]
 //                    [--tenant-mode per-tenant|per-user] [--json] [--out <file>]
+//                    [--findings-out <file>]
+//
+// --findings-out (#528): write the RAW mechanical Finding[] (the input to the free report, before
+// the free/paid gating) as a JSON array — the machine-readable feed the orchestrator's M1 probe
+// reads to detect coverage-disclosure findings (e.g. SEC-TH-GH-00, git-history tier unassessed).
+// Distinct from --out, which writes the gated free diagnosis.
 //
 // Privacy: the scan runs locally and NO SOURCE CODE leaves the machine. Two mechanical
 // checks make network calls that send non-source data only — TruffleHog (--only-verified)
@@ -159,7 +165,11 @@ async function main(): Promise<void> {
   const tenantKey = arg("--tenant-key");
   const mode = tenantMode(arg("--tenant-mode"));
   const tenancyOverride = tenantKey || mode ? { tenantKey, mode } : undefined;
-  const report = buildQuickScanReport(await runMechanicalScan({ dir, bundleDir: bundle, tenancyOverride, handrolledIndicators: true }));
+  const rawFindings = await runMechanicalScan({ dir, bundleDir: bundle, tenancyOverride, handrolledIndicators: true });
+  const report = buildQuickScanReport(rawFindings);
+
+  const findingsOut = arg("--findings-out");
+  if (findingsOut) writeFileSync(findingsOut, `${JSON.stringify(rawFindings, null, 2)}\n`);
 
   const out = arg("--out");
   const body = process.argv.includes("--json") ? JSON.stringify(report, null, 2) : render(report);
