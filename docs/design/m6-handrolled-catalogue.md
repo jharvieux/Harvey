@@ -244,11 +244,14 @@ this note said "5 SHIPPED + 25 YES = 31 … 31 + 76 = 106" — an arithmetic sli
 
 **Reading the split honestly:**
 
-- The 17 remaining YES entries are *candidates*, not detectors — all of them measured at zero on
-  the current corpus, so they are unranked and speculative until a corpus that contains them
-  exists. Every one still owes a paired positive+negative fixture (#61), an extension of the
-  vocabulary-lock test, and a dogfood run before it ships — the #395/#406 batches are the
-  template. None of this catalogue's verdicts is a precision claim; per #265's constraint,
+- The 17 remaining YES entries are *candidates*, not detectors. They measured zero on the original
+  six (mostly-professional) repos, but the #413 AI-tier measurement (2026-07-18, recorded in
+  `docs/design/m6-corpus-frequency.md`) found **9 of the 17 fire on AI-authored code** — 8 on
+  organic AI repos, entry 76 only on a curated repo. So 8 (3, 24, 27, 30, 53, 61, 89, 98) now have
+  measured graduation evidence, the other 8 (4, 11, 13, 16, 23, 44, 68, 95) remain unranked. Every
+  one still owes a paired positive+negative fixture (#61), an extension of the vocabulary-lock test,
+  and a dogfood run before it ships — the #395/#406 batches are the template. None of this
+  catalogue's verdicts is a precision claim; per #265's constraint,
   **no precision number of any kind is claimed for any tier of M6**, including the shipped
   classes.
 - The 33 MAYBEs are deferred for three named reasons: cross-statement correlation (73/75),
@@ -279,16 +282,18 @@ unwound.
 
 ## Follow-up work this catalogue creates (tracked, not silent)
 
-1. **Measure real frequency** — DONE 2026-07-16 (#406 item 1): `pnpm handrolled-frequency`,
-   results and the measured batch-2 order in `docs/design/m6-corpus-frequency.md`. Still true:
-   no "common"/"rampant" claim from this doc may appear in client-facing text — the measurement
-   found most shapes absent from this corpus, and the follow-up it created is an AI-generated
-   corpus tier.
+1. **Measure real frequency** — DONE 2026-07-16 (#406 item 1) and extended 2026-07-18 (#413): the
+   AI-generated corpus tier that #406's follow-up asked for now exists (four AI-authored repos,
+   provenance-tagged), and `pnpm handrolled-frequency` reports per-provenance density — organic
+   ai-generated code carries the catalogue at ~3.4x professional density (measured, in
+   `docs/design/m6-corpus-frequency.md`). Still true: no "common"/"rampant" claim may appear in
+   client-facing text — the AI figure is grounded in 3 organic ai-generated repos, not a client's.
 2. **Next detector batch** — DONE 2026-07-16 (#406 item 2): the eight measured-nonzero YES
    entries (28, 41, 88, 81, 29, 37, 42, 52) shipped in measured order, fixtures first, on the
-   `depGatePresent` gate from PR #409. What remains of the YES column is the 17 measured-zero
-   entries — unranked, no corpus evidence to order them by; building any is speculative until a
-   corpus that contains them exists (the AI-generated corpus tier of follow-up 1).
+   `depGatePresent` gate from PR #409. Of the 17 measured-zero entries, the #413 AI-tier run gave
+   8 (3, 24, 27, 30, 53, 61, 89, 98) measured graduation evidence — building them under the #395
+   fixture discipline is the next batch (deferred to a #413 follow-up issue); the other 8 stay
+   unranked pending a wider AI corpus.
 3. **The boundary checks** — SETTLED 2026-07-16 (#406): 74 → BOUNDARY → M7 (`detectUnboundedSelect`
    fires on the fetch-all variant, probed); 18/47/65/67/72/102 verified non-overlapping — each
    stays MAYBE with the evidence and the remaining blocker recorded in its reason cell. One

@@ -15,6 +15,68 @@
 // exactly the junk count this file must not emit.
 
 import type { SourceInput } from "../detectors/common.js";
+import type { Provenance } from "./external-corpus.js";
+
+// #413: AI-authored repos measured for M6 hand-rolled-frequency ONLY — deliberately NOT full
+// ExternalTarget corpus entries. The corpus contract requires MEASURED per-module drift baselines
+// (M4/M5/M7/M8/M9/M10), which cost a full scan + triage per repo to establish honestly; fabricating
+// them would be exactly the junk-number the repo's measure-don't-recall doctrine forbids. The M6
+// frequency question — "do the catalogue's 17 measured-zero YES shapes fire on genuinely
+// AI-generated code?" — needs only the source tree, so these are a lightweight clone-and-count
+// list. Full corpus-drift baselines for these repos are a separate, heavier follow-up (see #413).
+//
+// Source is NEVER vendored (same posture as external-corpus.ts): clone-on-demand only, so AGPL /
+// no-license repos are usable for internal scanning as long as their source isn't copied into
+// this repo. Pins verified to fetch + carry the expected shape (App Router + supabase/migrations)
+// on 2026-07-18.
+interface FrequencyTarget {
+  slug: string;
+  repo: string;
+  commit: string;
+  license: string;
+  provenance: Provenance;
+  provenanceNote: string;
+  // #413: intentionally-vulnerable / teaching repos are CURATED, not organic AI output — their
+  // shape mix is authored to demonstrate bugs, so they must not dominate the organic-AI signal.
+  // Measured and reported, but bucketed separately from the ai-generated/ai-assisted aggregate.
+  curated?: boolean;
+}
+
+export const AI_FREQUENCY_CORPUS: FrequencyTarget[] = [
+  {
+    slug: "cravab",
+    repo: "stoimera/Cravab",
+    commit: "f0b355fe5e082b9f67bacf3593393e763f50acea",
+    license: "AGPL-3.0",
+    provenance: "ai-generated",
+    provenanceNote: "#413: .cursor/rules mandating tenant_id isolation + AI-slop README; strong stack fit (tenant_id everywhere, RLS, migrations, App Router). AGPL — scan-only, never vendor.",
+  },
+  {
+    slug: "flori-web",
+    repo: "flori-ai-kr/web",
+    commit: "bead044955f069525edac4134696d0a8f1a3071b",
+    license: "none (all rights reserved)",
+    provenance: "ai-generated",
+    provenanceNote: "#413: Co-Authored-By: Claude on ~40 commits + CLAUDE.md + .claude/; many RLS migrations, user-scoped tenancy. No license — clone-and-scan only, never vendor.",
+  },
+  {
+    slug: "effective",
+    repo: "joshcoolman/effective",
+    commit: "52744674ef83306bc58ecfc607aa840092137132",
+    license: "MIT",
+    provenance: "ai-assisted",
+    provenanceNote: "#413: CLAUDE.md + Co-Authored-By: Claude, but higher-skill Effect TS and a thin schema — a capable-dev-with-AI contrast to the vibe-coded repos. Large tree (~500k LOC); reported per-repo so it can't silently dominate the aggregate.",
+  },
+  {
+    slug: "teardown",
+    repo: "vandyand/saas-security-teardown",
+    commit: "1ef96ab83f9a4b13109a1945ef936c1e83648865",
+    license: "none (all rights reserved)",
+    provenance: "ai-generated",
+    provenanceNote: "#413: README 'vibe-coded… let an AI scaffold' + Co-Authored-By: Claude Opus 4.8. CURATED — intentionally-vulnerable (8 planted cross-tenant leaks), so its shape mix is authored, not organic; bucketed separately.",
+    curated: true,
+  },
+];
 
 interface MeasuredShape {
   /** Row number in docs/design/m6-handrolled-catalogue.md. */

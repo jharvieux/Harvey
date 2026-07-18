@@ -176,3 +176,123 @@ all MAYBE and were already deferred on their own blockers; the non-zero MAYBE co
    on 42 total observations.
 2. The catalogue's "Honesty note on ranking" and follow-up item 1 are now satisfied/stale — the
    catalogue should point here (done in the same PR, `docs/design/*.md` is agent-editable).
+
+---
+
+# Per-provenance-tier frequency: AI-generated vs professional (#413)
+
+Measured **2026-07-18** by `pnpm handrolled-frequency` (same command, now extended). Follow-up
+item 1 above — "the corpus needs an AI-generated tier before 'common in AI code' claims can be
+grounded" — is what this section answers. **Rerun the command to regenerate; per measure-don't-
+recall no number here may be quoted without a fresh run.**
+
+## What changed
+
+Every corpus repo now carries an evidence-based `provenance` tag in `src/scan/external-corpus.ts`
+(professional / ai-assisted / ai-generated / unclear), and four AI-authored repos were added as a
+frequency-only list (`AI_FREQUENCY_CORPUS` in `src/scan/handrolled-frequency.ts`) — **clone-and-
+count only, NOT full corpus-drift entries** (establishing honest M4/M5/M7/M8/M9/M10 baselines for
+them is a separate, heavier follow-up; fabricating them would be the junk number the repo forbids).
+Source is never vendored, so the AGPL/no-license repos are scan-only.
+
+### The provenance-tagged corpus (10 repos, pinned)
+
+| Slug | Repo | Provenance | Evidence |
+|---|---|---|---|
+| proposit | JakeLeoDev/proposit | ai-assisted | Claude trailers + CLAUDE.md, but real 2-dev team, CI, no slop |
+| subscription-payments | vercel/nextjs-subscription-payments | professional | Vercel official template, 31 contributors, no AI files |
+| boxyhq | boxyhq/saas-starter-kit | professional | org product, 39 contributors, versioned releases |
+| multi-tenant-starter | Wallens11/supabase-multi-tenant-starter | unclear | single-dump commit (mild AI tell) but cleanest code, no fingerprints |
+| mvp-boilerplate | devtodollars/mvp-boilerplate | ai-generated | Co-Authored-By: Claude Opus 4.6, CLAUDE.md + agent-skills |
+| saas-lite | makerkit/nextjs-saas-starter-kit-lite | professional | commercial Makerkit free tier, renovate/syncpack |
+| cravab | stoimera/Cravab | ai-generated (NEW) | `.cursor/rules` mandating tenant_id, AI-slop README — AGPL |
+| flori-web | flori-ai-kr/web | ai-generated (NEW) | Co-Authored-By: Claude on ~40 commits + CLAUDE.md — no license |
+| effective | joshcoolman/effective | ai-assisted (NEW) | CLAUDE.md + Claude co-author, higher-skill Effect TS — MIT |
+| teardown | vandyand/saas-security-teardown | ai-generated, **curated** (NEW) | 'vibe-coded' README; intentionally-vulnerable — bucketed separately |
+
+ATC (jharvieux/atc), operator-confirmed all-AI-generated, is a PRIVATE repo and was NOT cloned;
+excluded here rather than guessed (no already-measured M6 frequency numbers exist for it in-repo).
+
+## The headline: AI-generated code carries the catalogue at ~3x professional density
+
+Per-provenance-tier indicator density (mixed-unit sum — matches/files/findings — so read as an
+order of magnitude, normalised per KLOC of product code the loader sees). Measured 2026-07-18:
+
+| Tier | Repos | Indicators | Product LOC | Indicators / KLOC |
+|---|---|---:|---:|---:|
+| **professional** | subscription-payments, boxyhq, saas-lite | 13 | 41,222 | **0.32** |
+| **ai-assisted** | proposit, effective | 86 | 426,843 | **0.20** |
+| **ai-generated** (organic) | mvp-boilerplate, cravab, flori-web | 151 | 137,661 | **1.10** |
+| unclear | multi-tenant-starter | 3 | 1,526 | 1.97 |
+| curated (weighted separately) | teardown | 7 | 1,409 | 4.97 |
+
+**Organic ai-generated code shows ~3.4x the hand-rolled-primitive density of professional code
+(1.10 vs 0.32 per KLOC).** That is the measured signal #413 asked for, and it is in the expected
+direction: the vibe-coded MVP tier reinvents standard primitives markedly more than maintained
+professional starter kits do.
+
+Two honesty caveats, both measured:
+- **ai-assisted is NOT elevated** (0.20/KLOC, actually below professional). effective (390k of the
+  426k ai-assisted LOC) is higher-skill Effect TS and dilutes the tier — consistent with
+  "capable-dev-with-AI" being a genuinely different population from vibe-coding, which is exactly
+  why the classification keeps them apart. The blended "all organic AI" figure (0.42/KLOC over
+  564k LOC) is therefore an underread, dragged down by effective's size; the ai-*generated* tier is
+  the honest AI-vibe-coding number.
+- **curated (teardown) is highest (4.97/KLOC) but must not be read as an AI-frequency signal** —
+  its shapes are authored to demonstrate bugs, not organic. It is reported and bucketed separately.
+
+## #413's core question: which of the 17 measured-zero YES entries now fire?
+
+Of the 17 YES entries that measured zero across all six original (mostly-professional) repos,
+**9 fire on the AI/non-professional tier** — 8 of them on organic AI code, 1 only on the curated
+repo. Measured 2026-07-18:
+
+| Entry | Shape | Count | Repos (all AI-authored) |
+|---|---|---:|---|
+| 24 | composite Date.now() + Math.random() ids | 5 matches | cravab=5 |
+| 98 | markdown→HTML via regex replaces | 5 matches | cravab=5 |
+| 30 | month/day-name literal arrays | 5 matches | cravab=1, effective=4 |
+| 27 | non-crypto string-hash loop (djb2/FNV/java-31) | 2 files | effective=2 |
+| 61 | hand-rolled ErrorBoundary class | 2 files | cravab=1, effective=1 |
+| 3 | unique via filter + indexOf self-compare | 1 match | cravab=1 |
+| 53 | JWT payload decode by hand | 1 match | flori-web=1 |
+| 89 | thousands-separator lookahead regex | 1 match | flori-web=1 |
+| 76 | Supabase storage public-URL concat | 3 matches | **teardown=3 (CURATED ONLY)** |
+
+Two catalogue-judgment calls the six-repo run had recorded as measured-zero are now vindicated on
+AI code: **53 (JWT decode by hand)** — the catalogue's "rampant in AI Supabase glue" — fires on
+flori-web; **76 (Supabase storage public-URL concat)** — "directly on-brand for the wedge" — fires,
+but ONLY on the curated teardown repo, so it stays unproven on *organic* AI code (an honest
+half-answer, not a graduation trigger). **23 (UUID-v4 template)** stayed zero everywhere.
+
+**Still zero on every non-professional repo (8):** 4, 11, 13, 16, 23, 44, 68, 95. These remain
+unrankable — a bigger or differently-sourced AI corpus would be needed to see them, if they occur
+at all.
+
+## Graduation candidates (measured evidence, deferred to a follow-up)
+
+Per #395's discipline, graduating an entry to a shipped detector requires the detector **plus**
+paired positive/negative fixtures — too much to fold into this measurement PR without diluting it.
+The measured evidence now exists to justify building these, in this order (organic-AI count,
+curated excluded):
+
+1. **24** — composite Date.now()+Math.random() ids (5, cravab) — a textbook non-crypto-id smell.
+2. **98** — markdown→HTML via regex replaces (5, cravab) — classic reinvention of a parser.
+3. **30** — month/day-name literal arrays (5: cravab+effective) — Intl.DateTimeFormat replacement.
+4. **61** — hand-rolled ErrorBoundary class (2: cravab+effective).
+5. **27** — non-crypto string-hash loop (2, effective).
+6. **3 / 53 / 89** — one organic-AI hit each; weakest evidence, build last if at all.
+
+Filed as a follow-up issue with these numbers; **entry 76 is explicitly NOT a graduation candidate
+yet** — its only evidence is the curated repo.
+
+## Follow-ups this measurement creates
+
+1. **Full corpus-drift baselines for the 4 new AI repos.** They are frequency-only today (no
+   M4/M5/M7/M8/M9/M10 baselines). Promoting any to a full `ExternalTarget` needs a measured scan +
+   triage per module — the heavier follow-up #413 deferred.
+2. **Graduation of the 5-6 candidates above** under the #395 fixture discipline (separate issue).
+3. **ATC and a wider organic-AI sample.** ATC is private (excluded here); the ai-generated tier is
+   3 repos. More organic vibe-coded repos on this exact stack (the AI code-gen platforms emit
+   Vite/React without committed Supabase migrations, so the pool is Cursor/Claude-assisted) would
+   tighten the 1.10/KLOC figure and give the 8 still-zero entries a chance to appear.

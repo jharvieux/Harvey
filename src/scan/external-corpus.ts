@@ -102,11 +102,27 @@ function formatMutationClaim(b: MutationBaseline): string {
   return `${b.mutationScore}% (${b.killed}/${b.valid} killed)${band} over ${scope} — a scoped subset, NOT a whole-repo coverage claim`;
 }
 
+// #413: authorship provenance of a corpus repo, classified by evidence (commit trailers, AI-tool
+// files like CLAUDE.md/.cursor/rules, comment style, contributor/release history) — NOT by naming
+// prior. This is metadata for the M6 hand-rolled-frequency measurement, which asks whether the
+// catalogue's "common in AI code" shapes actually appear more in AI-authored code than in
+// professional code. It does not touch the measured per-module drift baselines.
+//   - professional : org/maintained product, human contributors, no AI fingerprints
+//   - ai-assisted  : AI trailers/CLAUDE.md but a capable-dev population (real team, CI, no slop)
+//   - ai-generated : AI-authored MVP (Claude co-author / cursor rules driving the build), the
+//                    non-engineer vibe-coding population M6's wedge actually targets
+//   - unclear      : ambiguous evidence (recorded honestly, never forced into a tier)
+export type Provenance = "professional" | "ai-assisted" | "ai-generated" | "unclear";
+
 export interface ExternalTarget {
   slug: string; // local clone dir name used by the sweep + this file's baselines
   repo: string; // owner/name on GitHub
   commit: string; // pinned — baselines are only meaningful against this tree
   license: string;
+  // #413: authorship provenance (see Provenance above). Metadata only — the drift baselines below
+  // are unaffected. `provenanceNote` records the evidence the verdict rests on.
+  provenance: Provenance;
+  provenanceNote: string;
   // The security verdict from the 2026-07-12 sweep, as filed for responsible disclosure.
   // Kept alongside the quality baselines because #222's operator correction is explicit: this
   // corpus gates the WHOLE audit, not just security.
@@ -228,6 +244,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     repo: "JakeLeoDev/proposit",
     commit: "82838cef3606a176c4bca0af0587c5ea6b08d3a0",
     license: "MIT",
+    provenance: "ai-assisted",
+    provenanceNote: "#413: Co-Authored-By: Claude Opus 4.7 trailers + CLAUDE.md + .claude/commands/, but a real 2-dev team with a product site, full CI/governance and no slop — a capable-dev-with-AI population, distinct from vibe-coding.",
     securityVerdict: "1 Critical (world-readable invitation tokens), 2 High (invite acceptance trusts client userId; member self-escalation to admin)",
     disclosureIssue: 214,
     schemaPath: "supabase/migrations",
@@ -250,6 +268,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     repo: "vercel/nextjs-subscription-payments",
     commit: "bdd0813206e47e6b218d42f15a7976c8a0d3c3eb",
     license: "MIT",
+    provenance: "professional",
+    provenanceNote: "#413: Vercel official template, 7722★, 31 contributors (Lee Robinson, Stripe/Supabase engineers), 2020→2025, no AI files. One human 2024 refactor carries AI-style comments but the repo is human/professional.",
     securityVerdict: "1 Medium (client-controlled trial length -> arbitrarily long free subscription); otherwise sound — webhook sig verified, RLS scoped, service-role server-only",
     disclosureIssue: 215,
     schemaPath: "supabase/migrations",
@@ -271,6 +291,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     repo: "boxyhq/saas-starter-kit",
     commit: "abc9b686823cbfb4973c79bc36fea37a3244be6c",
     license: "Apache-2.0",
+    provenance: "professional",
+    provenanceNote: "#413: org product, 4868★, 39 contributors, 2022→2026, versioned releases, dependabot, no AI files.",
     securityVerdict: "1 Medium (team billing authz enforced only in UI), 1 Low (invite path bypasses the admins-cant-create-owners guard)",
     disclosureIssue: 216,
     m8: M8_CORPUS_CONFIGS.boxyhq,
@@ -302,6 +324,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     // demand instead of vendoring: distilling this repo's migration into targets/calibration, as
     // #222 proposed, would be copying unlicensed source.
     license: "none (no LICENSE file — all rights reserved)",
+    provenance: "unclear",
+    provenanceNote: "#413: leans professional — single-dump initial commit (a mild AI tell) but the cleanest code of the set, deliberate WHY-comments, no AI fingerprints/trailers. Genuinely ambiguous; recorded as unclear rather than forced into a tier.",
     securityVerdict: "1 Critical (any authed user self-joins any tenant as owner), 1 High (cross-tenant invitation tampering) — both confirmed dynamically against a local self-hosted clone",
     disclosureIssue: 217,
     schemaPath: "supabase/migrations",
@@ -324,6 +348,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     repo: "devtodollars/mvp-boilerplate",
     commit: "2aac5c2fcb45c35aa4a5f5eb9eb66645f0f84e70",
     license: "MIT",
+    provenance: "ai-generated",
+    provenanceNote: "#413: Co-Authored-By: Claude Opus 4.6 on recent commits, ships CLAUDE.md + agent-skills docs, AI over-commenting in original source. The corpus's clearest AI-generated data point among the six.",
     securityVerdict: "1 Low / latent (over-broad anon+authenticated grants on xmr_invoices, not exploitable today — RLS default-deny blocks it); base boilerplate otherwise sound, and the mechanical demo-key Criticals were the #210 FP",
     disclosureIssue: 218,
     // The app's own schema, not monero/supabase/migrations (the vendored payment-fork mirror
@@ -351,6 +377,8 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     repo: "makerkit/nextjs-saas-starter-kit-lite",
     commit: "37def9c20b01a3514cf69b5b3383bef3e5ffbcb9",
     license: "MIT",
+    provenance: "professional",
+    provenanceNote: "#413: free tier of the commercial Makerkit product — Turborepo, versioned CHANGELOG, renovate/syncpack, no AI files.",
     securityVerdict: "1 Low (unauthenticated open redirect via the auth-callback `next` param); otherwise sound — RLS scoped on read AND write, service-role server-only",
     disclosureIssue: 219,
     // Monorepo: the app lives under apps/web, not the repo root.
