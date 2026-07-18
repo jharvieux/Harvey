@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, MODULES_NEVER_EXECUTED, type AuditModule } from "./audit-coverage.js";
 import { assertRegistryComplete, formatFailures, type ModuleRunner, type ProbeOutcome, type RunContext } from "./audit-runner.js";
@@ -202,11 +203,37 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     expect(m10?.reason).toMatch(/schema tier only/);
   });
 
-  it("M10 has nothing to classify with neither a DB nor migrations", () => {
-    const bare = ctx({ exists: (p) => !p.includes("migrations") });
+  it("M10 has nothing to classify with neither a DB nor any conventional schema layout", () => {
+    // #529: the probe now tries supabase/migrations, prisma/migrations, drizzle/, db/, schema.sql —
+    // so "nothing to classify" means none of them exist, and the reason lists what was probed.
+    const bare = ctx({ exists: (p) => !/(migrations|drizzle|\/db$|schema\.sql)/.test(p) });
     const m10 = runAudit(AUDIT_RUNNERS, bare).recorded.find((r) => r.module === "M10");
     expect(m10?.status).toBe("requires-live-run");
     expect(m10?.reason).toMatch(/nothing to classify/);
+    expect(m10?.reason).toMatch(/Probed:/);
+    expect(m10?.reason).toMatch(/prisma\/migrations/);
+  });
+
+  // #529: a non-Supabase target (Prisma/Drizzle/pg_dump) whose schema is not at supabase/migrations
+  // still gets real M10 schema classification, not a bare "nothing to classify".
+  it("M10 classifies a Prisma-layout target (prisma/migrations, no supabase/migrations)", () => {
+    const prismaOnly = ctx({ exists: (p) => !p.includes(join("supabase", "migrations")) });
+    const m10 = runAudit(AUDIT_RUNNERS, prismaOnly).recorded.find((r) => r.module === "M10");
+    expect(m10?.status).toBe("partial");
+    expect(m10?.detail).toMatch(/prisma[/\\]migrations/);
+  });
+
+  // #529: an explicit --schema hint (ctx.schemaHint) wins over the conventional-location probe.
+  it("M10 uses the --schema hint ahead of the conventional-location probe", () => {
+    const seen: string[] = [];
+    runAudit(AUDIT_RUNNERS, ctx({
+      schemaHint: "/given/schema.sql",
+      exec: (_c, argv) => {
+        if (argv.includes("pii-classify")) seen.push(argv[argv.indexOf("--schema") + 1]!);
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    }));
+    expect(seen).toContain("/given/schema.sql");
   });
 
   // The whole-audit shape of #229's original failure: a source-tier engagement. Every module is

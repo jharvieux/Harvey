@@ -480,29 +480,52 @@ const m9: ModuleRunner = { module: "M9", run: perApp(m9Run) };
 const M10_NOT_COLLECTED =
   "this run captured no findings (coverage-only, no --findings-out), so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (#436/#420)";
 
-// #506: the schema tier is per-app — each app can carry its own supabase/migrations. Runs against
-// the given app dir; `instance` is set only on a multi-app monorepo so a single-app target is one
-// untagged row exactly as before.
+// #529: pii-classify --schema accepts ANY directory of *.sql or a single .sql file, so M10's
+// schema tier is not limited to supabase/migrations. Probe the conventional schema locations in
+// priority order and classify the first that exists, so a non-Supabase target (Prisma/Drizzle/
+// pg_dump) gets real M10 classification instead of a bare "nothing to classify". schema.prisma
+// itself is Prisma-DSL, not SQL the parser reads, so we target prisma/migrations (the derived
+// migration.sql) — pii-classify's readSchemaSql recurses into it.
+const SCHEMA_CANDIDATE_SUBPATHS = [
+  join("supabase", "migrations"),
+  join("prisma", "migrations"),
+  "drizzle",
+  join("db", "migrations"),
+  "db",
+  "migrations",
+  "schema.sql",
+];
+
+// #506: the schema tier is per-app — each app can carry its own schema layout. Runs against the
+// given app dir; `instance` is set only on a multi-app monorepo so a single-app target is one
+// untagged row exactly as before. The optional --schema hint (ctx.schemaHint) wins over the probe.
 const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): ProbeOutcome => {
   const instance = instanceName ? { instance: instanceName } : {};
   const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
-  const migrations = join(appPath, "supabase", "migrations");
-  if (!ctx.exists(migrations)) return { status: "requires-live-run", reason: `no live DB and no migrations at ${migrations} — nothing to classify`, ...instance };
-  const detail = `pnpm pii-classify --schema ${migrations}`;
+  // The hint is a single path, so it applies only to the single-target run — never smeared across a
+  // monorepo's per-app fan-out, where each app probes its own conventional locations.
+  const hint = ctx.schemaHint && appPath === ctx.targetDir ? [ctx.schemaHint] : [];
+  const candidates = [...hint, ...SCHEMA_CANDIDATE_SUBPATHS.map((sub) => join(appPath, sub))];
+  const schema = candidates.find((c) => ctx.exists(c));
+  if (!schema) return { status: "requires-live-run", reason: `no live DB and no schema found — nothing to classify. Probed: ${candidates.join(", ")}. pii-classify --schema accepts a migrations dir (supabase/prisma/drizzle) or a schema.sql file (#529)`, ...instance };
+  const detail = `pnpm pii-classify --schema ${schema}`;
   const schemaOnly = "schema tier only — no live DB, so row-level data was not sampled";
-  const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", migrations, ...(outPath ? ["--out", outPath] : [])]);
+  const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", schema, ...(outPath ? ["--out", outPath] : [])]);
   if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify --schema exited non-zero: ${trimOut(output)}`, ...instance };
   if (!outPath) return { status: "partial", detail, reason: `${schemaOnly}. And ${M10_NOT_COLLECTED}`, ...instance };
   const findings = readCaptured(ctx, outPath);
   return findings.length ? { status: "partial", detail, reason: schemaOnly, findings, ...instance } : { status: "partial", detail, reason: schemaOnly, ...instance };
 };
 
-// The env-bound live tier: pii-classify reads SUPABASE_DB_URL from the inherited env, so it reaches
-// exactly the one project the operator pointed it at.
-const m10Live = (ctx: RunContext, instanceName?: string): ProbeOutcome => {
+// The env-bound live tier: with no per-DB URL threaded, pii-classify reads SUPABASE_DB_URL from the
+// inherited env, so it reaches exactly the one project the operator pointed it at. `dbUrl` (#520)
+// overlays a per-project SUPABASE_DB_URL onto the child env so a monorepo classifies EACH enumerated
+// project against its own DB, not only the env-configured one.
+const m10Live = (ctx: RunContext, instanceName?: string, dbUrl?: string): ProbeOutcome => {
   const instance = instanceName ? { instance: instanceName } : {};
-  const outPath = captureOut(ctx, "M10");
-  const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : [])]);
+  const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
+  const execOpts = dbUrl ? { env: { SUPABASE_DB_URL: dbUrl } } : undefined;
+  const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : [])], execOpts);
   if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify exited non-zero: ${trimOut(output)}`, ...instance };
   if (!outPath) return { status: "partial", detail: "pnpm pii-classify (live)", reason: `live classification ran, but ${M10_NOT_COLLECTED}`, ...instance };
   const findings = readCaptured(ctx, outPath);
