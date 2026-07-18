@@ -3,13 +3,14 @@
 //
 //   pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm]
 //       [--out coverage.json] [--findings-out engagement.json] [--meta meta.json]
-//       [--artifacts-dir dir] [--supabase <project-ref>]
+//       [--artifacts-dir dir] [--supabase <project-ref>]...
 //
 // --supabase (#434): the connected project ref for M7's DB advisor tier (`pnpm perf-scan <ref>`).
 // Only meaningful alongside --connected; SUPABASE_ACCESS_TOKEN still comes from the environment
 // (perf-scan reads it itself, and it travels through the inherited child-process env unchanged).
 // Without it, --connected is recorded intent but M7's advisor call has no project to reach, so M7
-// stays partial on the code tier.
+// stays partial on the code tier. REPEATABLE (#506): pass it once per Supabase project on a
+// monorepo — M7's advisor tier fans out over all of them, one ledger row each.
 //
 // --artifacts-dir (#416): where the out-of-orchestrator passes leave their dated results artifact
 // (<module>.pass.json — see docs/design/audit-pass-artifacts.md). When a fresh, target-matching
@@ -44,11 +45,13 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { assembleEngagementDocument } from "../audit-report.js";
+import { buildExecutionPlan, formatExecutionPlan } from "../audit-plan.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
 import { applyBaseline } from "../audit-diff.js";
 import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit-execution-log.js";
 import { formatFailures, runAudit, type RunContext } from "../audit-runner.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
+import { discoverTargets } from "../pentest/targets.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
@@ -66,11 +69,15 @@ const flagValue = (flag: string): string | undefined => {
   const i = args.indexOf(flag);
   return i >= 0 ? args[i + 1] : undefined;
 };
+const flagValues = (flag: string): string[] => args.flatMap((a, i) => (a === flag && args[i + 1] ? [args[i + 1]!] : []));
 const outPath = flagValue("--out");
 const findingsOut = flagValue("--findings-out");
 const metaPath = flagValue("--meta");
 const artifactsDir = flagValue("--artifacts-dir");
-const supabaseRef = flagValue("--supabase");
+// #506: --supabase is repeatable — one project ref per Supabase project on a monorepo. M7's advisor
+// tier fans out over all of them. supabaseRef keeps the single-ref field for back-compat.
+const supabaseRefsArg = flagValues("--supabase");
+const supabaseRef = supabaseRefsArg[0];
 // #457: a prior engagement's findings.json to diff this run against (resolved/persistent/new).
 const baselinePath = flagValue("--baseline");
 
@@ -87,6 +94,12 @@ if (baselinePath && !findingsOut) {
 }
 
 const targetDir = resolve(targetArg);
+
+// #506: enumerate the monorepo's apps (pnpm-workspace packages with a package.json) so the per-app
+// tiers (M4/M5/M9, M10 schema) run once per app and record one ledger row each. A single-app repo
+// enumerates one app and the tiers behave exactly as before (no per-instance rows).
+const appList = discoverTargets(targetDir).apps.map((a) => ({ name: a.name, path: a.path }));
+
 const env: EngagementEnv = {
   connected: args.includes("--connected"),
   dynamic: args.includes("--dynamic"),
@@ -127,15 +140,25 @@ const ctx: RunContext = {
   artifactsDir: artifactsDir ? resolve(artifactsDir) : undefined,
   now: Date.now(),
   supabaseRef,
+  supabaseRefs: supabaseRefsArg,
+  apps: appList,
 };
 
 console.log(`\nFull audit — ${targetDir}`);
-console.log(`Tiers in scope: source${env.connected ? " + connected" : ""}${env.dynamic ? " + dynamic" : ""}${env.llm ? " + llm" : ""}\n`);
+console.log(`Tiers in scope: source${env.connected ? " + connected" : ""}${env.dynamic ? " + dynamic" : ""}${env.llm ? " + llm" : ""}`);
+if (appList.length > 1) console.log(`Monorepo apps enumerated (per-app tiers fan out): ${appList.map((a) => a.name).join(", ")}`);
+if (supabaseRefsArg.length > 1) console.log(`Supabase projects enumerated (M7 advisors fan out): ${supabaseRefsArg.join(", ")}`);
+console.log("");
 
-const { recorded, failures, findings } = runAudit(AUDIT_RUNNERS, ctx);
+const { recorded, failures, findings, hotspots } = runAudit(AUDIT_RUNNERS, ctx);
 const report = buildAuditCoverage(recorded, env);
 
 console.log(formatAuditCoverage(report));
+
+// #502: the flagship passes run OUTSIDE this process; print their correct dependency order so the
+// M3 → scan-focus → M1-semantic → triage chain is not left to tribal knowledge (it was violated on
+// the ATC engagement, silently un-prioritizing the semantic review).
+console.log(`\n${formatExecutionPlan(buildExecutionPlan(env))}`);
 if (outPath) {
   writeFileSync(outPath, JSON.stringify(recorded, null, 2));
   console.log(`\nDerived coverage ledger → ${outPath}`);
@@ -147,7 +170,7 @@ if (outPath) {
 // scaffold a placeholder and say loudly that it must be filled before the report ships.
 if (findingsOut) {
   const meta: ReportMeta = metaPath ? (JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta) : placeholderMeta(targetDir);
-  let doc = assembleEngagementDocument(recorded, env, findings, meta);
+  let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots);
 
   // #457: diff against a prior engagement so the deliverable leads with progress. The baseline is a
   // full findings.json from a previous audit of the SAME client; we diff by finding identity
@@ -182,7 +205,7 @@ if (findingsOut) {
 // Written with --record so a dry run can't quietly retire an alarm; the diff is reviewed like any
 // other claim about what happened.
 if (args.includes("--record")) {
-  const ranModules = AUDIT_MODULES.filter((m) => recorded.find((r) => r.module === m)?.status === "ran");
+  const ranModules = AUDIT_MODULES.filter((m) => recorded.some((r) => r.module === m && r.status === "ran"));
   const updated = recordExecutions(AUDIT_MODULES, readExecutionLog(), ranModules, targetDir, new Date().toISOString().slice(0, 10), `pnpm exec tsx src/cli/run-audit.ts ${targetDir}`);
   writeFileSync(EXECUTION_LOG_PATH, `${JSON.stringify(updated, null, 2)}\n`);
   console.log(`\nExecution log updated → ${EXECUTION_LOG_PATH} (commit it: it is the evidence behind MODULES_NEVER_EXECUTED)`);

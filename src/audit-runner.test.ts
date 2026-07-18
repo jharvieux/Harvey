@@ -399,6 +399,17 @@ describe("M3 derives ran from a real vitals parse, never a no-op exit (#314)", (
     expect(m3?.status).toBe("requires-live-run");
     expect(m3?.reason).toMatch(/vitals/);
   });
+
+  // #515: M3 surfaces its top-K ranking so runAudit can hand it to the assembler for cross-module
+  // enrichment. The whole path: probe reads the M3 artifact's topK → runAudit result.hotspots.
+  it("surfaces the captured top-K hotspot ranking on the run result", () => {
+    const withM3Artifact = ctx({
+      captureDir: "/cap",
+      readArtifact: (p: string) => (p.endsWith("M3.json") ? { topK: ["core/checkout.ts", "core/pay.ts"], findings: [] } : undefined),
+    });
+    const { hotspots } = runAudit(AUDIT_RUNNERS, withM3Artifact);
+    expect(hotspots).toEqual(["core/checkout.ts", "core/pay.ts"]);
+  });
 });
 
 // #416: the out-of-orchestrator passes (M1 semantic/live, M2 dynamic, M3 vitals, M6 verdict) leave
@@ -428,6 +439,23 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     const withFindings = withPass("M1", { findings: [{ id: "TRIAGE-1" }] });
     const { findings } = runAudit(AUDIT_RUNNERS, withFindings);
     expect(findings.some((f) => (f as { id?: string }).id === "TRIAGE-1")).toBe(true);
+  });
+
+  // #502: the M3→M1 hotspot focus is a designed dependency — an un-focused semantic pass silently
+  // degrades review to un-prioritized, so the ledger detail must make its presence/absence visible.
+  it("M1 flags a semantic pass that ran WITHOUT an M3 hotspot focus", () => {
+    const noFocus = withPass("M1", { pass: "semantic" }); // hotspotFocus absent
+    const m1 = status(AUDIT_RUNNERS, noFocus, "M1");
+    expect(m1?.status).toBe("ran");
+    expect(m1?.detail).toMatch(/no M3 hotspot focus/i);
+  });
+
+  it("M1 records a semantic pass that WAS hotspot-focused", () => {
+    const focused = withPass("M1", { pass: "semantic", hotspotFocus: true });
+    const m1 = status(AUDIT_RUNNERS, focused, "M1");
+    expect(m1?.status).toBe("ran");
+    expect(m1?.detail).toMatch(/hotspot-focused/i);
+    expect(m1?.detail).not.toMatch(/WARNING/);
   });
 
   it("M2 reads ran when a fresh dynamic pen-test artifact exists — the reachable-stack evidence #356 wanted", () => {
@@ -497,6 +525,96 @@ describe("M10 captures its classification findings (#436)", () => {
     const m10 = status(AUDIT_RUNNERS, {}, "M10");
     expect(m10?.status).toBe("partial");
     expect(m10?.reason).toMatch(/not-collected, not clean/);
+  });
+});
+
+// #506: on a monorepo the per-app tiers (M4/M5/M9, M10 schema) and the per-DB tier (M7 advisors)
+// fan out — one probe run and one ledger row per enumerated instance. A single-app/single-DB target
+// enumerates one instance and behaves exactly as before (no per-instance rows).
+describe("monorepo per-instance fan-out (#506)", () => {
+  const apps = [
+    { name: "apps/main", path: "/target/apps/main" },
+    { name: "apps/rag", path: "/target/apps/rag" },
+  ];
+
+  it("M4/M5/M9 record one row per enumerated app, tagged with the app name", () => {
+    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps })).recorded;
+    for (const m of ["M4", "M5", "M9"] as const) {
+      const rows = rec.filter((r) => r.module === m);
+      expect(rows.map((r) => r.instance).sort()).toEqual(["apps/main", "apps/rag"]);
+    }
+  });
+
+  it("runs each per-app probe against that app's own directory, not the repo root", () => {
+    const seen: string[] = [];
+    runAudit(AUDIT_RUNNERS, ctx({
+      apps,
+      exec: (_c, argv) => {
+        if (argv.includes("quality-scan")) seen.push(argv[argv.indexOf("quality-scan") + 1]!);
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    }));
+    expect(seen).toEqual(expect.arrayContaining(["/target/apps/main", "/target/apps/rag"]));
+  });
+
+  it("an app missing node_modules is an explicit requires-live-run row for THAT app, never absent (M5)", () => {
+    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps, exists: (p) => p !== "/target/apps/rag/node_modules" })).recorded;
+    const m5 = rec.filter((r) => r.module === "M5");
+    expect(m5).toHaveLength(2);
+    expect(m5.find((r) => r.instance === "apps/rag")?.status).toBe("requires-live-run");
+    expect(m5.find((r) => r.instance === "apps/rag")?.reason).toMatch(/no node_modules/);
+    expect(m5.find((r) => r.instance === "apps/main")?.status).toBe("ran");
+  });
+
+  it("M7 advisors record one row per enumerated Supabase project", () => {
+    const m7 = runAudit(AUDIT_RUNNERS, ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRefs: ["proj-main", "proj-rag"],
+      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : { ok: true, output: cleanOutput(argv) }),
+    })).recorded.filter((r) => r.module === "M7");
+    expect(m7.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
+    expect(m7.every((r) => r.status === "ran")).toBe(true);
+  });
+
+  it("a failed advisor for one project is a partial row for THAT project, the other still ran", () => {
+    const m7 = runAudit(AUDIT_RUNNERS, ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRefs: ["proj-main", "proj-rag"],
+      exec: (_c, argv) => {
+        if (argv.includes("perf-scan")) return { ok: !argv.includes("proj-rag"), output: "advisors 500" };
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    })).recorded.filter((r) => r.module === "M7");
+    expect(m7.find((r) => r.instance === "proj-rag")?.status).toBe("partial");
+    expect(m7.find((r) => r.instance === "proj-main")?.status).toBe("ran");
+  });
+
+  it("M10 live tier names every extra Supabase project it could not reach, never dropping one", () => {
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRefs: ["proj-main", "proj-rag"],
+    })).recorded.filter((r) => r.module === "M10");
+    expect(m10.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
+    const rag = m10.find((r) => r.instance === "proj-rag");
+    expect(rag?.status).toBe("requires-live-run");
+    expect(rag?.reason).toMatch(/env-bound to one DB/);
+  });
+
+  it("M10 schema tier fans out one partial row per app", () => {
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({ apps })).recorded.filter((r) => r.module === "M10");
+    expect(m10.map((r) => r.instance).sort()).toEqual(["apps/main", "apps/rag"]);
+    expect(m10.every((r) => r.status === "partial")).toBe(true);
+  });
+
+  it("a single-app / single-DB target is unchanged — one untagged row per module", () => {
+    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps: [{ name: "root", path: "/target" }] })).recorded;
+    expect(rec.filter((r) => r.module === "M5")).toHaveLength(1);
+    expect(rec.find((r) => r.module === "M5")?.instance).toBeUndefined();
+  });
+
+  it("the whole per-instance ledger still passes the coverage gate with no gaps", () => {
+    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps })).recorded;
+    expect(buildAuditCoverage(rec, ctx().env).gaps).toEqual([]);
   });
 });
 

@@ -38,6 +38,9 @@ export interface CoverageRow {
   reason?: string;
   // What actually executed (command, tier).
   detail?: string;
+  // #506: which app/Supabase project this row covers, on a monorepo per-app/per-DB tier. Absent ⇒
+  // a whole-target row.
+  instance?: string;
 }
 
 export interface Finding {
@@ -89,6 +92,14 @@ export interface Finding {
   // invented at report time. Absent on any finding with no defensible mapping.
   cwe?: string[];
   owasp?: string[];
+  // #515: cross-module hotspot enrichment. Set at assembly time when a finding's location sits on
+  // an M3-ranked hotspot (high churn × complexity × coupling). onHotspot up-ranks it in the report's
+  // cross-module ordering; hotspotRank is the file's 1-based position in the top-K (1 = hottest).
+  // One mechanism, every module benefits — most valuably M6 (a hand-rolled reinvention on a hot file
+  // matters far more than the same pattern on a stable leaf). Absent ⇒ not on a ranked hotspot, or no
+  // M3 ranking was available this run.
+  onHotspot?: boolean;
+  hotspotRank?: number;
 }
 
 // Engagement baseline diff summary (#457), attached to the deliverable when a --baseline is
@@ -172,6 +183,7 @@ function validateCoverage(coverage: unknown, errors: string[]): void {
       errors.push(`${at}.status: "${String(row.status)}" not one of ${COVERAGE_STATUSES.join("/")}`);
     }
     if (row.detail !== undefined && typeof row.detail !== "string") errors.push(`${at}.detail: expected string`);
+    if (row.instance !== undefined && typeof row.instance !== "string") errors.push(`${at}.instance: expected string`);
     // A non-"ran" row without a reason is a silent skip wearing a status — the exact failure the
     // ledger exists to surface. Mirrors buildAuditCoverage's gap rule (src/audit-coverage.ts).
     if (row.status !== "ran" && (typeof row.reason !== "string" || row.reason.trim() === "")) {
@@ -287,6 +299,12 @@ export function validateFindings(data: unknown): ValidationResult {
       if (v !== undefined && (!Array.isArray(v) || v.some((id) => typeof id !== "string"))) {
         errors.push(`${at}.${k}: expected an array of strings`);
       }
+    }
+    if (f.onHotspot !== undefined && typeof f.onHotspot !== "boolean") {
+      errors.push(`${at}.onHotspot: expected boolean`);
+    }
+    if (f.hotspotRank !== undefined && (typeof f.hotspotRank !== "number" || !Number.isInteger(f.hotspotRank) || f.hotspotRank < 1)) {
+      errors.push(`${at}.hotspotRank: expected a positive integer (1-based hotspot rank)`);
     }
   });
 
