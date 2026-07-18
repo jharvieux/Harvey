@@ -11,13 +11,13 @@ The productized audit service extracted from `jharvieux/atc` (ATC issue 1527, no
 
 ## The audit — full scope, how to run it, and the coverage guard
 
-**This is a COMPLETE codebase-health audit, not a security scan.** Security (M1/M2) is the marketing wedge and leads the report, but the *deliverable is all ten modules*. Running a security-only (or any ad-hoc) subset is a defect — it has happened; don't repeat it. Every engagement accounts for all ten modules against every enumerated target. Authoritative scope: `docs/audit-modules.md`.
+**This is a COMPLETE codebase-health audit, not a security scan.** All ten modules (M1–M10) carry **equal weight** in the deliverable — none is the "lead," none is secondary, and none may be prioritized over the others when executing. Running a security-only (or any ad-hoc) subset — or scoping any single module's run to only its security-relevant portion — is a defect; it has happened, don't repeat it. Every engagement accounts for all ten modules against every enumerated target. Authoritative scope: `docs/audit-modules.md`.
 
 ### The ten modules and how to run each
 
 | # | Module | Run it with | Tier / prereq |
 |---|--------|-------------|---------------|
-| M1 | Multi-tenant security (lead) | `pnpm quick-scan --dir <t>` (mechanical) + `pnpm exec tsx src/cli/scan.ts --supabase <ref\|local>` (config) + LLM `/vuln-scan --extra docs/scan-extras.txt --extra <pnpm scan-focus M3-hotspots.txt>` → `/triage --fp-rules docs/fp-rules.txt` (semantic; the M3 hotspot focus prioritizes review on the hottest files, #442) + `pnpm detect-deeper` (live RLS/policy review) | free → connected → paid-LLM |
+| M1 | Multi-tenant security | `pnpm quick-scan --dir <t>` (mechanical) + `pnpm exec tsx src/cli/scan.ts --supabase <ref\|local>` (config) + LLM `/vuln-scan --extra docs/scan-extras.txt --extra <pnpm scan-focus M3-hotspots.txt>` → `/triage --fp-rules docs/fp-rules.txt` (semantic; the M3 hotspot focus prioritizes review on the hottest files, #442) + `pnpm detect-deeper` (live RLS/policy review) | free → connected → paid-LLM |
 | M2 | Local pen-test (dynamic) | `pnpm exec tsx src/cli/pentest.ts` against a local `supabase start` stack seeded with two tenants | needs live stack; `assertComplete` gates target coverage |
 | M3 | Hotspot analysis | `pnpm exec tsx src/cli/hotspot-scan.ts <t>` — wraps `vitals_cli.py report --json` (pass `--report <capture>` when vitals is off PATH, #314; `--hotspots-out` feeds M8's `--hotspots` and M6 `simplify-scan --hotspots`, #442) | external plugin; run, don't build |
 | M4 | Duplication | `pnpm check:duplication` or `pnpm quality-scan <t>` (jscpd + diverged-clone near-miss pass, #360) | source-only |
