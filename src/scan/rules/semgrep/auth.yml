@@ -213,7 +213,15 @@ rules:
       # timingSafeEqual are fixed names, not verb+token: a constant-time comparison against a
       # server-held secret (an admin header-secret check) IS the auth check by convention, with no
       # auth-ish token in the name for the weak-verb bucket to key off.
-      - pattern-not-regex: (?i)\b((assert|require|ensure|authenticate|authorize|guard)[a-z0-9_]*|(?=[a-z0-9_]*(check|verify|with))[a-z0-9_]*(admin|permission|auth|session|tenant|role|access|user|login|signature|jwt|webhook|hmac|token)[a-z0-9_]*|constantTimeEqual|timingSafeEqual)\s*\(
+      # #562: the bare session-accessor names (getUser/getSession/getServerSession/getCurrentUser/
+      # getAuthUser/getAuthenticatedUser/auth) are fixed guard names too. The stock
+      # supabase.auth.getUser() METHOD call is already suppressed by the pattern-not-inside blocks
+      # above, but a project that wraps it in a plain top-level helper -- `const user = getUser(req)`
+      # (the vandyand/saas-security-teardown shape) -- reads the session just as authoritatively and
+      # must not be asserted "no auth-check call anywhere". "auth" bare covers the next-auth v5
+      # `auth()` accessor. Reading the session is a SEPARATE axis from whether the caller is
+      # AUTHORIZED for this specific privileged action (harvey-authed-no-role-check).
+      - pattern-not-regex: (?i)\b((assert|require|ensure|authenticate|authorize|guard)[a-z0-9_]*|(?=[a-z0-9_]*(check|verify|with))[a-z0-9_]*(admin|permission|auth|session|tenant|role|access|user|login|signature|jwt|webhook|hmac|token)[a-z0-9_]*|constantTimeEqual|timingSafeEqual|getUser|getSession|getServerSession|getCurrentUser|getAuthUser|getAuthenticatedUser|auth)\s*\(
 
   # IDOR/BOLA shape: an id from the request (req.query/req.params) is the SOLE predicate on a
   # Supabase query — .eq('id', $ID) with nothing else chained. The sink is anchored to a full
@@ -358,3 +366,100 @@ rules:
                 return true;
                 ...
               }
+
+  # #560: application/seed/setup code creates a Supabase Storage bucket with `public: true`. A
+  # public bucket skips storage RLS for reads, so every object in it is world-readable by URL
+  # regardless of any policy. On vandyand/saas-security-teardown this made KYC/patient documents
+  # (scripts/seed.mjs: createBucket("documents", { public: true })) globally readable. This is the
+  # STATIC, source-only sibling of the connected-tier live check checkPublicBucketsWithNoPolicies
+  # (src/scan/supabase-config.ts), which reads storage.buckets from a live DB; that live check is
+  # never fed on the source or autonomous-dynamic paths (the M2 stand-up neutralizes the client
+  # seed, so scripts/seed.mjs never runs and the bucket is never created to be observed). Review
+  # tier / High severity: `public: true` is a definite fact, but whether the bucket legitimately
+  # holds public assets (avatars, marketing images) vs. private data is not statically knowable --
+  # confirm what the bucket stores. Matches both createBucket(id, {public:true}) and the
+  # single-options-object form.
+  - id: harvey-public-bucket
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      This code creates a Supabase Storage bucket with public: true. A public bucket skips storage
+      RLS for reads — every object in it is readable by anyone who knows or can guess the URL,
+      regardless of policies. If it holds private/user data (documents, uploads, PII), this is a
+      broken object-authorization exposure. Set the bucket private and serve via signed URLs, or
+      confirm it only holds intentionally-public assets.
+    patterns:
+      - pattern-either:
+          - pattern: "$X.createBucket($NAME, { ..., public: true, ... })"
+          - pattern: "$X.createBucket($NAME, { public: true })"
+          - pattern: "$X.createBucket({ ..., public: true, ... })"
+          - pattern: "$X.createBucket({ public: true })"
+
+  # #561: a privileged/admin route handler AUTHENTICATES (reads the session via getUser/getSession)
+  # but performs NO role/authorization check before reading or returning privileged data — broken
+  # function-level authorization (OWASP API5 / BFLA). Distinct from harvey-route-noauth, which is
+  # about a route reachable with NO session at all: here the route correctly 401s an anonymous
+  # caller, but any AUTHENTICATED lower-privilege member passes. This is the real shape behind
+  # vandyand #5 (app/api/admin/revenue/route.ts: getUser() then returns CFO revenue with no role
+  # gate), which was previously only flagged by the filename+missing-auth-hint heuristic
+  # (Unauthenticated debug/admin route) — a false rationale, since the route DOES authenticate.
+  # Scoped to admin/internal/privileged path segments to hold precision (an authenticated route
+  # with no role check is normal for a user reading their OWN data; it is a defect only for a
+  # privileged surface). The pattern-not-regex clears any handler that references a role/authz gate
+  # (a `.role` read, is_admin, requireRole/assertAdmin/authorize/permission, a 403/forbidden
+  # response). Review tier / High severity — same negative-precision caveat as the rest of this file.
+  - id: harvey-authed-no-role-check
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    paths:
+      include:
+        - "*admin*"
+        - "*internal*"
+        - "*privileged*"
+    message: >
+      This admin/privileged route reads the session (getUser/getSession) but performs no
+      role/permission check before returning privileged data — broken function-level authorization
+      (OWASP API5). It correctly rejects anonymous callers, but any authenticated lower-privilege
+      user (e.g. a member) reaches it. Add a server-side role/permission gate after authenticating.
+    patterns:
+      - pattern: |
+          export async function $M($REQ) {
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(GET|POST|PUT|DELETE|PATCH)$
+      - pattern-either:
+          - pattern-inside: |
+              export async function $M($REQ) {
+                ...
+                getUser(...)
+                ...
+              }
+          - pattern-inside: |
+              export async function $M($REQ) {
+                ...
+                $S.auth.getUser(...)
+                ...
+              }
+          - pattern-inside: |
+              export async function $M($REQ) {
+                ...
+                getSession(...)
+                ...
+              }
+          - pattern-inside: |
+              export async function $M($REQ) {
+                ...
+                $S.auth.getSession(...)
+                ...
+              }
+      - pattern-not-regex: (?i)(is_?admin|hasrole|requirerole|checkrole|assertrole|assertadmin|requireadmin|ensureadmin|\bauthorize|\.role\b|permission|forbidden|\b403\b)
