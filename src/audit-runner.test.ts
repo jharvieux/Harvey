@@ -241,6 +241,23 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m8?.reason).toMatch(/no automated test suite/i);
   });
 
+  // #504: the coverage-honesty guard — a scoped mutation run emits its summary AND a partial
+  // moduleRecord, and the moduleRecord must win. A subset score that read `ran` is exactly how
+  // the ATC run silently invalidated M8.
+  it("M8 — a deliberately-scoped mutation run (summary + moduleRecord) scores partial with its scope, never ran", () => {
+    const scopedRun = {
+      exec: (_c: string, argv: string[]) =>
+        argv.includes("mutation-scan")
+          ? { ok: true, output: JSON.stringify({ summary: { overall: { mutationScore: 91.2 } }, reportRows: [], moduleRecord: { status: "partial", note: "Scoped mutation run — run covered 263 file(s) but the configured mutate globs match 812 — 549 file(s) were never mutated (e.g. src/other.ts). A subset measurement is not M8's result: recorded partial, never ran (#504)." } }) }
+          : { ok: true, output: cleanOutput(argv) },
+    };
+    const m8 = status(AUDIT_RUNNERS, scopedRun, "M8");
+    expect(m8?.status).not.toBe("ran");
+    expect(m8?.status).toBe("partial");
+    expect(m8?.reason).toMatch(/Scoped mutation run/);
+    expect(m8?.reason).toMatch(/263 file/);
+  });
+
   // #503: a failed Stryker dry run (the target's own suite failing unmutated) emits the same
   // machine-readable moduleRecord shape — the probe must surface its distinct reason, not a
   // generic requires-live-run and never a silent zero.

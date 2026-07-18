@@ -434,6 +434,101 @@ export function dryRunFailureModuleRecord(detail: string, env: readonly Detected
   };
 }
 
+// #504: nothing prevented a mutation run over PART of the configured mutate scope (a --mutate
+// subset, an alternate scoped config, or a replayed scoped report) from being treated as the
+// module's measurement — a subset score looks exactly like a whole-suite number. The ATC run
+// scoped Stryker to 263 files and reported the result as M8; that silently invalidated the
+// module, the same class as the exit-0-as-evidence bugs (#350). verifyMutationScope compares the
+// file set the report actually covers against the files matched by the CONFIGURED mutate globs
+// (the target's own config), so a scoped run is recorded partial with its scope — never `ran`.
+//
+// The matcher supports the glob subset real Stryker configs use (`**`, `*`, `?`, `{a,b}` braces,
+// leading-`!` negation). Anything wider (extglobs, character classes) makes the scope
+// unverifiable — recorded as such, never guessed at.
+const UNSUPPORTED_GLOB = /[[\]]|[!+@*?]\(/;
+
+function expandBraces(glob: string): string[] {
+  const m = glob.match(/\{([^{}]*)\}/);
+  if (!m) return [glob];
+  return m[1]!.split(",").flatMap((alt) => expandBraces(glob.replace(m[0], alt)));
+}
+
+function globToRegExp(glob: string): RegExp {
+  const source = glob
+    .replace(/[.+^$()|\\]/g, "\\$&")
+    .replace(/\*\*\//g, "\u0001")
+    .replace(/\*\*/g, "\u0002")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/\u0001/g, "(?:[^/]+/)*")
+    .replace(/\u0002/g, ".*");
+  return new RegExp(`^${source}$`);
+}
+
+function matchesMutateGlobs(path: string, globs: readonly string[]): boolean {
+  let included = false;
+  for (const g of globs) {
+    const negated = g.startsWith("!");
+    const raw = negated ? g.slice(1) : g;
+    if (expandBraces(raw).some((e) => globToRegExp(e).test(path))) included = !negated;
+  }
+  return included;
+}
+
+export interface MutationScope {
+  mutatedFileCount: number;
+  configuredGlobs?: string[];
+  expectedFileCount?: number;
+  missingCount?: number;
+  // Sample (max 5) of files the configured globs match but the report never covered.
+  missing?: string[];
+  // False when the configured scope could not be statically read (non-JSON config, no mutate
+  // array, unsupported glob syntax) — the run is not KNOWN scoped, but full coverage is unproven.
+  verified: boolean;
+  scoped: boolean;
+  note: string;
+}
+
+export function verifyMutationScope(
+  reportFiles: readonly string[],
+  mutateGlobs: readonly string[] | undefined,
+  sourceFiles: readonly string[],
+): MutationScope {
+  const base = { mutatedFileCount: reportFiles.length };
+  if (!mutateGlobs || mutateGlobs.length === 0) {
+    return { ...base, verified: false, scoped: false, note: "configured mutate scope not statically readable (no JSON Stryker config with a mutate array) — full-scope coverage is unverified, treat the score as covering only the listed files" };
+  }
+  const unsupported = mutateGlobs.find((g) => UNSUPPORTED_GLOB.test(g));
+  if (unsupported) {
+    return { ...base, configuredGlobs: [...mutateGlobs], verified: false, scoped: false, note: `configured mutate glob "${unsupported}" uses syntax this scope check cannot evaluate — full-scope coverage is unverified` };
+  }
+  // .d.ts files carry no executable code, so Stryker configs rarely bother excluding them; leaving
+  // them in `expected` would flag honest full runs as scoped.
+  const expected = sourceFiles.filter((f) => !f.endsWith(".d.ts") && matchesMutateGlobs(f, mutateGlobs));
+  const covered = new Set(reportFiles);
+  const missing = expected.filter((f) => !covered.has(f));
+  if (missing.length > 0) {
+    return {
+      ...base,
+      configuredGlobs: [...mutateGlobs],
+      expectedFileCount: expected.length,
+      missingCount: missing.length,
+      missing: missing.slice(0, 5),
+      verified: true,
+      scoped: true,
+      note: `run covered ${reportFiles.length} file(s) but the configured mutate globs match ${expected.length} — ${missing.length} file(s) were never mutated (e.g. ${missing.slice(0, 3).join(", ")})`,
+    };
+  }
+  return { ...base, configuredGlobs: [...mutateGlobs], expectedFileCount: expected.length, verified: true, scoped: false, note: `run covered all ${expected.length} file(s) matched by the configured mutate globs` };
+}
+
+export function scopedRunModuleRecord(scope: MutationScope): { status: "partial"; note: string } {
+  return {
+    status: "partial",
+    note: `Scoped mutation run — ${scope.note}. A subset measurement is not M8's result: recorded partial, never ran (#504). Re-run over the full configured mutate scope for the module's measurement.`,
+  };
+}
+
 // #435: a real Stryker run's { summary, reportRows } carries no report-schema Finding[], so it
 // contributed nothing to the engagement deliverable — only the no-test-suite branch's M8-00 did
 // (#224/#420). Surviving mutants are noisy at the individual-mutant level (a repo can have hundreds),

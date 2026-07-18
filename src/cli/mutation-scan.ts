@@ -40,7 +40,7 @@
 
 import { execSync, execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceInput } from "../detectors/common.js";
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
 import {
@@ -52,9 +52,11 @@ import {
   dryRunFailureModuleRecord,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
+  scopedRunModuleRecord,
   summarizeMutationReport,
   survivingMutantFindings,
   toReportRows,
+  verifyMutationScope,
   type DetectedEnvVar,
   type PackageJsonForTestDetection,
   type StrykerReport,
@@ -331,10 +333,45 @@ for (const b of summary.mutatorBreakdown.filter((x) => x.denialBoundaryConcentra
   console.error(`⚠ ${b.file}: ${b.boundarySurvivors}/${b.boundarySurvivors + b.otherSurvivors} survivors are boundary/negation mutants (ConditionalExpression/EqualityOperator/BooleanLiteral) — denial/boundary path looks untested`);
 }
 
+// #504: verify the run covered the CONFIGURED mutate scope — a scoped subset (an alternate
+// config, a --mutate override, or a replayed scoped report) must be recorded partial with its
+// scope, never presented as the module's measurement. The reference scope is the target's own
+// default config when one exists (the "configured" scope even when this run used --config or a
+// scaffolded config); statically readable only from a JSON config's mutate array.
+function readMutateGlobs(cfgPath: string | undefined): string[] | undefined {
+  if (!cfgPath || !cfgPath.endsWith(".json")) return undefined;
+  try {
+    const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as { mutate?: unknown };
+    return Array.isArray(cfg.mutate) && cfg.mutate.every((g) => typeof g === "string") ? (cfg.mutate as string[]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const SOURCE_PATH = /\.([cm]?[jt]s|[jt]sx)$/;
+const toTargetRelative = (file: string): string => (isAbsolute(file) ? relative(targetDir, file) : file).split(sep).join("/");
+
+const referenceConfigPath = defaultConfigPath ?? effectiveConfigPath;
+const scope = verifyMutationScope(
+  Object.keys(report.files).map(toTargetRelative),
+  readMutateGlobs(referenceConfigPath),
+  walkRelPaths(targetDir).filter((p) => SOURCE_PATH.test(p)),
+);
+console.error(`M8 mutate scope (#504): ${scope.note}`);
+
 // #435: findings from the denial/boundary-concentration mapper — a real Stryker run's survivors
 // contribute report-schema findings the same way the no-test-suite branch's M8-00 already does.
 const findings = survivingMutantFindings(summary);
-const output = { summary, reportRows: toReportRows(summary), findings };
+const output = {
+  summary,
+  reportRows: toReportRows(summary),
+  findings,
+  scope,
+  // #504: a scoped run carries the machine-readable partial verdict alongside its summary, so the
+  // M8 probe records partial-with-scope instead of banking the subset score as `ran`.
+  ...(scope.scoped ? { moduleRecord: scopedRunModuleRecord(scope) } : {}),
+};
+if (scope.scoped) console.error(`⚠ M8 coverage: partial (scoped mutation run, #504) — this score is a subset measurement, not the module's result.`);
 const json = JSON.stringify(output, null, 2);
 if (outPath) {
   writeFileSync(outPath, json + "\n");

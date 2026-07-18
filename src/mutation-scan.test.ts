@@ -10,9 +10,11 @@ import {
   mutationScore,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
+  scopedRunModuleRecord,
   summarizeMutationReport,
   survivingMutantFindings,
   toReportRows,
+  verifyMutationScope,
   type StrykerMutant,
   type StrykerReport,
 } from "./mutation-scan.js";
@@ -391,6 +393,60 @@ describe("noTestSuiteFinding / noTestSuiteModuleRecord", () => {
     const record = noTestSuiteModuleRecord("no package.json found");
     expect(record).toMatchObject({ status: "partial" });
     expect(record.note).toContain("no package.json found");
+  });
+});
+
+describe("verifyMutationScope (#504)", () => {
+  const SOURCES = ["src/auth.ts", "src/billing.ts", "src/util/dates.ts", "src/types.d.ts", "scripts/build.ts", "src/auth.test.ts"];
+  const GLOBS = ["src/**/*.ts", "!**/*.test.ts"];
+
+  it("verifies a run that covered every file the configured mutate globs match", () => {
+    const scope = verifyMutationScope(["src/auth.ts", "src/billing.ts", "src/util/dates.ts"], GLOBS, SOURCES);
+    expect(scope).toMatchObject({ verified: true, scoped: false, expectedFileCount: 3 });
+  });
+
+  it("flags a subset run as scoped, naming the count and the missing files — the ATC 263-file case in miniature", () => {
+    const scope = verifyMutationScope(["src/auth.ts"], GLOBS, SOURCES);
+    expect(scope.scoped).toBe(true);
+    expect(scope.missingCount).toBe(2);
+    expect(scope.missing).toEqual(["src/billing.ts", "src/util/dates.ts"]);
+    expect(scope.note).toContain("src/billing.ts");
+  });
+
+  it("excludes .d.ts files from the expected set — no executable code, no mutants, no false scoping", () => {
+    const scope = verifyMutationScope(["src/auth.ts", "src/billing.ts", "src/util/dates.ts"], ["src/**/*.ts", "!**/*.test.ts"], SOURCES);
+    expect(scope.scoped).toBe(false);
+  });
+
+  it("respects negation globs — test files the config excludes are not expected", () => {
+    const scope = verifyMutationScope(["src/auth.ts", "src/billing.ts", "src/util/dates.ts"], GLOBS, SOURCES);
+    expect(scope.scoped).toBe(false);
+  });
+
+  it("expands brace alternations like real Stryker configs use", () => {
+    const scope = verifyMutationScope(["src/auth.ts"], ["{src,lib}/**/*.{ts,tsx}", "!**/*.test.ts", "!**/*.d.ts"], ["src/auth.ts", "lib/x.tsx"]);
+    expect(scope.scoped).toBe(true);
+    expect(scope.missing).toEqual(["lib/x.tsx"]);
+  });
+
+  it("reports unverifiable (never guessing) when there are no statically readable mutate globs", () => {
+    const scope = verifyMutationScope(["src/auth.ts"], undefined, SOURCES);
+    expect(scope).toMatchObject({ verified: false, scoped: false });
+    expect(scope.note).toMatch(/not statically readable/);
+  });
+
+  it("reports unverifiable on glob syntax it cannot evaluate, naming the glob", () => {
+    const scope = verifyMutationScope(["src/auth.ts"], ["src/**/!(*.spec).ts"], SOURCES);
+    expect(scope).toMatchObject({ verified: false, scoped: false });
+    expect(scope.note).toContain("!(*.spec)");
+  });
+
+  it("scopedRunModuleRecord is partial and says a subset is never the module's measurement", () => {
+    const scope = verifyMutationScope(["src/auth.ts"], GLOBS, SOURCES);
+    const record = scopedRunModuleRecord(scope);
+    expect(record.status).toBe("partial");
+    expect(record.note).toMatch(/never ran \(#504\)/);
+    expect(record.note).toContain("src/billing.ts");
   });
 });
 
