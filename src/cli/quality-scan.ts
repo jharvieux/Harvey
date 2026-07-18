@@ -9,13 +9,24 @@
 // #505: jscpd and knip hung indefinitely (0% CPU, no output, >16 min) run over a whole multi-app
 // monorepo — knip in particular got stuck in its own workspace-resolution stage when pointed at a
 // root it doesn't recognize as one package. Per-app scoped runs completed in ~1 min each. Fix: run
-// both tools PER WORKSPACE — discovered from the target's pnpm-workspace.yaml / package.json
-// workspaces field via the same enumeration src/pentest/targets.ts already uses for M2 target
-// coverage (a target with no workspace file still gets exactly one scope, its own root, so a
-// plain non-monorepo target's behavior and output are unchanged) — with a hard per-invocation
-// timeout. A workspace that times out or crashes never takes the whole run down with it: it's
-// recorded as a disclosed coverage gap (jscpdUnavailableFinding / knipUnavailableFinding)
-// alongside whatever the other workspaces produced — partial, not a silent stall or a silent skip.
+// KNIP per workspace — discovered from the target's pnpm-workspace.yaml / package.json workspaces
+// field via the same enumeration src/pentest/targets.ts already uses for M2 target coverage (a
+// target with no workspace file still gets exactly one scope, its own root, so a plain
+// non-monorepo target's behavior and output are unchanged) — with a hard per-invocation timeout. A
+// workspace that times out or crashes never takes the whole run down with it: it's recorded as a
+// disclosed coverage gap (knipUnavailableFinding) alongside whatever the other workspaces
+// produced — partial, not a silent stall or a silent skip.
+//
+// #544: jscpd, however, runs WHOLE-REPO. #519 swept it into the per-workspace change alongside
+// knip, but jscpd is a text-based clone detector with NO workspace-resolution stage — it never hit
+// the hang (measured: 1.9s over the whole saas-lite monorepo), and whole-repo is the CORRECT scope
+// for duplication: a block copy-pasted ACROSS workspaces (a util duplicated between packages/shared
+// and apps/web instead of imported) is exactly the cross-package maintenance signal M4 exists to
+// surface, and per-workspace scoping structurally cannot see it. Per-workspace jscpd also silently
+// dropped every workspace the shared discoverTargets glob can't expand (saas-lite's `packages/**`
+// double-star) with no gap disclosure — the silent omission the coverage guard forbids. The hard
+// timeout still guards a pathological tree: a jscpd that does hang is SIGKILL'd and disclosed as an
+// M4-99 gap, never a silent under-count.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -193,25 +204,21 @@ const jscpdGaps: ScanGap[] = [];
 const knipReports: KnipReport[] = [];
 const knipGaps: ScanGap[] = [];
 
+// #544: one whole-repo jscpd pass — paths already come back relative to targetDir, so no
+// per-workspace re-anchoring is needed. See the header for why duplication is measured whole-repo.
+try {
+  jscpdReports.push(runJscpd(targetDir));
+} catch (err) {
+  const reason = gapReason(err);
+  jscpdGaps.push({ scope: "(whole repo)", reason });
+  console.error(`⚠ jscpd ${isTimeout(err) ? "timed out" : "failed"} on the whole repo — M4 coverage incomplete: ${reason}`);
+}
+
+// #223/#505: knip has no dependency on M4 and runs per workspace — a knip gap on one workspace
+// must not cost any other workspace's (or jscpd's) findings.
 for (const scope of scopes) {
   const label = scopeLabel(scope);
   const workspaceRel = relative(targetDir, scope);
-
-  try {
-    const report = runJscpd(scope);
-    for (const dup of report.duplicates) {
-      dup.firstFile.name = prefixed(workspaceRel, dup.firstFile.name);
-      dup.secondFile.name = prefixed(workspaceRel, dup.secondFile.name);
-    }
-    jscpdReports.push(report);
-  } catch (err) {
-    const reason = gapReason(err);
-    jscpdGaps.push({ scope: label, reason });
-    console.error(`⚠ jscpd ${isTimeout(err) ? "timed out" : "failed"} on ${label} — M4 coverage incomplete for this scope: ${reason}`);
-  }
-
-  // #223: M4 has no dependency on M5 — a knip gap on one workspace must not cost that workspace's
-  // (or any other workspace's) jscpd findings.
   try {
     const report = runKnip(scope);
     report.files = report.files.map((f) => prefixed(workspaceRel, f));
@@ -255,7 +262,7 @@ if (jscpdGaps.length) findings.push(jscpdUnavailableFinding(jscpdGaps.map((g) =>
 const dup = duplicationSummary(jscpdReport);
 console.error(
   `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s), ${dup.subThresholdCloneCount} sub-threshold small clone(s) disclosed in M4-00 (#365), ${divergedFindings.length} diverged security-path clone pair(s) (#360, review tier)` +
-    (jscpdGaps.length ? `, ${jscpdGaps.length}/${scopes.length} scope(s) incomplete (#505, see M4-99)` : ""),
+    (jscpdGaps.length ? `, whole-repo scan incomplete (#544, see M4-99)` : ""),
 );
 if (knipReport) {
   console.error(
