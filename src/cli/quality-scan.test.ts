@@ -78,4 +78,48 @@ describe("quality-scan CLI — jscpd runs whole-repo so cross-workspace clones a
     );
     expect(crossWorkspace.length).toBeGreaterThan(0);
   }, 30000);
+
+  // #580: this target has NO vite markers and a healthy (mostly-used) file set — the disclosure
+  // must stay silent on a target that never asked the question, matching "a normal Vite target
+  // with the plugin active is unaffected" from a non-Vite target's side too.
+  it("does not raise the M5-99 entry-uncertain disclosure on a normal, non-Vite target", () => {
+    const findings = runCli(monorepoFixture());
+    expect(findings.find((f) => f.id === "M5-99")).toBeUndefined();
+  }, 30000);
+});
+
+// #580: MEASURED against a real knip run (2026-07-18) — a Vite target where `vite` is declared in
+// no dependency at all (the issue's "vite not in deps" cause) leaves knip unable to activate its
+// Vite plugin. It falls back to default index.*-only entry resolution: main.ts and its one real
+// import stay "used", but vite.config.ts and every other file in src/utils/ come back unused (5 of
+// the 7 scanned .ts files, 71%) even though the real Vite entry graph (index.html -> main.ts ->
+// utils/a.ts) only leaves 4 of them (utils/b-e) genuinely dead. Regenerating this fixture and
+// re-running `knip --reporter json` directly is how the #580 disclosure logic's numbers were
+// grounded, not guessed.
+function misresolvedViteFixture(): string {
+  const repo = mkdtempSync(join(tmpdir(), "harvey-quality-vite-cli-"));
+  dirs.push(repo);
+  const write = (rel: string, text: string) => {
+    mkdirSync(dirname(join(repo, rel)), { recursive: true });
+    writeFileSync(join(repo, rel), text);
+  };
+  write("package.json", JSON.stringify({ name: "vite-fixture", private: true, version: "0.0.0" }));
+  write("vite.config.ts", "export default {};\n");
+  write("index.html", '<!doctype html>\n<html>\n  <body>\n    <script type="module" src="/src/main.ts"></script>\n  </body>\n</html>\n');
+  write("src/main.ts", 'import { helperA } from "./utils/a";\nconsole.log(helperA());\n');
+  write("src/utils/a.ts", "export function helperA() {\n  return \"a\";\n}\n");
+  for (const n of ["b", "c", "d", "e"]) {
+    write(`src/utils/${n}.ts`, `export function helper${n.toUpperCase()}() {\n  return "${n}";\n}\n`);
+  }
+  return repo;
+}
+
+describe("quality-scan CLI — M5 discloses uncertain knip entry resolution on a mis-resolved Vite target (#580)", () => {
+  it("raises M5-99 when vite.config.ts/index.html are present but `vite` isn't resolvable", () => {
+    const findings = runCli(misresolvedViteFixture());
+    const disclosure = findings.find((f) => f.id === "M5-99");
+    expect(disclosure).toBeDefined();
+    expect(disclosure?.taxonomy).toContain("M5");
+    expect(disclosure?.evidence).toContain("isn't resolvable");
+  }, 30000);
 });
