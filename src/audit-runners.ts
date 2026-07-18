@@ -537,21 +537,23 @@ const m10: ModuleRunner = {
   run: (ctx) => {
     if (ctx.env.connected) {
       const refs = supabaseRefs(ctx);
-      // Single project (or none enumerated): one live row, exactly as before.
+      // Single project (or none enumerated): one live row off the inherited SUPABASE_DB_URL, as before.
       if (refs.length <= 1) return m10Live(ctx);
-      // #506: pii-classify is env-bound to ONE DB (SUPABASE_DB_URL), so the orchestrator can live-
-      // classify only the configured project. The other enumerated projects must not vanish from the
-      // ledger — each gets an explicit requires-live-run row naming the limitation. Deep per-DB live
-      // classification (per-DB URL threading) is the remainder, #520.
-      const [primary, ...rest] = refs;
-      return [
-        { ...m10Live(ctx, primary), instance: primary! },
-        ...rest.map((ref): ProbeOutcome => ({
-          status: "requires-live-run",
-          reason: `only the SUPABASE_DB_URL-configured project was live-classified; ${ref} was not — pii-classify is env-bound to one DB, so per-DB live classification needs per-DB URL threading (#520). Recorded, not silently omitted.`,
-          instance: ref,
-        })),
-      ];
+      // #520: classify EACH enumerated project against its own DB. Its URL comes from ctx.supabaseDbUrls
+      // (run-audit reads SUPABASE_DB_URL_<ref>, the first ref also falling back to plain SUPABASE_DB_URL).
+      // A ref with a URL is live-classified against that DB; a ref WITHOUT one keeps an honest
+      // requires-live-run row naming the missing credential — never a silent skip.
+      return refs.map((ref): ProbeOutcome => {
+        const dbUrl = ctx.supabaseDbUrls?.[ref];
+        if (!dbUrl) {
+          return {
+            status: "requires-live-run",
+            reason: `no per-DB connection URL for ${ref} — set SUPABASE_DB_URL_<ref> (or SUPABASE_DB_URL for the first project) to live-classify it; see run-audit --help (#520). Recorded, not silently omitted.`,
+            instance: ref,
+          };
+        }
+        return { ...m10Live(ctx, ref, dbUrl), instance: ref };
+      });
     }
     // Schema tier: per app on a monorepo, single-target otherwise.
     const apps = ctx.apps && ctx.apps.length > 1 ? ctx.apps : undefined;

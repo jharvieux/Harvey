@@ -665,15 +665,53 @@ describe("monorepo per-instance fan-out (#506)", () => {
     expect(m7.find((r) => r.instance === "proj-main")?.reason).toMatch(/Lighthouse\/CWV tier not run/);
   });
 
-  it("M10 live tier names every extra Supabase project it could not reach, never dropping one", () => {
+  // #520: with no per-DB URLs supplied, EVERY enumerated project is an explicit requires-live-run
+  // row naming its missing connection URL — never a silent skip, and no longer a lone auto-run
+  // primary.
+  it("M10 live tier names every Supabase project with no per-DB URL, never dropping one", () => {
     const m10 = runAudit(AUDIT_RUNNERS, ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main", "proj-rag"],
     })).recorded.filter((r) => r.module === "M10");
     expect(m10.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
-    const rag = m10.find((r) => r.instance === "proj-rag");
-    expect(rag?.status).toBe("requires-live-run");
-    expect(rag?.reason).toMatch(/env-bound to one DB/);
+    expect(m10.every((r) => r.status === "requires-live-run")).toBe(true);
+    expect(m10.find((r) => r.instance === "proj-rag")?.reason).toMatch(/no per-DB connection URL/);
+  });
+
+  // #520: given a per-DB URL for each project, each is live-classified against its OWN DB — the URL
+  // is threaded onto the child env so pii-classify targets project N, not only the env-configured one.
+  it("M10 live tier classifies each project against its own threaded SUPABASE_DB_URL", () => {
+    const envByRef = new Map<string, string | undefined>();
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      captureDir: "/cap",
+      supabaseRefs: ["proj-main", "proj-rag"],
+      supabaseDbUrls: { "proj-main": "postgres://main", "proj-rag": "postgres://rag" },
+      readFindings: (p: string) => (p.endsWith(".json") ? [{ id: "M10-01" } as never] : []),
+      exec: (_c, argv, opts) => {
+        if (argv.includes("pii-classify")) {
+          const out = argv[argv.indexOf("--out") + 1] ?? "";
+          envByRef.set(out, opts?.env?.SUPABASE_DB_URL);
+        }
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    })).recorded.filter((r) => r.module === "M10");
+    expect(m10.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
+    expect(m10.every((r) => r.status === "ran")).toBe(true);
+    // Each project's classify ran with ITS url, not a single shared one.
+    expect([...envByRef.values()].sort()).toEqual(["postgres://main", "postgres://rag"]);
+  });
+
+  // #520: a mixed run — one project has a URL, the other does not — classifies the first and keeps
+  // an honest requires-live-run row for the second.
+  it("M10 live tier classifies the URL-provided project and keeps the other's requires-live-run row", () => {
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRefs: ["proj-main", "proj-rag"],
+      supabaseDbUrls: { "proj-main": "postgres://main" },
+    })).recorded.filter((r) => r.module === "M10");
+    expect(m10.find((r) => r.instance === "proj-main")?.status).not.toBe("requires-live-run");
+    expect(m10.find((r) => r.instance === "proj-rag")?.status).toBe("requires-live-run");
   });
 
   it("M10 schema tier fans out one partial row per app", () => {
