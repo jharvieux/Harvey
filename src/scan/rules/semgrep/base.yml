@@ -136,6 +136,11 @@ rules:
       - pattern-either:
           - pattern: $RES.setHeader("Access-Control-Allow-Origin", "*")
           - pattern: $RES.headers.set("Access-Control-Allow-Origin", "*")
+          # #570: App Router idiom — the wildcard is declared in an object-literal headers map
+          # (`const CORS_HEADERS = { "Access-Control-Allow-Origin": "*", ... }`) then passed to
+          # NextResponse.json(body, { headers }) or returned from a Deno edge function. The object
+          # literal itself carries the wildcard regardless of where it is later spread.
+          - pattern: '{ ..., "Access-Control-Allow-Origin": "*", ... }'
 
   # Service-role key referenced inside a Client Component ("use client"). Gating on the
   # "use client" directive is the high-precision signal: it means the module (and the key) ships
@@ -162,6 +167,14 @@ rules:
 
   # SSRF: server fetches a request-controlled URL with no host allow/deny. Review tier —
   # exploitability depends on the deploy network (internal ranges / cloud metadata reachability).
+  # #570: sources extended with the App Router request-access idioms — `new URL(req.url).searchParams`
+  # / `searchParams.get(...)` and the `await req.json()` body. Sinks extended with a small set of
+  # thin fetch-wrapper helper names (fetchRemote/fetchUrl/fetchExternal/proxyFetch): an SSRF is
+  # commonly split as "tainted URL in the route, `fetch()` in a shared helper", which OSS Semgrep's
+  # single-file taint cannot span — but the wrapper CALL in the route is same-file with the source,
+  # so keying the sink on the wrapper name recovers the flow (same curated-callee-name approach as
+  # harvey-sql-injection-rpc's exec_sql/run_sql list). A wrapper called with a request-tainted URL
+  # is exactly the SSRF entry point.
   - id: harvey-ssrf-fetch
     languages: [javascript, typescript]
     mode: taint
@@ -182,7 +195,16 @@ rules:
       - pattern: req.body
       - pattern: req.params
       - pattern: $REQ.nextUrl.searchParams
+      - pattern: new URL($REQ.url).searchParams
+      - pattern: $SP.get(...)
+      - pattern: await $REQ.json()
     pattern-sinks:
       - patterns:
-          - pattern: fetch($URL, ...)
+          - pattern-either:
+              - pattern: fetch($URL, ...)
+              - patterns:
+                  - pattern: $FN($URL, ...)
+                  - metavariable-regex:
+                      metavariable: $FN
+                      regex: (?i)^(fetchRemote|fetchUrl|fetchExternal|proxyFetch)$
           - focus-metavariable: $URL
