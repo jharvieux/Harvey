@@ -25,9 +25,11 @@ import type { Finding } from "./findings.js";
 // `instance` (#506): on a monorepo, a per-app/per-DB tier runs once per enumerated app or Supabase
 // project; the label names WHICH instance this outcome covers so the ledger records one row per
 // (module × instance). Absent ⇒ a single-instance target (the common case) — unchanged.
+// `hotspots` (#515): M3's worst-first top-K hotspot file list, surfaced so the assembler can enrich
+// EVERY module's findings with an onHotspot/hotspotRank tag. Only the M3 probe sets it.
 export type ProbeOutcome =
-  | { status: "ran"; detail: string; findings?: Finding[]; instance?: string }
-  | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string }
+  | { status: "ran"; detail: string; findings?: Finding[]; instance?: string; hotspots?: string[] }
+  | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string; hotspots?: string[] }
   | { status: "requires-live-run"; reason: string; instance?: string };
 
 // The seam that keeps this engine testable and offline: probes reach the outside world only through
@@ -93,6 +95,9 @@ interface AuditRunResult {
   // Report-schema findings captured from the module CLIs that emit them (#312). Raw and possibly
   // overlapping (shared CLIs feed two probes); assembleEngagementDocument de-duplicates.
   findings: Finding[];
+  // #515: M3's top-K hotspot ranking, when the M3 probe captured one. Fed to the assembler so every
+  // module's findings get the shared hotspot enrichment. Absent ⇒ M3 produced no ranking this run.
+  hotspots?: string[];
 }
 
 // A registry missing a module is the #229 defect at the source — an audit that never even tries M5
@@ -121,6 +126,7 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
   const recorded: ModuleCoverage[] = [];
   const failures: ModuleFailure[] = [];
   const findings: Finding[] = [];
+  let hotspots: string[] | undefined;
 
   // Iterate AUDIT_MODULES, not `runners`: the ledger's shape is owned by the module enumeration,
   // so a registry can never shorten the audit by reordering or under-listing itself.
@@ -155,10 +161,11 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
           : { module, status: outcome.status, detail: outcome.detail, ...(outcome.status === "partial" ? { reason: outcome.reason } : {}), ...instance },
       );
       if (outcome.status !== "requires-live-run" && outcome.findings) findings.push(...outcome.findings);
+      if (outcome.status !== "requires-live-run" && outcome.hotspots?.length) hotspots = outcome.hotspots;
     }
   }
 
-  return { recorded, failures, findings };
+  return { recorded, failures, findings, ...(hotspots ? { hotspots } : {}) };
 }
 
 export function formatFailures(failures: ModuleFailure[]): string {

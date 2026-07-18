@@ -11,7 +11,7 @@
 
 import type { EngagementEnv } from "./audit-coverage.js";
 
-export interface PlanStep {
+interface PlanStep {
   label: string; // short pass name (module + tier)
   command: string; // the concrete command / skill invocation
   // The prior step whose OUTPUT this one consumes — the dependency the ATC run violated. A step

@@ -11,6 +11,7 @@
 
 import { buildAuditCoverage, type EngagementEnv, type ModuleCoverage } from "./audit-coverage.js";
 import type { CoverageRow, Finding, FindingsDocument, ReportMeta } from "./findings.js";
+import { enrichFindingsWithHotspots } from "./hotspot-scan.js";
 
 // The derived coverage report's rows, projected onto the report schema's CoverageRow.
 export function coverageLedger(recorded: ModuleCoverage[], env?: EngagementEnv): CoverageRow[] {
@@ -40,6 +41,11 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
   return out;
 }
 
-export function assembleEngagementDocument(recorded: ModuleCoverage[], env: EngagementEnv, findings: Finding[], meta: ReportMeta): FindingsDocument {
-  return { meta, coverage: coverageLedger(recorded, env), findings: dedupeFindings(findings) };
+// #515: when the run captured an M3 hotspot ranking, tag every module's findings on a ranked hotspot
+// (onHotspot/hotspotRank) so the report up-ranks them across modules — one mechanism, every module.
+// Absent hotspots ⇒ findings pass through untagged, unchanged.
+export function assembleEngagementDocument(recorded: ModuleCoverage[], env: EngagementEnv, findings: Finding[], meta: ReportMeta, hotspots?: string[]): FindingsDocument {
+  const deduped = dedupeFindings(findings);
+  const enriched = hotspots?.length ? enrichFindingsWithHotspots(deduped, hotspots) : deduped;
+  return { meta, coverage: coverageLedger(recorded, env), findings: enriched };
 }

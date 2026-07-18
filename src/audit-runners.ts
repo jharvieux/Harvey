@@ -218,8 +218,16 @@ const m3: ModuleRunner = {
     const { ok, output } = ctx.exec("pnpm", ["exec", "tsx", "src/cli/hotspot-scan.ts", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
     const command = `pnpm exec tsx src/cli/hotspot-scan.ts ${ctx.targetDir}`;
     if (ok && /M3 hotspot table/.test(output)) {
-      const findings = artifactFindings(readArtifact(ctx, outPath));
-      return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
+      const artifact = readArtifact(ctx, outPath);
+      const findings = artifactFindings(artifact);
+      // #515: surface the top-K hotspot ranking so the assembler can enrich every module's findings.
+      const hotspots = Array.isArray(artifact?.topK) ? (artifact!.topK as string[]) : undefined;
+      return {
+        status: "ran",
+        detail: command,
+        ...(findings.length ? { findings } : {}),
+        ...(hotspots?.length ? { hotspots } : {}),
+      };
     }
     // #416: vitals is not on PATH here (the common case — it's an external plugin). A fresh captured
     // vitals pass artifact still proves M3 ran, so the orchestrator need not have vitals installed to

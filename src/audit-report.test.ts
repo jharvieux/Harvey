@@ -38,6 +38,22 @@ describe("assembleEngagementDocument (#312)", () => {
     expect(doc.coverage?.find((r) => r.module === "M5")?.reason).toMatch(/no node_modules/);
   });
 
+  // #515: when an M3 hotspot ranking is passed, every module's findings on a hot file get tagged.
+  it("enriches findings on a ranked hotspot with onHotspot/hotspotRank, and validates", () => {
+    const onHot = { ...finding("F-hot"), location: "core/checkout.ts:42" };
+    const offHot = { ...finding("F-cold"), location: "lib/leaf.ts:1" };
+    const doc = assembleEngagementDocument(recorded, env, [onHot, offHot], meta, ["core/checkout.ts", "core/pay.ts"]);
+    expect(doc.findings.find((f) => f.id === "F-hot")?.onHotspot).toBe(true);
+    expect(doc.findings.find((f) => f.id === "F-hot")?.hotspotRank).toBe(1);
+    expect(doc.findings.find((f) => f.id === "F-cold")?.onHotspot).toBeUndefined();
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+
+  it("leaves findings untagged when no hotspot ranking was captured", () => {
+    const doc = assembleEngagementDocument(recorded, env, [finding("F-1")], meta);
+    expect(doc.findings[0]?.onHotspot).toBeUndefined();
+  });
+
   // crit 3: a module that never ran must not read the same as one that ran and found nothing.
   it("keeps a never-run module distinguishable from a module that ran clean", () => {
     const doc = assembleEngagementDocument(recorded, env, [], meta);

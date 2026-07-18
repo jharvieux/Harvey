@@ -149,7 +149,7 @@ if (appList.length > 1) console.log(`Monorepo apps enumerated (per-app tiers fan
 if (supabaseRefsArg.length > 1) console.log(`Supabase projects enumerated (M7 advisors fan out): ${supabaseRefsArg.join(", ")}`);
 console.log("");
 
-const { recorded, failures, findings } = runAudit(AUDIT_RUNNERS, ctx);
+const { recorded, failures, findings, hotspots } = runAudit(AUDIT_RUNNERS, ctx);
 const report = buildAuditCoverage(recorded, env);
 
 console.log(formatAuditCoverage(report));
@@ -169,7 +169,7 @@ if (outPath) {
 // scaffold a placeholder and say loudly that it must be filled before the report ships.
 if (findingsOut) {
   const meta: ReportMeta = metaPath ? (JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta) : placeholderMeta(targetDir);
-  let doc = assembleEngagementDocument(recorded, env, findings, meta);
+  let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots);
 
   // #457: diff against a prior engagement so the deliverable leads with progress. The baseline is a
   // full findings.json from a previous audit of the SAME client; we diff by finding identity

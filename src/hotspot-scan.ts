@@ -220,6 +220,21 @@ export function toFactFindings(report: VitalsReport): Finding[] {
   return findings;
 }
 
+// #515: the cross-module hotspot enrichment — the ONE mechanism applied to every module's findings
+// at assembly time. A finding whose location sits on a top-K hotspot is tagged onHotspot=true and
+// hotspotRank (1-based, hottest first), so the report can up-rank it across all modules — most
+// valuably M6 (a reinvention on a churny, complex, sole-author file matters far more than the same
+// on a stable leaf), and equally M4/M7/M9. Matching mirrors crossReferenceHotspots: substring
+// containment of the hotspot path in the finding's location (covers "path:line", "path (pkg)", and
+// "a <> b" formats). This ONLY tags — severity and the BFTB inputs are untouched, so graded counts
+// are unchanged; ordering is the report's job. topK is the worst-first list from topKFiles.
+export function enrichFindingsWithHotspots(findings: Finding[], topK: string[]): Finding[] {
+  return findings.map((f) => {
+    const idx = topK.findIndex((hotspot) => f.location.includes(hotspot));
+    return idx < 0 ? f : { ...f, onHotspot: true, hotspotRank: idx + 1 };
+  });
+}
+
 interface HotspotCrossRef {
   findings: Finding[];
   hotspotFindingIds: string[];

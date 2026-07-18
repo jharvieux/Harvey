@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Finding } from "./findings.js";
-import { aiProvenanceFiles, couplingEdges, crossReferenceHotspots, rankHotspots, toFactFindings, topKFiles, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
+import { aiProvenanceFiles, couplingEdges, crossReferenceHotspots, enrichFindingsWithHotspots, rankHotspots, toFactFindings, topKFiles, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
 import { summarizeMutationReport, type StrykerReport } from "./mutation-scan.js";
 import { buildCoverageMatrix } from "./scan/calibration.js";
 import { m3Entries } from "./scan/calibration/m3.entries.js";
@@ -136,6 +136,28 @@ describe("M3 cross-reference against other modules' findings (#363)", () => {
     const { findings } = crossReferenceHotspots([onHotspot], report, 3);
     expect(findings[0]).toMatchObject({ severity: "High", value: 4, ease: 4, safety: 4 });
     expect(onHotspot.note).toBeUndefined(); // input not mutated
+  });
+
+  // #515: the shared enrichment applied at assembly to EVERY module's findings.
+  it("tags a finding on a top-K hotspot with onHotspot + 1-based hotspotRank, leaving others clean", () => {
+    const top = topKFiles(report, 3);
+    const enriched = enrichFindingsWithHotspots(
+      [planted("M7-01", "lib/stable.ts:10"), planted("M6-01", top[0] + ":5")],
+      top,
+    );
+    const onHot = enriched.find((f) => f.id === "M6-01");
+    expect(onHot?.onHotspot).toBe(true);
+    expect(onHot?.hotspotRank).toBe(1);
+    const offHot = enriched.find((f) => f.id === "M7-01");
+    expect(offHot?.onHotspot).toBeUndefined();
+    expect(offHot?.hotspotRank).toBeUndefined();
+  });
+
+  it("never mutates the input findings or their grading inputs", () => {
+    const input = planted("M4-01", topKFiles(report, 3)[0] + ":1");
+    const [out] = enrichFindingsWithHotspots([input], topKFiles(report, 3));
+    expect(input.onHotspot).toBeUndefined(); // input untouched
+    expect(out).toMatchObject({ severity: "High", value: 4, ease: 4, safety: 4 });
   });
 
   it("feeds M8 directly: topKFiles output is consumable as summarizeMutationReport's hotspot list", () => {

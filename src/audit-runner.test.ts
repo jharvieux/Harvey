@@ -355,6 +355,17 @@ describe("M3 derives ran from a real vitals parse, never a no-op exit (#314)", (
     expect(m3?.status).toBe("requires-live-run");
     expect(m3?.reason).toMatch(/vitals/);
   });
+
+  // #515: M3 surfaces its top-K ranking so runAudit can hand it to the assembler for cross-module
+  // enrichment. The whole path: probe reads the M3 artifact's topK → runAudit result.hotspots.
+  it("surfaces the captured top-K hotspot ranking on the run result", () => {
+    const withM3Artifact = ctx({
+      captureDir: "/cap",
+      readArtifact: (p: string) => (p.endsWith("M3.json") ? { topK: ["core/checkout.ts", "core/pay.ts"], findings: [] } : undefined),
+    });
+    const { hotspots } = runAudit(AUDIT_RUNNERS, withM3Artifact);
+    expect(hotspots).toEqual(["core/checkout.ts", "core/pay.ts"]);
+  });
 });
 
 // #416: the out-of-orchestrator passes (M1 semantic/live, M2 dynamic, M3 vitals, M6 verdict) leave
