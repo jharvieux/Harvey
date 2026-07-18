@@ -473,6 +473,96 @@ describe("M10 captures its classification findings (#436)", () => {
   });
 });
 
+// #506: on a monorepo the per-app tiers (M4/M5/M9, M10 schema) and the per-DB tier (M7 advisors)
+// fan out — one probe run and one ledger row per enumerated instance. A single-app/single-DB target
+// enumerates one instance and behaves exactly as before (no per-instance rows).
+describe("monorepo per-instance fan-out (#506)", () => {
+  const apps = [
+    { name: "apps/main", path: "/target/apps/main" },
+    { name: "apps/rag", path: "/target/apps/rag" },
+  ];
+
+  it("M4/M5/M9 record one row per enumerated app, tagged with the app name", () => {
+    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps })).recorded;
+    for (const m of ["M4", "M5", "M9"] as const) {
+      const rows = rec.filter((r) => r.module === m);
+      expect(rows.map((r) => r.instance).sort()).toEqual(["apps/main", "apps/rag"]);
+    }
+  });
+
+  it("runs each per-app probe against that app's own directory, not the repo root", () => {
+    const seen: string[] = [];
+    runAudit(AUDIT_RUNNERS, ctx({
+      apps,
+      exec: (_c, argv) => {
+        if (argv.includes("quality-scan")) seen.push(argv[argv.indexOf("quality-scan") + 1]!);
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    }));
+    expect(seen).toEqual(expect.arrayContaining(["/target/apps/main", "/target/apps/rag"]));
+  });
+
+  it("an app missing node_modules is an explicit requires-live-run row for THAT app, never absent (M5)", () => {
+    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps, exists: (p) => p !== "/target/apps/rag/node_modules" })).recorded;
+    const m5 = rec.filter((r) => r.module === "M5");
+    expect(m5).toHaveLength(2);
+    expect(m5.find((r) => r.instance === "apps/rag")?.status).toBe("requires-live-run");
+    expect(m5.find((r) => r.instance === "apps/rag")?.reason).toMatch(/no node_modules/);
+    expect(m5.find((r) => r.instance === "apps/main")?.status).toBe("ran");
+  });
+
+  it("M7 advisors record one row per enumerated Supabase project", () => {
+    const m7 = runAudit(AUDIT_RUNNERS, ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRefs: ["proj-main", "proj-rag"],
+      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : { ok: true, output: cleanOutput(argv) }),
+    })).recorded.filter((r) => r.module === "M7");
+    expect(m7.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
+    expect(m7.every((r) => r.status === "ran")).toBe(true);
+  });
+
+  it("a failed advisor for one project is a partial row for THAT project, the other still ran", () => {
+    const m7 = runAudit(AUDIT_RUNNERS, ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRefs: ["proj-main", "proj-rag"],
+      exec: (_c, argv) => {
+        if (argv.includes("perf-scan")) return { ok: !argv.includes("proj-rag"), output: "advisors 500" };
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    })).recorded.filter((r) => r.module === "M7");
+    expect(m7.find((r) => r.instance === "proj-rag")?.status).toBe("partial");
+    expect(m7.find((r) => r.instance === "proj-main")?.status).toBe("ran");
+  });
+
+  it("M10 live tier names every extra Supabase project it could not reach, never dropping one", () => {
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRefs: ["proj-main", "proj-rag"],
+    })).recorded.filter((r) => r.module === "M10");
+    expect(m10.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
+    const rag = m10.find((r) => r.instance === "proj-rag");
+    expect(rag?.status).toBe("requires-live-run");
+    expect(rag?.reason).toMatch(/env-bound to one DB/);
+  });
+
+  it("M10 schema tier fans out one partial row per app", () => {
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({ apps })).recorded.filter((r) => r.module === "M10");
+    expect(m10.map((r) => r.instance).sort()).toEqual(["apps/main", "apps/rag"]);
+    expect(m10.every((r) => r.status === "partial")).toBe(true);
+  });
+
+  it("a single-app / single-DB target is unchanged — one untagged row per module", () => {
+    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps: [{ name: "root", path: "/target" }] })).recorded;
+    expect(rec.filter((r) => r.module === "M5")).toHaveLength(1);
+    expect(rec.find((r) => r.module === "M5")?.instance).toBeUndefined();
+  });
+
+  it("the whole per-instance ledger still passes the coverage gate with no gaps", () => {
+    const rec = runAudit(AUDIT_RUNNERS, ctx({ apps })).recorded;
+    expect(buildAuditCoverage(rec, ctx().env).gaps).toEqual([]);
+  });
+});
+
 describe("formatFailures", () => {
   it("names each crashed module and calls the crash a bug, not a tier", () => {
     const out = formatFailures([{ module: "M4", error: "jscpd binary missing" }]);

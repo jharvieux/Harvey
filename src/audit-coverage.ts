@@ -87,6 +87,9 @@ export interface ModuleCoverage {
   reason?: string;
   // What actually executed (command, tier). Free-text provenance for the report's coverage line.
   detail?: string;
+  // #506: on a monorepo, a per-app/per-DB tier records one row per enumerated instance; this labels
+  // WHICH app or Supabase project the row covers. Absent ⇒ a single-instance (whole-target) row.
+  instance?: string;
 }
 
 // Which environments the engagement actually has. Optional: when supplied, a gap is annotated with
@@ -124,49 +127,66 @@ interface AuditCoverageReport {
 
 // Builds the coverage matrix over ALL ten modules from what the caller recorded. A module absent
 // from `recorded` is a gap — the point of the gate: we never infer that an unmentioned module ran.
+// #506: a per-app/per-DB tier records ONE entry per enumerated instance, so a module may legitimately
+// appear more than once — keyed by (module, instance). Two entries with the SAME (module, instance),
+// though, are still the broken-bookkeeping case they always were.
 export function buildAuditCoverage(recorded: ModuleCoverage[], env?: EngagementEnv): AuditCoverageReport {
-  const byModule = new Map<AuditModule, ModuleCoverage>();
+  const byModule = new Map<AuditModule, ModuleCoverage[]>();
   const gaps: AuditCoverageGap[] = [];
 
   for (const entry of recorded) {
-    if (byModule.has(entry.module)) {
-      // Two conflicting verdicts for one module means the caller's bookkeeping is broken; we
-      // can't know which is true, so refuse to pick rather than let a "ran" mask a gap.
-      gaps.push({ module: entry.module, problem: `recorded twice — ambiguous coverage for ${entry.module}` });
+    const list = byModule.get(entry.module) ?? [];
+    if (list.some((e) => (e.instance ?? "") === (entry.instance ?? ""))) {
+      // Two conflicting verdicts for one (module, instance) means the caller's bookkeeping is broken;
+      // we can't know which is true, so refuse to pick rather than let a "ran" mask a gap.
+      const where = entry.instance ? `${entry.module} (instance ${entry.instance})` : entry.module;
+      gaps.push({ module: entry.module, problem: `recorded twice — ambiguous coverage for ${where}` });
       continue;
     }
-    byModule.set(entry.module, entry);
+    list.push(entry);
+    byModule.set(entry.module, list);
   }
 
-  const rows = AUDIT_MODULES.map((module) => {
-    const entry = byModule.get(module);
-    if (!entry) {
+  const rows: (ModuleCoverage & { name: string })[] = [];
+  for (const module of AUDIT_MODULES) {
+    const entries = byModule.get(module);
+    if (!entries || !entries.length) {
       const gated = envGated(module, env) ? ` (needs ${MODULES[module].needs}: record it requires-live-run with that reason)` : "";
       gaps.push({ module, problem: `never accounted for — no run, and no reason given for skipping it${gated}` });
-      return { module, name: MODULES[module].name, status: "requires-live-run" as const, reason: "not accounted for in this engagement" };
+      rows.push({ module, name: MODULES[module].name, status: "requires-live-run", reason: "not accounted for in this engagement" });
+      continue;
     }
-    const reason = entry.reason?.trim();
-    if (entry.status !== "ran" && !reason) {
-      gaps.push({ module, problem: `recorded "${entry.status}" with no reason — a gap without a reason is a silent skip` });
-    } else if (entry.status !== "ran" && isPlaceholder(reason)) {
-      // An unfilled --template row. The gate can't judge whether a reason is TRUE, but it can
-      // refuse the one reason that is definitionally not an accounting: the prompt to write one.
-      gaps.push({ module, problem: `reason is still the "${reason}" placeholder — record why ${module} could not run` });
+    for (const entry of entries) {
+      const reason = entry.reason?.trim();
+      const at = entry.instance ? `${module} (${entry.instance})` : module;
+      if (entry.status !== "ran" && !reason) {
+        gaps.push({ module, problem: `${at} recorded "${entry.status}" with no reason — a gap without a reason is a silent skip` });
+      } else if (entry.status !== "ran" && isPlaceholder(reason)) {
+        // An unfilled --template row. The gate can't judge whether a reason is TRUE, but it can
+        // refuse the one reason that is definitionally not an accounting: the prompt to write one.
+        gaps.push({ module, problem: `${at} reason is still the "${reason}" placeholder — record why it could not run` });
+      }
+      rows.push({ ...entry, name: MODULES[module].name });
     }
-    return { ...entry, name: MODULES[module].name };
-  });
+  }
 
-  // A module in the never-executed ledger that also didn't run here stays loud no matter how well
-  // reasoned its excuse — that reason is exactly what has kept it invisible every time before.
-  const ran = new Set(rows.filter((r) => r.status === "ran").map((r) => r.module));
-  const neverRun = [...MODULES_NEVER_EXECUTED].filter((module) => !ran.has(module));
+  // A module in the never-executed ledger that also didn't run here (on ANY instance) stays loud no
+  // matter how well reasoned its excuse — that reason is exactly what has kept it invisible before.
+  const ranAny = new Set(rows.filter((r) => r.status === "ran").map((r) => r.module));
+  const neverRun = [...MODULES_NEVER_EXECUTED].filter((module) => !ranAny.has(module));
+  // "ran in full" is stricter than "ran on some instance": a module counts only when EVERY one of
+  // its recorded instances ran — a monorepo where one app ran and another is partial has not.
+  const ranCount = AUDIT_MODULES.filter((m) => {
+    const es = byModule.get(m);
+    return !!es && es.length > 0 && es.every((e) => e.status === "ran");
+  }).length;
 
   return {
     rows,
     gaps,
     neverRun,
     complete: gaps.length === 0 && neverRun.length === 0,
-    ranCount: ran.size,
+    ranCount,
   };
 }
 
@@ -198,7 +218,8 @@ export function formatAuditCoverage(report: AuditCoverageReport): string {
     r.status === "ran" ? "RAN " : r.status === "partial" ? "PART" : "LIVE";
   const lines = report.rows.map((r) => {
     const suffix = r.reason ? ` — ${r.reason}` : r.detail ? ` — ${r.detail}` : "";
-    return `  ${mark(r)}  ${r.module.padEnd(3)} ${r.name.padEnd(34)}${suffix}`;
+    const label = r.instance ? `${r.name} [${r.instance}]` : r.name;
+    return `  ${mark(r)}  ${r.module.padEnd(3)} ${label.padEnd(34)}${suffix}`;
   });
   lines.push("", `${report.ranCount}/${AUDIT_MODULES.length} modules ran in full.`);
   if (report.gaps.length) {

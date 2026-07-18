@@ -50,6 +50,7 @@ import { applyBaseline } from "../audit-diff.js";
 import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit-execution-log.js";
 import { formatFailures, runAudit, type RunContext } from "../audit-runner.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
+import { discoverTargets } from "../pentest/targets.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
@@ -67,11 +68,15 @@ const flagValue = (flag: string): string | undefined => {
   const i = args.indexOf(flag);
   return i >= 0 ? args[i + 1] : undefined;
 };
+const flagValues = (flag: string): string[] => args.flatMap((a, i) => (a === flag && args[i + 1] ? [args[i + 1]!] : []));
 const outPath = flagValue("--out");
 const findingsOut = flagValue("--findings-out");
 const metaPath = flagValue("--meta");
 const artifactsDir = flagValue("--artifacts-dir");
-const supabaseRef = flagValue("--supabase");
+// #506: --supabase is repeatable — one project ref per Supabase project on a monorepo. M7's advisor
+// tier fans out over all of them. supabaseRef keeps the single-ref field for back-compat.
+const supabaseRefsArg = flagValues("--supabase");
+const supabaseRef = supabaseRefsArg[0];
 // #457: a prior engagement's findings.json to diff this run against (resolved/persistent/new).
 const baselinePath = flagValue("--baseline");
 
@@ -88,6 +93,12 @@ if (baselinePath && !findingsOut) {
 }
 
 const targetDir = resolve(targetArg);
+
+// #506: enumerate the monorepo's apps (pnpm-workspace packages with a package.json) so the per-app
+// tiers (M4/M5/M9, M10 schema) run once per app and record one ledger row each. A single-app repo
+// enumerates one app and the tiers behave exactly as before (no per-instance rows).
+const appList = discoverTargets(targetDir).apps.map((a) => ({ name: a.name, path: a.path }));
+
 const env: EngagementEnv = {
   connected: args.includes("--connected"),
   dynamic: args.includes("--dynamic"),
@@ -128,10 +139,15 @@ const ctx: RunContext = {
   artifactsDir: artifactsDir ? resolve(artifactsDir) : undefined,
   now: Date.now(),
   supabaseRef,
+  supabaseRefs: supabaseRefsArg,
+  apps: appList,
 };
 
 console.log(`\nFull audit — ${targetDir}`);
-console.log(`Tiers in scope: source${env.connected ? " + connected" : ""}${env.dynamic ? " + dynamic" : ""}${env.llm ? " + llm" : ""}\n`);
+console.log(`Tiers in scope: source${env.connected ? " + connected" : ""}${env.dynamic ? " + dynamic" : ""}${env.llm ? " + llm" : ""}`);
+if (appList.length > 1) console.log(`Monorepo apps enumerated (per-app tiers fan out): ${appList.map((a) => a.name).join(", ")}`);
+if (supabaseRefsArg.length > 1) console.log(`Supabase projects enumerated (M7 advisors fan out): ${supabaseRefsArg.join(", ")}`);
+console.log("");
 
 const { recorded, failures, findings } = runAudit(AUDIT_RUNNERS, ctx);
 const report = buildAuditCoverage(recorded, env);
@@ -188,7 +204,7 @@ if (findingsOut) {
 // Written with --record so a dry run can't quietly retire an alarm; the diff is reviewed like any
 // other claim about what happened.
 if (args.includes("--record")) {
-  const ranModules = AUDIT_MODULES.filter((m) => recorded.find((r) => r.module === m)?.status === "ran");
+  const ranModules = AUDIT_MODULES.filter((m) => recorded.some((r) => r.module === m && r.status === "ran"));
   const updated = recordExecutions(AUDIT_MODULES, readExecutionLog(), ranModules, targetDir, new Date().toISOString().slice(0, 10), `pnpm exec tsx src/cli/run-audit.ts ${targetDir}`);
   writeFileSync(EXECUTION_LOG_PATH, `${JSON.stringify(updated, null, 2)}\n`);
   console.log(`\nExecution log updated → ${EXECUTION_LOG_PATH} (commit it: it is the evidence behind MODULES_NEVER_EXECUTED)`);

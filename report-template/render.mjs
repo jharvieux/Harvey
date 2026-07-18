@@ -176,7 +176,10 @@ function coverageSection(rows, m) {
   const body = rows.map((r) => {
     const s = COV[r.status] ?? COV["requires-live-run"];
     const note = r.status === "ran" ? esc(r.detail ?? "") : esc(r.reason ?? "");
-    return `<tr><td class="b">${esc(r.module)}</td><td>${esc(r.name)}</td>
+    // #506: a per-app/per-DB row names its instance so a monorepo's second app/DB is a visible row,
+    // never folded into the module's headline.
+    const area = r.instance ? `${esc(r.name)} <span style="color:var(--muted)">· ${esc(r.instance)}</span>` : esc(r.name);
+    return `<tr><td class="b">${esc(r.module)}</td><td>${area}</td>
       <td><span class="cov-badge" style="color:${s.c};background:${s.bg};border:1px solid ${s.bd}">${s.label}</span></td>
       <td>${note}</td></tr>`;
   }).join("");

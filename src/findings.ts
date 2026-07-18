@@ -36,6 +36,9 @@ export interface CoverageRow {
   reason?: string;
   // What actually executed (command, tier).
   detail?: string;
+  // #506: which app/Supabase project this row covers, on a monorepo per-app/per-DB tier. Absent ⇒
+  // a whole-target row.
+  instance?: string;
 }
 
 export interface Finding {
@@ -170,6 +173,7 @@ function validateCoverage(coverage: unknown, errors: string[]): void {
       errors.push(`${at}.status: "${String(row.status)}" not one of ${COVERAGE_STATUSES.join("/")}`);
     }
     if (row.detail !== undefined && typeof row.detail !== "string") errors.push(`${at}.detail: expected string`);
+    if (row.instance !== undefined && typeof row.instance !== "string") errors.push(`${at}.instance: expected string`);
     // A non-"ran" row without a reason is a silent skip wearing a status — the exact failure the
     // ledger exists to surface. Mirrors buildAuditCoverage's gap rule (src/audit-coverage.ts).
     if (row.status !== "ran" && (typeof row.reason !== "string" || row.reason.trim() === "")) {

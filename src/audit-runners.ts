@@ -75,6 +75,21 @@ const capturing = (module: AuditModule, script: string, args: (ctx: RunContext) 
 
 const hasNodeModules = (ctx: RunContext): boolean => ctx.exists(join(ctx.targetDir, "node_modules"));
 
+// #506: a per-app tier (M4/M5/M9, M10 schema) runs once per enumerated app on a monorepo. With ≤1
+// app (the common single-app target) it runs once against ctx.targetDir, untagged — behaviour is
+// exactly as before. With >1, it runs per app dir and tags each outcome with the app's name, so the
+// ledger records one row per (module × app) and no second app is silently folded into the first.
+const perApp = (base: (ctx: RunContext) => ProbeOutcome) => (ctx: RunContext): ProbeOutcome | ProbeOutcome[] => {
+  const apps = ctx.apps;
+  if (!apps || apps.length <= 1) return base(ctx);
+  return apps.map((app) => ({ ...base({ ...ctx, targetDir: app.path }), instance: app.name }));
+};
+
+// #506: the enumerated Supabase project refs for M7's advisor tier. Falls back to the single
+// ctx.supabaseRef (#434) when a multi-project list was not enumerated.
+const supabaseRefs = (ctx: RunContext): string[] => ctx.supabaseRefs?.length ? ctx.supabaseRefs : ctx.supabaseRef ? [ctx.supabaseRef] : [];
+const refSlug = (ref: string): string => ref.replace(/[^a-zA-Z0-9_-]/g, "_");
+
 // quality-scan (M4+M5) emits a Finding[] on stdout. When knip could not run, it substitutes an
 // M5-00 "did not run" disclosure finding and STILL exits 0 by design (#223, so M4 keeps its jscpd
 // findings). Reading the array is how M5 tells "knip ran" from "knip was skipped".
@@ -222,28 +237,30 @@ const m3: ModuleRunner = {
 // source alone, while knip cannot resolve config imports without the target's installed deps. One
 // `ran` covering both would be the composite-claim bug the gate exists to catch, so they probe
 // separately and M5 owns the node_modules precondition.
-const m4: ModuleRunner = capturing("M4", "quality-scan", (ctx) => [ctx.targetDir]);
+// #506: jscpd is per-app — on a monorepo, run it once per enumerated app so each app's duplication
+// is a distinct row, not folded into the first app's.
+const m4: ModuleRunner = { module: "M4", run: perApp(capturing("M4", "quality-scan", (ctx) => [ctx.targetDir]).run) };
 
 // M5 (#350): knip exits 0 even when it could not run — quality-scan then substitutes an M5-00
 // disclosure finding (#223). So the exit code is not the evidence; the presence of that finding in
 // the emitted array is. A knip that never resolved the target's deps is a coverage gap (partial),
 // not a clean `ran`.
-const m5: ModuleRunner = {
-  module: "M5",
-  run: (ctx) => {
-    if (!hasNodeModules(ctx)) return { status: "requires-live-run", reason: "target has no node_modules — knip cannot resolve config imports without the target's installed deps (run `npm install` in the target)" };
-    const outPath = captureOut(ctx, "M5");
-    const command = `pnpm quality-scan ${ctx.targetDir}`;
-    const { ok, output } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
-    if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-    // The verdict array is read from the captured --out file when capturing (quality-scan writes a
-    // bare Finding[] there and stays silent on stdout), else parsed from stdout (#312/#419).
-    const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
-    if (!findings) return { status: "requires-live-run", reason: `could not read quality-scan output to confirm knip ran: ${trimOut(output)}` };
-    if (findings.some((f) => (f as { id?: string }).id === "M5-00")) return { status: "partial", detail: command, reason: "knip did not run — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage was skipped this pass (M4 duplication still ran) (#223/#350)" };
-    return outPath && findings.length ? { status: "ran", detail: command, findings: findings as Finding[] } : { status: "ran", detail: command };
-  },
+const m5Run = (ctx: RunContext): ProbeOutcome => {
+  if (!hasNodeModules(ctx)) return { status: "requires-live-run", reason: "target has no node_modules — knip cannot resolve config imports without the target's installed deps (run `npm install` in the target)" };
+  const outPath = captureOut(ctx, "M5");
+  const command = `pnpm quality-scan ${ctx.targetDir}`;
+  const { ok, output } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+  if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
+  // The verdict array is read from the captured --out file when capturing (quality-scan writes a
+  // bare Finding[] there and stays silent on stdout), else parsed from stdout (#312/#419).
+  const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
+  if (!findings) return { status: "requires-live-run", reason: `could not read quality-scan output to confirm knip ran: ${trimOut(output)}` };
+  if (findings.some((f) => (f as { id?: string }).id === "M5-00")) return { status: "partial", detail: command, reason: "knip did not run — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage was skipped this pass (M4 duplication still ran) (#223/#350)" };
+  return outPath && findings.length ? { status: "ran", detail: command, findings: findings as Finding[] } : { status: "ran", detail: command };
 };
+// #506: knip is the clearest per-app tier — it needs each app's own node_modules/config, so a
+// monorepo runs it once per enumerated app.
+const m5: ModuleRunner = { module: "M5", run: perApp(m5Run) };
 
 // M6's free indicator layer (src/detectors/handrolled.ts, taxonomy `M6 — Indicator: …`) runs INSIDE
 // detect-static, the same CLI M7/M9 shell out to — same pattern as M8_TAXONOMY_PREFIX below (M8's
@@ -320,19 +337,25 @@ const m7: ModuleRunner = {
     if (!ctx.env.connected) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: "code tier only — no DB creds for the advisors (pnpm perf-scan)" };
     // #434: perf-scan needs a project ref as its positional arg (SUPABASE_ACCESS_TOKEN travels via
     // the inherited process env — perf-scan reads that itself). --connected is intent, not a reachable
-    // project; without a ref threaded through run-audit ctx.supabaseRef there is nothing to call, so
-    // this stays partial with that reason instead of shelling out to a usage error.
-    if (!ctx.supabaseRef) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: "connected tier flagged but no Supabase project ref was given (run-audit --supabase <ref>) — perf-scan needs a project ref to reach the advisors API (#434)" };
-    // #420: perf-scan writes a bare Finding[] to --out, so the advisor-tier findings are captured
-    // when the connected pass succeeds (M7's code-tier findings already arrive via the shared
-    // detect-static capture under M9).
-    const advisorsOut = captureOut(ctx, "M7");
-    const advisors = ctx.exec("pnpm", ["perf-scan", ctx.supabaseRef, ...(advisorsOut ? ["--out", advisorsOut] : [])]);
-    if (!advisors.ok) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: `advisors failed: ${trimOut(advisors.output)}` };
-    const findings = readCaptured(ctx, advisorsOut);
-    return findings.length
-      ? { status: "ran", detail: "pnpm detect-static (code) + pnpm perf-scan (advisors)", findings }
-      : { status: "ran", detail: "pnpm detect-static (code) + pnpm perf-scan (advisors)" };
+    // project; without a ref threaded through run-audit there is nothing to call, so this stays
+    // partial with that reason instead of shelling out to a usage error.
+    const refs = supabaseRefs(ctx);
+    if (!refs.length) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: "connected tier flagged but no Supabase project ref was given (run-audit --supabase <ref>) — perf-scan needs a project ref to reach the advisors API (#434)" };
+    // #506: the advisor tier is per-DB — run it once per enumerated Supabase project so a monorepo's
+    // second DB is a distinct row, never silently omitted. The code tier ran once (above) and is
+    // noted in each row's detail. Instances are tagged only when there's more than one project, so a
+    // single-project engagement is one untagged row exactly as before (#434).
+    // #420: perf-scan writes a bare Finding[] to --out, so the advisor-tier findings are captured.
+    const multi = refs.length > 1;
+    return refs.map((ref): ProbeOutcome => {
+      const instance = multi ? { instance: ref } : {};
+      const advisorsOut = ctx.captureDir ? join(ctx.captureDir, `M7-${refSlug(ref)}.json`) : undefined;
+      const advisors = ctx.exec("pnpm", ["perf-scan", ref, ...(advisorsOut ? ["--out", advisorsOut] : [])]);
+      if (!advisors.ok) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: `advisors failed for ${ref}: ${trimOut(advisors.output)}`, ...instance };
+      const detail = `pnpm detect-static (code) + pnpm perf-scan ${ref} (advisors)`;
+      const findings = readCaptured(ctx, advisorsOut);
+      return findings.length ? { status: "ran", detail, findings, ...instance } : { status: "ran", detail, ...instance };
+    });
   },
 };
 
@@ -397,20 +420,20 @@ const m8: ModuleRunner = {
 // not evidence of a scan; the file count the tool printed is. Zero files scanned is not `ran`.
 // detect-static prints the count to stdout AND writes a bare Finding[] to --out, so status and
 // capture (#312) coexist in real runs.
-const m9: ModuleRunner = {
-  module: "M9",
-  run: (ctx) => {
-    const outPath = captureOut(ctx, "M9");
-    const command = `pnpm detect-static ${ctx.targetDir}`;
-    const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
-    if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-    const scanned = filesScanned(output);
-    if (scanned === undefined) return { status: "requires-live-run", reason: `could not read detect-static output to confirm files were scanned: ${trimOut(output)}` };
-    if (scanned === 0) return { status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — nothing to analyze (empty or non-source target) (#350)` };
-    const findings = readCaptured(ctx, outPath);
-    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
-  },
+const m9Run = (ctx: RunContext): ProbeOutcome => {
+  const outPath = captureOut(ctx, "M9");
+  const command = `pnpm detect-static ${ctx.targetDir}`;
+  const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+  if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
+  const scanned = filesScanned(output);
+  if (scanned === undefined) return { status: "requires-live-run", reason: `could not read detect-static output to confirm files were scanned: ${trimOut(output)}` };
+  if (scanned === 0) return { status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — nothing to analyze (empty or non-source target) (#350)` };
+  const findings = readCaptured(ctx, outPath);
+  return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
 };
+// #506: App-Router boundary analysis is per-app — on a monorepo, run detect-static once per app so
+// each app's rendering surface is its own row.
+const m9: ModuleRunner = { module: "M9", run: perApp(m9Run) };
 
 // M10 classifies live columns, or parses migration SQL when there is no DB (#250) — two tiers, so
 // a schema-only pass is partial rather than a skip.
@@ -424,28 +447,63 @@ const m9: ModuleRunner = {
 //
 // #357 (untestable in CI): the `connected` branch needs real DB creds and has only ever been
 // exercised in its failure path here.
+const M10_NOT_COLLECTED =
+  "this run captured no findings (coverage-only, no --findings-out), so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (#436/#420)";
+
+// #506: the schema tier is per-app — each app can carry its own supabase/migrations. Runs against
+// the given app dir; `instance` is set only on a multi-app monorepo so a single-app target is one
+// untagged row exactly as before.
+const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): ProbeOutcome => {
+  const instance = instanceName ? { instance: instanceName } : {};
+  const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
+  const migrations = join(appPath, "supabase", "migrations");
+  if (!ctx.exists(migrations)) return { status: "requires-live-run", reason: `no live DB and no migrations at ${migrations} — nothing to classify`, ...instance };
+  const detail = `pnpm pii-classify --schema ${migrations}`;
+  const schemaOnly = "schema tier only — no live DB, so row-level data was not sampled";
+  const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", migrations, ...(outPath ? ["--out", outPath] : [])]);
+  if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify --schema exited non-zero: ${trimOut(output)}`, ...instance };
+  if (!outPath) return { status: "partial", detail, reason: `${schemaOnly}. And ${M10_NOT_COLLECTED}`, ...instance };
+  const findings = readCaptured(ctx, outPath);
+  return findings.length ? { status: "partial", detail, reason: schemaOnly, findings, ...instance } : { status: "partial", detail, reason: schemaOnly, ...instance };
+};
+
+// The env-bound live tier: pii-classify reads SUPABASE_DB_URL from the inherited env, so it reaches
+// exactly the one project the operator pointed it at.
+const m10Live = (ctx: RunContext, instanceName?: string): ProbeOutcome => {
+  const instance = instanceName ? { instance: instanceName } : {};
+  const outPath = captureOut(ctx, "M10");
+  const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : [])]);
+  if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify exited non-zero: ${trimOut(output)}`, ...instance };
+  if (!outPath) return { status: "partial", detail: "pnpm pii-classify (live)", reason: `live classification ran, but ${M10_NOT_COLLECTED}`, ...instance };
+  const findings = readCaptured(ctx, outPath);
+  return findings.length ? { status: "ran", detail: "pnpm pii-classify (live)", findings, ...instance } : { status: "ran", detail: "pnpm pii-classify (live)", ...instance };
+};
+
 const m10: ModuleRunner = {
   module: "M10",
   run: (ctx) => {
-    const outPath = captureOut(ctx, "M10");
-    const notCollected =
-      "this run captured no findings (coverage-only, no --findings-out), so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (#436/#420)";
     if (ctx.env.connected) {
-      const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : [])]);
-      if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify exited non-zero: ${trimOut(output)}` };
-      if (!outPath) return { status: "partial", detail: "pnpm pii-classify (live)", reason: `live classification ran, but ${notCollected}` };
-      const findings = readCaptured(ctx, outPath);
-      return findings.length ? { status: "ran", detail: "pnpm pii-classify (live)", findings } : { status: "ran", detail: "pnpm pii-classify (live)" };
+      const refs = supabaseRefs(ctx);
+      // Single project (or none enumerated): one live row, exactly as before.
+      if (refs.length <= 1) return m10Live(ctx);
+      // #506: pii-classify is env-bound to ONE DB (SUPABASE_DB_URL), so the orchestrator can live-
+      // classify only the configured project. The other enumerated projects must not vanish from the
+      // ledger — each gets an explicit requires-live-run row naming the limitation. Deep per-DB live
+      // classification (per-DB URL threading) is the remainder, #520.
+      const [primary, ...rest] = refs;
+      return [
+        { ...m10Live(ctx, primary), instance: primary! },
+        ...rest.map((ref): ProbeOutcome => ({
+          status: "requires-live-run",
+          reason: `only the SUPABASE_DB_URL-configured project was live-classified; ${ref} was not — pii-classify is env-bound to one DB, so per-DB live classification needs per-DB URL threading (#520). Recorded, not silently omitted.`,
+          instance: ref,
+        })),
+      ];
     }
-    const migrations = join(ctx.targetDir, "supabase", "migrations");
-    if (!ctx.exists(migrations)) return { status: "requires-live-run", reason: `no live DB and no migrations at ${migrations} — nothing to classify` };
-    const detail = `pnpm pii-classify --schema ${migrations}`;
-    const schemaOnly = "schema tier only — no live DB, so row-level data was not sampled";
-    const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", migrations, ...(outPath ? ["--out", outPath] : [])]);
-    if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify --schema exited non-zero: ${trimOut(output)}` };
-    if (!outPath) return { status: "partial", detail, reason: `${schemaOnly}. And ${notCollected}` };
-    const findings = readCaptured(ctx, outPath);
-    return findings.length ? { status: "partial", detail, reason: schemaOnly, findings } : { status: "partial", detail, reason: schemaOnly };
+    // Schema tier: per app on a monorepo, single-target otherwise.
+    const apps = ctx.apps && ctx.apps.length > 1 ? ctx.apps : undefined;
+    if (!apps) return m10Schema(ctx, ctx.targetDir);
+    return apps.map((app) => m10Schema(ctx, app.path, app.name));
   },
 };
 

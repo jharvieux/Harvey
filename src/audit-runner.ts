@@ -22,10 +22,13 @@ import type { Finding } from "./findings.js";
 // only describe what it did, and cannot claim a status for a module it isn't registered under.
 // `findings` (#312): the report-schema Finding[] the module's CLI emitted, when the probe captured
 // it. A requires-live-run probe produced no output, so it carries none.
+// `instance` (#506): on a monorepo, a per-app/per-DB tier runs once per enumerated app or Supabase
+// project; the label names WHICH instance this outcome covers so the ledger records one row per
+// (module × instance). Absent ⇒ a single-instance target (the common case) — unchanged.
 export type ProbeOutcome =
-  | { status: "ran"; detail: string; findings?: Finding[] }
-  | { status: "partial"; detail: string; reason: string; findings?: Finding[] }
-  | { status: "requires-live-run"; reason: string };
+  | { status: "ran"; detail: string; findings?: Finding[]; instance?: string }
+  | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string }
+  | { status: "requires-live-run"; reason: string; instance?: string };
 
 // The seam that keeps this engine testable and offline: probes reach the outside world only through
 // ctx, so a test drives real orchestration logic against fake tooling rather than a mocked runAudit.
@@ -60,11 +63,22 @@ export interface RunContext {
   // it itself. Absent ⇒ the advisor tier has no ref to call with, so M7 stays partial even when
   // --connected is set (a flag alone was never evidence — same rule #311/#356 apply to the ref).
   supabaseRef?: string;
+  // #506: the enumerated apps and Supabase projects of a monorepo target. `apps` (>1 entry) makes
+  // the per-app tiers (M4/M5/M9, M10 schema) fan out — one probe run per app dir, one ledger row
+  // per app. `supabaseRefs` (>1 entry) makes M7's advisor tier fan out per project. Absent or a
+  // single entry ⇒ single-instance behaviour, exactly as before. An enumerated instance that is
+  // never covered must surface as an explicit partial/requires-live-run row — never absent (#506).
+  apps?: { name: string; path: string }[];
+  supabaseRefs?: string[];
 }
 
 export interface ModuleRunner {
   module: AuditModule;
-  run: (ctx: RunContext) => ProbeOutcome;
+  // #506: a per-app/per-DB probe returns ONE outcome per instance (an array). A single-instance
+  // probe returns one outcome. runAudit records one ledger row per returned outcome — so a fan-out
+  // that enumerated N instances produces N rows, and an empty array is treated as a crash (a
+  // fan-out with zero instances would be a silent skip, the one thing the gate exists to catch).
+  run: (ctx: RunContext) => ProbeOutcome | ProbeOutcome[];
 }
 
 interface ModuleFailure {
@@ -113,9 +127,10 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
   for (const module of AUDIT_MODULES) {
     const runner = byModule.get(module);
     if (!runner) continue; // unreachable — assertRegistryComplete has already thrown.
-    let outcome: ProbeOutcome;
+    let outcomes: ProbeOutcome[];
     try {
-      outcome = runner.run(ctx);
+      const result = runner.run(ctx);
+      outcomes = Array.isArray(result) ? result : [result];
     } catch (err) {
       // Recorded requires-live-run because that is the honest description of the OUTPUT (there is
       // none). The reason names the crash rather than a tier, and `failures` — not this row — is
@@ -125,12 +140,22 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
       recorded.push({ module, status: "requires-live-run", reason: `runner failed: ${message}` });
       continue;
     }
-    recorded.push(
-      outcome.status === "requires-live-run"
-        ? { module, status: "requires-live-run", reason: outcome.reason }
-        : { module, status: outcome.status, detail: outcome.detail, ...(outcome.status === "partial" ? { reason: outcome.reason } : {}) },
-    );
-    if (outcome.status !== "requires-live-run" && outcome.findings) findings.push(...outcome.findings);
+    // #506: a fan-out that produced no outcome would drop the module from the ledger silently — the
+    // exact omission the gate exists to prevent. Treat it as a crash, not an absence.
+    if (!outcomes.length) {
+      failures.push({ module, error: "runner returned no outcomes — a per-instance fan-out that enumerated nothing is a silent skip" });
+      recorded.push({ module, status: "requires-live-run", reason: "runner produced no outcome for any instance" });
+      continue;
+    }
+    for (const outcome of outcomes) {
+      const instance = outcome.instance ? { instance: outcome.instance } : {};
+      recorded.push(
+        outcome.status === "requires-live-run"
+          ? { module, status: "requires-live-run", reason: outcome.reason, ...instance }
+          : { module, status: outcome.status, detail: outcome.detail, ...(outcome.status === "partial" ? { reason: outcome.reason } : {}), ...instance },
+      );
+      if (outcome.status !== "requires-live-run" && outcome.findings) findings.push(...outcome.findings);
+    }
   }
 
   return { recorded, failures, findings };
