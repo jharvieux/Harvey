@@ -72,6 +72,13 @@ export interface RunContext {
   // never covered must surface as an explicit partial/requires-live-run row — never absent (#506).
   apps?: { name: string; path: string }[];
   supabaseRefs?: string[];
+  // #523: operator consent for the M8 mutation tier to provision missing Stryker packages into the
+  // target via `npm install --no-save` (which executes the target's npm lifecycle scripts — a real
+  // trust-boundary decision). When set, the M8 probe passes `--install` to mutation-scan so the
+  // scaffolded full-mutation rung is reachable under the orchestrator; absent (the default) it stays
+  // off and a cold target degrades to the loud "re-run with --install" partial. Consent unlocks the
+  // attempt; the status is still derived from what actually ran.
+  allowTargetInstall?: boolean;
 }
 
 export interface ModuleRunner {

@@ -28,6 +28,10 @@ export interface PassArtifact {
   // /vuln-scan. undefined ⇒ not recorded (treated as "no focus" — an un-prioritized semantic pass
   // that must be surfaced, never silently assumed hotspot-focused).
   hotspotFocus?: boolean;
+  // #530: for the M3 vitals pass, the worst-first top-K hotspot file ranking the captured report
+  // produced. Surfaced by the m3 probe so the cross-module enrichment (#515) also fires when M3 ran
+  // via a pass artifact (vitals off PATH during run-audit), not only the in-process capture path.
+  hotspots?: string[];
 }
 
 // A pass older than this describes a prior state of the target, so it cannot prove the module ran
@@ -91,6 +95,7 @@ export function buildPassArtifact(parts: {
   summary?: string;
   findings?: Finding[];
   hotspotFocus?: boolean;
+  hotspots?: string[];
 }): PassArtifact {
   if (!parts.target.trim()) throw new Error("pass artifact needs a non-empty target (the audited directory)");
   if (!parts.pass.trim()) throw new Error("pass artifact needs a non-empty pass name (e.g. semantic, dynamic, verdict)");
@@ -103,6 +108,7 @@ export function buildPassArtifact(parts: {
     ...(parts.summary ? { summary: parts.summary } : {}),
     ...(parts.findings?.length ? { findings: parts.findings } : {}),
     ...(parts.hotspotFocus !== undefined ? { hotspotFocus: parts.hotspotFocus } : {}),
+    ...(parts.hotspots?.length ? { hotspots: parts.hotspots } : {}),
   };
 }
 

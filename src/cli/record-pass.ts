@@ -32,9 +32,12 @@ const findingsPath = flag("--findings");
 // #502: for an M1 semantic pass, record whether an M3 hotspot focus brief (scan-focus) was supplied
 // to /vuln-scan. Presence of the flag ⇒ true; absence ⇒ left unrecorded (surfaced as "no focus").
 const hotspotFocus = args.includes("--hotspot-focus") ? true : undefined;
+// #530: for an M3 vitals pass, the worst-first top-K hotspot ranking (a JSON array of file paths).
+// Surfaced by the m3 probe so cross-module enrichment (#515) fires from a captured-vitals pass too.
+const hotspotsPath = flag("--hotspots");
 
 if (!module || !target || !pass || !out) {
-  console.error("usage: pnpm record-pass --module <M1..M10> --target <dir> --pass <name> --out <artifacts-dir> [--findings file.json] [--summary text] [--hotspot-focus]");
+  console.error("usage: pnpm record-pass --module <M1..M10> --target <dir> --pass <name> --out <artifacts-dir> [--findings file.json] [--hotspots file.json] [--summary text] [--hotspot-focus]");
   process.exit(2);
 }
 if (!AUDIT_MODULES.includes(module as AuditModule)) {
@@ -56,6 +59,20 @@ if (findingsPath) {
   findings = parsed as Finding[];
 }
 
+let hotspots: string[] | undefined;
+if (hotspotsPath) {
+  if (!existsSync(hotspotsPath)) {
+    console.error(`--hotspots file not found: ${hotspotsPath}`);
+    process.exit(1);
+  }
+  const parsed = JSON.parse(readFileSync(hotspotsPath, "utf8"));
+  if (!Array.isArray(parsed) || !parsed.every((h) => typeof h === "string")) {
+    console.error(`--hotspots must be a JSON array of file-path strings (the top-K hotspot ranking): ${hotspotsPath}`);
+    process.exit(1);
+  }
+  hotspots = parsed as string[];
+}
+
 try {
   const artifact = buildPassArtifact({
     module: module as AuditModule,
@@ -65,6 +82,7 @@ try {
     summary,
     findings,
     hotspotFocus,
+    hotspots,
   });
   const path = writePassArtifact(resolve(out), artifact);
   console.error(`Recorded ${module} ${pass} pass for ${resolve(target)}${findings ? ` (${findings.length} finding(s))` : ""} → ${path}`);
