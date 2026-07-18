@@ -199,6 +199,25 @@ over every ref you pass it and folds each into its own ledger row; `SUPABASE_ACC
 comes from the environment. `--connected` alone (no ref) records `partial` — a flag declares
 intent, the ref is what lets the advisor call actually reach a project.
 
+M10's **live** tier is per-DB too (#520): the orchestrator classifies EACH `--supabase` project
+against its own connection string, read from a per-project env var `SUPABASE_DB_URL_<REF>` — the ref
+uppercased with every non-alphanumeric char turned into `_` (e.g. ref `proj-rag` →
+`SUPABASE_DB_URL_PROJ_RAG`). The first `--supabase` ref also falls back to the plain
+`SUPABASE_DB_URL`, so a single-project engagement needs no new var. A project with no URL supplied
+keeps its own honest `requires-live-run` row — never a silent skip. So a two-backend run sets:
+
+```bash
+SUPABASE_DB_URL_<BACKEND_1_REF>=<backend-1-conn-string> \
+SUPABASE_DB_URL_<BACKEND_2_REF>=<backend-2-conn-string> \
+SUPABASE_ACCESS_TOKEN=<token> \
+pnpm exec tsx src/cli/run-audit.ts <target-dir> --connected \
+  --supabase <backend-1-ref> --supabase <backend-2-ref> --findings-out engagement-findings.json
+```
+
+For M10's **schema** tier, a target whose SQL is not at `supabase/migrations` is probed at the
+conventional locations (`prisma/migrations`, `drizzle/`, `db/`, `schema.sql`) automatically (#529);
+pass `--schema <path>` to point at an unconventional one.
+
 ## 6. Full M8 mutation run — correct env, full scope, every app
 
 Now that the target's test env is known (step 1) and its apps are enumerated (step 0), run the

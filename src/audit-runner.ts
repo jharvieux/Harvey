@@ -38,8 +38,10 @@ export interface RunContext {
   targetDir: string;
   env: EngagementEnv;
   // Runs a module's CLI. `ok` is the exit status; the engine never parses `output` — a module's
-  // own runner decides what its output means.
-  exec: (command: string, args: string[]) => { ok: boolean; output: string };
+  // own runner decides what its output means. `opts.env` (#520) overlays extra variables onto the
+  // child's inherited environment, so the M10 live tier can point pii-classify at a different
+  // SUPABASE_DB_URL per enumerated project; absent ⇒ the child inherits the parent env unchanged.
+  exec: (command: string, args: string[], opts?: { env?: Record<string, string> }) => { ok: boolean; output: string };
   // Prereq probing (target node_modules, a test suite, migrations). Injected for the same reason.
   exists: (path: string) => boolean;
   // #312 findings assembly. When both are set, an emitter probe writes its Finding[] to a file in
@@ -72,6 +74,17 @@ export interface RunContext {
   // never covered must surface as an explicit partial/requires-live-run row — never absent (#506).
   apps?: { name: string; path: string }[];
   supabaseRefs?: string[];
+  // #529: an operator-supplied schema location for M10's schema tier (run-audit --schema), tried
+  // ahead of the conventional-location probe (supabase/migrations, prisma/migrations, drizzle, …).
+  // Absent ⇒ probe the conventional locations only.
+  schemaHint?: string;
+  // #520: per-Supabase-project DB connection URLs for M10's live tier, keyed by project ref. On a
+  // multi-project connected run the M10 probe classifies each ref whose URL is present here and
+  // records requires-live-run for any ref without one — so each enumerated project is either
+  // live-classified or carries its own honest not-run row. Built by run-audit from
+  // SUPABASE_DB_URL_<ref> env vars (the first ref also falling back to plain SUPABASE_DB_URL).
+  // Absent ⇒ no per-DB URLs supplied.
+  supabaseDbUrls?: Record<string, string>;
   // #523: operator consent for the M8 mutation tier to provision missing Stryker packages into the
   // target via `npm install --no-save` (which executes the target's npm lifecycle scripts — a real
   // trust-boundary decision). When set, the M8 probe passes `--install` to mutation-scan so the

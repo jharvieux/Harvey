@@ -113,10 +113,26 @@ const filesScanned = (output: string): number | undefined => {
 // exists to prevent, reintroduced inside the enforcer. The flags say which tiers the engagement
 // HAS; they are not evidence those passes executed. `ran` becomes reachable only once those passes
 // write a durable artifact the probe checks for (option 2, tracked in #416).
+// #528: the mechanical scan emits a SEC-TH-GH-00 coverage-disclosure finding when the git-history
+// secrets tier could not run (target is not a git repo root — an archive/subdirectory delivery). On
+// the capture path the M1 probe reads quick-scan's raw --findings-out feed for that id the same way
+// M4/M5 read for M4-99/M5-00, so the gap surfaces in the M1 ledger reason rather than staying a
+// buried Info finding in the deliverable.
+const GIT_HISTORY_DISCLOSURE_ID = "SEC-TH-GH-00";
+const gitHistoryGapNote = (ctx: RunContext): string => {
+  const rawOut = ctx.captureDir ? join(ctx.captureDir, "M1.json") : undefined;
+  if (!rawOut) return "";
+  const found = readCaptured(ctx, rawOut).some((f) => (f as { id?: string }).id === GIT_HISTORY_DISCLOSURE_ID);
+  return found
+    ? " Coverage note: the git-history secret scan (TruffleHog) did not run — this target is not a git repository root (archive/subdirectory delivery), so committed-secret history was not assessed (SEC-TH-GH-00, #528)."
+    : "";
+};
+
 const m1: ModuleRunner = {
   module: "M1",
   run: (ctx) => {
-    const { ok, output } = ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir]);
+    const rawOut = ctx.captureDir ? join(ctx.captureDir, "M1.json") : undefined;
+    const { ok, output } = ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir, ...(rawOut ? ["--findings-out", rawOut] : [])]);
     if (!ok) return { status: "requires-live-run", reason: `pnpm quick-scan exited non-zero: ${trimOut(output)}` };
     // #416: a fresh semantic/live pass artifact is the evidence #311 said `ran` needs. With it, the
     // flagship LLM/live work is proven (and its triage findings flow into the deliverable); without
@@ -138,7 +154,7 @@ const m1: ModuleRunner = {
     return {
       status: "partial",
       detail: "pnpm quick-scan (mechanical tier)",
-      reason: withRejectedPass("mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). No M1 security findings are collected into this deliverable — the flagship findings are produced by that paid-LLM pass and src/cli/scan.ts, not the mechanical quick-scan, so absence here is not-collected, not clean (#420)", pass.reason),
+      reason: withRejectedPass("mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). No M1 security findings are collected into this deliverable — the flagship findings are produced by that paid-LLM pass and src/cli/scan.ts, not the mechanical quick-scan, so absence here is not-collected, not clean (#420)", pass.reason) + gitHistoryGapNote(ctx),
     };
   },
 };
@@ -480,29 +496,52 @@ const m9: ModuleRunner = { module: "M9", run: perApp(m9Run) };
 const M10_NOT_COLLECTED =
   "this run captured no findings (coverage-only, no --findings-out), so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (#436/#420)";
 
-// #506: the schema tier is per-app — each app can carry its own supabase/migrations. Runs against
-// the given app dir; `instance` is set only on a multi-app monorepo so a single-app target is one
-// untagged row exactly as before.
+// #529: pii-classify --schema accepts ANY directory of *.sql or a single .sql file, so M10's
+// schema tier is not limited to supabase/migrations. Probe the conventional schema locations in
+// priority order and classify the first that exists, so a non-Supabase target (Prisma/Drizzle/
+// pg_dump) gets real M10 classification instead of a bare "nothing to classify". schema.prisma
+// itself is Prisma-DSL, not SQL the parser reads, so we target prisma/migrations (the derived
+// migration.sql) — pii-classify's readSchemaSql recurses into it.
+const SCHEMA_CANDIDATE_SUBPATHS = [
+  join("supabase", "migrations"),
+  join("prisma", "migrations"),
+  "drizzle",
+  join("db", "migrations"),
+  "db",
+  "migrations",
+  "schema.sql",
+];
+
+// #506: the schema tier is per-app — each app can carry its own schema layout. Runs against the
+// given app dir; `instance` is set only on a multi-app monorepo so a single-app target is one
+// untagged row exactly as before. The optional --schema hint (ctx.schemaHint) wins over the probe.
 const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): ProbeOutcome => {
   const instance = instanceName ? { instance: instanceName } : {};
   const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
-  const migrations = join(appPath, "supabase", "migrations");
-  if (!ctx.exists(migrations)) return { status: "requires-live-run", reason: `no live DB and no migrations at ${migrations} — nothing to classify`, ...instance };
-  const detail = `pnpm pii-classify --schema ${migrations}`;
+  // The hint is a single path, so it applies only to the single-target run — never smeared across a
+  // monorepo's per-app fan-out, where each app probes its own conventional locations.
+  const hint = ctx.schemaHint && appPath === ctx.targetDir ? [ctx.schemaHint] : [];
+  const candidates = [...hint, ...SCHEMA_CANDIDATE_SUBPATHS.map((sub) => join(appPath, sub))];
+  const schema = candidates.find((c) => ctx.exists(c));
+  if (!schema) return { status: "requires-live-run", reason: `no live DB and no schema found — nothing to classify. Probed: ${candidates.join(", ")}. pii-classify --schema accepts a migrations dir (supabase/prisma/drizzle) or a schema.sql file (#529)`, ...instance };
+  const detail = `pnpm pii-classify --schema ${schema}`;
   const schemaOnly = "schema tier only — no live DB, so row-level data was not sampled";
-  const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", migrations, ...(outPath ? ["--out", outPath] : [])]);
+  const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", schema, ...(outPath ? ["--out", outPath] : [])]);
   if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify --schema exited non-zero: ${trimOut(output)}`, ...instance };
   if (!outPath) return { status: "partial", detail, reason: `${schemaOnly}. And ${M10_NOT_COLLECTED}`, ...instance };
   const findings = readCaptured(ctx, outPath);
   return findings.length ? { status: "partial", detail, reason: schemaOnly, findings, ...instance } : { status: "partial", detail, reason: schemaOnly, ...instance };
 };
 
-// The env-bound live tier: pii-classify reads SUPABASE_DB_URL from the inherited env, so it reaches
-// exactly the one project the operator pointed it at.
-const m10Live = (ctx: RunContext, instanceName?: string): ProbeOutcome => {
+// The env-bound live tier: with no per-DB URL threaded, pii-classify reads SUPABASE_DB_URL from the
+// inherited env, so it reaches exactly the one project the operator pointed it at. `dbUrl` (#520)
+// overlays a per-project SUPABASE_DB_URL onto the child env so a monorepo classifies EACH enumerated
+// project against its own DB, not only the env-configured one.
+const m10Live = (ctx: RunContext, instanceName?: string, dbUrl?: string): ProbeOutcome => {
   const instance = instanceName ? { instance: instanceName } : {};
-  const outPath = captureOut(ctx, "M10");
-  const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : [])]);
+  const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
+  const execOpts = dbUrl ? { env: { SUPABASE_DB_URL: dbUrl } } : undefined;
+  const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : [])], execOpts);
   if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify exited non-zero: ${trimOut(output)}`, ...instance };
   if (!outPath) return { status: "partial", detail: "pnpm pii-classify (live)", reason: `live classification ran, but ${M10_NOT_COLLECTED}`, ...instance };
   const findings = readCaptured(ctx, outPath);
@@ -514,21 +553,23 @@ const m10: ModuleRunner = {
   run: (ctx) => {
     if (ctx.env.connected) {
       const refs = supabaseRefs(ctx);
-      // Single project (or none enumerated): one live row, exactly as before.
+      // Single project (or none enumerated): one live row off the inherited SUPABASE_DB_URL, as before.
       if (refs.length <= 1) return m10Live(ctx);
-      // #506: pii-classify is env-bound to ONE DB (SUPABASE_DB_URL), so the orchestrator can live-
-      // classify only the configured project. The other enumerated projects must not vanish from the
-      // ledger — each gets an explicit requires-live-run row naming the limitation. Deep per-DB live
-      // classification (per-DB URL threading) is the remainder, #520.
-      const [primary, ...rest] = refs;
-      return [
-        { ...m10Live(ctx, primary), instance: primary! },
-        ...rest.map((ref): ProbeOutcome => ({
-          status: "requires-live-run",
-          reason: `only the SUPABASE_DB_URL-configured project was live-classified; ${ref} was not — pii-classify is env-bound to one DB, so per-DB live classification needs per-DB URL threading (#520). Recorded, not silently omitted.`,
-          instance: ref,
-        })),
-      ];
+      // #520: classify EACH enumerated project against its own DB. Its URL comes from ctx.supabaseDbUrls
+      // (run-audit reads SUPABASE_DB_URL_<ref>, the first ref also falling back to plain SUPABASE_DB_URL).
+      // A ref with a URL is live-classified against that DB; a ref WITHOUT one keeps an honest
+      // requires-live-run row naming the missing credential — never a silent skip.
+      return refs.map((ref): ProbeOutcome => {
+        const dbUrl = ctx.supabaseDbUrls?.[ref];
+        if (!dbUrl) {
+          return {
+            status: "requires-live-run",
+            reason: `no per-DB connection URL for ${ref} — set SUPABASE_DB_URL_<ref> (or SUPABASE_DB_URL for the first project) to live-classify it; see run-audit --help (#520). Recorded, not silently omitted.`,
+            instance: ref,
+          };
+        }
+        return { ...m10Live(ctx, ref, dbUrl), instance: ref };
+      });
     }
     // Schema tier: per app on a monorepo, single-target otherwise.
     const apps = ctx.apps && ctx.apps.length > 1 ? ctx.apps : undefined;

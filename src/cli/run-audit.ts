@@ -4,6 +4,16 @@
 //   pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm]
 //       [--out coverage.json] [--findings-out engagement.json] [--meta meta.json]
 //       [--artifacts-dir dir] [--supabase <project-ref>]... [--allow-target-install]
+//       [--schema <path>]
+//
+// --schema (#529): an explicit schema location for M10's schema tier (a migrations dir or a single
+// .sql file), tried ahead of the conventional-location probe. For a target whose schema is not at
+// supabase/migrations, prisma/migrations, drizzle/, db/, or schema.sql.
+//
+// Per-DB M10 live classification (#520): on a multi-project connected run, each --supabase project's
+// live DB is classified against its own connection URL, read from `SUPABASE_DB_URL_<REF>` (the ref
+// uppercased, non-alphanumerics → `_`; the first ref also falls back to plain SUPABASE_DB_URL). A
+// project with no URL supplied keeps an honest requires-live-run row rather than being skipped.
 //
 // --supabase (#434): the connected project ref for M7's DB advisor tier (`pnpm perf-scan <ref>`).
 // Only meaningful alongside --connected; SUPABASE_ACCESS_TOKEN still comes from the environment
@@ -85,9 +95,25 @@ const supabaseRefsArg = flagValues("--supabase");
 const supabaseRef = supabaseRefsArg[0];
 // #457: a prior engagement's findings.json to diff this run against (resolved/persistent/new).
 const baselinePath = flagValue("--baseline");
+// #529: an explicit schema location for M10's schema tier, tried ahead of the conventional-location
+// probe (supabase/migrations, prisma/migrations, drizzle, db/, schema.sql). For non-Supabase or
+// unusually-laid-out targets whose schema the probe would not find.
+const schemaHint = flagValue("--schema");
+
+// #520: per-Supabase-project DB connection URLs for M10's live tier. Convention: one env var per
+// project ref, `SUPABASE_DB_URL_<REF>` where <REF> is the ref uppercased with every non-alphanumeric
+// char turned into `_` (e.g. ref `proj-rag` → `SUPABASE_DB_URL_PROJ_RAG`). The first `--supabase`
+// ref also falls back to the plain `SUPABASE_DB_URL`, so a single-project engagement needs no new
+// var. A ref with no URL keeps its honest requires-live-run row rather than being silently skipped.
+const dbUrlEnvKey = (ref: string): string => `SUPABASE_DB_URL_${ref.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+const supabaseDbUrls: Record<string, string> = {};
+supabaseRefsArg.forEach((ref, i) => {
+  const url = process.env[dbUrlEnvKey(ref)] ?? (i === 0 ? process.env.SUPABASE_DB_URL : undefined);
+  if (url) supabaseDbUrls[ref] = url;
+});
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--allow-target-install] [--baseline prior-findings.json]");
+  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--schema <path>] [--allow-target-install] [--baseline prior-findings.json]");
   process.exit(2);
 }
 
@@ -118,9 +144,15 @@ const captureDir = findingsOut ? mkdtempSync(join(tmpdir(), "harvey-audit-")) : 
 const ctx: RunContext = {
   targetDir,
   env,
-  exec: (command, argv) => {
+  exec: (command, argv, opts) => {
     try {
-      const output = execFileSync(command, argv, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      const output = execFileSync(command, argv, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        // #520: overlay a per-child env (e.g. a per-project SUPABASE_DB_URL for M10's live tier) onto
+        // the inherited environment; absent ⇒ inherit unchanged.
+        ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}),
+      });
       return { ok: true, output };
     } catch (err) {
       // A tool that exits non-zero or is not installed is a real outcome the probe must judge, not
@@ -148,6 +180,8 @@ const ctx: RunContext = {
   supabaseRefs: supabaseRefsArg,
   apps: appList,
   allowTargetInstall: args.includes("--allow-target-install"),
+  schemaHint,
+  supabaseDbUrls,
 };
 
 console.log(`\nFull audit — ${targetDir}`);

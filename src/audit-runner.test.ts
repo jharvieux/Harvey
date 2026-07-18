@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, MODULES_NEVER_EXECUTED, type AuditModule } from "./audit-coverage.js";
 import { assertRegistryComplete, formatFailures, type ModuleRunner, type ProbeOutcome, type RunContext } from "./audit-runner.js";
@@ -202,11 +203,37 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     expect(m10?.reason).toMatch(/schema tier only/);
   });
 
-  it("M10 has nothing to classify with neither a DB nor migrations", () => {
-    const bare = ctx({ exists: (p) => !p.includes("migrations") });
+  it("M10 has nothing to classify with neither a DB nor any conventional schema layout", () => {
+    // #529: the probe now tries supabase/migrations, prisma/migrations, drizzle/, db/, schema.sql —
+    // so "nothing to classify" means none of them exist, and the reason lists what was probed.
+    const bare = ctx({ exists: (p) => !/(migrations|drizzle|\/db$|schema\.sql)/.test(p) });
     const m10 = runAudit(AUDIT_RUNNERS, bare).recorded.find((r) => r.module === "M10");
     expect(m10?.status).toBe("requires-live-run");
     expect(m10?.reason).toMatch(/nothing to classify/);
+    expect(m10?.reason).toMatch(/Probed:/);
+    expect(m10?.reason).toMatch(/prisma\/migrations/);
+  });
+
+  // #529: a non-Supabase target (Prisma/Drizzle/pg_dump) whose schema is not at supabase/migrations
+  // still gets real M10 schema classification, not a bare "nothing to classify".
+  it("M10 classifies a Prisma-layout target (prisma/migrations, no supabase/migrations)", () => {
+    const prismaOnly = ctx({ exists: (p) => !p.includes(join("supabase", "migrations")) });
+    const m10 = runAudit(AUDIT_RUNNERS, prismaOnly).recorded.find((r) => r.module === "M10");
+    expect(m10?.status).toBe("partial");
+    expect(m10?.detail).toMatch(/prisma[/\\]migrations/);
+  });
+
+  // #529: an explicit --schema hint (ctx.schemaHint) wins over the conventional-location probe.
+  it("M10 uses the --schema hint ahead of the conventional-location probe", () => {
+    const seen: string[] = [];
+    runAudit(AUDIT_RUNNERS, ctx({
+      schemaHint: "/given/schema.sql",
+      exec: (_c, argv) => {
+        if (argv.includes("pii-classify")) seen.push(argv[argv.indexOf("--schema") + 1]!);
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    }));
+    expect(seen).toContain("/given/schema.sql");
   });
 
   // The whole-audit shape of #229's original failure: a source-tier engagement. Every module is
@@ -571,6 +598,42 @@ describe("M10 captures its classification findings (#436)", () => {
   });
 });
 
+// #528: the mechanical scan emits SEC-TH-GH-00 when the git-history secrets tier could not run
+// (non-git archive/subdirectory delivery). On the capture path the M1 probe reads quick-scan's raw
+// --findings-out feed for that id and surfaces the gap in its ledger reason, so it is not left a
+// buried Info finding in the deliverable.
+describe("M1 surfaces the git-history secrets coverage gap (#528)", () => {
+  it("appends the git-history not-assessed note to the M1 reason when SEC-TH-GH-00 is present", () => {
+    const capturing = ctx({
+      captureDir: "/cap",
+      readFindings: (p: string) => (p.endsWith("M1.json") ? [{ id: "SEC-TH-GH-00" } as never] : []),
+    });
+    const m1 = runAudit(AUDIT_RUNNERS, capturing).recorded.find((r) => r.module === "M1");
+    expect(m1?.status).toBe("partial");
+    expect(m1?.reason).toMatch(/git-history secret scan/i);
+    expect(m1?.reason).toMatch(/SEC-TH-GH-00/);
+  });
+
+  it("passes --findings-out to quick-scan on the capture path so the raw feed exists to read", () => {
+    let seen: string[] = [];
+    runAudit(AUDIT_RUNNERS, ctx({
+      captureDir: "/cap",
+      readFindings: () => [],
+      exec: (_c, argv) => {
+        if (argv.includes("quick-scan")) seen = argv;
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    }));
+    expect(seen).toContain("--findings-out");
+  });
+
+  it("omits the git-history note when the tier ran (no SEC-TH-GH-00 in the feed)", () => {
+    const capturing = ctx({ captureDir: "/cap", readFindings: () => [] });
+    const m1 = runAudit(AUDIT_RUNNERS, capturing).recorded.find((r) => r.module === "M1");
+    expect(m1?.reason).not.toMatch(/git-history/i);
+  });
+});
+
 // #506: on a monorepo the per-app tiers (M4/M5/M9, M10 schema) and the per-DB tier (M7 advisors)
 // fan out — one probe run and one ledger row per enumerated instance. A single-app/single-DB target
 // enumerates one instance and behaves exactly as before (no per-instance rows).
@@ -638,15 +701,53 @@ describe("monorepo per-instance fan-out (#506)", () => {
     expect(m7.find((r) => r.instance === "proj-main")?.reason).toMatch(/Lighthouse\/CWV tier not run/);
   });
 
-  it("M10 live tier names every extra Supabase project it could not reach, never dropping one", () => {
+  // #520: with no per-DB URLs supplied, EVERY enumerated project is an explicit requires-live-run
+  // row naming its missing connection URL — never a silent skip, and no longer a lone auto-run
+  // primary.
+  it("M10 live tier names every Supabase project with no per-DB URL, never dropping one", () => {
     const m10 = runAudit(AUDIT_RUNNERS, ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main", "proj-rag"],
     })).recorded.filter((r) => r.module === "M10");
     expect(m10.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
-    const rag = m10.find((r) => r.instance === "proj-rag");
-    expect(rag?.status).toBe("requires-live-run");
-    expect(rag?.reason).toMatch(/env-bound to one DB/);
+    expect(m10.every((r) => r.status === "requires-live-run")).toBe(true);
+    expect(m10.find((r) => r.instance === "proj-rag")?.reason).toMatch(/no per-DB connection URL/);
+  });
+
+  // #520: given a per-DB URL for each project, each is live-classified against its OWN DB — the URL
+  // is threaded onto the child env so pii-classify targets project N, not only the env-configured one.
+  it("M10 live tier classifies each project against its own threaded SUPABASE_DB_URL", () => {
+    const envByRef = new Map<string, string | undefined>();
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      captureDir: "/cap",
+      supabaseRefs: ["proj-main", "proj-rag"],
+      supabaseDbUrls: { "proj-main": "postgres://main", "proj-rag": "postgres://rag" },
+      readFindings: (p: string) => (p.endsWith(".json") ? [{ id: "M10-01" } as never] : []),
+      exec: (_c, argv, opts) => {
+        if (argv.includes("pii-classify")) {
+          const out = argv[argv.indexOf("--out") + 1] ?? "";
+          envByRef.set(out, opts?.env?.SUPABASE_DB_URL);
+        }
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    })).recorded.filter((r) => r.module === "M10");
+    expect(m10.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
+    expect(m10.every((r) => r.status === "ran")).toBe(true);
+    // Each project's classify ran with ITS url, not a single shared one.
+    expect([...envByRef.values()].sort()).toEqual(["postgres://main", "postgres://rag"]);
+  });
+
+  // #520: a mixed run — one project has a URL, the other does not — classifies the first and keeps
+  // an honest requires-live-run row for the second.
+  it("M10 live tier classifies the URL-provided project and keeps the other's requires-live-run row", () => {
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRefs: ["proj-main", "proj-rag"],
+      supabaseDbUrls: { "proj-main": "postgres://main" },
+    })).recorded.filter((r) => r.module === "M10");
+    expect(m10.find((r) => r.instance === "proj-main")?.status).not.toBe("requires-live-run");
+    expect(m10.find((r) => r.instance === "proj-rag")?.status).toBe("requires-live-run");
   });
 
   it("M10 schema tier fans out one partial row per app", () => {
