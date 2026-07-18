@@ -116,14 +116,14 @@ were cloned only under `/private/tmp`; `targets/calibration` in the repo was nev
 
 ## Follow-ups (filed as issues)
 
-- **Calibration migrations don't stand up on a fresh live DB** — duplicate `create table
+- **Calibration migrations don't stand up on a fresh live DB** (#546) — duplicate `create table
   public.reports` across two migrations, and a `seed.sql` referencing a non-existent
   `legacy_accounts`. The static tooling never applied them live, so this stayed latent.
-- **Generic seed can't satisfy a `CHECK` on a *non-defaulted* enum column** — the `DEFAULT`-omission
-  fix covers the common case (defaulted enums); a `CHECK (col IN (…))` with no default still fails
-  the INSERT (recorded as an `M2-PROVISION-MIGRATE` finding). Parsing simple `IN (…)` allow-lists to
-  pick a legal value would close the gap.
+- **Generic seed can't satisfy a `CHECK` on a *non-defaulted* enum column** (#547) — the
+  `DEFAULT`-omission fix covers the common case (defaulted enums); a `CHECK (col IN (…))` with no
+  default still fails the INSERT (recorded as an `M2-PROVISION-MIGRATE` finding). Parsing simple `IN
+  (…)` allow-lists to pick a legal value would close the gap.
 - **App-route probes (Tier 2)** ran only as a build/boot attempt here; neither target booted
-  (calibration's broken dep; mtstarter's build error), so the #159 NO-RATE-LIMIT loop and #161 seam
-  probes were not exercised end-to-end against a live app. The PostgREST matrix (Tier 1) does not
-  need the app and ran fully on both.
+  (calibration's broken dep; mtstarter's build error), so the NO-RATE-LIMIT loop (#159) and seam
+  probes (#161) were not exercised end-to-end against a live app. The PostgREST matrix (Tier 1) does
+  not need the app and ran fully on both.
