@@ -285,6 +285,26 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m8?.reason).toMatch(/format-date\.test\.ts/);
   });
 
+  // #523: --install (provisioning Stryker into the target, running its npm lifecycle scripts) is
+  // gated on explicit operator consent threaded via ctx.allowTargetInstall. The flag decides whether
+  // the M8 probe appends --install to mutation-scan — consent unlocks the attempt, nothing else.
+  it("M8 appends --install to mutation-scan only when ctx.allowTargetInstall is set (#523)", () => {
+    const mutationArgv = (over: Partial<RunContext>): string[] => {
+      let seen: string[] = [];
+      runAudit(AUDIT_RUNNERS, ctx({
+        ...over,
+        exec: (_c, argv) => {
+          if (argv.includes("mutation-scan")) seen = argv;
+          return { ok: true, output: cleanOutput(argv) };
+        },
+      }));
+      return seen;
+    };
+    expect(mutationArgv({ allowTargetInstall: true })).toContain("--install");
+    expect(mutationArgv({})).not.toContain("--install");
+    expect(mutationArgv({ allowTargetInstall: false })).not.toContain("--install");
+  });
+
   it("M9 — an empty directory (detect-static: loaded 0 source files, exit 0) is NOT recorded ran", () => {
     const emptyDir = { exec: () => ({ ok: true, output: "loaded 0 source files (0 product-code) from /empty\n\n0 findings across 0 classes:" }) };
     const m9 = status(AUDIT_RUNNERS, emptyDir, "M9");

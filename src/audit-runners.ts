@@ -408,8 +408,12 @@ const m8: ModuleRunner = {
     }
 
     const outPath = captureOut(ctx, "M8");
-    const command = `pnpm mutation-scan ${ctx.targetDir}`;
-    const { ok, output } = ctx.exec("pnpm", ["mutation-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+    // #523: --install (provisioning missing Stryker packages into the target, executing its npm
+    // lifecycle scripts) is gated on explicit operator consent — without it a cold target degrades
+    // to the loud "re-run with --install" partial rather than the orchestrator silently installing.
+    const installArg = ctx.allowTargetInstall ? ["--install"] : [];
+    const command = `pnpm mutation-scan ${ctx.targetDir}${ctx.allowTargetInstall ? " --install" : ""}`;
+    const { ok, output } = ctx.exec("pnpm", ["mutation-scan", ctx.targetDir, ...installArg, ...(outPath ? ["--out", outPath] : [])]);
     if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
     const artifact = readArtifact(ctx, outPath);
     const verdict = mutationVerdict(artifact ?? output);

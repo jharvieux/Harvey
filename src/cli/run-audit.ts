@@ -3,7 +3,7 @@
 //
 //   pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm]
 //       [--out coverage.json] [--findings-out engagement.json] [--meta meta.json]
-//       [--artifacts-dir dir] [--supabase <project-ref>]...
+//       [--artifacts-dir dir] [--supabase <project-ref>]... [--allow-target-install]
 //
 // --supabase (#434): the connected project ref for M7's DB advisor tier (`pnpm perf-scan <ref>`).
 // Only meaningful alongside --connected; SUPABASE_ACCESS_TOKEN still comes from the environment
@@ -11,6 +11,11 @@
 // Without it, --connected is recorded intent but M7's advisor call has no project to reach, so M7
 // stays partial on the code tier. REPEATABLE (#506): pass it once per Supabase project on a
 // monorepo — M7's advisor tier fans out over all of them, one ledger row each.
+//
+// --allow-target-install (#523): consent for M8's mutation tier to provision missing Stryker
+// packages into the target via `npm install --no-save` (which runs the target's npm lifecycle
+// scripts). Default off — a real trust-boundary decision, so it must be explicit; without it a cold
+// client target degrades to the loud "re-run with --install" partial instead of installing silently.
 //
 // --artifacts-dir (#416): where the out-of-orchestrator passes leave their dated results artifact
 // (<module>.pass.json — see docs/design/audit-pass-artifacts.md). When a fresh, target-matching
@@ -82,7 +87,7 @@ const supabaseRef = supabaseRefsArg[0];
 const baselinePath = flagValue("--baseline");
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--baseline prior-findings.json]");
+  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--allow-target-install] [--baseline prior-findings.json]");
   process.exit(2);
 }
 
@@ -142,6 +147,7 @@ const ctx: RunContext = {
   supabaseRef,
   supabaseRefs: supabaseRefsArg,
   apps: appList,
+  allowTargetInstall: args.includes("--allow-target-install"),
 };
 
 console.log(`\nFull audit — ${targetDir}`);
