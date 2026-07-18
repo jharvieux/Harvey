@@ -232,6 +232,17 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m5?.reason).toMatch(/knip did not run/);
   });
 
+  // #505: a monorepo target where jscpd timed out on one workspace — quality-scan still exits 0
+  // (the gap is disclosed as a finding, not a crash) so this is exactly the #350 shape: the exit
+  // code says nothing, the M4-99 finding is the tell.
+  it("M4 — jscpd did not complete on every workspace (M4-99 disclosure emitted, exit 0) is NOT recorded ran", () => {
+    const jscpdTimedOut = { exec: () => ({ ok: true, output: JSON.stringify([{ id: "M5-01" }, { id: "M4-99", title: "M4 duplication scan (jscpd) did not complete for every workspace" }]) }) };
+    const m4 = status(AUDIT_RUNNERS, jscpdTimedOut, "M4");
+    expect(m4?.status).not.toBe("ran");
+    expect(m4?.status).toBe("partial");
+    expect(m4?.reason).toMatch(/jscpd did not complete/);
+  });
+
   it("M8 — no test suite (moduleRecord partial, exit 0) is NOT recorded ran", () => {
     // mutation-scan's #224 branch: the correct verdict is serialized and must be read, not discarded.
     const noSuite = { exec: () => ({ ok: true, output: JSON.stringify({ finding: { id: "M8-00" }, moduleRecord: { status: "partial", note: "No automated test suite found (no scripts.test) — mutation scan could not run." } }) }) };

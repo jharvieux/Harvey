@@ -10,7 +10,7 @@
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
 import { findFreshPass, ranFromPass } from "./audit-pass-artifact.js";
-import type { ModuleRunner, ProbeOutcome, RunContext } from "./audit-runner.js";
+import type { ModuleRunner, RunContext } from "./audit-runner.js";
 import type { Finding } from "./findings.js";
 
 // #416: fold a rejected-pass reason (wrong target, stale, malformed) into a probe's not-run reason,
@@ -50,28 +50,6 @@ const runCli = (ctx: RunContext, script: string, argv: string[]): { ok: boolean;
   const { ok, output } = ctx.exec("pnpm", [script, ...argv]);
   return { ok, output, command: `pnpm ${script} ${argv.join(" ")}`.trim() };
 };
-
-// For a module whose CLI emits a report-schema Finding[] to --out: when the run context is capturing
-// (#312), append `--out <captureDir>/<module>.json`, then read the emitted findings back onto the
-// outcome so run-audit can assemble them. Shared CLIs (quality-scan feeds M4+M5, detect-static feeds
-// M7+M9) get captured under each module key; the assembler de-dupes.
-//
-// #350: exit 0 alone is NOT evidence a module ran — several tools deliberately exit 0 when they
-// scanned nothing. This factory is used only by M4 (jscpd), whose tool genuinely executes whenever
-// it exits 0; probes over the exit-0 no-op tools DERIVE their status from the machine-readable
-// verdict the tool printed instead.
-const capturing = (module: AuditModule, script: string, args: (ctx: RunContext) => string[]) => ({
-  module,
-  run: (ctx: RunContext): ProbeOutcome => {
-    const argv = args(ctx);
-    const command = `pnpm ${script} ${argv.join(" ")}`.trim();
-    const outPath = captureOut(ctx, module);
-    const { ok, output } = ctx.exec("pnpm", [script, ...argv, ...(outPath ? ["--out", outPath] : [])]);
-    if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-    const findings = readCaptured(ctx, outPath);
-    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
-  },
-});
 
 const hasNodeModules = (ctx: RunContext): boolean => ctx.exists(join(ctx.targetDir, "node_modules"));
 
@@ -213,7 +191,25 @@ const m3: ModuleRunner = {
 // source alone, while knip cannot resolve config imports without the target's installed deps. One
 // `ran` covering both would be the composite-claim bug the gate exists to catch, so they probe
 // separately and M5 owns the node_modules precondition.
-const m4: ModuleRunner = capturing("M4", "quality-scan", (ctx) => [ctx.targetDir]);
+//
+// M4 (#505): quality-scan now runs jscpd per workspace with a hard timeout, so a monorepo target
+// can be a genuine partial — some workspaces scanned, one timed out. Exit 0 alone is no longer
+// enough evidence of a clean `ran` (#350's rule): the probe reads the emitted array for the M4-99
+// gap-disclosure finding the CLI substitutes for any workspace that didn't complete, the same way
+// M5 already reads for M5-00.
+const m4: ModuleRunner = {
+  module: "M4",
+  run: (ctx) => {
+    const outPath = captureOut(ctx, "M4");
+    const command = `pnpm quality-scan ${ctx.targetDir}`;
+    const { ok, output } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+    if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
+    const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
+    if (!findings) return { status: "requires-live-run", reason: `could not read quality-scan output to confirm jscpd ran: ${trimOut(output)}` };
+    if (findings.some((f) => (f as { id?: string }).id === "M4-99")) return { status: "partial", detail: command, reason: "jscpd did not complete on every workspace — quality-scan emitted the M4-99 disclosure finding, so duplication coverage is incomplete for this pass (#505)", findings: findings as Finding[] };
+    return findings.length ? { status: "ran", detail: command, findings: findings as Finding[] } : { status: "ran", detail: command };
+  },
+};
 
 // M5 (#350): knip exits 0 even when it could not run — quality-scan then substitutes an M5-00
 // disclosure finding (#223). So the exit code is not the evidence; the presence of that finding in
