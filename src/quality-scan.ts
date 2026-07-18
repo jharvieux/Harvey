@@ -210,29 +210,82 @@ export function duplicationSummary(report: JscpdReport): { percentage: number; d
   return { percentage, duplicatedLines, totalLines, subThresholdCloneCount };
 }
 
-// #223: knip throws (rather than reporting) when it can't resolve a target's config/plugin
-// imports — most often because the target's own node_modules isn't installed. M4 (jscpd) has no
-// such dependency, so a knip failure shouldn't cost the engagement its duplication findings too.
-// The CLI catches the throw and substitutes this disclosure finding for the M5-* findings
-// knipToFindings would otherwise have produced — a visible partial, not a silent skip, matching
-// the coverage gap disclosure pattern already used for M7's Turbopack bundle-manifest gap
-// (src/detectors/bundle-stats.ts, id M7B-03).
+// #223/#505: knip throws (rather than reporting) when it can't resolve a target's config/plugin
+// imports — most often because the target's own node_modules isn't installed, or (on a monorepo)
+// because a per-workspace run timed out (#505: the whole-repo run hung indefinitely in knip's
+// workspace-resolution stage; quality-scan now runs knip per workspace with a hard timeout
+// instead). M4 (jscpd) has no such dependency, so a knip gap shouldn't cost the engagement its
+// duplication findings too. The CLI catches the throw/timeout per workspace and substitutes this
+// disclosure finding for the M5-* findings the affected workspace(s) would otherwise have
+// produced — a visible partial, not a silent skip or a silent stall, matching the coverage gap
+// disclosure pattern already used for M7's Turbopack bundle-manifest gap
+// (src/detectors/bundle-stats.ts, id M7B-03). `reason` may name a single cause (whole-repo target)
+// or list several workspace:cause pairs (monorepo target, partial coverage).
 export function knipUnavailableFinding(reason: string): Finding {
   return {
     id: "M5-00",
-    title: "M5 dead-code scan (knip) did not run",
+    title: "M5 dead-code scan (knip) did not complete for every workspace",
     severity: "Info",
     confidence: "N/A",
     category: "Maintainability",
     taxonomy: "M5 — Slop / dead code",
     location: "(repo-wide)",
     status: "Open",
-    evidence: `knip failed to run: ${reason}`,
+    evidence: `knip did not complete: ${reason}`,
     impact: "Dead-code coverage for this engagement is incomplete for this pass — a disclosed coverage gap, not a finding of zero dead code.",
-    fix: "Install the target repo's dependencies (npm/pnpm/yarn install) so knip can resolve its config and plugin imports, then re-run `pnpm quality-scan`.",
+    fix: "Install the target repo's dependencies (npm/pnpm/yarn install) so knip can resolve its config and plugin imports, then re-run `pnpm quality-scan` (raise --timeout if the gap was a timeout).",
     value: 1,
     ease: 3,
     safety: 5,
+  };
+}
+
+// #505: the M4 mirror of knipUnavailableFinding — jscpd has no node_modules dependency, but a
+// per-workspace run can still time out (the same whole-repo hang the issue reports, just on the
+// duplication side) or crash on one workspace without losing the others' results. `M4-99` (not
+// `M4-00`, which jscpdToFindings already uses for the #365 sub-threshold-clone disclosure) keeps
+// this a distinct, non-colliding meta row.
+export function jscpdUnavailableFinding(reason: string): Finding {
+  return {
+    id: "M4-99",
+    title: "M4 duplication scan (jscpd) did not complete for every workspace",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Maintainability",
+    taxonomy: "M4 — Duplication",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `jscpd did not complete: ${reason}`,
+    impact: "Duplication coverage for this engagement is incomplete for this pass — a disclosed coverage gap, not a finding of zero duplication.",
+    fix: "Re-run `pnpm quality-scan` with a longer --timeout, or investigate the affected workspace(s) individually.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
+}
+
+// #505: quality-scan now runs jscpd/knip per workspace (monorepo target) rather than once over the
+// whole target, so their reports need merging back into one before the existing jscpdToFindings /
+// knipToFindings transforms run — those stay single-report, unchanged and still independently
+// tested. Pure concatenation: file paths are already made workspace-relative-to-target by the CLI
+// before merging.
+export function mergeJscpdReports(reports: JscpdReport[]): JscpdReport {
+  return {
+    statistics: {
+      total: {
+        percentage: 0, // recomputed from the merged duplicates by duplicationSummary; not meaningful pre-merge
+        duplicatedLines: reports.reduce((sum, r) => sum + r.statistics.total.duplicatedLines, 0),
+        lines: reports.reduce((sum, r) => sum + r.statistics.total.lines, 0),
+      },
+    },
+    duplicates: reports.flatMap((r) => r.duplicates),
+  };
+}
+
+export function mergeKnipReports(reports: KnipReport[]): KnipReport {
+  return {
+    files: reports.flatMap((r) => r.files),
+    issues: reports.flatMap((r) => r.issues),
   };
 }
 
