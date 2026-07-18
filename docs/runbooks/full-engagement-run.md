@@ -52,16 +52,21 @@ Playwright's bundled chromium (M7 Lighthouse). A missing mechanical-tier binary 
 git clone --no-single-branch <repo-url> <target-dir>   # FULL history — a shallow/zip delivery
                                                          # silently voids M1 git-history secrets
                                                          # and M3 churn/co-change signal
-cd <target-dir> && npm install                          # (or pnpm/yarn install per the target's
+cd <target-dir> && npm install --ignore-scripts         # (or pnpm/yarn install per the target's
                                                          # own lockfile) — unlocks M5 (knip needs
                                                          # the target's own node_modules to resolve
                                                          # config/plugin imports), M8 stub-check/
                                                          # Stryker candidacy, M7 Lighthouse/bundle
 ```
 
-For an untrusted cold repo, consider `--ignore-scripts` on the install (install scripts of an
-unvetted repo are the exact execution-vector class M1's supply-chain checks flag) — verify knip
-still resolves before adopting that as standard; it hasn't been measured yet.
+`--ignore-scripts` is the standard for an untrusted cold repo (install scripts of an unvetted
+repo are the exact execution-vector class M1's supply-chain checks flag). **Measured 2026-07-18
+(#531)** against `boxyhq/saas-starter-kit`: knip's output and the M8 stub-check's results were
+identical with and without `--ignore-scripts`, even though it skips `@prisma/client`'s postinstall
+codegen — see `docs/design/portability-cold-target.md`'s M5/M8 rows for the detail and the one
+caveat (a target whose covered tests import a generated client, unlike this one, is unmeasured).
+M7 Lighthouse/bundle builds under `--ignore-scripts` are also still unmeasured — a `next build`
+can depend on postinstall codegen in ways M5/M8 did not here.
 
 If the target is a monorepo, `npm install` at the workspace root is normally sufficient (pnpm/npm
 workspaces hoist), but confirm — a workspace with its own lockfile needs its own install.
