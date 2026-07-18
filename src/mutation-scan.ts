@@ -350,6 +350,250 @@ export function noTestSuiteModuleRecord(reason: string): { status: "partial"; no
   return { status: "partial", note: `No automated test suite found (${reason}) — mutation scan could not run.` };
 }
 
+// #503: a target's suite can pass ONLY under a specific process env (ATC: a timezone-sensitive
+// test that needs the process to START with TZ=Pacific/Honolulu — a runtime process.env.TZ
+// reassignment does not re-init Node's timezone). Stryker's initial dry run then fails under the
+// audit machine's ambient env and M8 voids with no actionable reason. These functions detect the
+// env the target itself declares (CI workflow, test-runner config/setup, package.json test
+// script) so the CLI can replicate it when invoking Stryker/stub-check.
+//
+// Only locale/timezone keys: they are the env-fragility class that breaks a dry run without being
+// a secret or machine-specific path. Anything wider (DATABASE_URL, tokens) must come from the
+// operator, not be scraped out of the target's CI.
+const TEST_ENV_KEYS = "TZ|LANG|LC_ALL";
+const ENV_PATTERNS: RegExp[] = [
+  new RegExp(`\\b(${TEST_ENV_KEYS})=([A-Za-z0-9_./:+-]+)`, "g"), // inline prefix: TZ=UTC vitest run
+  new RegExp(`\\b(${TEST_ENV_KEYS})["']?\\s*:\\s*["']?([A-Za-z0-9_./:+-]+)`, "g"), // YAML env: / JS env object
+  new RegExp(`process\\.env\\.(${TEST_ENV_KEYS})\\s*=\\s*["']([^"']+)["']`, "g"), // setup-file assignment
+];
+
+export interface DetectedEnvVar {
+  key: string;
+  value: string;
+  source: string;
+}
+
+// First declaration per key wins, in the file order the caller supplies — the CLI passes
+// test-runner configs/setup files first (closest to the runner), then package.json scripts, then
+// CI workflows, so a runner-level TZ beats a workflow-level one.
+export function detectTestEnv(files: readonly { path: string; text: string }[]): DetectedEnvVar[] {
+  const found = new Map<string, DetectedEnvVar>();
+  for (const { path, text } of files) {
+    for (const pattern of ENV_PATTERNS) {
+      for (const m of text.matchAll(pattern)) {
+        const key = m[1]!;
+        if (!found.has(key)) found.set(key, { key, value: m[2]!, source: path });
+      }
+    }
+  }
+  return [...found.values()];
+}
+
+// #503: Stryker aborts with a ConfigError when any test fails in its initial (unmutated) dry run —
+// the report is never written, so before this the CLI fell through to "mutation report not found"
+// and the probe recorded a generic requires-live-run. The failure is distinct and actionable:
+// the SUITE does not pass under the invoked env, which is the target's defect (or an env we
+// failed to replicate), not an environment gap.
+const DRY_RUN_FAILURE = /failed tests in the initial test run|initial test run (?:failed|timed out)/i;
+// Best-effort first failing test out of the runner output Stryker echoes (vitest ×/✗, jest ●/FAIL).
+const FAILING_TEST_LINE = /^.*(?:✗|✖|×|✘|●|\bFAIL\b).*$/m;
+
+export function detectDryRunFailure(output: string): { failed: boolean; detail?: string } {
+  if (!DRY_RUN_FAILURE.test(output)) return { failed: false };
+  const failing = output.match(FAILING_TEST_LINE)?.[0].trim();
+  const configError = output.match(/^.*initial test run.*$/im)?.[0].trim();
+  return { failed: true, detail: failing ?? configError ?? "Stryker reported a failed initial test run" };
+}
+
+const describeEnv = (env: readonly DetectedEnvVar[]): string =>
+  env.length ? env.map((e) => `${e.key}=${e.value} (from ${e.source})`).join(", ") : "no target-declared test env detected; ambient process env only";
+
+export function dryRunFailureFinding(detail: string, env: readonly DetectedEnvVar[]): Finding {
+  return {
+    id: "M8-03",
+    status: "Open",
+    category: "Test quality",
+    title: "Test suite fails its own unmutated dry run — mutation testing blocked",
+    severity: "Medium",
+    confidence: "Confirmed",
+    taxonomy: "M8 — Suite fails unmutated dry run (env-fragile tests)",
+    location: "package.json (test suite)",
+    evidence: `Stryker's initial dry run — the target's own suite, unmutated — failed under the invoked environment (${describeEnv(env)}). First failure: ${detail}.`,
+    impact: "The suite only passes under an environment it does not declare (or not at all) — CI green is unreproducible elsewhere, and mutation testing (M8's headline metric) cannot run until the suite passes a clean dry run.",
+    fix: "Make the suite pass in a declared environment: pin required env (TZ, locale) in the test-runner config rather than relying on ambient machine state or runtime process.env reassignment (which does not re-init Node's timezone), then re-run the mutation scan.",
+    value: 3,
+    ease: 3,
+    safety: 5,
+  };
+}
+
+export function dryRunFailureModuleRecord(detail: string, env: readonly DetectedEnvVar[]): { status: "partial"; note: string } {
+  return {
+    status: "partial",
+    note: `Stryker's initial dry run FAILED — the target suite does not pass under the invoked environment (${describeEnv(env)}): ${detail}. M8 mutation scoring could not run (#503); the suite must pass an unmutated run first.`,
+  };
+}
+
+// #504: nothing prevented a mutation run over PART of the configured mutate scope (a --mutate
+// subset, an alternate scoped config, or a replayed scoped report) from being treated as the
+// module's measurement — a subset score looks exactly like a whole-suite number. The ATC run
+// scoped Stryker to 263 files and reported the result as M8; that silently invalidated the
+// module, the same class as the exit-0-as-evidence bugs (#350). verifyMutationScope compares the
+// file set the report actually covers against the files matched by the CONFIGURED mutate globs
+// (the target's own config), so a scoped run is recorded partial with its scope — never `ran`.
+//
+// The matcher supports the glob subset real Stryker configs use (`**`, `*`, `?`, `{a,b}` braces,
+// leading-`!` negation). Anything wider (extglobs, character classes) makes the scope
+// unverifiable — recorded as such, never guessed at.
+const UNSUPPORTED_GLOB = /[[\]]|[!+@*?]\(/;
+
+function expandBraces(glob: string): string[] {
+  const m = glob.match(/\{([^{}]*)\}/);
+  if (!m) return [glob];
+  return m[1]!.split(",").flatMap((alt) => expandBraces(glob.replace(m[0], alt)));
+}
+
+function globToRegExp(glob: string): RegExp {
+  let source = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        // "**/" spans zero or more whole segments; a bare "**" spans anything.
+        source += glob[i + 2] === "/" ? "(?:[^/]+/)*" : ".*";
+        i += glob[i + 2] === "/" ? 2 : 1;
+      } else {
+        source += "[^/]*";
+      }
+    } else if (c === "?") {
+      source += "[^/]";
+    } else if (/[.+^$()|\\]/.test(c)) {
+      source += `\\${c}`;
+    } else {
+      source += c;
+    }
+  }
+  return new RegExp(`^${source}$`);
+}
+
+function matchesMutateGlobs(path: string, globs: readonly string[]): boolean {
+  let included = false;
+  for (const g of globs) {
+    const negated = g.startsWith("!");
+    const raw = negated ? g.slice(1) : g;
+    if (expandBraces(raw).some((e) => globToRegExp(e).test(path))) included = !negated;
+  }
+  return included;
+}
+
+// Not exported (same rule as the summary shapes above): callers receive it as verifyMutationScope's
+// inferred return type.
+interface MutationScope {
+  mutatedFileCount: number;
+  configuredGlobs?: string[];
+  expectedFileCount?: number;
+  missingCount?: number;
+  // Sample (max 5) of files the configured globs match but the report never covered.
+  missing?: string[];
+  // False when the configured scope could not be statically read (non-JSON config, no mutate
+  // array, unsupported glob syntax) — the run is not KNOWN scoped, but full coverage is unproven.
+  verified: boolean;
+  scoped: boolean;
+  note: string;
+}
+
+export function verifyMutationScope(
+  reportFiles: readonly string[],
+  mutateGlobs: readonly string[] | undefined,
+  sourceFiles: readonly string[],
+): MutationScope {
+  const base = { mutatedFileCount: reportFiles.length };
+  if (!mutateGlobs || mutateGlobs.length === 0) {
+    return { ...base, verified: false, scoped: false, note: "configured mutate scope not statically readable (no JSON Stryker config with a mutate array) — full-scope coverage is unverified, treat the score as covering only the listed files" };
+  }
+  const unsupported = mutateGlobs.find((g) => UNSUPPORTED_GLOB.test(g));
+  if (unsupported) {
+    return { ...base, configuredGlobs: [...mutateGlobs], verified: false, scoped: false, note: `configured mutate glob "${unsupported}" uses syntax this scope check cannot evaluate — full-scope coverage is unverified` };
+  }
+  // .d.ts files carry no executable code, so Stryker configs rarely bother excluding them; leaving
+  // them in `expected` would flag honest full runs as scoped.
+  const expected = sourceFiles.filter((f) => !f.endsWith(".d.ts") && matchesMutateGlobs(f, mutateGlobs));
+  const covered = new Set(reportFiles);
+  const missing = expected.filter((f) => !covered.has(f));
+  if (missing.length > 0) {
+    return {
+      ...base,
+      configuredGlobs: [...mutateGlobs],
+      expectedFileCount: expected.length,
+      missingCount: missing.length,
+      missing: missing.slice(0, 5),
+      verified: true,
+      scoped: true,
+      note: `run covered ${reportFiles.length} file(s) but the configured mutate globs match ${expected.length} — ${missing.length} file(s) were never mutated (e.g. ${missing.slice(0, 3).join(", ")})`,
+    };
+  }
+  return { ...base, configuredGlobs: [...mutateGlobs], expectedFileCount: expected.length, verified: true, scoped: false, note: `run covered all ${expected.length} file(s) matched by the configured mutate globs` };
+}
+
+export function scopedRunModuleRecord(scope: MutationScope): { status: "partial"; note: string } {
+  return {
+    status: "partial",
+    note: `Scoped mutation run — ${scope.note}. A subset measurement is not M8's result: recorded partial, never ran (#504). Re-run over the full configured mutate scope for the module's measurement.`,
+  };
+}
+
+// #513: most third-party clients have a test suite but no Stryker setup — before this, M8's
+// headline metric (mutation score) was simply unavailable to them ("this wrapper does not
+// generate a config" was the old stance; ATC masked it by shipping its own config). Now the CLI
+// detects the target's test runner and scaffolds a minimal, off-tree Stryker config for it.
+// Test-runner choice IS still client-specific — which is why this detects rather than assumes,
+// and degrades loudly (mutationNotRunModuleRecord) when it cannot detect one.
+type ScaffoldRunner = "vitest" | "jest" | "mocha";
+const SCAFFOLD_RUNNERS: readonly ScaffoldRunner[] = ["vitest", "jest", "mocha"];
+
+export function detectTestRunner(pkg: PackageJsonForTestDetection | undefined): { runner: ScaffoldRunner; plugin: string } | undefined {
+  const deps = { ...pkg?.dependencies, ...pkg?.devDependencies };
+  const runner = SCAFFOLD_RUNNERS.find((r) => r in deps);
+  return runner ? { runner, plugin: `@stryker-mutator/${runner}-runner` } : undefined;
+}
+
+// Where a target's product code usually lives. Only dirs that actually exist go into the
+// scaffolded mutate globs; a target matching none gets no mutate key (Stryker's own defaults),
+// which verifyMutationScope then honestly reports as an unverifiable scope.
+export const SCAFFOLD_SOURCE_DIRS: readonly string[] = ["src", "app", "apps", "pages", "lib", "components", "server", "packages", "utils", "api"];
+
+// Deliberately the glob subset verifyMutationScope can evaluate (braces + ** + !-negation, no
+// extglobs) so a scaffolded run's scope is always verifiable.
+export function scaffoldStrykerConfig(runner: ScaffoldRunner, presentDirs: readonly string[]): Record<string, unknown> {
+  const mutate = presentDirs.length
+    ? [
+        ...presentDirs.map((d) => `${d}/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}`),
+        "!**/*.test.*",
+        "!**/*.spec.*",
+        "!**/__tests__/**",
+        "!**/*.d.ts",
+        "!**/node_modules/**",
+      ]
+    : undefined;
+  return {
+    testRunner: runner,
+    coverageAnalysis: "perTest",
+    reporters: ["json", "progress"],
+    jsonReporter: { fileName: "reports/mutation/mutation.json" },
+    tempDirName: "stryker-tmp",
+    ...(mutate ? { mutate } : {}),
+  };
+}
+
+// The explicit degradation ladder (#513): when the full-mutation rung cannot run, the ledger says
+// which rung this was, why it stopped, and what the next rung is — never a silent drop.
+export function mutationNotRunModuleRecord(reason: string): { status: "partial"; note: string } {
+  return {
+    status: "partial",
+    note: `Mutation scoring did not run: ${reason}. M8 degradation ladder (#513): full mutation (target or scaffolded Stryker config) → deletion-survival (pnpm mutation-scan <target> --stub-check) → source-only test-intent detectors (pnpm detect-static <target>) → M8-00 zero-coverage finding. The full-mutation rung stopped here; the drop to a lower rung is recorded, never silent.`,
+  };
+}
+
 // #435: a real Stryker run's { summary, reportRows } carries no report-schema Finding[], so it
 // contributed nothing to the engagement deliverable — only the no-test-suite branch's M8-00 did
 // (#224/#420). Surviving mutants are noisy at the individual-mutant level (a repo can have hundreds),

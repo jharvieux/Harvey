@@ -80,8 +80,88 @@ describe("mutation-scan --detect-only (#470/#252, child process, no stryker on P
     expect(parsed.finding.evidence).toContain("ZERO test files");
   });
 
-  it("negative control: WITHOUT --detect-only the same missing-stryker repo still fails — the flag is the protection", () => {
+  // Negative control, updated for #513: WITHOUT --detect-only the same repo now proceeds to the
+  // mutation rung — no config, so it reaches the scaffold path and (lacking --install and any
+  // Stryker packages) degrades to the machine-readable partial verdict instead of the old ENOENT
+  // crash. --detect-only remains the corpus-drift protection: it alone yields the bare [] shape
+  // and never enters the mutation rung.
+  it("negative control: WITHOUT --detect-only the same repo enters the mutation rung and degrades loudly, not to []", () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC });
-    expect(runCli(repo, []).status).not.toBe(0);
+    const { status, out } = runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { moduleRecord?: { status: string; note: string } };
+    expect(parsed.moduleRecord?.status).toBe("partial");
+    expect(parsed.moduleRecord?.note).toMatch(/--install/);
+  });
+});
+
+// #513: a suite-bearing target with no Stryker config gets the scaffold path, whose every degrade
+// is a loud, machine-readable ladder statement — never a crash, never a silent skip.
+describe("mutation-scan scaffold degradation ladder (#513, child process)", () => {
+  it("no recognized test runner (ava-only harness): degrades naming the detection gap and the ladder", () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-m8-cli-"));
+    dirs.push(repo);
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "fixture", scripts: { test: "ava" }, devDependencies: { ava: "^6.0.0" } }));
+    // Two test files so #252's single-placeholder threshold can't trip — this fixture is about the
+    // scaffold rung, not suite absence.
+    writeFileSync(join(repo, "app.test.js"), `const test = require("ava");\ntest("adds", (t) => { t.is(1 + 2, 3); });\n`);
+    writeFileSync(join(repo, "cli.test.js"), `const test = require("ava");\ntest("rejects", (t) => { t.throws(() => { throw new Error("x"); }); });\n`);
+    const { status, out } = runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { moduleRecord?: { status: string; note: string } };
+    expect(parsed.moduleRecord?.status).toBe("partial");
+    expect(parsed.moduleRecord?.note).toMatch(/no recognized test runner/);
+    expect(parsed.moduleRecord?.note).toMatch(/degradation ladder/);
+    expect(parsed.moduleRecord?.note).toMatch(/--stub-check/);
+  });
+
+  it("recognized runner but no Stryker packages and no --install: degrades naming the exact unlock command", () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC });
+    const { status, out } = runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { moduleRecord?: { note: string } };
+    expect(parsed.moduleRecord?.note).toMatch(/vitest suite but no Stryker install/);
+    expect(parsed.moduleRecord?.note).toMatch(/@stryker-mutator\/core, @stryker-mutator\/vitest-runner/);
+    expect(parsed.moduleRecord?.note).toMatch(/npm install --no-save/);
+  });
+});
+
+// #504 end-to-end through the CLI: a replayed Stryker report that covers less than the target
+// config's mutate globs must come out carrying the partial moduleRecord — the guard that a
+// deliberately-scoped run can never be recorded as M8's measurement.
+describe("mutation-scan --report scope verification (#504, child process)", () => {
+  const killed = { id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } };
+
+  function scopedFixture(reportFiles: string[]): { repo: string; reportPath: string } {
+    const repo = fixtureRepo({
+      "src/add.test.ts": REAL_SPEC,
+      "src/add.ts": "export const add = (a: number, b: number) => a + b;\n",
+      "src/mul.ts": "export const mul = (a: number, b: number) => a * b;\n",
+    });
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest", mutate: ["src/**/*.ts", "!**/*.test.ts"] }));
+    const reportPath = join(repo, "scoped-mutation.json");
+    writeFileSync(reportPath, JSON.stringify({ schemaVersion: "1", files: Object.fromEntries(reportFiles.map((f) => [f, { mutants: [killed] }])) }));
+    return { repo, reportPath };
+  }
+
+  it("a report covering a subset of the configured mutate scope emits the partial moduleRecord alongside its summary", () => {
+    const { repo, reportPath } = scopedFixture(["src/add.ts"]);
+    const { status, out } = runCli(repo, ["--report", reportPath]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { summary: unknown; scope: { scoped: boolean; missing: string[] }; moduleRecord?: { status: string; note: string } };
+    expect(parsed.summary).toBeTruthy();
+    expect(parsed.scope.scoped).toBe(true);
+    expect(parsed.scope.missing).toEqual(["src/mul.ts"]);
+    expect(parsed.moduleRecord?.status).toBe("partial");
+    expect(parsed.moduleRecord?.note).toMatch(/never ran \(#504\)/);
+  });
+
+  it("a report covering the full configured mutate scope carries no moduleRecord — a real full run still reads ran", () => {
+    const { repo, reportPath } = scopedFixture(["src/add.ts", "src/mul.ts"]);
+    const { status, out } = runCli(repo, ["--report", reportPath]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { scope: { scoped: boolean; verified: boolean }; moduleRecord?: unknown };
+    expect(parsed.scope).toMatchObject({ scoped: false, verified: true });
+    expect(parsed.moduleRecord).toBeUndefined();
   });
 });

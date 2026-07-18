@@ -136,6 +136,41 @@ describe("validateFindings — coverage ledger (#349)", () => {
   });
 });
 
+describe("validateFindings — headline must not claim completion over a partial ledger (#509)", () => {
+  const partialLedger = [
+    { module: "M2", name: "Local pen-test (dynamic)", status: "requires-live-run", reason: "no local supabase stack" },
+  ];
+
+  it("rejects a headline claiming the audit is done while the ledger has a gap", () => {
+    const doc = {
+      ...example,
+      meta: { ...example.meta, headline: "The full audit is done and the deliverable is rendered." },
+      coverage: partialLedger,
+    };
+    const { ok, errors } = validateFindings(doc);
+    expect(ok).toBe(false);
+    expect(errors).toContainEqual(expect.stringContaining("meta.headline"));
+  });
+
+  it("accepts an honest partial headline against the same gap", () => {
+    const doc = {
+      ...example,
+      meta: { ...example.meta, headline: "Partial audit — M2 requires a live run." },
+      coverage: partialLedger,
+    };
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+
+  it("accepts a completion claim when the ledger is actually complete", () => {
+    const doc = {
+      ...example,
+      meta: { ...example.meta, headline: "The audit is done — all modules assessed." },
+      coverage: [{ module: "M2", name: "Local pen-test (dynamic)", status: "ran" }],
+    };
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+});
+
 describe("bftb", () => {
   it("matches the renderer's formula: round(value*ease*safety/125*100)", () => {
     expect(bftb({ value: 5, ease: 5, safety: 5 })).toBe(100);
