@@ -116,9 +116,17 @@ were cloned only under `/private/tmp`; `targets/calibration` in the repo was nev
 
 ## Follow-ups (filed as issues)
 
-- **Calibration migrations don't stand up on a fresh live DB** (#546) — duplicate `create table
-  public.reports` across two migrations, and a `seed.sql` referencing a non-existent
-  `legacy_accounts`. The static tooling never applied them live, so this stayed latent.
+- **Calibration migrations don't stand up on a fresh live DB** (#546, fixed) — duplicate `create
+  table public.reports` across two migrations, and a `seed.sql` referencing a non-existent
+  `legacy_accounts`. The static tooling never applied them live, so this stayed latent. Fixed by
+  renaming the benign tenant-scoped-read fixture's table to `tenant_reports` (the connected-tier
+  `P-RLS-ENABLED-NO-POLICY` plant keeps the literal name `reports`) and adding the missing
+  `legacy_accounts` table (RLS enabled, zero policies, same deny-all shape as `service_state`).
+  Also found and fixed in the same pass: the `#301` widgets migration
+  (`20260718000001_fk_tenant_scope.sql`, landed after this doc was written) called a
+  nonexistent `current_tenant()` instead of `public.current_tenant_id()`, which also blocked a
+  fresh `supabase db reset`. Verified live: `supabase db reset` applies the full migration set +
+  seed with zero errors.
 - **Generic seed can't satisfy a `CHECK` on a *non-defaulted* enum column** (#547) — the
   `DEFAULT`-omission fix covers the common case (defaulted enums); a `CHECK (col IN (…))` with no
   default still fails the INSERT (recorded as an `M2-PROVISION-MIGRATE` finding). Parsing simple `IN
