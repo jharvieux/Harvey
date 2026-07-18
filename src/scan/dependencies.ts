@@ -544,6 +544,28 @@ function severityFromCvss(score: string | undefined): Severity {
   return "Medium";
 }
 
+// #512: when osv-scanner cannot run at all (binary missing, crash with no report), the CVE pass
+// must degrade to this disclosure — previously it degraded to an empty result, which read as
+// "zero vulnerable dependencies" in every deliverable. Same contract as M5-00/M7L-00/M8-00.
+export function osvUnavailableFinding(reason: string): Finding {
+  return {
+    id: "DEP-OSV-00",
+    title: "Dependency-CVE scan (osv-scanner) did not run",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Dependency CVE",
+    taxonomy: "Known-vulnerable dependency — coverage not assessed",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `osv-scanner failed to run: ${reason}`,
+    impact: "Lockfile CVE coverage for this engagement is incomplete for this pass — a disclosed coverage gap, not a finding of zero vulnerable dependencies. The curated Next.js version checks still ran.",
+    fix: "Install osv-scanner on the scanning machine (see this file's header) and re-run the scan.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
+}
+
 export function parseOsvFindings(result: OsvScanResult): Finding[] {
   const findings: Finding[] = [];
   for (const src of result.results ?? []) {

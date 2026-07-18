@@ -5,6 +5,7 @@ import {
   checkNextVersionCVEs,
   type CuratedDepCve,
   CURATED_CLAIMS,
+  osvUnavailableFinding,
   parseOsvFindings,
   type OsvScanResult,
 } from "./dependencies.js";
@@ -464,5 +465,20 @@ describe("curated + OSV dedup (issue #73)", () => {
     expect(ids).toContain("DEP-CVE-2026-44578");
     expect(ids).toContain("DEP-OSV-GHSA-aaaa-bbbb-cccc");
     expect(merged).toHaveLength(2);
+  });
+});
+
+// #512: an osv-scanner that could not run at all previously degraded to an EMPTY result — every
+// deliverable then read "zero vulnerable dependencies" instead of "the CVE pass did not run".
+// mechanical.ts now substitutes this disclosure finding, same contract as M5-00/M7L-00/M8-00.
+describe("osvUnavailableFinding", () => {
+  it("discloses the CVE-pass coverage gap without claiming zero vulnerable dependencies", () => {
+    const finding = osvUnavailableFinding("osv-scanner not found on PATH");
+    expect(finding.id).toBe("DEP-OSV-00");
+    expect(finding.severity).toBe("Info");
+    expect(finding.confidence).toBe("N/A");
+    expect(finding.evidence).toContain("osv-scanner not found on PATH");
+    expect(finding.impact).toContain("incomplete");
+    expect(finding.impact).toContain("not a finding of zero vulnerable dependencies");
   });
 });

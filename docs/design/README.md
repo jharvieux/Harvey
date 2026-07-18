@@ -13,5 +13,6 @@
 | [quick-scan-tier.md](quick-scan-tier.md) | Freemium model (decided): free **diagnosis** (finding + location + why-it-matters), gated **remediation** (the fix) + deep dynamic/semantic scan | quick-scan (#27) |
 | [exploratory-pentest.md](exploratory-pentest.md) | Exploratory dynamic pen testing beyond verify-only: local two-tenant harness, PostgREST/Server-Action/storage probe checklist, safety rails | #5 |
 | [m6-simplification-eval.md](m6-simplification-eval.md) | M6 rubric: what counts as a simplification/reuse opportunity, LLM rubric-agreement eval (not a precision gate), why M6 is paid-only | #72 |
+| [portability-cold-target.md](portability-cold-target.md) | Per-module (M1–M10) dependence on target-provided/operator/client-granted assets; provision-or-degrade table for a cold third-party target, cold-engagement provisioning sequence | #512 |
 
 Tracker adapter implementation details live in the interface sketches of `epic-builder.md` §8 (issue #22).
