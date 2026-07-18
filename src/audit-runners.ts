@@ -508,15 +508,17 @@ const SCHEMA_CANDIDATE_SUBPATHS = [
   "schema.sql",
 ];
 
-// #506: the schema tier is per-app — each app can carry its own schema layout. Runs against the
-// given app dir; `instance` is set only on a multi-app monorepo so a single-app target is one
-// untagged row exactly as before. The optional --schema hint (ctx.schemaHint) wins over the probe.
+// #506/#538: the schema tier is per-app — each app can carry its own schema layout. Runs against
+// the given app dir; `instance` is set only on a multi-app monorepo so a single-app target is one
+// untagged row exactly as before. A hint wins over the probe: on a single-target run (no
+// instanceName) that's ctx.schemaHint; on a monorepo fan-out, it's ctx.schemaHints[instanceName] —
+// its OWN app's hint, never smeared across the fan-out — so an app with an unconventional layout
+// still gets pointed at the right place.
 const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): ProbeOutcome => {
   const instance = instanceName ? { instance: instanceName } : {};
   const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
-  // The hint is a single path, so it applies only to the single-target run — never smeared across a
-  // monorepo's per-app fan-out, where each app probes its own conventional locations.
-  const hint = ctx.schemaHint && appPath === ctx.targetDir ? [ctx.schemaHint] : [];
+  const hintPath = instanceName ? ctx.schemaHints?.[instanceName] : ctx.schemaHint;
+  const hint = hintPath ? [hintPath] : [];
   const candidates = [...hint, ...SCHEMA_CANDIDATE_SUBPATHS.map((sub) => join(appPath, sub))];
   const schema = candidates.find((c) => ctx.exists(c));
   if (!schema) return { status: "requires-live-run", reason: `no live DB and no schema found — nothing to classify. Probed: ${candidates.join(", ")}. pii-classify --schema accepts a migrations dir (supabase/prisma/drizzle) or a schema.sql file (#529)`, ...instance };

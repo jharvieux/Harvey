@@ -74,10 +74,17 @@ export interface RunContext {
   // never covered must surface as an explicit partial/requires-live-run row — never absent (#506).
   apps?: { name: string; path: string }[];
   supabaseRefs?: string[];
-  // #529: an operator-supplied schema location for M10's schema tier (run-audit --schema), tried
-  // ahead of the conventional-location probe (supabase/migrations, prisma/migrations, drizzle, …).
-  // Absent ⇒ probe the conventional locations only.
+  // #529: an operator-supplied schema location for M10's schema tier (run-audit --schema <path>),
+  // tried ahead of the conventional-location probe (supabase/migrations, prisma/migrations,
+  // drizzle, …), on a SINGLE-target run. Absent ⇒ probe the conventional locations only.
   schemaHint?: string;
+  // #538: per-app schema locations for a MONOREPO, keyed by the app name in `apps` below (run-audit
+  // --schema <app>=<path>, repeatable — one pair per app whose layout the conventional-location
+  // probe would not find). schemaHint (above) is a single path and only ever applies to a
+  // single-target run; on a monorepo fan-out, each app's hint (if any) comes from this map instead,
+  // so an app with an unconventional layout still gets real M10 schema classification instead of
+  // being limited to the conventional-location probe alone. Absent ⇒ no per-app hints supplied.
+  schemaHints?: Record<string, string>;
   // #520: per-Supabase-project DB connection URLs for M10's live tier, keyed by project ref. On a
   // multi-project connected run the M10 probe classifies each ref whose URL is present here and
   // records requires-live-run for any ref without one — so each enumerated project is either

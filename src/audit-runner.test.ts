@@ -751,6 +751,27 @@ describe("monorepo per-instance fan-out (#506)", () => {
     expect(m10.every((r) => r.status === "partial")).toBe(true);
   });
 
+  // #538: a monorepo's per-app schema hint (ctx.schemaHints, keyed by app name) targets that ONE
+  // app's schema tier — the other app still falls back to the conventional-location probe, and the
+  // single-target ctx.schemaHint (#529) must never leak into either app's fan-out.
+  it("M10 schema tier uses each app's OWN per-app --schema hint, not a shared one", () => {
+    const schemasSeen: string[] = [];
+    runAudit(AUDIT_RUNNERS, ctx({
+      apps,
+      schemaHint: "/should/not/apply/on/a/monorepo.sql",
+      schemaHints: { "apps/rag": "/given/apps-rag-schema.sql" },
+      exec: (_c, argv) => {
+        if (argv.includes("pii-classify")) schemasSeen.push(argv[argv.indexOf("--schema") + 1]!);
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    }));
+    // apps/rag used its own hint; apps/main had none, so it fell back to the conventional probe
+    // (ctx.exists() defaults to true, so it resolves the first conventional candidate).
+    expect(schemasSeen).toContain("/given/apps-rag-schema.sql");
+    expect(schemasSeen.some((s) => s.includes("apps/main") && s.includes("supabase"))).toBe(true);
+    expect(schemasSeen).not.toContain("/should/not/apply/on/a/monorepo.sql");
+  });
+
   it("a single-app / single-DB target is unchanged — one untagged row per module", () => {
     const rec = runAudit(AUDIT_RUNNERS, ctx({ apps: [{ name: "root", path: "/target" }] })).recorded;
     expect(rec.filter((r) => r.module === "M5")).toHaveLength(1);
