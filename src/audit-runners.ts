@@ -214,7 +214,12 @@ const m3: ModuleRunner = {
     // vitals pass artifact still proves M3 ran, so the orchestrator need not have vitals installed to
     // record a real prior run.
     const pass = findFreshPass(ctx, "M3");
-    if (pass.fresh) return ranFromPass(pass.artifact, "captured vitals report");
+    if (pass.fresh) {
+      // #530: surface the pass artifact's top-K ranking so the cross-module enrichment (#515) fires
+      // in the common vitals-off-PATH flow too, not only when M3 was captured in-process.
+      const ran = ranFromPass(pass.artifact, "captured vitals report");
+      return pass.artifact.hotspots?.length ? { ...ran, hotspots: pass.artifact.hotspots } : ran;
+    }
     const base = !ok
       ? `vitals plugin unavailable or hotspot-scan failed: ${trimOut(output)}`
       : `hotspot-scan produced no M3 table — vitals report empty or unrecognized: ${trimOut(output)}`;

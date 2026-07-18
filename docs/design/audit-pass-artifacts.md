@@ -28,12 +28,20 @@ engagement's **artifacts directory**, passed to the orchestrator as `--artifacts
   "pass": "semantic",                   // "semantic" | "live" | "dynamic" | "vitals" | "verdict"
   "generatedAt": "2026-07-17T12:00:00Z",// ISO-8601; older than 30 days is stale
   "summary": "42 findings, 7 high",     // optional, surfaced in the coverage ledger detail
-  "findings": [ /* report-schema Finding[] */ ]  // optional; flows into the engagement document
+  "findings": [ /* report-schema Finding[] */ ],  // optional; flows into the engagement document
+  "hotspotFocus": true,                 // optional (M1 semantic): was an M3 hotspot brief supplied?
+  "hotspots": [ "core/checkout.ts" ]    // optional (M3 vitals): worst-first top-K ranking
 }
 ```
 
 The schema and the freshness window live in `src/audit-pass-artifact.ts`
 (`PassArtifact`, `MAX_PASS_AGE_MS`).
+
+`hotspots` (#530) is the M3 vitals pass's top-K hotspot ranking. When present, the M3 probe surfaces
+it so the cross-module enrichment (#515 — every module's findings tagged `onHotspot`/`hotspotRank`)
+fires in the common **vitals-off-PATH** flow, where M3 derives `ran` from this artifact rather than
+an in-process capture. Record it with `pnpm record-pass --module M3 --pass vitals --hotspots
+ranking.json …`, where `ranking.json` is a JSON array of file-path strings.
 
 ## How the probe uses it
 

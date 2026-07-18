@@ -497,6 +497,24 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     expect(status(AUDIT_RUNNERS, vitalsDown, "M3")?.status).toBe("ran");
   });
 
+  // #530: the vitals-off-PATH flow — M3 ran via a pass artifact carrying its top-K ranking, so the
+  // cross-module enrichment (#515) must fire here too, not only on the in-process capture path.
+  it("M3 surfaces the pass artifact's top-K ranking so run-audit hands it to the assembler", () => {
+    const withRanking = withPass(
+      "M3",
+      { pass: "vitals", hotspots: ["core/checkout.ts", "core/pay.ts"] },
+      { exec: () => ({ ok: false, output: "vitals_cli.py not found" }) },
+    );
+    const { recorded, hotspots } = runAudit(AUDIT_RUNNERS, withRanking);
+    expect(recorded.find((r) => r.module === "M3")?.status).toBe("ran");
+    expect(hotspots).toEqual(["core/checkout.ts", "core/pay.ts"]);
+  });
+
+  it("M3 pass artifact without a ranking yields no hotspots — enrichment simply does not fire", () => {
+    const noRanking = withPass("M3", { pass: "vitals" }, { exec: () => ({ ok: false, output: "vitals_cli.py not found" }) });
+    expect(runAudit(AUDIT_RUNNERS, noRanking).hotspots).toBeUndefined();
+  });
+
   // The core guard: a stale or mismatched artifact must NOT yield ran — the probe falls back to its
   // honest not-run status and says the artifact was rejected.
   it("a STALE artifact does not yield ran — M1 falls back to partial and reports the rejection", () => {
