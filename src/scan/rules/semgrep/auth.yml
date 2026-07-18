@@ -366,3 +366,35 @@ rules:
                 return true;
                 ...
               }
+
+  # #560: application/seed/setup code creates a Supabase Storage bucket with `public: true`. A
+  # public bucket skips storage RLS for reads, so every object in it is world-readable by URL
+  # regardless of any policy. On vandyand/saas-security-teardown this made KYC/patient documents
+  # (scripts/seed.mjs: createBucket("documents", { public: true })) globally readable. This is the
+  # STATIC, source-only sibling of the connected-tier live check checkPublicBucketsWithNoPolicies
+  # (src/scan/supabase-config.ts), which reads storage.buckets from a live DB; that live check is
+  # never fed on the source or autonomous-dynamic paths (the M2 stand-up neutralizes the client
+  # seed, so scripts/seed.mjs never runs and the bucket is never created to be observed). Review
+  # tier / High severity: `public: true` is a definite fact, but whether the bucket legitimately
+  # holds public assets (avatars, marketing images) vs. private data is not statically knowable --
+  # confirm what the bucket stores. Matches both createBucket(id, {public:true}) and the
+  # single-options-object form.
+  - id: harvey-public-bucket
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      This code creates a Supabase Storage bucket with public: true. A public bucket skips storage
+      RLS for reads — every object in it is readable by anyone who knows or can guess the URL,
+      regardless of policies. If it holds private/user data (documents, uploads, PII), this is a
+      broken object-authorization exposure. Set the bucket private and serve via signed URLs, or
+      confirm it only holds intentionally-public assets.
+    patterns:
+      - pattern-either:
+          - pattern: "$X.createBucket($NAME, { ..., public: true, ... })"
+          - pattern: "$X.createBucket($NAME, { public: true })"
+          - pattern: "$X.createBucket({ ..., public: true, ... })"
+          - pattern: "$X.createBucket({ public: true })"
