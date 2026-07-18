@@ -278,6 +278,8 @@ rules:
       - pattern: req.body
       - pattern: req.params
       - pattern: $REQ.nextUrl.searchParams
+      # App Router route handler body: `const { template } = await req.json()` (#570)
+      - pattern: await $REQ.json()
     pattern-sinks:
       - patterns:
           - pattern-either:

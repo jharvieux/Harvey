@@ -223,11 +223,15 @@ rules:
       # AUTHORIZED for this specific privileged action (harvey-authed-no-role-check).
       - pattern-not-regex: (?i)\b((assert|require|ensure|authenticate|authorize|guard)[a-z0-9_]*|(?=[a-z0-9_]*(check|verify|with))[a-z0-9_]*(admin|permission|auth|session|tenant|role|access|user|login|signature|jwt|webhook|hmac|token)[a-z0-9_]*|constantTimeEqual|timingSafeEqual|getUser|getSession|getServerSession|getCurrentUser|getAuthUser|getAuthenticatedUser|auth)\s*\(
 
-  # IDOR/BOLA shape: an id from the request (req.query/req.params) is the SOLE predicate on a
-  # Supabase query — .eq('id', $ID) with nothing else chained. The sink is anchored to a full
-  # statement (a `const { ... } = await ...;` destructure) so it does NOT match when a second
-  # .eq() scopes the same query by owner/tenant (N-IDOR-SCOPED) — that additional call makes the
-  # statement's RHS a different, longer expression tree that this exact-shape pattern can't match.
+  # IDOR/BOLA shape: an id from the request (req.query/req.params, or the App Router route-handler
+  # `{ params }` second-arg — params.id) is the SOLE predicate on a Supabase query — .eq('id', $ID)
+  # with nothing else chained. The sink is anchored to a full statement (a `const { ... } = await
+  # ...;` destructure, or the bare `await ....delete()` statement) so it does NOT match when a
+  # second .eq() scopes the same query by owner/tenant (N-IDOR-SCOPED / N-IDOR-APPROUTER-SCOPED) —
+  # that additional call makes the statement's RHS a different, longer expression tree that this
+  # exact-shape pattern can't match. #570: the trailing-.single() and update().select().single()
+  # variants are the idiomatic App Router / supabase-js single-row read+write shapes; each is spelled
+  # out so a scoping .eq() between .eq("id",$ID) and .single() still breaks the match.
   - id: harvey-idor-param
     languages: [javascript, typescript]
     mode: taint
@@ -237,12 +241,15 @@ rules:
       category: security
       harveySeverity: Medium
     message: >
-      A request-controlled id (req.query/req.params) is the only predicate on this query — no
-      owner/tenant scoping (e.g. .eq('user_id', session.user.id)) in the same chain. Any caller
-      who can guess/enumerate another record's id can read or write it (IDOR/BOLA, OWASP API1).
+      A request-controlled id (req.query/req.params or the App Router { params } arg) is the only
+      predicate on this query — no owner/tenant scoping (e.g. .eq('user_id', session.user.id)) in
+      the same chain. Any caller who can guess/enumerate another record's id can read or write it
+      (IDOR/BOLA, OWASP API1).
     pattern-sources:
       - pattern: req.query
       - pattern: req.params
+      # App Router route handler: `export async function GET(req, { params }) { ... params.id ... }`
+      - pattern: params.$K
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -252,6 +259,12 @@ rules:
                   const { $DATA, $ERR } = await $C.from($T).select($S).eq("id", $ID);
               - pattern: |
                   const { $DATA } = await $C.from($T).update($V).eq("id", $ID);
+              - pattern: |
+                  const { $DATA } = await $C.from($T).select($S).eq("id", $ID).single();
+              - pattern: |
+                  const { $DATA } = await $C.from($T).update($V).eq("id", $ID).select().single();
+              - pattern: |
+                  await $C.from($T).delete().eq("id", $ID);
           - focus-metavariable: $ID
 
   # Mass assignment (OWASP API3/BOPLA): the entire request body is spread into an insert/update
@@ -272,6 +285,8 @@ rules:
       pass an explicit list of allowed fields instead of spreading req.body.
     pattern-sources:
       - pattern: req.body
+      # App Router route handler body: `const body = await req.json()` (#570)
+      - pattern: await $REQ.json()
     pattern-sinks:
       - patterns:
           - pattern-either:
