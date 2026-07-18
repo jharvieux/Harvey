@@ -34,6 +34,12 @@ function byTaxonomy(relDir: string, taxonomy: string) {
   return detectPerfCodeFindings(loadFixtureDir(relDir)).filter((f) => f.taxonomy === taxonomy);
 }
 
+// #577: the Vite-aware tiers — the framework flag switches the client-JS detectors to their
+// all-client shape and turns on the Vite-only glob / route-splitting checks.
+function byTaxonomyVite(relDir: string, taxonomy: string) {
+  return detectPerfCodeFindings(loadFixtureDir(relDir), "vite").filter((f) => f.taxonomy === taxonomy);
+}
+
 // #248: the micro-render classes (context value / inline literal prop / index-as-key) only emit
 // when React Compiler is enabled, so their positives AND negatives run with this config appended —
 // a negative that passes only because the whole class is suppressed would be vacuous.
@@ -244,6 +250,56 @@ describe("manual font stylesheet", () => {
   });
   it("does not flag next/font usage", () => {
     expect(byTaxonomy("font-link/negative", TAX)).toHaveLength(0);
+  });
+});
+
+describe("Vite mode (#577)", () => {
+  it("flags a heavy static import in a no-directive module ONLY in Vite mode (every module is client)", () => {
+    const TAX = "M7 — Heavy import in client bundle";
+    // No `"use client"` directive → Next mode leaves it alone; Vite mode treats it as client.
+    expect(byTaxonomy("heavy-client-import/positive-vite", TAX)).toHaveLength(0);
+    const vite = byTaxonomyVite("heavy-client-import/positive-vite", TAX);
+    expect(vite).toHaveLength(1);
+    expect(vite[0]?.title).toContain("three");
+    expect(vite[0]?.fix).toContain("React.lazy");
+  });
+
+  it("flags a useEffect fetch in a no-directive module only in Vite mode, with an SPA fix (no Server Component)", () => {
+    const TAX = "M7 — Client fetch in useEffect";
+    expect(byTaxonomy("client-fetch-effect/positive-vite", TAX)).toHaveLength(0);
+    const vite = byTaxonomyVite("client-fetch-effect/positive-vite", TAX);
+    expect(vite).toHaveLength(1);
+    expect(vite[0]?.fix).toMatch(/useSWR|React Query/);
+    expect(vite[0]?.fix).not.toContain("Server Component");
+  });
+
+  it("flags eager import.meta.glob only in Vite mode; a lazy glob is clean", () => {
+    const TAX = "M7 — Eager import.meta.glob";
+    expect(byTaxonomy("import-meta-glob/positive", TAX)).toHaveLength(0); // Next mode: detector off
+    const vite = byTaxonomyVite("import-meta-glob/positive", TAX);
+    expect(vite).toHaveLength(1);
+    expect(vite[0]?.evidence).toContain("eager: true");
+    expect(byTaxonomyVite("import-meta-glob/negative", TAX)).toHaveLength(0); // lazy glob is fine
+  });
+
+  it("flags statically-imported react-router route components; React.lazy routes are clean", () => {
+    const TAX = "M7 — Route not code-split";
+    const vite = byTaxonomyVite("route-split/positive", TAX);
+    expect(vite).toHaveLength(1);
+    expect(vite[0]?.title).toContain("3 route components");
+    expect(vite[0]?.evidence).toContain("Home");
+    expect(byTaxonomyVite("route-split/negative", TAX)).toHaveLength(0);
+    expect(byTaxonomy("route-split/positive", TAX)).toHaveLength(0); // Next mode: detector off
+  });
+
+  it("branches raw-<img> and font remediation text on Vite", () => {
+    const img = byTaxonomyVite("img-tag/positive", "M7 — Raw <img> instead of next/image");
+    expect(img).toHaveLength(1);
+    expect(img[0]?.title).toContain("without dimensions");
+    expect(img[0]?.fix).toContain("vite-imagetools");
+    const font = byTaxonomyVite("font-link/positive", "M7 — Manual font stylesheet");
+    expect(font).toHaveLength(1);
+    expect(font[0]?.fix).toContain("@fontsource");
   });
 });
 
