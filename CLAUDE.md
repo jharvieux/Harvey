@@ -89,7 +89,7 @@ Automated agents (issue-sweep or any batch pipeline) must never modify these wit
 
 ## Model-tier labels
 
-Issues carry one of `haiku` / `sonnet` / `opus` to tell automated sweeps which model tier the task needs: `haiku` = mechanical/small, `sonnet` = standard implementation, `opus` = design-heavy or security-sensitive. Unlabeled issues default to `sonnet`.
+Issues carry one of `haiku` / `sonnet` / `opus` / `fable` to tell automated sweeps which model tier the task needs: `haiku` = mechanical/small, `sonnet` = standard implementation, `opus` = design-heavy or security-sensitive, `fable` = hardest architecture / product-shape / top-tier reasoning (above opus). Unlabeled issues default to `sonnet`.
 
 ## Working doctrine (ported from ATC)
 
