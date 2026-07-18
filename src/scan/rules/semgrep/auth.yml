@@ -398,3 +398,68 @@ rules:
           - pattern: "$X.createBucket($NAME, { public: true })"
           - pattern: "$X.createBucket({ ..., public: true, ... })"
           - pattern: "$X.createBucket({ public: true })"
+
+  # #561: a privileged/admin route handler AUTHENTICATES (reads the session via getUser/getSession)
+  # but performs NO role/authorization check before reading or returning privileged data — broken
+  # function-level authorization (OWASP API5 / BFLA). Distinct from harvey-route-noauth, which is
+  # about a route reachable with NO session at all: here the route correctly 401s an anonymous
+  # caller, but any AUTHENTICATED lower-privilege member passes. This is the real shape behind
+  # vandyand #5 (app/api/admin/revenue/route.ts: getUser() then returns CFO revenue with no role
+  # gate), which was previously only flagged by the filename+missing-auth-hint heuristic
+  # (Unauthenticated debug/admin route) — a false rationale, since the route DOES authenticate.
+  # Scoped to admin/internal/privileged path segments to hold precision (an authenticated route
+  # with no role check is normal for a user reading their OWN data; it is a defect only for a
+  # privileged surface). The pattern-not-regex clears any handler that references a role/authz gate
+  # (a `.role` read, is_admin, requireRole/assertAdmin/authorize/permission, a 403/forbidden
+  # response). Review tier / High severity — same negative-precision caveat as the rest of this file.
+  - id: harvey-authed-no-role-check
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    paths:
+      include:
+        - "*admin*"
+        - "*internal*"
+        - "*privileged*"
+    message: >
+      This admin/privileged route reads the session (getUser/getSession) but performs no
+      role/permission check before returning privileged data — broken function-level authorization
+      (OWASP API5). It correctly rejects anonymous callers, but any authenticated lower-privilege
+      user (e.g. a member) reaches it. Add a server-side role/permission gate after authenticating.
+    patterns:
+      - pattern: |
+          export async function $M($REQ) {
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(GET|POST|PUT|DELETE|PATCH)$
+      - pattern-either:
+          - pattern-inside: |
+              export async function $M($REQ) {
+                ...
+                getUser(...)
+                ...
+              }
+          - pattern-inside: |
+              export async function $M($REQ) {
+                ...
+                $S.auth.getUser(...)
+                ...
+              }
+          - pattern-inside: |
+              export async function $M($REQ) {
+                ...
+                getSession(...)
+                ...
+              }
+          - pattern-inside: |
+              export async function $M($REQ) {
+                ...
+                $S.auth.getSession(...)
+                ...
+              }
+      - pattern-not-regex: (?i)(is_?admin|hasrole|requirerole|checkrole|assertrole|assertadmin|requireadmin|ensureadmin|\bauthorize|\.role\b|permission|forbidden|\b403\b)
