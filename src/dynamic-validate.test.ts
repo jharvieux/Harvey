@@ -4,19 +4,44 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { findFreshPass, ranFromPass } from "./audit-pass-artifact.js";
 import type { RunContext } from "./audit-runner.js";
-import { assessStandUpAbility, readRepoLayout, type RepoLayout, runDynamicValidation, type StandUpRunner } from "./dynamic-validate.js";
+import {
+  assessStandUpAbility,
+  buildProvisioningPlan,
+  detectClientSecuritySuite,
+  discoverMigrationDirs,
+  interpretClientSuiteRun,
+  type ClientSecuritySuite,
+  type ProvisioningPlan,
+  readRepoLayout,
+  type RepoLayout,
+  runDynamicValidation,
+  type StandUpRunner,
+} from "./dynamic-validate.js";
 import type { Finding } from "./findings.js";
 
 const layout = (over: Partial<RepoLayout> = {}): RepoLayout => ({
-  hasSupabaseMigrations: true,
+  migrationDirs: ["/repo/supabase/migrations"],
   scripts: { dev: "next dev", build: "next build" },
   externalSeamDeps: [],
   ...over,
 });
 
+const MIGRATION_SQL = `
+create table tenants (
+  id uuid primary key,
+  name text not null
+);
+create table documents (
+  id uuid primary key,
+  tenant_id uuid not null,
+  body text
+);
+`;
+const plan = (l: RepoLayout = layout()): ProvisioningPlan => buildProvisioningPlan(l, MIGRATION_SQL);
+
 describe("assessStandUpAbility (#450 — can we stand this up, and how fully?)", () => {
   it("is a hard no-go with no migrations — there is no RLS surface to probe", () => {
-    const v = assessStandUpAbility(layout({ hasSupabaseMigrations: false }));
+    const v = assessStandUpAbility(layout({ migrationDirs: [] }));
     expect(v.canStandUp).toBe(false);
     expect(v.coverage).toBe("none");
     expect(v.reason).toMatch(/no supabase\/migrations/);
@@ -41,33 +66,79 @@ describe("assessStandUpAbility (#450 — can we stand this up, and how fully?)",
     expect(v.canStandUp).toBe(true);
     expect(v.limitations.join(" ")).toMatch(/external backend/);
   });
+
+  it("discloses multiple discovered Supabase projects as distinct backends (#508 monorepo)", () => {
+    const v = assessStandUpAbility(layout({ migrationDirs: ["/repo/apps/main/supabase/migrations", "/repo/apps/rag/supabase/migrations"] }));
+    expect(v.canStandUp).toBe(true);
+    expect(v.limitations.join(" ")).toMatch(/2 separate Supabase projects/);
+  });
 });
 
-// #450 acceptance: the go/no-go decision is exercised against real fixture repo LAYOUTS on disk —
-// readRepoLayout reads the facts (migrations, scripts, deps incl. the external-seam regex) that
-// assessStandUpAbility then judges. The in-memory tests above cover the decision; these cover the
-// disk-reading half so the whole path (fixture → verdict) is proven, not just its second stage.
-describe("readRepoLayout → assessStandUpAbility over fixture repo directories (#450)", () => {
+// #508 acceptance: migration discovery must find nested apps/*/supabase/migrations, not only the
+// (empty) top-level supabase/migrations that made ATC read NO-GO for the wrong reason.
+describe("discoverMigrationDirs (#508 — monorepo nested migrations)", () => {
+  const root = mkdtempSync(join(tmpdir(), "harvey-migdisc-"));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  const withMigration = (rel: string): string => {
+    const dir = join(root, rel, "supabase", "migrations");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "0001_init.sql"), "create table t (id uuid);\n");
+    return dir;
+  };
+
+  it("finds apps/*/supabase/migrations that the old top-level-only check missed", () => {
+    const main = withMigration("apps/main");
+    const rag = withMigration("apps/rag");
+    const found = discoverMigrationDirs(root);
+    expect(found).toContain(main);
+    expect(found).toContain(rag);
+  });
+
+  it("requires ≥1 .sql — an empty migrations dir is not a schema surface", () => {
+    const empty = mkdtempSync(join(tmpdir(), "harvey-empty-"));
+    mkdirSync(join(empty, "supabase", "migrations"), { recursive: true });
+    expect(discoverMigrationDirs(empty)).toEqual([]);
+    rmSync(empty, { recursive: true, force: true });
+  });
+
+  it("never descends into node_modules (a dep's own supabase/migrations is not the client's)", () => {
+    const nm = join(root, "node_modules", "some-pkg", "supabase", "migrations");
+    mkdirSync(nm, { recursive: true });
+    writeFileSync(join(nm, "0001.sql"), "create table x (id uuid);\n");
+    expect(discoverMigrationDirs(root)).not.toContain(nm);
+  });
+});
+
+// #450 acceptance: the go/no-go decision is exercised against real fixture repo LAYOUTS on disk.
+describe("readRepoLayout → assessStandUpAbility over fixture repo directories (#450/#508)", () => {
   const root = mkdtempSync(join(tmpdir(), "harvey-dynval-fixtures-"));
   afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-  const fixture = (name: string, files: { migrations?: string[]; pkg?: object }): string => {
+  const fixture = (name: string, files: { migrations?: { rel?: string; files: string[] }; pkg?: object }): string => {
     const dir = join(root, name);
     mkdirSync(dir, { recursive: true });
     if (files.migrations) {
-      const mig = join(dir, "supabase", "migrations");
+      const mig = join(dir, files.migrations.rel ?? "", "supabase", "migrations");
       mkdirSync(mig, { recursive: true });
-      for (const f of files.migrations) writeFileSync(join(mig, f), "-- sql\n");
+      for (const f of files.migrations.files) writeFileSync(join(mig, f), "-- sql\n");
     }
     if (files.pkg) writeFileSync(join(dir, "package.json"), JSON.stringify(files.pkg));
     return dir;
   };
 
-  it("stand-up-able fixture (migrations + build script) reads as a full GO", () => {
-    const dir = fixture("standupable", { migrations: ["0001_init.sql"], pkg: { scripts: { build: "next build" } } });
+  it("stand-up-able fixture (top-level migrations + build script) reads as a full GO", () => {
+    const dir = fixture("standupable", { migrations: { files: ["0001_init.sql"] }, pkg: { scripts: { build: "next build" } } });
     const v = assessStandUpAbility(readRepoLayout(dir));
     expect(v.canStandUp).toBe(true);
     expect(v.coverage).toBe("full");
+  });
+
+  it("monorepo fixture (migrations only under apps/main) reads as a GO — #508 regression", () => {
+    const dir = fixture("monorepo", { migrations: { rel: "apps/main", files: ["0001_init.sql"] }, pkg: { scripts: { build: "next build" } } });
+    const l = readRepoLayout(dir);
+    expect(l.migrationDirs.some((d) => d.includes(join("apps", "main")))).toBe(true);
+    expect(assessStandUpAbility(l).canStandUp).toBe(true);
   });
 
   it("missing-migrations fixture is a hard NO-GO — nothing to probe", () => {
@@ -79,12 +150,71 @@ describe("readRepoLayout → assessStandUpAbility over fixture repo directories 
 
   it("external-dep-blocked fixture stands up but discloses the seam it can't fake", () => {
     const dir = fixture("external-dep", {
-      migrations: ["0001_init.sql"],
+      migrations: { files: ["0001_init.sql"] },
       pkg: { scripts: { build: "next build" }, dependencies: { "@pinecone-database/pinecone": "^1.0.0" } },
     });
-    const layout = readRepoLayout(dir);
-    expect(layout.externalSeamDeps).toContain("@pinecone-database/pinecone");
-    expect(assessStandUpAbility(layout).limitations.join(" ")).toMatch(/external backend/);
+    const l = readRepoLayout(dir);
+    expect(l.externalSeamDeps).toContain("@pinecone-database/pinecone");
+    expect(assessStandUpAbility(l).limitations.join(" ")).toMatch(/external backend/);
+  });
+});
+
+// #508 part 2: a client's own security suite is only evidence if it PROVED it exercised the DB.
+describe("interpretClientSuiteRun (#508 — a skipped suite is never evidence)", () => {
+  it("counts a suite that executed tests as having exercised the DB", () => {
+    const r = interpretClientSuiteRun("Tests  3 passed | 1 skipped (4)");
+    expect(r.exercised).toBe(true);
+  });
+
+  it("a suite whose DB-backed tests all skipped did NOT exercise the DB (the ATC it.skip case)", () => {
+    const r = interpretClientSuiteRun("Tests  2 skipped (2)");
+    expect(r.exercised).toBe(false);
+    expect(r.reason).toMatch(/skipped/);
+  });
+
+  it("failures still count as having exercised the DB (a failing isolation test IS a result)", () => {
+    const r = interpretClientSuiteRun("Tests  1 failed | 2 passed (3)");
+    expect(r.exercised).toBe(true);
+  });
+
+  it("no executed and none skipped is not confirmed evidence", () => {
+    expect(interpretClientSuiteRun("no tests found").exercised).toBe(false);
+  });
+});
+
+describe("detectClientSecuritySuite (#508 — presence only, the run is the operator's)", () => {
+  const root = mkdtempSync(join(tmpdir(), "harvey-suite-"));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  it("finds a matching package.json script", () => {
+    const dir = join(root, "with-script");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { "test:cross-tenant": "vitest run" } }));
+    const s = detectClientSecuritySuite(dir);
+    expect(s.present).toBe(true);
+    expect(s.command).toContain("test:cross-tenant");
+  });
+
+  it("finds a tests/security directory when there is no matching script", () => {
+    const dir = join(root, "with-dir");
+    mkdirSync(join(dir, "tests", "security"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { build: "next build" } }));
+    expect(detectClientSecuritySuite(dir).present).toBe(true);
+  });
+
+  it("reports absent when the client ships no such suite", () => {
+    const dir = join(root, "none");
+    mkdirSync(dir, { recursive: true });
+    expect(detectClientSecuritySuite(dir).present).toBe(false);
+  });
+});
+
+describe("buildProvisioningPlan (#514 — own stack, client migrations, generic seed, pentest)", () => {
+  it("orders start → apply-migrations → seed → pentest and carries the seeded table surface", () => {
+    const p = buildProvisioningPlan(layout(), MIGRATION_SQL);
+    expect(p.steps.map((s) => s.kind)).toEqual(["start", "apply-migrations", "seed", "pentest"]);
+    expect(p.seed.scopedTables).toContain("documents");
+    expect(p.tables).toContain("documents:tenant_id");
   });
 });
 
@@ -99,13 +229,15 @@ const runner = (over: Partial<StandUpRunner> = {}): StandUpRunner => ({
   ...over,
 });
 
-describe("runDynamicValidation (#450 orchestration + #448 emit)", () => {
+describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", () => {
   const dir = mkdtempSync(join(tmpdir(), "harvey-dynval-"));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const now = () => "2026-07-17T12:00:00.000Z";
+  const run = (o: Partial<Parameters<typeof runDynamicValidation>[0]> = {}) =>
+    runDynamicValidation({ targetDir: "/repo", layout: layout(), plan: plan(), artifactsDir: dir, now, runner: runner(), ...o });
 
   it("stands up, pen-tests, and writes an M2.pass.json carrying the findings", () => {
-    const r = runDynamicValidation({ targetDir: "/repo", layout: layout(), artifactsDir: dir, now, runner: runner() });
+    const r = run();
     expect(r.standUp).toBe(true);
     expect(r.coverage).toBe("full");
     expect(r.artifactPath).toBe(join(dir, "M2.pass.json"));
@@ -116,21 +248,33 @@ describe("runDynamicValidation (#450 orchestration + #448 emit)", () => {
   });
 
   it("a no-go target writes NO artifact and says why — never a silent clean ran", () => {
-    const r = runDynamicValidation({ targetDir: "/repo", layout: layout({ hasSupabaseMigrations: false }), artifactsDir: dir, now, runner: runner() });
+    const r = run({ layout: layout({ migrationDirs: [] }) });
     expect(r.standUp).toBe(false);
     expect(r.artifactPath).toBeNull();
     expect(r.reason).toMatch(/could not stand up.*no supabase\/migrations/);
   });
 
-  it("a failed stand-up writes no artifact and reports the failure", () => {
-    const r = runDynamicValidation({ targetDir: "/repo", layout: layout(), artifactsDir: dir, now, runner: runner({ standUpDb: () => ({ ok: false, output: "supabase start: port in use" }) }) });
+  it("a failed stand-up (env/operator gap) writes no artifact and reports the failure", () => {
+    const r = run({ runner: runner({ standUpDb: () => ({ ok: false, output: "supabase start: port in use" }) }) });
     expect(r.standUp).toBe(false);
     expect(r.artifactPath).toBeNull();
     expect(r.reason).toMatch(/stand-up failed.*port in use/);
   });
 
+  // #514: migrations that won't apply to a fresh stack are an M2 FINDING with evidence, not an
+  // environment gap to swallow — so this path DOES emit an artifact carrying that finding.
+  it("client migrations that fail to apply are recorded as an M2 finding, WITH an artifact", () => {
+    const r = run({ runner: runner({ standUpDb: () => ({ ok: false, migrationApplyFailed: true, output: "ERROR: relation already exists" }) }) });
+    expect(r.standUp).toBe(false);
+    expect(r.artifactPath).not.toBeNull();
+    expect(r.findings[0]?.id).toBe("M2-PROVISION-MIGRATE");
+    expect(r.reason).toMatch(/failed to apply.*not skipped/);
+    const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
+    expect(written.findings[0].evidence).toMatch(/relation already exists/);
+  });
+
   it("degrades to postgrest-only when the app won't run, discloses it, and still emits", () => {
-    const r = runDynamicValidation({ targetDir: "/repo", layout: layout(), artifactsDir: dir, now, runner: runner({ runApp: () => ({ ok: false, output: "build error" }) }) });
+    const r = run({ runner: runner({ runApp: () => ({ ok: false, output: "build error" }) }) });
     expect(r.standUp).toBe(true);
     expect(r.coverage).toBe("postgrest-only");
     expect(r.limitations.join(" ")).toMatch(/app failed to run/);
@@ -138,22 +282,48 @@ describe("runDynamicValidation (#450 orchestration + #448 emit)", () => {
   });
 
   it("a failed pen-test writes no artifact — no evidence, no ran", () => {
-    const r = runDynamicValidation({ targetDir: "/repo", layout: layout(), artifactsDir: dir, now, runner: runner({ pentest: () => ({ ok: false, findings: [], output: "probe crashed" }) }) });
+    const r = run({ runner: runner({ pentest: () => ({ ok: false, findings: [], output: "probe crashed" }) }) });
     expect(r.standUp).toBe(false);
     expect(r.artifactPath).toBeNull();
     expect(r.reason).toMatch(/pen-test failed/);
   });
 
-  // #450 acceptance: the emitted M2.pass.json must round-trip through findFreshPass → ran, exactly as
-  // run-audit --artifacts-dir consumes it (#416/#448). This proves the harness's output is the
-  // evidence the M2 probe derives `ran` from — not just that the file has the right fields.
-  it("the emitted M2.pass.json is read back by findFreshPass as fresh and derives ran, findings intact", () => {
+  // #508: a client suite that SKIPPED is disclosed and never counted as evidence; one that ran and
+  // FAILED becomes an M2 finding on top of Harvey's own pentest findings.
+  const suite: ClientSecuritySuite = { present: true, command: ["npm", "run", "test:sec"], detail: 'script "test:sec"' };
+
+  it("a skipped client suite is disclosed as a limitation, not counted as evidence", () => {
+    const r = run({ clientSuite: suite, runner: runner({ clientSuite: () => ({ ok: true, output: "Tests  2 skipped (2)" }) }) });
+    expect(r.limitations.join(" ")).toMatch(/did not exercise the DB/);
+    expect(r.findings).toHaveLength(1); // only Harvey's own finding
+  });
+
+  it("a client suite that ran and failed adds an M2 finding (real dynamic evidence)", () => {
+    const r = run({ clientSuite: suite, runner: runner({ clientSuite: () => ({ ok: false, output: "Tests  1 failed | 3 passed (4)" }) }) });
+    expect(r.findings.map((f) => f.id)).toContain("M2-CLIENT-SUITE");
+    expect(r.notes.join(" ")).toMatch(/ran and FAILED/);
+  });
+
+  it("a client suite that ran and passed is a bonus note, not a finding", () => {
+    const r = run({ clientSuite: suite, runner: runner({ clientSuite: () => ({ ok: true, output: "Tests  4 passed (4)" }) }) });
+    expect(r.findings).toHaveLength(1);
+    expect(r.notes.join(" ")).toMatch(/passed against the seeded stack/);
+  });
+
+  it("surfaces seed warnings (no scoped tables ⇒ nothing to leak) as limitations", () => {
+    const noScope = buildProvisioningPlan(layout(), "create table settings (\n  id uuid primary key,\n  k text\n);");
+    const r = run({ plan: noScope });
+    expect(r.limitations.join(" ")).toMatch(/no tenant-scoped tables/);
+  });
+
+  // #450 acceptance: the emitted M2.pass.json must round-trip through findFreshPass → ran.
+  it("the emitted M2.pass.json is read back by findFreshPass as fresh and derives ran", () => {
     const target = "/engagement/repo";
-    const r = runDynamicValidation({ targetDir: target, layout: layout(), artifactsDir: dir, now, runner: runner() });
+    const r = run({ targetDir: target });
     expect(r.artifactPath).not.toBeNull();
 
     const ctx: RunContext = {
-      targetDir: target, // the audit's target must match the artifact's — that's what freshness gates on
+      targetDir: target,
       env: { connected: false, dynamic: true, llm: false },
       exec: () => ({ ok: true, output: "" }),
       exists: (p) => existsSync(p),
