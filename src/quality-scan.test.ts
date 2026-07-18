@@ -9,8 +9,11 @@ import {
   duplicationSummary,
   JSCPD_IGNORE_GLOBS,
   jscpdToFindings,
+  jscpdUnavailableFinding,
   knipToFindings,
   knipUnavailableFinding,
+  mergeJscpdReports,
+  mergeKnipReports,
   touchesSecurityPath,
   touchesTenantSupabasePath,
   type JscpdReport,
@@ -469,5 +472,51 @@ describe("knipUnavailableFinding", () => {
     expect(finding.taxonomy).toContain("M5");
     expect(finding.evidence).toContain("Cannot find module 'vitest/config'");
     expect(finding.impact).toContain("incomplete");
+  });
+});
+
+// #505: the M4 mirror — a jscpd timeout/crash on one workspace of a monorepo target must not drop
+// the other workspaces' duplication findings, so the CLI substitutes this disclosure instead of
+// crashing the whole run.
+describe("jscpdUnavailableFinding", () => {
+  it("discloses the M4 coverage gap, distinct from the M4-00 sub-threshold meta row, without claiming zero duplication", () => {
+    const finding = jscpdUnavailableFinding("apps/rag: did not complete within 120s (timed out)");
+    expect(finding.id).toBe("M4-99");
+    expect(finding.id).not.toBe("M4-00");
+    expect(finding.severity).toBe("Info");
+    expect(finding.confidence).toBe("N/A");
+    expect(finding.taxonomy).toContain("M4");
+    expect(finding.evidence).toContain("apps/rag: did not complete within 120s (timed out)");
+    expect(finding.impact).toContain("incomplete");
+  });
+});
+
+// #505: quality-scan runs jscpd/knip per workspace on a monorepo target, then merges their reports
+// back into one before the existing (already-tested) jscpdToFindings/knipToFindings transforms run.
+describe("mergeJscpdReports (#505)", () => {
+  it("concatenates duplicates and sums the line totals from every workspace's report", () => {
+    const a: JscpdReport = { statistics: { total: { percentage: 10, duplicatedLines: 20, lines: 200 } }, duplicates: [jscpdReport.duplicates[0]!] };
+    const b: JscpdReport = { statistics: { total: { percentage: 5, duplicatedLines: 5, lines: 100 } }, duplicates: [jscpdReport.duplicates[1]!] };
+    const merged = mergeJscpdReports([a, b]);
+    expect(merged.duplicates).toEqual([a.duplicates[0], b.duplicates[0]]);
+    expect(merged.statistics.total.lines).toBe(300);
+    expect(merged.statistics.total.duplicatedLines).toBe(25);
+  });
+
+  it("merging zero reports (every workspace gapped out) yields an empty, valid report", () => {
+    const merged = mergeJscpdReports([]);
+    expect(merged.duplicates).toEqual([]);
+    expect(merged.statistics.total.lines).toBe(0);
+    expect(jscpdToFindings(merged)).toEqual([]);
+  });
+});
+
+describe("mergeKnipReports (#505)", () => {
+  it("concatenates files and issues from every workspace's report", () => {
+    const a: KnipReport = { files: ["apps/main/src/dead.ts"], issues: [] };
+    const b: KnipReport = { files: [], issues: [{ file: "apps/rag/src/mixed.ts", exports: [{ name: "x", line: 1 }], types: [] }] };
+    const merged = mergeKnipReports([a, b]);
+    expect(merged.files).toEqual(["apps/main/src/dead.ts"]);
+    expect(merged.issues).toEqual(b.issues);
   });
 });

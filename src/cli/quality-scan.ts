@@ -4,21 +4,36 @@
 // Merge the result into the engagement's findings.json alongside the M1/M2/M3
 // findings and meta, then `pnpm validate:findings`.
 //
-//   pnpm quality-scan <target-dir> [--out findings.quality.json]
+//   pnpm quality-scan <target-dir> [--out findings.quality.json] [--timeout <seconds>]
+//
+// #505: jscpd and knip hung indefinitely (0% CPU, no output, >16 min) run over a whole multi-app
+// monorepo — knip in particular got stuck in its own workspace-resolution stage when pointed at a
+// root it doesn't recognize as one package. Per-app scoped runs completed in ~1 min each. Fix: run
+// both tools PER WORKSPACE — discovered from the target's pnpm-workspace.yaml / package.json
+// workspaces field via the same enumeration src/pentest/targets.ts already uses for M2 target
+// coverage (a target with no workspace file still gets exactly one scope, its own root, so a
+// plain non-monorepo target's behavior and output are unchanged) — with a hard per-invocation
+// timeout. A workspace that times out or crashes never takes the whole run down with it: it's
+// recorded as a disclosed coverage gap (jscpdUnavailableFinding / knipUnavailableFinding)
+// alongside whatever the other workspaces produced — partial, not a silent stall or a silent skip.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, type SecurityPathFile } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
+import { discoverTargets } from "../pentest/targets.js";
 import {
   duplicationSummary,
   JSCPD_IGNORE_GLOBS,
   jscpdToFindings,
+  jscpdUnavailableFinding,
   knipToFindings,
   knipUnavailableFinding,
+  mergeJscpdReports,
+  mergeKnipReports,
   touchesSecurityPath,
   touchesTenantSupabasePath,
   type JscpdReport,
@@ -35,41 +50,100 @@ const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
 const outIdx = args.indexOf("--out");
 const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
+const timeoutIdx = args.indexOf("--timeout");
+const timeoutSeconds = timeoutIdx >= 0 ? Number(args[timeoutIdx + 1]) : 120;
 
 if (!targetArg) {
-  console.error("usage: pnpm quality-scan <target-dir> [--out findings.quality.json]");
+  console.error("usage: pnpm quality-scan <target-dir> [--out findings.quality.json] [--timeout <seconds>]");
   process.exit(2);
 }
+if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+  console.error("--timeout must be a positive number of seconds");
+  process.exit(2);
+}
+const TIMEOUT_MS = timeoutSeconds * 1000;
 
 const targetDir = resolve(targetArg);
 
+// #505: one scope per workspace. discoverTargets' app enumeration already falls back to the
+// target's own root as a single app when there's no workspace manifest, so `scopes` is always
+// non-empty; it only degrades to [targetDir] itself when the root carries no package.json at all
+// (e.g. a bare source directory, as some calibration fixtures are) — same tree quality-scan always
+// scanned in that case.
+const workspaceDirs = discoverTargets(targetDir).apps.map((a) => a.path);
+const scopes = workspaceDirs.length ? workspaceDirs : [targetDir];
+
+interface ScanGap {
+  scope: string;
+  reason: string;
+}
+
+function scopeLabel(dir: string): string {
+  const rel = relative(targetDir, dir);
+  return rel === "" ? "(repo root)" : rel;
+}
+
+// jscpd/knip file paths come back relative to the SCOPE they were run against; re-anchor to
+// relative-to-target so a monorepo's merged report still has one consistent, unambiguous location
+// per file, and a single-scope run (workspaceRel === "") is untouched.
+function prefixed(workspaceRel: string, relPath: string): string {
+  return workspaceRel === "" ? relPath : join(workspaceRel, relPath);
+}
+
+// Node's execFileSync `timeout` option kills the child and sets `code: "ETIMEDOUT"` on the thrown
+// error (MEASURED on Node 24 — the documented `killed` boolean is NOT set by execFileSync's own
+// timeout path, unlike spawn's async API; a nonzero exit leaves `code` undefined, a missing binary
+// sets `code: "ENOENT"`). "ETIMEDOUT" is the one code we can reach here — nothing else in this
+// invocation sends a signal or times anything out — so it reliably distinguishes "we killed this
+// for taking too long" from any other failure shape (missing deps, tool crash, ...).
+function isTimeout(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: string }).code === "ETIMEDOUT";
+}
+
+function gapReason(err: unknown): string {
+  if (isTimeout(err)) return `did not complete within ${timeoutSeconds}s (timed out)`;
+  const e = err as { stderr?: Buffer | string; message?: string };
+  const detail = (e.stderr ? e.stderr.toString() : undefined) || e.message || String(err);
+  return detail.trim().slice(0, 300);
+}
+
 function runJscpd(dir: string): JscpdReport {
   const outDir = mkdtempSync(join(tmpdir(), "harvey-jscpd-"));
-  // --threshold 100 overrides any client .jscpd.json so the scan never exits
-  // non-zero on us — we want the raw report, not jscpd's own pass/fail gate.
-  // JSCPD_IGNORE_GLOBS excludes generated/vendored/demo paths (M4-N-GENERATED, issue #72;
-  // extended per #232) that aren't hand-maintained duplication.
-  execFileSync(
-    jscpdBin,
-    [dir, "--reporters", "json", "--output", outDir, "--threshold", "100", "--absolute", "--silent", "--noTips", "--ignore", JSCPD_IGNORE_GLOBS.join(",")],
-    { stdio: ["ignore", "ignore", "inherit"] },
-  );
-  const report = JSON.parse(readFileSync(join(outDir, "jscpd-report.json"), "utf8")) as JscpdReport;
-  rmSync(outDir, { recursive: true, force: true });
-  // jscpd's json reporter emits paths relative to --output by default even
-  // with --absolute in some versions' clone entries; normalize to relative-
-  // to-target so the report doesn't leak local filesystem layout.
-  for (const dup of report.duplicates) {
-    dup.firstFile.name = relative(dir, resolve(dup.firstFile.name));
-    dup.secondFile.name = relative(dir, resolve(dup.secondFile.name));
+  try {
+    // --threshold 100 overrides any client .jscpd.json so the scan never exits
+    // non-zero on us — we want the raw report, not jscpd's own pass/fail gate.
+    // JSCPD_IGNORE_GLOBS excludes generated/vendored/demo paths (M4-N-GENERATED, issue #72;
+    // extended per #232) that aren't hand-maintained duplication.
+    execFileSync(
+      jscpdBin,
+      [dir, "--reporters", "json", "--output", outDir, "--threshold", "100", "--absolute", "--silent", "--noTips", "--ignore", JSCPD_IGNORE_GLOBS.join(",")],
+      { stdio: ["ignore", "ignore", "pipe"], timeout: TIMEOUT_MS, killSignal: "SIGKILL" },
+    );
+    const reportPath = join(outDir, "jscpd-report.json");
+    // #505: per-workspace scopes surface a case a whole-repo run rarely hit — a workspace with
+    // fewer than 2 comparable source files. jscpd exits 0 but writes NO report file at all (there
+    // was nothing to compare), which is a clean zero-duplicates scan, not a coverage gap.
+    if (!existsSync(reportPath)) return { statistics: { total: { percentage: 0, duplicatedLines: 0, lines: 0 } }, duplicates: [] };
+    const report = JSON.parse(readFileSync(reportPath, "utf8")) as JscpdReport;
+    // jscpd's json reporter emits paths relative to --output by default even
+    // with --absolute in some versions' clone entries; normalize to relative-
+    // to-scope so the report doesn't leak local filesystem layout.
+    for (const dup of report.duplicates) {
+      dup.firstFile.name = relative(dir, resolve(dup.firstFile.name));
+      dup.secondFile.name = relative(dir, resolve(dup.secondFile.name));
+    }
+    return report;
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
   }
-  return report;
 }
 
 function runKnip(dir: string): KnipReport {
   const out = execFileSync(knipBin, ["--reporter", "json", "--no-exit-code"], {
     cwd: dir,
-    stdio: ["ignore", "pipe", "inherit"],
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   return JSON.parse(out.toString("utf8")) as KnipReport;
 }
@@ -89,6 +163,9 @@ function lineCount(dir: string, relPath: string): number | undefined {
 // an auth/guard/middleware/security concern (touchesSecurityPath, v1/#360), or its body scopes a
 // supabase query by a tenant key regardless of path (touchesTenantSupabasePath, v2/#399) — the
 // per-entity lib/ai/tools/*/lib/stores/* copy-paste vein #399 measured outside the v1 vocabulary.
+// #505: this pass is an in-process directory walk (already excluding node_modules/dist/etc via
+// SKIP_DIRS), not an external tool invocation — it isn't what the issue found hanging, so it stays
+// whole-target rather than per-workspace.
 const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".next", ".git", "generated", "vendor", "patches", "__tests__", "e2e"]);
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const SKIP_FILE = /(\.gen\.ts|\.test\.|\.spec\.)|^(database\.types|types_db)\.ts$/;
@@ -111,24 +188,50 @@ function securityPathFiles(dir: string, rel = ""): SecurityPathFile[] {
   return files;
 }
 
-const jscpdReport = runJscpd(targetDir);
+const jscpdReports: JscpdReport[] = [];
+const jscpdGaps: ScanGap[] = [];
+const knipReports: KnipReport[] = [];
+const knipGaps: ScanGap[] = [];
+
+for (const scope of scopes) {
+  const label = scopeLabel(scope);
+  const workspaceRel = relative(targetDir, scope);
+
+  try {
+    const report = runJscpd(scope);
+    for (const dup of report.duplicates) {
+      dup.firstFile.name = prefixed(workspaceRel, dup.firstFile.name);
+      dup.secondFile.name = prefixed(workspaceRel, dup.secondFile.name);
+    }
+    jscpdReports.push(report);
+  } catch (err) {
+    const reason = gapReason(err);
+    jscpdGaps.push({ scope: label, reason });
+    console.error(`⚠ jscpd ${isTimeout(err) ? "timed out" : "failed"} on ${label} — M4 coverage incomplete for this scope: ${reason}`);
+  }
+
+  // #223: M4 has no dependency on M5 — a knip gap on one workspace must not cost that workspace's
+  // (or any other workspace's) jscpd findings.
+  try {
+    const report = runKnip(scope);
+    report.files = report.files.map((f) => prefixed(workspaceRel, f));
+    for (const issue of report.issues) issue.file = prefixed(workspaceRel, issue.file);
+    knipReports.push(report);
+  } catch (err) {
+    const reason = gapReason(err);
+    knipGaps.push({ scope: label, reason });
+    console.error(`⚠ knip ${isTimeout(err) ? "timed out" : "failed"} on ${label} — M5 dead-code coverage skipped for this scope: ${reason}`);
+  }
+}
+
+const jscpdReport = mergeJscpdReports(jscpdReports);
 
 // #360/#399: the Type-3 near-miss layer jscpd structurally cannot provide — diverged copies of
 // security checks. Scoped to securityPathFiles's admitted subset (touchesSecurityPath OR
 // touchesTenantSupabasePath).
 const divergedFindings = divergedCloneFindings(securityPathFiles(targetDir));
 
-// #223: M4 has no dependency on M5 — a knip failure (most commonly the target's own
-// node_modules isn't installed, so it can't resolve config/plugin imports) must not cost the
-// engagement its jscpd findings too. Caught here so main flow always has a duplication result.
-let knipReport: KnipReport | undefined;
-let knipFailure: string | undefined;
-try {
-  knipReport = runKnip(targetDir);
-} catch (err) {
-  knipFailure = err instanceof Error ? err.message : String(err);
-  console.error(`⚠ knip failed — M5 dead-code coverage skipped for this run: ${knipFailure}`);
-}
+const knipReport = knipReports.length ? mergeKnipReports(knipReports) : undefined;
 
 const fileLineCounts: Record<string, number> = {};
 if (knipReport) {
@@ -141,19 +244,26 @@ if (knipReport) {
 const findings: Finding[] = [
   ...jscpdToFindings(jscpdReport),
   ...divergedFindings,
-  ...(knipReport ? knipToFindings(knipReport, fileLineCounts) : [knipUnavailableFinding(knipFailure ?? "unknown error")]),
+  ...(knipReport ? knipToFindings(knipReport, fileLineCounts) : []),
 ];
+// #505: a gap disclosure coexists with real findings from the scopes that DID complete — unlike
+// the old whole-repo-or-nothing shape, a monorepo run can be a genuine partial (2 of 3 workspaces
+// scanned clean, 1 timed out).
+if (knipGaps.length) findings.push(knipUnavailableFinding(knipGaps.map((g) => `${g.scope}: ${g.reason}`).join("; ")));
+if (jscpdGaps.length) findings.push(jscpdUnavailableFinding(jscpdGaps.map((g) => `${g.scope}: ${g.reason}`).join("; ")));
 
 const dup = duplicationSummary(jscpdReport);
 console.error(
-  `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s), ${dup.subThresholdCloneCount} sub-threshold small clone(s) disclosed in M4-00 (#365), ${divergedFindings.length} diverged security-path clone pair(s) (#360, review tier)`,
+  `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s), ${dup.subThresholdCloneCount} sub-threshold small clone(s) disclosed in M4-00 (#365), ${divergedFindings.length} diverged security-path clone pair(s) (#360, review tier)` +
+    (jscpdGaps.length ? `, ${jscpdGaps.length}/${scopes.length} scope(s) incomplete (#505, see M4-99)` : ""),
 );
 if (knipReport) {
   console.error(
-    `M5 dead code: ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports`,
+    `M5 dead code: ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports` +
+      (knipGaps.length ? `, ${knipGaps.length}/${scopes.length} scope(s) incomplete (#505, see M5-00)` : ""),
   );
 } else {
-  console.error("M5 dead code: skipped (knip failed — see warning above)");
+  console.error("M5 dead code: skipped (knip failed on every scope — see warnings above)");
 }
 
 const json = JSON.stringify(findings, null, 2);
