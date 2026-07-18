@@ -29,6 +29,7 @@ import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
 import { detectTestIntentFindings } from "../detectors/test-intent.js";
+import { detectTargetFramework } from "../scan/framework-detect.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
 
 const args = process.argv.slice(2);
@@ -49,6 +50,10 @@ try {
   // full set (test files are its subject; non-test files feed its cross-file resolution).
   const sources = allSources.filter((f) => !NON_PRODUCT.test(f.path));
   console.log(`loaded ${allSources.length} source files (${sources.length} product-code) from ${targetDir}`);
+
+  // M9 assumes a Next.js App Router shape; on a Vite/SPA target it is N/A (see detectAppRouterFindings).
+  const framework = detectTargetFramework(scanDir);
+  console.log(`target framework: ${framework}${framework === "vite" ? " — M9 App Router checks N/A (SPA, no SSR)" : ""}`);
 
   // Bundle tier: explicit --build flags, or auto-detected .next dirs (root + apps/*).
   // Build artifacts live in the REAL target dir — they're gitignored, so the scoped copy
@@ -74,7 +79,7 @@ try {
   });
 
   const findings: Finding[] = [
-    ...detectAppRouterFindings(sources),
+    ...detectAppRouterFindings(sources, framework),
     ...detectPerfCodeFindings(sources),
     ...detectHookDepFindings(sources),
     ...detectSlopFindings(sources),

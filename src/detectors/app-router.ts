@@ -12,6 +12,7 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
+import type { TargetFramework } from "../scan/framework-detect.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 import {
   AUTH_PATTERN,
@@ -978,6 +979,36 @@ function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: 
   return findings;
 }
 
+// --- Non-SSR SPA coverage note ------------------------------------------------
+//
+// Every M9 check is Next.js-App-Router-specific — SSR-by-default browser-API misuse, the RSC
+// server→client boundary, Server Actions, `server-only`, the Full Route Cache. A Vite/SPA export
+// has none of these: the whole bundle IS the client, there is no SSR render path, no `"use server"`
+// action, no `app/` route cache. Running the family there produces false-premise findings (the
+// live nocode-rescue miss: `localStorage` reads flagged as "SSR render path" misuse on a Vite SPA
+// that has no SSR — #575). So on a confirmed non-SSR SPA we SUPPRESS the whole M9 pass and emit
+// this one explicit N/A note instead — fail loud: the absence of M9 findings must read as "not
+// applicable here", never as "assessed and clean" (the coverage-guard principle in CLAUDE.md).
+function nonSsrSpaCoverageNote(nextId: NextId, framework: TargetFramework): Finding {
+  return {
+    id: nextId(),
+    title: "M9 N/A — non-SSR SPA",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Performance",
+    taxonomy: "M9 — Not applicable (non-Next SPA)",
+    location: "(whole target)",
+    status: "Open",
+    evidence: `Target framework detected as \`${framework}\` — a non-Next single-page app. M9's App Router checks (SSR browser-API misuse, server→client leak, \`server-only\` guard, Server Action auth/validation, cache/dynamic-rendering) all assume Next.js server-rendering by default and do not apply: a Vite/SPA build has no SSR render path, no Server Actions, and no RSC server→client boundary.`,
+    impact: "M9 App Router coverage is not applicable to this target. Recorded explicitly so the absence of M9 findings reads as 'not applicable here', not 'assessed and clean'.",
+    fix: "None — informational. If this target is in fact a Next.js app, verify framework detection (its `vite.config` / package.json `next` dependency).",
+    value: 1,
+    ease: 5,
+    safety: 5,
+    precisionTier: "high",
+  };
+}
+
 // --- Orchestrator ------------------------------------------------------------
 
 /**
@@ -985,13 +1016,20 @@ function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: 
  * Finding[] (src/findings.ts). `files` should be a project's full set of
  * relevant .ts/.tsx sources — the server→client leak check needs sibling
  * files to resolve which imported components are Client Components.
+ *
+ * `framework` (from src/scan/framework-detect.ts) gates the whole pass: on a Vite/SPA target the
+ * App-Router surface does not exist, so M9 is suppressed to a single N/A coverage note (#575).
+ * Omitted (tests/legacy callers) or `next`/`other` → run the full pass as before.
  */
-export function detectAppRouterFindings(files: SourceInput[]): Finding[] {
+export function detectAppRouterFindings(files: SourceInput[], framework?: TargetFramework): Finding[] {
+  let n = 0;
+  const nextId: NextId = () => `M9-${String(++n).padStart(2, "0")}`;
+
+  if (framework === "vite") return [nonSsrSpaCoverageNote(nextId, framework)];
+
   const sources = new Map(files.map((f) => [f.path, parse(f.path, f.text)]));
   const pagesRouterOnly = isPagesRouterOnly(files);
   const aliases = collectPathAliases(files);
-  let n = 0;
-  const nextId: NextId = () => `M9-${String(++n).padStart(2, "0")}`;
 
   // Owner-id runs first: its subsumed-action set feeds the missing-auth dedupe (#465).
   const ownerId = detectClientSuppliedOwnerId(sources, nextId);
