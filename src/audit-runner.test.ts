@@ -24,6 +24,7 @@ const ctx = (over: Partial<RunContext> = {}): RunContext => ({
   env: { connected: false, dynamic: false, llm: false },
   exec: (_command, argv) => ({ ok: true, output: cleanOutput(argv) }),
   exists: () => true,
+  isGitRepoRoot: () => true,
   ...over,
 });
 
@@ -598,38 +599,32 @@ describe("M10 captures its classification findings (#436)", () => {
   });
 });
 
-// #528: the mechanical scan emits SEC-TH-GH-00 when the git-history secrets tier could not run
-// (non-git archive/subdirectory delivery). On the capture path the M1 probe reads quick-scan's raw
-// --findings-out feed for that id and surfaces the gap in its ledger reason, so it is not left a
-// buried Info finding in the deliverable.
-describe("M1 surfaces the git-history secrets coverage gap (#528)", () => {
-  it("appends the git-history not-assessed note to the M1 reason when SEC-TH-GH-00 is present", () => {
-    const capturing = ctx({
-      captureDir: "/cap",
-      readFindings: (p: string) => (p.endsWith("M1.json") ? [{ id: "SEC-TH-GH-00" } as never] : []),
-    });
-    const m1 = runAudit(AUDIT_RUNNERS, capturing).recorded.find((r) => r.module === "M1");
+// #528/#537: the mechanical scan emits SEC-TH-GH-00 when the git-history secrets tier could not run
+// (non-git archive/subdirectory delivery) — quick-scan derives that from isGitRepoRoot(targetDir).
+// #528 originally surfaced the gap only by reading a captured raw-findings feed (capture-only). #537
+// switched the M1 probe to check ctx.isGitRepoRoot directly, so a coverage-only run (no captureDir)
+// reflects the sub-gap too, and a git-repo-root target is unaffected either way.
+describe("M1 surfaces the git-history secrets coverage gap (#528/#537)", () => {
+  it("surfaces the git-history-not-assessed note on a coverage-only run against a non-git target", () => {
+    const m1 = runAudit(AUDIT_RUNNERS, ctx({ isGitRepoRoot: () => false })).recorded.find((r) => r.module === "M1");
     expect(m1?.status).toBe("partial");
     expect(m1?.reason).toMatch(/git-history secret scan/i);
     expect(m1?.reason).toMatch(/SEC-TH-GH-00/);
   });
 
-  it("passes --findings-out to quick-scan on the capture path so the raw feed exists to read", () => {
-    let seen: string[] = [];
-    runAudit(AUDIT_RUNNERS, ctx({
-      captureDir: "/cap",
-      readFindings: () => [],
-      exec: (_c, argv) => {
-        if (argv.includes("quick-scan")) seen = argv;
-        return { ok: true, output: cleanOutput(argv) };
-      },
-    }));
-    expect(seen).toContain("--findings-out");
+  it("still surfaces the note on a capturing run against a non-git target", () => {
+    const capturing = ctx({ captureDir: "/cap", readFindings: () => [], isGitRepoRoot: () => false });
+    const m1 = runAudit(AUDIT_RUNNERS, capturing).recorded.find((r) => r.module === "M1");
+    expect(m1?.reason).toMatch(/SEC-TH-GH-00/);
   });
 
-  it("omits the git-history note when the tier ran (no SEC-TH-GH-00 in the feed)", () => {
-    const capturing = ctx({ captureDir: "/cap", readFindings: () => [] });
-    const m1 = runAudit(AUDIT_RUNNERS, capturing).recorded.find((r) => r.module === "M1");
+  it("a git-repo-root target's M1 reason carries no git-history note", () => {
+    const m1 = runAudit(AUDIT_RUNNERS, ctx({ isGitRepoRoot: () => true })).recorded.find((r) => r.module === "M1");
+    expect(m1?.reason).not.toMatch(/git-history/i);
+  });
+
+  it("stays silent on the sub-gap when the signal is not supplied at all", () => {
+    const m1 = runAudit(AUDIT_RUNNERS, ctx({ isGitRepoRoot: undefined })).recorded.find((r) => r.module === "M1");
     expect(m1?.reason).not.toMatch(/git-history/i);
   });
 });

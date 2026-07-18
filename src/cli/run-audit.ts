@@ -67,6 +67,7 @@ import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit
 import { formatFailures, runAudit, type RunContext } from "../audit-runner.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
 import { discoverTargets } from "../pentest/targets.js";
+import { isGitRepoRoot } from "../scan/secrets.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
@@ -182,6 +183,7 @@ const ctx: RunContext = {
   allowTargetInstall: args.includes("--allow-target-install"),
   schemaHint,
   supabaseDbUrls,
+  isGitRepoRoot,
 };
 
 console.log(`\nFull audit — ${targetDir}`);

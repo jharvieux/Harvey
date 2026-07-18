@@ -92,6 +92,13 @@ export interface RunContext {
   // off and a cold target degrades to the loud "re-run with --install" partial. Consent unlocks the
   // attempt; the status is still derived from what actually ran.
   allowTargetInstall?: boolean;
+  // #537: whether ctx.targetDir is a git repository ROOT — the same signal quick-scan's mechanical
+  // scan uses internally (src/scan/secrets.ts's isGitRepoRoot, exported in #533) to decide whether
+  // the git-history secrets tier can run at all. Checking it directly lets the M1 probe disclose that
+  // sub-gap on every run, not only a capturing one with a raw findings feed to read back (#528's
+  // original fix only fired when ctx.captureDir was set). Absent ⇒ the probe cannot tell and stays
+  // silent on this sub-gap.
+  isGitRepoRoot?: (dir: string) => boolean;
 }
 
 export interface ModuleRunner {
