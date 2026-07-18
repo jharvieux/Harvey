@@ -241,6 +241,22 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m8?.reason).toMatch(/no automated test suite/i);
   });
 
+  // #503: a failed Stryker dry run (the target's own suite failing unmutated) emits the same
+  // machine-readable moduleRecord shape — the probe must surface its distinct reason, not a
+  // generic requires-live-run and never a silent zero.
+  it("M8 — a failed Stryker dry run (moduleRecord partial, exit 0) reads partial with the dry-run reason", () => {
+    const dryRunFailed = {
+      exec: (_c: string, argv: string[]) =>
+        argv.includes("mutation-scan")
+          ? { ok: true, output: JSON.stringify({ finding: { id: "M8-03" }, moduleRecord: { status: "partial", note: "Stryker's initial dry run FAILED — the target suite does not pass under the invoked environment (TZ=UTC (from ci.yml)): × format-date.test.ts. M8 mutation scoring could not run (#503); the suite must pass an unmutated run first." } }) }
+          : { ok: true, output: cleanOutput(argv) },
+    };
+    const m8 = status(AUDIT_RUNNERS, dryRunFailed, "M8");
+    expect(m8?.status).toBe("partial");
+    expect(m8?.reason).toMatch(/dry run FAILED/);
+    expect(m8?.reason).toMatch(/format-date\.test\.ts/);
+  });
+
   it("M9 — an empty directory (detect-static: loaded 0 source files, exit 0) is NOT recorded ran", () => {
     const emptyDir = { exec: () => ({ ok: true, output: "loaded 0 source files (0 product-code) from /empty\n\n0 findings across 0 classes:" }) };
     const m9 = status(AUDIT_RUNNERS, emptyDir, "M9");

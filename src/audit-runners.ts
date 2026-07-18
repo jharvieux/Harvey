@@ -87,15 +87,18 @@ const parseFindings = (output: string): { id?: string }[] | undefined => {
   }
 };
 
-// mutation-scan's no-test-suite branch emits { finding, moduleRecord: { status:"partial", note } }
-// and exits 0 (#224); a real Stryker run emits { summary, reportRows }. The moduleRecord is the
-// machine-readable verdict #350 says to read instead of the exit code. #420: --out diverts this
-// verdict off stdout into the object artifact, so a capturing run passes the parsed object here
-// instead of the stdout string.
-const mutationVerdict = (input: string | Record<string, unknown>): { kind: "ran" } | { kind: "no-suite"; note: string } | { kind: "unknown" } => {
+// mutation-scan emits a machine-readable moduleRecord ({ status:"partial", note }) and exits 0
+// whenever the mutation tier fell short of a full run: no test suite (#224), a failed Stryker dry
+// run (#503), a degraded scaffold rung (#513), or a scoped run that covered less than the
+// configured mutate scope (#504 — that artifact carries BOTH a summary and a moduleRecord, and the
+// moduleRecord wins: a subset measurement must never read `ran`). Only a summary WITHOUT a
+// moduleRecord is a full run. The moduleRecord is the verdict #350 says to read instead of the
+// exit code. #420: --out diverts this verdict off stdout into the object artifact, so a capturing
+// run passes the parsed object here instead of the stdout string.
+const mutationVerdict = (input: string | Record<string, unknown>): { kind: "ran" } | { kind: "partial"; note: string } | { kind: "unknown" } => {
   try {
     const parsed = (typeof input === "string" ? JSON.parse(input) : input) as { moduleRecord?: { note?: string }; summary?: unknown };
-    if (parsed.moduleRecord && typeof parsed.moduleRecord.note === "string") return { kind: "no-suite", note: parsed.moduleRecord.note };
+    if (parsed.moduleRecord && typeof parsed.moduleRecord.note === "string") return { kind: "partial", note: parsed.moduleRecord.note };
     if (parsed.summary) return { kind: "ran" };
     return { kind: "unknown" };
   } catch {
@@ -331,8 +334,9 @@ const testIntentFindings = (findings: Finding[]): Finding[] => findings.filter((
 
 // M8 (#224/#350): a target with no tests is a zero-coverage FINDING, not a skipped module — and
 // mutation-scan says so in a machine-readable moduleRecord while exiting 0. The probe reads that
-// verdict rather than the exit code: no test suite → partial (the zero-coverage finding), a real
-// Stryker report → ran.
+// verdict rather than the exit code: any moduleRecord (no suite #224, dry-run failure #503,
+// degraded ladder rung #513, scoped subset run #504) → partial with its note; a full Stryker
+// report with no moduleRecord → ran.
 // #312/#420 capture note: mutation-scan's --out artifact is an OBJECT ({ summary, ... } or
 // { finding, moduleRecord }), not a bare Finding[], AND --out diverts the verdict off stdout into
 // that object. So when capturing, this probe reads BOTH its status verdict and its findings from the
@@ -371,7 +375,7 @@ const m8: ModuleRunner = {
     if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
     const artifact = readArtifact(ctx, outPath);
     const verdict = mutationVerdict(artifact ?? output);
-    if (verdict.kind === "no-suite") {
+    if (verdict.kind === "partial") {
       const findings = [...artifactFindings(artifact), ...staticFindings];
       return findings.length ? { status: "partial", detail: command, reason: verdict.note, findings } : { status: "partial", detail: command, reason: verdict.note };
     }

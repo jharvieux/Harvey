@@ -45,12 +45,17 @@ import type { SourceInput } from "../detectors/common.js";
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
 import {
   coveredScopeLine,
+  detectDryRunFailure,
   detectNoTestSuite,
+  detectTestEnv,
+  dryRunFailureFinding,
+  dryRunFailureModuleRecord,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
   summarizeMutationReport,
   survivingMutantFindings,
   toReportRows,
+  type DetectedEnvVar,
   type PackageJsonForTestDetection,
   type StrykerReport,
 } from "../mutation-scan.js";
@@ -111,20 +116,44 @@ function readTargetPackageJson(): PackageJsonForTestDetection | undefined {
 const TEST_FILE = /(\.(test|spec)\.[cm]?[jt]sx?$)/;
 const WALK_EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out|reports|stryker-tmp)$/;
 
-function collectTestFiles(root: string): { path: string; text: string }[] {
-  const files: { path: string; text: string }[] = [];
-  const walk = (dir: string, inTestsDir: boolean) => {
+// One tree walk shared by every census below (test files, env sources, source paths) — they only
+// differ in which relative paths they keep.
+function walkRelPaths(root: string): string[] {
+  const paths: string[] = [];
+  const walk = (dir: string) => {
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry);
       if (statSync(full).isDirectory()) {
-        if (!WALK_EXCLUDED_DIR.test(entry)) walk(full, inTestsDir || entry === "__tests__");
-      } else if (TEST_FILE.test(entry) || (inTestsDir && /\.[cm]?[jt]sx?$/.test(entry))) {
-        files.push({ path: relative(root, full).split(sep).join("/"), text: readFileSync(full, "utf8") });
+        if (!WALK_EXCLUDED_DIR.test(entry)) walk(full);
+      } else {
+        paths.push(relative(root, full).split(sep).join("/"));
       }
     }
   };
-  walk(root, false);
-  return files;
+  walk(root);
+  return paths;
+}
+
+const readRel = (root: string, rel: string): { path: string; text: string } => ({ path: rel, text: readFileSync(join(root, ...rel.split("/")), "utf8") });
+
+function collectTestFiles(root: string): { path: string; text: string }[] {
+  return walkRelPaths(root)
+    .filter((p) => TEST_FILE.test(p.split("/").at(-1)!) || (/(^|\/)__tests__\//.test(p) && /\.[cm]?[jt]sx?$/.test(p)))
+    .map((rel) => readRel(root, rel));
+}
+
+// #503: the files a target can declare its test env in, ordered most-authoritative-first for
+// detectTestEnv's first-wins rule: test-runner config/setup files, then package.json's scripts,
+// then CI workflows (where ATC's TZ lived — the env CI sets is why CI is green).
+const RUNNER_CONFIG_FILE = /^(vitest|jest)\.(config|setup|workspace)\.[cm]?[jt]sx?$|^setupTests\.[cm]?[jt]sx?$/;
+
+function collectEnvSourceFiles(root: string): { path: string; text: string }[] {
+  const all = walkRelPaths(root);
+  const runnerConfigs = all.filter((p) => RUNNER_CONFIG_FILE.test(p.split("/").at(-1)!)).map((rel) => readRel(root, rel));
+  const scripts = readTargetPackageJson()?.scripts;
+  const pkgScripts = scripts ? [{ path: "package.json (scripts)", text: JSON.stringify(scripts) }] : [];
+  const workflows = all.filter((p) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(p)).map((rel) => readRel(root, rel));
+  return [...runnerConfigs, ...pkgScripts, ...workflows];
 }
 
 // #224: no test script / no known test-runner dep / no Stryker config means Stryker literally
@@ -162,25 +191,21 @@ if (detectOnly) {
   process.exit(0);
 }
 
+// #503: replicate the test env the target itself declares (TZ/LANG/LC_ALL from its runner config,
+// test script, or CI workflow) when running its suite — under the audit machine's ambient env an
+// env-fragile suite fails its dry run and M8 voids. Applies to both stub-check and Stryker runs.
+const detectedEnv: DetectedEnvVar[] = detectTestEnv(collectEnvSourceFiles(targetDir));
+const suiteEnv = { ...process.env, ...Object.fromEntries(detectedEnv.map((e) => [e.key, e.value])) };
+if (detectedEnv.length) {
+  console.error(`replicating target-declared test env (#503): ${detectedEnv.map((e) => `${e.key}=${e.value} (from ${e.source})`).join(", ")}`);
+}
+
 // #373: the fast pre-Stryker deletion-survival pass. Everything below (Stryker invocation,
 // report shaping) is bypassed — this mode's output is stub-check runs + M8-01 findings.
 if (stubCheck) {
   const SOURCE_FILE = /\.([cm]?[jt]s|[jt]sx)$/;
-  const loadSources = (root: string): SourceInput[] => {
-    const files: SourceInput[] = [];
-    const walk = (dir: string) => {
-      for (const entry of readdirSync(dir)) {
-        const full = join(dir, entry);
-        if (statSync(full).isDirectory()) {
-          if (!WALK_EXCLUDED_DIR.test(entry)) walk(full);
-        } else if (SOURCE_FILE.test(entry)) {
-          files.push({ path: relative(root, full).split(sep).join("/"), text: readFileSync(full, "utf8") });
-        }
-      }
-    };
-    walk(root);
-    return files;
-  };
+  const loadSources = (root: string): SourceInput[] =>
+    walkRelPaths(root).filter((p) => SOURCE_FILE.test(p)).map((rel) => readRel(root, rel));
 
   const testCmd = arg("--test-cmd") ?? "npm test --";
   // In-place stub with backup/restore — the same write-mutate-run shape Stryker itself uses,
@@ -190,7 +215,7 @@ if (stubCheck) {
     const original = readFileSync(abs, "utf8");
     writeFileSync(abs, stub.stubbedText);
     try {
-      execSync(`${testCmd} ${tests.join(" ")}`, { cwd: targetDir, stdio: "ignore" });
+      execSync(`${testCmd} ${tests.join(" ")}`, { cwd: targetDir, stdio: "ignore", env: suiteEnv });
       return true; // exit 0 with the body deleted — the suite survived
     } catch {
       return false;
@@ -216,30 +241,72 @@ if (stubCheck) {
   process.exit(0);
 }
 
-function runStryker(): string {
+// Machine-readable partial verdicts (dry-run failure, degraded ladder rungs) exit 0 with the
+// artifact — the same shape as the #224 no-suite branch, so the M8 probe reads the moduleRecord
+// instead of a bare non-zero exit it could only record as a generic requires-live-run.
+function emitAndExit(output: Record<string, unknown>, stderrNote: string): never {
+  console.error(stderrNote);
+  const json = JSON.stringify(output, null, 2);
+  if (outPath) {
+    writeFileSync(outPath, json + "\n");
+    console.error(`wrote M8 artifact to ${outPath}`);
+  } else {
+    console.log(json);
+  }
+  process.exit(0);
+}
+
+// #503: Stryker's output is captured (then echoed) rather than streamed, so a failed initial dry
+// run — the target's own suite failing unmutated, which writes NO report — can be recognized and
+// surfaced as its own verdict instead of falling through to "mutation report not found".
+function runStryker(cfgPath: string | undefined): { dryRunFailure?: string } {
   const strykerArgs = ["run"];
-  if (configPath) strykerArgs.push(configPath);
+  if (cfgPath) strykerArgs.push(cfgPath);
   if (concurrency) strykerArgs.push("--concurrency", concurrency);
   if (incremental) strykerArgs.push("--incremental");
 
-  const cfgToCheck = configPath ?? ["stryker.conf.json", "stryker.config.json"].map((f) => join(targetDir, f)).find(existsSync);
-  if (cfgToCheck) warnIfNotPerTest(cfgToCheck);
+  if (cfgPath) warnIfNotPerTest(cfgPath);
 
+  // Prefer the target's own install over PATH — clients that ship Stryker have it in
+  // node_modules/.bin, not globally.
+  const localBin = join(targetDir, "node_modules", ".bin", "stryker");
+  const strykerBin = existsSync(localBin) ? localBin : "stryker";
   try {
     // Stryker exits non-zero when the mutation score is under its configured break threshold —
     // that's not a wrapper failure, the report is still written; only a missing binary should throw.
-    execFileSync("stryker", strykerArgs, { cwd: targetDir, stdio: ["ignore", "inherit", "inherit"] });
+    const stdout = execFileSync(strykerBin, strykerArgs, { cwd: targetDir, encoding: "utf8", env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+    process.stderr.write(stdout);
+    return {};
   } catch (err) {
-    const e = err as { code?: string };
+    const e = err as { code?: string; stdout?: string; stderr?: string };
     if (e.code === "ENOENT") {
-      throw new Error("stryker binary not found on PATH — install @stryker-mutator/core in the target repo (see this file's header comment)");
+      throw new Error("stryker binary not found (neither node_modules/.bin/stryker in the target nor on PATH) — install @stryker-mutator/core in the target repo (see this file's header comment)");
     }
-    // Non-ENOENT: Stryker ran and (likely) failed its break threshold; fall through to read the report.
+    const captured = `${e.stdout ?? ""}\n${e.stderr ?? ""}`;
+    process.stderr.write(captured);
+    const dryRun = detectDryRunFailure(captured);
+    if (dryRun.failed) return { dryRunFailure: dryRun.detail };
+    // Non-ENOENT, no dry-run failure: (likely) a break-threshold exit; fall through to read the report.
+    return {};
   }
-  return reportPath ?? join(targetDir, "reports", "mutation", "mutation.json");
 }
 
-const resolvedReportPath = reportPath ? resolve(reportPath) : runStryker();
+const defaultConfigPath = STRYKER_CONFIG_NAMES.map((f) => join(targetDir, f)).find(existsSync);
+const effectiveConfigPath = configPath ? resolve(configPath) : defaultConfigPath;
+
+let resolvedReportPath: string;
+if (reportPath) {
+  resolvedReportPath = resolve(reportPath);
+} else {
+  const run = runStryker(effectiveConfigPath);
+  if (run.dryRunFailure) {
+    emitAndExit(
+      { finding: dryRunFailureFinding(run.dryRunFailure, detectedEnv), moduleRecord: dryRunFailureModuleRecord(run.dryRunFailure, detectedEnv) },
+      `✗ Stryker's initial dry run failed — the target suite does not pass under the invoked env: ${run.dryRunFailure}\nM8 coverage: partial (dry-run failure, #503) — emitting the env-fragile-suite finding instead.`,
+    );
+  }
+  resolvedReportPath = join(targetDir, "reports", "mutation", "mutation.json");
+}
 
 if (!existsSync(resolvedReportPath)) {
   console.error(`✗ mutation report not found at ${resolvedReportPath} — pass --report <path> if Stryker wrote it elsewhere`);

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   coveredScopeLine,
+  detectDryRunFailure,
   detectNoTestSuite,
+  detectTestEnv,
+  dryRunFailureFinding,
+  dryRunFailureModuleRecord,
   isPlaceholderSpec,
   mutationScore,
   noTestSuiteFinding,
@@ -387,5 +391,77 @@ describe("noTestSuiteFinding / noTestSuiteModuleRecord", () => {
     const record = noTestSuiteModuleRecord("no package.json found");
     expect(record).toMatchObject({ status: "partial" });
     expect(record.note).toContain("no package.json found");
+  });
+});
+
+describe("detectTestEnv (#503)", () => {
+  it("reads a YAML env mapping from a CI workflow — the ATC TZ case", () => {
+    const env = detectTestEnv([{ path: ".github/workflows/ci.yml", text: "jobs:\n  test:\n    env:\n      TZ: Pacific/Honolulu\n" }]);
+    expect(env).toEqual([{ key: "TZ", value: "Pacific/Honolulu", source: ".github/workflows/ci.yml" }]);
+  });
+
+  it("reads an inline env prefix from a package.json test script", () => {
+    const env = detectTestEnv([{ path: "package.json (scripts)", text: JSON.stringify({ test: "TZ=UTC vitest run" }) }]);
+    expect(env).toEqual([{ key: "TZ", value: "UTC", source: "package.json (scripts)" }]);
+  });
+
+  it("reads a quoted env object entry from a vitest config", () => {
+    const env = detectTestEnv([{ path: "vitest.config.ts", text: `export default { test: { env: { TZ: "America/New_York", LANG: "en_US.UTF-8" } } };` }]);
+    expect(env).toContainEqual({ key: "TZ", value: "America/New_York", source: "vitest.config.ts" });
+    expect(env).toContainEqual({ key: "LANG", value: "en_US.UTF-8", source: "vitest.config.ts" });
+  });
+
+  it("reads a process.env assignment from a setup file — the runtime-reassignment pattern that needs process-start replication", () => {
+    const env = detectTestEnv([{ path: "vitest.setup.ts", text: `process.env.TZ = "Pacific/Honolulu";\n` }]);
+    expect(env).toEqual([{ key: "TZ", value: "Pacific/Honolulu", source: "vitest.setup.ts" }]);
+  });
+
+  it("first declaration per key wins across the caller-ordered file list (runner config beats workflow)", () => {
+    const env = detectTestEnv([
+      { path: "vitest.config.ts", text: `env: { TZ: "UTC" }` },
+      { path: ".github/workflows/ci.yml", text: "env:\n  TZ: Pacific/Honolulu\n" },
+    ]);
+    expect(env).toEqual([{ key: "TZ", value: "UTC", source: "vitest.config.ts" }]);
+  });
+
+  it("ignores env keys outside the locale/timezone allowlist — CI secrets must never be scraped", () => {
+    const env = detectTestEnv([{ path: ".github/workflows/ci.yml", text: "env:\n  DATABASE_URL: postgres://x\n  API_TOKEN: abc\n" }]);
+    expect(env).toEqual([]);
+  });
+});
+
+describe("detectDryRunFailure / dry-run-failure verdict (#503)", () => {
+  const STRYKER_FAIL = [
+    "12:01:02 (1234) ERROR Stryker Something went wrong",
+    "× src/format-date.test.ts > formats a negative-UTC-offset timezone",
+    "ConfigError: There were failed tests in the initial test run.",
+  ].join("\n");
+
+  it("recognizes Stryker's failed-initial-test-run abort and extracts the first failing test line", () => {
+    const verdict = detectDryRunFailure(STRYKER_FAIL);
+    expect(verdict.failed).toBe(true);
+    expect(verdict.detail).toContain("format-date.test.ts");
+  });
+
+  it("recognizes an initial-test-run timeout", () => {
+    expect(detectDryRunFailure("Initial test run timed out!").failed).toBe(true);
+  });
+
+  it("does not fire on ordinary Stryker output (break-threshold exit, score table)", () => {
+    expect(detectDryRunFailure("Final mutation score of 42.00 is lower than break threshold").failed).toBe(false);
+  });
+
+  it("emits an M8-03 finding naming the applied env and the failing test", () => {
+    const finding = dryRunFailureFinding("× format-date.test.ts > negative-UTC-offset", [{ key: "TZ", value: "UTC", source: "ci.yml" }]);
+    expect(finding.id).toBe("M8-03");
+    expect(finding.evidence).toContain("TZ=UTC");
+    expect(finding.evidence).toContain("format-date.test.ts");
+  });
+
+  it("marks the coverage record partial with a distinct, actionable note — never a generic void", () => {
+    const record = dryRunFailureModuleRecord("× format-date.test.ts", []);
+    expect(record.status).toBe("partial");
+    expect(record.note).toMatch(/dry run FAILED/);
+    expect(record.note).toContain("format-date.test.ts");
   });
 });

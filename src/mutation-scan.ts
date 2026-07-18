@@ -350,6 +350,90 @@ export function noTestSuiteModuleRecord(reason: string): { status: "partial"; no
   return { status: "partial", note: `No automated test suite found (${reason}) — mutation scan could not run.` };
 }
 
+// #503: a target's suite can pass ONLY under a specific process env (ATC: a timezone-sensitive
+// test that needs the process to START with TZ=Pacific/Honolulu — a runtime process.env.TZ
+// reassignment does not re-init Node's timezone). Stryker's initial dry run then fails under the
+// audit machine's ambient env and M8 voids with no actionable reason. These functions detect the
+// env the target itself declares (CI workflow, test-runner config/setup, package.json test
+// script) so the CLI can replicate it when invoking Stryker/stub-check.
+//
+// Only locale/timezone keys: they are the env-fragility class that breaks a dry run without being
+// a secret or machine-specific path. Anything wider (DATABASE_URL, tokens) must come from the
+// operator, not be scraped out of the target's CI.
+const TEST_ENV_KEYS = "TZ|LANG|LC_ALL";
+const ENV_PATTERNS: RegExp[] = [
+  new RegExp(`\\b(${TEST_ENV_KEYS})=([A-Za-z0-9_./:+-]+)`, "g"), // inline prefix: TZ=UTC vitest run
+  new RegExp(`\\b(${TEST_ENV_KEYS})["']?\\s*:\\s*["']?([A-Za-z0-9_./:+-]+)`, "g"), // YAML env: / JS env object
+  new RegExp(`process\\.env\\.(${TEST_ENV_KEYS})\\s*=\\s*["']([^"']+)["']`, "g"), // setup-file assignment
+];
+
+export interface DetectedEnvVar {
+  key: string;
+  value: string;
+  source: string;
+}
+
+// First declaration per key wins, in the file order the caller supplies — the CLI passes
+// test-runner configs/setup files first (closest to the runner), then package.json scripts, then
+// CI workflows, so a runner-level TZ beats a workflow-level one.
+export function detectTestEnv(files: readonly { path: string; text: string }[]): DetectedEnvVar[] {
+  const found = new Map<string, DetectedEnvVar>();
+  for (const { path, text } of files) {
+    for (const pattern of ENV_PATTERNS) {
+      for (const m of text.matchAll(pattern)) {
+        const key = m[1]!;
+        if (!found.has(key)) found.set(key, { key, value: m[2]!, source: path });
+      }
+    }
+  }
+  return [...found.values()];
+}
+
+// #503: Stryker aborts with a ConfigError when any test fails in its initial (unmutated) dry run —
+// the report is never written, so before this the CLI fell through to "mutation report not found"
+// and the probe recorded a generic requires-live-run. The failure is distinct and actionable:
+// the SUITE does not pass under the invoked env, which is the target's defect (or an env we
+// failed to replicate), not an environment gap.
+const DRY_RUN_FAILURE = /failed tests in the initial test run|initial test run (?:failed|timed out)/i;
+// Best-effort first failing test out of the runner output Stryker echoes (vitest ×/✗, jest ●/FAIL).
+const FAILING_TEST_LINE = /^.*(?:✗|✖|×|✘|●|\bFAIL\b).*$/m;
+
+export function detectDryRunFailure(output: string): { failed: boolean; detail?: string } {
+  if (!DRY_RUN_FAILURE.test(output)) return { failed: false };
+  const failing = output.match(FAILING_TEST_LINE)?.[0].trim();
+  const configError = output.match(/^.*initial test run.*$/im)?.[0].trim();
+  return { failed: true, detail: failing ?? configError ?? "Stryker reported a failed initial test run" };
+}
+
+const describeEnv = (env: readonly DetectedEnvVar[]): string =>
+  env.length ? env.map((e) => `${e.key}=${e.value} (from ${e.source})`).join(", ") : "no target-declared test env detected; ambient process env only";
+
+export function dryRunFailureFinding(detail: string, env: readonly DetectedEnvVar[]): Finding {
+  return {
+    id: "M8-03",
+    status: "Open",
+    category: "Test quality",
+    title: "Test suite fails its own unmutated dry run — mutation testing blocked",
+    severity: "Medium",
+    confidence: "Confirmed",
+    taxonomy: "M8 — Suite fails unmutated dry run (env-fragile tests)",
+    location: "package.json (test suite)",
+    evidence: `Stryker's initial dry run — the target's own suite, unmutated — failed under the invoked environment (${describeEnv(env)}). First failure: ${detail}.`,
+    impact: "The suite only passes under an environment it does not declare (or not at all) — CI green is unreproducible elsewhere, and mutation testing (M8's headline metric) cannot run until the suite passes a clean dry run.",
+    fix: "Make the suite pass in a declared environment: pin required env (TZ, locale) in the test-runner config rather than relying on ambient machine state or runtime process.env reassignment (which does not re-init Node's timezone), then re-run the mutation scan.",
+    value: 3,
+    ease: 3,
+    safety: 5,
+  };
+}
+
+export function dryRunFailureModuleRecord(detail: string, env: readonly DetectedEnvVar[]): { status: "partial"; note: string } {
+  return {
+    status: "partial",
+    note: `Stryker's initial dry run FAILED — the target suite does not pass under the invoked environment (${describeEnv(env)}): ${detail}. M8 mutation scoring could not run (#503); the suite must pass an unmutated run first.`,
+  };
+}
+
 // #435: a real Stryker run's { summary, reportRows } carries no report-schema Finding[], so it
 // contributed nothing to the engagement deliverable — only the no-test-suite branch's M8-00 did
 // (#224/#420). Surviving mutants are noisy at the individual-mutant level (a repo can have hundreds),
