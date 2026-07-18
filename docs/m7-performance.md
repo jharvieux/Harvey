@@ -184,10 +184,11 @@ pnpm lighthouse-scan --url http://localhost:3000 --route / --out findings.lh.jso
   `npm run start -- -p <port>` in the target, waits for the server, and drives Lighthouse against
   `http://localhost:<port>`. Not a client staging URL — pass `--url` only to audit an instance
   you already have running.
-- **Browser: `chrome-launcher`** (+ the `lighthouse` Node API). It auto-detects a system Chrome;
-  set `LIGHTHOUSE_CHROME_PATH` to reuse the Playwright chromium the repo already installs for
-  `report-template` — the CLI fills that in from `chromium.executablePath()` when the env var is
-  unset, so no second browser install is required.
+- **Browser: `chrome-launcher`** (+ the `lighthouse` Node API) **prefers a system Chrome**
+  (auto-detected). It falls back to the Playwright chromium the repo installs for `report-template`
+  **only when no system Chrome exists** — that "Chrome for Testing" build fails Lighthouse with
+  **NO_FCP** (#488), so a real CWV measurement needs a system Chrome; a Playwright-only machine
+  records the `M7L-00` disclosure instead of a (false) clean. `LIGHTHOUSE_CHROME_PATH` overrides both.
 - **Pure transform:** `parseLighthouseFindings(pages)` (`src/lighthouse.ts`) reads
   `categories.performance.score` and the `largest-contentful-paint` / `total-blocking-time` /
   `cumulative-layout-shift` audits, and emits one `Finding` per failing metric (grouped across
@@ -212,7 +213,8 @@ pnpm lighthouse-scan --url http://localhost:3000 --route / --out findings.lh.jso
 - **Only a live run validates:** the end-to-end build → serve → Chrome → Lighthouse pipeline has
   no unit coverage (no browser/target in CI) — `src/lighthouse.test.ts` covers the JSON→`Finding[]`
   parse, the threshold/severity logic, and the degrade finding against a fixture LHR. The live
-  pipeline is exercised on the first real engagement.
+  pipeline was validated end-to-end against a real target on 2026-07-18 (#488; see
+  `docs/design/m7-lighthouse-validation.md`).
 
 ## 4. Mapping into the report (§3b Performance of `docs/audit-report-skeleton.md`)
 
@@ -281,9 +283,10 @@ review pass says what the right structure would be.
 
 ### Deferred / scoped-out follow-ups
 
-- **Web Vitals (§3): implemented (#387)** — `pnpm lighthouse-scan` runs Lighthouse locally
-  (`chrome-launcher` + the `lighthouse` Node API) and shapes LCP/TBT/CLS + the performance score
-  into `M7L-*` findings. Remaining live-only validation: the build → serve → Chrome → Lighthouse
-  pipeline end-to-end against a real target (no browser/target in CI).
+- **Web Vitals (§3): implemented (#387) + live-validated (#488)** — `pnpm lighthouse-scan` runs
+  Lighthouse locally (`chrome-launcher` + the `lighthouse` Node API) and shapes LCP/TBT/CLS + the
+  performance score into `M7L-*` findings. The build → serve → Chrome → Lighthouse pipeline was
+  validated end-to-end against a real target on 2026-07-18 (#488; see
+  `docs/design/m7-lighthouse-validation.md`).
 - **`/advisors/performance` endpoint path:** inferred by analogy, not exercised live — verify on
   the first real engagement (§1).
