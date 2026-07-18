@@ -71,6 +71,8 @@ function readMigrations(targetDir: string): string {
 // mirrored: a subdirectory, not the root) so secrets.ts's isGitRepoRoot still sees a
 // SUBDIRECTORY and the git-history trufflehog pass stays skipped, exactly as it is today for the
 // real targets/calibration path — this only changes which files the TRACKED-file walk finds.
+// Since #528, "skipped" means the SEC-TH-GH-00 disclosure finding fires instead of a silent []
+// — that finding is expected to appear in this harness's committed findings.json.
 const BUILD_ARTIFACT_IGNORE = /(^|\/)(node_modules|\.next)\/|\.log$/;
 
 function findEnvFixtures(dir: string, base = dir): string[] {

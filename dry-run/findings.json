@@ -1,5 +1,21 @@
 [
   {
+    "id": "SEC-TH-GH-00",
+    "title": "Git-history secret scan (TruffleHog) did not run",
+    "severity": "Info",
+    "confidence": "N/A",
+    "category": "Secret exposure",
+    "taxonomy": "Committed credential — coverage not assessed",
+    "location": "(repo-wide)",
+    "status": "Open",
+    "evidence": "TruffleHog git-history pass did not run: target directory is not a git repository root (an archive export or a subdirectory of a repo, not a full checkout)",
+    "impact": "Git-history secret coverage for this engagement is incomplete for this pass — a disclosed coverage gap, not a finding of zero secrets committed to history.",
+    "fix": "Deliver the engagement as a full git checkout (not an archive/subdirectory export) and re-run the scan, or run `trufflehog git` directly against the client's repository.",
+    "value": 1,
+    "ease": 3,
+    "safety": 5
+  },
+  {
     "id": "SEC-GL-source-1",
     "title": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data. (jwt)",
     "severity": "High",

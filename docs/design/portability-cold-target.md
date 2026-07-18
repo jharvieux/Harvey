@@ -48,7 +48,7 @@ absolute path `run-audit` will be given.
 
 | Module / tier | Needs (who provides) | Provision path for a cold target | Degrade path | Ledger status |
 |---|---|---|---|---|
-| **M1 mechanical** (`quick-scan`) | semgrep/trufflehog/gitleaks/osv-scanner + network (operator); lockfile, `package.json`, real `.git` at repo root (target) | Install binaries on the scanning machine; clone the repo with full history (not a tarball/shallow clone) | Missing semgrep/trufflehog/gitleaks binary → the scan **throws**, probe records the reason (fail-loud). Missing/failed osv-scanner → **DEP-OSV-00 disclosure finding** (#512, was a silent empty result). No lockfile → OSV pass skipped but SUP-NO-LOCKFILE finding fires (`src/scan/supply-chain.ts`). No `.git` repo root → git-history secret pass returns nothing **silently** (`src/scan/secrets.ts` `isGitRepoRoot`) — open gap, see below. No `package.json` → supply-chain checks silently skipped (`src/scan/mechanical.ts` `if (pkg)`) — acceptable only because a Next.js target always has one | `partial` always under the orchestrator (mechanical tier alone, #311) |
+| **M1 mechanical** (`quick-scan`) | semgrep/trufflehog/gitleaks/osv-scanner + network (operator); lockfile, `package.json`, real `.git` at repo root (target) | Install binaries on the scanning machine; clone the repo with full history (not a tarball/shallow clone) | Missing semgrep/trufflehog/gitleaks binary → the scan **throws**, probe records the reason (fail-loud). Missing/failed osv-scanner → **DEP-OSV-00 disclosure finding** (#512, was a silent empty result). No lockfile → OSV pass skipped but SUP-NO-LOCKFILE finding fires (`src/scan/supply-chain.ts`). No `.git` repo root → git-history secret pass degrades to the **SEC-TH-GH-00 disclosure finding** (#528, was a silent empty result). No `package.json` → supply-chain checks silently skipped (`src/scan/mechanical.ts` `if (pkg)`) — acceptable only because a Next.js target always has one | `partial` always under the orchestrator (mechanical tier alone, #311) |
 | **M1 config** (`scan.ts --supabase`) | `SUPABASE_ACCESS_TOKEN` + project ref (client), or a local stack | Client mints a scoped token; or run against the M2 local stack (`--supabase local`) | Not run → covered by M1's standing `partial` reason | folded into M1 `partial` |
 | **M1 semantic** (LLM `/vuln-scan → /triage`) | paid-LLM tier (operator) | Operator/skill pass; `pnpm record-pass` emits M1.pass.json | No artifact → `partial` with the #311 reason; stale/wrong-target artifact → rejected with reason | `ran` only via fresh pass artifact |
 | **M1 live** (`detect-deeper`) | read-only `SUPABASE_DB_URL` (client) | Client mints a read-only connection string (see `docs/runbooks/connected-access-hardening.md`) | No creds → mechanical-only `partial` | folded into M1 |
@@ -88,10 +88,10 @@ Paid adds the client-granted credentials (read-only DB URL, scoped access token 
   without stdout, including a missing binary: zero CVE findings, no disclosure, in every tier
   that runs the mechanical scan. Now degrades to the `DEP-OSV-00` disclosure finding
   (`src/scan/dependencies.ts`, `src/scan/mechanical.ts`).
-- **Git-history secrets silently unassessed for non-git delivery.** A target delivered as a
-  zip/subdirectory makes `runTruffleHogGitHistory` return `[]` with no disclosure
-  (`src/scan/secrets.ts`). Legitimate when there is genuinely no history, but for a cold
-  engagement it should be a stated limitation (finding or ledger note). Follow-up.
+- **Git-history secrets silently unassessed for non-git delivery — FIXED (#528).** A target
+  delivered as a zip/subdirectory made `runTruffleHogGitHistory` return `[]` with no disclosure
+  (`src/scan/secrets.ts`). Now degrades to the `SEC-TH-GH-00` disclosure finding when
+  `isGitRepoRoot` trips, same contract as `DEP-OSV-00`/`M5-00`.
 - **M7's ledger row can read `ran` while the Lighthouse tier never executed** (see M7 Lighthouse
   row). Follow-up.
 - **M7 bundle-tier skip is stdout-only** (see M7 bundle row) — low priority; the skip is at

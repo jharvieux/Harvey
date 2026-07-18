@@ -206,7 +206,7 @@ function runTruffleHogFilesystem(dir: string): TruffleHogResult[] {
 // trufflehog's git pass clones the target as a repo, so it only works when the scan target is a
 // git repo ROOT. A subdirectory of a repo (e.g. targets/calibration inside this repo) has no
 // clonable .git and would error — there's simply no separate history to scan, so skip it.
-function isGitRepoRoot(dir: string): boolean {
+export function isGitRepoRoot(dir: string): boolean {
   try {
     const top = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
     return realpathSync(top) === realpathSync(dir);
@@ -216,8 +216,30 @@ function isGitRepoRoot(dir: string): boolean {
 }
 
 function runTruffleHogGitHistory(repoDir: string): TruffleHogResult[] {
-  if (!isGitRepoRoot(repoDir)) return [];
   return runJson<TruffleHogResult>("trufflehog", ["git", "--only-verified", "--json", `file://${repoDir}`]);
+}
+
+// #528: previously the isGitRepoRoot guard (added for #55) just returned [] with no disclosure,
+// so a cold engagement delivered as an archive/subdirectory had the git-history secret tier
+// silently unassessed — an unstated limitation that reads as a clean bill of health. Same
+// disclosure contract as DEP-OSV-00/M4-99/M5-00: a visible not-assessed row, never a silent skip.
+export function gitHistorySecretsUnavailableFinding(reason: string): Finding {
+  return {
+    id: "SEC-TH-GH-00",
+    title: "Git-history secret scan (TruffleHog) did not run",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Secret exposure",
+    taxonomy: "Committed credential — coverage not assessed",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `TruffleHog git-history pass did not run: ${reason}`,
+    impact: "Git-history secret coverage for this engagement is incomplete for this pass — a disclosed coverage gap, not a finding of zero secrets committed to history.",
+    fix: "Deliver the engagement as a full git checkout (not an archive/subdirectory export) and re-run the scan, or run `trufflehog git` directly against the client's repository.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
 }
 
 // gitleaks writes its report to a file (no stdout JSON mode), so scan into a scratch dir
@@ -253,9 +275,16 @@ function runGitleaks(dir: string): GitleaksResult[] {
 // tracked-files-only copy as sourceDir (issue #101) — that copy has no `.git`, so the
 // git-history pass needs the real, clonable original directory instead (historyDir).
 export function scanSecrets(sourceDir: string, historyDir: string, bundleDir?: string): Finding[] {
+  // Reason deliberately omits historyDir itself: on a real engagement the path is just the
+  // target root (no signal beyond what location "(repo-wide)" already says), and on the
+  // deterministic dry-run harness (src/cli/dry-run.ts) historyDir is a freshly minted scratch
+  // path — embedding it would make the committed findings.json non-reproducible across runs.
+  const gitHistoryFindings = isGitRepoRoot(historyDir)
+    ? parseTruffleHogFindings(runTruffleHogGitHistory(historyDir), "git-history")
+    : [gitHistorySecretsUnavailableFinding("target directory is not a git repository root (an archive export or a subdirectory of a repo, not a full checkout)")];
   const findings: Finding[] = [
     ...parseTruffleHogFindings(runTruffleHogFilesystem(sourceDir), "source"),
-    ...parseTruffleHogFindings(runTruffleHogGitHistory(historyDir), "git-history"),
+    ...gitHistoryFindings,
     ...parseGitleaksFindings(runGitleaks(sourceDir), "source"),
   ];
   if (bundleDir) {
