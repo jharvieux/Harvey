@@ -5,6 +5,7 @@ import {
   lighthouseRunErrorReason,
   lighthouseUnavailableFinding,
   parseLighthouseFindings,
+  serveCommand,
   type LighthouseResult,
 } from "./lighthouse.js";
 
@@ -115,6 +116,20 @@ describe("lighthouseRunErrorReason", () => {
 
   it("returns undefined for a genuinely measured run (numeric score)", () => {
     expect(lighthouseRunErrorReason(good)).toBeUndefined();
+  });
+});
+
+describe("serveCommand (#577) — Vite has no `start`, its build is served by `vite preview`", () => {
+  it("uses `npm run preview -- --port` for a Vite target", () => {
+    expect(serveCommand("vite", 3000)).toEqual({
+      args: ["run", "preview", "--", "--port", "3000"],
+      label: "npm run preview -- --port 3000",
+    });
+  });
+
+  it("uses `npm run start -- -p` for Next and for unknown/other targets", () => {
+    expect(serveCommand("next", 4000).args).toEqual(["run", "start", "--", "-p", "4000"]);
+    expect(serveCommand("other", 4000).args).toEqual(["run", "start", "--", "-p", "4000"]);
   });
 });
 

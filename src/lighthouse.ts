@@ -13,6 +13,7 @@
 // field data or multiple runs.
 
 import type { Finding, Severity } from "./findings.js";
+import type { TargetFramework } from "./scan/framework-detect.js";
 
 interface LighthouseAudit {
   score?: number | null;
@@ -201,6 +202,19 @@ export function lighthouseRunErrorReason(result: LighthouseResult): string | und
   }
   if (result.categories?.performance?.score == null) return "the run produced no performance score";
   return undefined;
+}
+
+// The `npm run <script>` a target uses to serve its production build for the Lighthouse pass. Next
+// serves the `next start` build via the `start` script (`-p <port>`); a Vite app has no `start` —
+// its build is served by `vite preview --port <port>` (the `preview` script) (#577). `other`/unknown
+// falls back to `start`, the create-react-app / generic convention. The build step (`npm run build`)
+// is the same for both, so only the serve command branches.
+export function serveCommand(framework: TargetFramework, port: number): { args: string[]; label: string } {
+  const args =
+    framework === "vite"
+      ? ["run", "preview", "--", "--port", String(port)]
+      : ["run", "start", "--", "-p", String(port)];
+  return { args, label: `npm ${args.join(" ")}` };
 }
 
 // The fail-loud disclosure the coverage doctrine requires: when the target can't be built, served,
