@@ -13,11 +13,20 @@
 // The decision logic and emission are the tested pure functions in src/dynamic-validate.ts; this
 // wrapper is the untested I/O per the repo convention.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { cloneAtPin } from "../scan/corpus-clone.js";
-import { assessStandUpAbility, readRepoLayout, runDynamicValidation, type StandUpRunner } from "../dynamic-validate.js";
+import {
+  assessStandUpAbility,
+  buildProvisioningPlan,
+  detectClientSecuritySuite,
+  readMigrationSql,
+  readRepoLayout,
+  runDynamicValidation,
+  type ProvisioningPlan,
+  type StandUpRunner,
+} from "../dynamic-validate.js";
 
 const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
@@ -64,24 +73,35 @@ if (!out) {
 
 // Thin shell-out runner. Each step reports ok/output; a missing tool is a reasoned failure the
 // orchestration turns into "could not stand up", never a silent pass.
-const sh = (cmd: string, cmdArgs: string[], cwd: string): { ok: boolean; output: string } => {
+const sh = (cmd: string, cmdArgs: string[], cwd: string, env?: NodeJS.ProcessEnv): { ok: boolean; output: string } => {
   try {
-    return { ok: true, output: execFileSync(cmd, cmdArgs, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
+    return { ok: true, output: execFileSync(cmd, cmdArgs, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
   } catch (err) {
     const e = err as { stderr?: string; stdout?: string; message?: string };
     return { ok: false, output: (e.stderr || e.stdout || e.message || "").slice(0, 300) };
   }
 };
 
+// Conventional local Supabase DB URL (`supabase start` binds this by default) — used to apply the
+// Harvey generic seed once migrations are in. Override via SUPABASE_DB_URL if the operator remapped ports.
+const LOCAL_DB_URL = process.env.SUPABASE_DB_URL ?? "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
+
 const runner: StandUpRunner = {
-  standUpDb: (dir) => {
+  standUpDb: (dir, plan: ProvisioningPlan) => {
     const start = sh("supabase", ["start"], dir);
-    if (!start.ok) return start;
-    return sh("supabase", ["db", "reset"], dir); // applies migrations + supabase/seed.sql
+    if (!start.ok) return start; // env/operator gap (Docker/CLI) — NOT a migration finding
+    const reset = sh("supabase", ["db", "reset"], dir); // applies the client's migrations
+    if (!reset.ok) return { ...reset, migrationApplyFailed: true }; // schema won't provision ⇒ an M2 finding
+    const seedFile = join(mkdtempSync(join(tmpdir(), "harvey-seed-")), "seed.sql");
+    writeFileSync(seedFile, plan.seed.sql);
+    return sh("psql", [LOCAL_DB_URL, "-v", "ON_ERROR_STOP=1", "-f", seedFile], dir);
   },
   runApp: (dir) => sh("npm", ["run", "build"], dir),
-  pentest: (dir) => {
-    const r = sh("pnpm", ["exec", "tsx", "src/cli/pentest.ts", "--target", dir], process.cwd());
+  pentest: () => {
+    // Wire the seed's tenant surface into pentest.ts (HARVEY_TABLES + the seeded tenant ids); the
+    // remaining creds (anon/service keys, per-persona JWTs) come from `supabase status` per the runbook.
+    const ptEnv = { ...process.env, HARVEY_TABLES: plan.tables, HARVEY_TENANT_A: plan.seed.tenants.a, HARVEY_TENANT_B: plan.seed.tenants.b };
+    const r = sh("pnpm", ["exec", "tsx", "src/cli/pentest.ts", "--mode=explore"], process.cwd(), ptEnv);
     if (!r.ok) return { ok: false, findings: [], output: r.output };
     try {
       const parsed = JSON.parse(r.output) as { findings?: unknown };
@@ -90,11 +110,21 @@ const runner: StandUpRunner = {
       return { ok: false, findings: [], output: `pentest produced no parseable findings: ${r.output.slice(0, 200)}` };
     }
   },
+  clientSuite: (dir, suite) => sh(suite.command[0]!, suite.command.slice(1), dir),
 };
 
-const result = runDynamicValidation({ targetDir, layout, artifactsDir: resolve(out), now: () => new Date().toISOString(), runner });
+const migrationSql = readMigrationSql(layout.migrationDirs);
+const plan = buildProvisioningPlan(layout, migrationSql);
+console.log(`  seed: two tenants across ${plan.seed.scopedTables.length} scoped table(s)${plan.tables ? ` (HARVEY_TABLES=${plan.tables})` : ""}`);
+for (const w of plan.seed.warnings) console.log(`  seed-warning: ${w}`);
+
+const clientSuite = detectClientSecuritySuite(targetDir);
+if (clientSuite.present) console.log(`  client suite (bonus): ${clientSuite.detail}`);
+
+const result = runDynamicValidation({ targetDir, layout, plan, artifactsDir: resolve(out), now: () => new Date().toISOString(), runner, clientSuite });
 console.log(`\n${result.reason}`);
 for (const l of result.limitations) console.log(`  limitation: ${l}`);
+for (const n of result.notes) console.log(`  note: ${n}`);
 if (result.artifactPath) {
   console.log(`M2 pass artifact → ${result.artifactPath} (run-audit --artifacts-dir ${resolve(out)} now derives M2 ran)`);
 } else {
