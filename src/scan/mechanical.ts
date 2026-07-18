@@ -13,7 +13,7 @@ import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { scanBolaOwner } from "./bola-owner.js";
 import { scanCounterRace } from "./counter-race.js";
-import { checkKnownDependencyCVEs, checkNextVersionCVEs, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
+import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { scanSecrets } from "./secrets.js";
@@ -42,9 +42,10 @@ function readPackageJson(dir: string): PackageJson | null {
 
 const LOCKFILES = ["pnpm-lock.yaml", "package-lock.json", "yarn.lock"];
 
-function runOsvScanner(dir: string): OsvScanResult {
+function runOsvScanner(dir: string): { result: OsvScanResult; failure?: string } {
   const lockfile = LOCKFILES.find((f) => existsSync(join(dir, f)));
-  if (!lockfile) return {};
+  // No lockfile is a target property, not a tool failure — checkLockfilePresence discloses it.
+  if (!lockfile) return { result: {} };
   let out: string;
   try {
     out = execFileSync("osv-scanner", ["--format", "json", "--lockfile", join(dir, lockfile)], {
@@ -53,11 +54,13 @@ function runOsvScanner(dir: string): OsvScanResult {
     });
   } catch (err) {
     // osv-scanner exits 1 when it finds vulnerabilities — stdout still has the report.
-    const e = err as { stdout?: string };
+    const e = err as { stdout?: string; code?: string; message?: string };
     if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
-    else return {};
+    // #512: a failure with no report (binary missing, crash) must not silently cost the
+    // engagement its CVE pass — surface the reason so the caller emits the disclosure finding.
+    else return { result: {}, failure: e.code === "ENOENT" ? "osv-scanner not found on PATH" : (e.message ?? "osv-scanner failed with no output") };
   }
-  return out.trim() ? (JSON.parse(out) as OsvScanResult) : {};
+  return { result: out.trim() ? (JSON.parse(out) as OsvScanResult) : {} };
 }
 
 interface MechanicalScanOptions {
@@ -96,7 +99,8 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     findings.push(...scanSecrets(scanDir, dir, bundleDir && existsSync(bundleDir) ? bundleDir : undefined));
 
     // Framework/dependency CVEs.
-    findings.push(...parseOsvFindings(runOsvScanner(scanDir)));
+    const osv = runOsvScanner(scanDir);
+    findings.push(...(osv.failure ? [osvUnavailableFinding(osv.failure)] : parseOsvFindings(osv.result)));
     const pkg = readPackageJson(scanDir);
     const nextVersion = pkg?.dependencies?.next ?? pkg?.devDependencies?.next;
     if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion.replace(/^[\^~]/, "")));
