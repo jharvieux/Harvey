@@ -5,15 +5,16 @@
 //
 // Default is ASSESS-ONLY: clone (if a URL) + report a go/no-go verdict with its coverage and any
 // limitations — useful for triaging which public repos are dynamic-validation candidates at all.
-// --execute runs the live pipeline (supabase start → migrations → app build → pentest.ts) via a thin
-// shell-out runner and, on success, writes <out>/M2.pass.json. The live steps need Docker + the
-// Supabase CLI and are operator-run — the same live-stack work tracked in #159/#161; without those
-// tools each step returns a reasoned failure and NO artifact is written (never a silent clean run).
+// --execute runs the AUTONOMOUS live pipeline (createLiveStandUp: supabase start → apply the client
+// migrations → create two auth users → seed two tenants → live PostgREST cross-tenant matrix → app
+// build) and, on success, writes <out>/M2.pass.json. No operator step — Harvey provisions its own
+// stack (#159/#161). It needs Docker + the Supabase CLI on PATH; without them each step returns a
+// reasoned failure and NO artifact is written (never a silent clean run). The stack is always torn
+// down (supabase stop) in a finally.
 //
 // The decision logic and emission are the tested pure functions in src/dynamic-validate.ts; this
 // wrapper is the untested I/O per the repo convention.
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { cloneAtPin } from "../scan/corpus-clone.js";
@@ -24,9 +25,8 @@ import {
   readMigrationSql,
   readRepoLayout,
   runDynamicValidation,
-  type ProvisioningPlan,
-  type StandUpRunner,
 } from "../dynamic-validate.js";
+import { createLiveStandUp } from "../pentest/live-standup.js";
 
 const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
@@ -71,48 +71,6 @@ if (!out) {
   process.exit(2);
 }
 
-// Thin shell-out runner. Each step reports ok/output; a missing tool is a reasoned failure the
-// orchestration turns into "could not stand up", never a silent pass.
-const sh = (cmd: string, cmdArgs: string[], cwd: string, env?: NodeJS.ProcessEnv): { ok: boolean; output: string } => {
-  try {
-    return { ok: true, output: execFileSync(cmd, cmdArgs, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
-  } catch (err) {
-    const e = err as { stderr?: string; stdout?: string; message?: string };
-    return { ok: false, output: (e.stderr || e.stdout || e.message || "").slice(0, 300) };
-  }
-};
-
-// Conventional local Supabase DB URL (`supabase start` binds this by default) — used to apply the
-// Harvey generic seed once migrations are in. Override via SUPABASE_DB_URL if the operator remapped ports.
-const LOCAL_DB_URL = process.env.SUPABASE_DB_URL ?? "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
-
-const runner: StandUpRunner = {
-  standUpDb: (dir, plan: ProvisioningPlan) => {
-    const start = sh("supabase", ["start"], dir);
-    if (!start.ok) return start; // env/operator gap (Docker/CLI) — NOT a migration finding
-    const reset = sh("supabase", ["db", "reset"], dir); // applies the client's migrations
-    if (!reset.ok) return { ...reset, migrationApplyFailed: true }; // schema won't provision ⇒ an M2 finding
-    const seedFile = join(mkdtempSync(join(tmpdir(), "harvey-seed-")), "seed.sql");
-    writeFileSync(seedFile, plan.seed.sql);
-    return sh("psql", [LOCAL_DB_URL, "-v", "ON_ERROR_STOP=1", "-f", seedFile], dir);
-  },
-  runApp: (dir) => sh("npm", ["run", "build"], dir),
-  pentest: () => {
-    // Wire the seed's tenant surface into pentest.ts (HARVEY_TABLES + the seeded tenant ids); the
-    // remaining creds (anon/service keys, per-persona JWTs) come from `supabase status` per the runbook.
-    const ptEnv = { ...process.env, HARVEY_TABLES: plan.tables, HARVEY_TENANT_A: plan.seed.tenants.a, HARVEY_TENANT_B: plan.seed.tenants.b };
-    const r = sh("pnpm", ["exec", "tsx", "src/cli/pentest.ts", "--mode=explore"], process.cwd(), ptEnv);
-    if (!r.ok) return { ok: false, findings: [], output: r.output };
-    try {
-      const parsed = JSON.parse(r.output) as { findings?: unknown };
-      return { ok: true, findings: Array.isArray(parsed.findings) ? (parsed.findings as never[]) : [], output: r.output };
-    } catch {
-      return { ok: false, findings: [], output: `pentest produced no parseable findings: ${r.output.slice(0, 200)}` };
-    }
-  },
-  clientSuite: (dir, suite) => sh(suite.command[0]!, suite.command.slice(1), dir),
-};
-
 const migrationSql = readMigrationSql(layout.migrationDirs);
 const plan = buildProvisioningPlan(layout, migrationSql);
 console.log(`  seed: two tenants across ${plan.seed.scopedTables.length} scoped table(s)${plan.tables ? ` (HARVEY_TABLES=${plan.tables})` : ""}`);
@@ -121,13 +79,28 @@ for (const w of plan.seed.warnings) console.log(`  seed-warning: ${w}`);
 const clientSuite = detectClientSecuritySuite(targetDir);
 if (clientSuite.present) console.log(`  client suite (bonus): ${clientSuite.detail}`);
 
-const result = runDynamicValidation({ targetDir, layout, plan, artifactsDir: resolve(out), now: () => new Date().toISOString(), runner, clientSuite });
-console.log(`\n${result.reason}`);
-for (const l of result.limitations) console.log(`  limitation: ${l}`);
-for (const n of result.notes) console.log(`  note: ${n}`);
-if (result.artifactPath) {
-  console.log(`M2 pass artifact → ${result.artifactPath} (run-audit --artifacts-dir ${resolve(out)} now derives M2 ran)`);
-} else {
-  console.error("no M2 artifact written — the target could not be validated dynamically (see reason above)");
-  process.exit(1);
+// The real autonomous live runner: supabase start → apply client migrations → create two auth
+// users → apply the generic two-tenant seed → run the live PostgREST matrix. --allow-destructive
+// is safe here: every probe hits the disposable local seed inside the stand-up boundary.
+const { runner, workdir, stop } = createLiveStandUp({
+  migrationSql,
+  plan,
+  safeScope: { allowDestructive: true, allowNonLocal: false },
+});
+console.log(`  live stand-up workdir: ${workdir}`);
+
+try {
+  const result = runDynamicValidation({ targetDir, layout, plan, artifactsDir: resolve(out), now: () => new Date().toISOString(), runner, clientSuite });
+  console.log(`\n${result.reason}`);
+  for (const l of result.limitations) console.log(`  limitation: ${l}`);
+  for (const n of result.notes) console.log(`  note: ${n}`);
+  console.log(`  findings: ${result.findings.length}`);
+  if (result.artifactPath) {
+    console.log(`M2 pass artifact → ${result.artifactPath} (run-audit --artifacts-dir ${resolve(out)} now derives M2 ran)`);
+  } else {
+    console.error("no M2 artifact written — the target could not be validated dynamically (see reason above)");
+    process.exitCode = 1;
+  }
+} finally {
+  stop(); // ALWAYS tear the stack down + restore the client seed, even on failure.
 }

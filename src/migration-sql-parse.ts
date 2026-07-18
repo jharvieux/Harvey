@@ -96,6 +96,45 @@ export function parseTableNames(sql: string): { schema: string; table: string }[
   }));
 }
 
+// Columns that FK to auth.users — the seed must fill these with a REAL auth user id (an id the
+// live pipeline created via the admin API), not a random uuid: they're the profile/membership
+// link an RLS `current_tenant_id()`-style resolver reads, and a random uuid both violates the FK
+// at apply time and leaves the resolver unable to map the seeded JWT to a tenant. `references
+// auth.users` on the same column line is how a Supabase migration declares this link.
+const AUTH_USER_REF = new RegExp(`^\\s*${IDENT}\\s+\\w+[\\s\\S]*?references\\s+"?auth"?\\."?users"?`, "i");
+
+export function parseAuthUserRefs(sql: string): { table_name: string; column_name: string }[] {
+  sql = stripLineComments(sql);
+  const out: { table_name: string; column_name: string }[] = [];
+  for (const m of sql.matchAll(CREATE_TABLE)) {
+    const table = identText(m[3], m[4]);
+    for (const line of m[5]!.split("\n")) {
+      const cm = AUTH_USER_REF.exec(line);
+      if (cm) out.push({ table_name: table, column_name: identText(cm[1], cm[2]) });
+    }
+  }
+  return out;
+}
+
+// Columns that carry a DEFAULT — the seed can (and should) OMIT these and let Postgres fill them,
+// which is what lets a generic seed survive a `CHECK (plan IN (...))` on a defaulted enum column, a
+// `UNIQUE ... DEFAULT gen_random_bytes()` token, etc.: the default value is by construction a legal
+// one, whereas a generic placeholder is not. `\bdefault\b` on the column's own declaration line.
+const COLUMN_DEFAULT = new RegExp(`^\\s*${IDENT}\\s+(?:${SQL_TYPES.join("|")})\\b[\\s\\S]*?\\bdefault\\b`, "i");
+
+export function parseColumnDefaults(sql: string): { table_name: string; column_name: string }[] {
+  sql = stripLineComments(sql);
+  const out: { table_name: string; column_name: string }[] = [];
+  for (const m of sql.matchAll(CREATE_TABLE)) {
+    const table = identText(m[3], m[4]);
+    for (const line of m[5]!.split("\n")) {
+      const cm = COLUMN_DEFAULT.exec(line);
+      if (cm) out.push({ table_name: table, column_name: identText(cm[1], cm[2]) });
+    }
+  }
+  return out;
+}
+
 const DEFINER_FUNCTION =
   /create\s+(?:or\s+replace\s+)?function\s+(?:(\w+)\.)?(\w+)\s*\(([^)]*)\)[\s\S]*?security\s+definer[\s\S]*?as\s+\$(\w*)\$([\s\S]*?)\$\4\$/gi;
 
