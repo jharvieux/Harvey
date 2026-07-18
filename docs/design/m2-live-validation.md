@@ -22,9 +22,14 @@ orchestrator in `src/dynamic-validate.ts`):
 4. Creates **two real auth users** (one per tenant) via the local GoTrue admin API, applies the
    Harvey generic two-tenant seed (`src/pentest/two-tenant-seed.ts`) wired to those users' ids, and
    signs both users in for per-persona JWTs.
-5. Runs the live PostgREST cross-tenant read/write matrix (`pentest.ts --mode=explore` →
-   `engine.ts runExplore`) against `127.0.0.1`, and writes `<artifacts-dir>/M2.pass.json`.
-6. Always `supabase stop` in a `finally`.
+5. **Tier 1** — runs the live PostgREST cross-tenant read/write matrix (`pentest.ts --mode=explore`
+   → `engine.ts runExplore`) against `127.0.0.1`.
+6. **Tier 2 (#159/#161)** — `npm install` → maps the local stack's creds onto the app's declared
+   Supabase env var names → `next build && next start` → health-check → runs the app-route + seam
+   replays (`pentest.ts --mode=verify … --app-dir`) against the running app with the two seeded
+   sessions. A boot failure is a recorded limitation (coverage degrades to postgrest-only); Tier 1
+   still runs. Writes `<artifacts-dir>/M2.pass.json`.
+7. Always `supabase stop` (and kill the app server) in a `finally`.
 
 `run-audit --artifacts-dir <dir>` then derives M2 `ran` from that artifact and folds its findings
 into the deliverable — verified below.
@@ -96,6 +101,34 @@ This target drove two general seed-robustness fixes that only surfaced by runnin
   table declared in two migrations no longer double-seeds or names a column twice) — both first
   observed against calibration.
 
+## Target 3 — `vandyand/saas-security-teardown` (Tier-2 app-boot, live proof of #159/#161)
+
+Cloned to `/private/tmp` (shallow). A small single-app Next.js 16 + Supabase teardown target with
+four **planted** vulns and a known answer key (RLS-off `orgs`/`line_items`, `profiles` `USING
+(true)`, a `NEXT_PUBLIC_` service-role leak) and three API routes (`/api/admin/revenue`,
+`/api/profile` `PATCH`, `/api/team`). Run on 2026-07-18 (Docker 29.5, Supabase CLI 2.102, node 24):
+
+| Stage | Result |
+|---|---|
+| `supabase start` + migrations + two auth users + generic seed | ✅ all clean; seed across 3 scoped tables (`profiles:org_id,invoices:org_id,documents:org_id`) |
+| **App boot (Tier 2)** | ✅ **booted for real** — `npm install` → `next build` → `next start` on `127.0.0.1:3000`, health-checked live. `mapAppSupabaseEnv` set the app's declared `NEXT_PUBLIC_SUPABASE_*` names from `.env.example` onto the local stack's creds. |
+| Tier 1 — PostgREST matrix | ✅ 4 findings — `profiles` read leak to **anon + Tenant A + Tenant B + Admin** (the planted `USING (true)`, VULN #3) |
+| **Tier 2 — app-route probes** | ✅ **`MASS-ASSIGNMENT` PROVEN live (Critical)** against `POST/PATCH http://127.0.0.1:3000/api/profile` — a privileged field injected as Tenant A persisted on its own row, read back through the service-role oracle |
+| `M2.pass.json` | ✅ 5 findings total (4 explore + 1 app-route), `full` coverage |
+| Teardown | ✅ `supabase stop` + app server killed in `finally`; **0** `supabase_*`/app containers left, no stray `next` process |
+
+**This proves the Tier-2 app-boot path end-to-end**: the app really booted, route discovery via
+`--app-dir` fed a live target profile, and the `MASS-ASSIGNMENT` replay ran against the running app
+with two seeded sessions and confirmed a real cross-field write.
+
+**#159 (NO-RATE-LIMIT) and #161 (seam probes) ran in the app-route batch but reported
+not-applicable** — *measured, not assumed*: `discoverProfile` on this target yields `highValue: []`
+(no payout/checkout/redeem/invite flow route) and no seam endpoints (single app, no `*_SERVICE_URL`
+/ `*_WEBHOOK_SECRET` env), so those classes have no candidate surface here. The tier is built and
+proven live; the two specific loops need a target that ships a high-value flow / real seams to be
+exercised end-to-end, so **#159/#161 stay open** (honest partial — the tier is done, the specific
+surfaces were absent on the target that booted).
+
 ## Precision fix the live run forced (write probes)
 
 The very first calibration run produced **59** findings: 11 correct reads + **48 false-positive
@@ -116,8 +149,8 @@ were cloned only under `/private/tmp`; `targets/calibration` in the repo was nev
 
 ## Follow-ups (filed as issues)
 
-- **Calibration migrations don't stand up on a fresh live DB** (#546, fixed) — duplicate `create
-  table public.reports` across two migrations, and a `seed.sql` referencing a non-existent
+- **Calibration migrations don't stand up on a fresh live DB** (#546) — **FIXED.** Duplicate
+  `create table public.reports` across two migrations, and a `seed.sql` referencing a non-existent
   `legacy_accounts`. The static tooling never applied them live, so this stayed latent. Fixed by
   renaming the benign tenant-scoped-read fixture's table to `tenant_reports` (the connected-tier
   `P-RLS-ENABLED-NO-POLICY` plant keeps the literal name `reports`) and adding the missing
@@ -127,11 +160,16 @@ were cloned only under `/private/tmp`; `targets/calibration` in the repo was nev
   nonexistent `current_tenant()` instead of `public.current_tenant_id()`, which also blocked a
   fresh `supabase db reset`. Verified live: `supabase db reset` applies the full migration set +
   seed with zero errors.
-- **Generic seed can't satisfy a `CHECK` on a *non-defaulted* enum column** (#547) — the
-  `DEFAULT`-omission fix covers the common case (defaulted enums); a `CHECK (col IN (…))` with no
-  default still fails the INSERT (recorded as an `M2-PROVISION-MIGRATE` finding). Parsing simple `IN
-  (…)` allow-lists to pick a legal value would close the gap.
-- **App-route probes (Tier 2)** ran only as a build/boot attempt here; neither target booted
-  (calibration's broken dep; mtstarter's build error), so the NO-RATE-LIMIT loop (#159) and seam
-  probes (#161) were not exercised end-to-end against a live app. The PostgREST matrix (Tier 1) does
-  not need the app and ran fully on both.
+- **Generic seed can't satisfy a `CHECK` on a *non-defaulted* enum column** (#547) — **FIXED.**
+  `parseCheckInConstraints` (`src/migration-sql-parse.ts`) derives simple `CHECK (col IN (…))`
+  allow-lists and the two-tenant seed picks a legal member (distinct per row when the list has ≥2),
+  so a NOT-NULL non-defaulted enum column seeds instead of failing the INSERT. Exotic CHECK
+  expressions stay in the fail-loud path.
+- **App-route probes (Tier 2)** — **now booted and proven live** against `vandyand/saas-security-
+  teardown` (Target 3 above): the app built + started, and `MASS-ASSIGNMENT` was proven against a
+  live route. The NO-RATE-LIMIT loop (#159) and seam probes (#161) ran in the same batch but were
+  not-applicable on that target (no high-value-flow route, no seams — measured), so #159/#161 remain
+  open until exercised against a target that ships those surfaces.
+- **`expandGlob` dropped `packages/**`** (#548) — **FIXED.** `src/pentest/targets.ts`'s glob
+  expander now handles `**` (recursive) and `*` segments, so nested-monorepo workspaces are
+  enumerated for both M5-knip and the M2 target-coverage guard.

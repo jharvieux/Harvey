@@ -69,11 +69,13 @@ function runCli(repo: string): Finding[] {
 }
 
 describe("quality-scan CLI — jscpd runs whole-repo so cross-workspace clones are detected (#544)", () => {
+  // 30s: drives the real CLI end-to-end (jscpd whole-repo + per-workspace knip on the now-enumerated
+  // packages/** workspace, #548) as a child process — well over vitest's 5s default under load.
   it("finds a clone spanning apps/web and a packages/** workspace", () => {
     const findings = runCli(monorepoFixture());
     const crossWorkspace = findings.filter(
       (f) => f.taxonomy.startsWith("M4 —") && f.location.includes("apps/web") && f.location.includes("packages/billing"),
     );
     expect(crossWorkspace.length).toBeGreaterThan(0);
-  });
+  }, 30000);
 });
