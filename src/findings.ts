@@ -1,6 +1,8 @@
 // Findings schema for the audit deliverable. report-template/render.mjs consumes
 // this shape; validate an engagement's findings.json here before rendering.
 
+import { deriveCompleteness, headlineClaimsCompletion } from "./audit-completeness.js";
+
 export const SEVERITIES = ["Critical", "High", "Medium", "Low", "Perf", "Info", "Watch"] as const;
 export const CONFIDENCES = ["Confirmed", "Likely", "Review", "N/A"] as const;
 // Trust tier for mechanically-generated findings: "high" = ~100%-precision source (verified
@@ -217,6 +219,17 @@ export function validateFindings(data: unknown): ValidationResult {
 
   if (data.coverage !== undefined) validateCoverage(data.coverage, errors);
   if (data.baseline !== undefined) validateBaseline(data.baseline, errors);
+
+  // #509: refuse a "done"/"complete" headline over a ledger that isn't. Only checked when a
+  // derived ledger is present — a hand-authored legacy doc with no coverage[] has nothing to
+  // check against, same back-compat carve-out as validateCoverage above.
+  if (Array.isArray(data.coverage) && isRecord(data.meta) && typeof data.meta.headline === "string") {
+    const { complete, ranCount, total, gaps } = deriveCompleteness(data.coverage as CoverageRow[]);
+    if (!complete && headlineClaimsCompletion(data.meta.headline)) {
+      const gapList = gaps.map((g) => g.module).join(", ");
+      errors.push(`meta.headline: claims completion ("${data.meta.headline}") but only ${ranCount}/${total} modules ran — not fully run: ${gapList}`);
+    }
+  }
 
   if (!Array.isArray(data.findings)) {
     errors.push("findings: missing or not an array");
