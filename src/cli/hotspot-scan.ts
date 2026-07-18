@@ -25,8 +25,9 @@
 // functions in src/hotspot-scan.ts.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { homedir } from "node:os";
 import type { Finding } from "../findings.js";
 import { crossReferenceHotspots, rankHotspots, toFactFindings, topKFiles, type VitalsReport } from "../hotspot-scan.js";
 
@@ -35,6 +36,40 @@ const args = process.argv.slice(2);
 function arg(flag: string): string | undefined {
   const i = args.indexOf(flag);
   return i >= 0 ? args[i + 1] : undefined;
+}
+
+// Discover vitals_cli.py in Claude Code plugin install locations (#507).
+// Checks:
+// 1. ~/.claude/plugins/marketplaces/vitals/scripts/vitals_cli.py
+// 2. ~/.claude/plugins/cache/vitals/*/scripts/vitals_cli.py
+// Returns the path if found, undefined otherwise.
+function discoverVitalsCli(): string | undefined {
+  const home = homedir();
+  const pluginsDir = resolve(home, ".claude/plugins");
+
+  // Check marketplaces location
+  const marketplaceScript = resolve(pluginsDir, "marketplaces/vitals/scripts/vitals_cli.py");
+  if (existsSync(marketplaceScript)) {
+    return marketplaceScript;
+  }
+
+  // Check cache location with versioned directories
+  const cacheVitalsDir = resolve(pluginsDir, "cache/vitals");
+  if (existsSync(cacheVitalsDir)) {
+    try {
+      const versions = readdirSync(cacheVitalsDir);
+      for (const version of versions) {
+        const cacheScript = resolve(cacheVitalsDir, version, "vitals/scripts/vitals_cli.py");
+        if (existsSync(cacheScript)) {
+          return cacheScript;
+        }
+      }
+    } catch {
+      // If cache directory doesn't exist or can't be read, continue to PATH check
+    }
+  }
+
+  return undefined;
 }
 
 // Positional target-dir: the first bare token, expected before any flags (matches
@@ -58,13 +93,47 @@ function loadReport(): VitalsReport {
   if (reportPath) {
     raw = readFileSync(resolve(reportPath), "utf8");
   } else {
+    // Try PATH first (existing behavior)
+    const attemptedPaths: string[] = ["vitals_cli.py on PATH"];
     try {
       raw = execFileSync("vitals_cli.py", ["report", "--json", targetDir], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
       const e = err as { code?: string; stderr?: string; message?: string };
-      const detail = e.code === "ENOENT" ? "vitals_cli.py not found on PATH (#314)" : (e.stderr || e.message || "vitals_cli.py failed");
-      console.error(`✗ ${detail} — run vitals where it is installed and pass the capture via --report <vitals.json>`);
-      process.exit(1);
+
+      // Try plugin discovery locations if PATH failed
+      if (e.code === "ENOENT") {
+        const pluginPath = discoverVitalsCli();
+        if (pluginPath) {
+          try {
+            raw = execFileSync("python3", [pluginPath, "report", "--json", targetDir], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+            console.log(`✓ Found vitals_cli.py at ${pluginPath}`);
+          } catch (err2) {
+            const e2 = err2 as { stderr?: string; message?: string };
+            const detail = e2.stderr || e2.message || "vitals_cli.py failed";
+            attemptedPaths.push(pluginPath);
+            console.error(`✗ vitals_cli.py found at ${pluginPath} but failed: ${detail}`);
+            console.error(`  Searched locations: ${attemptedPaths.join(", ")}`);
+            process.exit(1);
+          }
+        } else {
+          const detail = "vitals_cli.py not found on PATH or in plugin install locations (#507)";
+          const pluginLocations = [
+            `${homedir()}/.claude/plugins/marketplaces/vitals/scripts/vitals_cli.py`,
+            `${homedir()}/.claude/plugins/cache/vitals/*/scripts/vitals_cli.py`,
+          ];
+          console.error(`✗ ${detail}`);
+          console.error(`  Searched locations: ${attemptedPaths.concat(pluginLocations).join(", ")}`);
+          console.error(`  Solutions:`);
+          console.error(`    1. Install vitals plugin: follow https://github.com/vitals-ai/vitals docs`);
+          console.error(`    2. Or run vitals locally and pass the capture: --report <vitals.json>`);
+          process.exit(1);
+        }
+      } else {
+        const detail = e.stderr || e.message || "vitals_cli.py failed";
+        console.error(`✗ vitals_cli.py error: ${detail}`);
+        console.error(`  Searched locations: ${attemptedPaths.join(", ")}`);
+        process.exit(1);
+      }
     }
   }
   const parsed = JSON.parse(raw) as VitalsReport;
