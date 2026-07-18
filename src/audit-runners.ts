@@ -325,6 +325,16 @@ const m6: ModuleRunner = {
   },
 };
 
+// #527: M7 is THREE tiers — code detectors (#170), DB advisors, and the Lighthouse/CWV run (M7 [L],
+// #387). The orchestrator invokes only the first two; the Lighthouse run is a heavy local
+// build+serve+Chrome pass, deliberately opt-in (#487, end-to-end validation #488), so run-audit
+// never fires it. That means even a code+advisors success is NOT a full M7 — Core Web Vitals were
+// never measured. M7 therefore tops out at `partial` under the orchestrator with this reason, so an
+// advisors-success can never read as a bare `ran` (a composite claim reading as complete — the exact
+// shape the coverage guard exists to catch). Run `pnpm lighthouse-scan` separately for the CWV tier.
+const M7_LIGHTHOUSE_NOT_RUN =
+  "Lighthouse/CWV tier not run: the orchestrator does not invoke the local build+serve+Chrome Lighthouse pass (opt-in per #487; end-to-end validation #488) — run `pnpm lighthouse-scan` separately. Core Web Vitals were not measured this pass (#527)";
+
 // M7 is two layers: code-tier detectors on source (#170) plus the DB advisors. Without creds it
 // loses a layer — partial, not a skip. #350: detect-static exits 0 over an empty dir, so the probe
 // checks the file count it printed before claiming the code tier ran.
@@ -358,9 +368,13 @@ const m7: ModuleRunner = {
       const advisorsOut = ctx.captureDir ? join(ctx.captureDir, `M7-${refSlug(ref)}.json`) : undefined;
       const advisors = ctx.exec("pnpm", ["perf-scan", ref, ...(advisorsOut ? ["--out", advisorsOut] : [])]);
       if (!advisors.ok) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: `advisors failed for ${ref}: ${trimOut(advisors.output)}`, ...instance };
+      // #527: code + advisors both ran, but the Lighthouse/CWV tier did not — so this is `partial`
+      // with that reason, never a bare `ran`. The advisor findings still flow into the deliverable.
       const detail = `pnpm detect-static (code) + pnpm perf-scan ${ref} (advisors)`;
       const findings = readCaptured(ctx, advisorsOut);
-      return findings.length ? { status: "ran", detail, findings, ...instance } : { status: "ran", detail, ...instance };
+      return findings.length
+        ? { status: "partial", detail, reason: M7_LIGHTHOUSE_NOT_RUN, findings, ...instance }
+        : { status: "partial", detail, reason: M7_LIGHTHOUSE_NOT_RUN, ...instance };
     });
   },
 };

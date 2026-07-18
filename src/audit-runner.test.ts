@@ -172,14 +172,19 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     expect(m7?.reason).toMatch(/project ref/);
   });
 
-  it("M7 threads ctx.supabaseRef through to perf-scan's positional arg, reaching ran", () => {
+  // #527: code + advisors both run, but the orchestrator never fires the Lighthouse/CWV tier, so a
+  // successful advisor run is `partial` naming the unmeasured tier — never a bare `ran`.
+  it("M7 threads ctx.supabaseRef to perf-scan and, on advisor success, is partial (Lighthouse tier not run)", () => {
     const connectedWithRef = ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRef: "my-project-ref",
       exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: argv.includes("my-project-ref"), output: "" } : { ok: true, output: cleanOutput(argv) }),
     });
     const m7 = runAudit(AUDIT_RUNNERS, connectedWithRef).recorded.find((r) => r.module === "M7");
-    expect(m7?.status).toBe("ran");
+    expect(m7?.status).toBe("partial");
+    expect(m7?.status).not.toBe("ran");
+    expect(m7?.reason).toMatch(/Lighthouse\/CWV tier not run/);
+    expect(m7?.detail).toMatch(/perf-scan my-project-ref/);
   });
 
   // A non-zero exit is the tool saying it produced nothing. Recording that as "ran" is precisely
@@ -593,10 +598,12 @@ describe("monorepo per-instance fan-out (#506)", () => {
       exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : { ok: true, output: cleanOutput(argv) }),
     })).recorded.filter((r) => r.module === "M7");
     expect(m7.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
-    expect(m7.every((r) => r.status === "ran")).toBe(true);
+    // #527: advisor success is `partial` (Lighthouse/CWV tier unmeasured), never `ran`.
+    expect(m7.every((r) => r.status === "partial")).toBe(true);
+    expect(m7.every((r) => /Lighthouse\/CWV tier not run/.test(r.reason ?? ""))).toBe(true);
   });
 
-  it("a failed advisor for one project is a partial row for THAT project, the other still ran", () => {
+  it("a failed advisor for one project names the advisor failure; the other names the Lighthouse gap", () => {
     const m7 = runAudit(AUDIT_RUNNERS, ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main", "proj-rag"],
@@ -605,8 +612,12 @@ describe("monorepo per-instance fan-out (#506)", () => {
         return { ok: true, output: cleanOutput(argv) };
       },
     })).recorded.filter((r) => r.module === "M7");
+    // #527: both rows are partial now, but for different reasons — the coverage guard needs each row
+    // to say why it fell short, so distinguish by reason, not status.
     expect(m7.find((r) => r.instance === "proj-rag")?.status).toBe("partial");
-    expect(m7.find((r) => r.instance === "proj-main")?.status).toBe("ran");
+    expect(m7.find((r) => r.instance === "proj-rag")?.reason).toMatch(/advisors failed/);
+    expect(m7.find((r) => r.instance === "proj-main")?.status).toBe("partial");
+    expect(m7.find((r) => r.instance === "proj-main")?.reason).toMatch(/Lighthouse\/CWV tier not run/);
   });
 
   it("M10 live tier names every extra Supabase project it could not reach, never dropping one", () => {
