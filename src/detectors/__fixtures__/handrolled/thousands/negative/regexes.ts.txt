@@ -1,0 +1,5 @@
+// Ordinary regex literals: a digits check and a slug cleaner. Neither carries the
+// (\d{3})+(?!\d) grouping fragment.
+export const DIGITS = /^\d+$/;
+
+export const SLUG = /[^a-z0-9]+/g;

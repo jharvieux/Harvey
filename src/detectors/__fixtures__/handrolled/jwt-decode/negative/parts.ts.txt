@@ -1,0 +1,13 @@
+// Each single step in isolation: a file-extension split, a plain JSON.parse, and a bare atob.
+// The full three-step decode chain never occurs, so none flags.
+export function fileExt(name: string): string {
+  return name.split(".")[1];
+}
+
+export function parseBody(raw: string): unknown {
+  return JSON.parse(raw);
+}
+
+export function decodeText(data: string): string {
+  return atob(data);
+}

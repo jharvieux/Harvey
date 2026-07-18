@@ -1,0 +1,11 @@
+// charCodeAt WITHOUT a shift/multiply accumulate, and a `* 31` in a different scope with no
+// charCodeAt — the co-occurrence guard keeps both silent.
+export function sumCodes(s: string): number {
+  let total = 0;
+  for (let i = 0; i < s.length; i++) total += s.charCodeAt(i);
+  return total;
+}
+
+export function maxDaysInMonths(months: number): number {
+  return months * 31;
+}
