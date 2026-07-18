@@ -232,6 +232,17 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m5?.reason).toMatch(/knip did not run/);
   });
 
+  // #505: a monorepo target where jscpd timed out on one workspace — quality-scan still exits 0
+  // (the gap is disclosed as a finding, not a crash) so this is exactly the #350 shape: the exit
+  // code says nothing, the M4-99 finding is the tell.
+  it("M4 — jscpd did not complete on every workspace (M4-99 disclosure emitted, exit 0) is NOT recorded ran", () => {
+    const jscpdTimedOut = { exec: () => ({ ok: true, output: JSON.stringify([{ id: "M5-01" }, { id: "M4-99", title: "M4 duplication scan (jscpd) did not complete for every workspace" }]) }) };
+    const m4 = status(AUDIT_RUNNERS, jscpdTimedOut, "M4");
+    expect(m4?.status).not.toBe("ran");
+    expect(m4?.status).toBe("partial");
+    expect(m4?.reason).toMatch(/jscpd did not complete/);
+  });
+
   it("M8 — no test suite (moduleRecord partial, exit 0) is NOT recorded ran", () => {
     // mutation-scan's #224 branch: the correct verdict is serialized and must be read, not discarded.
     const noSuite = { exec: () => ({ ok: true, output: JSON.stringify({ finding: { id: "M8-00" }, moduleRecord: { status: "partial", note: "No automated test suite found (no scripts.test) — mutation scan could not run." } }) }) };
@@ -239,6 +250,39 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m8?.status).not.toBe("ran");
     expect(m8?.status).toBe("partial");
     expect(m8?.reason).toMatch(/no automated test suite/i);
+  });
+
+  // #504: the coverage-honesty guard — a scoped mutation run emits its summary AND a partial
+  // moduleRecord, and the moduleRecord must win. A subset score that read `ran` is exactly how
+  // the ATC run silently invalidated M8.
+  it("M8 — a deliberately-scoped mutation run (summary + moduleRecord) scores partial with its scope, never ran", () => {
+    const scopedRun = {
+      exec: (_c: string, argv: string[]) =>
+        argv.includes("mutation-scan")
+          ? { ok: true, output: JSON.stringify({ summary: { overall: { mutationScore: 91.2 } }, reportRows: [], moduleRecord: { status: "partial", note: "Scoped mutation run — run covered 263 file(s) but the configured mutate globs match 812 — 549 file(s) were never mutated (e.g. src/other.ts). A subset measurement is not M8's result: recorded partial, never ran (#504)." } }) }
+          : { ok: true, output: cleanOutput(argv) },
+    };
+    const m8 = status(AUDIT_RUNNERS, scopedRun, "M8");
+    expect(m8?.status).not.toBe("ran");
+    expect(m8?.status).toBe("partial");
+    expect(m8?.reason).toMatch(/Scoped mutation run/);
+    expect(m8?.reason).toMatch(/263 file/);
+  });
+
+  // #503: a failed Stryker dry run (the target's own suite failing unmutated) emits the same
+  // machine-readable moduleRecord shape — the probe must surface its distinct reason, not a
+  // generic requires-live-run and never a silent zero.
+  it("M8 — a failed Stryker dry run (moduleRecord partial, exit 0) reads partial with the dry-run reason", () => {
+    const dryRunFailed = {
+      exec: (_c: string, argv: string[]) =>
+        argv.includes("mutation-scan")
+          ? { ok: true, output: JSON.stringify({ finding: { id: "M8-03" }, moduleRecord: { status: "partial", note: "Stryker's initial dry run FAILED — the target suite does not pass under the invoked environment (TZ=UTC (from ci.yml)): × format-date.test.ts. M8 mutation scoring could not run (#503); the suite must pass an unmutated run first." } }) }
+          : { ok: true, output: cleanOutput(argv) },
+    };
+    const m8 = status(AUDIT_RUNNERS, dryRunFailed, "M8");
+    expect(m8?.status).toBe("partial");
+    expect(m8?.reason).toMatch(/dry run FAILED/);
+    expect(m8?.reason).toMatch(/format-date\.test\.ts/);
   });
 
   it("M9 — an empty directory (detect-static: loaded 0 source files, exit 0) is NOT recorded ran", () => {

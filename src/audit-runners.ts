@@ -51,28 +51,6 @@ const runCli = (ctx: RunContext, script: string, argv: string[]): { ok: boolean;
   return { ok, output, command: `pnpm ${script} ${argv.join(" ")}`.trim() };
 };
 
-// For a module whose CLI emits a report-schema Finding[] to --out: when the run context is capturing
-// (#312), append `--out <captureDir>/<module>.json`, then read the emitted findings back onto the
-// outcome so run-audit can assemble them. Shared CLIs (quality-scan feeds M4+M5, detect-static feeds
-// M7+M9) get captured under each module key; the assembler de-dupes.
-//
-// #350: exit 0 alone is NOT evidence a module ran — several tools deliberately exit 0 when they
-// scanned nothing. This factory is used only by M4 (jscpd), whose tool genuinely executes whenever
-// it exits 0; probes over the exit-0 no-op tools DERIVE their status from the machine-readable
-// verdict the tool printed instead.
-const capturing = (module: AuditModule, script: string, args: (ctx: RunContext) => string[]) => ({
-  module,
-  run: (ctx: RunContext): ProbeOutcome => {
-    const argv = args(ctx);
-    const command = `pnpm ${script} ${argv.join(" ")}`.trim();
-    const outPath = captureOut(ctx, module);
-    const { ok, output } = ctx.exec("pnpm", [script, ...argv, ...(outPath ? ["--out", outPath] : [])]);
-    if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-    const findings = readCaptured(ctx, outPath);
-    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
-  },
-});
-
 const hasNodeModules = (ctx: RunContext): boolean => ctx.exists(join(ctx.targetDir, "node_modules"));
 
 // #506: a per-app tier (M4/M5/M9, M10 schema) runs once per enumerated app on a monorepo. With ≤1
@@ -102,15 +80,18 @@ const parseFindings = (output: string): { id?: string }[] | undefined => {
   }
 };
 
-// mutation-scan's no-test-suite branch emits { finding, moduleRecord: { status:"partial", note } }
-// and exits 0 (#224); a real Stryker run emits { summary, reportRows }. The moduleRecord is the
-// machine-readable verdict #350 says to read instead of the exit code. #420: --out diverts this
-// verdict off stdout into the object artifact, so a capturing run passes the parsed object here
-// instead of the stdout string.
-const mutationVerdict = (input: string | Record<string, unknown>): { kind: "ran" } | { kind: "no-suite"; note: string } | { kind: "unknown" } => {
+// mutation-scan emits a machine-readable moduleRecord ({ status:"partial", note }) and exits 0
+// whenever the mutation tier fell short of a full run: no test suite (#224), a failed Stryker dry
+// run (#503), a degraded scaffold rung (#513), or a scoped run that covered less than the
+// configured mutate scope (#504 — that artifact carries BOTH a summary and a moduleRecord, and the
+// moduleRecord wins: a subset measurement must never read `ran`). Only a summary WITHOUT a
+// moduleRecord is a full run. The moduleRecord is the verdict #350 says to read instead of the
+// exit code. #420: --out diverts this verdict off stdout into the object artifact, so a capturing
+// run passes the parsed object here instead of the stdout string.
+const mutationVerdict = (input: string | Record<string, unknown>): { kind: "ran" } | { kind: "partial"; note: string } | { kind: "unknown" } => {
   try {
     const parsed = (typeof input === "string" ? JSON.parse(input) : input) as { moduleRecord?: { note?: string }; summary?: unknown };
-    if (parsed.moduleRecord && typeof parsed.moduleRecord.note === "string") return { kind: "no-suite", note: parsed.moduleRecord.note };
+    if (parsed.moduleRecord && typeof parsed.moduleRecord.note === "string") return { kind: "partial", note: parsed.moduleRecord.note };
     if (parsed.summary) return { kind: "ran" };
     return { kind: "unknown" };
   } catch {
@@ -245,9 +226,26 @@ const m3: ModuleRunner = {
 // source alone, while knip cannot resolve config imports without the target's installed deps. One
 // `ran` covering both would be the composite-claim bug the gate exists to catch, so they probe
 // separately and M5 owns the node_modules precondition.
-// #506: jscpd is per-app — on a monorepo, run it once per enumerated app so each app's duplication
-// is a distinct row, not folded into the first app's.
-const m4: ModuleRunner = { module: "M4", run: perApp(capturing("M4", "quality-scan", (ctx) => [ctx.targetDir]).run) };
+//
+// M4 (#505): quality-scan now runs jscpd per workspace with a hard timeout, so a monorepo target
+// can be a genuine partial — some workspaces scanned, one timed out. Exit 0 alone is no longer
+// enough evidence of a clean `ran` (#350's rule): the probe reads the emitted array for the M4-99
+// gap-disclosure finding the CLI substitutes for any workspace that didn't complete, the same way
+// M5 already reads for M5-00.
+// #506: jscpd is also a per-app tier — on a monorepo, perApp runs this once per enumerated app so
+// each app's duplication is a distinct row (with #505's per-app M4-99 timeout signal intact), not
+// folded into the first app's.
+const m4Run = (ctx: RunContext): ProbeOutcome => {
+  const outPath = captureOut(ctx, "M4");
+  const command = `pnpm quality-scan ${ctx.targetDir}`;
+  const { ok, output } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+  if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
+  const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
+  if (!findings) return { status: "requires-live-run", reason: `could not read quality-scan output to confirm jscpd ran: ${trimOut(output)}` };
+  if (findings.some((f) => (f as { id?: string }).id === "M4-99")) return { status: "partial", detail: command, reason: "jscpd did not complete on every workspace — quality-scan emitted the M4-99 disclosure finding, so duplication coverage is incomplete for this pass (#505)", findings: findings as Finding[] };
+  return findings.length ? { status: "ran", detail: command, findings: findings as Finding[] } : { status: "ran", detail: command };
+};
+const m4: ModuleRunner = { module: "M4", run: perApp(m4Run) };
 
 // M5 (#350): knip exits 0 even when it could not run — quality-scan then substitutes an M5-00
 // disclosure finding (#223). So the exit code is not the evidence; the presence of that finding in
@@ -374,8 +372,9 @@ const testIntentFindings = (findings: Finding[]): Finding[] => findings.filter((
 
 // M8 (#224/#350): a target with no tests is a zero-coverage FINDING, not a skipped module — and
 // mutation-scan says so in a machine-readable moduleRecord while exiting 0. The probe reads that
-// verdict rather than the exit code: no test suite → partial (the zero-coverage finding), a real
-// Stryker report → ran.
+// verdict rather than the exit code: any moduleRecord (no suite #224, dry-run failure #503,
+// degraded ladder rung #513, scoped subset run #504) → partial with its note; a full Stryker
+// report with no moduleRecord → ran.
 // #312/#420 capture note: mutation-scan's --out artifact is an OBJECT ({ summary, ... } or
 // { finding, moduleRecord }), not a bare Finding[], AND --out diverts the verdict off stdout into
 // that object. So when capturing, this probe reads BOTH its status verdict and its findings from the
@@ -414,7 +413,7 @@ const m8: ModuleRunner = {
     if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
     const artifact = readArtifact(ctx, outPath);
     const verdict = mutationVerdict(artifact ?? output);
-    if (verdict.kind === "no-suite") {
+    if (verdict.kind === "partial") {
       const findings = [...artifactFindings(artifact), ...staticFindings];
       return findings.length ? { status: "partial", detail: command, reason: verdict.note, findings } : { status: "partial", detail: command, reason: verdict.note };
     }

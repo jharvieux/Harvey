@@ -171,6 +171,23 @@ const COV = {
   "requires-live-run": { label: "Not assessed", c: "#b3261e", bg: "#fef2f2", bd: "#fecaca" },
 };
 
+// The report's completeness claim, derived from the coverage ledger — never from the operator's
+// free-text meta.headline (#509). Mirrors src/audit-completeness.ts's deriveCompleteness (same
+// duplication pattern as bftb() above: render.mjs is plain JS, not built from src/*.ts). Renders
+// ahead of meta.headline so a "the audit is done" headline can never talk over a ledger that
+// disagrees — the ATC incident this closes. No ledger (hand-authored legacy doc) ⇒ no banner.
+function completenessBanner(rows) {
+  if (!rows?.length) return "";
+  const gaps = rows.filter((r) => r.status !== "ran");
+  if (!gaps.length) {
+    return `<div class="headline"><b>Full ${rows.length}-module audit</b> — all modules assessed.</div>`;
+  }
+  const gapList = gaps.map((g) => `${esc(g.module)} (${esc(g.status)})`).join(", ");
+  return `<div class="headline" style="background:#fef2f2;border-color:#fecaca">
+    <b style="color:#b3261e">Partial audit — ${rows.length - gaps.length}/${rows.length} modules fully assessed.</b>
+    Not fully run: ${gapList}. See Module coverage below for reasons.</div>`;
+}
+
 // The derived coverage ledger, rendered as the report's authoritative coverage statement (#349).
 // Replaces the hand-typed meta.outOfScope as the source of truth; outOfScope is demoted to a note.
 function coverageSection(rows, m) {
@@ -330,6 +347,7 @@ function buildHtml(data) {
       </div>
     </div>
 
+    ${completenessBanner(data.coverage)}
     <div class="headline">${esc(m.headline)}</div>
 
     ${data.baseline ? baselineBanner(data.baseline) : ""}
