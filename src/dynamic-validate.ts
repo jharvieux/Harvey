@@ -27,6 +27,7 @@ import { buildTwoTenantSeed, type TwoTenantSeed } from "./pentest/two-tenant-see
 // The facts about a repo that decide whether — and how fully — we can stand it up for M2.
 export interface RepoLayout {
   migrationDirs: string[]; // every supabase/migrations dir with ≥1 .sql (top-level AND nested apps/*) — the RLS surface to apply
+  schemaFiles: string[]; // #574 — standalone schema .sql files (root schema.sql / conventional) used when there is NO migrations dir (Vite/no-code exports ship one committed schema)
   scripts: Record<string, string>; // package.json scripts (dev/build/start let us run the app)
   externalSeamDeps: string[]; // deps naming a separate backend we can't stand up locally
 }
@@ -74,12 +75,71 @@ export function discoverMigrationDirs(targetDir: string, maxDepth = 5): string[]
   return found.sort();
 }
 
+// #574 — conventional locations a single committed schema lives in when a target has no
+// supabase/migrations dir (Vite / v0 / Lovable / Bolt exports commit one root schema.sql). Probed in
+// order; the first that exists AND declares a table is the schema fed to the local stack.
+const SCHEMA_FILE_CANDIDATES = [
+  "schema.sql",
+  "db/schema.sql",
+  "sql/schema.sql",
+  "database/schema.sql",
+  "supabase/schema.sql",
+  "prisma/schema.sql",
+];
+
+function declaresTable(file: string): boolean {
+  try {
+    return /create\s+table/i.test(readFileSync(file, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+// Find the standalone schema .sql file(s) to apply when there is NO migrations dir. Tries the
+// conventional paths first; failing that, a bounded shallow scan for any *.sql (not a seed file,
+// not inside a migrations dir) that declares a table. Returns [] for a genuinely schema-less repo —
+// the caller then records an honest NO-GO listing what it probed. `probed` reports the locations
+// checked so a NO-GO can name them.
+export function discoverSchemaFiles(targetDir: string, maxDepth = 3): { files: string[]; probed: string[] } {
+  const probed: string[] = [...SCHEMA_FILE_CANDIDATES];
+  const conventional = SCHEMA_FILE_CANDIDATES.map((rel) => join(targetDir, rel)).filter((p) => existsSync(p) && declaresTable(p));
+  if (conventional.length) return { files: conventional.sort(), probed };
+  const found: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name) && e.name !== "migrations" && depth < maxDepth) walk(p, depth + 1);
+      } else if (e.name.endsWith(".sql") && !/seed/i.test(e.name) && declaresTable(p)) {
+        found.push(p);
+      }
+    }
+  };
+  walk(targetDir, 0);
+  probed.push(`shallow *.sql scan (depth ≤ ${maxDepth}, excluding migrations/ and seed files)`);
+  return { files: found.sort(), probed };
+}
+
 // The decision: given a repo's layout, can we stand it up, and how fully?
 export function assessStandUpAbility(layout: RepoLayout): StandUpVerdict {
-  if (layout.migrationDirs.length === 0) {
-    return { canStandUp: false, coverage: "none", reason: "no supabase/migrations (top-level or nested apps/*) — no schema to apply to a local stack, so there is no RLS surface to probe", limitations: [] };
+  if (layout.migrationDirs.length === 0 && layout.schemaFiles.length === 0) {
+    return {
+      canStandUp: false,
+      coverage: "none",
+      reason: `no schema to apply to a local stack (no supabase/migrations top-level or nested apps/*, and no standalone schema .sql) — nothing to provision, so there is no RLS surface to probe. Probed: supabase/migrations, ${SCHEMA_FILE_CANDIDATES.join(", ")}, and a shallow *.sql scan`,
+      limitations: [],
+    };
   }
   const limitations: string[] = [];
+  if (layout.migrationDirs.length === 0 && layout.schemaFiles.length > 0) {
+    limitations.push(`no supabase/migrations dir — applying the standalone schema file(s) directly to the local stack: ${layout.schemaFiles.join(", ")} (#574)`);
+  }
   const canRunApp = Boolean(layout.scripts.dev || layout.scripts.build || layout.scripts.start);
   if (!canRunApp) {
     limitations.push("no dev/build/start script — the app can't be run, so custom API-route and seam probes are skipped; the PostgREST RLS matrix still runs against the local DB");
@@ -108,12 +168,16 @@ export function readRepoLayout(targetDir: string): RepoLayout {
     scripts = pkg.scripts ?? {};
     deps = Object.keys(pkg.dependencies ?? {});
   }
-  return { migrationDirs: discoverMigrationDirs(targetDir), scripts, externalSeamDeps: deps.filter((d) => EXTERNAL_SEAM_DEP.test(d)) };
+  // Migrations take precedence; only a target with NO migrations dir falls back to a standalone
+  // schema file (#574), so the two are never both applied.
+  const migrationDirs = discoverMigrationDirs(targetDir);
+  const schemaFiles = migrationDirs.length === 0 ? discoverSchemaFiles(targetDir).files : [];
+  return { migrationDirs, schemaFiles, scripts, externalSeamDeps: deps.filter((d) => EXTERNAL_SEAM_DEP.test(d)) };
 }
 
 // Concatenate every discovered migration dir's SQL, in dir + filename order, so the seed derivation
 // (buildTwoTenantSeed) sees the whole schema. Deterministic ordering keeps the seed stable.
-export function readMigrationSql(migrationDirs: string[]): string {
+function readMigrationSql(migrationDirs: string[]): string {
   const parts: string[] = [];
   for (const dir of migrationDirs) {
     for (const f of readdirSync(dir).filter((n) => n.endsWith(".sql")).sort()) {
@@ -121,6 +185,13 @@ export function readMigrationSql(migrationDirs: string[]): string {
     }
   }
   return parts.join("\n");
+}
+
+// The concatenated schema for a layout: its migrations if it has them, else its standalone schema
+// file(s) (#574). This is what the seed derivation sees and what the live runner applies.
+export function readSchemaSql(layout: RepoLayout): string {
+  if (layout.migrationDirs.length) return readMigrationSql(layout.migrationDirs);
+  return layout.schemaFiles.map((f) => readFileSync(f, "utf8")).join("\n");
 }
 
 // ---- provisioning plan (#514) ----------------------------------------------
@@ -131,7 +202,9 @@ export interface ProvisioningStep {
 }
 
 export interface ProvisioningPlan {
+  projectRoot: string; // #574 — the target dir; the live runner's workdir when there is no supabase/migrations to derive it from
   migrationDirs: string[]; // the client migrations the live runner applies to the fresh stack
+  schemaFiles: string[]; // #574 — standalone schema files applied via psql when there is no migrations dir
   seed: TwoTenantSeed; // the Harvey-owned two-tenant seed derived from those migrations
   steps: ProvisioningStep[];
   tables: string; // HARVEY_TABLES spec for pentest.ts (name:tenantKey list) — the pentest wiring
@@ -140,15 +213,18 @@ export interface ProvisioningPlan {
 // Build the ordered plan that stands up a Harvey-owned stack for a cold client: start → apply the
 // client's own migrations → seed two tenants generically → run Harvey's pentest.ts. Pure: the live
 // runner executes each step; this just assembles what to do and the seed to do it with.
-export function buildProvisioningPlan(layout: RepoLayout, migrationSql: string): ProvisioningPlan {
+export function buildProvisioningPlan(layout: RepoLayout, migrationSql: string, projectRoot: string): ProvisioningPlan {
   const seed = buildTwoTenantSeed(migrationSql);
+  const applyDetail = layout.migrationDirs.length
+    ? `apply the client's ${layout.migrationDirs.length} migration dir(s): ${layout.migrationDirs.join(", ")}`
+    : `apply the standalone schema file(s) via psql (no migrations dir): ${layout.schemaFiles.join(", ")}`;
   const steps: ProvisioningStep[] = [
     { kind: "start", detail: "supabase start — a Harvey-owned local stack (the client provides no DB)" },
-    { kind: "apply-migrations", detail: `apply the client's ${layout.migrationDirs.length} migration dir(s): ${layout.migrationDirs.join(", ")}` },
-    { kind: "seed", detail: `seed two tenants across ${seed.scopedTables.length} tenant-scoped table(s)${seed.warnings.length ? ` (warnings: ${seed.warnings.length})` : ""}` },
+    { kind: "apply-migrations", detail: applyDetail },
+    { kind: "seed", detail: `seed two ${seed.dataModel === "user" ? "users" : "tenants"} across ${seed.scopedTables.length} scoped table(s)${seed.warnings.length ? ` (warnings: ${seed.warnings.length})` : ""}` },
     { kind: "pentest", detail: "run Harvey's own pentest.ts against the stood-up stack (the mechanism; the client's suite is only a bonus)" },
   ];
-  return { migrationDirs: layout.migrationDirs, seed, steps, tables: seed.tablesSpec };
+  return { projectRoot, migrationDirs: layout.migrationDirs, schemaFiles: layout.schemaFiles, seed, steps, tables: seed.tablesSpec };
 }
 
 // ---- the client's OWN security suite: a bonus signal, gated on it not skipping (#508) ------------
