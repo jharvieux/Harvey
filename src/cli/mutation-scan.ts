@@ -59,11 +59,12 @@
 // list), used to flag surviving mutants that sit on a security/perf hotspot as top priority.
 
 import { execSync, execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceInput } from "../detectors/common.js";
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
+import { mirrorNodeModules } from "../stub-worktree.js";
 import {
   coveredScopeLine,
   detectDryRunFailure,
@@ -250,8 +251,18 @@ if (stubCheck) {
       recursive: true,
       filter: (src) => !(WALK_EXCLUDED_DIR.test(basename(src)) && statSync(src).isDirectory()),
     });
-    const targetNodeModules = join(targetDir, "node_modules");
-    if (existsSync(targetNodeModules)) symlinkSync(targetNodeModules, join(copyDir, "node_modules"), "dir");
+    if (existsSync(join(targetDir, "node_modules"))) {
+      // #607: mirror node_modules as a real dir, re-pointing workspace-package symlinks at the copy
+      // so a stub in packages/* is honored across package boundaries instead of resolving to the
+      // original (unstubbed) source through a wholesale node_modules symlink.
+      const mirror = mirrorNodeModules(targetDir, copyDir);
+      if (mirror.repointed.length) {
+        console.error(`M8 stub-check: re-pointed ${mirror.repointed.length} workspace-package symlink(s) into the copy so cross-package stubs are honored (#607): ${mirror.repointed.slice(0, 5).join(", ")}${mirror.repointed.length > 5 ? " ..." : ""}`);
+      }
+      if (mirror.unresolvedWorkspacePkgs.length) {
+        console.error(`⚠ ${mirror.unresolvedWorkspacePkgs.length} workspace-package symlink(s) could NOT be re-pointed (source not in the copy) — stubs in these resolve to ORIGINAL source and may be bypassed (#607): ${mirror.unresolvedWorkspacePkgs.join(", ")}`);
+      }
+    }
     console.error(`M8 stub-check: mutating a disposable copy at ${copyDir} — ${targetDir} is never opened for writing (#600)`);
 
     // In-place stub with backup/restore on the COPY. The finally here is about correctness
