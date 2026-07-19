@@ -29,4 +29,11 @@ export const b5HeadersEntries: CorpusEntry[] = [
   { id: "N-CSRF-ORIGIN-CHECKED", kind: "negative", cls: "Cookie-authed mutation guarded by an Origin check", location: "app/actions.ts", match: ["origin-checked"], note: "updateAccountName() checks headers().get('origin') against an allowlisted APP_ORIGIN before mutating. harvey-csrf-missing's pattern-not-inside excludes any function containing that call — cleared (review tier only regardless, since it shares a file with the P-CSRF-MISSING positive). match keyword is disjoint from the positive's 'csrf-missing' rule-id keyword." },
   { id: "N-ERROR-GENERIC", kind: "negative", cls: "Generic error message, no stack/raw error object", location: "pages/api/orders-safe.js", note: "res.status(500).json({ error: 'Server error' }) — a literal string, not err.stack/err.message or the raw `error` identifier. Clears both harvey-verbose-error and harvey-db-error-disclosure." },
   { id: "N-NODE-ENV-PROD", kind: "negative", cls: "NODE_ENV read (branch), never assigned", location: "lib/env-check.js", note: "if (process.env.NODE_ENV !== 'production') { ... } reads the value; harvey-node-env-not-prod only matches a literal assignment — cleared." },
+
+  // #578 — security-header presence over a hosting config (public/_headers / netlify.toml / vercel.json),
+  // for apps that set headers OUTSIDE next.config.js (the harvey-missing-* semgrep rules are next.config-
+  // only). checkHostingConfigHeaders (src/scan/hosting-headers.ts). Positive-only in the corpus: the
+  // check is a GLOBAL presence check over one well-known file set, so a headers-present negative can't
+  // coexist in the same target — the negative is exercised by hosting-headers.test.ts (temp dirs).
+  { id: "P-HOSTING-HEADERS-MISSING", kind: "positive", cls: "hosting config sets response headers but no security headers", location: "public/_headers", match: ["hosting-header"], expectedTier: "review", note: "#578: public/_headers (a Netlify-style hosting-header file — how a Vite/no-code SPA export sets headers) declares Cache-Control/X-DNS-Prefetch-Control but NO Strict-Transport-Security / X-Frame-Options / X-Content-Type-Options. checkHostingConfigHeaders emits HOSTING-HEADER-hsts/-frame-options/-nosniff → review. Sibling of checkMissingCsp for the non-Next hosting-config surface." },
 ];

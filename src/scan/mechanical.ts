@@ -14,6 +14,7 @@ import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { scanBolaOwner } from "./bola-owner.js";
 import { scanCounterRace } from "./counter-race.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
+import { checkHostingConfigHeaders } from "./hosting-headers.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { scanSecrets } from "./secrets.js";
@@ -108,6 +109,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // Semgrep footguns + missing-CSP config check.
     findings.push(...parseSemgrepFindings(runSemgrep(scanDir)));
     findings.push(...checkMissingCsp(scanDir));
+    findings.push(...checkHostingConfigHeaders(scanDir));
     findings.push(...checkPublicDirSensitive(scanDir));
     findings.push(...checkMigrationRlsStatic(scanDir));
     findings.push(...checkMigrationPolicySemantics(scanDir, tenancyOverride));

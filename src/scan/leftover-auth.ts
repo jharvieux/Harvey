@@ -21,7 +21,12 @@ const GREP_PATTERNS: { id: string; regex: RegExp; title: string }[] = [
 ];
 
 const SENSITIVE_ROUTE_SEGMENT = /(^|\/)(debug|seed|admin|api\/dev)(\/|$|\.)/i;
-const AUTH_HINT = /(getServerSession|auth\(\)|requireAuth|withAuth|assertAuth|supabase\.auth\.getUser|createServerClient)/;
+// #568: recognize the BARE session-accessor wrappers (getUser/getSession/getCurrentUser/…), not only
+// the stock supabase.auth.getUser() METHOD call. A route that reads the session through a plain
+// top-level helper — `const user = await getUser(req)` (the vandyand app/api/admin/revenue shape) —
+// authenticates just as authoritatively and must not be labelled "Unauthenticated debug/admin route"
+// (the #562 false-premise class, fixed there for harvey-route-noauth). `auth()` covers next-auth v5.
+const AUTH_HINT = /(getServerSession|getSession|getUser|getCurrentUser|getAuthUser|getAuthenticatedUser|auth\(\)|requireAuth|withAuth|assertAuth|supabase\.auth\.getUser|createServerClient)/;
 const ROUTE_FILE = /(^|\/)(route\.(ts|tsx|js)|pages\/api\/.*\.(ts|tsx|js))$/;
 
 // B7 (#71): a login/signup/OTP/password-reset route with no rate-limiter hint — an attacker can
@@ -30,6 +35,29 @@ const ROUTE_FILE = /(^|\/)(route\.(ts|tsx|js)|pages\/api\/.*\.(ts|tsx|js))$/;
 // file can't see is a false negative, not a gate concern).
 const AUTH_SENSITIVE_ROUTE = /(^|\/)(login|signin|sign-in|signup|sign-up|register|otp|reset-password|forgot-password)(\/|$|\.)/i;
 const RATE_LIMIT_HINT = /(rateLimit|ratelimit|Ratelimit|limiter\.)/;
+
+// #576 — client-trust-boundary: a role/privilege decision made in CLIENT code, gating what the
+// browser renders/navigates to or an action it takes. Client code is fully attacker-controlled — a
+// role read from Web Storage (user-editable) or from a user object, compared to a privilege literal
+// to open a gate, is bypassable by editing storage or the bundle. Framework-neutral: fires on any
+// client source (a Vite/no-code SPA component or a Next "use client" component), which is why it
+// lives in the file-walking grep layer rather than a Next-shaped semgrep rule. Review tier — a grep
+// can't prove the same decision isn't ALSO re-enforced server-side/RLS.
+const PRIV_LITERAL = `['"](?:admin|owner|staff|superadmin|super-admin)['"]`;
+// A role read from tamperable Web Storage: localStorage.getItem('...role...'), or a .role/.userRole
+// property on localStorage/sessionStorage.
+const STORAGE_ROLE_READ = /(?:localStorage|sessionStorage)\s*\.\s*(?:getItem\s*\(\s*['"][^'"]*role[^'"]*['"]\s*\)|[\w$]*role\b)/i;
+// A user/session/auth object's role field compared against a privilege literal (either operand order).
+const USER_ROLE_COMPARE = new RegExp(`\\.(?:user_metadata\\.|app_metadata\\.)?role\\s*[=!]==?\\s*${PRIV_LITERAL}|${PRIV_LITERAL}\\s*[=!]==?\\s*[\\w.$]*\\.(?:user_metadata\\.|app_metadata\\.)?role`, "i");
+// Browser-only navigation/render gating. Deliberately narrow (no generic JSX): a legitimate
+// server-side role check — `if (profile.role !== 'admin') return new Response(403)` — must NOT match,
+// so the .role branch requires one of these client-gate signals to co-occur.
+const CLIENT_GATE = /\b(?:useNavigate|navigate\s*\(|router\s*\.\s*(?:push|replace)|useState|useEffect)\b|window\.location|return\s+null|<Navigate\b/;
+
+function isClientSideAuthz(content: string): boolean {
+  if (STORAGE_ROLE_READ.test(content) && new RegExp(PRIV_LITERAL, "i").test(content)) return true;
+  return USER_ROLE_COMPARE.test(content) && CLIENT_GATE.test(content);
+}
 
 // B14 (#71): app-logic heuristics — all "review" tier (a grep can't prove the missing check
 // isn't enforced elsewhere, only that its shape is absent here). See
@@ -62,6 +90,16 @@ const B14_CHECKS: { id: string; title: string; taxonomy: string; category: strin
     impact: "The credential persists in log aggregation, CI output, and crash dumps.",
     fix: "Log only non-sensitive identifiers and the outcome; never the credential itself.",
     test: (f) => /console\.(log|error|info|warn|debug)\s*\([^)]*\b(password|passwd|pwd|secret|api[_-]?key|private[_-]?key|client[_-]?secret|credentials?)\b/i.test(f.content),
+  },
+  {
+    // #576 — client-side authorization decision (Web Storage role or a user-object role gating the UI).
+    id: "client-side-authz",
+    title: "authorization decision enforced in client code (bypassable)",
+    taxonomy: "Client-side authorization decision",
+    category: "Broken access control",
+    impact: "The role/privilege check runs in the browser, where the user controls Web Storage and the JS bundle — they can flip the gate open (edit storage, patch the bundle) and reach the privileged view/action. Any data the gate is supposed to protect is already in the client.",
+    fix: "Enforce the privileged read/action server-side: an RLS policy, or a server route that re-derives the role from the verified session. Treat any client-side role as display-only, never as the gate.",
+    test: (f) => isClientSideAuthz(f.content),
   },
 ];
 

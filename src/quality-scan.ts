@@ -264,6 +264,69 @@ export function jscpdUnavailableFinding(reason: string): Finding {
   };
 }
 
+// #580: a knip run that completes without throwing can still have silently mis-resolved entry
+// points — knip auto-detects the Vite plugin from the target's installed deps, and if that
+// activation fails (vite not in deps, or declared but not actually installed) knip falls back to
+// its default index.*-only entry resolution and can report most of a real Vite app's src/ as
+// unused. Two independent signals, MEASURED against a synthetic Vite fixture (2026-07-18): (1) a
+// mis-resolved run (no vite install at all) reported 5/7 = 71% of scanned source files unused,
+// including vite.config.ts itself; the same fixture with `vite` genuinely installed dropped to
+// 4/7 with vite.config.ts correctly excluded — so an implausibly high unused-file ratio is a real,
+// measured tell, not a guess. (2) the scope carries Vite's own entry markers
+// (vite.config.*/index.html) with vite NOT resolvable from that directory (walking node_modules up
+// the tree the way Node's own resolution does) — the exact "plugin didn't activate" precondition.
+// Either signal alone is enough to distrust the number (the issue's "prefer disclosure at minimum"
+// bar); a target with neither is unaffected. totalSourceFiles/hasViteMarkers/viteResolvable are
+// filesystem facts the CLI supplies, so this stays a pure, testable transform over them.
+const UNUSED_FILE_RATIO_THRESHOLD = 0.5;
+const MIN_FILES_FOR_RATIO_SIGNAL = 5;
+
+export function knipEntryUncertainReason(
+  report: KnipReport,
+  totalSourceFiles: number,
+  hasViteMarkers: boolean,
+  viteResolvable: boolean,
+): string | undefined {
+  const reasons: string[] = [];
+  if (totalSourceFiles >= MIN_FILES_FOR_RATIO_SIGNAL) {
+    const ratio = report.files.length / totalSourceFiles;
+    if (ratio > UNUSED_FILE_RATIO_THRESHOLD) {
+      reasons.push(
+        `${report.files.length}/${totalSourceFiles} source files (${Math.round(ratio * 100)}%) reported unused — implausibly high, a signal of mis-resolved entry points rather than genuine dead code`,
+      );
+    }
+  }
+  if (hasViteMarkers && !viteResolvable) {
+    reasons.push(
+      "target has vite.config.*/index.html but `vite` isn't resolvable from this scope — knip's Vite plugin auto-detection likely didn't activate, so entry resolution is unverified",
+    );
+  }
+  return reasons.length ? reasons.join("; ") : undefined;
+}
+
+// #580: mirrors knipUnavailableFinding's spot (M5-00, "did not complete") one row down — M5-99
+// covers the opposite shape: knip DID complete, but the result looks untrustworthy. Distinct from
+// M4-99 (M4's own did-not-complete gap) and M5-00 by taxonomy, not just id.
+export function knipEntryUncertainFinding(reason: string): Finding {
+  return {
+    id: "M5-99",
+    title: "M5 dead-code result may be unreliable for one or more scopes",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Maintainability",
+    taxonomy: "M5 — Slop / dead code",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `knip completed but entry resolution looks uncertain: ${reason}`,
+    impact:
+      "The M5 unused-file/export counts above may be significantly over- or under-stated for the affected scope(s) rather than a trustworthy measurement — a disclosed uncertainty, not a finding of confirmed dead code.",
+    fix: "Add an explicit knip config for the scope (e.g. entry: index.html for a Vite app) or install the target's dependencies so knip's plugin auto-detection can activate, then re-run `pnpm quality-scan` and compare the unused-file count.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
+}
+
 // #505: quality-scan now runs jscpd/knip per workspace (monorepo target) rather than once over the
 // whole target, so their reports need merging back into one before the existing jscpdToFindings /
 // knipToFindings transforms run — those stay single-report, unchanged and still independently

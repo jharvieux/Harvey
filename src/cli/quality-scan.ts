@@ -41,6 +41,8 @@ import {
   JSCPD_IGNORE_GLOBS,
   jscpdToFindings,
   jscpdUnavailableFinding,
+  knipEntryUncertainFinding,
+  knipEntryUncertainReason,
   knipToFindings,
   knipUnavailableFinding,
   mergeJscpdReports,
@@ -199,10 +201,49 @@ function securityPathFiles(dir: string, rel = ""): SecurityPathFile[] {
   return files;
 }
 
+// #580: filesystem facts for src/quality-scan.ts's knipEntryUncertainReason. countSourceFiles
+// reuses the same SKIP_DIRS/SOURCE_EXT/SKIP_FILE walk shape as securityPathFiles above (total
+// count instead of a security-relevant subset) so the ratio denominator matches what knip could
+// plausibly have scanned.
+function countSourceFiles(dir: string, rel = ""): number {
+  let count = 0;
+  for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+    const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) count += countSourceFiles(dir, relPath);
+    } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+const VITE_CONFIG_NAMES = ["vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cjs", "vite.config.mts", "vite.config.cts"];
+
+function hasViteEntryMarkers(dir: string): boolean {
+  return VITE_CONFIG_NAMES.some((f) => existsSync(join(dir, f))) || existsSync(join(dir, "index.html"));
+}
+
+// Walks node_modules up the directory tree the way Node's own module resolution does — MEASURED
+// (2026-07-18) as the actual gate on whether knip's Vite plugin excludes vite.config.ts from the
+// unused-files list: a fixture with `vite` declared in package.json but not installed still
+// reported vite.config.ts unused; installing it (`npm install vite`) stopped that. Declared-in-
+// package.json alone is not enough signal — resolvability is.
+function isViteResolvable(dir: string): boolean {
+  let cur = dir;
+  for (;;) {
+    if (existsSync(join(cur, "node_modules", "vite"))) return true;
+    const parent = dirname(cur);
+    if (parent === cur) return false;
+    cur = parent;
+  }
+}
+
 const jscpdReports: JscpdReport[] = [];
 const jscpdGaps: ScanGap[] = [];
 const knipReports: KnipReport[] = [];
 const knipGaps: ScanGap[] = [];
+const knipUncertainScopes: ScanGap[] = [];
 
 // #544: one whole-repo jscpd pass — paths already come back relative to targetDir, so no
 // per-workspace re-anchoring is needed. See the header for why duplication is measured whole-repo.
@@ -221,6 +262,11 @@ for (const scope of scopes) {
   const workspaceRel = relative(targetDir, scope);
   try {
     const report = runKnip(scope);
+    // #580: computed BEFORE re-anchoring report.files below — knipEntryUncertainReason's ratio
+    // only cares about the count, and countSourceFiles/hasViteEntryMarkers/isViteResolvable all
+    // operate on the real scope dir, not the merged-report-relative path.
+    const uncertainReason = knipEntryUncertainReason(report, countSourceFiles(scope), hasViteEntryMarkers(scope), isViteResolvable(scope));
+    if (uncertainReason) knipUncertainScopes.push({ scope: label, reason: uncertainReason });
     report.files = report.files.map((f) => prefixed(workspaceRel, f));
     for (const issue of report.issues) issue.file = prefixed(workspaceRel, issue.file);
     knipReports.push(report);
@@ -258,6 +304,10 @@ const findings: Finding[] = [
 // scanned clean, 1 timed out).
 if (knipGaps.length) findings.push(knipUnavailableFinding(knipGaps.map((g) => `${g.scope}: ${g.reason}`).join("; ")));
 if (jscpdGaps.length) findings.push(jscpdUnavailableFinding(jscpdGaps.map((g) => `${g.scope}: ${g.reason}`).join("; ")));
+// #580: a completed-without-error knip run that still looks untrustworthy — disclosed separately
+// from knipGaps (which is "didn't complete at all") so the two failure shapes stay distinguishable
+// in the report.
+if (knipUncertainScopes.length) findings.push(knipEntryUncertainFinding(knipUncertainScopes.map((g) => `${g.scope}: ${g.reason}`).join("; ")));
 
 const dup = duplicationSummary(jscpdReport);
 console.error(
@@ -267,7 +317,8 @@ console.error(
 if (knipReport) {
   console.error(
     `M5 dead code: ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports` +
-      (knipGaps.length ? `, ${knipGaps.length}/${scopes.length} scope(s) incomplete (#505, see M5-00)` : ""),
+      (knipGaps.length ? `, ${knipGaps.length}/${scopes.length} scope(s) incomplete (#505, see M5-00)` : "") +
+      (knipUncertainScopes.length ? `, ${knipUncertainScopes.length}/${scopes.length} scope(s) flagged as uncertain (#580, see M5-99)` : ""),
   );
 } else {
   console.error("M5 dead code: skipped (knip failed on every scope — see warnings above)");

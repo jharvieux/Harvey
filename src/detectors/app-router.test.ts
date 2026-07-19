@@ -434,3 +434,46 @@ describe("id assignment", () => {
     expect(ids.every((id) => /^M9-\d{2}$/.test(id))).toBe(true);
   });
 });
+
+// #575: M9's checks are all Next.js-App-Router-specific. On a Vite/SPA target there is no SSR
+// render path, so `detectSsrBrowserApiMisuse` (and the rest of the family) false-fires. When the
+// framework probe (#573) says `vite`, the whole pass is suppressed to a single N/A coverage note.
+const NON_SSR_NOTE = "M9 — Not applicable (non-Next SPA)";
+
+describe("non-Next (Vite/SPA) framework gate (#575)", () => {
+  it("suppresses all SSR/App-Router findings and emits one N/A note on a `vite` target", () => {
+    // Same fixture that fires an SSR-misuse finding on Next (asserted above) — proving the
+    // suppression is the framework gate, not an empty input.
+    const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"), "vite");
+
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+    expect(taxonomies(findings)).toEqual([NON_SSR_NOTE]);
+    expect(findings[0]).toMatchObject({ severity: "Info", confidence: "N/A", id: "M9-01" });
+    expect(findings[0]?.evidence).toContain("vite");
+  });
+
+  it("also suppresses M9's security findings (server→client leak, server actions) on a `vite` target", () => {
+    const findings = detectAppRouterFindings(
+      [...loadFixtureDir("server-client-leak/positive"), ...loadFixtureDir("missing-server-only/positive")],
+      "vite",
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.taxonomy).toBe(NON_SSR_NOTE);
+  });
+
+  it("leaves a Next App Router target unchanged — `next` behaves exactly like an omitted framework", () => {
+    const fixture = loadFixtureDir("ssr-browser-api/positive");
+    const explicitNext = detectAppRouterFindings(fixture, "next");
+    const omitted = detectAppRouterFindings(fixture);
+
+    expect(explicitNext).toEqual(omitted);
+    expect(taxonomies(explicitNext)).toContain(SSR_API);
+    expect(taxonomies(explicitNext)).not.toContain(NON_SSR_NOTE);
+  });
+
+  it("does NOT suppress on `other` (ambiguous shape) — only a confirmed non-SSR SPA is N/A", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"), "other");
+    expect(taxonomies(findings)).toContain(SSR_API);
+    expect(taxonomies(findings)).not.toContain(NON_SSR_NOTE);
+  });
+});

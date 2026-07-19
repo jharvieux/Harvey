@@ -22,13 +22,14 @@ import { join, resolve } from "node:path";
 import type { Finding } from "../findings.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { scanAssetWeight } from "../detectors/asset-weight.js";
-import { parseBundleAnalyzerStats, parseBundleStats } from "../detectors/bundle-stats.js";
+import { parseBundleAnalyzerStats, parseBundleStats, parseViteBundleStats } from "../detectors/bundle-stats.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { detectHookDepFindings } from "../detectors/hook-deps.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
 import { detectTestIntentFindings } from "../detectors/test-intent.js";
+import { detectTargetFramework } from "../scan/framework-detect.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
 
 const args = process.argv.slice(2);
@@ -50,44 +51,56 @@ try {
   const sources = allSources.filter((f) => !NON_PRODUCT.test(f.path));
   console.log(`loaded ${allSources.length} source files (${sources.length} product-code) from ${targetDir}`);
 
-  // Bundle tier: explicit --build flags, or auto-detected .next dirs (root + apps/*).
-  // Build artifacts live in the REAL target dir — they're gitignored, so the scoped copy
-  // never contains them.
-  const buildDirs = args.flatMap((a, i) => {
+  // M9 assumes a Next.js App Router shape; on a Vite/SPA target it is N/A (see detectAppRouterFindings).
+  // M7's client-JS tiers and bundle reader also branch on it (#577).
+  const framework = detectTargetFramework(scanDir);
+  const isVite = framework === "vite";
+  console.log(`target framework: ${framework}${isVite ? " — M9 App Router checks N/A (SPA, no SSR); M7 in Vite mode" : ""}`);
+
+  // Bundle tier: explicit --build flags, or auto-detected build dirs. Build artifacts live in the
+  // REAL target dir — they're gitignored, so the scoped copy never contains them. A Next target's
+  // artifact is `.next/` (build-manifest.json); a Vite target's is `dist/` (index.html).
+  const explicitBuilds = args.flatMap((a, i) => {
     const next = args[i + 1];
     return a === "--build" && next ? [resolve(next)] : [];
   });
+  const buildDirs = [...explicitBuilds];
   if (buildDirs.length === 0) {
-    const candidates = [join(targetDir, ".next")];
+    const marker = isVite ? "index.html" : "build-manifest.json";
+    const candidates = [join(targetDir, isVite ? "dist" : ".next")];
     const appsDir = join(targetDir, "apps");
     if (existsSync(appsDir)) {
-      for (const app of readdirSync(appsDir)) candidates.push(join(appsDir, app, ".next"));
+      for (const app of readdirSync(appsDir)) candidates.push(join(appsDir, app, isVite ? "dist" : ".next"));
     }
-    buildDirs.push(...candidates.filter((c) => existsSync(join(c, "build-manifest.json"))));
+    buildDirs.push(...candidates.filter((c) => existsSync(join(c, marker))));
   }
 
   // Stats tier: explicit --stats flags only — the artifact isn't part of `.next` so there's
-  // nothing to auto-detect it from.
+  // nothing to auto-detect it from. Next-only (webpack/bundle-analyzer shape).
   const statsPaths = args.flatMap((a, i) => {
     const next = args[i + 1];
     return a === "--stats" && next ? [resolve(next)] : [];
   });
 
   const findings: Finding[] = [
-    ...detectAppRouterFindings(sources),
-    ...detectPerfCodeFindings(sources),
+    ...detectAppRouterFindings(sources, framework),
+    ...detectPerfCodeFindings(sources, framework),
     ...detectHookDepFindings(sources),
     ...detectSlopFindings(sources),
     ...detectHandrolledFindings(sources), // M6 free-tier indicators — Info-only, non-grading (#267)
     ...detectTestIntentFindings(allSources), // M8 free tier (#372) — needs the test files too
     ...scanAssetWeight(scanDir), // scoped copy = committed files only
-    ...buildDirs.flatMap((b) => parseBundleStats(b)),
+    ...buildDirs.flatMap((b) => (isVite ? parseViteBundleStats(b) : parseBundleStats(b))),
     ...statsPaths.flatMap((p) => parseBundleAnalyzerStats(p)),
   ];
   if (buildDirs.length === 0) {
-    console.log("bundle tier: no next build artifact found (pass --build <path-to-.next>) — [B] findings skipped");
+    console.log(
+      isVite
+        ? "bundle tier: no Vite dist/ build found (pass --build <path-to-dist>) — first-load JS unmeasured"
+        : "bundle tier: no next build artifact found (pass --build <path-to-.next>) — [B] findings skipped",
+    );
   }
-  if (statsPaths.length === 0) {
+  if (statsPaths.length === 0 && !isVite) {
     console.log("bundle-analyzer tier: no --stats path provided — M7B-04/05/06 findings skipped");
   }
 
