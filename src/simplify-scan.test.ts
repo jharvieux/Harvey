@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPacket, extractM6Brief, renderPacket } from "./simplify-scan.js";
+import { buildPacket, extractM6Brief, renderPacket, scopePacketFiles } from "./simplify-scan.js";
 
 const BRIEF = `# quality-extras
 
@@ -129,5 +129,25 @@ describe("buildPacket hotspot ordering (#442)", () => {
     expect(packet.files[0]?.path).toBe("package.json");
     expect(packet.files[0]?.hotspotRank).toBe(1);
     expect(packet.files[1]?.hotspotRank).toBeUndefined();
+  });
+});
+
+describe("scopePacketFiles (#621 — --hotspots bounds the packet on a monorepo)", () => {
+  const dir = "/repo";
+  const all = ["/repo/apps/main/a.ts", "/repo/apps/main/b.ts", "/repo/packages/x/c.ts"];
+
+  it("keeps only files whose target-relative path is in the hotspot list", () => {
+    const scoped = scopePacketFiles(all, dir, ["apps/main/a.ts", "packages/x/c.ts"]);
+    expect(scoped).toEqual(["/repo/apps/main/a.ts", "/repo/packages/x/c.ts"]);
+  });
+
+  it("returns every file when no hotspots are supplied (single-target behaviour)", () => {
+    expect(scopePacketFiles(all, dir, [])).toEqual(all);
+  });
+
+  it("drops files not in the hotspot list — the whole-tree packet cannot leak back in", () => {
+    const scoped = scopePacketFiles(all, dir, ["apps/main/a.ts"]);
+    expect(scoped).toEqual(["/repo/apps/main/a.ts"]);
+    expect(scoped).not.toContain("/repo/apps/main/b.ts");
   });
 });

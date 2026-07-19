@@ -13,7 +13,7 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildPacket, renderPacket } from "../simplify-scan.js";
+import { buildPacket, renderPacket, scopePacketFiles } from "../simplify-scan.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const briefPath = join(repoRoot, "docs", "quality-extras.txt");
@@ -57,8 +57,8 @@ if (!targetArg) {
 }
 
 const targetDir = resolve(targetArg);
-const files = sourceFiles(targetDir);
-if (!files.length) {
+const allFiles = sourceFiles(targetDir);
+if (!allFiles.length) {
   console.error(`M6: no source files under ${targetDir} — nothing to review.`);
   process.exit(1);
 }
@@ -67,6 +67,15 @@ const hotspots = hotspotsPath
   ? readFileSync(hotspotsPath, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)
   : [];
 
+// #621: with --hotspots the packet body is scoped to the matched hotspot files, not the full tree.
+const files = scopePacketFiles(allFiles, targetDir, hotspots);
+if (hotspotsPath && !files.length) {
+  console.error(
+    `M6: --hotspots was given but none of its ${hotspots.length} entr${hotspots.length === 1 ? "y" : "ies"} matched a source file under ${targetDir} — refusing to fall back to the full ${allFiles.length}-file tree. Check the hotspot paths are relative to the target root.`,
+  );
+  process.exit(1);
+}
+
 const manifests = manifestFiles(targetDir);
 if (!manifests.length) {
   console.error(`M6: no package.json found under ${targetDir} — the packet will say the dependency-tree class is unverifiable.`);
@@ -74,8 +83,7 @@ if (!manifests.length) {
 
 const packet = renderPacket(buildPacket(readFileSync(briefPath, "utf8"), targetDir, files, hotspots, manifests));
 if (hotspotsPath) {
-  const matched = files.filter((f) => hotspots.includes(f.replace(`${targetDir}/`, ""))).length;
-  console.error(`M6: ordered packet by ${hotspots.length} M3 hotspot(s); ${matched} matched a source file under review.`);
+  console.error(`M6: scoped packet to ${files.length} file(s) matching ${hotspots.length} M3 hotspot(s) (of ${allFiles.length} source files under the target).`);
 }
 
 if (outPath) {
