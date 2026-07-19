@@ -1,0 +1,4 @@
+import { readFileSync } from "node:fs";
+// JSON.parse of a FILE, not an environment variable — even with the gate open, only a process.env
+// source is the env-parsing shape; reading config from disk never flags.
+export const cfg = JSON.parse(readFileSync("config.json", "utf8"));

@@ -1,0 +1,4 @@
+// A complete URL constant (no interpolation) — mentioning the path is not building it — and an
+// unrelated interpolated URL that never touches the storage path.
+export const SAMPLE = "https://proj.supabase.co/storage/v1/object/public/avatars/a.png";
+export const api = (id: string) => `https://api.example.com/v1/items/${id}`;

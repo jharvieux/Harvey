@@ -1,0 +1,7 @@
+{
+  "name": "path-get-negative-with-dep",
+  "dependencies": {
+    "react": "^18.3.0",
+    "lodash": "^4.17.21"
+  }
+}

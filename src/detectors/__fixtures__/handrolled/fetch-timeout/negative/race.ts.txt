@@ -1,0 +1,3 @@
+// A race without a fetch+timer pair, and Promise.all of two fetches — neither is the timeout idiom.
+export const first = (a: Promise<number>, b: Promise<number>) => Promise.race([a, b]);
+export const both = (x: string, y: string) => Promise.all([fetch(x), fetch(y)]);

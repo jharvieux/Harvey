@@ -1129,6 +1129,419 @@ function detectThousandsRegex(sf: ts.SourceFile, path: string, nextId: NextId): 
   return findings;
 }
 
+// --- Batch 4 (#628): the remaining measured-zero YES entries + the Vite env idiom ---
+// Operator un-gate 2026-07-19 (#413 comment): the measure-before-graduate rule was circular
+// (a pattern's frequency can't be measured without a detector) and corpus-bounded. New rule:
+// build any plausible catalogued YES shape and gate on PRECISION — a paired negative fixture and
+// no false-fire on the existing calibration corpus — not on corpus-frequency. Zero corpus
+// positives is expected and fine. These graduate the 9 YES entries still standing after batch 3
+// (4, 11, 13, 16, 23, 44, 68, 76, 95) plus #628's import.meta.env coercion idiom. Every class
+// keeps the free-tier discipline: hedged, Info, never naming a replacement (vocabulary-locked).
+
+// A bare-identifier call `name(...)` anywhere in the subtree (fetch(), setTimeout ref).
+function subtreeHasIdentifierCall(node: ts.Node, name: string): boolean {
+  return subtreeHas(node, (n) => ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === name);
+}
+
+function subtreeHasIdentifier(node: ts.Node, name: string): boolean {
+  return subtreeHas(node, (n) => ts.isIdentifier(n) && n.text === name);
+}
+
+// --- 22. Array flatten via reduce + concat (catalogue 4) -------------------------
+// arr.reduce((a, b) => a.concat(b), []) — the two-param callback whose returned body is a bare
+// `a.concat(b)` over an empty-array seed. A non-empty seed, a different body, or Buffer.concat
+// (a static-member call, not a param.concat(param)) never flags.
+
+function isConcatOfParams(expr: ts.Expression, accName: string, itemName: string): boolean {
+  const e = unwrapParens(expr);
+  return (
+    ts.isCallExpression(e) &&
+    ts.isPropertyAccessExpression(e.expression) &&
+    e.expression.name.text === "concat" &&
+    ts.isIdentifier(e.expression.expression) &&
+    e.expression.expression.text === accName &&
+    e.arguments.length === 1 &&
+    ts.isIdentifier(e.arguments[0] as ts.Expression) &&
+    (e.arguments[0] as ts.Identifier).text === itemName
+  );
+}
+
+function detectReduceConcatFlatten(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "reduce" &&
+      node.arguments.length === 2 &&
+      ts.isArrayLiteralExpression(node.arguments[1] as ts.Expression) &&
+      (node.arguments[1] as ts.ArrayLiteralExpression).elements.length === 0
+    ) {
+      const cb = node.arguments[0] as ts.Expression;
+      if ((ts.isArrowFunction(cb) || ts.isFunctionExpression(cb)) && cb.parameters.length === 2) {
+        const [acc, item] = cb.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : undefined));
+        if (acc && item && returnedExpressions(cb).some((r) => isConcatOfParams(r, acc, item))) {
+          const f = makeIndicator(nextId, sf, path, node, {
+            title: "Looks hand-rolled: array flattening via reduce + concat — may be worth investigating",
+            taxonomy: "M6 — Indicator: array flatten via reduce",
+            evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — flattens a nested array by reducing with concat over an empty-array seed (a new array is allocated at each step).`,
+          });
+          if (f) findings.push(f);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 23. Shuffle via a random sort comparator (catalogue 11) ---------------------
+// arr.sort(() => Math.random() - 0.5) and its sign variants — any .sort() whose comparator body
+// calls Math.random(). No legitimate ordering comparator uses randomness, so the call inside the
+// comparator is the whole signature; an ordinary numeric comparator never flags.
+
+function detectShuffleSort(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "sort" &&
+      node.arguments.length === 1
+    ) {
+      const cb = node.arguments[0] as ts.Expression;
+      if ((ts.isArrowFunction(cb) || ts.isFunctionExpression(cb)) && subtreeHasCall(cb, "Math", "random")) {
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: array shuffle via a random sort comparator — may be worth investigating",
+          taxonomy: "M6 — Indicator: random-comparator shuffle",
+          evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — shuffles by sorting with a Math.random() comparator (the resulting order is biased and engine-dependent).`,
+        });
+        if (f) findings.push(f);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 24. Zero-padding via string concat + negative slice (catalogue 13) ----------
+// ("0" + n).slice(-2), ("00" + x).slice(-3) — a .slice(negative) on a parenthesized concatenation
+// whose leftmost operand is a string of only "0"s. A slice on other strings, or a positive slice,
+// never flags.
+
+function leftmostConcatOperand(expr: ts.Expression): ts.Expression {
+  let e = unwrapParens(expr);
+  while (isPlusExpression(e)) e = unwrapParens(e.left);
+  return e;
+}
+
+function isNegativeNumericArg(node: ts.Expression): boolean {
+  return (
+    ts.isPrefixUnaryExpression(node) &&
+    node.operator === ts.SyntaxKind.MinusToken &&
+    ts.isNumericLiteral(node.operand)
+  );
+}
+
+function detectZeroPadSlice(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "slice" &&
+      node.arguments.length === 1 &&
+      isNegativeNumericArg(node.arguments[0] as ts.Expression)
+    ) {
+      const receiver = unwrapParens(node.expression.expression);
+      if (isPlusExpression(receiver)) {
+        const lead = leftmostConcatOperand(receiver);
+        if (ts.isStringLiteralLike(lead) && /^0+$/.test(lead.text)) {
+          const f = makeIndicator(nextId, sf, path, node, {
+            title: "Looks hand-rolled: zero-padding via string concatenation and slice — may be worth investigating",
+            taxonomy: "M6 — Indicator: zero-pad via slice",
+            evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — pads a value to a fixed width by prepending zeros and slicing (values wider than the prefix silently truncate).`,
+          });
+          if (f) findings.push(f);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 25. Nested-path get via split(".").reduce (catalogue 16, dep-gated) ---------
+// path.split(".").reduce((o, k) => o?.[k], obj) — a .reduce whose receiver is a .split(".") call.
+// Dep-gated on a path-access helper family: with none in the tree there is no stdlib form for a
+// DYNAMIC path, so hand-rolling the walk is the deliberate dep-drop shape, not a reinvention.
+
+const PATH_GET_DEPS = ["lodash", "lodash.get", "es-toolkit", "dlv", "get-value", "just-safe-get"];
+
+function isSplitDotCall(node: ts.Node): boolean {
+  return (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === "split" &&
+    node.arguments.length >= 1 &&
+    ts.isStringLiteralLike(node.arguments[0] as ts.Expression) &&
+    (node.arguments[0] as ts.StringLiteralLike).text === "."
+  );
+}
+
+function detectPathGetReduce(sf: ts.SourceFile, path: string, nextId: NextId, gateOpen: boolean): Finding[] {
+  if (!gateOpen) return [];
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "reduce" &&
+      isSplitDotCall(unwrapParens(node.expression.expression))
+    ) {
+      const f = makeIndicator(nextId, sf, path, node, {
+        title: "Looks hand-rolled: nested property access via a dotted-path split + reduce — may be worth investigating",
+        taxonomy: "M6 — Indicator: nested-path get via split/reduce",
+        evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — walks a dotted path string to read a nested property by hand while a helper for this is already in the dependency tree (missing keys and array indices are unhandled).`,
+      });
+      if (f) findings.push(f);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 26. Placeholder-template id string (catalogue 23) ---------------------------
+// The 8-4-4-4-12 hyphenated placeholder template ('xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx') that is
+// character-replaced into an id. The shape guard (all x/y/hex, plus >= 8 literal 'x' characters)
+// separates the placeholder template from a real hex id string, which carries no 'x'.
+
+const ID_TEMPLATE_SHAPE = /^[0-9a-fxy]{8}-[0-9a-fxy]{4}-[0-9a-fxy]{4}-[0-9a-fxy]{4}-[0-9a-fxy]{12}$/i;
+
+function detectIdTemplate(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isStringLiteralLike(node)) {
+      const t = node.text;
+      if (ID_TEMPLATE_SHAPE.test(t) && (t.match(/x/gi)?.length ?? 0) >= 8) {
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: id built from an 'xxxx' placeholder template — may be worth investigating",
+          taxonomy: "M6 — Indicator: placeholder-template id",
+          evidence: `\`${node.getText(sf).slice(0, 70)}\` — generates an identifier by replacing placeholder characters in a template string (the result is not collision-resistant).`,
+        });
+        if (f) findings.push(f);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 27. fetch timeout via Promise.race (catalogue 44) ---------------------------
+// Promise.race([fetch(...), <setTimeout-based promise>]) — a Promise.race over an array whose
+// subtree contains both a fetch() call and a setTimeout reference. Promise.all, or a race without
+// both a fetch and a timer, never flags.
+
+function isPromiseRace(node: ts.Node): node is ts.CallExpression {
+  return (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) &&
+    node.expression.expression.text === "Promise" &&
+    node.expression.name.text === "race"
+  );
+}
+
+function detectFetchTimeoutRace(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (isPromiseRace(node) && node.arguments.length >= 1 && ts.isArrayLiteralExpression(node.arguments[0] as ts.Expression)) {
+      const arr = node.arguments[0] as ts.ArrayLiteralExpression;
+      if (subtreeHasIdentifierCall(arr, "fetch") && subtreeHasIdentifier(arr, "setTimeout")) {
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: fetch timeout via Promise.race against a timer — may be worth investigating",
+          taxonomy: "M6 — Indicator: fetch timeout via Promise.race",
+          evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — imposes a request timeout by racing fetch against a setTimeout promise (the underlying request keeps running after the timeout).`,
+        });
+        if (f) findings.push(f);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 28. JSON.parse of a process.env value (catalogue 68, dep-gated) --------------
+// JSON.parse(process.env.X) — parsing structured config out of an environment variable by hand.
+// Dep-gated on a schema-validation library: with none in the tree, a by-hand parse is the ordinary
+// approach, so the gate stays shut.
+
+const ENV_SCHEMA_DEPS = ["zod", "valibot", "@t3-oss/env-core", "@t3-oss/env-nextjs", "envalid", "znv"];
+
+function referencesProcessEnv(node: ts.Node): boolean {
+  return subtreeHas(
+    node,
+    (n) =>
+      ts.isPropertyAccessExpression(n) &&
+      n.name.text === "env" &&
+      ts.isIdentifier(n.expression) &&
+      n.expression.text === "process",
+  );
+}
+
+function detectEnvJsonParse(sf: ts.SourceFile, path: string, nextId: NextId, gateOpen: boolean): Finding[] {
+  if (!gateOpen) return [];
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (isJsonCall(node, "parse") && node.arguments.length >= 1 && referencesProcessEnv(node.arguments[0] as ts.Node)) {
+      const f = makeIndicator(nextId, sf, path, node, {
+        title: "Looks hand-rolled: configuration parsed from an environment variable by hand — may be worth investigating",
+        taxonomy: "M6 — Indicator: env JSON parsing",
+        evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — parses JSON out of a process environment variable while a schema-validation library is already in the dependency tree (a malformed value throws at the parse with nothing validated).`,
+      });
+      if (f) findings.push(f);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 29. Vite env value coerced/validated by hand (#628) -------------------------
+// Hand-rolled coercion of an import.meta.env value: a `=== "true"`/`=== "false"` boolean coercion,
+// or a Number()/parseInt()/parseFloat()/JSON.parse() over an import.meta.env member. A BARE read
+// (`apiKey: import.meta.env.VITE_X`) — the correct way to read Vite env — never flags, and a MODE
+// check against a non-boolean literal never flags. Dep-gated on a schema-validation library.
+
+const ENV_COERCE_FNS = new Set(["Number", "parseInt", "parseFloat"]);
+const BOOL_STRING_RE = /^(?:true|false)$/i;
+
+function isImportMetaEnvMember(e: ts.Expression): boolean {
+  const u = unwrapParens(e);
+  const base = ts.isPropertyAccessExpression(u) || ts.isElementAccessExpression(u) ? u.expression : undefined;
+  return (
+    base !== undefined &&
+    ts.isPropertyAccessExpression(base) &&
+    base.name.text === "env" &&
+    ts.isMetaProperty(base.expression) &&
+    base.expression.keywordToken === ts.SyntaxKind.ImportKeyword
+  );
+}
+
+function detectViteEnvCoercion(sf: ts.SourceFile, path: string, nextId: NextId, gateOpen: boolean): Finding[] {
+  if (!gateOpen) return [];
+  const findings: Finding[] = [];
+  const push = (node: ts.Node) => {
+    const f = makeIndicator(nextId, sf, path, node, {
+      title: "Looks hand-rolled: environment value coerced or validated by hand — may be worth investigating",
+      taxonomy: "M6 — Indicator: Vite env coercion",
+      evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — coerces or parses a build-time environment value by hand while a schema-validation library is already in the dependency tree (types, ranges, and defaults go unchecked).`,
+    });
+    if (f) findings.push(f);
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isBinaryExpression(node) && EQUALITY_OPS.has(node.operatorToken.kind)) {
+      const l = unwrapParens(node.left);
+      const r = unwrapParens(node.right);
+      const boolStr = (x: ts.Expression) => ts.isStringLiteralLike(x) && BOOL_STRING_RE.test(x.text);
+      if ((isImportMetaEnvMember(l) && boolStr(r)) || (isImportMetaEnvMember(r) && boolStr(l))) push(node);
+    } else if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      ENV_COERCE_FNS.has(node.expression.text) &&
+      node.arguments.length >= 1 &&
+      isImportMetaEnvMember(node.arguments[0] as ts.Expression)
+    ) {
+      push(node);
+    } else if (isJsonCall(node, "parse") && node.arguments.length >= 1 && isImportMetaEnvMember(node.arguments[0] as ts.Expression)) {
+      push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 30. Storage object URL built by concatenation (catalogue 76) ----------------
+// The Supabase-specific `/storage/v1/object/public/` path literal assembled into a URL by
+// interpolation or `+` concat. A standalone complete URL literal (no interpolation) stays silent
+// — the reinvention is BUILDING the URL, not mentioning the path.
+
+const STORAGE_PUBLIC_URL_RE = /\/storage\/v1\/object\/public\//;
+
+function detectStoragePublicUrl(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const push = (node: ts.Node) => {
+    const f = makeIndicator(nextId, sf, path, node, {
+      title: "Looks hand-rolled: storage object URL built by string concatenation — may be worth investigating",
+      taxonomy: "M6 — Indicator: storage object URL concat",
+      evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — assembles a storage object URL from the fixed \`/storage/v1/object/public/\` path by hand (bucket names and path encoding are manual here).`,
+    });
+    if (f) findings.push(f);
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isTemplateExpression(node)) {
+      // The path must sit in a chunk FOLLOWED by an interpolation — the URL-building signal (a
+      // dynamic bucket/path segment). The trailing chunk (prose after the last ${}) is excluded,
+      // so an English sentence that merely mentions the path never flags.
+      const followedChunks = [node.head.text, ...node.templateSpans.slice(0, -1).map((s) => s.literal.text)];
+      if (followedChunks.some((c) => STORAGE_PUBLIC_URL_RE.test(c))) {
+        push(node);
+        return;
+      }
+    } else if (isPlusExpression(node) && !insidePlusChain(node)) {
+      const operands: ts.Expression[] = [];
+      plusOperands(node, operands);
+      // The path literal must be followed by another operand (the dynamic segment being appended),
+      // not be the final operand of the concatenation.
+      const idx = operands.findIndex((o) => ts.isStringLiteralLike(o) && STORAGE_PUBLIC_URL_RE.test(o.text));
+      if (idx >= 0 && idx < operands.length - 1) {
+        push(node);
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 31. Clipboard copy via deprecated execCommand (catalogue 95) ----------------
+// document.execCommand("copy"|"cut") — the deprecated clipboard path (needs a hidden element and
+// focus juggling). execCommand with any other argument (rich-text editing: "bold", …) never flags.
+
+const EXEC_COMMAND_CLIPBOARD = new Set(["copy", "cut"]);
+
+function detectClipboardExecCommand(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "execCommand" &&
+      node.arguments.length >= 1 &&
+      ts.isStringLiteralLike(node.arguments[0] as ts.Expression) &&
+      EXEC_COMMAND_CLIPBOARD.has((node.arguments[0] as ts.StringLiteralLike).text.toLowerCase())
+    ) {
+      const f = makeIndicator(nextId, sf, path, node, {
+        title: "Looks hand-rolled: clipboard copy via a deprecated command — may be worth investigating",
+        taxonomy: "M6 — Indicator: clipboard via execCommand",
+        evidence: `\`${node.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — copies text through the deprecated execCommand path (which needs a hidden element and focus juggling and is unsupported on newer browsers).`,
+      });
+      if (f) findings.push(f);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
 // --- Orchestrator ----------------------------------------------------------------
 
 /**
@@ -1143,6 +1556,8 @@ export function detectHandrolledFindings(files: SourceInput[]): Finding[] {
   const classMergeGateOpen = depGatePresent(files, CLASS_MERGE_DEPS);
   const dateMathGateOpen = depGatePresent(files, DATE_MATH_DEPS);
   const emailRegexGateOpen = depGatePresent(files, EMAIL_SCHEMA_DEPS);
+  const pathGetGateOpen = depGatePresent(files, PATH_GET_DEPS);
+  const envSchemaGateOpen = depGatePresent(files, ENV_SCHEMA_DEPS);
   const findings: Finding[] = [];
   for (const f of files) {
     if (!/\.(ts|tsx|jsx|mjs)$/.test(f.path)) continue;
@@ -1171,6 +1586,17 @@ export function detectHandrolledFindings(files: SourceInput[]): Finding[] {
       ...detectErrorBoundaryClass(sf, f.path, nextId),
       ...detectMarkdownToHtml(sf, f.path, nextId),
       ...detectThousandsRegex(sf, f.path, nextId),
+      // Batch 4 (#628): the remaining measured-zero YES entries + the Vite env idiom:
+      ...detectReduceConcatFlatten(sf, f.path, nextId),
+      ...detectShuffleSort(sf, f.path, nextId),
+      ...detectZeroPadSlice(sf, f.path, nextId),
+      ...detectPathGetReduce(sf, f.path, nextId, pathGetGateOpen),
+      ...detectIdTemplate(sf, f.path, nextId),
+      ...detectFetchTimeoutRace(sf, f.path, nextId),
+      ...detectEnvJsonParse(sf, f.path, nextId, envSchemaGateOpen),
+      ...detectViteEnvCoercion(sf, f.path, nextId, envSchemaGateOpen),
+      ...detectStoragePublicUrl(sf, f.path, nextId),
+      ...detectClipboardExecCommand(sf, f.path, nextId),
     );
   }
   return findings;

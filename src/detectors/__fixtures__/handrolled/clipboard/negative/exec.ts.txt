@@ -1,0 +1,3 @@
+// execCommand for rich-text editing, not the clipboard — different argument, stays silent.
+export const bold = () => document.execCommand("bold");
+export const italic = () => document.execCommand("italic");
