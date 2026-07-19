@@ -8,7 +8,7 @@
 // The same fixtures exercise #252's suite-absent threshold end-to-end through the CLI: a harness
 // with a single placeholder spec emits M8-00; a harness with one MEANINGFUL spec does not.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -163,5 +163,47 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     const parsed = JSON.parse(out) as { scope: { scoped: boolean; verified: boolean }; moduleRecord?: unknown };
     expect(parsed.scope).toMatchObject({ scoped: false, verified: true });
     expect(parsed.moduleRecord).toBeUndefined();
+  });
+});
+
+// #600: --stub-check used to write the stub directly into the target and restore it via
+// try/finally on the same file — a finally that can't run once the process is killed. A real
+// engagement's 2-minute stub-check timeout left a client's reporting.ts stubbed in the operator's
+// checkout. The fix mutates a disposable copy instead, so the target is never opened for writing
+// in the first place: "untouched" holds no matter when or how the process dies, which these
+// tests prove for both the normal-completion path and a SIGTERM sent mid-mutation.
+describe("mutation-scan --stub-check crash safety (#600)", () => {
+  const SUBJECT = `export function add(a: number, b: number): number {\n  return a + b;\n}\n`;
+  const COVERING_TEST = `import { it, expect } from "vitest";\nimport { add } from "./add";\nit("adds", () => { expect(add(1, 2)).toBe(3); });\n`;
+
+  it("a normal (non-killed) run leaves the target checkout byte-identical, having actually run the stub against a copy", () => {
+    const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
+    // "true" always exits 0 — the covering "suite" trivially "survives" the stub, proving the
+    // stub-write-and-test cycle executed for real (not skipped) without depending on npm/vitest
+    // actually being installed in the fixture.
+    const { status, out } = runCli(repo, ["--stub-check", "--test-cmd", "true"]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { runs: unknown[]; findings: unknown[] };
+    expect(parsed.runs).toHaveLength(1);
+    expect(parsed.findings).toHaveLength(1);
+    expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
+  });
+
+  it("a run killed (SIGTERM) mid-mutation leaves the target checkout byte-identical", async () => {
+    const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
+    const outPath = join(repo, "m8-out.json");
+    // A test command that blocks for 5s — long enough to guarantee the SIGTERM below lands while
+    // the CLI is mid-mutation (stub already written to its copy, execSync blocked waiting on
+    // this child), simulating the timeout/kill that produced #600.
+    const child = spawn("node_modules/.bin/tsx", [CLI, repo, "--stub-check", "--test-cmd", "node -e 'setTimeout(() => {}, 5000)'", "--out", outPath], {
+      cwd: REPO_ROOT,
+      stdio: "ignore",
+      env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
+    });
+    const exited = new Promise<void>((done) => child.on("exit", () => done()));
+    await new Promise((r) => setTimeout(r, 1000));
+    child.kill("SIGTERM");
+    await exited;
+    expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
   });
 });

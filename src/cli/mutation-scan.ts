@@ -37,10 +37,18 @@
 // it crashed mid-run on "stryker binary not found" for every target with a real suite.
 //
 // --stub-check (#373) runs the fast pre-Stryker deletion-survival pass INSTEAD of Stryker:
-// each covered exported function is stubbed to `return undefined` in place (backed up and
-// restored), the covering test files are re-run via --test-cmd (default `npm test --`, which
-// gets the covering test paths appended), and a suite that still passes yields an M8-01-*
-// finding (src/stub-check.ts). O(exported functions) suite runs, no Stryker install needed.
+// each covered exported function is stubbed to `return undefined`, the covering test files are
+// re-run via --test-cmd (default `npm test --`, which gets the covering test paths appended),
+// and a suite that still passes yields an M8-01-* finding (src/stub-check.ts). O(exported
+// functions) suite runs, no Stryker install needed.
+//
+// #600: the mutation happens on a DISPOSABLE COPY of the target (node_modules symlinked in, not
+// copied), never on the live checkout — a target's own tree is never opened for writing, so a
+// SIGTERM/SIGKILL/timeout mid-run cannot leave it stubbed (a real engagement did: a killed run
+// left AoP's reporting.ts stubbed in the operator's checkout). This is crash-safe by
+// construction, not by a try/finally racing a signal — a signal handler can't run cleanup code
+// while the process is blocked inside a synchronous child-process wait, and nothing can run at
+// all after SIGKILL.
 //
 // --report points at the mutation.json Stryker already wrote (skips re-running Stryker — use
 // this to shape a report from a prior run). Without --report, this invokes `stryker run` and
@@ -51,9 +59,9 @@
 // list), used to flag surviving mutants that sit on a security/perf hotspot as top priority.
 
 import { execSync, execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceInput } from "../detectors/common.js";
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
 import {
@@ -228,30 +236,63 @@ if (stubCheck) {
     walkRelPaths(root).filter((p) => SOURCE_FILE.test(p)).map((rel) => readRel(root, rel));
 
   const testCmd = arg("--test-cmd") ?? "npm test --";
-  // In-place stub with backup/restore — the same write-mutate-run shape Stryker itself uses,
-  // restored in a finally so a crashed test run can't leave a stubbed file behind.
-  const runner: StubTestRunner = (stub, tests) => {
-    const abs = join(targetDir, stub.file);
-    const original = readFileSync(abs, "utf8");
-    writeFileSync(abs, stub.stubbedText);
-    try {
-      execSync(`${testCmd} ${tests.join(" ")}`, { cwd: targetDir, stdio: "ignore", env: suiteEnv });
-      return true; // exit 0 with the body deleted — the suite survived
-    } catch {
-      return false;
-    } finally {
-      writeFileSync(abs, original);
-    }
-  };
 
-  const runs = runStubCheck(loadSources(targetDir), runner);
-  const findings = stubSurvivalFindings(runs);
-  const checkedFiles = new Set(runs.map((r) => r.file)).size;
-  console.error(`M8 stub-check: ${runs.length} exported function(s) stubbed across ${checkedFiles} covered file(s); ${findings.length} suite(s) survive deletion`);
-  if (runs.length === 0) {
-    console.error("⚠ no covered source files found (no test file imports or sits beside a source file) — nothing was checked; this is NOT a clean result");
+  // #600: copy the target into a scratch dir the stubbing writes to, excluding the same heavy/
+  // irrelevant dirs walkRelPaths already skips (node_modules is symlinked back in below rather
+  // than copied, so the target's real dependency install is reused without re-copying it).
+  const copyDir = mkdtempSync(join(tmpdir(), "harvey-stub-check-"));
+  const sources = loadSources(targetDir); // read from the ORIGINAL — read-only, and the copy is a byte-identical mirror
+  // process.exit() does NOT run pending finally blocks (it terminates before the stack unwinds),
+  // so the copyDir cleanup is a real try/finally and the exit happens AFTER it, not inside it.
+  let stubJson: string;
+  try {
+    cpSync(targetDir, copyDir, {
+      recursive: true,
+      filter: (src) => !(WALK_EXCLUDED_DIR.test(basename(src)) && statSync(src).isDirectory()),
+    });
+    const targetNodeModules = join(targetDir, "node_modules");
+    if (existsSync(targetNodeModules)) symlinkSync(targetNodeModules, join(copyDir, "node_modules"), "dir");
+    console.error(`M8 stub-check: mutating a disposable copy at ${copyDir} — ${targetDir} is never opened for writing (#600)`);
+
+    // In-place stub with backup/restore on the COPY. The finally here is about correctness
+    // between iterations (the next stubbed export in the same file must start from unstubbed
+    // text), not crash-safety — the target directory this could leak into was never written to
+    // in the first place.
+    const runner: StubTestRunner = (stub, tests) => {
+      const copyAbs = join(copyDir, stub.file);
+      const original = readFileSync(copyAbs, "utf8");
+      writeFileSync(copyAbs, stub.stubbedText);
+      try {
+        execSync(`${testCmd} ${tests.join(" ")}`, { cwd: copyDir, stdio: "ignore", env: suiteEnv });
+        return true; // exit 0 with the body deleted — the suite survived
+      } catch {
+        return false;
+      } finally {
+        writeFileSync(copyAbs, original);
+      }
+    };
+
+    const runs = runStubCheck(sources, runner);
+    const findings = stubSurvivalFindings(runs);
+    const checkedFiles = new Set(runs.map((r) => r.file)).size;
+    console.error(`M8 stub-check: ${runs.length} exported function(s) stubbed across ${checkedFiles} covered file(s); ${findings.length} suite(s) survive deletion`);
+    if (runs.length === 0) {
+      console.error("⚠ no covered source files found (no test file imports or sits beside a source file) — nothing was checked; this is NOT a clean result");
+    }
+
+    // #600 acceptance: prove the live checkout is still exactly what it was — fail loud (not a
+    // silent pass) if anything under targetDir drifted from what was read at the start.
+    for (const s of sources) {
+      const now = readFileSync(join(targetDir, ...s.path.split("/")), "utf8");
+      if (now !== s.text) throw new Error(`#600 invariant violated: ${s.path} in ${targetDir} changed during stub-check — the target checkout is no longer pristine`);
+    }
+
+    stubJson = JSON.stringify({ runs, findings }, null, 2);
+  } finally {
+    // Best-effort: a killed process can't run this either, but that only leaks a scratch temp
+    // dir — never the client's checkout, which this branch never wrote to.
+    rmSync(copyDir, { recursive: true, force: true });
   }
-  const stubJson = JSON.stringify({ runs, findings }, null, 2);
   if (outPath) {
     writeFileSync(outPath, stubJson + "\n");
     console.error(`wrote stub-check results to ${outPath}`);
