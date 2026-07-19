@@ -135,26 +135,81 @@ export function parseColumnDefaults(sql: string): { table_name: string; column_n
   return out;
 }
 
-// Columns constrained to an enum-like allow-list via `CHECK (col IN ('a','b',...))`, whether the
-// check is written inline on the column line or as a table-level constraint. The two-tenant seed
-// uses these to pick a LEGAL value for a NOT-NULL column with no default (a generic placeholder
-// like 'harvey-seed-a' would violate the CHECK and fail the INSERT — #547). Only the simple `IN
-// (literal, literal, …)` shape is derived; a CHECK using a function/expression stays in the seed's
-// fail-loud path. Values are returned unquoted (the '' escape collapsed to a single quote).
-const CHECK_IN = new RegExp(`\\bcheck\\s*\\(\\s*${IDENT}\\s+in\\s*\\(([^)]*)\\)`, "gi");
+// Columns constrained by a CHECK, and the enum-like allow-list of literal values that satisfies it.
+// The two-tenant seed uses these to pick a LEGAL value for a NOT-NULL column with no default (a
+// generic placeholder like 'harvey-seed-a' would violate the CHECK and fail the INSERT — #547).
+//
+// `values` is the derived allow-list, or `null` when we located a CHECK on the column but could NOT
+// derive a literal allow-list from it (a regex/comparison/expression check like `qty > 0` or `slug ~
+// '…'`) — the seed treats `null` as a fail-loud limitation to disclose, never a value it can pick.
+//
+// Three CHECK shapes yield an allow-list: `col IN ('a','b',…)`, `col = 'x'`, and the same guarded by
+// `col IS NULL OR …` (the IN/eq sub-expression still derives). All three are matched whether the
+// CHECK is written inline on the column line, as a table-level constraint, OR added later via
+// `ALTER TABLE … ADD CONSTRAINT/ADD COLUMN … CHECK (…)` — the last is the shape that drifts onto a
+// column after its table is created (ATC's tenants_onboarding_stage_check, #622), which a
+// CREATE-TABLE-only scan misses. Values are returned unquoted ('' collapsed to a single quote).
 const STRING_LITERAL = /'((?:[^']|'')*)'/g;
+const CHECK_AT = /\bcheck\s*\(/gi;
+const IN_ALLOWLIST = new RegExp(`${IDENT}\\s+in\\s*\\(([^)]*)\\)`, "i");
+const EQ_LITERAL = new RegExp(`${IDENT}\\s*=\\s*'((?:[^']|'')*)'`, "i");
+// `alter table [only] [schema.]table` — the target a later CHECK attaches to.
+const ALTER_TABLE = new RegExp(`\\balter\\s+table\\s+(?:only\\s+)?(?:${IDENT}\\.)?${IDENT}`, "gi");
 
-export function parseCheckInConstraints(sql: string): { table_name: string; column_name: string; values: string[] }[] {
-  sql = stripLineComments(sql);
-  const out: { table_name: string; column_name: string; values: string[] }[] = [];
-  for (const m of sql.matchAll(CREATE_TABLE)) {
-    const table = identText(m[3], m[4]);
-    for (const cm of m[5]!.matchAll(CHECK_IN)) {
-      const values = [...cm[3]!.matchAll(STRING_LITERAL)].map((v) => v[1]!.replace(/''/g, "'"));
-      if (values.length) out.push({ table_name: table, column_name: identText(cm[1], cm[2]), values });
+interface CheckConstraint { table_name: string; column_name: string; values: string[] | null }
+
+// Derive {column, allow-list} from a single CHECK expression's inner text: an `IN (…)` list wins,
+// else a `= 'literal'` equality. Returns null when neither shape is present (an un-derivable check).
+function deriveCheckAllowList(body: string): { column: string; values: string[] } | null {
+  const inM = IN_ALLOWLIST.exec(body);
+  if (inM) {
+    const values = [...inM[3]!.matchAll(STRING_LITERAL)].map((v) => v[1]!.replace(/''/g, "'"));
+    if (values.length) return { column: identText(inM[1], inM[2]), values };
+  }
+  const eqM = EQ_LITERAL.exec(body);
+  if (eqM) return { column: identText(eqM[1], eqM[2]), values: [eqM[3]!.replace(/''/g, "'")] };
+  return null;
+}
+
+// Collect every CHECK in `text` (a CREATE TABLE body or an ALTER TABLE statement) attributed to
+// `table`. Derivable checks record their allow-list; an un-derivable check is recorded with a null
+// allow-list ONLY when it sits on a column-definition line we can attribute it to (the common inline
+// case) — an un-attributable table-level expression check is left to the seed's apply-time fail-loud.
+function collectChecks(text: string, table: string, out: CheckConstraint[]): void {
+  CHECK_AT.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = CHECK_AT.exec(text))) {
+    const open = text.indexOf("(", m.index);
+    const body = readBalanced(text, open);
+    if (body === null) continue;
+    const derived = deriveCheckAllowList(body);
+    if (derived) {
+      out.push({ table_name: table, column_name: derived.column, values: derived.values });
+      continue;
     }
+    const lineStart = text.lastIndexOf("\n", m.index) + 1;
+    const cm = COLUMN_LINE.exec(text.slice(lineStart, m.index));
+    if (cm) out.push({ table_name: table, column_name: identText(cm[1], cm[2]), values: null });
+  }
+}
+
+export function parseCheckConstraints(sql: string): CheckConstraint[] {
+  sql = stripLineComments(sql);
+  const out: CheckConstraint[] = [];
+  for (const m of sql.matchAll(CREATE_TABLE)) {
+    collectChecks(m[5]!, identText(m[3], m[4]), out);
+  }
+  for (const am of sql.matchAll(ALTER_TABLE)) {
+    const stmt = statementText(sql, am.index) ?? sql.slice(am.index);
+    collectChecks(stmt, identText(am[3], am[4]), out);
   }
   return out;
+}
+
+// The derivable subset: enum-like allow-lists the seed can pick a legal value from (#547).
+export function parseCheckInConstraints(sql: string): { table_name: string; column_name: string; values: string[] }[] {
+  return parseCheckConstraints(sql)
+    .filter((c): c is { table_name: string; column_name: string; values: string[] } => c.values !== null);
 }
 
 // Single-column PRIMARY KEY / UNIQUE columns — the arbiters an idempotent seed can target with
