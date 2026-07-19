@@ -477,3 +477,44 @@ describe("non-Next (Vite/SPA) framework gate (#575)", () => {
     expect(taxonomies(findings)).not.toContain(NON_SSR_NOTE);
   });
 });
+
+// #597: at a MONOREPO root the root's own verdict is `other` (vite.config lives in apps/web, not the
+// root), so the whole-target `vite` short-circuit above never fires and the SSR family false-fires
+// on the Vite app's files — the #575 regression. The gate takes the Vite workspace dirs and
+// suppresses the family per-app: files under a Vite workspace get one N/A note; every other file
+// (including a genuine Next workspace's) still runs the full pass.
+function prefixPaths(files: SourceInput[], prefix: string): SourceInput[] {
+  return files.map((f) => ({ ...f, path: `${prefix}/${f.path}` }));
+}
+
+describe("monorepo per-workspace framework gate (#597)", () => {
+  it("suppresses the SSR family for a Vite workspace's files even when the root verdict is `other`", () => {
+    const webFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/web");
+    const findings = detectAppRouterFindings(webFiles, "other", ["apps/web"]);
+
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+    expect(taxonomies(findings)).toContain(NON_SSR_NOTE);
+    expect(findings.find((f) => f.taxonomy === NON_SSR_NOTE)?.location).toBe("apps/web");
+  });
+
+  it("keeps M9 active on a Next workspace in the same monorepo while the Vite workspace is N/A", () => {
+    const webFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/web"); // Vite
+    const apiFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/api"); // Next
+    const findings = detectAppRouterFindings([...webFiles, ...apiFiles], "other", ["apps/web"]);
+
+    // The Vite side is N/A; the Next side still fires SSR-misuse.
+    expect(taxonomies(findings)).toContain(NON_SSR_NOTE);
+    expect(taxonomies(findings)).toContain(SSR_API);
+    const ssr = findings.filter((f) => f.taxonomy === SSR_API);
+    expect(ssr.length).toBeGreaterThan(0);
+    expect(ssr.every((f) => f.location.startsWith("apps/api/"))).toBe(true);
+    expect(ssr.some((f) => f.location.startsWith("apps/web/"))).toBe(false);
+  });
+
+  it("emits no N/A note for a listed Vite workspace that contributes no files", () => {
+    const apiFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/api");
+    const findings = detectAppRouterFindings(apiFiles, "other", ["apps/web"]);
+    expect(taxonomies(findings)).not.toContain(NON_SSR_NOTE);
+    expect(taxonomies(findings)).toContain(SSR_API);
+  });
+});

@@ -989,18 +989,22 @@ function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: 
 // that has no SSR — #575). So on a confirmed non-SSR SPA we SUPPRESS the whole M9 pass and emit
 // this one explicit N/A note instead — fail loud: the absence of M9 findings must read as "not
 // applicable here", never as "assessed and clean" (the coverage-guard principle in CLAUDE.md).
-function nonSsrSpaCoverageNote(nextId: NextId, framework: TargetFramework): Finding {
+// `scope` is "(whole target)" for a single-app Vite target, or a workspace-relative dir
+// ("apps/web") for one Vite workspace of a monorepo whose other workspaces still run the pass (#597).
+function nonSsrSpaCoverageNote(nextId: NextId, framework: TargetFramework, scope: string): Finding {
+  const isWorkspace = scope !== "(whole target)";
+  const subject = isWorkspace ? `Workspace \`${scope}\`` : "Target";
   return {
     id: nextId(),
-    title: "M9 N/A — non-SSR SPA",
+    title: isWorkspace ? `M9 N/A — non-SSR SPA workspace (${scope})` : "M9 N/A — non-SSR SPA",
     severity: "Info",
     confidence: "N/A",
     category: "Performance",
     taxonomy: "M9 — Not applicable (non-Next SPA)",
-    location: "(whole target)",
+    location: scope,
     status: "Open",
-    evidence: `Target framework detected as \`${framework}\` — a non-Next single-page app. M9's App Router checks (SSR browser-API misuse, server→client leak, \`server-only\` guard, Server Action auth/validation, cache/dynamic-rendering) all assume Next.js server-rendering by default and do not apply: a Vite/SPA build has no SSR render path, no Server Actions, and no RSC server→client boundary.`,
-    impact: "M9 App Router coverage is not applicable to this target. Recorded explicitly so the absence of M9 findings reads as 'not applicable here', not 'assessed and clean'.",
+    evidence: `${subject} framework detected as \`${framework}\` — a non-Next single-page app. M9's App Router checks (SSR browser-API misuse, server→client leak, \`server-only\` guard, Server Action auth/validation, cache/dynamic-rendering) all assume Next.js server-rendering by default and do not apply: a Vite/SPA build has no SSR render path, no Server Actions, and no RSC server→client boundary.`,
+    impact: "M9 App Router coverage is not applicable to this scope. Recorded explicitly so the absence of M9 findings reads as 'not applicable here', not 'assessed and clean'.",
     fix: "None — informational. If this target is in fact a Next.js app, verify framework detection (its `vite.config` / package.json `next` dependency).",
     value: 1,
     ease: 5,
@@ -1009,24 +1013,7 @@ function nonSsrSpaCoverageNote(nextId: NextId, framework: TargetFramework): Find
   };
 }
 
-// --- Orchestrator ------------------------------------------------------------
-
-/**
- * Runs all M9 App Router checks over the given source set and returns
- * Finding[] (src/findings.ts). `files` should be a project's full set of
- * relevant .ts/.tsx sources — the server→client leak check needs sibling
- * files to resolve which imported components are Client Components.
- *
- * `framework` (from src/scan/framework-detect.ts) gates the whole pass: on a Vite/SPA target the
- * App-Router surface does not exist, so M9 is suppressed to a single N/A coverage note (#575).
- * Omitted (tests/legacy callers) or `next`/`other` → run the full pass as before.
- */
-export function detectAppRouterFindings(files: SourceInput[], framework?: TargetFramework): Finding[] {
-  let n = 0;
-  const nextId: NextId = () => `M9-${String(++n).padStart(2, "0")}`;
-
-  if (framework === "vite") return [nonSsrSpaCoverageNote(nextId, framework)];
-
+function runAppRouterPass(files: SourceInput[], nextId: NextId): Finding[] {
   const sources = new Map(files.map((f) => [f.path, parse(f.path, f.text)]));
   const pagesRouterOnly = isPagesRouterOnly(files);
   const aliases = collectPathAliases(files);
@@ -1043,4 +1030,42 @@ export function detectAppRouterFindings(files: SourceInput[], framework?: Target
     ...detectAccidentalDynamicRendering(sources, nextId),
     ...detectSsrBrowserApiMisuse(sources, nextId),
   ];
+}
+
+// --- Orchestrator ------------------------------------------------------------
+
+/**
+ * Runs all M9 App Router checks over the given source set and returns
+ * Finding[] (src/findings.ts). `files` should be a project's full set of
+ * relevant .ts/.tsx sources — the server→client leak check needs sibling
+ * files to resolve which imported components are Client Components.
+ *
+ * `framework` (from src/scan/framework-detect.ts) gates the whole pass: on a Vite/SPA target the
+ * App-Router surface does not exist, so M9 is suppressed to a single N/A coverage note (#575).
+ * Omitted (tests/legacy callers) or `next`/`other` → run the full pass as before.
+ *
+ * `viteWorkspaceDirs` (workspace-relative dirs, e.g. `["apps/web"]`) makes the gate monorepo-aware
+ * (#597): at a monorepo root the root's own verdict is `other` (vite.config lives in the app dir),
+ * so the whole-target `vite` short-circuit never fires and the SSR family false-fires on the Vite
+ * app's files. Files under any of these prefixes are suppressed (one N/A note per Vite workspace),
+ * and the full pass runs over the remaining files — a genuine Next workspace in the same monorepo
+ * is unaffected. Empty (single-app targets, tests) → behaves exactly as before.
+ */
+export function detectAppRouterFindings(
+  files: SourceInput[],
+  framework?: TargetFramework,
+  viteWorkspaceDirs: string[] = [],
+): Finding[] {
+  let n = 0;
+  const nextId: NextId = () => `M9-${String(++n).padStart(2, "0")}`;
+
+  if (framework === "vite") return [nonSsrSpaCoverageNote(nextId, framework, "(whole target)")];
+
+  const underVite = (p: string) => viteWorkspaceDirs.some((w) => p === w || p.startsWith(`${w}/`));
+  const notes = viteWorkspaceDirs
+    .filter((w) => files.some((f) => f.path === w || f.path.startsWith(`${w}/`)))
+    .map((w) => nonSsrSpaCoverageNote(nextId, "vite", w));
+  const scoped = notes.length ? files.filter((f) => !underVite(f.path)) : files;
+
+  return [...notes, ...runAppRouterPass(scoped, nextId)];
 }
