@@ -337,6 +337,42 @@ rules:
           - pattern: $C.from($T).update($BODY)
           - pattern: $C.from($T).insert($BODY)
 
+  # #614: a privilege/role decision is taken directly from a client-supplied request field. A plain
+  # Express (or any HTTP) handler reads `req.body.isAdmin` / `req.body.role` / `req.query.*` and uses
+  # it as an authorization gate or persists it — the client names its own privilege level (privilege
+  # escalation, OWASP A01/API1). The role must come from the verified session (`session.user.role`),
+  # never the request. Gated on BOTH the source root being an HTTP request (`req`/`request`, not an
+  # arbitrary object — the #614 "non-Express req" precision concern) AND the field being an
+  # unambiguous privilege flag, so a benign body field (`req.body.title`) or a session-derived flag
+  # stays dark. Review tier (WARNING/MEDIUM): reading such a field usually IS the bug, but a handler
+  # that reads it only to reject it is a benign shape a single-file rule can't tell apart, so it is
+  # surfaced for triage rather than counted as high-precision. `role` is included despite being the
+  # softest of the set (an admin-set invite can legitimately carry it) precisely because review tier
+  # absorbs that ambiguity without touching the free count.
+  - id: harvey-client-trusted-role
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      A privilege/role value is read directly from a client-supplied request field
+      (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can
+      escalate their own privileges by adding the field to the request. Derive role/admin status
+      from the verified session, never from the request.
+    patterns:
+      - pattern-either:
+          - pattern: $REQ.body.$FLAG
+          - pattern: $REQ.query.$FLAG
+          - pattern: $REQ.params.$FLAG
+      - metavariable-regex:
+          metavariable: $REQ
+          regex: ^(req|request)$
+      - metavariable-regex:
+          metavariable: $FLAG
+          regex: (?i)^(is_?admin|is_?superuser|is_?root|is_?owner|admin|superuser|role)$
+
   # A full DB row (select('*')) is spread directly into a rendered component's props. In a Server
   # Component (no "use client" in this file), every column on that row serializes across the
   # Server -> Client Component boundary in the RSC payload, whether or not the target component
