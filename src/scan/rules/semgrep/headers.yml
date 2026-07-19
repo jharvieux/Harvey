@@ -52,6 +52,35 @@ rules:
               ...
               $RES.setHeader("Access-Control-Allow-Credentials", "true")
 
+  # #601 (CX-17): the OBJECT-LITERAL reflected-origin variant. The App Router idiom builds a headers
+  # map — `{ "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true" }`
+  # (origin = request.headers.get("origin")) — and returns it via new NextResponse(body, { headers }),
+  # instead of the imperative res.headers.set() the rule above matches. Taint from the request origin
+  # to the object field, gated on Allow-Credentials: "true" in the SAME literal, is the same
+  # ~100%-precision reflected+credentials combo → high. A hardcoded allowlisted origin string is not
+  # tainted, so it never reaches the sink (N-CORS-OBJLIT-REFLECTED-SAFE).
+  - id: harvey-cors-reflected-origin-object
+    languages: [javascript, typescript]
+    mode: taint
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      An object-literal CORS headers map reflects the request's Origin header verbatim into
+      Access-Control-Allow-Origin, combined with Access-Control-Allow-Credentials: "true". Any
+      origin can read the response with the victim's cookies attached. Validate Origin against an
+      allowlist before echoing it back.
+    pattern-sources:
+      - pattern: $REQ.headers.get("origin")
+      - pattern: $REQ.headers.get("Origin")
+      - pattern: $REQ.headers.origin
+    pattern-sinks:
+      - patterns:
+          - pattern: '{ ..., "Access-Control-Allow-Origin": $O, ..., "Access-Control-Allow-Credentials": "true", ... }'
+          - focus-metavariable: $O
+
   # CSP present but weakened with 'unsafe-inline'/'unsafe-eval' in script-src — defeats the
   # policy's main XSS mitigation (inline/eval'd script runs regardless of the policy). Review —
   # some apps genuinely need unsafe-inline for a third-party widget and accept the trade-off.

@@ -60,8 +60,8 @@ describe("#493: harvey-* rule metadata.owasp matches OWASP's official 2021 CWE-t
   const files = readdirSync(RULES_DIR).filter((f) => f.endsWith(".yml"));
   const rulesWithCwe = files.flatMap(parseRuleMetadata).filter((r) => r.cwe && r.cwe.length > 0);
 
-  it("found the 18 harvey-* rules carrying cwe metadata (guards against silently losing coverage)", () => {
-    expect(rulesWithCwe.length).toBe(18);
+  it("found the 19 harvey-* rules carrying cwe metadata (guards against silently losing coverage)", () => {
+    expect(rulesWithCwe.length).toBe(19);
   });
 
   it.each(rulesWithCwe.map((r): [string, RuleMeta] => [r.id, r]))("%s: owasp category matches OWASP's official mapping for its cwe", (_id, rule) => {
