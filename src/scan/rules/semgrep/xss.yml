@@ -110,6 +110,44 @@ rules:
               - pattern: "<$EL dangerouslySetInnerHTML={{ __html: $VAL }}>...</$EL>"
           - focus-metavariable: $VAL
 
+  # #613 (vibe-dummy stage-06/10): a prop/param/identifier value reaches dangerouslySetInnerHTML with
+  # no sanitizer. The stored rule above keys its source on a Supabase select; the base reflected rule
+  # keys on request sources. Neither matches the very common React shape where the tainted HTML arrives
+  # as a component PROP or function parameter — `<div dangerouslySetInnerHTML={{ __html: user.bio }} />`,
+  # `__html: html`, `__html: inquiry.messageHtml`. This is a non-taint structural rule: $VAL is any
+  # NON-literal, NON-sanitized expression (a string literal — including a propagated const like
+  # STATIC_BIO — and a DOMPurify.sanitize/sanitizeHtml/sanitize/escapeHtml wrap are excluded via
+  # metavariable-pattern). Review tier (MEDIUM): a static rule can't prove the value was sanitized
+  # upstream, so it is surfaced, not free-counted — safe JSX text interpolation ({user.bio}) is not a
+  # dangerouslySetInnerHTML sink and never matches, which is what keeps this precise.
+  - id: harvey-dangerously-set-inner-html-prop
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+      cwe: ["CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"]
+      owasp: ["A03:2021 - Injection"]
+    message: >
+      A prop/parameter/identifier value reaches dangerouslySetInnerHTML with no sanitizer. If any of
+      the data on this path is user-controlled (a bio, a comment, markdown, an AI-generated string),
+      this is stored/reflected XSS. Sanitize with DOMPurify.sanitize before it reaches __html, or
+      render the value as text.
+    patterns:
+      - pattern-either:
+          - pattern: "<$EL dangerouslySetInnerHTML={{ __html: $VAL }} />"
+          - pattern: "<$EL dangerouslySetInnerHTML={{ __html: $VAL }}>...</$EL>"
+      - metavariable-pattern:
+          metavariable: $VAL
+          patterns:
+            - pattern-not: '"..."'
+            - pattern-not: DOMPurify.sanitize(...)
+            - pattern-not: sanitizeHtml(...)
+            - pattern-not: sanitize(...)
+            - pattern-not: escapeHtml(...)
+      - focus-metavariable: $VAL
+
   # javascript: URL XSS via a native <a href>. Review — a static rule can't see whether a scheme
   # allowlist runs elsewhere before render; the sink is scoped to a plain <a>, not next/link's
   # <Link> (an internal-route string on <Link> is a different element and not a scheme sink).
