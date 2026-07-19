@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Session Sync Helper (scoped)",
+  "version": "1.0.0",
+  "description": "TRUE NEGATIVE (N-WEBEXT-SCOPED-HOST, #625): cookies capability but host scoped to one origin.",
+  "host_permissions": ["https://app.example.com/*"],
+  "permissions": ["cookies", "storage"]
+}

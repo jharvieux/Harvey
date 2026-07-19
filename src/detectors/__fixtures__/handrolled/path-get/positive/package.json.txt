@@ -1,0 +1,7 @@
+{
+  "name": "path-get-positive",
+  "dependencies": {
+    "react": "^18.3.0",
+    "lodash": "^4.17.21"
+  }
+}

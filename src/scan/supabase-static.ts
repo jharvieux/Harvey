@@ -26,8 +26,15 @@ import { isUsingTrueGated, policyReviewFindings, type LivePolicy, type TenancyMo
 import { reviewFinding } from "../review-tier.js";
 import { mechanicalFinding } from "./common.js";
 
-const CREATE_TABLE = /create\s+table\s+(?:if\s+not\s+exists\s+)?public\.([a-z0-9_]+)/gi;
-const ENABLE_RLS = /alter\s+table\s+(?:only\s+)?public\.([a-z0-9_]+)\s+enable\s+row\s+level\s+security/gi;
+// #611 — the schema qualifier is OPTIONAL. A no-code Table-Editor export (Lovable/Bolt/v0) emits
+// bare `create table workspaces` — public is the implicit default schema — so requiring the literal
+// `public.` enumerated zero tables and every RLS-off table in the export stayed invisible. The
+// optional first group captures an EXPLICIT schema so the loop can keep only public-schema tables
+// (a `create table private.secrets` is not PostgREST-exposed and must not be flagged); a bare name
+// has no schema group and defaults to public. ENABLE_RLS is broadened symmetrically so a bare
+// `alter table workspaces enable row level security` still clears the bare create.
+const CREATE_TABLE = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:([a-z0-9_]+)\.)?([a-z0-9_]+)/gi;
+const ENABLE_RLS = /alter\s+table\s+(?:only\s+)?(?:([a-z0-9_]+)\.)?([a-z0-9_]+)\s+enable\s+row\s+level\s+security/gi;
 
 interface CreatedTable {
   name: string;
@@ -65,13 +72,17 @@ export function checkMigrationRlsStatic(dir: string): Finding[] {
     // stable by blanking rather than deleting, so the create-site line number stays accurate.
     const sql = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/--[^\n]*/g, "");
     for (const m of sql.matchAll(CREATE_TABLE)) {
-      const name = m[1]!.toLowerCase();
+      if ((m[1] ?? "public").toLowerCase() !== "public") continue;
+      const name = m[2]!.toLowerCase();
       if (!created.has(name)) {
         const line = sql.slice(0, m.index).split("\n").length;
         created.set(name, { name, file: rel, line });
       }
     }
-    for (const m of sql.matchAll(ENABLE_RLS)) enabled.add(m[1]!.toLowerCase());
+    for (const m of sql.matchAll(ENABLE_RLS)) {
+      if ((m[1] ?? "public").toLowerCase() !== "public") continue;
+      enabled.add(m[2]!.toLowerCase());
+    }
   }
 
   return [...created.values()]
@@ -412,6 +423,149 @@ export function checkMigrationDefinerAuthz(dir: string): Finding[] {
       const at = sql.toLowerCase().indexOf(`function ${f.location.toLowerCase()}`);
       const line = at >= 0 ? sql.slice(0, at).split("\n").length : 1;
       findings.push({ ...f, id: `SB-DEFINER-AUTHZ-${signature}`, location: `${file}:${line} (${signature})` });
+    }
+  }
+  return findings;
+}
+
+// #602 (cipherx CX-12) — plpgsql dynamic-SQL injection over committed migration SQL. A function body
+// that builds a query with `EXECUTE` and CONCATENATES a declared parameter (`|| p_query ||`) or
+// interpolates one with format()'s `%s` placeholder is classic CWE-89: the parameter is spliced into
+// the SQL text unescaped. The safe forms — quote_literal()/quote_ident() around the param, or
+// format() with `%L` (literal) / `%I` (identifier) — are explicitly cleared. Runs over ALL functions,
+// not just SECURITY DEFINER (a plain function is injectable too), but a DEFINER function is called out
+// as higher-impact (it runs as the owner, bypassing RLS). Review tier: static text shows the concat
+// shape; whether the param is genuinely attacker-reachable is confirmed at the connected/semantic tier.
+const CREATE_FUNCTION = /create\s+(?:or\s+replace\s+)?function\s+(?:(\w+)\.)?(\w+)\s*\(([^)]*)\)([\s\S]*?)as\s+\$(\w*)\$([\s\S]*?)\$\5\$/gi;
+const EXECUTE_KW = /\bexecute\b/i;
+
+function functionArgNames(argsRaw: string): string[] {
+  return argsRaw
+    .split(",")
+    .map((a) => a.trim())
+    .filter(Boolean)
+    // drop a leading arg-mode keyword (in/out/inout/variadic) so `in p_query text` yields `p_query`.
+    .map((a) => a.replace(/^(in|out|inout|variadic)\s+/i, "").split(/\s+/)[0]!)
+    .filter((n) => /^[a-z_][a-z0-9_]*$/i.test(n));
+}
+
+// The QUERY-STRING part of each `EXECUTE` — the text from the `execute` keyword up to the bound-
+// parameter clause (`USING`/`INTO`) or the statement end. Scoping to this range is what keeps the
+// SAFE parameterized form clear: `EXECUTE '… where x = $1' USING '%' || p || '%'` concatenates the
+// param into the USING *value* (bound, not spliced into SQL text), which lands AFTER `using` and so
+// is excluded — only a concat inside the query string itself is injection.
+function executeQueryStrings(body: string): string[] {
+  const out: string[] = [];
+  const re = /\bexecute\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    const rest = body.slice(m.index + m[0].length);
+    const end = rest.search(/\b(using|into)\b|;/i);
+    out.push(end >= 0 ? rest.slice(0, end) : rest);
+  }
+  return out;
+}
+
+// A parameter concatenated raw into an EXECUTE query string — `|| p` or `p ||` — not wrapped in a
+// safe escaper (quote_literal/quote_ident). Also the format() `%s` interpolation of the param
+// (unsafe for SQL; %L/%I are the safe placeholders).
+function unsafeDynamicParam(queryStrings: string[], param: string): boolean {
+  const p = param.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return queryStrings.some((q) => {
+    if (new RegExp(`quote_(literal|ident)\\s*\\(\\s*${p}\\b`, "i").test(q)) return false;
+    const concatenated = new RegExp(`\\|\\|\\s*${p}\\b`, "i").test(q) || new RegExp(`\\b${p}\\s*\\|\\|`, "i").test(q);
+    const formatUnsafe = /\bformat\s*\(/i.test(q) && /%s/.test(q) && new RegExp(`\\b${p}\\b`, "i").test(q) && !/%[LI]/.test(q);
+    return concatenated || formatUnsafe;
+  });
+}
+
+export function checkMigrationDynamicSqlInjection(dir: string): Finding[] {
+  const findings: Finding[] = [];
+  for (const { file, sql } of readMigrations(dir)) {
+    const clean = sql.replace(/--[^\n]*/g, "");
+    for (const m of clean.matchAll(CREATE_FUNCTION)) {
+      const schema = m[1] ?? "public";
+      const name = m[2]!;
+      const decl = m[4] ?? "";
+      const body = m[6] ?? "";
+      if (!EXECUTE_KW.test(body)) continue;
+      const params = functionArgNames(m[3]!);
+      const queryStrings = executeQueryStrings(body);
+      const injected = params.filter((p) => unsafeDynamicParam(queryStrings, p));
+      if (injected.length === 0) continue;
+      const isDefiner = /security\s+definer/i.test(decl);
+      const at = clean.toLowerCase().indexOf(`function ${schema.toLowerCase()}.${name.toLowerCase()}`);
+      const line = at >= 0 ? clean.slice(0, at).split("\n").length : 1;
+      findings.push(
+        mechanicalFinding({
+          id: `SB-PLPGSQL-SQLI-${schema}.${name}`,
+          title: `Function ${schema}.${name} builds dynamic SQL by concatenating a parameter (SQL injection)`,
+          severity: "Critical",
+          category: "Injection",
+          taxonomy: "plpgsql dynamic SQL injection (static)",
+          location: `${file}:${line} (${schema}.${name})`,
+          evidence: `EXECUTE in ${schema}.${name} splices the parameter(s) ${injected.join(", ")} into the dynamic query by string concatenation (|| / format %s) with no quote_literal/quote_ident/%L/%I escaping${isDefiner ? " — and the function is SECURITY DEFINER, so the injected query runs as the owner, bypassing RLS" : ""}. CWE-89.`,
+          impact: "A caller controls the SQL text: they can read, modify, or drop any data the function's role can reach (for a SECURITY DEFINER function, that is the table owner's full access, bypassing RLS).",
+          fix: "Never concatenate a parameter into EXECUTE. Use parameterized dynamic SQL (`EXECUTE '… where col = $1' USING p`), or quote_literal()/quote_ident() / format() with %L/%I for identifiers and literals.",
+          precisionTier: "review",
+          bftb: { value: 5, ease: 3, safety: 4 },
+        }),
+      );
+    }
+  }
+  return findings;
+}
+
+// #602 (cipherx CX-11) — a SECURITY DEFINER function EXPLICITLY `grant execute … to anon`/`to public`
+// that returns/reads data with no caller-authorization check. checkMigrationDefinerAuthz only flags
+// privileged WRITES (needsAuthzReview), so a definer function that merely DUMPS data (get_user_by_email,
+// search_lab_data, export_demo_secrets) reachable by the UNAUTHENTICATED anon role fell through. An
+// explicit anon grant is a stronger signal than the PUBLIC-default inference: the app deliberately
+// exposed a bypass-RLS reader to anon. Scoped to anon/public (an `authenticated` grant is normal for a
+// user-facing RPC), to data-returning functions (not triggers/void), and to functions with no
+// auth.uid()/auth.jwt() caller check — so a legitimately anon-scoped reader that checks its caller is
+// cleared, and the write case stays with the authz pass (no double-report). Review tier.
+const DEFINER_CALLER_AUTH = /auth\.(uid|jwt)\s*\(\)/i;
+const PRIVILEGED_WRITE_BODY = /\b(update|insert\s+into|delete\s+from|grant)\b/i;
+const RETURNS_DATA = /returns\s+(setof|table|record)\b/i;
+
+function grantedToAnon(sql: string, name: string): boolean {
+  const grant = new RegExp(`grant\\s+execute\\s+on\\s+function\\s+[\\w.]*\\b${name}\\s*\\([^)]*\\)\\s*to\\s+([^;]+);`, "i").exec(sql);
+  return grant !== null && /\b(anon|public)\b/i.test(grant[1]!);
+}
+
+export function checkMigrationDefinerAnonGrant(dir: string): Finding[] {
+  const findings: Finding[] = [];
+  for (const { file, sql } of readMigrations(dir)) {
+    for (const fn of parseDefinerFunctions(sql)) {
+      if (!grantedToAnon(sql, fn.name)) continue;
+      // The write case is the authz pass's job; here we surface the READ/dump case it misses.
+      if (PRIVILEGED_WRITE_BODY.test(fn.body)) continue;
+      // A definer reader that checks its caller (auth.uid()/auth.jwt()) can be legitimately anon-scoped.
+      if (DEFINER_CALLER_AUTH.test(fn.body)) continue;
+      // Only a data-returning function is a dump risk — the function's signature (before `as $$`) must
+      // declare it returns rows. The full declaration text precedes the body in the SQL.
+      const declStart = sql.toLowerCase().indexOf(`function ${fn.schema.toLowerCase()}.${fn.name.toLowerCase()}`);
+      const decl = declStart >= 0 ? sql.slice(declStart, sql.indexOf(fn.body, declStart)) : "";
+      if (!RETURNS_DATA.test(decl) && !/\breturn\s+query\b/i.test(fn.body) && !/\bselect\b/i.test(fn.body)) continue;
+      const at = sql.toLowerCase().indexOf(`function ${fn.schema.toLowerCase()}.${fn.name.toLowerCase()}`);
+      const line = at >= 0 ? sql.slice(0, at).split("\n").length : 1;
+      const signature = `${fn.schema}.${fn.name}(${fn.argNames.join(", ")})`;
+      findings.push(
+        mechanicalFinding({
+          id: `SB-DEFINER-ANON-GRANT-${signature}`,
+          title: `SECURITY DEFINER ${fn.schema}.${fn.name} is granted to anon and reads data with no caller check`,
+          severity: "High",
+          category: "Multi-tenant security",
+          taxonomy: "SECURITY DEFINER granted to anon (static)",
+          location: `${file}:${line} (${signature})`,
+          evidence: `${fn.schema}.${fn.name} is SECURITY DEFINER (runs as owner, bypasses RLS), returns/reads data, has no auth.uid()/auth.jwt() caller check, and is EXPLICITLY granted execute to the anon/public role. An unauthenticated caller can invoke it to enumerate or dump data across every tenant.`,
+          impact: "A SECURITY DEFINER reader reachable by anon runs with the owner's privileges and no RLS — anyone holding the anon key can dump or enumerate the data it returns for any tenant.",
+          fix: "REVOKE EXECUTE … FROM anon (and public), or add a caller-authorization check (auth.uid()/role/tenant) inside the function before it returns data. Grant only to the specific authenticated role that needs it, if any.",
+          precisionTier: "review",
+          bftb: { value: 5, ease: 4, safety: 4 },
+        }),
+      );
     }
   }
   return findings;

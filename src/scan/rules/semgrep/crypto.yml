@@ -282,6 +282,36 @@ rules:
           - pattern: "jwt.verify($T, $K, { ..., ignoreExpiration: true, ... })"
           - pattern: "jsonwebtoken.verify($T, $K, { ..., ignoreExpiration: true, ... })"
 
+  # #595 (SuperRedHat F-09): jwt.sign() with NO expiry. The 2-argument form has no options object at
+  # all, so no `expiresIn`; the 3-argument INLINE-object form is flagged only when the options literal
+  # has no `expiresIn` key (pattern-not). A variable options argument is NOT flagged — this rule can't
+  # see whether expiresIn lives inside it, so it stays out to preserve precision. Review tier: a token
+  # with no expiry is a real weakness (it can't be revoked by time), but a deliberately long-lived
+  # token is a legitimate design choice, so it is surfaced, not free-counted. harvey-jwt-verify-noalg
+  # is the verify-side (unpinned alg); this is the sign-side companion (missing expiry) of the same F-09.
+  - id: harvey-jwt-sign-noexpiry
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      jwt.sign() is called with no `expiresIn` — the token never expires, so a leaked or stolen
+      token is valid forever and cannot be revoked by time. Pass { expiresIn: '<duration>' } (and
+      verify with a matching maxAge), unless this token is intentionally long-lived with its own
+      revocation path.
+    patterns:
+      - pattern-either:
+          - pattern: jwt.sign($P, $S)
+          - pattern: jsonwebtoken.sign($P, $S)
+          - patterns:
+              - pattern: jwt.sign($P, $S, { ... })
+              - pattern-not: "jwt.sign($P, $S, { ..., expiresIn: $E, ... })"
+          - patterns:
+              - pattern: jsonwebtoken.sign($P, $S, { ... })
+              - pattern-not: "jsonwebtoken.sign($P, $S, { ..., expiresIn: $E, ... })"
+
   # Plaintext WebSocket URL (ws://): the connection — session token and all messages — travels
   # unencrypted, open to on-path interception/tampering. The scheme literal is anchored to ws:// so
   # the secure wss:// scheme does not match → high.

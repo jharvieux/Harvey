@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "Session Sync Helper",
+  "version": "1.0.0",
+  "description": "PLANTED BUG (P-WEBEXT-OVERBROAD, #625): host_permissions https://*/* + cookies = auth-cookie read on every site.",
+  "host_permissions": ["https://*/*"],
+  "permissions": ["cookies", "storage"],
+  "action": { "default_title": "Sync" }
+}
