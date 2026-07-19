@@ -211,6 +211,29 @@ describe("Vite env coercion (dep-gated on a schema-validation library, #628)", (
   });
 });
 
+describe("hand-rolled route guard (dep-gated on react-router, #628)", () => {
+  const TAX = "M6 — Indicator: hand-rolled route guard";
+  const ROUTER_LIBS = ["react-router", "react-router-dom"];
+
+  it("catches the children- and Outlet-gating guard forks when react-router is in the tree", () => {
+    const hits = byTaxonomy("router-guard/positive", TAX);
+    expect(hits).toHaveLength(2);
+    expect(hits.every((h) => h.location.startsWith("Guards.tsx:"))).toBe(true);
+  });
+
+  it("stays silent when no react-router is in the tree — a local <Navigate> is not this idiom", () => {
+    const files = loadFixtureDir("router-guard/negative-no-dep");
+    expect(depGatePresent(files, ROUTER_LIBS)).toBe(false);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+
+  it("stays silent on a redirect-only page and a plain Outlet layout even with the gate open — only the redirect+children fork is the shape", () => {
+    const files = loadFixtureDir("router-guard/negative-with-dep");
+    expect(depGatePresent(files, ROUTER_LIBS)).toBe(true);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+});
+
 // The generic dep-gate every future dep-gated class reuses (#406). The class-merge suite above
 // covers the fixture-set path end-to-end; these lock the generic semantics directly.
 describe("depGatePresent (generic dep-gate)", () => {
@@ -327,6 +350,7 @@ describe("free-tier language lock (#267 operator ruling)", () => {
     ...detectHandrolledFindings(loadFixtureDir("path-get/positive")),
     ...detectHandrolledFindings(loadFixtureDir("env-json/positive")),
     ...detectHandrolledFindings(loadFixtureDir("vite-env/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("router-guard/positive")),
   ];
   const REPLACEMENT_NAMES =
     /structuredClone|isDeepStrictEqual|fast-deep-equal|deep-equal|URLSearchParams|useSearchParams|next\/headers|cookies\(\)|cookie-parse|randomUUID|getRandomValues|nanoid|\buuid\b|clsx|tailwind-merge|\bclassnames\b|lodash|date-fns|dayjs|luxon|\bmoment\b|\bIntl\b|toLocale(?:Date|Time)?String|DateTimeFormat|NumberFormat|\bmime\b|\bzod\b|\bjose\b|padStart|base64url|fromBase64|should be replaced/i;
