@@ -427,6 +427,14 @@ rules:
   # privileged surface). The pattern-not-regex clears any handler that references a role/authz gate
   # (a `.role` read, is_admin, requireRole/assertAdmin/authorize/permission, a 403/forbidden
   # response). Review tier / High severity — same negative-precision caveat as the rest of this file.
+  # #586: the "authenticated" signal is auth-MECHANISM-neutral. #561 only recognized Supabase
+  # getUser/getSession, so a CUSTOM-JWT-authenticated admin route (SuperRedHat F-04,
+  # app/api/admin/users: `jwt.verify(token, secret)` then returns every user with no role gate) never
+  # registered as authenticated and was MISSED. The pattern-either below now also fires on a custom
+  # verify — a `$X.verify(...)` method call (jwt.verify / jsonwebtoken) or a bare auth-helper call
+  # (jwtVerify/verifyToken/verifySession/verifyJwt/requireAuth/decodeToken, jose/next-auth/Clerk/Lucia
+  # session shapes) — so an admin/privileged handler reached after ANY auth establishment with no
+  # subsequent role comparison fires, regardless of mechanism. Kept path-scoped for precision.
   - id: harvey-authed-no-role-check
     languages: [javascript, typescript]
     severity: WARNING
@@ -440,10 +448,11 @@ rules:
         - "*internal*"
         - "*privileged*"
     message: >
-      This admin/privileged route reads the session (getUser/getSession) but performs no
-      role/permission check before returning privileged data — broken function-level authorization
-      (OWASP API5). It correctly rejects anonymous callers, but any authenticated lower-privilege
-      user (e.g. a member) reaches it. Add a server-side role/permission gate after authenticating.
+      This admin/privileged route establishes a session (Supabase getUser/getSession or a custom
+      jwt.verify/verifyToken/requireAuth) but performs no role/permission check before returning
+      privileged data — broken function-level authorization (OWASP API5). It correctly rejects
+      anonymous callers, but any authenticated lower-privilege user (e.g. a member) reaches it. Add
+      a server-side role/permission gate after authenticating.
     patterns:
       - pattern: |
           export async function $M($REQ) {
@@ -477,4 +486,24 @@ rules:
                 $S.auth.getSession(...)
                 ...
               }
+          # #586 — custom-JWT / non-Supabase auth establishment: a `$X.verify(...)` method call
+          # (jwt.verify / jsonwebtoken) inside the handler.
+          - pattern-inside: |
+              export async function $M($REQ) {
+                ...
+                $V.verify(...)
+                ...
+              }
+          # #586 — a bare auth-helper call (jose jwtVerify, verifyToken/verifySession/verifyJwt/
+          # requireAuth/decodeToken helpers) inside the handler.
+          - patterns:
+              - pattern-inside: |
+                  export async function $M($REQ) {
+                    ...
+                    $AUTHFN(...)
+                    ...
+                  }
+              - metavariable-regex:
+                  metavariable: $AUTHFN
+                  regex: ^(jwtVerify|verifyJwt|verifyJWT|verifyToken|verifyAccessToken|verifySession|verifyAuth|requireAuth|decodeToken)$
       - pattern-not-regex: (?i)(is_?admin|hasrole|requirerole|checkrole|assertrole|assertadmin|requireadmin|ensureadmin|\bauthorize|\.role\b|permission|forbidden|\b403\b)
