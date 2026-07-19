@@ -25,6 +25,7 @@ import { parseDefinerFunctions, parsePolicies } from "../migration-sql-parse.js"
 import { isUsingTrueGated, policyReviewFindings, type LivePolicy, type TenancyModel } from "../rls-policy-review.js";
 import { reviewFinding } from "../review-tier.js";
 import { mechanicalFinding } from "./common.js";
+import { gateOnAuthMethod, type AuthMethods } from "./supabase-config.js";
 
 // #611 — the schema qualifier is OPTIONAL. A no-code Table-Editor export (Lovable/Bolt/v0) emits
 // bare `create table workspaces` — public is the implicit default schema — so requiring the literal
@@ -690,7 +691,7 @@ const ENABLE_CONFIRMATIONS_FALSE = /^\s*enable_confirmations\s*=\s*false\b/i;
 // only under [auth.email], so the [auth.sms]/[auth.mfa] siblings (where these keys are normal and
 // carry different meaning) are not flagged. Review tier: whether open signup / no-confirm is a defect
 // depends on product intent (a deliberately frictionless-signup product is legitimate) — confirm.
-export function checkOpenSignupConfig(dir: string): Finding[] {
+export function checkOpenSignupConfig(dir: string, authMethods?: AuthMethods): Finding[] {
   const configPath = join(dir, "supabase", "config.toml");
   if (!existsSync(configPath)) return [];
 
@@ -721,21 +722,76 @@ export function checkOpenSignupConfig(dir: string): Finding[] {
       );
     }
     if (section === "auth.email" && ENABLE_CONFIRMATIONS_FALSE.test(line)) {
-      findings.push(
-        mechanicalFinding({
-          id: "SB-EMAIL-CONFIRM-OFF",
-          title: "Email confirmation disabled ([auth.email] enable_confirmations = false)",
-          severity: "Medium",
-          category: "Supabase config",
-          taxonomy: "Email confirmation disabled",
-          location: `supabase/config.toml:${i + 1}`,
-          evidence: `[auth.email] sets enable_confirmations = false — accounts authenticate without proving ownership of the email address.`,
-          impact: "Signups are effectively auto-confirmed: an attacker can register accounts against emails they do not control (mass fake-account signup, account-takeover setups). The static twin of the live mailer_autoconfirm=true check.",
-          fix: "Set enable_confirmations = true so a signup must confirm the email before the account is usable.",
-          precisionTier: "review",
-        }),
-      );
+      // #671 — email confirmation only matters if the email provider is actually used. When the
+      // caller supplies inferred auth methods and the app is OAuth/OTP-only (email off), reframe this
+      // to a conditional note rather than an asserted Medium.
+      const input = {
+        id: "SB-EMAIL-CONFIRM-OFF",
+        title: "Email confirmation disabled ([auth.email] enable_confirmations = false)",
+        severity: "Medium" as const,
+        category: "Supabase config",
+        taxonomy: "Email confirmation disabled",
+        location: `supabase/config.toml:${i + 1}`,
+        evidence: `[auth.email] sets enable_confirmations = false — accounts authenticate without proving ownership of the email address.`,
+        impact: "Signups are effectively auto-confirmed: an attacker can register accounts against emails they do not control (mass fake-account signup, account-takeover setups). The static twin of the live mailer_autoconfirm=true check.",
+        fix: "Set enable_confirmations = true so a signup must confirm the email before the account is usable.",
+        precisionTier: "review" as const,
+      };
+      findings.push(mechanicalFinding(authMethods ? gateOnAuthMethod(input, "email authentication", authMethods.email) : input));
     }
   });
   return findings;
+}
+
+// #671 source tier — infer which auth methods a repo actually uses, for framing password/email/OTP-
+// specific advisories when there is no live Auth to query. Two evidence sources, ORed:
+//   - client auth-method calls in committed source: signInWithPassword / password signUp /
+//     resetPasswordForEmail / email signInWithOtp → email in use; phone signInWithOtp/verifyOtp →
+//     phone in use; signInWithOAuth/IdToken/SSO → OAuth (no password/email evidence on its own).
+//   - supabase/config.toml provider toggles: [auth.email] enable_signup = true → email configured;
+//     [auth.sms] enable_signup = true → phone; [auth.external.<x>] enabled = true → OAuth.
+// A method is `false` (→ conditional framing) only when there IS auth evidence but none for that
+// method (an OAuth/OTP-only app, the ATC shape); with no auth evidence at all it stays `undefined`.
+const AUTH_SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
+const AUTH_SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
+const EMAIL_CALL = /\bsignInWithPassword\b|\bresetPasswordForEmail\b|\bsignUp\s*\([^)]*password|\bsignInWithOtp\s*\(\s*\{[^}]*\bemail\b/i;
+const PHONE_CALL = /\bsignInWithOtp\s*\(\s*\{[^}]*\bphone\b|\bverifyOtp\s*\([^)]*\bphone\b/i;
+const OAUTH_CALL = /\bsignInWithOAuth\b|\bsignInWithIdToken\b|\bsignInWithSSO\b/i;
+
+function scanSourceAuthSignals(dir: string): { email: boolean; phone: boolean; oauth: boolean } {
+  const signals = { email: false, phone: false, oauth: false };
+  const walk = (d: string): void => {
+    for (const entry of readdirSync(d, { withFileTypes: true })) {
+      if (AUTH_SKIP_DIRS.has(entry.name)) continue;
+      const full = join(d, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (AUTH_SOURCE_EXT.test(entry.name)) {
+        const c = readFileSync(full, "utf8");
+        if (!signals.email) signals.email = EMAIL_CALL.test(c);
+        if (!signals.phone) signals.phone = PHONE_CALL.test(c);
+        if (!signals.oauth) signals.oauth = OAUTH_CALL.test(c);
+      }
+    }
+  };
+  if (existsSync(dir)) walk(dir);
+  return signals;
+}
+
+export function inferAuthMethodsFromSource(dir: string): AuthMethods {
+  const src = scanSourceAuthSignals(dir);
+
+  const configPath = join(dir, "supabase", "config.toml");
+  const toml = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
+  const emailConfig = /\[auth\.email\][\s\S]*?enable_signup\s*=\s*true/i.test(toml);
+  const phoneConfig = /\[auth\.sms\][\s\S]*?enable_signup\s*=\s*true/i.test(toml);
+  const oauthConfig = /\[auth\.external\.[a-z0-9_]+\][\s\S]*?enabled\s*=\s*true/i.test(toml);
+
+  const emailInUse = src.email || emailConfig;
+  const phoneInUse = src.phone || phoneConfig;
+  const anyEvidence = emailInUse || phoneInUse || src.oauth || oauthConfig;
+
+  return {
+    email: emailInUse ? true : anyEvidence ? false : undefined,
+    phone: phoneInUse ? true : anyEvidence ? false : undefined,
+  };
 }

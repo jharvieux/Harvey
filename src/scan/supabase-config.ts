@@ -63,28 +63,80 @@ export function checkAutoExposedTables(tables: TableInfo[]): Finding[] {
     );
 }
 
-// Field names below follow the commonly-documented Supabase Auth config keys
-// (mailer_autoconfirm, security_captcha_enabled, password_hibp_enabled, otp_expiry,
-// rate_limit_*, uri_allow_list). Not independently re-verified against a live
-// GET /v1/projects/{ref}/config/auth response in this session — confirm the exact field
-// names against that response before wiring to a real scan run, and adjust this interface
-// if any differ.
+// Field names below follow the Supabase Management API GET /v1/projects/{ref}/config/auth
+// response (GoTrueConfig). The provider-enablement flags (external_email_enabled /
+// external_phone_enabled) plus password_hibp_enabled / mailer_autoconfirm were confirmed against
+// the published OpenAPI spec (https://api.supabase.com/api/v1-json, 2026-07-19); the same two
+// enablement signals appear as external.email / external.phone in the anon-key GoTrue
+// /auth/v1/settings response (verified live 2026-07-19).
 export interface AuthConfig {
   mailer_autoconfirm?: boolean; // true = signups are auto-confirmed without email verification
   password_hibp_enabled?: boolean; // leaked-password (HaveIBeenPwned) protection
   otp_expiry?: number; // seconds
   uri_allow_list?: string; // comma-separated redirect/OAuth allowlist
   rate_limit_email_sent?: number;
+  // #671 — which auth methods this project has enabled. An auth-config advisor that only protects a
+  // specific method (leaked-password → password; email confirmation → email; OTP expiry → OTP) is a
+  // not-applicable false positive on a project that doesn't use that method (ATC was OAuth-only, so
+  // leaked-password protection had no password sign-up to protect).
+  external_email_enabled?: boolean; // email provider (password sign-in + email magic-link/OTP)
+  external_phone_enabled?: boolean; // phone provider (SMS OTP)
+}
+
+// #671 — tri-state enablement of an auth method: true = confirmed enabled, false = confirmed
+// disabled, undefined = could not confirm (a source-tier heuristic with no evidence, or a live
+// response that didn't carry the flag). Only a confirmed-enabled method keeps an asserted severity.
+export type AuthMethodState = boolean | undefined;
+
+export interface AuthMethods {
+  email: AuthMethodState; // email provider: password sign-in + email magic-link/OTP
+  phone: AuthMethodState; // phone provider: SMS OTP
+}
+
+// True if EITHER method is enabled; false only when BOTH are confirmed off; otherwise unconfirmed.
+export function eitherEnabled(a: AuthMethodState, b: AuthMethodState): AuthMethodState {
+  if (a === true || b === true) return true;
+  if (a === false && b === false) return false;
+  return undefined;
+}
+
+export function deriveAuthMethods(config: Pick<AuthConfig, "external_email_enabled" | "external_phone_enabled">): AuthMethods {
+  return { email: config.external_email_enabled, phone: config.external_phone_enabled };
+}
+
+type AuthAdvisorInput = Parameters<typeof mechanicalFinding>[0];
+
+// #671 — an auth-config advisor only applies when the auth method it protects is actually in use.
+// Confirmed-on → return the finding unchanged (asserted severity). Off OR unconfirmed → keep the
+// finding (fail-loud: still surfaced, same id/taxonomy so a re-audit still matches it) but reframe
+// it to an Info-tier conditional note, never an asserted Medium against an inapplicable method.
+export function gateOnAuthMethod(input: AuthAdvisorInput, methodLabel: string, state: AuthMethodState): AuthAdvisorInput {
+  if (state === true) return input;
+  const situation =
+    state === false
+      ? `${methodLabel} is not enabled on this project, so this is not currently applicable`
+      : `Harvey could not confirm whether ${methodLabel} is enabled for this engagement`;
+  return {
+    ...input,
+    severity: "Info",
+    confidence: "N/A",
+    title: `${input.title} — conditional (applies only if ${methodLabel} is enabled)`,
+    impact: `Only applies when ${methodLabel} is enabled: ${situation}. If it is enabled: ${input.impact} Re-assess if it is turned on.`,
+  };
 }
 
 const OTP_EXPIRY_WARN_SECONDS = 3600; // 1 hour — flag anything longer as worth a second look
 
-export function checkAuthConfig(config: AuthConfig): Finding[] {
+// #671 — authMethods gates the password/email/OTP-specific advisors below on whether that method is
+// actually in use. Defaults to what the config itself carries (external_email_enabled /
+// external_phone_enabled); the source tier passes an inferred value instead. The wildcard-redirect
+// advisor is NOT gated — a redirect allowlist protects every redirect-based flow, OAuth included.
+export function checkAuthConfig(config: AuthConfig, authMethods: AuthMethods = deriveAuthMethods(config)): Finding[] {
   const findings: Finding[] = [];
 
   if (config.mailer_autoconfirm === true) {
     findings.push(
-      mechanicalFinding({
+      mechanicalFinding(gateOnAuthMethod({
         id: "SB-AUTH-AUTOCONFIRM",
         title: "Email confirmation is disabled (auto-confirm on signup)",
         severity: "Medium",
@@ -95,13 +147,13 @@ export function checkAuthConfig(config: AuthConfig): Finding[] {
         impact: "Accounts can authenticate without proving ownership of the email address — enables mass fake-account signup and email-enumeration-free account takeover setups.",
         fix: "Disable auto-confirm unless deliberately building a frictionless-signup product with a compensating control.",
         precisionTier: "review",
-      }),
+      }, "email authentication", authMethods.email)),
     );
   }
 
   if (config.password_hibp_enabled === false) {
     findings.push(
-      mechanicalFinding({
+      mechanicalFinding(gateOnAuthMethod({
         id: "SB-AUTH-HIBP",
         title: "Leaked-password protection is disabled",
         severity: "Low",
@@ -112,13 +164,13 @@ export function checkAuthConfig(config: AuthConfig): Finding[] {
         impact: "Users can set passwords already known to be compromised in public breach corpora.",
         fix: "Enable leaked-password protection in the Auth config.",
         precisionTier: "review",
-      }),
+      }, "password authentication", authMethods.email)),
     );
   }
 
   if (typeof config.otp_expiry === "number" && config.otp_expiry > OTP_EXPIRY_WARN_SECONDS) {
     findings.push(
-      mechanicalFinding({
+      mechanicalFinding(gateOnAuthMethod({
         id: "SB-AUTH-OTP-EXPIRY",
         title: `OTP expiry is ${config.otp_expiry}s — longer than the ${OTP_EXPIRY_WARN_SECONDS}s baseline`,
         severity: "Low",
@@ -129,7 +181,7 @@ export function checkAuthConfig(config: AuthConfig): Finding[] {
         impact: "A longer-lived OTP widens the window for interception/replay.",
         fix: "Shorten OTP expiry unless there's a specific UX reason for the longer window.",
         precisionTier: "review",
-      }),
+      }, "email or SMS OTP", eitherEnabled(authMethods.email, authMethods.phone))),
     );
   }
 
