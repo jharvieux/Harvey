@@ -142,4 +142,40 @@ describe("classifyLeftoverAuth", () => {
   it("does not flag draftMode().enable() gated by a secret comparison", () => {
     expect(has(classifyLeftoverAuth({ path: "pages/api/preview/enable.js", content: "if (req.query.secret !== process.env.PREVIEW_SECRET) return; draftMode().enable();" }), DRAFTMODE)).toBe(false);
   });
+
+  // #568 — sensitive-route AUTH_HINT recognizes bare session-accessor wrappers.
+  const SENSITIVE = "Unauthenticated debug/admin route";
+  it("does not flag an admin route guarded by a bare getUser() wrapper", () => {
+    const findings = classifyLeftoverAuth({ path: "app/api/admin/revenue/route.ts", content: "export async function GET(req) { const user = await getUser(req); if (!user) return unauthorized(); return Response.json(await db.all()); }" });
+    expect(has(findings, SENSITIVE)).toBe(false);
+  });
+
+  it("still flags a sensitive route with no session read of any name", () => {
+    const findings = classifyLeftoverAuth({ path: "app/api/admin/revenue/route.ts", content: "export async function GET() { return Response.json(await db.all()); }" });
+    expect(has(findings, SENSITIVE)).toBe(true);
+  });
+
+  // #576 — client-trust-boundary: a role/privilege decision made in client code.
+  const CLIENT_AUTHZ = "Client-side authorization decision";
+  it("flags an admin gate read from Web Storage", () => {
+    expect(has(classifyLeftoverAuth({ path: "src/App.tsx", content: "const role = localStorage.getItem('role'); if (role === 'admin') return <Admin/>;" }), CLIENT_AUTHZ)).toBe(true);
+  });
+
+  it("flags a localStorage.role property compared to a privilege literal", () => {
+    expect(has(classifyLeftoverAuth({ path: "src/App.tsx", content: "if (localStorage.role === 'owner') { showOwnerTools(); }" }), CLIENT_AUTHZ)).toBe(true);
+  });
+
+  it("flags a client component gating navigation on a user-object role field", () => {
+    const content = "const navigate = useNavigate(); if (user.user_metadata.role !== 'admin') return null; navigate('/admin');";
+    expect(has(classifyLeftoverAuth({ path: "src/Route.tsx", content }), CLIENT_AUTHZ)).toBe(true);
+  });
+
+  it("does not flag a server-side role check (no client nav/render gate)", () => {
+    const content = "const { data: profile } = await admin.from('profiles').select('role').eq('id', user.id).single(); if (profile.role !== 'admin') return new Response('Forbidden', { status: 403 });";
+    expect(has(classifyLeftoverAuth({ path: "src/lib/requireAdmin.ts", content }), CLIENT_AUTHZ)).toBe(false);
+  });
+
+  it("does not flag a role read from a non-storage variable with no privilege comparison", () => {
+    expect(has(classifyLeftoverAuth({ path: "src/App.tsx", content: "const role = session.role; return <span>{role}</span>;" }), CLIENT_AUTHZ)).toBe(false);
+  });
 });

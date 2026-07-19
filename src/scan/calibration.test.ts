@@ -594,6 +594,10 @@ describe("Batch B14 app-logic heuristics corpus (real leftover-auth greps → ti
     { path: "lib/audit-login-safe.js", content: "export function auditLogin(email, success) { console.log(\"login attempt\", { email, success }); }" },
     { path: "pages/api/upload.js", content: "const buffer = Buffer.from(req.body); await admin.storage.from(\"uploads\").upload(req.query.name, buffer);" },
     { path: "pages/api/upload-safe.js", content: "const ALLOWED_MIME = [\"image/png\"]; const length = Number(req.headers[\"content-length\"]); if (!ALLOWED_MIME.includes(ct) || length > MAX) return; await admin.storage.from(\"uploads\").upload(req.query.name, buffer, { contentType: ct });" },
+    // #576 — client-trust-boundary: a role decision made in client code (Web Storage / user-object role).
+    { path: "src/components/AdminGateStorage.tsx", content: "const role = localStorage.getItem(\"role\"); if (role === \"admin\") { return <AdminControls />; } return <p>Members only</p>;" },
+    { path: "src/components/AdminGateUser.tsx", content: "const navigate = useNavigate(); if (user.user_metadata.role !== \"admin\") { return null; } navigate(\"/admin\");" },
+    { path: "src/lib/requireAdmin.ts", content: "const { data: profile } = await admin.from(\"profiles\").select(\"role\").eq(\"id\", user.id).single(); if (profile.role !== \"admin\") return new Response(\"Forbidden\", { status: 403 });" },
   ];
   const findings = fixtures.flatMap((f) => classifyLeftoverAuth(f));
 
@@ -606,12 +610,12 @@ describe("Batch B14 app-logic heuristics corpus (real leftover-auth greps → ti
     }
   });
 
-  it("promotes none of the app-logic heuristics to the free count (0 high, 5 review)", () => {
+  it("promotes none of the app-logic heuristics to the free count (0 high, 7 review)", () => {
     const m = buildCoverageMatrix(findings, b14AppLogicEntries);
     const positives = b14AppLogicEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
     expect(m.positivesCaughtHigh).toBe(0);
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(5);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(7);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });
