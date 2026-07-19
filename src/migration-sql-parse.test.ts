@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseAuthUserRefs, parseCheckConstraints, parseCheckInConstraints, parseColumns, parseDefinerFunctions, parsePolicies, parseRlsState, parseTableNames, parseUniqueColumns } from "./migration-sql-parse.js";
+import { parseArrayColumns, parseAuthUserRefs, parseDroppedColumns, parseLiveColumns, parseCheckConstraints, parseCheckInConstraints, parseColumns, parseDefinerFunctions, parseForeignKeys, parseLiveTableNames, parseNotNullColumns, parsePolicies, parseRlsState, parseTableNames, parseUniqueColumns } from "./migration-sql-parse.js";
 
 // Fixtures are the real calibration-target migrations (targets/calibration/supabase/migrations) —
 // this test asserts the parser extracts exactly what GROUND-TRUTH.md says is there, so a change
@@ -329,5 +329,89 @@ describe("parsePolicies", () => {
     expect(policies).toEqual([]);
     expect(unparsed).toHaveLength(1);
     expect(unparsed[0]).toMatchObject({ table: "t", name: "broken" });
+  });
+});
+
+describe("parseForeignKeys (#630 — generic FK columns → parent table)", () => {
+  it("parses an inline column-level nullable FK (ATC tenants.tier_id → tier_definitions)", () => {
+    const fks = parseForeignKeys(`
+      create table public.tenants (
+        id uuid primary key default gen_random_uuid(),
+        tier_id uuid references public.tier_definitions(id)
+      );`);
+    expect(fks).toEqual([{ table_name: "tenants", column_name: "tier_id", ref_schema: "public", ref_table: "tier_definitions" }]);
+  });
+
+  it("defaults the ref schema to public when the reference is unqualified", () => {
+    const fks = parseForeignKeys("create table t (\n  parent_id uuid references parents\n);");
+    expect(fks).toEqual([{ table_name: "t", column_name: "parent_id", ref_schema: "public", ref_table: "parents" }]);
+  });
+
+  it("parses a table-level FOREIGN KEY constraint", () => {
+    const fks = parseForeignKeys("create table t (\n  pid uuid,\n  foreign key (pid) references public.parents(id)\n);");
+    expect(fks).toEqual([{ table_name: "t", column_name: "pid", ref_schema: "public", ref_table: "parents" }]);
+  });
+
+  it("parses an ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY added after the table", () => {
+    const fks = parseForeignKeys("create table t (id uuid, pid uuid);\nalter table only public.t add constraint t_pid_fk foreign key (pid) references public.parents(id);");
+    expect(fks).toContainEqual({ table_name: "t", column_name: "pid", ref_schema: "public", ref_table: "parents" });
+  });
+
+  it("does not treat a table-level FOREIGN KEY line as an inline column named 'foreign'", () => {
+    const fks = parseForeignKeys("create table t (\n  pid uuid,\n  foreign key (pid) references parents\n);");
+    expect(fks.map((f) => f.column_name)).toEqual(["pid"]);
+  });
+});
+
+describe("parseNotNullColumns (#630 — nullability drives FK omission vs parent-seeding)", () => {
+  it("finds an inline NOT NULL column and omits a nullable one", () => {
+    const nn = parseNotNullColumns("create table t (\n  id uuid primary key,\n  a text not null,\n  b text,\n  c uuid not null references parents\n);");
+    const cols = nn.map((n) => n.column_name);
+    expect(cols).toContain("a");
+    expect(cols).toContain("c");
+    expect(cols).not.toContain("b");
+  });
+});
+
+describe("parseLiveTableNames (#640 — DROPped tables excluded, re-CREATE re-includes)", () => {
+  it("excludes a table that is created then dropped", () => {
+    const live = parseLiveTableNames("create table public.a (\n  id uuid\n);\ncreate table public.b (\n  id uuid\n);\ndrop table if exists public.b;");
+    expect(live.map((t) => t.table)).toEqual(["a"]);
+  });
+
+  it("keeps a table that is dropped then re-created (last event wins)", () => {
+    const live = parseLiveTableNames("create table public.email_log (\n  id uuid\n);\ndrop table if exists public.email_log;\ncreate table public.email_log (\n  id uuid,\n  tenant_id uuid\n);");
+    expect(live.map((t) => t.table)).toEqual(["email_log"]);
+  });
+});
+
+describe("parseArrayColumns (#641 — array columns need an array literal, not a scalar)", () => {
+  it("detects text[] and type ARRAY columns, not scalars", () => {
+    const arr = parseArrayColumns("create table t (\n  id uuid,\n  tags text[] not null,\n  scores integer array,\n  name text\n);");
+    const cols = arr.map((a) => a.column_name);
+    expect(cols).toEqual(["tags", "scores"]);
+  });
+});
+
+describe("parseDroppedColumns (#642 — columns removed via ALTER TABLE DROP COLUMN)", () => {
+  it("collects every DROP COLUMN clause of a multi-column ALTER, attributed to its table", () => {
+    const sql = "create table public.quotes (\n  id uuid,\n  cruise_line text,\n  ship_name text\n);\nalter table public.quotes\n  drop column if exists cruise_line,\n  drop column if exists ship_name;";
+    const dropped = parseDroppedColumns(sql).map((d) => `${d.table_name}.${d.column_name}`);
+    expect(dropped).toEqual(["quotes.cruise_line", "quotes.ship_name"]);
+  });
+});
+
+describe("parseLiveColumns (#643 — re-CREATEd table uses its final definition, not the union)", () => {
+  it("uses the last CREATE's columns after a DROP+re-CREATE, dropping stale ones", () => {
+    const sql = "create table public.email_log (\n  id uuid,\n  recipient_email text\n);\ndrop table if exists public.email_log;\ncreate table public.email_log (\n  id uuid,\n  to_email text\n);";
+    const cols = parseLiveColumns(sql).filter((c) => c.table_name === "email_log").map((c) => c.column_name);
+    expect(cols).toContain("to_email");
+    expect(cols).not.toContain("recipient_email");
+  });
+
+  it("treats CREATE IF NOT EXISTS on an already-live table as a no-op (keeps the first)", () => {
+    const sql = "create table public.t (\n  id uuid,\n  a text\n);\ncreate table if not exists public.t (\n  id uuid,\n  a text,\n  b text\n);";
+    const cols = parseLiveColumns(sql).filter((c) => c.table_name === "t").map((c) => c.column_name);
+    expect(cols.sort()).toEqual(["a", "id"]);
   });
 });
