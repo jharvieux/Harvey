@@ -47,6 +47,30 @@ silent skip (CLAUDE.md coverage doctrine).
 > skipped+disclosed while the rest seed, letting the matrix run on the bulk of the surface for a *partial* runtime
 > proof. No genuine ATC M2 finding resulted (the blocker is a Harvey harness gap, not an ATC vuln).
 
+> **Addendum 3 — 2026-07-19 (M2 PARTIAL RUNTIME ISOLATION PROOF — per-table SAVEPOINT seed, Harvey #649).**
+> The seed now applies **per-table under its own SAVEPOINT** (a plpgsql BEGIN/EXCEPTION subtransaction): a
+> table whose bespoke cross-column CHECK/constraint a generic seed can't satisfy is **rolled back, recorded
+> as skipped with the failing constraint, and the rest still seed** — the transaction no longer aborts on the
+> first bad table (the `tasks` exactly-one-of blocker of Addendum 2). M2 was re-run live against a
+> `/private/tmp` copy of `apps/main` on a fresh isolated stack (project `harvey-dv-0e0f00c86c`, non-default
+> ports api=57321/db=57322; **185 migrations applied cleanly, stack torn down clean** — 0 Harvey
+> containers/volumes left, no foreign volumes touched, #604 re-verified). **Result: 78 of the 92 scoped tables
+> SEEDED and were probed; 14 scoped tables (+1 non-scoped parent, `legal_documents`) were SKIPPED-and-disclosed**
+> with their exact failing constraint. The 14 scoped skips and why: `tasks` (`tasks_check`, the exactly-one-of),
+> `task_sequence_runs` (`task_sequence_runs_check`), `task_reminders` (FK to skipped `tasks`), `forum_threads` /
+> `forum_messages` / `forum_strikes` / `forum_user_state` (`*_author_xor` — a user-XOR-guest exactly-one CHECK),
+> `forum_reactions` (FK to skipped `forum_messages`), `forum_guest_write_counters` (composite-PK collision across
+> the two seeded rows), `legal_consents` (FK to skipped `legal_documents`), `price_watches` (`threshold_present`),
+> `tenant_email_templates` (`tenant_email_templates_not_empty`), `tenant_host_configs` (FK to an unseeded adapter),
+> `voice_samples` (`voice_samples_body_check`). **The live cross-tenant PostgREST matrix RAN over the 78 seeded
+> tables (both tenants' rows present per table) and found ZERO cross-tenant leaks** → a **PARTIAL runtime
+> tenant-isolation PROOF: isolation proven on 78/92 scoped tables, 14 skipped-and-disclosed.** This is the first
+> time ATC's runtime isolation has been exercised on the bulk of its surface (previously PENDING/zero). Tier-2
+> app-route probes did not run — a standalone `npm install` of the monorepo `apps/main` fails on `workspace:*`
+> deps, so coverage degraded to PostgREST-only (disclosed, not silent). **No genuine ATC M2 finding** (0 leaks;
+> the 14 skips are a Harvey seed-generality limit, not an ATC vuln). Growing an exactly-one-of / XOR / FK-cardinality
+> recognizer to seed some of the 14 remains useful future work but is no longer a blocker to a runtime proof.
+
 ---
 
 ## 1. Target enumeration
@@ -85,7 +109,7 @@ Legend: **ran** = all in-scope classes executed · **partial** = some classes ra
 | M1 | git-history secrets (TruffleHog) | mechanical | ran (clean) | **orchestrator falsely skipped it (Harvey #619)**; run manually: 26,311 chunks / 49MB, **0 verified, 0 unverified secrets** |
 | M1 | main DB | connected (live RLS/advisors) | ran | read-only `get_advisors(security)` + DDL review |
 | M1 | rag DB | connected (live RLS/advisors) | ran | read-only `get_advisors(security)` + DDL review |
-| **M2** Local pen-test (dynamic) | apps/main / main DB | dynamic | **partial** | isolated stack stood up + migrations applied + torn down cleanly (#604), but the two-tenant **seed failed** on ATC's `tenants_onboarding_stage_check` constraint → cross-tenant/IDOR/BFLA probes did not run; 0 findings, no artifact, exit 1 (Harvey #622) |
+| **M2** Local pen-test (dynamic) | apps/main / main DB | dynamic | **ran (partial proof)** | isolated stack stood up + 185 migrations applied + torn down cleanly (#604); per-table SAVEPOINT seed (#649) seeded **78/92 scoped tables** (14 skipped-and-disclosed with their bespoke CHECK/FK constraint); the live cross-tenant PostgREST matrix ran over the 78 and found **0 leaks → partial runtime isolation proof** (Addendum 3). Tier-2 app-route probes degraded to PostgREST-only (`workspace:*` install). M2 pass artifact emitted |
 | M2 | apps/rag / rag DB | dynamic | requires-live-run | second backend not stood up — the runner applies only `migrationDirs[0]` (Harvey #610); would need a per-DB stand-up |
 | **M3** Hotspot analysis | monorepo | vitals | ran | orchestrator failed (abs-path CWD bug, Harvey #624); re-run via `--report` capture → 56 findings (50 truck-factor-1, 5 co-change, 1 AI-authored high-churn); top-10 hotspots feed M1/M6/M8 |
 | **M4** Duplication | apps/main | jscpd | **partial** | jscpd did not complete on the workspace (M4-99 disclosure, Harvey #505) |
@@ -166,12 +190,14 @@ RS256 service JWTs. No cross-tenant data-exposure path was found in the reviewed
 
 ## 5. Modules that could not fully run, and why (fail-loud summary)
 
-- **M2 dynamic pen-test — partial/blocked.** The isolated stack stood up and tore down cleanly (no foreign
-  Docker volumes touched, #604 verified), but Harvey's two-tenant seed inserts an `onboarding_stage` value ATC's
-  current CHECK constraint rejects, so no cross-tenant probe executed. Second backend (rag) not stood up (#610).
-  → Harvey #622, #610. **This is the one module with no findings coverage this engagement.** _Update 2026-07-19:
-  #622 fixed and verified (see the addendum at the top); the seed now advances past the CHECK but is blocked on the
-  next column by a dangling generic FK (`tenants.tier_id`) → Harvey #630. Runtime isolation proof still pending._
+- **M2 dynamic pen-test — RAN, partial runtime isolation proof (Addendum 3, Harvey #649).** The isolated stack
+  stood up (185 migrations), the per-table SAVEPOINT seed seeded **78/92 scoped tables** (14 skipped-and-disclosed
+  with their bespoke CHECK/FK constraint), and the live cross-tenant PostgREST matrix ran over the 78 and found
+  **0 cross-tenant leaks** — a partial runtime tenant-isolation proof (isolation proven on 78/92, 14 disclosed),
+  torn down cleanly (#604 re-verified). Tier-2 app-route probes degraded to PostgREST-only (`workspace:*` blocks a
+  standalone `npm install`). Second backend (rag) still not stood up (#610). No genuine ATC M2 finding (0 leaks;
+  the 14 skips are a Harvey seed-generality limit). _Superseded the prior #622/#630 "seed blocked, proof pending"
+  status — the seed no longer needs to satisfy every table to run the matrix._
 - **M7 Lighthouse — requires-live-run (deliberate).** A CWV run needs a full `next build`+`next start` against
   ATC's production `.env.local`; not built to avoid a long build touching live services. Static code tier + DB
   advisors ran.

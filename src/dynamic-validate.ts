@@ -22,7 +22,7 @@ import { basename, join } from "node:path";
 import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
 import type { Finding } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
-import { buildTwoTenantSeed, type TwoTenantSeed } from "./pentest/two-tenant-seed.js";
+import { buildTwoTenantSeed, type SeedSkip, type TwoTenantSeed } from "./pentest/two-tenant-seed.js";
 
 // The facts about a repo that decide whether — and how fully — we can stand it up for M2.
 export interface RepoLayout {
@@ -324,6 +324,10 @@ export interface StandUpResult {
   // harness/seed issue (#598), NOT a client schema defect — must never surface as M2-PROVISION-
   // MIGRATE. Recorded as a distinct, honest reason (requires-live-run), never a false client finding.
   seedApplyFailed?: boolean;
+  // #649 — tables the per-table SAVEPOINT seed had to skip (a bespoke cross-column CHECK a generic
+  // seed can't satisfy). The rest seeded and were probed; these are disclosed (fail-loud) and were
+  // NOT probed for cross-tenant isolation. Never a silent narrowing of the surface.
+  seedSkips?: SeedSkip[];
 }
 
 export interface StandUpRunner {
@@ -391,6 +395,16 @@ export function runDynamicValidation(opts: {
   const limitations = [...verdict.limitations];
   const notes: string[] = [];
   for (const w of plan.seed.warnings) limitations.push(`seed: ${w}`);
+  // #649 — every table the per-table SAVEPOINT seed skipped is disclosed as a limitation (fail-loud):
+  // its cross-tenant isolation was NOT probed, so it can't read as a clean pass. The rest DID seed and
+  // were probed — a partial isolation proof over the seeded surface, never zero.
+  for (const s of db.seedSkips ?? []) {
+    limitations.push(`seed: table "${s.table}" was SKIPPED — its INSERT violated ${s.constraint || "a constraint"} (${s.reason}); a generic two-tenant seed can't satisfy this table's bespoke invariant, so its cross-tenant isolation was NOT probed`);
+  }
+  if (db.seedSkips?.length) {
+    const scopedSkipped = db.seedSkips.filter((s) => plan.seed.scopedTables.some((t) => t.toLowerCase() === s.table.toLowerCase())).length;
+    notes.push(`seed: ${plan.seed.scopedTables.length - scopedSkipped}/${plan.seed.scopedTables.length} scoped table(s) seeded and probed; ${db.seedSkips.length} table(s) skipped-and-disclosed (per-table SAVEPOINT, #649)`);
+  }
 
   if (coverage === "full") {
     const app = runner.runApp(targetDir);

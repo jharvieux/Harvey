@@ -245,6 +245,9 @@ export interface PackageJsonForTestDetection {
   scripts?: Record<string, string>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
+  // #623: a `workspaces` field (npm/yarn) marks a monorepo root — used to tell "this app has no
+  // tests" from "this app's tests live at the workspace root".
+  workspaces?: string[] | { packages?: string[] };
 }
 
 const KNOWN_TEST_RUNNER_DEPS = ["vitest", "jest", "mocha", "ava", "tape", "jasmine", "karma", "cypress", "@japa/runner", "uvu", "tap"];
@@ -348,6 +351,89 @@ export function noTestSuiteFinding(reason: string): Finding {
 
 export function noTestSuiteModuleRecord(reason: string): { status: "partial"; note: string } {
   return { status: "partial", note: `No automated test suite found (${reason}) — mutation scan could not run.` };
+}
+
+// #623: a per-app invocation on a workspace monorepo whose test config lives at the ROOT (a vitest
+// `workspace`/`projects` config, root `test:*` scripts) finds no test script/runner in the APP's
+// own package.json and would falsely report "no automated test suite" — the ATC engagement's app
+// (apps/main) has no scripts.test but the monorepo root runs a substantial vitest workspace. A root
+// suite that covers the app is NOT suite-absence; it is a suite this per-app path cannot invoke.
+// Detect it from the target's ancestors so the CLI emits a distinct "measurement gap" verdict
+// (M8-04) rather than the M8-00 zero-coverage finding.
+export interface AncestorTestSignals {
+  dir: string;
+  pkg?: PackageJsonForTestDetection;
+  hasPnpmWorkspaceYaml: boolean;
+  // A vitest.workspace.* file, or a vitest config declaring `projects`/`workspace` — the shape of a
+  // multi-project root whose suite is invoked from the root, not per-package.
+  hasVitestWorkspaceConfig: boolean;
+  // The repo root marker — the ancestor walk stops here so it never climbs past the repository.
+  hasGit: boolean;
+}
+
+// Callers receive this as the inferred return of detectRootWorkspaceTestSuite / the param of the
+// finding+record builders — no name needs exporting.
+interface RootWorkspaceTestSuite {
+  root: string;
+  reason: string;
+}
+
+const TEST_SCRIPT_KEY = /^test(:|$)/;
+
+function ancestorTestSuite(a: AncestorTestSignals): string | undefined {
+  if (a.hasVitestWorkspaceConfig) return "a vitest workspace/projects config";
+  const scripts = a.pkg?.scripts ?? {};
+  const testScript = Object.entries(scripts).find(([k, v]) => TEST_SCRIPT_KEY.test(k) && !PLACEHOLDER_TEST_SCRIPT.test(v));
+  if (testScript) return `a root "${testScript[0]}" script`;
+  const deps = { ...a.pkg?.dependencies, ...a.pkg?.devDependencies };
+  const dep = KNOWN_TEST_RUNNER_DEPS.find((d) => d in deps);
+  if (dep) return `a root ${dep} dependency`;
+  return undefined;
+}
+
+function isWorkspaceRoot(a: AncestorTestSignals): string | undefined {
+  if (a.pkg?.workspaces) return "package.json workspaces";
+  if (a.hasPnpmWorkspaceYaml) return "pnpm-workspace.yaml";
+  if (a.hasVitestWorkspaceConfig) return "a vitest workspace config";
+  return undefined;
+}
+
+// `ancestors` are the target's ancestors nearest-first (excluding the target itself); the caller
+// bounds the walk at the repo root (a `.git`-bearing dir).
+export function detectRootWorkspaceTestSuite(ancestors: readonly AncestorTestSignals[]): RootWorkspaceTestSuite | undefined {
+  for (const a of ancestors) {
+    const rootMarker = isWorkspaceRoot(a);
+    const suite = ancestorTestSuite(a);
+    if (rootMarker && suite) return { root: a.dir, reason: `${suite}; ${rootMarker} marks it a monorepo root` };
+    if (a.hasGit) break;
+  }
+  return undefined;
+}
+
+export function rootWorkspaceTestFinding(info: RootWorkspaceTestSuite): Finding {
+  return {
+    id: "M8-04",
+    status: "Open",
+    category: "Test quality",
+    title: "Test suite lives at the monorepo root — per-app mutation scan could not reach it",
+    severity: "Medium",
+    confidence: "Confirmed",
+    taxonomy: "M8 — Root-workspace test suite not reachable per-app",
+    location: "package.json",
+    evidence: `This package declares no test script/runner of its own, but a workspace-root test suite was detected at ${info.root} (${info.reason}). A per-app mutation scan runs only this package, so it cannot execute the root suite — this is a measurement gap, NOT an absent suite.`,
+    impact: "M8 could not measure this app from a per-app invocation, and the app may in fact be covered by the root workspace suite — reported as a coverage gap rather than a false 'no automated test suite' (which would read as zero coverage on a tested app).",
+    fix: "Run M8 from the monorepo root with the root test command, scoping the mutate globs to this app (e.g. select this app's project in the root vitest workspace), so the root suite's coverage of the app is measured.",
+    value: 3,
+    ease: 3,
+    safety: 5,
+  };
+}
+
+export function rootWorkspaceTestModuleRecord(info: RootWorkspaceTestSuite): { status: "partial"; note: string } {
+  return {
+    status: "partial",
+    note: `A workspace-root test suite was detected at ${info.root} (${info.reason}) but this per-app invocation cannot run it — M8 here is a measurement GAP, not suite-absent (#623). Re-run M8 from the monorepo root (scoping mutate globs to this app) to measure it.`,
+  };
 }
 
 // #503: a target's suite can pass ONLY under a specific process env (ATC: a timezone-sensitive

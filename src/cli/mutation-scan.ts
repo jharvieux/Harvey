@@ -59,15 +59,17 @@
 // list), used to flag surviving mutants that sit on a security/perf hotspot as top priority.
 
 import { execSync, execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceInput } from "../detectors/common.js";
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
+import { mirrorNodeModules } from "../stub-worktree.js";
 import {
   coveredScopeLine,
   detectDryRunFailure,
   detectNoTestSuite,
+  detectRootWorkspaceTestSuite,
   detectTestEnv,
   detectTestRunner,
   dryRunFailureFinding,
@@ -75,6 +77,8 @@ import {
   mutationNotRunModuleRecord,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
+  rootWorkspaceTestFinding,
+  rootWorkspaceTestModuleRecord,
   SCAFFOLD_SOURCE_DIRS,
   scaffoldStrykerConfig,
   scopedRunModuleRecord,
@@ -82,6 +86,7 @@ import {
   survivingMutantFindings,
   toReportRows,
   verifyMutationScope,
+  type AncestorTestSignals,
   type DetectedEnvVar,
   type PackageJsonForTestDetection,
   type StrykerReport,
@@ -184,6 +189,58 @@ function collectEnvSourceFiles(root: string): { path: string; text: string }[] {
   return [...runnerConfigs, ...pkgScripts, ...workflows];
 }
 
+// #623: a per-app invocation whose package.json has no test suite might still be an app in a
+// workspace monorepo whose tests live at the ROOT (vitest workspace/projects, root test:* scripts).
+// Walk the target's ancestors (bounded at the repo root) so detectRootWorkspaceTestSuite can tell
+// "this app has no tests" from "this app's tests are run from the workspace root".
+const VITEST_WORKSPACE_FILES = ["vitest.workspace.ts", "vitest.workspace.js", "vitest.workspace.mjs", "vitest.workspace.cjs", "vitest.workspace.json"];
+const VITEST_CONFIG_FILES = ["vitest.config.ts", "vitest.config.js", "vitest.config.mjs", "vitest.config.cjs", "vite.config.ts", "vite.config.js", "vite.config.mjs"];
+const VITEST_PROJECTS_KEY = /\b(?:projects|workspace)\s*:/;
+
+function hasVitestWorkspaceConfig(dir: string): boolean {
+  if (VITEST_WORKSPACE_FILES.some((f) => existsSync(join(dir, f)))) return true;
+  for (const f of VITEST_CONFIG_FILES) {
+    const p = join(dir, f);
+    if (existsSync(p)) {
+      try {
+        if (VITEST_PROJECTS_KEY.test(readFileSync(p, "utf8"))) return true;
+      } catch {
+        /* unreadable config — no signal from it */
+      }
+    }
+  }
+  return false;
+}
+
+function collectAncestorSignals(dir: string): AncestorTestSignals[] {
+  const out: AncestorTestSignals[] = [];
+  let cur = resolve(dir);
+  for (let i = 0; i < 12; i++) {
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+    const pkgPath = join(cur, "package.json");
+    let pkg: PackageJsonForTestDetection | undefined;
+    if (existsSync(pkgPath)) {
+      try {
+        pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as PackageJsonForTestDetection;
+      } catch {
+        /* unparseable ancestor package.json — no signal from it */
+      }
+    }
+    const hasGit = existsSync(join(cur, ".git"));
+    out.push({
+      dir: cur,
+      pkg,
+      hasPnpmWorkspaceYaml: existsSync(join(cur, "pnpm-workspace.yaml")) || existsSync(join(cur, "pnpm-workspace.yml")),
+      hasVitestWorkspaceConfig: hasVitestWorkspaceConfig(cur),
+      hasGit,
+    });
+    if (hasGit) break;
+  }
+  return out;
+}
+
 // #224: no test script / no known test-runner dep / no Stryker config means Stryker literally
 // can't run here — that's itself a High-severity M8 finding (zero automated coverage on a
 // codebase in an audit's scope), not a wrapper failure. Report it and mark M8 coverage partial
@@ -193,6 +250,22 @@ if (!reportPath) {
   const hasStrykerConfig = configPath ? existsSync(resolve(configPath)) : STRYKER_CONFIG_NAMES.some((f) => existsSync(join(targetDir, f)));
   const { missing, reason } = detectNoTestSuite(readTargetPackageJson(), hasStrykerConfig, collectTestFiles(targetDir));
   if (missing) {
+    // #623: before declaring suite-absent, check whether the target is an app whose tests live at
+    // a monorepo root — a false "no test suite" on a well-tested app reads as zero coverage.
+    const rootSuite = detectRootWorkspaceTestSuite(collectAncestorSignals(targetDir));
+    if (rootSuite) {
+      console.error(`✗ ${targetDir}: no per-app test suite, but a workspace-ROOT suite exists at ${rootSuite.root} (${rootSuite.reason}) — measurement gap, not 'no test suite' (#623).`);
+      console.error(`M8 coverage: partial (root-workspace suite not reachable per-app, #623) — emitting the measurement-gap finding instead of M8-00.`);
+      const output = { finding: rootWorkspaceTestFinding(rootSuite), moduleRecord: rootWorkspaceTestModuleRecord(rootSuite) };
+      const json = JSON.stringify(output, null, 2);
+      if (outPath) {
+        writeFileSync(outPath, json + "\n");
+        console.error(`wrote M8 finding to ${outPath}`);
+      } else {
+        console.log(json);
+      }
+      process.exit(0);
+    }
     const why = reason ?? "no automated test suite detected";
     console.error(`✗ ${targetDir}: no automated test suite detected (${why}) — mutation testing has nothing to run against.`);
     console.error(`M8 coverage: partial (no test suite) — emitting the "no automated test suite" finding instead.`);
@@ -250,8 +323,18 @@ if (stubCheck) {
       recursive: true,
       filter: (src) => !(WALK_EXCLUDED_DIR.test(basename(src)) && statSync(src).isDirectory()),
     });
-    const targetNodeModules = join(targetDir, "node_modules");
-    if (existsSync(targetNodeModules)) symlinkSync(targetNodeModules, join(copyDir, "node_modules"), "dir");
+    if (existsSync(join(targetDir, "node_modules"))) {
+      // #607: mirror node_modules as a real dir, re-pointing workspace-package symlinks at the copy
+      // so a stub in packages/* is honored across package boundaries instead of resolving to the
+      // original (unstubbed) source through a wholesale node_modules symlink.
+      const mirror = mirrorNodeModules(targetDir, copyDir);
+      if (mirror.repointed.length) {
+        console.error(`M8 stub-check: re-pointed ${mirror.repointed.length} workspace-package symlink(s) into the copy so cross-package stubs are honored (#607): ${mirror.repointed.slice(0, 5).join(", ")}${mirror.repointed.length > 5 ? " ..." : ""}`);
+      }
+      if (mirror.unresolvedWorkspacePkgs.length) {
+        console.error(`⚠ ${mirror.unresolvedWorkspacePkgs.length} workspace-package symlink(s) could NOT be re-pointed (source not in the copy) — stubs in these resolve to ORIGINAL source and may be bypassed (#607): ${mirror.unresolvedWorkspacePkgs.join(", ")}`);
+      }
+    }
     console.error(`M8 stub-check: mutating a disposable copy at ${copyDir} — ${targetDir} is never opened for writing (#600)`);
 
     // In-place stub with backup/restore on the COPY. The finally here is about correctness
