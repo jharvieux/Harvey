@@ -10,6 +10,8 @@ import {
   JSCPD_IGNORE_GLOBS,
   jscpdToFindings,
   jscpdUnavailableFinding,
+  knipEntryUncertainFinding,
+  knipEntryUncertainReason,
   knipToFindings,
   knipUnavailableFinding,
   mergeJscpdReports,
@@ -488,6 +490,56 @@ describe("jscpdUnavailableFinding", () => {
     expect(finding.taxonomy).toContain("M4");
     expect(finding.evidence).toContain("apps/rag: did not complete within 120s (timed out)");
     expect(finding.impact).toContain("incomplete");
+  });
+});
+
+// #580: knip completing without error is not proof its entry resolution was correct — on a Vite
+// target whose plugin didn't auto-activate, knip falls back to default index.*-only resolution and
+// can report most of src/ as unused. Ratios below are the numbers MEASURED (2026-07-18) against a
+// real synthetic Vite fixture: a mis-resolved run (no `vite` install) reported 5/7 = 71% of scanned
+// files unused; the same fixture with `vite` genuinely installed dropped to 4/7 with vite.config.ts
+// correctly excluded from the unused list.
+describe("knipEntryUncertainReason (#580)", () => {
+  it("discloses on an implausibly high unused-file ratio, even with vite resolvable", () => {
+    const report: KnipReport = { files: ["vite.config.ts", "src/utils/b.ts", "src/utils/c.ts", "src/utils/d.ts", "src/utils/e.ts"], issues: [] };
+    const reason = knipEntryUncertainReason(report, 7, true, true);
+    expect(reason).toContain("5/7 source files");
+    expect(reason).toContain("71%");
+    expect(reason).toContain("mis-resolved entry points");
+  });
+
+  it("discloses when vite entry markers are present but vite isn't resolvable from the scope, even at a low ratio", () => {
+    const report: KnipReport = { files: ["src/one-stale-file.ts"], issues: [] };
+    const reason = knipEntryUncertainReason(report, 20, true, false);
+    expect(reason).toContain("vite.config.*/index.html");
+    expect(reason).toContain("isn't resolvable");
+  });
+
+  it("does not fire on a normal, well-resolved Vite target (low ratio, vite resolvable)", () => {
+    const report: KnipReport = { files: ["src/utils/orphan.ts"], issues: [] };
+    const reason = knipEntryUncertainReason(report, 8, true, true);
+    expect(reason).toBeUndefined();
+  });
+
+  it("does not fire on a non-Vite target with no entry markers, even at a high ratio, below the minimum-file floor", () => {
+    // Too few scanned files for the ratio to mean anything (MIN_FILES_FOR_RATIO_SIGNAL guard) and
+    // no Vite markers at all — nothing here should read as "Vite entry resolution uncertain".
+    const report: KnipReport = { files: ["a.ts", "b.ts", "c.ts"], issues: [] };
+    const reason = knipEntryUncertainReason(report, 3, false, true);
+    expect(reason).toBeUndefined();
+  });
+});
+
+describe("knipEntryUncertainFinding (#580)", () => {
+  it("discloses the uncertainty as a distinct row from M5-00 (did-not-complete)", () => {
+    const finding = knipEntryUncertainFinding("apps/web: 5/7 source files (71%) reported unused — implausibly high, a signal of mis-resolved entry points rather than genuine dead code");
+    expect(finding.id).toBe("M5-99");
+    expect(finding.id).not.toBe("M5-00");
+    expect(finding.severity).toBe("Info");
+    expect(finding.confidence).toBe("N/A");
+    expect(finding.taxonomy).toContain("M5");
+    expect(finding.evidence).toContain("apps/web: 5/7 source files");
+    expect(finding.impact).toContain("may be significantly over- or under-stated");
   });
 });
 
