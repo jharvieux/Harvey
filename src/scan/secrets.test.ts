@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { gitHistorySecretsUnavailableFinding, isGitRepoRoot, parseGitleaksFindings, parseTruffleHogFindings, type GitleaksResult, type TruffleHogResult } from "./secrets.js";
+import { gitHistorySecretsUnavailableFinding, isGitRepoRoot, parseGitleaksFindings, parseTruffleHogFindings, resolveBundleScan, type GitleaksResult, type TruffleHogResult } from "./secrets.js";
 
 describe("parseTruffleHogFindings", () => {
   it("drops unverified hits — only a live-verified secret is ~100% precision", () => {
@@ -198,5 +198,43 @@ describe("gitHistorySecretsUnavailableFinding (#528)", () => {
     expect(finding.severity).toBe("Info");
     expect(finding.evidence).not.toMatch(/ghp_|sk_|service_role/);
     expect(finding.impact).toContain("not a finding of zero secrets");
+  });
+});
+
+describe("resolveBundleScan (#588)", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function mkTarget(...bundleRels: string[]): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-bundle-"));
+    for (const rel of bundleRels) mkdirSync(join(root, rel), { recursive: true });
+    return root;
+  }
+
+  it("auto-detects a Vite dist/ build output when no explicit bundle is passed", () => {
+    const dir = mkTarget("dist", "dist/assets");
+    const r = resolveBundleScan(dir);
+    expect(r.bundleDir).toBe(join(dir, "dist"));
+    expect(r.disclosure).toBeUndefined();
+  });
+
+  it("prefers Next .next/static over dist/ when both exist", () => {
+    const dir = mkTarget("dist", ".next/static");
+    expect(resolveBundleScan(dir).bundleDir).toBe(join(dir, ".next", "static"));
+  });
+
+  it("discloses (never silently skips) when no recognized build output exists", () => {
+    const dir = mkTarget("src");
+    const r = resolveBundleScan(dir);
+    expect(r.bundleDir).toBeUndefined();
+    expect(r.disclosure?.id).toBe("SEC-BUNDLE-00");
+    expect(r.disclosure?.severity).toBe("Info");
+    expect(r.disclosure?.impact).toContain("not a finding of zero secrets");
+  });
+
+  it("honours an explicit bundle path, and discloses when the explicit path is missing", () => {
+    const dir = mkTarget("build/out");
+    expect(resolveBundleScan(dir, join(dir, "build", "out")).bundleDir).toBe(join(dir, "build", "out"));
+    expect(resolveBundleScan(dir, join(dir, "nope")).disclosure?.id).toBe("SEC-BUNDLE-00");
   });
 });

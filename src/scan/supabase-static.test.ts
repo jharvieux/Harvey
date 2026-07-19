@@ -8,6 +8,7 @@ import {
   checkMigrationPolicySemantics,
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsStatic,
+  checkOpenSignupConfig,
   type TenancyOverride,
 } from "./supabase-static.js";
 
@@ -130,6 +131,35 @@ describe("checkEdgeFunctionVerifyJwt", () => {
   it("clears verify_jwt = true and a bare verify_jwt = false outside any [functions.X] table", () => {
     const dir = writeConfig("[functions.user-profile]\nverify_jwt = true\n\n[auth]\nverify_jwt = false\n");
     expect(checkEdgeFunctionVerifyJwt(dir)).toEqual([]);
+  });
+});
+
+describe("checkOpenSignupConfig (#588)", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function writeConfig(toml: string): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-signup-"));
+    mkdirSync(join(root, "supabase"), { recursive: true });
+    writeFileSync(join(root, "supabase", "config.toml"), toml);
+    return root;
+  }
+
+  it("flags [auth] enable_signup = true and [auth.email] enable_confirmations = false", () => {
+    const dir = writeConfig("[auth]\nenable_signup = true\n\n[auth.email]\nenable_confirmations = false\n");
+    const findings = checkOpenSignupConfig(dir);
+    expect(findings.map((f) => f.id).sort()).toEqual(["SB-EMAIL-CONFIRM-OFF", "SB-OPEN-SIGNUP"]);
+    expect(findings.every((f) => f.precisionTier === "review")).toBe(true);
+  });
+
+  it("clears the safe values (enable_signup = false, enable_confirmations = true)", () => {
+    const dir = writeConfig("[auth]\nenable_signup = false\n\n[auth.email]\nenable_confirmations = true\n");
+    expect(checkOpenSignupConfig(dir)).toEqual([]);
+  });
+
+  it("scopes by section — the [auth.sms] siblings are not flagged", () => {
+    const dir = writeConfig("[auth]\nenable_signup = false\n\n[auth.sms]\nenable_signup = true\nenable_confirmations = false\n");
+    expect(checkOpenSignupConfig(dir)).toEqual([]);
   });
 });
 

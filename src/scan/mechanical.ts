@@ -17,7 +17,7 @@ import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, 
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
-import { scanSecrets } from "./secrets.js";
+import { resolveBundleScan, scanSecrets } from "./secrets.js";
 import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
 import {
   checkEdgeFunctionVerifyJwt,
@@ -25,6 +25,7 @@ import {
   checkMigrationPolicySemantics,
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsStatic,
+  checkOpenSignupConfig,
   type TenancyOverride,
 } from "./supabase-static.js";
 import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
@@ -96,8 +97,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
   try {
     const findings: Finding[] = [];
 
-    // Secrets — source, git history, and built bundle if present.
-    findings.push(...scanSecrets(scanDir, dir, bundleDir && existsSync(bundleDir) ? bundleDir : undefined));
+    // Secrets — source, git history, and built bundle (auto-detected .next/static or dist/, #588).
+    const bundle = resolveBundleScan(dir, bundleDir);
+    findings.push(...scanSecrets(scanDir, dir, bundle.bundleDir));
+    if (bundle.disclosure) findings.push(bundle.disclosure);
 
     // Framework/dependency CVEs.
     const osv = runOsvScanner(scanDir);
@@ -116,6 +119,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     findings.push(...checkMigrationDefinerAuthz(scanDir));
     findings.push(...checkMigrationRlsInitplanStatic(scanDir));
     findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
+    findings.push(...checkOpenSignupConfig(scanDir));
 
     // Supply chain.
     if (pkg) {
