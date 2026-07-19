@@ -22,8 +22,8 @@ import {
   assessStandUpAbility,
   buildProvisioningPlan,
   detectClientSecuritySuite,
-  readMigrationSql,
   readRepoLayout,
+  readSchemaSql,
   runDynamicValidation,
 } from "../dynamic-validate.js";
 import { createLiveStandUp } from "../pentest/live-standup.js";
@@ -71,9 +71,9 @@ if (!out) {
   process.exit(2);
 }
 
-const migrationSql = readMigrationSql(layout.migrationDirs);
-const plan = buildProvisioningPlan(layout, migrationSql);
-console.log(`  seed: two tenants across ${plan.seed.scopedTables.length} scoped table(s)${plan.tables ? ` (HARVEY_TABLES=${plan.tables})` : ""}`);
+const migrationSql = readSchemaSql(layout);
+const plan = buildProvisioningPlan(layout, migrationSql, targetDir);
+console.log(`  seed: two ${plan.seed.dataModel === "user" ? "users" : "tenants"} (${plan.seed.dataModel} model) across ${plan.seed.scopedTables.length} scoped table(s)${plan.tables ? ` (HARVEY_TABLES=${plan.tables})` : ""}`);
 for (const w of plan.seed.warnings) console.log(`  seed-warning: ${w}`);
 
 const clientSuite = detectClientSecuritySuite(targetDir);
@@ -82,12 +82,13 @@ if (clientSuite.present) console.log(`  client suite (bonus): ${clientSuite.deta
 // The real autonomous live runner: supabase start → apply client migrations → create two auth
 // users → apply the generic two-tenant seed → run the live PostgREST matrix. --allow-destructive
 // is safe here: every probe hits the disposable local seed inside the stand-up boundary.
-const { runner, workdir, stop } = createLiveStandUp({
+const { runner, workdir, customAuth, stop } = createLiveStandUp({
   migrationSql,
   plan,
   safeScope: { allowDestructive: true, allowNonLocal: false },
 });
 console.log(`  live stand-up workdir: ${workdir}`);
+console.log(`  app auth: ${customAuth.reason}`);
 
 try {
   const result = runDynamicValidation({ targetDir, layout, plan, artifactsDir: resolve(out), now: () => new Date().toISOString(), runner, clientSuite });
