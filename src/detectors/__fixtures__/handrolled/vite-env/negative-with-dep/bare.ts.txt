@@ -1,0 +1,6 @@
+// Bare reads are the CORRECT way to read Vite env, and a MODE check against a non-boolean literal
+// and the built-in PROD boolean are not coercions — all stay silent even with the gate open.
+export const key = import.meta.env.VITE_OPENAI_API_KEY;
+export const url = import.meta.env.VITE_SUPABASE_URL;
+export const isProd = import.meta.env.MODE === "production";
+export const prod = import.meta.env.PROD;

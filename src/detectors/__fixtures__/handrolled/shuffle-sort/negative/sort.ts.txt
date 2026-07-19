@@ -1,0 +1,3 @@
+// Ordinary comparators: neither uses randomness, so neither is the biased-shuffle idiom.
+export const ascending = (ns: number[]) => [...ns].sort((a, b) => a - b);
+export const byName = (xs: { n: string }[]) => xs.sort((a, b) => a.n.localeCompare(b.n));

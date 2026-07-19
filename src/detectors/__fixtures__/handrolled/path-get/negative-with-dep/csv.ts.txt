@@ -1,0 +1,3 @@
+// A split on a different separator feeding a reduce — even with the gate open, only split(".")
+// (a dotted property path) is the reinvention shape; a CSV sum never flags.
+export const sumCsv = (csv: string) => csv.split(",").reduce((a, b) => a + Number(b), 0);

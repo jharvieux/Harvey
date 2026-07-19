@@ -1,0 +1,5 @@
+// The SAME split(".").reduce walk, but no path-access helper is in this tree — with nothing
+// installed for dynamic path access, hand-rolling it is the ordinary approach; the gate stays shut.
+export function get(obj: Record<string, unknown>, path: string): unknown {
+  return path.split(".").reduce<any>((o, k) => (o == null ? undefined : o[k]), obj);
+}

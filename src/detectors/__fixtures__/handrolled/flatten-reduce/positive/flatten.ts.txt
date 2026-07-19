@@ -1,0 +1,3 @@
+export function flatten<T>(rows: T[][]): T[] {
+  return rows.reduce((acc, row) => acc.concat(row), []);
+}

@@ -1,0 +1,6 @@
+export function fetchWithTimeout(url: string, ms: number): Promise<Response> {
+  return Promise.race([
+    fetch(url),
+    new Promise<Response>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms)),
+  ]);
+}

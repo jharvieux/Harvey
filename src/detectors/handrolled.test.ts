@@ -62,6 +62,15 @@ const CASES: Case[] = [
   { name: "hand-rolled ErrorBoundary", dir: "error-boundary", taxonomy: "M6 — Indicator: hand-rolled ErrorBoundary", posCount: 1 },
   { name: "markdown-to-HTML by regex", dir: "markdown-html", taxonomy: "M6 — Indicator: markdown-to-HTML by regex", posCount: 3 },
   { name: "thousands-separator regex", dir: "thousands", taxonomy: "M6 — Indicator: thousands-separator regex", posCount: 1 },
+  // Batch 4 (#628): the remaining measured-zero YES entries (non-dep-gated). The dep-gated three
+  // (path-get, env JSON parse, Vite env coercion) have their own suites below.
+  { name: "array flatten via reduce", dir: "flatten-reduce", taxonomy: "M6 — Indicator: array flatten via reduce", posCount: 1 },
+  { name: "random-comparator shuffle", dir: "shuffle-sort", taxonomy: "M6 — Indicator: random-comparator shuffle", posCount: 1 },
+  { name: "zero-pad via slice", dir: "zero-pad", taxonomy: "M6 — Indicator: zero-pad via slice", posCount: 1 },
+  { name: "placeholder-template id", dir: "id-template", taxonomy: "M6 — Indicator: placeholder-template id", posCount: 1 },
+  { name: "fetch timeout via Promise.race", dir: "fetch-timeout", taxonomy: "M6 — Indicator: fetch timeout via Promise.race", posCount: 1 },
+  { name: "storage object URL concat", dir: "storage-url", taxonomy: "M6 — Indicator: storage object URL concat", posCount: 1 },
+  { name: "clipboard via execCommand", dir: "clipboard", taxonomy: "M6 — Indicator: clipboard via execCommand", posCount: 1 },
 ];
 
 for (const c of CASES) {
@@ -132,6 +141,72 @@ describe("email-shape regex (dep-gated on a schema-validation library, batch 2)"
   it("stays silent when no schema-validation library is in the tree — a regex IS the standard approach there", () => {
     const files = loadFixtureDir("email-regex/negative-no-dep");
     expect(depGatePresent(files, ["zod"])).toBe(false);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+});
+
+describe("nested-path get via split/reduce (dep-gated on a path-access helper, batch 4)", () => {
+  const TAX = "M6 — Indicator: nested-path get via split/reduce";
+  const PATH_LIBS = ["lodash", "lodash.get", "es-toolkit", "dlv", "get-value", "just-safe-get"];
+
+  it("catches the split(\".\").reduce walk when a path-access helper is in the tree", () => {
+    const hits = byTaxonomy("path-get/positive", TAX);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.location).toBe("get.ts:2");
+  });
+
+  it("stays silent when no path-access helper is in the tree — the deliberate dep-drop shape", () => {
+    const files = loadFixtureDir("path-get/negative-no-dep");
+    expect(depGatePresent(files, PATH_LIBS)).toBe(false);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+
+  it("stays silent on a split on a different separator even with the gate open — only split(\".\") is the shape", () => {
+    const files = loadFixtureDir("path-get/negative-with-dep");
+    expect(depGatePresent(files, PATH_LIBS)).toBe(true);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+});
+
+describe("env JSON parsing (dep-gated on a schema-validation library, batch 4)", () => {
+  const TAX = "M6 — Indicator: env JSON parsing";
+
+  it("catches JSON.parse of a process.env value when a schema-validation library is in the tree", () => {
+    const hits = byTaxonomy("env-json/positive", TAX);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.location).toBe("env.ts:1");
+  });
+
+  it("stays silent when no schema-validation library is in the tree — by-hand parsing is the norm there", () => {
+    const files = loadFixtureDir("env-json/negative-no-dep");
+    expect(depGatePresent(files, ["zod"])).toBe(false);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+
+  it("stays silent on a JSON.parse of a file (not process.env) even with the gate open", () => {
+    const files = loadFixtureDir("env-json/negative-with-dep");
+    expect(depGatePresent(files, ["zod"])).toBe(true);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+});
+
+describe("Vite env coercion (dep-gated on a schema-validation library, #628)", () => {
+  const TAX = "M6 — Indicator: Vite env coercion";
+
+  it("catches the boolean/number/JSON coercions of import.meta.env when a schema-validation library is in the tree", () => {
+    const hits = byTaxonomy("vite-env/positive", TAX);
+    expect(hits).toHaveLength(3);
+  });
+
+  it("stays silent when no schema-validation library is in the tree — the deliberate dep-drop shape", () => {
+    const files = loadFixtureDir("vite-env/negative-no-dep");
+    expect(depGatePresent(files, ["zod"])).toBe(false);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+
+  it("stays silent on bare reads, a MODE string check, and the PROD boolean even with the gate open — only a coercion is the shape", () => {
+    const files = loadFixtureDir("vite-env/negative-with-dep");
+    expect(depGatePresent(files, ["zod"])).toBe(true);
     expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
   });
 });
@@ -241,6 +316,17 @@ describe("free-tier language lock (#267 operator ruling)", () => {
     ...detectHandrolledFindings(loadFixtureDir("error-boundary/positive")),
     ...detectHandrolledFindings(loadFixtureDir("markdown-html/positive")),
     ...detectHandrolledFindings(loadFixtureDir("thousands/positive")),
+    // Batch 4 (#628):
+    ...detectHandrolledFindings(loadFixtureDir("flatten-reduce/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("shuffle-sort/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("zero-pad/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("id-template/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("fetch-timeout/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("storage-url/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("clipboard/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("path-get/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("env-json/positive")),
+    ...detectHandrolledFindings(loadFixtureDir("vite-env/positive")),
   ];
   const REPLACEMENT_NAMES =
     /structuredClone|isDeepStrictEqual|fast-deep-equal|deep-equal|URLSearchParams|useSearchParams|next\/headers|cookies\(\)|cookie-parse|randomUUID|getRandomValues|nanoid|\buuid\b|clsx|tailwind-merge|\bclassnames\b|lodash|date-fns|dayjs|luxon|\bmoment\b|\bIntl\b|toLocale(?:Date|Time)?String|DateTimeFormat|NumberFormat|\bmime\b|\bzod\b|\bjose\b|padStart|base64url|fromBase64|should be replaced/i;
