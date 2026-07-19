@@ -16,7 +16,7 @@
 // "review". The anon key and .env.example are allowlisted in the gitleaks config, not here.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
@@ -209,7 +209,15 @@ function runTruffleHogFilesystem(dir: string): TruffleHogResult[] {
 export function isGitRepoRoot(dir: string): boolean {
   try {
     const top = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
-    return realpathSync(top) === realpathSync(dir);
+    // Compare by filesystem identity (device + inode), not realpath string equality (#619): on a
+    // case-insensitive filesystem (macOS default) git reports the toplevel in the case it recorded
+    // for the work tree, which can differ from the caller's `dir` (e.g. .../atc vs .../ATC). Two
+    // realpath strings differing only in case then compare unequal and false-negative a valid repo
+    // root — silently skipping the git-history secret scan on a full checkout. dev+ino identity is
+    // case-insensitive and symlink-safe: the same file has one (dev, ino) regardless of path case.
+    const a = statSync(top);
+    const b = statSync(dir);
+    return a.dev === b.dev && a.ino === b.ino;
   } catch {
     return false;
   }
