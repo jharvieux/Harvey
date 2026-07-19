@@ -82,12 +82,13 @@ if (clientSuite.present) console.log(`  client suite (bonus): ${clientSuite.deta
 // The real autonomous live runner: supabase start → apply client migrations → create two auth
 // users → apply the generic two-tenant seed → run the live PostgREST matrix. --allow-destructive
 // is safe here: every probe hits the disposable local seed inside the stand-up boundary.
-const { runner, workdir, customAuth, stop } = createLiveStandUp({
+const { runner, workdir, projectId, ports, customAuth, stop } = createLiveStandUp({
   migrationSql,
   plan,
   safeScope: { allowDestructive: true, allowNonLocal: false },
 });
 console.log(`  live stand-up workdir: ${workdir}`);
+console.log(`  isolation: project-id ${projectId} on ports api=${ports.api} db=${ports.db} (#604 — teardown scoped to this project only)`);
 console.log(`  app auth: ${customAuth.reason}`);
 
 try {
