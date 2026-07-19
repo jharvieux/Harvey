@@ -31,6 +31,7 @@ import {
   type TenancyOverride,
 } from "./supabase-static.js";
 import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
+import { checkWebExtensionManifest } from "./webext-manifest.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
@@ -124,6 +125,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     findings.push(...checkMigrationRlsInitplanStatic(scanDir));
     findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
     findings.push(...checkOpenSignupConfig(scanDir));
+    findings.push(...checkWebExtensionManifest(scanDir));
 
     // Supply chain.
     if (pkg) {
