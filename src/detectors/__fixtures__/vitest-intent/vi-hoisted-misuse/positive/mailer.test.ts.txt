@@ -1,0 +1,20 @@
+import { describe, expect, it, vi } from "vitest";
+import { CONFIG } from "./config.js";
+import { sendEmail } from "./mailer.js";
+
+const template = "welcome";
+
+// References the imported CONFIG — an import, hoisted below vi.hoisted, so undefined here.
+const mockedConfig = vi.hoisted(() => ({ apiKey: CONFIG.apiKey }));
+
+// References a top-level const — in the TDZ when the hoisted factory runs.
+const mockedTemplate = vi.hoisted(() => ({ name: template }));
+
+vi.mock("./mailer.js", () => ({ sendEmail: vi.fn() }));
+
+describe("mailer", () => {
+  it("sends with the mocked key and template", () => {
+    sendEmail(mockedConfig.apiKey, mockedTemplate.name);
+    expect(sendEmail).toHaveBeenCalled();
+  });
+});

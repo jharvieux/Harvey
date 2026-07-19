@@ -1,0 +1,17 @@
+import { describe, expect, it, vi } from "vitest";
+import { sendEmail } from "./mailer.js";
+
+// Self-contained: the factory builds everything from its own locals and literals.
+const mocks = vi.hoisted(() => {
+  const apiKey = "test-key";
+  return { apiKey, label: apiKey.toUpperCase() };
+});
+
+vi.mock("./mailer.js", () => ({ sendEmail: vi.fn() }));
+
+describe("mailer", () => {
+  it("sends", () => {
+    sendEmail(mocks.apiKey);
+    expect(sendEmail).toHaveBeenCalled();
+  });
+});
