@@ -207,3 +207,66 @@ describe("mutation-scan --stub-check crash safety (#600)", () => {
     expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
   });
 });
+
+// #623: a per-app invocation on a workspace monorepo whose test config lives at the ROOT (vitest
+// workspace + a root test:* script, no per-app runner) used to report "no automated test suite" —
+// a false zero-coverage verdict on an app the root suite covers. The CLI must instead emit the
+// M8-04 measurement-gap finding. Exercised through --detect-only (no Stryker needed), the exact
+// path corpus-drift and the orchestrator take.
+describe("mutation-scan monorepo root-workspace suite (#623, child process)", () => {
+  function monorepo(): { root: string; app: string } {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-monorepo-"));
+    dirs.push(root);
+    mkdirSync(join(root, ".git"), { recursive: true }); // repo-root boundary for the ancestor walk
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "root", private: true, workspaces: ["apps/*"], scripts: { "test:cross-tenant": "vitest run" }, devDependencies: { vitest: "^3.0.0" } }),
+    );
+    writeFileSync(join(root, "vitest.workspace.ts"), `export default ["apps/*"];\n`);
+    const app = join(root, "apps", "main");
+    mkdirSync(app, { recursive: true });
+    // The app package declares NO test script and NO runner dependency of its own.
+    writeFileSync(join(app, "package.json"), JSON.stringify({ name: "@app/main", dependencies: {} }));
+    writeFileSync(join(app, "index.ts"), `export const main = () => 1;\n`);
+    return { root, app };
+  }
+
+  function runCliOn(target: string, extraArgs: string[]): { status: number; out: string } {
+    const outPath = join(target, "m8-out.json");
+    try {
+      execFileSync("node_modules/.bin/tsx", [CLI, target, ...extraArgs, "--out", outPath], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
+      });
+      return { status: 0, out: readFileSync(outPath, "utf8") };
+    } catch (err) {
+      const e = err as { status?: number };
+      return { status: e.status ?? 1, out: "" };
+    }
+  }
+
+  it("emits the M8-04 measurement-gap finding for an app whose tests live at the monorepo root — NOT M8-00", () => {
+    const { app } = monorepo();
+    const { status, out } = runCliOn(app, ["--detect-only"]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
+    expect(parsed.finding.id).toBe("M8-04");
+    expect(parsed.finding.evidence).toMatch(/workspace-root test suite/);
+    expect(parsed.moduleRecord.status).toBe("partial");
+    expect(parsed.moduleRecord.note).toMatch(/#623/);
+  });
+
+  it("negative control: a standalone app with no test suite and no workspace root still gets M8-00", () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-m8-standalone-"));
+    dirs.push(repo);
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "solo", dependencies: {} }));
+    writeFileSync(join(repo, "index.ts"), `export const x = () => 1;\n`);
+    const { status, out } = runCliOn(repo, ["--detect-only"]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { finding: Finding };
+    expect(parsed.finding.id).toBe("M8-00");
+  });
+});

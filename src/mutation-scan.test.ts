@@ -3,6 +3,7 @@ import {
   coveredScopeLine,
   detectDryRunFailure,
   detectNoTestSuite,
+  detectRootWorkspaceTestSuite,
   detectTestEnv,
   detectTestRunner,
   dryRunFailureFinding,
@@ -12,12 +13,15 @@ import {
   mutationScore,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
+  rootWorkspaceTestFinding,
+  rootWorkspaceTestModuleRecord,
   scaffoldStrykerConfig,
   scopedRunModuleRecord,
   summarizeMutationReport,
   survivingMutantFindings,
   toReportRows,
   verifyMutationScope,
+  type AncestorTestSignals,
   type StrykerMutant,
   type StrykerReport,
 } from "./mutation-scan.js";
@@ -576,5 +580,55 @@ describe("detectDryRunFailure / dry-run-failure verdict (#503)", () => {
     expect(record.status).toBe("partial");
     expect(record.note).toMatch(/dry run FAILED/);
     expect(record.note).toContain("format-date.test.ts");
+  });
+});
+
+// #623: a per-app invocation on a workspace monorepo whose test config lives at the ROOT must be
+// told apart from a genuinely untested package — a false "no test suite" reads as zero coverage on
+// an app the root suite in fact covers.
+describe("detectRootWorkspaceTestSuite (#623)", () => {
+  const noSignals = { hasPnpmWorkspaceYaml: false, hasVitestWorkspaceConfig: false, hasGit: false };
+
+  it("detects a monorepo root that declares workspaces AND a test suite (root test:* script)", () => {
+    const ancestors: AncestorTestSignals[] = [
+      { dir: "/repo", pkg: { workspaces: ["apps/*"], scripts: { "test:cross-tenant": "vitest run" }, devDependencies: { vitest: "^3" } }, ...noSignals, hasGit: true },
+    ];
+    const found = detectRootWorkspaceTestSuite(ancestors);
+    expect(found?.root).toBe("/repo");
+    expect(found?.reason).toMatch(/test:cross-tenant/);
+    expect(found?.reason).toMatch(/monorepo root/);
+  });
+
+  it("detects a vitest workspace/projects config as both the root marker and the suite", () => {
+    const ancestors: AncestorTestSignals[] = [
+      { dir: "/repo", pkg: { name: "root" } as never, ...noSignals, hasVitestWorkspaceConfig: true, hasGit: true },
+    ];
+    expect(detectRootWorkspaceTestSuite(ancestors)?.root).toBe("/repo");
+  });
+
+  it("does NOT fire on a workspace root that has NO test suite — that is a real gap, not this one", () => {
+    const ancestors: AncestorTestSignals[] = [
+      { dir: "/repo", pkg: { workspaces: ["apps/*"] }, ...noSignals, hasGit: true },
+    ];
+    expect(detectRootWorkspaceTestSuite(ancestors)).toBeUndefined();
+  });
+
+  it("does NOT fire on a plain ancestor with a test suite but no workspace marker", () => {
+    const ancestors: AncestorTestSignals[] = [
+      { dir: "/somedir", pkg: { scripts: { test: "vitest run" }, devDependencies: { vitest: "^3" } }, ...noSignals, hasGit: true },
+    ];
+    expect(detectRootWorkspaceTestSuite(ancestors)).toBeUndefined();
+  });
+
+  it("emits an M8-04 measurement-gap finding and partial record — NOT the M8-00 zero-coverage shape", () => {
+    const info = { root: "/repo", reason: 'a root "test:cross-tenant" script; package.json workspaces marks it a monorepo root' };
+    const finding = rootWorkspaceTestFinding(info);
+    expect(finding.id).toBe("M8-04");
+    expect(finding.evidence).toContain("/repo");
+    expect(finding.evidence).toMatch(/measurement gap/i);
+    const record = rootWorkspaceTestModuleRecord(info);
+    expect(record.status).toBe("partial");
+    expect(record.note).toMatch(/#623/);
+    expect(record.note).toMatch(/not suite-absent/);
   });
 });
