@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseAuthUserRefs, parseCheckInConstraints, parseColumns, parseDefinerFunctions, parsePolicies, parseRlsState, parseTableNames, parseUniqueColumns } from "./migration-sql-parse.js";
+import { parseAuthUserRefs, parseCheckConstraints, parseCheckInConstraints, parseColumns, parseDefinerFunctions, parsePolicies, parseRlsState, parseTableNames, parseUniqueColumns } from "./migration-sql-parse.js";
 
 // Fixtures are the real calibration-target migrations (targets/calibration/supabase/migrations) —
 // this test asserts the parser extracts exactly what GROUND-TRUTH.md says is there, so a change
@@ -60,6 +60,32 @@ describe("parseCheckInConstraints (#547 — enum-like allow-lists the seed must 
 
   it("ignores a CHECK that is not a simple IN allow-list (stays in the seed's fail-loud path)", () => {
     const sql = "create table t (\n  id uuid primary key,\n  qty integer check (qty > 0)\n);";
+    expect(parseCheckInConstraints(sql)).toEqual([]);
+  });
+
+  // #622 — the constraint that blocked M2 on ATC: the column is a plain TEXT in CREATE TABLE and its
+  // allow-list arrives LATER via ALTER TABLE ADD CONSTRAINT, guarded by `IS NULL OR`. A
+  // CREATE-TABLE-only scan misses it and the seed placeholders an illegal value.
+  it("reads an allow-list added later via ALTER TABLE ADD CONSTRAINT (IS NULL OR col IN (...))", () => {
+    const sql = [
+      "create table tenants (\n  id uuid primary key,\n  onboarding_stage text\n);",
+      "alter table public.tenants",
+      "  add constraint tenants_onboarding_stage_check",
+      "    check (onboarding_stage is null or onboarding_stage in ('signup','profile','complete'));",
+    ].join("\n");
+    expect(parseCheckInConstraints(sql)).toEqual([
+      { table_name: "tenants", column_name: "onboarding_stage", values: ["signup", "profile", "complete"] },
+    ]);
+  });
+
+  it("reads a single-value equality CHECK (col = 'x')", () => {
+    const sql = "create table t (\n  id uuid primary key,\n  kind text check (kind = 'fixed')\n);";
+    expect(parseCheckInConstraints(sql)).toEqual([{ table_name: "t", column_name: "kind", values: ["fixed"] }]);
+  });
+
+  it("records an un-derivable inline CHECK with a null allow-list (fail-loud disclosure, not silence)", () => {
+    const sql = "create table t (\n  id uuid primary key,\n  slug text check (slug = lower(slug) and slug ~ '^[a-z]+$')\n);";
+    expect(parseCheckConstraints(sql)).toEqual([{ table_name: "t", column_name: "slug", values: null }]);
     expect(parseCheckInConstraints(sql)).toEqual([]);
   });
 });

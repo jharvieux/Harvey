@@ -1,0 +1,4 @@
+// A sum reducer, a non-empty seed, and a static Buffer.concat — none is the concat-flatten idiom.
+export const total = (ns: number[]) => ns.reduce((a, b) => a + b, 0);
+export const seeded = (rows: number[][]) => rows.reduce((a, b) => a.concat(b), [0]);
+export const joinBufs = (parts: Buffer[]) => Buffer.concat(parts);

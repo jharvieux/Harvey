@@ -1,0 +1,7 @@
+{
+  "name": "env-json-negative-with-dep",
+  "dependencies": {
+    "react": "^18.3.0",
+    "zod": "^3.23.0"
+  }
+}

@@ -1,0 +1,3 @@
+// A non-zero prefix, and a positive slice — neither is the zero-pad idiom.
+export const tail = (s: string) => ("Item " + s).slice(-4);
+export const drop = (n: number) => ("0" + n).slice(2);
