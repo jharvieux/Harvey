@@ -316,14 +316,21 @@ unwound.
      `MODE` check against a non-boolean literal, and the built-in `PROD` boolean all stay silent —
      locked by the `vite-env/negative-with-dep` fixture, which mirrors the bare reads in
      `targets/calibration/src/lib/*`.
-   - **Hand-rolled SPA route guards — ATTEMPTED, NOT PRECISE (split).** A component that conditionally
-     redirects on auth state (a `RequireAuth`/`ProtectedRoute` wrapper, a `useEffect` that calls
-     `navigate('/login')`) has no crisp syntactic signature that separates it from ordinary
-     conditional navigation, and the react-router dep-gate alone does not narrow it — a hedged
-     indicator here would false-fire on legitimate guarded routes. Not shipped; deferred to the
-     `M6 parked-detector graduation — remainder` issue (#638) for a shape-work pass, per the
-     operator rule that an entry which keeps matching benign shapes is recorded as
-     attempted-not-precise, not forced out the door.
+   - **Hand-rolled SPA route guards — SHIPPED (#654), real-target precision still UNVALIDATED (#638
+     stays open).** `M6 — Indicator: hand-rolled route guard` (`detectRouteGuard`,
+     `src/detectors/handrolled.ts` detector 32), dep-gated on react-router (`ROUTER_GUARD_DEPS =
+     ["react-router", "react-router-dom"]`). #628's analysis warned this shape has no crisp syntactic
+     signature separating a reinvention (`RequireAuth`/`ProtectedRoute`, a `useEffect` calling
+     `navigate('/login')`) from the idiomatic `<Navigate>`/`useNavigate` redirect, so the live
+     precision question is whether it **false-fires on idiomatic react-router guards**. That question
+     is still UNVALIDATED against a real target. The 2026-07-19 AoP run could NOT answer it: AoP (an
+     operator-owned real Vite SPA) has **no react-router dependency at all**, so the dep-gate was
+     CLOSED and the detector was inert — AoP navigates via a `useState<Screen>('title')` +
+     `setScreen(...)` screen state machine (`apps/web/src/App.tsx`), giving the react-router-gated
+     detector no surface to fire on. Real-target precision therefore still needs a Vite/SPA target
+     that actually uses react-router guards; #638 remains open pending such a target. (Correction:
+     #654 shipped this detector, but this bullet had drifted to "Not shipped / deferred" — the
+     catalogue lagged the code; fixed here.)
 4. **The boundary checks** — SETTLED 2026-07-16 (#406): 74 → BOUNDARY → M7 (`detectUnboundedSelect`
    fires on the fetch-all variant, probed); 18/47/65/67/72/102 verified non-overlapping — each
    stays MAYBE with the evidence and the remaining blocker recorded in its reason cell. One
@@ -335,3 +342,40 @@ unwound.
    or trailing on its line; narration without the marker never suppresses (fixture-locked). Known
    literalism: a WHY comment above the enclosing *function* does not suppress a shape inside the
    body — extend deliberately if real targets show that placement dominates.
+
+## Real-target validation — AoP (operator-owned Vite SPA), source-only, 2026-07-19
+
+The Vite-tier M6 indicators from batch 4 (#628) plus the route-guard (#654, `detectRouteGuard`) and
+SPA-root error-boundary (#654/#627, `src/detectors/app-router.ts`) detectors were run against AoP —
+a real, operator-owned Vite single-page app (`apps/web`, a PixiJS/canvas game), source-only via
+`pnpm detect-static` — to check precision on idiomatic real code, not only on calibration fixtures.
+No detector was changed as a result. This records precision on real code; per #265 it is not a
+precision *number* claim.
+
+Framework detection resolved correctly: repo root `other` (configs live under `apps/*`), `apps/web`
+`vite`, `viteWorkspaces` = `["apps/web"]`, so M9's SSR/App-Router family was suppressed per-workspace
+and emitted one `M9 — Not applicable (non-Next SPA)` note with zero SSR false-fires.
+
+- **Hand-rolled route guard (#654, `detectRouteGuard`) — INCONCLUSIVE (dep-gate closed, detector
+  inert).** The detector IS shipped and dep-gated on react-router; AoP has no react-router, so the
+  gate was CLOSED and it never ran. AoP is therefore NOT a valid test target for this detector's
+  precision — it neither confirms nor refutes the idiomatic-`<Navigate>`/`useNavigate` false-fire
+  question #638 raises. That question stays open (see Follow-up item 3); it needs a Vite/SPA target
+  that actually uses react-router guards.
+- **SPA-root error boundary (#627, `detectSpaRootErrorBoundary`) — correctly SILENT (true
+  negative).** AoP mounts `<ErrorBoundary>…<App/>…</ErrorBoundary>` at the SPA root in
+  `apps/web/src/main.tsx`, so the absence detector correctly did not fire. Verified by reading the
+  entry file, not inferred from the tally.
+- **Hand-rolled ErrorBoundary class (entry 61, `M6 — Indicator: hand-rolled ErrorBoundary`) —
+  correctly FIRED (true positive).** `apps/web/src/ErrorBoundary.tsx:21` is a by-hand `Component`
+  subclass implementing `getDerivedStateFromError` + `componentDidCatch`; the Info indicator flagged
+  it once. It is a deliberate, WHY-commented boundary — the hedged "may be worth investigating"
+  framing is correct (paid triage would record it as deliberate); not a defect to file.
+- **Vite env coercion (#628, `detectViteEnvCoercion`) — correctly SILENT (true negative).** AoP reads
+  env as bare `import.meta.env.VITE_*` / `import.meta.env.MODE` (`apps/web/src/auth/config.ts`,
+  `apps/web/src/reporting.ts`, `apps/web/src/monetization/adConfig.ts`) with no `=== "true"` coercion
+  or `Number()`/`parseInt()`/`JSON.parse()` wrapping — the idiomatic form the detector deliberately
+  leaves alone.
+
+No Vite-tier detector false-fired on AoP, and none surfaced a genuine new AoP defect, so no AoP issue
+was filed.
