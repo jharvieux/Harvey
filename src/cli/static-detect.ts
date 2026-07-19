@@ -29,6 +29,7 @@ import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
 import { detectTestIntentFindings } from "../detectors/test-intent.js";
+import { detectVitestIntentFindings } from "../detectors/vitest-intent.js";
 import { detectTargetFramework, viteWorkspaces } from "../scan/framework-detect.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
 
@@ -97,6 +98,7 @@ try {
     ...detectSlopFindings(sources),
     ...detectHandrolledFindings(sources), // M6 free-tier indicators — Info-only, non-grading (#267)
     ...detectTestIntentFindings(allSources), // M8 free tier (#372) — needs the test files too
+    ...detectVitestIntentFindings(allSources), // M8 vitest-specific (#629) — runner-gated
     ...scanAssetWeight(scanDir), // scoped copy = committed files only
     ...buildDirs.flatMap((b) => (isVite ? parseViteBundleStats(b) : parseBundleStats(b))),
     ...statsPaths.flatMap((p) => parseBundleAnalyzerStats(p)),

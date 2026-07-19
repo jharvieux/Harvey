@@ -1,0 +1,11 @@
+import { describe, expect, it, vi } from "vitest";
+import { load } from "./loader.js";
+
+// References only globals (Date, process) — not module-scope bindings, so the hoist is safe.
+const stubs = vi.hoisted(() => ({ now: Date.now(), env: process.env.NODE_ENV }));
+
+describe("loader", () => {
+  it("loads with a stubbed timestamp", () => {
+    expect(load(stubs.now)).toBeDefined();
+  });
+});
