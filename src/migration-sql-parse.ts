@@ -157,6 +157,32 @@ export function parseCheckInConstraints(sql: string): { table_name: string; colu
   return out;
 }
 
+// Single-column PRIMARY KEY / UNIQUE columns — the arbiters an idempotent seed can target with
+// `INSERT ... ON CONFLICT (col)`. Matches an inline `primary key`/`unique` on the column's own line
+// and a table-level `primary key (col)` / `unique (col)` (including a named `constraint … unique
+// (col)`). Multi-column keys are intentionally skipped: they are not a single-column ON CONFLICT
+// arbiter. Used by the two-tenant seed to seed an auth.users-linked table (profiles) idempotently,
+// so a `handle_new_user`-style signup trigger that already inserted the row doesn't dup-key (#598).
+const INLINE_PK_UNIQUE = new RegExp(`^\\s*${IDENT}\\s+(?:${SQL_TYPES.join("|")})\\b[\\s\\S]*?\\b(?:primary\\s+key|unique)\\b`, "i");
+const TABLE_PK_UNIQUE = new RegExp(`\\b(?:primary\\s+key|unique)\\s*\\(\\s*${IDENT}\\s*\\)`, "gi");
+
+export function parseUniqueColumns(sql: string): { table_name: string; column_name: string }[] {
+  sql = stripLineComments(sql);
+  const out: { table_name: string; column_name: string }[] = [];
+  for (const m of sql.matchAll(CREATE_TABLE)) {
+    const table = identText(m[3], m[4]);
+    const body = m[5]!;
+    for (const line of body.split("\n")) {
+      const cm = INLINE_PK_UNIQUE.exec(line);
+      if (cm) out.push({ table_name: table, column_name: identText(cm[1], cm[2]) });
+    }
+    for (const cm of body.matchAll(TABLE_PK_UNIQUE)) {
+      out.push({ table_name: table, column_name: identText(cm[1], cm[2]) });
+    }
+  }
+  return out;
+}
+
 const DEFINER_FUNCTION =
   /create\s+(?:or\s+replace\s+)?function\s+(?:(\w+)\.)?(\w+)\s*\(([^)]*)\)[\s\S]*?security\s+definer[\s\S]*?as\s+\$(\w*)\$([\s\S]*?)\$\4\$/gi;
 
