@@ -15,6 +15,21 @@
 //                        imports, so those bindings do not exist yet when the factory runs (TDZ /
 //                        undefined) — the hoist guarantee is defeated.
 //
+// EXCLUDED (#660, the "vi.mock-factory hoisting reference" remainder split from #629): a static
+// detector for a `vi.mock(spec, factory)` whose factory references a non-hoisted, non-`mock`-prefixed
+// module binding was evaluated and DELIBERATELY NOT SHIPPED — no crisp signature clears the
+// zero-false-fire precision bar. Empirically (vitest 4.1.10, same hoisting model as our 3.2):
+// whether the reference throws "Cannot access X before initialization" depends on runtime IMPORT
+// ORDER, not on the reference itself. A lazy closure ref (`() => ({ f: () => binding })`) always
+// passes; an eager read (`() => binding` / `() => ({ ...binding })`) throws ONLY when the mocked
+// module is pulled in by an EAGER static import before the binding initializes — and passes when the
+// consumer is loaded via a later dynamic import. Our OWN `src/scan/mechanical.test.ts` eagerly reads
+// two non-`mock`-prefixed top-level consts inside a `vi.mock` factory and is correct, so any
+// single-file signature keying on the reference false-fires on the dogfood; distinguishing the
+// erroring case needs cross-module import-ordering analysis, out of scope for an AST pass. #660 is
+// left OPEN with this evidence; also, the modern-vitest static "must be `mock`-prefixed" rule the
+// issue assumes no longer exists (Vite rewrites imports to hoisted `await import()`).
+//
 // Method mirrors test-intent.ts: TypeScript compiler API over SourceInput[], Finding[] out, every
 // class gated by a positive+negative fixture pair (vitest-intent.test.ts, the #61 discipline).
 
