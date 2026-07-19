@@ -29,7 +29,7 @@ import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
 import { detectTestIntentFindings } from "../detectors/test-intent.js";
-import { detectTargetFramework } from "../scan/framework-detect.js";
+import { detectTargetFramework, viteWorkspaces } from "../scan/framework-detect.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
 
 const args = process.argv.slice(2);
@@ -57,6 +57,14 @@ try {
   const isVite = framework === "vite";
   console.log(`target framework: ${framework}${isVite ? " — M9 App Router checks N/A (SPA, no SSR); M7 in Vite mode" : ""}`);
 
+  // #597: at a monorepo root the root verdict is `other` (vite.config lives in apps/*), so the
+  // whole-target Vite short-circuit above never fires. Resolve a framework per workspace so M9
+  // suppresses the SSR family for each Vite app's files rather than false-firing on them.
+  const viteWs = isVite ? [] : viteWorkspaces(scanDir);
+  if (viteWs.length) {
+    console.log(`Vite workspaces (M9 App Router checks N/A): ${viteWs.join(", ")}`);
+  }
+
   // Bundle tier: explicit --build flags, or auto-detected build dirs. Build artifacts live in the
   // REAL target dir — they're gitignored, so the scoped copy never contains them. A Next target's
   // artifact is `.next/` (build-manifest.json); a Vite target's is `dist/` (index.html).
@@ -83,7 +91,7 @@ try {
   });
 
   const findings: Finding[] = [
-    ...detectAppRouterFindings(sources, framework),
+    ...detectAppRouterFindings(sources, framework, viteWs),
     ...detectPerfCodeFindings(sources, framework),
     ...detectHookDepFindings(sources),
     ...detectSlopFindings(sources),
