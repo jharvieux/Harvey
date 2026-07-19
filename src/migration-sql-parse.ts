@@ -89,11 +89,93 @@ export function parseColumns(sql: string): ParsedColumn[] {
   return out;
 }
 
+// Columns declared as an ARRAY (`<type>[]`, `varchar(n)[]`, or `<type> ARRAY`). The two-tenant seed
+// must seed these with an array literal (`'{}'`), not the scalar placeholder a base-type match would
+// pick — a scalar aborts the INSERT with "malformed array literal" (#641). `COLUMN_LINE` records only
+// the base type, so array-ness is a separate signal.
+const ARRAY_COLUMN = new RegExp(`^\\s*${IDENT}\\s+(?:${SQL_TYPES.join("|")})(?:\\s*\\([^)]*\\))?\\s*(?:\\[\\s*\\]|\\barray\\b)`, "i");
+
+export function parseArrayColumns(sql: string): { table_name: string; column_name: string }[] {
+  sql = stripLineComments(sql);
+  const out: { table_name: string; column_name: string }[] = [];
+  for (const m of sql.matchAll(CREATE_TABLE)) {
+    const table = identText(m[3], m[4]);
+    for (const line of m[5]!.split("\n")) {
+      const cm = ARRAY_COLUMN.exec(line);
+      if (cm) out.push({ table_name: table, column_name: identText(cm[1], cm[2]) });
+    }
+  }
+  return out;
+}
+
 export function parseTableNames(sql: string): { schema: string; table: string }[] {
   return [...stripLineComments(sql).matchAll(CREATE_TABLE)].map((m) => ({
     schema: m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public",
     table: identText(m[3], m[4]),
   }));
+}
+
+// `DROP TABLE [IF EXISTS] [schema.]table` — group 1/2 schema, 3/4 table. A comma-separated multi-table
+// drop matches only the first table (rare in Supabase migrations; a disclosed limitation).
+const DROP_TABLE = new RegExp(`\\bdrop\\s+table\\s+(?:if\\s+exists\\s+)?(?:${IDENT}\\.)?${IDENT}`, "gi");
+
+// Tables that still EXIST at the end of the migration history: created and not subsequently dropped.
+// The two-tenant seed must not INSERT into a table a later migration DROPped (ATC drops pending_rag_sync
+// after creating it, #640) — that aborts the whole seed under `psql -v ON_ERROR_STOP=1`. Order-aware,
+// not "any DROP excludes": a DROP followed by a re-CREATE leaves the table live (ATC drops+recreates
+// email_log). Migrations are concatenated in filename order = chronological, so the LAST create/drop
+// event per table wins.
+export function parseLiveTableNames(sql: string): { schema: string; table: string }[] {
+  sql = stripLineComments(sql);
+  const events: { pos: number; schema: string; table: string; op: "create" | "drop" }[] = [];
+  const ident = (m: RegExpMatchArray) => ({
+    schema: m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public",
+    table: identText(m[3], m[4]),
+  });
+  for (const m of sql.matchAll(CREATE_TABLE)) events.push({ pos: m.index!, ...ident(m), op: "create" });
+  for (const m of sql.matchAll(DROP_TABLE)) events.push({ pos: m.index!, ...ident(m), op: "drop" });
+  events.sort((a, b) => a.pos - b.pos);
+  const last = new Map<string, (typeof events)[number]>();
+  for (const e of events) last.set(`${e.schema}.${e.table}`.toLowerCase(), e);
+  return [...last.values()].filter((e) => e.op === "create").map(({ schema, table }) => ({ schema, table }));
+}
+
+// Columns of each live table's EFFECTIVE definition — the CREATE TABLE currently in force at the end
+// of the migration history, not the union of every CREATE for that name. When a table is DROPped and
+// re-CREATEd with a different shape (ATC email_log gains to_email/from_email and LOSES recipient_email,
+// #643), parseColumns' union would carry stale columns from the dead definition, and the seed would
+// name a column that no longer exists. Resolved by event order: a plain CREATE after a DROP replaces
+// the definition; a `CREATE ... IF NOT EXISTS` on an already-live table is a no-op (keeps the first).
+export function parseLiveColumns(sql: string): ParsedColumn[] {
+  sql = stripLineComments(sql);
+  const events: { pos: number; key: string; table: string; body?: string; ifNotExists?: boolean; op: "create" | "drop" }[] = [];
+  for (const m of sql.matchAll(CREATE_TABLE)) {
+    events.push({
+      pos: m.index!,
+      key: `${m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public"}.${identText(m[3], m[4])}`.toLowerCase(),
+      table: identText(m[3], m[4]),
+      body: m[5]!,
+      ifNotExists: /create\s+table\s+if\s+not\s+exists/i.test(m[0]),
+      op: "create",
+    });
+  }
+  for (const m of sql.matchAll(DROP_TABLE)) {
+    events.push({ pos: m.index!, key: `${m[1] !== undefined || m[2] !== undefined ? identText(m[1], m[2]) : "public"}.${identText(m[3], m[4])}`.toLowerCase(), table: identText(m[3], m[4]), op: "drop" });
+  }
+  events.sort((a, b) => a.pos - b.pos);
+  const live = new Map<string, { table: string; body: string }>();
+  for (const e of events) {
+    if (e.op === "drop") live.delete(e.key);
+    else if (!(e.ifNotExists && live.has(e.key))) live.set(e.key, { table: e.table, body: e.body! });
+  }
+  const out: ParsedColumn[] = [];
+  for (const { table, body } of live.values()) {
+    for (const line of body.split("\n")) {
+      const cm = COLUMN_LINE.exec(line);
+      if (cm) out.push({ table_name: table, column_name: identText(cm[1], cm[2]), data_type: cm[3]!.toLowerCase() });
+    }
+  }
+  return out;
 }
 
 // Columns that FK to auth.users — the seed must fill these with a REAL auth user id (an id the
@@ -234,6 +316,90 @@ export function parseUniqueColumns(sql: string): { table_name: string; column_na
     for (const cm of body.matchAll(TABLE_PK_UNIQUE)) {
       out.push({ table_name: table, column_name: identText(cm[1], cm[2]) });
     }
+  }
+  return out;
+}
+
+// Generic foreign-key columns and the parent table they REFERENCE, so the two-tenant seed can fill a
+// FK with a value that resolves instead of a dangling `gen_random_uuid()` that aborts the INSERT
+// (ATC `tenants.tier_id` → `tier_definitions`, #630). Covers the inline column-level `<col> <type> …
+// REFERENCES [schema.]<table>[(col)]` shape, the table-level `FOREIGN KEY (col) REFERENCES
+// [schema.]<table>` shape, and either added later via `ALTER TABLE … ADD [CONSTRAINT …] FOREIGN KEY`.
+// `auth.users` refs are still emitted here but the seed resolves those via parseAuthUserRefs (a real
+// created user id), so callers filter them out. The referenced COLUMN is not captured — the seed
+// references the parent's own row identity, which for a Supabase table is its `id`.
+interface ForeignKey { table_name: string; column_name: string; ref_schema: string; ref_table: string }
+
+// A column-declaration line that ends in a REFERENCES — group 1/2 the column ident, 3/4 the optional
+// ref schema, 5/6 the ref table. Guarded (in the loop) against a table-level `foreign key (…)` /
+// `constraint … references` line, which starts with a keyword, not a column+type.
+const INLINE_FK = new RegExp(`^\\s*${IDENT}\\s+\\w+[\\s\\S]*?\\breferences\\s+(?:${IDENT}\\.)?${IDENT}`, "i");
+// `FOREIGN KEY (col) REFERENCES [schema.]table` — table-level or ALTER-added. Group 1/2 col, 3/4 ref
+// schema, 5/6 ref table.
+const TABLE_FK = new RegExp(`foreign\\s+key\\s*\\(\\s*${IDENT}\\s*\\)\\s*references\\s+(?:${IDENT}\\.)?${IDENT}`, "gi");
+const CONSTRAINT_LEAD = /^\s*(?:foreign|constraint|primary|unique|check|references|exclude)\b/i;
+
+export function parseForeignKeys(sql: string): ForeignKey[] {
+  sql = stripLineComments(sql);
+  const out: ForeignKey[] = [];
+  const push = (table: string, m: RegExpExecArray | RegExpMatchArray, colA: number): void => {
+    out.push({
+      table_name: table,
+      column_name: identText(m[colA], m[colA + 1]),
+      ref_schema: m[colA + 2] !== undefined || m[colA + 3] !== undefined ? identText(m[colA + 2], m[colA + 3]) : "public",
+      ref_table: identText(m[colA + 4], m[colA + 5]),
+    });
+  };
+  for (const m of sql.matchAll(CREATE_TABLE)) {
+    const table = identText(m[3], m[4]);
+    const body = m[5]!;
+    for (const line of body.split("\n")) {
+      if (CONSTRAINT_LEAD.test(line)) continue; // table-level constraint line — handled by TABLE_FK below
+      const cm = INLINE_FK.exec(line);
+      if (cm) push(table, cm, 1);
+    }
+    for (const cm of body.matchAll(TABLE_FK)) push(table, cm, 1);
+  }
+  for (const am of sql.matchAll(ALTER_TABLE)) {
+    const table = identText(am[3], am[4]);
+    const stmt = statementText(sql, am.index) ?? sql.slice(am.index);
+    for (const cm of stmt.matchAll(TABLE_FK)) push(table, cm, 1);
+  }
+  return out;
+}
+
+// Columns declared NOT NULL inline on their own declaration line. The seed needs this so a generic FK
+// it cannot resolve is handled correctly: a NULLABLE FK is simply OMITTED (left NULL), but a NOT NULL
+// FK cannot be — it needs a real parent row (#630). A column absent from this set is nullable
+// (Postgres's default), which is exactly the signal the seed reads.
+const NOT_NULL_LINE = new RegExp(`^\\s*${IDENT}\\s+(?:${SQL_TYPES.join("|")})\\b[\\s\\S]*?\\bnot\\s+null\\b`, "i");
+
+export function parseNotNullColumns(sql: string): { table_name: string; column_name: string }[] {
+  sql = stripLineComments(sql);
+  const out: { table_name: string; column_name: string }[] = [];
+  for (const m of sql.matchAll(CREATE_TABLE)) {
+    const table = identText(m[3], m[4]);
+    for (const line of m[5]!.split("\n")) {
+      const cm = NOT_NULL_LINE.exec(line);
+      if (cm) out.push({ table_name: table, column_name: identText(cm[1], cm[2]) });
+    }
+  }
+  return out;
+}
+
+// Columns removed later via `ALTER TABLE [only] [schema.]table … DROP COLUMN [IF EXISTS] <col>` (one
+// ALTER may drop several columns in a comma-separated clause list). The two-tenant seed must not name
+// a dropped column — it no longer exists in the final schema and aborts the seed (ATC drops
+// quotes.cruise_line and 10 others, #642). Column-level analog of parseLiveTableNames. Group 1/2 col.
+const DROP_COLUMN = new RegExp(`\\bdrop\\s+column\\s+(?:if\\s+exists\\s+)?${IDENT}`, "gi");
+
+export function parseDroppedColumns(sql: string): { table_name: string; column_name: string }[] {
+  sql = stripLineComments(sql);
+  const out: { table_name: string; column_name: string }[] = [];
+  for (const am of sql.matchAll(ALTER_TABLE)) {
+    const table = identText(am[3], am[4]);
+    const stmt = statementText(sql, am.index) ?? sql.slice(am.index);
+    for (const dm of stmt.matchAll(DROP_COLUMN)) out.push({ table_name: table, column_name: identText(dm[1], dm[2]) });
   }
   return out;
 }
