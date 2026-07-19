@@ -250,6 +250,10 @@ rules:
       - pattern: req.params
       # App Router route handler: `export async function GET(req, { params }) { ... params.id ... }`
       - pattern: params.$K
+      # #601 (CX-13): Next 15/16 makes the route-handler `params` a Promise, read as
+      # `const { id } = await params;`. The destructured id is tainted from the awaited promise —
+      # a source `params.$K` (property access) never saw, so the pure-App-Router IDOR stayed dark.
+      - pattern: await params
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -295,6 +299,43 @@ rules:
               - pattern: $C.from($T).update({ ...$BODY, ... })
               - pattern: $C.from($T).update({ ...$BODY })
           - focus-metavariable: $BODY
+
+  # #601 (CX-14): the BARE-variable mass-assignment sink. harvey-mass-assignment above requires an
+  # object SPREAD (`update({ ...body })`); this target passes the whole parsed request body directly
+  # — `const body = await request.json(); supabase.from("profiles").update(body).eq("id", user.id)`.
+  # A bare tainted variable as the ENTIRE payload is an even stronger over-posting signal than a
+  # spread, but the spread-only sink never matched it. Precision is held by UNIFYING $BODY: the sink
+  # variable must be the exact identifier declared from `await req.json()` / `req.body` in the same
+  # function — a safe reconstructed object (`const upd = { name: body.name }; update(upd)`) has a
+  # different RHS, so its variable never binds $BODY and it stays dark. This is why it is a separate
+  # non-taint rule: taint would flow through the reconstruction and lose the distinction. Review tier
+  # (same as harvey-mass-assignment — a static rule can't prove no allowlist runs elsewhere).
+  - id: harvey-mass-assignment-bare
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      The whole parsed request body is passed directly as the insert/update payload (a bare
+      variable, no field allowlist) — mass assignment. A caller can set any column the table
+      exposes (role/is_admin/owner_id/price) by adding it to the JSON body. Destructure and pass
+      an explicit list of allowed fields instead of the raw body object.
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              const $BODY = await $REQ.json();
+              ...
+          - pattern-inside: |
+              let $BODY = await $REQ.json();
+              ...
+          - pattern-inside: |
+              const $BODY = $REQ.body;
+              ...
+      - pattern-either:
+          - pattern: $C.from($T).update($BODY)
+          - pattern: $C.from($T).insert($BODY)
 
   # A full DB row (select('*')) is spread directly into a rendered component's props. In a Server
   # Component (no "use client" in this file), every column on that row serializes across the
