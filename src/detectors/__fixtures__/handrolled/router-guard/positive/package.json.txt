@@ -1,0 +1,7 @@
+{
+  "name": "router-guard-positive",
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-router-dom": "^6.26.0"
+  }
+}

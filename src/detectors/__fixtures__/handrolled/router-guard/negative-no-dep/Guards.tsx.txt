@@ -1,0 +1,9 @@
+// The SAME ProtectedRoute fork, but no react-router is in this tree — there a locally-defined
+// <Navigate> is not this idiom, so the gate stays shut.
+import { Navigate } from "./local-nav";
+
+export function ProtectedRoute({ children }) {
+  const user = useUser();
+  if (!user) return <Navigate to="/login" replace />;
+  return children;
+}

@@ -1,0 +1,6 @@
+{
+  "name": "router-guard-negative-no-dep",
+  "dependencies": {
+    "react": "^18.3.0"
+  }
+}

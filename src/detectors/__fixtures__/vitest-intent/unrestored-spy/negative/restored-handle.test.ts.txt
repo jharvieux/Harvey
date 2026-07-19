@@ -1,0 +1,11 @@
+import { describe, expect, it, vi } from "vitest";
+import { logWarning } from "./logger.js";
+
+describe("logWarning", () => {
+  it("writes to console.warn", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    logWarning("boom");
+    expect(warn).toHaveBeenCalledWith("boom");
+    warn.mockRestore();
+  });
+});
