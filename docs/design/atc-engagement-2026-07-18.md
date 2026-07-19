@@ -24,6 +24,29 @@ silent skip (CLAUDE.md coverage doctrine).
 > stand-up (apps/rag) stays open as #610. No genuine ATC M2 finding resulted (the blocker is a Harvey harness gap,
 > not an ATC vulnerability).
 
+> **Addendum 2 — 2026-07-19 (M2 seed switched to LIVE-SCHEMA INTROSPECTION, Harvey #646).** The M2
+> `--execute` seed is now built by **introspecting the live post-migration database** (`information_schema`
+> / `pg_catalog` — columns, types, nullability, defaults, PK/UNIQUE, the FK graph, and CHECK/enum/domain
+> definitions) instead of parsing migration text. This kills the entire unrecognized-type + schema-evolution
+> class at the source: the daterange blocker (`tenant_usage_metrics.billing_period`, #646) that stopped the
+> #622 re-run is **GONE** — a NOT NULL `daterange` now seeds a valid range literal from the real applied type.
+> M2 was re-run live against `apps/main` on an isolated stack (project `harvey-dv-25105cd717`, non-default
+> ports api=58161/db=58162; **185 migrations applied cleanly + torn down clean** — 0 Harvey containers/volumes
+> left, no foreign volumes touched, #604 verified). The introspection seed advanced **far past** every prior
+> blocker: the first `tenants` row (nullable FK `tier_id`, #630) ✓, and the `bookings`/`commissions` multi-column
+> *belt-and-suspenders* consistency CHECKs ✓ (a new null-branch heuristic: null the nullable referenced columns,
+> pin the NOT NULL discriminator to its first allowed value) — reaching `tasks` at `seed.sql:85`, deep in the
+> 92-table scoped set. **New, distinct blocker there:** `tasks`' table-level CHECK
+> `(contact_id IS NOT NULL)::int + (quote_id …)::int + (booking_id …)::int + (conversation_id …)::int = 1`,
+> an **exactly-one-of / polymorphic-parent** invariant requiring exactly ONE of four nullable FKs to be non-null
+> — the opposite of the null-branch shape, so the generic heuristic can't satisfy it. This is a **bespoke
+> multi-column CHECK-invariant class (Harvey #649)**, NOT a type/schema-evolution issue. So the live cross-tenant
+> PostgREST matrix **still did not run, and ATC's runtime tenant-isolation proof remains PENDING** — now blocked
+> by #649 (bespoke cross-column CHECKs), not by #646 (types, closed) or #630/#622. Recommended next step (in
+> #649): apply the seed per-table under SAVEPOINTs so a table with an unsatisfiable bespoke CHECK is
+> skipped+disclosed while the rest seed, letting the matrix run on the bulk of the surface for a *partial* runtime
+> proof. No genuine ATC M2 finding resulted (the blocker is a Harvey harness gap, not an ATC vuln).
+
 ---
 
 ## 1. Target enumeration

@@ -83,7 +83,6 @@ if (clientSuite.present) console.log(`  client suite (bonus): ${clientSuite.deta
 // users → apply the generic two-tenant seed → run the live PostgREST matrix. --allow-destructive
 // is safe here: every probe hits the disposable local seed inside the stand-up boundary.
 const { runner, workdir, projectId, ports, customAuth, stop } = createLiveStandUp({
-  migrationSql,
   plan,
   safeScope: { allowDestructive: true, allowNonLocal: false },
 });
