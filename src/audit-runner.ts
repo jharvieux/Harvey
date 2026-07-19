@@ -194,7 +194,16 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
           ? { module, status: "requires-live-run", reason: outcome.reason, ...instance }
           : { module, status: outcome.status, detail: outcome.detail, ...(outcome.status === "partial" ? { reason: outcome.reason } : {}), ...instance },
       );
-      if (outcome.status !== "requires-live-run" && outcome.findings) findings.push(...outcome.findings);
+      // #620: on a monorepo fan-out each app's probe emits the SAME finding ids (SLOP-01, M9-01, …),
+      // so the assembled document had duplicate ids and --findings-out failed schema validation —
+      // the deliverable was never written. Namespace ids by the instance they belong to so each
+      // app's finding is distinct (and the location/instance still says which app it is). Only when
+      // an instance is set: a single-target run keeps its ids unchanged.
+      if (outcome.status !== "requires-live-run" && outcome.findings) {
+        findings.push(
+          ...(outcome.instance ? outcome.findings.map((f) => ({ ...f, id: `${f.id}@${outcome.instance}` })) : outcome.findings),
+        );
+      }
       if (outcome.status !== "requires-live-run" && outcome.hotspots?.length) hotspots = outcome.hotspots;
     }
   }
