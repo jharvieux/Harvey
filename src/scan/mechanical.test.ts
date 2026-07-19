@@ -17,7 +17,7 @@ vi.mock("./supply-chain.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./supply-chain.js")>();
   return { ...actual, checkSlopsquat, checkLicenseCompliance };
 });
-vi.mock("./secrets.js", () => ({ scanSecrets: vi.fn(() => []) }));
+vi.mock("./secrets.js", () => ({ scanSecrets: vi.fn(() => []), resolveBundleScan: vi.fn(() => ({})) }));
 vi.mock("./semgrep.js", () => ({
   runSemgrep: vi.fn(() => ""),
   parseSemgrepFindings: vi.fn(() => []),

@@ -26,7 +26,11 @@ const SENSITIVE_ROUTE_SEGMENT = /(^|\/)(debug|seed|admin|api\/dev)(\/|$|\.)/i;
 // top-level helper — `const user = await getUser(req)` (the vandyand app/api/admin/revenue shape) —
 // authenticates just as authoritatively and must not be labelled "Unauthenticated debug/admin route"
 // (the #562 false-premise class, fixed there for harvey-route-noauth). `auth()` covers next-auth v5.
-const AUTH_HINT = /(getServerSession|getSession|getUser|getCurrentUser|getAuthUser|getAuthenticatedUser|auth\(\)|requireAuth|withAuth|assertAuth|supabase\.auth\.getUser|createServerClient)/;
+// #586: the same false-premise class for CUSTOM-JWT auth — a route that establishes its session with
+// `jwt.verify(...)` (jsonwebtoken) or a verifyToken/verifySession/verifyJwt/jwtVerify/decodeToken
+// helper (jose/next-auth/Clerk/Lucia shapes) authenticates just as authoritatively as getUser, and
+// must not be mislabelled "Unauthenticated" simply because the mechanism isn't Supabase.
+const AUTH_HINT = /(getServerSession|getSession|getUser|getCurrentUser|getAuthUser|getAuthenticatedUser|auth\(\)|requireAuth|withAuth|assertAuth|supabase\.auth\.getUser|createServerClient|jwt\.verify|jwtVerify|verifyToken|verifySession|verifyJwt|verifyJWT|decodeToken)/;
 const ROUTE_FILE = /(^|\/)(route\.(ts|tsx|js)|pages\/api\/.*\.(ts|tsx|js))$/;
 
 // B7 (#71): a login/signup/OTP/password-reset route with no rate-limiter hint — an attacker can
