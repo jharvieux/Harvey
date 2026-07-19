@@ -165,6 +165,48 @@ rules:
           "use client";
           ...
 
+  # #565: Vite variant of the service-role-in-client footgun. A Vite/no-code (Lovable/Bolt/v0) SPA
+  # has no "use client" boundary — ALL of its code is client code — and reads env via
+  # import.meta.env.VITE_*. Vite statically INLINES every VITE_-prefixed var into the browser bundle
+  # by design, so a service-role key named with the VITE_ prefix ships full RLS-bypass credentials to
+  # every visitor. Scoped to a service-role key name (not the anon/publishable key, which is meant to
+  # be public) so it stays HIGH-precision → free count. Critical.
+  - id: harvey-vite-service-role-in-client
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: Critical
+    message: >
+      A Supabase service-role key is read from import.meta.env.VITE_* — Vite inlines every
+      VITE_-prefixed variable into the browser bundle, so this ships full RLS-bypass credentials to
+      every visitor. Never expose a service-role key with the VITE_ prefix; move service-role work to
+      a server-side function and keep only the anon/publishable key in the client.
+    patterns:
+      - pattern: import.meta.env.$K
+      - metavariable-regex:
+          metavariable: $K
+          regex: ^VITE_[A-Z0-9_]*(SERVICE_ROLE|SERVICE_KEY)[A-Z0-9_]*$
+
+  # #565: a browser LLM client constructed with dangerouslyAllowBrowser: true — the canonical no-code
+  # "the AI key is in the bundle" footgun. The SDK requires this flag to run in a browser precisely
+  # because doing so exposes the API key to every visitor (it is inlined alongside the client). The
+  # literal `true` is an exact, unambiguous signal → HIGH, free count.
+  - id: harvey-dangerously-allow-browser
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      An LLM client is constructed with dangerouslyAllowBrowser: true — this runs in the browser and
+      exposes the API key to every visitor (the key is inlined into the bundle). Call the LLM from a
+      server-side route/function and keep the key server-only; never ship it to the client.
+    patterns:
+      - pattern: "{ ..., dangerouslyAllowBrowser: true, ... }"
+
   # SSRF: server fetches a request-controlled URL with no host allow/deny. Review tier —
   # exploitability depends on the deploy network (internal ranges / cloud metadata reachability).
   # #570: sources extended with the App Router request-access idioms — `new URL(req.url).searchParams`

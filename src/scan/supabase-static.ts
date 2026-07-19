@@ -35,20 +35,35 @@ interface CreatedTable {
   line: number;
 }
 
-export function checkMigrationRlsStatic(dir: string): Finding[] {
+// #565 — a Supabase Table-Editor / no-code (Lovable/Bolt/v0) export commits its schema as a single
+// root `schema.sql` instead of supabase/migrations/*.sql, so the migrations-only discovery returned
+// [] and every RLS-off table in that export was invisible. Read BOTH: every supabase/migrations/*.sql
+// AND a root schema.sql. (This M1 static-RLS side only; M2/M10 schema discovery is handled in #574/#529.)
+function readRlsSqlSources(dir: string): { file: string; raw: string }[] {
+  const out: { file: string; raw: string }[] = [];
   const migrationsDir = join(dir, "supabase", "migrations");
-  if (!existsSync(migrationsDir)) return [];
+  if (existsSync(migrationsDir)) {
+    for (const file of readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
+      out.push({ file: relative(dir, join(migrationsDir, file)), raw: readFileSync(join(migrationsDir, file), "utf8") });
+    }
+  }
+  const rootSchema = join(dir, "schema.sql");
+  if (existsSync(rootSchema)) out.push({ file: "schema.sql", raw: readFileSync(rootSchema, "utf8") });
+  return out;
+}
+
+export function checkMigrationRlsStatic(dir: string): Finding[] {
+  const sources = readRlsSqlSources(dir);
+  if (sources.length === 0) return [];
 
   const created = new Map<string, CreatedTable>();
   const enabled = new Set<string>();
 
-  for (const file of readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
-    const raw = readFileSync(join(migrationsDir, file), "utf8");
+  for (const { file: rel, raw } of sources) {
     // Strip comments so commented-out DDL (e.g. an "intentionally NO enable RLS" note that quotes
     // the statement it's warning about) can't register as a real create/enable. Keep line count
     // stable by blanking rather than deleting, so the create-site line number stays accurate.
     const sql = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/--[^\n]*/g, "");
-    const rel = relative(dir, join(migrationsDir, file));
     for (const m of sql.matchAll(CREATE_TABLE)) {
       const name = m[1]!.toLowerCase();
       if (!created.has(name)) {

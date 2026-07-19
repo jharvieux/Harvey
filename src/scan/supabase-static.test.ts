@@ -80,6 +80,32 @@ describe("checkMigrationRlsStatic", () => {
     expect(names).toHaveLength(1);
     expect(names[0]).toContain("audit_logs");
   });
+
+  // #565 — a no-code export commits its schema as a root schema.sql, not supabase/migrations/*.sql.
+  it("flags an RLS-off table read from a root schema.sql (no supabase/migrations)", () => {
+    root = mkdtempSync(join(tmpdir(), "harvey-rls-"));
+    writeFileSync(join(root, "schema.sql"), "create table public.nocode_tickets (id uuid primary key);");
+    const findings = checkMigrationRlsStatic(root);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.evidence).toContain("public.nocode_tickets");
+    expect(findings[0]!.location).toContain("schema.sql");
+    expect(findings[0]!.precisionTier).toBe("high");
+  });
+
+  it("clears a root schema.sql table that enables RLS", () => {
+    root = mkdtempSync(join(tmpdir(), "harvey-rls-"));
+    writeFileSync(
+      join(root, "schema.sql"),
+      "create table public.nocode_safe (id uuid primary key);\nalter table public.nocode_safe enable row level security;",
+    );
+    expect(checkMigrationRlsStatic(root)).toEqual([]);
+  });
+
+  it("aggregates enables across supabase/migrations AND a root schema.sql", () => {
+    const dir = writeMigrations({ "0002_rls.sql": "alter table public.nocode_tickets enable row level security;" });
+    writeFileSync(join(dir, "schema.sql"), "create table public.nocode_tickets (id uuid primary key);");
+    expect(checkMigrationRlsStatic(dir)).toEqual([]);
+  });
 });
 
 describe("checkEdgeFunctionVerifyJwt", () => {

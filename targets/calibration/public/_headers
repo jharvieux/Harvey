@@ -1,0 +1,9 @@
+# PLANTED BUG (P-HOSTING-HEADERS-MISSING, #578): a Netlify-style hosting-header file — how a
+# Vite/no-code SPA export sets response headers (the missing-header semgrep rules only match a
+# next.config.js headers() route object, so this hosting-config shape was a blind spot). The app IS
+# managing headers here (Cache-Control below) but ships none of the transport/clickjacking/MIME-sniff
+# protections. checkHostingConfigHeaders flags each missing one -> review. (This comment avoids naming
+# the specific header keys, since the check greps the whole file text.)
+/*
+  Cache-Control: public, max-age=0, must-revalidate
+  X-DNS-Prefetch-Control: on

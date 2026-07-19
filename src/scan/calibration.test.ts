@@ -509,6 +509,9 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     warning("harvey-template-autoescape-off", "lib/render-template.js"),
     warning("harvey-html-template-literal", "pages/api/greet.js"),
     warning("harvey-incomplete-sanitize", "lib/sanitize-bad.js"),
+    // #565 — Vite/no-code M1 secret shapes (ERROR+HIGH).
+    error("harvey-vite-service-role-in-client", "src/lib/supabaseServiceClient.ts"),
+    error("harvey-dangerously-allow-browser", "src/lib/openaiBrowser.ts"),
   ];
 
   // The two new static checks are filesystem facts, so run the REAL functions against a temp
@@ -526,6 +529,16 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     join(supaDir, "supabase", "migrations", "20260708000002_rls.sql"),
     "alter table public.documents enable row level security;\nalter table public.service_state enable row level security;\n",
   );
+  // #565 — a root schema.sql (no-code export shape) in a SEPARATE dir (keeps supaDir migrations-only
+  // for the focused "flags only audit_logs" test below): nocode_tickets (RLS off → positive),
+  // nocode_safe (RLS enabled in the same file → negative). checkMigrationRlsStatic reads a root
+  // schema.sql, not just supabase/migrations.
+  const rootSchemaDir = mkdtempSync(join(tmpdir(), "harvey-b13-rootschema-"));
+  afterAll(() => rmSync(rootSchemaDir, { recursive: true, force: true }));
+  writeFileSync(
+    join(rootSchemaDir, "schema.sql"),
+    "create table public.nocode_tickets (id uuid primary key);\ncreate table public.nocode_safe (id uuid primary key);\nalter table public.nocode_safe enable row level security;\n",
+  );
   writeFileSync(
     join(supaDir, "supabase", "config.toml"),
     "[functions.admin-refund]\nverify_jwt = false\n\n[functions.user-profile]\nverify_jwt = true\n",
@@ -534,6 +547,7 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
   const findings = [
     ...parseSemgrepFindings({ results: semgrep }),
     ...checkMigrationRlsStatic(supaDir),
+    ...checkMigrationRlsStatic(rootSchemaDir),
     ...checkEdgeFunctionVerifyJwt(supaDir),
   ];
 
@@ -546,11 +560,11 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     }
   });
 
-  it("promotes only the exact static/structural sinks to the free count (4 high, 8 review)", () => {
+  it("promotes only the exact static/structural sinks to the free count (7 high, 8 review)", () => {
     const m = buildCoverageMatrix(findings, b13SupaEntries);
     const positives = b13SupaEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
-    expect(m.positivesCaughtHigh).toBe(4);
+    expect(m.positivesCaughtHigh).toBe(7);
     expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(8);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
@@ -580,6 +594,10 @@ describe("Batch B14 app-logic heuristics corpus (real leftover-auth greps → ti
     { path: "lib/audit-login-safe.js", content: "export function auditLogin(email, success) { console.log(\"login attempt\", { email, success }); }" },
     { path: "pages/api/upload.js", content: "const buffer = Buffer.from(req.body); await admin.storage.from(\"uploads\").upload(req.query.name, buffer);" },
     { path: "pages/api/upload-safe.js", content: "const ALLOWED_MIME = [\"image/png\"]; const length = Number(req.headers[\"content-length\"]); if (!ALLOWED_MIME.includes(ct) || length > MAX) return; await admin.storage.from(\"uploads\").upload(req.query.name, buffer, { contentType: ct });" },
+    // #576 — client-trust-boundary: a role decision made in client code (Web Storage / user-object role).
+    { path: "src/components/AdminGateStorage.tsx", content: "const role = localStorage.getItem(\"role\"); if (role === \"admin\") { return <AdminControls />; } return <p>Members only</p>;" },
+    { path: "src/components/AdminGateUser.tsx", content: "const navigate = useNavigate(); if (user.user_metadata.role !== \"admin\") { return null; } navigate(\"/admin\");" },
+    { path: "src/lib/requireAdmin.ts", content: "const { data: profile } = await admin.from(\"profiles\").select(\"role\").eq(\"id\", user.id).single(); if (profile.role !== \"admin\") return new Response(\"Forbidden\", { status: 403 });" },
   ];
   const findings = fixtures.flatMap((f) => classifyLeftoverAuth(f));
 
@@ -592,12 +610,12 @@ describe("Batch B14 app-logic heuristics corpus (real leftover-auth greps → ti
     }
   });
 
-  it("promotes none of the app-logic heuristics to the free count (0 high, 5 review)", () => {
+  it("promotes none of the app-logic heuristics to the free count (0 high, 7 review)", () => {
     const m = buildCoverageMatrix(findings, b14AppLogicEntries);
     const positives = b14AppLogicEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
     expect(m.positivesCaughtHigh).toBe(0);
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(5);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(7);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });
