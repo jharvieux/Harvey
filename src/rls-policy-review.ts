@@ -35,6 +35,27 @@ const WRITE_CMDS = new Set(["INSERT", "UPDATE", "ALL"]);
 // (writes accept anything) and USING (every existing row is in scope).
 const CLAUSE_TRUE = /^\s*\(*\s*true\s*\)*\s*$/i;
 
+// #616 — a clause that is a logical TAUTOLOGY but not the literal `true`. A migration built to
+// defeat the linter (SupatestVibeDemo/VulnBlog) disguises `USING (true)` as
+// `(author_id IS NOT NULL OR author_id IS NULL)` — a column is always one or the other, so the
+// policy admits every row while never spelling `true`. Collapse the recognised tautologies to
+// `true` before the always-true checks run. Scoped TIGHTLY to preserve precision: the null pair
+// must reference the SAME column on both sides with opposite null-ness, and `col = col` must have
+// identical operands — a genuine predicate (`status IS NOT NULL`, `author_id = auth.uid()`) does
+// not match and is left untouched.
+function collapseAlwaysTrue(clause: string): string {
+  return clause
+    .replace(/([\w."]+)\s+is\s+(not\s+)?null\s+or\s+([\w."]+)\s+is\s+(not\s+)?null/gi, (m, a: string, notA: string | undefined, b: string, notB: string | undefined) =>
+      a.toLowerCase() === b.toLowerCase() && Boolean(notA) !== Boolean(notB) ? "true" : m,
+    )
+    .replace(/([\w."]+)\s*=\s*([\w."]+)/gi, (m, a: string, b: string) => (a.toLowerCase() === b.toLowerCase() ? "true" : m));
+}
+
+// True for a literal `(true)` OR a recognised always-true tautology (#616).
+function isAlwaysTrue(clause: string | null): boolean {
+  return clause !== null && CLAUSE_TRUE.test(collapseAlwaysTrue(clause));
+}
+
 // USING gates which EXISTING rows the caller reaches. INSERT is absent because it has no USING at
 // all — Postgres rejects one ("only WITH CHECK expression allowed for INSERT").
 const USING_GATED_CMDS = new Set(["SELECT", "UPDATE", "DELETE", "ALL"]);
@@ -58,7 +79,7 @@ function ownerBound(clause: string | null): boolean {
 // spared tables: a spared policy returns null exactly like a correct one, so "not assessable" and
 // "assessed clean" are indistinguishable unless the sparing is named.
 export function isUsingTrueGated(policy: LivePolicy): boolean {
-  return USING_GATED_CMDS.has(policy.cmd.toUpperCase()) && policy.qual !== null && CLAUSE_TRUE.test(policy.qual);
+  return USING_GATED_CMDS.has(policy.cmd.toUpperCase()) && isAlwaysTrue(policy.qual);
 }
 
 interface PolicyReview {
@@ -77,7 +98,7 @@ interface PolicyReview {
 // Deliberately last in each mode: a policy whose USING *is* scoped but whose check is `true` is
 // already reported by the weaker-than-USING rules, whose wording names that specific defect.
 function checkTrueReview(policy: LivePolicy, name: string, isWrite: boolean): PolicyReview | null {
-  if (!isWrite || policy.withCheck === null || !CLAUSE_TRUE.test(policy.withCheck)) return null;
+  if (!isWrite || !isAlwaysTrue(policy.withCheck)) return null;
   return {
     policy: name,
     reason: `WITH CHECK is "true" — the policy accepts any row the caller submits, so writes are not constrained to the caller's own tenant or rows.`,
@@ -109,7 +130,7 @@ function checkTrueReview(policy: LivePolicy, name: string, isWrite: boolean): Po
 function usingTrueReview(policy: LivePolicy, name: string, model: TenancyModel): PolicyReview | null {
   if ((model.mode ?? "per-tenant") === "per-user") return null;
   if (!USING_GATED_CMDS.has(policy.cmd.toUpperCase())) return null;
-  if (policy.qual === null || !CLAUSE_TRUE.test(policy.qual)) return null;
+  if (!isAlwaysTrue(policy.qual)) return null;
   const reads = policy.cmd.toUpperCase() === "SELECT" || policy.cmd.toUpperCase() === "ALL";
   return {
     policy: name,
