@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type AuditModule } from "./audit-coverage.js";
 import { assertRegistryComplete, formatFailures, type ModuleRunner, type ProbeOutcome, type RunContext } from "./audit-runner.js";
+import type { Finding } from "./findings.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
 
@@ -248,6 +249,30 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
       if (row.status !== "ran") expect(row.reason, `${row.module} must say why`).toBeTruthy();
     }
     expect(buildAuditCoverage(recorded, ctx().env).gaps).toEqual([]);
+  });
+});
+
+// #620: on a monorepo, per-app tiers fan out and each app's probe emits the SAME finding ids
+// (SLOP-01, M9-01, …). Before the fix the assembled document carried duplicate ids and
+// --findings-out failed schema validation, so the engagement findings.json was never written.
+describe("monorepo fan-out namespaces finding ids by instance (#620)", () => {
+  const withId = (id: string): Finding => ({ id } as unknown as Finding);
+  const swap = (module: AuditModule, run: ModuleRunner["run"]) => allRan().map((r) => (r.module === module ? { module, run } : r));
+
+  it("distinguishes the same finding id emitted by two apps so ids stay unique", () => {
+    const runners = swap("M5", () => [
+      { status: "ran", detail: "knip apps/main", instance: "apps/main", findings: [withId("SLOP-01")] },
+      { status: "ran", detail: "knip apps/rag", instance: "apps/rag", findings: [withId("SLOP-01")] },
+    ]);
+    const ids = runAudit(runners, ctx()).findings.map((f) => f.id);
+    expect(ids).toContain("SLOP-01@apps/main");
+    expect(ids).toContain("SLOP-01@apps/rag");
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("leaves ids unchanged on a single-target (no instance) run", () => {
+    const runners = swap("M5", () => ({ status: "ran", detail: "knip", findings: [withId("SLOP-01")] }));
+    expect(runAudit(runners, ctx()).findings.map((f) => f.id)).toContain("SLOP-01");
   });
 });
 

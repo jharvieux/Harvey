@@ -36,6 +36,18 @@ export function extractM6Brief(briefText: string): string {
   return [...lines.slice(start, end), "", ...lines.slice(fpStart, fpEnd)].join("\n").trim();
 }
 
+// #621: on a monorepo the source walk enumerates every workspace (21k+ files). When --hotspots is
+// given the review is meant to be SCOPED to those files, but hotspots previously only reordered an
+// all-files packet — so the packet ballooned to the whole tree (a 105MB / 21,386-file packet) while
+// reporting "9 hotspots matched". Reordering keeps non-hotspot files by design (buildPacket, #442),
+// so the scoping decision is made here, BEFORE buildPacket: with a hotspot list, keep only files
+// whose target-relative path is in it; without one, keep everything (single-target behaviour).
+export function scopePacketFiles(allFiles: string[], targetDir: string, hotspots: string[]): string[] {
+  if (!hotspots.length) return allFiles;
+  const wanted = new Set(hotspots);
+  return allFiles.filter((f) => wanted.has(relative(targetDir, f)));
+}
+
 interface SimplifyPacket {
   brief: string;
   files: { path: string; source: string; hotspotRank?: number }[];
