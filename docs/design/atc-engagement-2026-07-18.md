@@ -11,6 +11,19 @@ This is a COMPLETE audit: all ten modules were accounted for against every app a
 Modules that could not fully run are recorded `partial` / `requires-live-run` **with the reason** — never a
 silent skip (CLAUDE.md coverage doctrine).
 
+> **Addendum — 2026-07-19 (M2 re-run after Harvey #622).** With the #622 seed fix landed, M2 was re-run live
+> against `apps/main` on an isolated stack (project `harvey-dv-7264109781`, non-default ports api=55181/db=55182;
+> stood up + all 185 apps/main migrations applied cleanly + torn down clean — 0 Harvey containers/volumes left,
+> no foreign volumes touched, #604 verified). **#622 is confirmed fixed against ATC's real schema:** the seed no
+> longer fails on `tenants_onboarding_stage_check` — `onboarding_stage` now seeds a legal value derived from the
+> ALTER-added `IS NULL OR IN (...)` constraint. However the two-tenant seed still could not fully apply: the first
+> `tenants` INSERT now aborts on `tenants_tier_id_fkey` — the seed fills the nullable generic FK `tenants.tier_id`
+> (→ `tier_definitions`) with a dangling `gen_random_uuid()` instead of NULL/a seeded parent (**Harvey #630**, a
+> distinct seed gap). So the live cross-tenant PostgREST matrix **still did not run, and ATC's runtime tenant-isolation
+> proof remains pending** — now blocked by #630, not #622. This re-run was scoped to `apps/main` only; per-project
+> stand-up (apps/rag) stays open as #610. No genuine ATC M2 finding resulted (the blocker is a Harvey harness gap,
+> not an ATC vulnerability).
+
 ---
 
 ## 1. Target enumeration
@@ -133,7 +146,9 @@ RS256 service JWTs. No cross-tenant data-exposure path was found in the reviewed
 - **M2 dynamic pen-test — partial/blocked.** The isolated stack stood up and tore down cleanly (no foreign
   Docker volumes touched, #604 verified), but Harvey's two-tenant seed inserts an `onboarding_stage` value ATC's
   current CHECK constraint rejects, so no cross-tenant probe executed. Second backend (rag) not stood up (#610).
-  → Harvey #622, #610. **This is the one module with no findings coverage this engagement.**
+  → Harvey #622, #610. **This is the one module with no findings coverage this engagement.** _Update 2026-07-19:
+  #622 fixed and verified (see the addendum at the top); the seed now advances past the CHECK but is blocked on the
+  next column by a dangling generic FK (`tenants.tier_id`) → Harvey #630. Runtime isolation proof still pending._
 - **M7 Lighthouse — requires-live-run (deliberate).** A CWV run needs a full `next build`+`next start` against
   ATC's production `.env.local`; not built to avoid a long build touching live services. Static code tier + DB
   advisors ran.
