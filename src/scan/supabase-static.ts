@@ -26,8 +26,15 @@ import { isUsingTrueGated, policyReviewFindings, type LivePolicy, type TenancyMo
 import { reviewFinding } from "../review-tier.js";
 import { mechanicalFinding } from "./common.js";
 
-const CREATE_TABLE = /create\s+table\s+(?:if\s+not\s+exists\s+)?public\.([a-z0-9_]+)/gi;
-const ENABLE_RLS = /alter\s+table\s+(?:only\s+)?public\.([a-z0-9_]+)\s+enable\s+row\s+level\s+security/gi;
+// #611 — the schema qualifier is OPTIONAL. A no-code Table-Editor export (Lovable/Bolt/v0) emits
+// bare `create table workspaces` — public is the implicit default schema — so requiring the literal
+// `public.` enumerated zero tables and every RLS-off table in the export stayed invisible. The
+// optional first group captures an EXPLICIT schema so the loop can keep only public-schema tables
+// (a `create table private.secrets` is not PostgREST-exposed and must not be flagged); a bare name
+// has no schema group and defaults to public. ENABLE_RLS is broadened symmetrically so a bare
+// `alter table workspaces enable row level security` still clears the bare create.
+const CREATE_TABLE = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:([a-z0-9_]+)\.)?([a-z0-9_]+)/gi;
+const ENABLE_RLS = /alter\s+table\s+(?:only\s+)?(?:([a-z0-9_]+)\.)?([a-z0-9_]+)\s+enable\s+row\s+level\s+security/gi;
 
 interface CreatedTable {
   name: string;
@@ -65,13 +72,17 @@ export function checkMigrationRlsStatic(dir: string): Finding[] {
     // stable by blanking rather than deleting, so the create-site line number stays accurate.
     const sql = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/--[^\n]*/g, "");
     for (const m of sql.matchAll(CREATE_TABLE)) {
-      const name = m[1]!.toLowerCase();
+      if ((m[1] ?? "public").toLowerCase() !== "public") continue;
+      const name = m[2]!.toLowerCase();
       if (!created.has(name)) {
         const line = sql.slice(0, m.index).split("\n").length;
         created.set(name, { name, file: rel, line });
       }
     }
-    for (const m of sql.matchAll(ENABLE_RLS)) enabled.add(m[1]!.toLowerCase());
+    for (const m of sql.matchAll(ENABLE_RLS)) {
+      if ((m[1] ?? "public").toLowerCase() !== "public") continue;
+      enabled.add(m[2]!.toLowerCase());
+    }
   }
 
   return [...created.values()]
