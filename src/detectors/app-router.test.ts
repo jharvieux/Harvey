@@ -518,3 +518,40 @@ describe("monorepo per-workspace framework gate (#597)", () => {
     expect(taxonomies(findings)).toContain(SSR_API);
   });
 });
+
+// #627: a Vite/SPA has no framework-level error boundary (no Next error.tsx), so an entry that
+// mounts the root with no error boundary anywhere blanks the whole app on an unhandled render
+// error. This runs ONLY on the Vite/SPA scope the rest of the M9 pass is suppressed on.
+const SPA_BOUNDARY = "M9 — SPA missing root error boundary";
+
+describe("SPA root error-boundary absence (#627)", () => {
+  it("flags a `vite` entry that mounts the root with no error boundary anywhere in the SPA", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("spa-error-boundary/positive"), "vite");
+    const boundary = findings.filter((f) => f.taxonomy === SPA_BOUNDARY);
+    expect(boundary).toHaveLength(1);
+    expect(boundary[0]).toMatchObject({ severity: "Low", confidence: "Review", category: "Reliability" });
+    expect(boundary[0]?.location).toBe("main.tsx:5");
+    // The N/A coverage note still accompanies it — the family is still suppressed, this is the one
+    // SPA-specific check that runs on the Vite scope.
+    expect(taxonomies(findings)).toContain(NON_SSR_NOTE);
+  });
+
+  it("stays silent when the SPA already wraps the root in a boundary (react-error-boundary)", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("spa-error-boundary/negative-has-boundary"), "vite");
+    expect(taxonomies(findings)).not.toContain(SPA_BOUNDARY);
+    expect(taxonomies(findings)).toContain(NON_SSR_NOTE);
+  });
+
+  it("does NOT run on a Next/omitted-framework target — the check is Vite/SPA-specific", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("spa-error-boundary/positive"));
+    expect(taxonomies(findings)).not.toContain(SPA_BOUNDARY);
+  });
+
+  it("flags a Vite workspace's entry in a monorepo, located under the workspace dir", () => {
+    const webFiles = prefixPaths(loadFixtureDir("spa-error-boundary/positive"), "apps/web");
+    const findings = detectAppRouterFindings(webFiles, "other", ["apps/web"]);
+    const boundary = findings.filter((f) => f.taxonomy === SPA_BOUNDARY);
+    expect(boundary).toHaveLength(1);
+    expect(boundary[0]?.location).toBe("apps/web/main.tsx:5");
+  });
+});
