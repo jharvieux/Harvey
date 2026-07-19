@@ -141,6 +141,14 @@ rules:
           # NextResponse.json(body, { headers }) or returned from a Deno edge function. The object
           # literal itself carries the wildcard regardless of where it is later spread.
           - pattern: '{ ..., "Access-Control-Allow-Origin": "*", ... }'
+          # #614: the Express `cors` middleware config idiom — `cors({ origin: "*", credentials:
+          # true })`. A wildcard origin TOGETHER WITH credentials is the dangerous combination (the
+          # cors lib reflects the origin, defeating same-origin protection for authenticated
+          # requests). Both keys are required so a public-API `origin: "*"` with no credentials —
+          # the common, intended shape — stays dark.
+          - patterns:
+              - pattern: '{ ..., origin: "*", ... }'
+              - pattern: "{ ..., credentials: true, ... }"
 
   # Service-role key referenced inside a Client Component ("use client"). Gating on the
   # "use client" directive is the high-precision signal: it means the module (and the key) ships
