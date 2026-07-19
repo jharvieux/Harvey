@@ -22,7 +22,7 @@ import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
 import { checkPublicDirSensitive, parseSemgrepFindings, type SemgrepResult } from "./semgrep.js";
-import { checkEdgeFunctionVerifyJwt, checkMigrationRlsInitplanStatic, checkMigrationRlsStatic } from "./supabase-static.js";
+import { checkEdgeFunctionVerifyJwt, checkMigrationRlsInitplanStatic, checkMigrationRlsStatic, checkOpenSignupConfig } from "./supabase-static.js";
 import { m7InitplanStaticEntries } from "./calibration/m7-initplan-static.entries.js";
 import { checkKnownIoc, checkLockfilePresence } from "./supply-chain.js";
 import type { Finding, PrecisionTier } from "../findings.js";
@@ -541,7 +541,7 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
   );
   writeFileSync(
     join(supaDir, "supabase", "config.toml"),
-    "[functions.admin-refund]\nverify_jwt = false\n\n[functions.user-profile]\nverify_jwt = true\n",
+    "[functions.admin-refund]\nverify_jwt = false\n\n[functions.user-profile]\nverify_jwt = true\n\n[auth]\nenable_signup = true\n\n[auth.email]\nenable_confirmations = false\n",
   );
 
   const findings = [
@@ -549,6 +549,7 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     ...checkMigrationRlsStatic(supaDir),
     ...checkMigrationRlsStatic(rootSchemaDir),
     ...checkEdgeFunctionVerifyJwt(supaDir),
+    ...checkOpenSignupConfig(supaDir),
   ];
 
   it("catches every B13 positive at its declared tier and clears every B13 negative", () => {
@@ -560,12 +561,12 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     }
   });
 
-  it("promotes only the exact static/structural sinks to the free count (7 high, 8 review)", () => {
+  it("promotes only the exact static/structural sinks to the free count (7 high, 10 review)", () => {
     const m = buildCoverageMatrix(findings, b13SupaEntries);
     const positives = b13SupaEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
     expect(m.positivesCaughtHigh).toBe(7);
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(8);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(10);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });

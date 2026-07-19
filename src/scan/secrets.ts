@@ -16,7 +16,7 @@
 // "review". The anon key and .env.example are allowlisted in the gitleaks config, not here.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
@@ -236,6 +236,53 @@ export function gitHistorySecretsUnavailableFinding(reason: string): Finding {
     evidence: `TruffleHog git-history pass did not run: ${reason}`,
     impact: "Git-history secret coverage for this engagement is incomplete for this pass — a disclosed coverage gap, not a finding of zero secrets committed to history.",
     fix: "Deliver the engagement as a full git checkout (not an archive/subdirectory export) and re-run the scan, or run `trufflehog git` directly against the client's repository.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
+}
+
+// #588 — the built bundle is where a client-inlined secret (Vite VITE_*, CRA REACT_APP_*, Next
+// NEXT_PUBLIC_*) actually lands: the source has the reference, the BUILD OUTPUT has the value baked
+// in. Auto-detect the build output generically when the caller passes no explicit --bundle:
+// `.next/static` (Next) or `dist/` (Vite/rollup). The build output is normally gitignored, so this
+// resolves against the real target dir (not the tracked-only scan copy). If neither exists, DISCLOSE
+// that the bundle pass did not run rather than skipping silently — a "no bundle scanned" that reads
+// as "no bundle secrets" is the #345 clean-bill-of-health trap.
+const BUNDLE_CANDIDATES = [join(".next", "static"), "dist"];
+
+export function resolveBundleScan(dir: string, explicit?: string): { bundleDir?: string; disclosure?: Finding } {
+  if (explicit) {
+    return existsSync(explicit)
+      ? { bundleDir: explicit }
+      : { disclosure: bundleScanUnavailableFinding(`the --bundle path ${explicit} does not exist`) };
+  }
+  for (const rel of BUNDLE_CANDIDATES) {
+    const candidate = join(dir, rel);
+    if (existsSync(candidate)) return { bundleDir: candidate };
+  }
+  return {
+    disclosure: bundleScanUnavailableFinding(
+      "no built bundle found (.next/static or dist/) — run a production build so client-inlined secrets can be scanned",
+    ),
+  };
+}
+
+// Same disclosure contract as SEC-TH-GH-00/DEP-OSV-00: a visible not-assessed row, never a silent
+// skip. Info severity — a coverage gap, not a finding of zero bundle secrets.
+function bundleScanUnavailableFinding(reason: string): Finding {
+  return {
+    id: "SEC-BUNDLE-00",
+    title: "Built-bundle secret scan did not run",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Secret exposure",
+    taxonomy: "Client-inlined secret — coverage not assessed",
+    location: "(bundle)",
+    status: "Open",
+    evidence: `Built-bundle secret pass did not run: ${reason}.`,
+    impact: "Client-inlined secrets (VITE_*/NEXT_PUBLIC_*/REACT_APP_* baked into the shipped JS) are not covered — a disclosed coverage gap, not a finding of zero secrets in the bundle.",
+    fix: "Produce a production build (`next build` -> .next/static, or `vite build` -> dist/) and re-run the scan, or pass --bundle <dir> at the built assets.",
     value: 1,
     ease: 3,
     safety: 5,

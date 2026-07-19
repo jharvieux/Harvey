@@ -521,3 +521,67 @@ export function checkEdgeFunctionVerifyJwt(dir: string): Finding[] {
   });
   return findings;
 }
+
+const AUTH_SECTION_HEADER = /^\s*\[(auth(?:\.[a-z0-9_]+)*)\]/i;
+const ENABLE_SIGNUP_TRUE = /^\s*enable_signup\s*=\s*true\b/i;
+const ENABLE_CONFIRMATIONS_FALSE = /^\s*enable_confirmations\s*=\s*false\b/i;
+
+// #588 — the source-tier counterpart of the connected-tier checkAuthConfig (mailer_autoconfirm) in
+// src/scan/supabase-config.ts. Reads supabase/config.toml for two open-registration weaknesses that
+// are committed FACTS, so they run in the free/mechanical scan with no live project:
+//   - [auth] enable_signup = true — anyone can self-register an account.
+//   - [auth.email] enable_confirmations = false — accounts authenticate without proving they own the
+//     email address (the static twin of the live mailer_autoconfirm=true check).
+// Scoped by section: enable_signup is read only under the top-level [auth] table, enable_confirmations
+// only under [auth.email], so the [auth.sms]/[auth.mfa] siblings (where these keys are normal and
+// carry different meaning) are not flagged. Review tier: whether open signup / no-confirm is a defect
+// depends on product intent (a deliberately frictionless-signup product is legitimate) — confirm.
+export function checkOpenSignupConfig(dir: string): Finding[] {
+  const configPath = join(dir, "supabase", "config.toml");
+  if (!existsSync(configPath)) return [];
+
+  const findings: Finding[] = [];
+  let section: string | undefined;
+  const lines = readFileSync(configPath, "utf8").split("\n");
+  lines.forEach((line, i) => {
+    const header = AUTH_SECTION_HEADER.exec(line);
+    if (header) {
+      section = header[1]!.toLowerCase();
+      return;
+    }
+    if (/^\s*\[/.test(line)) section = undefined; // a non-auth table header ends the auth scope
+    if (section === "auth" && ENABLE_SIGNUP_TRUE.test(line)) {
+      findings.push(
+        mechanicalFinding({
+          id: "SB-OPEN-SIGNUP",
+          title: "Open signup enabled ([auth] enable_signup = true)",
+          severity: "Low",
+          category: "Supabase config",
+          taxonomy: "Open signup enabled",
+          location: `supabase/config.toml:${i + 1}`,
+          evidence: `[auth] sets enable_signup = true — anyone can self-register an account without an invite.`,
+          impact: "Any anonymous visitor can create an account, enabling mass fake-account signup and abuse of any per-account resource.",
+          fix: "Set enable_signup = false and provision users via invite/admin, unless open self-registration is a deliberate product decision with abuse controls.",
+          precisionTier: "review",
+        }),
+      );
+    }
+    if (section === "auth.email" && ENABLE_CONFIRMATIONS_FALSE.test(line)) {
+      findings.push(
+        mechanicalFinding({
+          id: "SB-EMAIL-CONFIRM-OFF",
+          title: "Email confirmation disabled ([auth.email] enable_confirmations = false)",
+          severity: "Medium",
+          category: "Supabase config",
+          taxonomy: "Email confirmation disabled",
+          location: `supabase/config.toml:${i + 1}`,
+          evidence: `[auth.email] sets enable_confirmations = false — accounts authenticate without proving ownership of the email address.`,
+          impact: "Signups are effectively auto-confirmed: an attacker can register accounts against emails they do not control (mass fake-account signup, account-takeover setups). The static twin of the live mailer_autoconfirm=true check.",
+          fix: "Set enable_confirmations = true so a signup must confirm the email before the account is usable.",
+          precisionTier: "review",
+        }),
+      );
+    }
+  });
+  return findings;
+}
