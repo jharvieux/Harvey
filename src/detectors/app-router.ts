@@ -1013,6 +1013,106 @@ function nonSsrSpaCoverageNote(nextId: NextId, framework: TargetFramework, scope
   };
 }
 
+// --- SPA root error-boundary absence [LOW] — Vite/SPA resilience (#627) -------
+//
+// A Vite/SPA entry mounts the React root (`createRoot(el).render(<App/>)`, or the React 17
+// `ReactDOM.render(<App/>, el)`) with no error boundary anywhere in the app. Unlike a Next app —
+// which has a framework-level boundary (`error.tsx`) — a bare SPA has none, so an unhandled render
+// error unmounts the whole tree and blanks the screen. Runs ONLY on the Vite/SPA scope the rest of
+// the M9 pass is suppressed on (this entry-mount + no-boundary shape is SPA-specific).
+//
+// Precision (absence detection errs toward silence): fires only when the scope has a root-mount AND
+// no error boundary of any recognised form — a hand-rolled boundary class (componentDidCatch /
+// getDerivedStateFromError), a `react-error-boundary` import, a `<…ErrorBoundary>` element, or a
+// `withErrorBoundary` wrapper. Any boundary present anywhere in the scope suppresses the finding,
+// even one that doesn't demonstrably wrap the root — a false negative is preferable to flagging an
+// app that already has a boundary.
+const ERROR_BOUNDARY_LIFECYCLE = /^(componentDidCatch|getDerivedStateFromError)$/;
+
+function isCreateRootCall(node: ts.Expression): boolean {
+  return (
+    ts.isCallExpression(node) &&
+    ((ts.isIdentifier(node.expression) && node.expression.text === "createRoot") ||
+      (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "createRoot"))
+  );
+}
+
+function isJsxNode(node: ts.Node): boolean {
+  return ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node);
+}
+
+// The root-mount call: `createRoot(...).render(<jsx>)` (React 18) or `ReactDOM.render(<jsx>, el)`
+// (React 17). A JSX first argument is what separates a React root mount from any other `.render()`.
+function findSpaRootMount(sf: ts.SourceFile): ts.Node | undefined {
+  let hit: ts.Node | undefined;
+  const visit = (node: ts.Node) => {
+    if (hit) return;
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "render") {
+      const receiver = node.expression.expression;
+      const firstArg = node.arguments[0];
+      if (firstArg && isJsxNode(firstArg)) {
+        if (isCreateRootCall(receiver)) hit = node;
+        else if (ts.isIdentifier(receiver) && /^ReactDOM?$/i.test(receiver.text) && node.arguments.length >= 2) hit = node;
+      }
+      if (hit) return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return hit;
+}
+
+function fileHasErrorBoundary(sf: ts.SourceFile): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === "react-error-boundary") {
+      found = true;
+    } else if (ts.isClassLike(node) && node.members.some((m) => m.name !== undefined && ts.isIdentifier(m.name) && ERROR_BOUNDARY_LIFECYCLE.test(m.name.text))) {
+      found = true;
+    } else if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && /ErrorBoundary$/.test(node.tagName.getText(sf))) {
+      found = true;
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
+      if (name === "withErrorBoundary") found = true;
+    }
+    if (!found) ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+function detectSpaRootErrorBoundary(files: SourceInput[], nextId: NextId, scope: string): Finding[] {
+  const sources = files.map((f) => ({ path: f.path, sf: parse(f.path, f.text) }));
+  if (sources.some(({ sf }) => fileHasErrorBoundary(sf))) return [];
+  for (const { path, sf } of sources) {
+    const mount = findSpaRootMount(sf);
+    if (!mount) continue;
+    const where = scope === "(whole target)" ? "this SPA" : `workspace \`${scope}\``;
+    return [
+      {
+        id: nextId(),
+        title: "SPA mounts its root with no top-level error boundary",
+        severity: "Low",
+        confidence: "Review",
+        category: "Reliability",
+        taxonomy: "M9 — SPA missing root error boundary",
+        location: loc(path, sf, mount),
+        status: "Open",
+        evidence: `${path} mounts the React root here, and no error boundary (an error-boundary class, a react-error-boundary import, an <ErrorBoundary> element, or a withErrorBoundary wrapper) appears anywhere in ${where}. A Vite/SPA build has no framework-level boundary (no Next.js error.tsx) to fall back on.`,
+        impact: "An unhandled error thrown while rendering any component unmounts the whole React tree and leaves the user a blank white screen, with no fallback UI and no recovery path.",
+        fix: "Wrap the mounted root (or the top-level <App/>) in a React error boundary that renders a fallback UI.",
+        precisionTier: "review",
+        value: 3,
+        ease: 4,
+        safety: 5,
+      },
+    ];
+  }
+  return [];
+}
+
 function runAppRouterPass(files: SourceInput[], nextId: NextId): Finding[] {
   const sources = new Map(files.map((f) => [f.path, parse(f.path, f.text)]));
   const pagesRouterOnly = isPagesRouterOnly(files);
@@ -1041,15 +1141,18 @@ function runAppRouterPass(files: SourceInput[], nextId: NextId): Finding[] {
  * files to resolve which imported components are Client Components.
  *
  * `framework` (from src/scan/framework-detect.ts) gates the whole pass: on a Vite/SPA target the
- * App-Router surface does not exist, so M9 is suppressed to a single N/A coverage note (#575).
- * Omitted (tests/legacy callers) or `next`/`other` → run the full pass as before.
+ * App-Router surface does not exist, so the App-Router family is suppressed to a single N/A
+ * coverage note (#575), plus the one SPA-specific resilience check that DOES apply there — the
+ * missing-root-error-boundary detector (#627). Omitted (tests/legacy callers) or `next`/`other` →
+ * run the full pass as before.
  *
  * `viteWorkspaceDirs` (workspace-relative dirs, e.g. `["apps/web"]`) makes the gate monorepo-aware
  * (#597): at a monorepo root the root's own verdict is `other` (vite.config lives in the app dir),
  * so the whole-target `vite` short-circuit never fires and the SSR family false-fires on the Vite
- * app's files. Files under any of these prefixes are suppressed (one N/A note per Vite workspace),
- * and the full pass runs over the remaining files — a genuine Next workspace in the same monorepo
- * is unaffected. Empty (single-app targets, tests) → behaves exactly as before.
+ * app's files. Files under any of these prefixes are suppressed (one N/A note per Vite workspace,
+ * plus the #627 root-error-boundary check on that workspace's files), and the full pass runs over
+ * the remaining files — a genuine Next workspace in the same monorepo is unaffected. Empty
+ * (single-app targets, tests) → behaves exactly as before.
  */
 export function detectAppRouterFindings(
   files: SourceInput[],
@@ -1059,13 +1162,17 @@ export function detectAppRouterFindings(
   let n = 0;
   const nextId: NextId = () => `M9-${String(++n).padStart(2, "0")}`;
 
-  if (framework === "vite") return [nonSsrSpaCoverageNote(nextId, framework, "(whole target)")];
+  if (framework === "vite") {
+    return [nonSsrSpaCoverageNote(nextId, framework, "(whole target)"), ...detectSpaRootErrorBoundary(files, nextId, "(whole target)")];
+  }
 
   const underVite = (p: string) => viteWorkspaceDirs.some((w) => p === w || p.startsWith(`${w}/`));
-  const notes = viteWorkspaceDirs
-    .filter((w) => files.some((f) => f.path === w || f.path.startsWith(`${w}/`)))
-    .map((w) => nonSsrSpaCoverageNote(nextId, "vite", w));
+  const activeViteWs = viteWorkspaceDirs.filter((w) => files.some((f) => f.path === w || f.path.startsWith(`${w}/`)));
+  const notes = activeViteWs.map((w) => nonSsrSpaCoverageNote(nextId, "vite", w));
+  const spaBoundary = activeViteWs.flatMap((w) =>
+    detectSpaRootErrorBoundary(files.filter((f) => f.path === w || f.path.startsWith(`${w}/`)), nextId, w),
+  );
   const scoped = notes.length ? files.filter((f) => !underVite(f.path)) : files;
 
-  return [...notes, ...runAppRouterPass(scoped, nextId)];
+  return [...notes, ...spaBoundary, ...runAppRouterPass(scoped, nextId)];
 }
