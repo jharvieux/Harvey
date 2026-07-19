@@ -71,6 +71,47 @@ describe("checkAuthConfig", () => {
   });
 });
 
+describe("checkAuthConfig — #671 auth-method gating", () => {
+  const hibp = (findings: ReturnType<typeof checkAuthConfig>) => findings.find((f) => f.taxonomy === "Auth config: leaked-password protection off")!;
+
+  it("keeps the leaked-password finding asserted when password (email) auth IS enabled", () => {
+    const f = hibp(checkAuthConfig({ password_hibp_enabled: false, external_email_enabled: true }));
+    expect(f.severity).toBe("Low");
+    expect(f.confidence).not.toBe("N/A");
+    expect(f.title).not.toContain("conditional");
+  });
+
+  it("reframes the leaked-password finding to an Info conditional when password auth is OFF (OAuth-only)", () => {
+    const f = hibp(checkAuthConfig({ password_hibp_enabled: false, external_email_enabled: false }));
+    // Still surfaced (fail-loud) and same taxonomy so a re-audit matches it — but never an asserted Medium/Low.
+    expect(f.severity).toBe("Info");
+    expect(f.confidence).toBe("N/A");
+    expect(f.title).toContain("conditional");
+    expect(f.taxonomy).toBe("Auth config: leaked-password protection off");
+  });
+
+  it("reframes to conditional when the method can't be confirmed (no enablement signal)", () => {
+    const f = hibp(checkAuthConfig({ password_hibp_enabled: false }));
+    expect(f.severity).toBe("Info");
+    expect(f.title).toContain("conditional");
+  });
+
+  it("gates OTP expiry on email OR phone OTP being in use", () => {
+    const asserted = checkAuthConfig({ otp_expiry: 7200, external_email_enabled: true, external_phone_enabled: false });
+    expect(asserted[0]!.severity).toBe("Low");
+    const conditional = checkAuthConfig({ otp_expiry: 7200, external_email_enabled: false, external_phone_enabled: false });
+    expect(conditional[0]!.severity).toBe("Info");
+    expect(conditional[0]!.taxonomy).toBe("Auth config: long OTP expiry");
+  });
+
+  it("never gates the wildcard-redirect advisor (applies to OAuth flows too)", () => {
+    const f = checkAuthConfig({ uri_allow_list: "https://app.example.com/*,*", external_email_enabled: false });
+    expect(f).toHaveLength(1);
+    expect(f[0]!.severity).toBe("High");
+    expect(f[0]!.title).not.toContain("conditional");
+  });
+});
+
 describe("checkAuthConfig — Batch B8 planted config.toml shape", () => {
   // Mirrors targets/calibration/supabase/config.toml (auth.email.otp_expiry=86400,
   // auth.additional_redirect_urls includes "*") — see GROUND-TRUTH.md §"Batch B8". No live
