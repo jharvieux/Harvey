@@ -71,6 +71,36 @@ silent skip (CLAUDE.md coverage doctrine).
 > the 14 skips are a Harvey seed-generality limit, not an ATC vuln). Growing an exactly-one-of / XOR / FK-cardinality
 > recognizer to seed some of the 14 remains useful future work but is no longer a blocker to a runtime proof.
 
+> **Addendum 4 — 2026-07-19 (M2 isolation proof LIFTED to 91/92 — constraint-shape-aware seed, Harvey #656).**
+> The seed value generator now recognizes four common constraint shapes that Addendum 3's 14 skips fell into
+> (all built in `src/pentest/schema-introspect.ts` + `two-tenant-seed.ts`, driven by live introspection):
+> (1) **exactly-one-of / XOR** — `sum((col IS NOT NULL)::int) = 1` (ATC `tasks`, `task_sequence_runs`) and
+> `(a IS NOT NULL) <> (b IS NOT NULL)` (ATC `forum_threads`/`forum_messages`/`forum_strikes`/`forum_user_state`
+> `*_author_xor`) now set exactly ONE branch non-null and NULL the rest, instead of the belt-and-suspenders
+> fill-every-branch that violated them; (2) **PK/UNIQUE distinctness** — a composite-key column varies per
+> seed row, and a one-row FK lookup is promoted to two rows when a child references it through a
+> key-participating FK (ATC `forum_guest_write_counters`); (3) **single-column length / at-least-one-present
+> CHECKs** — `char_length(col) BETWEEN 50 AND 8000` (ATC `voice_samples`) seeds a legal-length value, and
+> `a IS NOT NULL OR b IS NOT NULL` (ATC `tenant_email_templates_not_empty`) / `threshold_present`
+> (`price_watches`) are kept out of the null-branch heuristic so their non-null placeholders satisfy them
+> (distinguished from the null-iff exclusivity family by a bare `IS NULL`); (4) **non-uuid-keyed lookup
+> parents** — a NOT NULL FK to a non-scoped lookup keyed on a text UNIQUE column (ATC `tenant_host_configs.adapter_id`
+> -> `host_adapters(adapter_id)`) seeds a minimal parent row pinning that key. M2 was re-run live against a
+> `/private/tmp` copy of `apps/main` on a fresh isolated stack (project `harvey-dv-4228f1d658`, non-default
+> ports api=57731/db=57732; **185 migrations applied cleanly, stack torn down clean** — 0 Harvey
+> containers/volumes left, no foreign volumes touched, #604 re-verified). **Result: 91 of the 92 scoped tables
+> SEEDED and were probed** (up from 78/92) — 13 of Addendum 3's 14 scoped skips now seed. **The live cross-tenant
+> PostgREST matrix RAN over the 91 seeded tables and found ZERO cross-tenant leaks (0 findings)** -> the runtime
+> tenant-isolation PROOF is now **91/92 scoped tables, 0 leaks**. **One scoped table still skips:** `legal_consents`
+> (cascade — its NOT NULL FK `document_id` -> the also-skipped `legal_documents`). **`legal_documents`** (a
+> non-scoped parent) skips on `legal_documents_document_type_version_key` — NOT the cross-row collision shape 2
+> targeted, but a collision with **migration-seeded reference rows** (`legal_consent.sql:90` inserts `('tou',1)`
+> etc.; the generic lookup INSERT re-inserts `('tou',1)`). This is a distinct, un-designed class — a NOT NULL FK
+> to a lookup that ships its own seed data — filed as **Harvey #665** and disclosed+SAVEPOINT-skipped (fail loud),
+> not silent. Tier-2 app-route probes still degraded to PostgREST-only (`workspace:*` blocks a standalone
+> `npm install`, disclosed). **No genuine ATC M2 finding** (0 leaks; the 1 residual scoped skip is a Harvey seed
+> limitation, not an ATC vuln). _Superseded Addendum 3's 78/92 partial proof._
+
 ---
 
 ## 1. Target enumeration
@@ -109,7 +139,7 @@ Legend: **ran** = all in-scope classes executed · **partial** = some classes ra
 | M1 | git-history secrets (TruffleHog) | mechanical | ran (clean) | **orchestrator falsely skipped it (Harvey #619)**; run manually: 26,311 chunks / 49MB, **0 verified, 0 unverified secrets** |
 | M1 | main DB | connected (live RLS/advisors) | ran | read-only `get_advisors(security)` + DDL review |
 | M1 | rag DB | connected (live RLS/advisors) | ran | read-only `get_advisors(security)` + DDL review |
-| **M2** Local pen-test (dynamic) | apps/main / main DB | dynamic | **ran (partial proof)** | isolated stack stood up + 185 migrations applied + torn down cleanly (#604); per-table SAVEPOINT seed (#649) seeded **78/92 scoped tables** (14 skipped-and-disclosed with their bespoke CHECK/FK constraint); the live cross-tenant PostgREST matrix ran over the 78 and found **0 leaks → partial runtime isolation proof** (Addendum 3). Tier-2 app-route probes degraded to PostgREST-only (`workspace:*` install). M2 pass artifact emitted |
+| **M2** Local pen-test (dynamic) | apps/main / main DB | dynamic | **ran (partial proof)** | isolated stack stood up + 185 migrations applied + torn down cleanly (#604); constraint-shape-aware seed (#656, four shapes) seeded **91/92 scoped tables** (up from 78 — only `legal_consents` still skips, a cascade from the migration-seed-collision on `legal_documents`, Harvey #665); the live cross-tenant PostgREST matrix ran over the 91 and found **0 leaks → runtime isolation proof on 91/92** (Addendum 4). Tier-2 app-route probes degraded to PostgREST-only (`workspace:*` install). M2 pass artifact emitted |
 | M2 | apps/rag / rag DB | dynamic | requires-live-run | second backend not stood up — the runner applies only `migrationDirs[0]` (Harvey #610); would need a per-DB stand-up |
 | **M3** Hotspot analysis | monorepo | vitals | ran | orchestrator failed (abs-path CWD bug, Harvey #624); re-run via `--report` capture → 56 findings (50 truck-factor-1, 5 co-change, 1 AI-authored high-churn); top-10 hotspots feed M1/M6/M8 |
 | **M4** Duplication | apps/main | jscpd | **partial** | jscpd did not complete on the workspace (M4-99 disclosure, Harvey #505) |
@@ -190,14 +220,15 @@ RS256 service JWTs. No cross-tenant data-exposure path was found in the reviewed
 
 ## 5. Modules that could not fully run, and why (fail-loud summary)
 
-- **M2 dynamic pen-test — RAN, partial runtime isolation proof (Addendum 3, Harvey #649).** The isolated stack
-  stood up (185 migrations), the per-table SAVEPOINT seed seeded **78/92 scoped tables** (14 skipped-and-disclosed
-  with their bespoke CHECK/FK constraint), and the live cross-tenant PostgREST matrix ran over the 78 and found
-  **0 cross-tenant leaks** — a partial runtime tenant-isolation proof (isolation proven on 78/92, 14 disclosed),
-  torn down cleanly (#604 re-verified). Tier-2 app-route probes degraded to PostgREST-only (`workspace:*` blocks a
-  standalone `npm install`). Second backend (rag) still not stood up (#610). No genuine ATC M2 finding (0 leaks;
-  the 14 skips are a Harvey seed-generality limit). _Superseded the prior #622/#630 "seed blocked, proof pending"
-  status — the seed no longer needs to satisfy every table to run the matrix._
+- **M2 dynamic pen-test — RAN, runtime isolation proof on 91/92 (Addendum 4, Harvey #656).** The isolated stack
+  stood up (185 migrations), the constraint-shape-aware seed (four shapes) seeded **91/92 scoped tables** (up from
+  78 — 13 of Addendum 3's 14 skips now seed), and the live cross-tenant PostgREST matrix ran over the 91 and found
+  **0 cross-tenant leaks** — a runtime tenant-isolation proof (isolation proven on 91/92), torn down cleanly (#604
+  re-verified). One scoped table still skips: `legal_consents` (cascade from `legal_documents`, which collides with
+  migration-seeded reference rows — Harvey #665, disclosed+SAVEPOINT-skipped). Tier-2 app-route probes degraded to
+  PostgREST-only (`workspace:*` blocks a standalone `npm install`). Second backend (rag) still not stood up (#610).
+  No genuine ATC M2 finding (0 leaks; the 1 residual scoped skip is a Harvey seed limitation). _Superseded
+  Addendum 3's 78/92 partial proof._
 - **M7 Lighthouse — requires-live-run (deliberate).** A CWV run needs a full `next build`+`next start` against
   ATC's production `.env.local`; not built to avoid a long build touching live services. Static code tier + DB
   advisors ran.
