@@ -21,7 +21,9 @@ import { resolveBundleScan, scanSecrets } from "./secrets.js";
 import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
 import {
   checkEdgeFunctionVerifyJwt,
+  checkMigrationDefinerAnonGrant,
   checkMigrationDefinerAuthz,
+  checkMigrationDynamicSqlInjection,
   checkMigrationPolicySemantics,
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsStatic,
@@ -117,6 +119,8 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     findings.push(...checkMigrationRlsStatic(scanDir));
     findings.push(...checkMigrationPolicySemantics(scanDir, tenancyOverride));
     findings.push(...checkMigrationDefinerAuthz(scanDir));
+    findings.push(...checkMigrationDefinerAnonGrant(scanDir));
+    findings.push(...checkMigrationDynamicSqlInjection(scanDir));
     findings.push(...checkMigrationRlsInitplanStatic(scanDir));
     findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
     findings.push(...checkOpenSignupConfig(scanDir));
