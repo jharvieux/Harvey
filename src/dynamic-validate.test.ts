@@ -276,6 +276,19 @@ describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", ()
     expect(written.findings[0].evidence).toMatch(/relation already exists/);
   });
 
+  // #598: the client's migrations applied, but HARVEY'S OWN seed failed (e.g. a signup-trigger
+  // dup-key). This is a harness/seed issue — it must NOT surface as an M2-PROVISION-MIGRATE client
+  // finding, and it must fail loud with the real seed error, never a silent clean ran.
+  it("a harness seed failure is a distinct status, not a client migration defect", () => {
+    const r = run({ runner: runner({ standUpDb: () => ({ ok: false, seedApplyFailed: true, output: 'ERROR: duplicate key value violates unique constraint "profiles_pkey"' }) }) });
+    expect(r.standUp).toBe(false);
+    expect(r.artifactPath).toBeNull();
+    expect(r.findings).toHaveLength(0);
+    expect(r.findings.map((f) => f.id)).not.toContain("M2-PROVISION-MIGRATE");
+    expect(r.reason).toMatch(/harness\/seed issue, not a client migration defect/);
+    expect(r.reason).toMatch(/profiles_pkey/);
+  });
+
   it("degrades to postgrest-only when the app won't run, discloses it, and still emits", () => {
     const r = run({ runner: runner({ runApp: () => ({ ok: false, output: "build error" }) }) });
     expect(r.standUp).toBe(true);

@@ -320,6 +320,10 @@ export interface StandUpResult {
   // M2 finding (schema won't provision) from an operator/env gap (Docker/CLI missing ⇒ ok:false,
   // this false) so the former emits evidence and the latter honestly records requires-live-run.
   migrationApplyFailed?: boolean;
+  // true ⇒ the client's migrations applied cleanly but HARVEY'S OWN two-tenant seed.sql failed. A
+  // harness/seed issue (#598), NOT a client schema defect — must never surface as M2-PROVISION-
+  // MIGRATE. Recorded as a distinct, honest reason (requires-live-run), never a false client finding.
+  seedApplyFailed?: boolean;
 }
 
 export interface StandUpRunner {
@@ -364,6 +368,12 @@ export function runDynamicValidation(opts: {
 
   const db = runner.standUpDb(targetDir, plan);
   if (!db.ok) {
+    if (db.seedApplyFailed) {
+      // Harvey's OWN two-tenant seed failed to apply — the client's migrations DID apply, so this is
+      // NOT M2-PROVISION-MIGRATE and carries no client finding. Fail loud with the real seed error so
+      // M2 reads as requires-live-run for a harness reason, not a false "schema won't provision" (#598).
+      return { ...base, standUp: false, coverage: "none", reason: `Harvey's two-tenant seed failed to apply (a harness/seed issue, not a client migration defect): ${db.output}`, limitations: verdict.limitations };
+    }
     if (db.migrationApplyFailed) {
       const finding = migrationApplyFinding(targetDir, db.output);
       const artifact = buildPassArtifact({

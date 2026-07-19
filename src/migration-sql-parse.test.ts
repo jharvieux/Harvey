@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseAuthUserRefs, parseCheckInConstraints, parseColumns, parseDefinerFunctions, parsePolicies, parseRlsState, parseTableNames } from "./migration-sql-parse.js";
+import { parseAuthUserRefs, parseCheckInConstraints, parseColumns, parseDefinerFunctions, parsePolicies, parseRlsState, parseTableNames, parseUniqueColumns } from "./migration-sql-parse.js";
 
 // Fixtures are the real calibration-target migrations (targets/calibration/supabase/migrations) —
 // this test asserts the parser extracts exactly what GROUND-TRUTH.md says is there, so a change
@@ -61,6 +61,29 @@ describe("parseCheckInConstraints (#547 — enum-like allow-lists the seed must 
   it("ignores a CHECK that is not a simple IN allow-list (stays in the seed's fail-loud path)", () => {
     const sql = "create table t (\n  id uuid primary key,\n  qty integer check (qty > 0)\n);";
     expect(parseCheckInConstraints(sql)).toEqual([]);
+  });
+});
+
+describe("parseUniqueColumns (#598 — the ON CONFLICT arbiter for idempotent trigger-safe seeding)", () => {
+  it("reads an inline PRIMARY KEY column (the profiles.id → auth.users arbiter)", () => {
+    const sql = "create table profiles (\n  id uuid primary key references auth.users (id),\n  email text\n);";
+    expect(parseUniqueColumns(sql)).toEqual([{ table_name: "profiles", column_name: "id" }]);
+  });
+
+  it("reads an inline UNIQUE column and a table-level primary key (col)", () => {
+    const sql = "create table t (\n  id uuid,\n  email text unique,\n  primary key (id)\n);";
+    const cols = parseUniqueColumns(sql).map((c) => c.column_name).sort();
+    expect(cols).toEqual(["email", "id"]);
+  });
+
+  it("does NOT treat a plain non-unique FK column as an arbiter (many-per-user push_tokens)", () => {
+    const sql = "create table push_tokens (\n  id uuid primary key default gen_random_uuid(),\n  user_id uuid not null references auth.users (id),\n  token text\n);";
+    expect(parseUniqueColumns(sql)).toEqual([{ table_name: "push_tokens", column_name: "id" }]);
+  });
+
+  it("skips a multi-column key (not a single-column ON CONFLICT arbiter)", () => {
+    const sql = "create table members (\n  org_id uuid,\n  user_id uuid,\n  primary key (org_id, user_id)\n);";
+    expect(parseUniqueColumns(sql)).toEqual([]);
   });
 });
 
