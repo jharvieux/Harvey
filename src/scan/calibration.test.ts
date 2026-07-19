@@ -22,7 +22,7 @@ import { classifyLeftoverAuth } from "./leftover-auth.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "./dependencies.js";
 import { parseGitleaksFindings, type GitleaksResult } from "./secrets.js";
 import { checkPublicDirSensitive, parseSemgrepFindings, type SemgrepResult } from "./semgrep.js";
-import { checkEdgeFunctionVerifyJwt, checkMigrationRlsInitplanStatic, checkMigrationRlsStatic, checkOpenSignupConfig } from "./supabase-static.js";
+import { checkEdgeFunctionVerifyJwt, checkMigrationDefinerAnonGrant, checkMigrationDynamicSqlInjection, checkMigrationRlsInitplanStatic, checkMigrationRlsStatic, checkOpenSignupConfig } from "./supabase-static.js";
 import { m7InitplanStaticEntries } from "./calibration/m7-initplan-static.entries.js";
 import { checkKnownIoc, checkLockfilePresence } from "./supply-chain.js";
 import type { Finding, PrecisionTier } from "../findings.js";
@@ -308,6 +308,8 @@ describe("Batch B9 secrets corpus (recorded gitleaks + semgrep output → tier m
     { check_id: "secrets.harvey-nextconfig-env-secret", path: "next.config.js", start: { line: 11 }, extra: { severity: "ERROR", metadata: { confidence: "HIGH" }, message: "secret-named key inlined via env" } },
     { check_id: "secrets.harvey-edgefn-secret-fallback", path: "supabase/functions/send-email/index.ts", start: { line: 6 }, extra: { severity: "ERROR", metadata: { confidence: "HIGH" }, message: "hardcoded secret fallback" } },
     { check_id: "secrets.harvey-secret-in-url-param", path: "lib/weather.js", start: { line: 5 }, extra: { severity: "WARNING", metadata: { confidence: "MEDIUM" }, message: "secret in URL query parameter" } },
+    // #595 — the Node process.env secret-fallback (review). Negatives (empty/fail-closed, non-secret name) draw nothing.
+    { check_id: "secrets.harvey-node-secret-fallback", path: "lib/jwt-signing.ts", start: { line: 5 }, extra: { severity: "WARNING", metadata: { confidence: "MEDIUM" }, message: "process.env secret fallback to a hardcoded literal" } },
   ];
   const findings = [...parseGitleaksFindings(gitleaks, "source"), ...parseSemgrepFindings({ results: semgrep })];
 
@@ -320,12 +322,12 @@ describe("Batch B9 secrets corpus (recorded gitleaks + semgrep output → tier m
     }
   });
 
-  it("promotes only the ~100%-precision detections to the free count (8 high, 3 review)", () => {
+  it("promotes only the ~100%-precision detections to the free count (8 high, 4 review)", () => {
     const m = buildCoverageMatrix(findings, b9SecretsEntries);
     const positives = b9SecretsEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
     expect(m.positivesCaughtHigh).toBe(8);
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(3);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(4);
     expect(m.ok).toBe(true);
   });
 });
@@ -393,6 +395,8 @@ describe("Batch B11 crypto-API misuse corpus (recorded semgrep output → tier m
     warning("harvey-aead-decipher-no-final", "lib/aead-nofinal.js"),
     warning("harvey-jwt-decode-render", "components/RoleBadge.jsx"),
     warning("harvey-hmac-hardcoded-key", "lib/sign.js"),
+    // #595 — jwt.sign with no expiresIn (review). The N-JWT-SIGN-EXPIRY negative draws nothing.
+    warning("harvey-jwt-sign-noexpiry", "lib/jwt-signing.ts"),
   ];
   const findings = parseSemgrepFindings({ results: semgrep });
 
@@ -405,12 +409,12 @@ describe("Batch B11 crypto-API misuse corpus (recorded semgrep output → tier m
     }
   });
 
-  it("promotes only the exact-API/literal rules to the free count (5 high, 4 review)", () => {
+  it("promotes only the exact-API/literal rules to the free count (5 high, 5 review)", () => {
     const m = buildCoverageMatrix(findings, b11CryptoEntries);
     const positives = b11CryptoEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
     expect(m.positivesCaughtHigh).toBe(5);
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(4);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(5);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });
@@ -537,7 +541,18 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
   afterAll(() => rmSync(rootSchemaDir, { recursive: true, force: true }));
   writeFileSync(
     join(rootSchemaDir, "schema.sql"),
-    "create table public.nocode_tickets (id uuid primary key);\ncreate table public.nocode_safe (id uuid primary key);\nalter table public.nocode_safe enable row level security;\n",
+    "create table public.nocode_tickets (id uuid primary key);\ncreate table public.nocode_safe (id uuid primary key);\nalter table public.nocode_safe enable row level security;\n" +
+      // #611 Gap B — bare (unqualified) create table (public implicit): workspaces RLS off (positive),
+      // members RLS on via a bare alter (negative), private.internal_audit non-public schema (negative).
+      "create table workspaces (id uuid primary key);\ncreate table members (id uuid primary key);\nalter table members enable row level security;\ncreate table private.internal_audit (id uuid primary key);\n",
+  );
+  // #602 — a migration with the plpgsql SQLi + DEFINER-anon-grant fixtures (and their safe siblings).
+  writeFileSync(
+    join(supaDir, "supabase", "migrations", "20260719000002_injection.sql"),
+    "create function public.search_tickets_unsafe(p_query text) returns setof public.audit_logs language plpgsql security definer as $$\nbegin\n  return query execute 'select * from public.audit_logs where subject ilike ' || p_query;\nend;\n$$;\n" +
+      "create function public.search_tickets_quoted(p_query text) returns setof public.audit_logs language plpgsql security definer as $$\nbegin\n  return query execute 'select * from public.audit_logs where subject = ' || quote_literal(p_query);\nend;\n$$;\n" +
+      "create function public.get_user_by_email(p_email text) returns setof public.audit_logs language plpgsql security definer as $$\nbegin\n  return query select * from public.audit_logs where email = p_email;\nend;\n$$;\ngrant execute on function public.get_user_by_email(text) to anon;\n" +
+      "create function public.get_my_tickets() returns setof public.audit_logs language plpgsql security definer as $$\nbegin\n  return query select * from public.audit_logs where auth.uid() is not null;\nend;\n$$;\ngrant execute on function public.get_my_tickets() to anon;\n",
   );
   writeFileSync(
     join(supaDir, "supabase", "config.toml"),
@@ -550,6 +565,8 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     ...checkMigrationRlsStatic(rootSchemaDir),
     ...checkEdgeFunctionVerifyJwt(supaDir),
     ...checkOpenSignupConfig(supaDir),
+    ...checkMigrationDynamicSqlInjection(supaDir), // #602 CX-12
+    ...checkMigrationDefinerAnonGrant(supaDir), // #602 CX-11
   ];
 
   it("catches every B13 positive at its declared tier and clears every B13 negative", () => {
@@ -561,12 +578,12 @@ describe("Batch B13 supabase-static/injection corpus (recorded semgrep + real st
     }
   });
 
-  it("promotes only the exact static/structural sinks to the free count (7 high, 10 review)", () => {
+  it("promotes only the exact static/structural sinks to the free count (8 high, 12 review)", () => {
     const m = buildCoverageMatrix(findings, b13SupaEntries);
     const positives = b13SupaEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
-    expect(m.positivesCaughtHigh).toBe(7);
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(10);
+    expect(m.positivesCaughtHigh).toBe(8);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(12);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });

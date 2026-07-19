@@ -296,8 +296,6 @@ rules:
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
-      cwe: ["CWE-613: Insufficient Session Expiration"]
-      owasp: ["A02:2021 - Cryptographic Failures"]
     message: >
       jwt.sign() is called with no `expiresIn` — the token never expires, so a leaked or stolen
       token is valid forever and cannot be revoked by time. Pass { expiresIn: '<duration>' } (and
