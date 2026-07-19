@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -188,6 +188,29 @@ describe("isGitRepoRoot (#528)", () => {
     const sub = join(dir, "target");
     mkdirSync(sub);
     expect(isGitRepoRoot(sub)).toBe(false);
+  });
+
+  // #619: on a case-insensitive filesystem (macOS default) git reports the toplevel in the case
+  // it recorded for the work tree, which can differ from the case the caller passes. The old
+  // realpath-string-equality check false-negated a valid repo root and silently skipped the
+  // git-history secret scan. Filesystem (dev+ino) identity is case-insensitive, so it stays true.
+  it("is true when the passed dir differs only in CASE from git's recorded toplevel (#619)", () => {
+    const parent = mkdtempSync(join(tmpdir(), "harvey-secrets-case-"));
+    scratchDirs.push(parent);
+    const real = join(parent, "RepoDir");
+    mkdirSync(real);
+    execFileSync("git", ["init", "-q"], { cwd: real });
+    const variant = join(parent, "repodir");
+    // Only manifests on a case-insensitive FS — on a case-sensitive FS `variant` doesn't exist
+    // and the bug cannot occur, so there is nothing to assert.
+    let caseInsensitive = false;
+    try {
+      caseInsensitive = statSync(variant).isDirectory();
+    } catch {
+      caseInsensitive = false;
+    }
+    if (!caseInsensitive) return;
+    expect(isGitRepoRoot(variant)).toBe(true);
   });
 });
 

@@ -96,7 +96,10 @@ function loadReport(): VitalsReport {
     // Try PATH first (existing behavior)
     const attemptedPaths: string[] = ["vitals_cli.py on PATH"];
     try {
-      raw = execFileSync("vitals_cli.py", ["report", "--json", targetDir], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      // #624: vitals reads its precomputed store from `./.vitals/store.db` relative to CWD, so it
+      // must run WITH cwd set to the target — otherwise, run from the Harvey worktree, it finds no
+      // store and exits "No source files found", which was misreported as "plugin unavailable".
+      raw = execFileSync("vitals_cli.py", ["report", "--json", targetDir], { cwd: targetDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
       const e = err as { code?: string; stderr?: string; message?: string };
 
@@ -105,7 +108,7 @@ function loadReport(): VitalsReport {
         const pluginPath = discoverVitalsCli();
         if (pluginPath) {
           try {
-            raw = execFileSync("python3", [pluginPath, "report", "--json", targetDir], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+            raw = execFileSync("python3", [pluginPath, "report", "--json", targetDir], { cwd: targetDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
             console.log(`✓ Found vitals_cli.py at ${pluginPath}`);
           } catch (err2) {
             const e2 = err2 as { stderr?: string; message?: string };
