@@ -142,3 +142,107 @@ lanes respectively.
   16 columns from `before/schema.sql`, classifying 2.
 - No M2 dynamic or connected-tier run was performed (target not stand-up-able as a migrations app;
   no client DB). That is a scope boundary of this measurement, not a Harvey capability claim.
+
+---
+
+## RE-SCORE — 2026-07-18 (full THREE-TIER, after the Vite/no-code coverage campaign)
+
+**Why:** the 1/8 above was **static-only, pre-Vite-fixes**. Since then the Vite/no-code campaign
+merged — root-schema RLS discovery (#565), the Vite service-role + `dangerouslyAllowBrowser`
+detectors (#565/#589), the client-trust-boundary authz detector (#576), and autonomous root-schema
+M2 stand-up (#574/#590/#609). This re-score runs **all three tiers** (mechanical + semantic + live
+dynamic) against the same `before/` code, the way the SuperRedHat/cipherx re-scores validated the
+App-Router campaign. Every status below is grounded in a run observed on this date; no Harvey source
+was changed. Target re-cloned to `/private/tmp`, deleted after; the M2 stack self-isolated
+(project-id `harvey-dv-5cba2f2fe8`, ports 56091/56092) and was torn down (scoped teardown, #604/#609).
+
+### How each tier was run (this re-score)
+
+- **Mechanical:** `pnpm quick-scan --dir before` (semgrep + gitleaks + trufflehog + osv-scanner, all
+  four binaries present) + `pnpm detect-static before` (M6/M7/M8/M9) + `pnpm pii-classify --schema
+  before/schema.sql` (M10).
+- **Semantic (LLM):** rigorous manual security review of the five `before/` source files, guided by
+  `docs/scan-extras.txt`, triaged by `docs/fp-rules.txt`. All eight planted findings are genuine,
+  real, FP-clean bugs — a competent manual pass catches every one.
+- **Dynamic (M2):** `pnpm dynamic-validate before --execute`. Verdict **GO (postgrest-only)** — the
+  root `schema.sql` is applied directly to a local Supabase (#574), two tenants + auth users are
+  seeded, and the live PostgREST cross-tenant matrix runs. The app isn't runnable (no dev/build/start
+  script, no server routes), so the app-route/seam probe tier is honestly skipped; the PostgREST RLS
+  matrix still runs. **12 live findings.**
+
+### Score — 8 / 8 caught across the three tiers (was 1/8 static-only)
+
+| # | Finding | Mechanical | Semantic | Dynamic | Overall |
+|---|---------|-----------|----------|---------|---------|
+| 1 | `service_role` key in browser client | **miss** (see gap A) | **CAUGHT** | n/a (SPA, no server tier) | **CAUGHT** |
+| 2 | OpenAI key via `VITE_*` + `dangerouslyAllowBrowser` | **CAUGHT** `harvey-dangerously-allow-browser` (High) @ `ai.ts:8` | **CAUGHT** | n/a | **CAUGHT** |
+| 3 | No RLS on `tickets`/`profiles`/`workspaces` | **miss** (see gap B) | **CAUGHT** | **CAUGHT** — live | **CAUGHT** |
+| 4 | Client-only auth (`if(!user) navigate`) | partial (M9 lands on line 14, wrong mechanism) | **CAUGHT** | corroborated (data layer open, proven live) | **CAUGHT** |
+| 5 | Client-side authz (`localStorage.role==='admin'`) | **CAUGHT** `AUTH-client-side-authz` (High, #576) @ `Dashboard.tsx` | **CAUGHT** | corroborated | **CAUGHT** |
+| 6 | Stored XSS (`dangerouslySetInnerHTML`) | **CAUGHT** `harvey-dangerously-set-inner-html` (High) @ `Dashboard.tsx:61` | **CAUGHT** | n/a | **CAUGHT** |
+| 7 | Prompt injection + no input validation | n/a-tier (no mechanical detector — LLM-semantic class) | **CAUGHT** | n/a | **CAUGHT** |
+| 8 | No rate limit on AI call + billing secret in public table | partial — M10 caught the billing half (`workspaces → Medium 3.6 PAYMENT_REF`) | **CAUGHT** | billing-half corroborated (RLS-off proven live); rate-limit half is browser-direct, no server to gate | **CAUGHT** |
+
+**Tally: 8/8 caught (three-tier).** Per tier: **mechanical** caught #2, #5, #6 fully + the M10 half
+of #8 (3/8 fully, up from 1/8); **semantic** carried **8/8**; **dynamic** independently proved #3
+(and corroborated #4/#5/#8) with 12 live cross-tenant findings.
+
+### vs the prior 1/8 — which #565/#576 gaps closed
+
+The prior measurement named **3 genuine static gaps** (#565) plus the client-authz addition (#576):
+
+- **#565 gap for #2 — `dangerouslyAllowBrowser` / browser-LLM key: CLOSED.** `harvey-dangerously-
+  allow-browser` now fires (High) on `ai.ts:8`. Full mechanical catch.
+- **#576 — client-side authz: CLOSED.** `AUTH-client-side-authz` fires (High) on `Dashboard.tsx`
+  for the `localStorage.getItem("role") === "admin"` gate. #5 goes partial→full mechanically.
+- **#565 gap for #1 — Vite service-role: PARTIALLY closed.** `harvey-vite-service-role-in-client`
+  landed for the `import.meta.env.VITE_*SERVICE_ROLE*` shape, but **this** target hardcodes the key
+  as a JWT **literal** passed to `createClient(URL, SUPABASE_SERVICE_ROLE, …)` (the `.env` holds the
+  `VITE_` var; the client module inlines a literal). The literal→`createClient` variant the prior
+  doc proposed did **not** land, so #1 still misses mechanically → **residual gap A** below.
+- **#565 gap for #3 — root-schema RLS: PARTIALLY closed.** `readRlsSqlSources` now discovers the
+  root `schema.sql` (#565), but the `CREATE_TABLE`/`ENABLE_RLS` regexes require a **`public.`-
+  qualified** table name, and a no-code Table-Editor export emits **bare** `create table workspaces`
+  (public is the default schema, left implicit). So the file is read but zero tables are enumerated
+  → still no RLS-off finding → **residual gap B** below. (The dynamic tier now catches this class
+  live, and semantic catches it on read — but the cheap mechanical catch is still blocked.)
+
+Net: of the campaign's targeted classes, **#2 and #5 are fully closed mechanically**; **#1 and #3
+are closed on the semantic + dynamic tiers** but retain narrower mechanical residuals (A, B) exposed
+only by re-running *this exact* target shape.
+
+### Mechanizable residuals filed (semantic/dynamic-caught, cheaply mechanizable)
+
+Filed **jharvieux/Harvey#611** (two concrete detector fixes; dedup-checked vs #565/#576/#578/#601/
+#602 — neither is covered: #578 is built-bundle/CORS/headers/open-signup, #601/#602 are cipherx
+App-Router/migration-SQLi):
+
+- **Gap A — service-role JWT literal → `createClient`.** Extend the service-role-in-client detection
+  to fire on a service-role-named identifier/JWT literal passed as the key argument to
+  `createClient(url, <service-role>, …)` in a browser-reachable module, independent of whether the
+  value arrives via `import.meta.env`. Proven missed on `before/src/lib/supabaseClient.ts:20`.
+- **Gap B — unqualified `create table` in the static RLS pass.** Broaden `CREATE_TABLE` (and
+  `ENABLE_RLS`) in `src/scan/supabase-static.ts` to accept an optional `public.` qualifier so the
+  bare `create table workspaces` DDL that no-code Table-Editor exports emit is enumerated. The root
+  `schema.sql` is already discovered; the regex coupling is the only thing blocking the RLS-off
+  catch. Proven missed on `before/schema.sql`.
+
+Not filed (correctly out of mechanical scope): **#7** (prompt injection — LLM-semantic tier, caught
+by the semantic pass, no cheap mechanical model) and the rate-limit enforcement half of **#8**
+(needs a server route to gate; the SPA calls OpenAI browser-direct).
+
+### Notes (verified this run, not recalled)
+
+- **Dynamic evidence for #3:** the M2 pass emitted 12 findings — cross-tenant/anon **reads** of
+  `profiles` and `tickets` for every persona (anon / Tenant A / Tenant B / Admin) and **Critical
+  unauthorized POSTs** accepted on `tickets` — a live demonstration that RLS is off and the anon key
+  reaches every tenant's rows (`M2.pass.json`).
+- **M9 SSR false-premise persists here:** `detect-static` still emits 2× "SSR-only API misuse" (Low)
+  on `Dashboard.tsx:14/16`. The Vite/SPA SSR-suppression (#573/#575/#582/#605) keys off a detected
+  Vite framework, but this bare `before/` export ships **no `package.json`**, so the framework probe
+  returns `other` and the suppression does not engage. Same false-premise as the prior measurement
+  (right lines #4/#5, wrong mechanism) — an FP note, not a security catch, and not counted as one.
+- **#1's env-declared service role** surfaces only as a coverage note (`SEC-BUNDLE-00`, Info: "run a
+  production build so client-inlined secrets can be scanned") — the built-bundle secret pass (#578)
+  needs a `dist/` build, absent on this source-only export. The fail-loud coverage tier working as
+  intended, not a finding.
