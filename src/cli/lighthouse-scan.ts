@@ -45,7 +45,8 @@ import { join, resolve } from "node:path";
 import { launch, type LaunchedChrome, type Options as LaunchOptions } from "chrome-launcher";
 import runLighthouse from "lighthouse";
 import type { Finding } from "../findings.js";
-import { lighthouseRunErrorReason, lighthouseUnavailableFinding, parseLighthouseFindings, type LighthousePageResult, type LighthouseResult } from "../lighthouse.js";
+import { lighthouseRunErrorReason, lighthouseUnavailableFinding, parseLighthouseFindings, serveCommand, type LighthousePageResult, type LighthouseResult } from "../lighthouse.js";
+import { detectTargetFramework } from "../scan/framework-detect.js";
 
 // Value-flags consume the next token; --route repeats. Anything left over is the target dir.
 const VALUE_FLAGS = new Set(["--url", "--out", "--port", "--route"]);
@@ -227,8 +228,11 @@ async function resolveTarget(): Promise<{ base: string; cleanup: () => void }> {
   const build = spawnSync("npm", ["run", "build"], { cwd: targetDir, stdio: "inherit" });
   if (build.status !== 0) throw new Error(`\`npm run build\` in ${targetDir} exited ${build.status ?? "with a signal"} — no servable build to audit`);
 
-  console.error(`starting target (npm run start -- -p ${port}) …`);
-  const server = spawn("npm", ["run", "start", "--", "-p", String(port)], { cwd: targetDir, stdio: "inherit" });
+  // Vite has no `start` script — its build is served by `vite preview --port` (#577).
+  const framework = detectTargetFramework(targetDir);
+  const serve = serveCommand(framework, port);
+  console.error(`starting target (${serve.label}) [framework: ${framework}] …`);
+  const server = spawn("npm", serve.args, { cwd: targetDir, stdio: "inherit" });
   const base = `http://localhost:${port}`;
   const cleanup = () => {
     if (!server.killed) server.kill("SIGTERM");
@@ -237,7 +241,7 @@ async function resolveTarget(): Promise<{ base: string; cleanup: () => void }> {
 
   if (!(await waitForServer(base, 60_000))) {
     cleanup();
-    throw new Error(`target server at ${base} did not become ready within 60s (check its \`start\` script and that port ${port} is free)`);
+    throw new Error(`target server at ${base} did not become ready within 60s (check its \`${framework === "vite" ? "preview" : "start"}\` script and that port ${port} is free)`);
   }
   return { base, cleanup };
 }

@@ -8,12 +8,13 @@ import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { parseBundleAnalyzerStats, parseBundleStats } from "./bundle-stats.js";
+import { parseBundleAnalyzerStats, parseBundleStats, parseViteBundleStats } from "./bundle-stats.js";
 
 let webpackDir: string;
 let turboDir: string;
 let statsPath: string;
 let statsDir: string;
+let viteDir: string;
 
 beforeAll(() => {
   // Webpack layout: shared framework chunk (100 KB) + heavy route chunk (300 KB) + light (5 KB).
@@ -67,12 +68,30 @@ beforeAll(() => {
       },
     }),
   );
+
+  // Vite (Rollup) dist layout (#577): index.html references the entry chunk (<script type=module>)
+  // and a modulepreload vendor chunk; a lazy chunk sits in assets/ but is NOT referenced by the HTML,
+  // so it must be excluded from first-load. randomBytes → incompressible → gzip ≈ raw, so budgets are
+  // predictable (250 KB budget; entry 200 + vendor 100 = 300 KB first-load; lazy 500 KB excluded).
+  viteDir = mkdtempSync(join(tmpdir(), "harvey-bundle-vite-"));
+  mkdirSync(join(viteDir, "assets"), { recursive: true });
+  writeFileSync(join(viteDir, "assets", "index-abc123.js"), randomBytes(200 * 1024));
+  writeFileSync(join(viteDir, "assets", "vendor-def456.js"), randomBytes(100 * 1024));
+  writeFileSync(join(viteDir, "assets", "SettingsPage-lazy789.js"), randomBytes(500 * 1024));
+  writeFileSync(
+    join(viteDir, "index.html"),
+    `<!doctype html><html><head>
+      <link rel="modulepreload" crossorigin href="/assets/vendor-def456.js">
+      <script type="module" crossorigin src="/assets/index-abc123.js"></script>
+    </head><body><div id="root"></div></body></html>`,
+  );
 });
 
 afterAll(() => {
   rmSync(webpackDir, { recursive: true, force: true });
   rmSync(turboDir, { recursive: true, force: true });
   rmSync(statsDir, { recursive: true, force: true });
+  rmSync(viteDir, { recursive: true, force: true });
 });
 
 describe("webpack-layout builds (per-route manifests)", () => {
@@ -116,6 +135,47 @@ describe("no build artifact", () => {
       expect(parseBundleStats(empty)).toHaveLength(0);
     } finally {
       rmSync(empty, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Vite (Rollup) dist reader (#577)", () => {
+  it("measures first-load JS from the index.html entry + modulepreload set, excluding lazy chunks", () => {
+    const findings = parseViteBundleStats(viteDir);
+    expect(findings).toHaveLength(1);
+    const f = findings[0]!;
+    expect(f).toMatchObject({ id: "M7B-V1", confidence: "Confirmed", severity: "Perf" });
+    expect(f.taxonomy).toBe("M7 — First-load JS over budget (Vite)");
+    expect(f.title).toContain("300 KB"); // 200 entry + 100 vendor, gzip ≈ raw (incompressible)
+    expect(f.title).toContain("2 entry chunks");
+    expect(f.evidence).toContain("index-abc123.js");
+    expect(f.evidence).toContain("vendor-def456.js");
+    expect(f.evidence).not.toContain("SettingsPage-lazy789.js"); // lazy chunk not in first-load
+  });
+
+  it("stays silent when first-load is under budget", () => {
+    expect(parseViteBundleStats(viteDir, { firstLoadBudgetBytes: 999 * 1024 })).toHaveLength(0);
+  });
+
+  it("returns nothing for a directory with no dist/index.html and no assets", () => {
+    const empty = mkdtempSync(join(tmpdir(), "harvey-vite-empty-"));
+    try {
+      expect(parseViteBundleStats(empty)).toHaveLength(0);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it("discloses the first-load attribution gap (M7B-V0) when assets exist but index.html is absent", () => {
+    const noHtml = mkdtempSync(join(tmpdir(), "harvey-vite-nohtml-"));
+    try {
+      mkdirSync(join(noHtml, "assets"), { recursive: true });
+      writeFileSync(join(noHtml, "assets", "chunk.js"), randomBytes(80 * 1024));
+      const findings = parseViteBundleStats(noHtml);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]).toMatchObject({ id: "M7B-V0", severity: "Info", confidence: "N/A" });
+    } finally {
+      rmSync(noHtml, { recursive: true, force: true });
     }
   });
 });

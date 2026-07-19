@@ -1,0 +1,9 @@
+import { useEffect, useState } from "react";
+
+export function Widget() {
+  const [data, setData] = useState<unknown>(null);
+  useEffect(() => {
+    fetch("/api/widget").then((r) => r.json()).then(setData);
+  }, []);
+  return data ? null : null;
+}

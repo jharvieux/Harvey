@@ -25,8 +25,8 @@
 // JSON, so the budgets here are independently calibrated on uncompressed bytes and are NOT
 // directly comparable to the gzip-based M7B-01/02 budgets above.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { Finding } from "../findings.js";
 
@@ -354,4 +354,117 @@ export function parseBundleAnalyzerStats(statsPath: string, options?: BundleAnal
   const route = statsRouteAttributionFinding(groups, routeBudget);
   if (route) findings.push(route);
   return findings;
+}
+
+// --- Vite (Rollup) dist reader (#577) ---------------------------------------------------
+//
+// A Vite SPA build emits `dist/assets/*.js` (hashed Rollup chunks) and a `dist/index.html` that
+// references the entry chunk via `<script type="module" src>` plus its statically-imported chunks
+// via `<link rel="modulepreload" href>`. Those together are FIRST-LOAD JS — what every visitor
+// downloads, parses, and executes before the app is interactive — the Vite analogue of Next's
+// per-route first-load number `parseBundleStats` measures from `.next`. Lazy chunks (behind a
+// dynamic `import()`) are emitted to `assets/` too but are NOT referenced by index.html, so summing
+// only the index.html-referenced set is the honest first-load metric rather than "total JS shipped".
+//
+// Metric: gzipped bytes, same basis as M7B-01/02. There is no build-manifest requirement — a Vite
+// SPA always emits index.html, so this needs only the default `vite build` output.
+
+interface ViteBundleOptions {
+  /** First-load JS budget, gzipped bytes. Default 250 KB (same as the Next per-route budget). */
+  firstLoadBudgetBytes?: number;
+}
+
+// Asset hrefs index.html loads before first interaction: entry `<script type="module" src>` and
+// preloaded `<link rel="modulepreload" href>`. Tag-level match so attribute order doesn't matter.
+function firstLoadAssetsFromHtml(html: string): string[] {
+  const assets = new Set<string>();
+  for (const m of html.matchAll(/<script\b[^>]*>/gi)) {
+    if (!/\btype=["']module["']/i.test(m[0])) continue;
+    const src = /\bsrc=["']([^"']+)["']/i.exec(m[0])?.[1];
+    if (src?.endsWith(".js")) assets.add(src);
+  }
+  for (const m of html.matchAll(/<link\b[^>]*>/gi)) {
+    if (!/\brel=["']modulepreload["']/i.test(m[0])) continue;
+    const href = /\bhref=["']([^"']+)["']/i.exec(m[0])?.[1];
+    if (href?.endsWith(".js")) assets.add(href);
+  }
+  return [...assets];
+}
+
+// Resolve an index.html href ("/assets/index-abc.js", possibly under a non-root base) to a real
+// file under distDir and gzip-measure it. Falls back to matching the basename inside dist/assets.
+function measureHref(distDir: string, href: string): { file: string; bytes: number } | undefined {
+  const rel = href.replace(/^\//, "").split(/[?#]/)[0] ?? "";
+  let path = join(distDir, rel);
+  if (!existsSync(path)) path = join(distDir, "assets", basename(rel));
+  if (!existsSync(path) || !path.endsWith(".js")) return undefined;
+  return { file: rel || basename(path), bytes: gzipSync(readFileSync(path)).length };
+}
+
+function firstLoadFinding(measured: { file: string; bytes: number }[], totalBytes: number, budget: number): Finding {
+  const shown = measured.slice(0, INSTANCE_CAP);
+  return {
+    id: "M7B-V1",
+    status: "Open",
+    category: "Performance",
+    title: `Vite first-load JS is ${kb(totalBytes)} across ${measured.length} entry chunk${measured.length === 1 ? "" : "s"} (budget ${kb(budget)})`,
+    severity: "Perf",
+    confidence: "Confirmed", // measured from the built dist artifact, not inferred from source
+    taxonomy: "M7 — First-load JS over budget (Vite)",
+    location: shown[0]?.file ?? "dist/index.html",
+    evidence:
+      `Gzipped JS referenced by dist/index.html as the entry script + its modulepreloads (the bundle every visitor loads before interaction), worst-first: ` +
+      shown.map((a) => `${a.file} (${kb(a.bytes)})`).join(", ") +
+      (measured.length > shown.length ? ` … and ${measured.length - shown.length} more` : ""),
+    impact: "Every visitor downloads, parses, and executes this JS before the SPA is interactive — the single largest controllable input to INP/TTI on mid-range devices; lazy (route/feature) chunks are excluded, so this is the unavoidable floor.",
+    fix: "Code-split behind `React.lazy(() => import(...))` / dynamic `import()` so route- and feature-specific code leaves the entry chunk; check the M7C heavy-import / eager-glob findings for what is inflating it.",
+    value: 4,
+    ease: 3,
+    safety: 4,
+  };
+}
+
+// `distDir` points at a Vite build output (the `dist/` a `vite build` writes). Measures first-load
+// JS from dist/index.html; returns [] when the artifact is absent or under budget. When index.html
+// is present but references no measurable JS, or is missing while assets exist, discloses the gap
+// (fail-loud) rather than silently reporting nothing.
+export function parseViteBundleStats(distDir: string, options?: ViteBundleOptions): Finding[] {
+  const budget = options?.firstLoadBudgetBytes ?? 250 * 1024;
+  const indexHtml = join(distDir, "index.html");
+
+  if (existsSync(indexHtml)) {
+    const measured = firstLoadAssetsFromHtml(readFileSync(indexHtml, "utf8"))
+      .map((h) => measureHref(distDir, h))
+      .filter((x): x is { file: string; bytes: number } => x !== undefined)
+      .sort((a, b) => b.bytes - a.bytes);
+    if (measured.length === 0) return [];
+    const totalBytes = measured.reduce((sum, a) => sum + a.bytes, 0);
+    return totalBytes > budget ? [firstLoadFinding(measured, totalBytes, budget)] : [];
+  }
+
+  // No index.html — can't separate first-load from lazy chunks. If JS assets exist, disclose the
+  // gap and report total shipped JS rather than pretending the tier is clean.
+  const assetsDir = join(distDir, "assets");
+  if (!existsSync(assetsDir)) return [];
+  const jsFiles = readdirSync(assetsDir).filter((f) => f.endsWith(".js"));
+  if (jsFiles.length === 0) return [];
+  const totalBytes = jsFiles.reduce((sum, f) => sum + gzipSync(readFileSync(join(assetsDir, f))).length, 0);
+  return [
+    {
+      id: "M7B-V0",
+      status: "Open",
+      category: "Performance",
+      title: `Vite first-load JS unmeasured — no dist/index.html (total shipped JS ${kb(totalBytes)})`,
+      severity: "Info",
+      confidence: "N/A",
+      taxonomy: "M7 — Vite first-load attribution unavailable",
+      location: distDir,
+      evidence: `This dist/ has assets/*.js (${jsFiles.length} chunks, ${kb(totalBytes)} gzipped total) but no index.html to attribute first-load vs. lazy chunks — the total is measurable, the first-load split is not.`,
+      impact: "The audit cannot separate entry-chunk (first-load) JS from on-demand route/feature chunks from this artifact alone — a coverage disclosure, not a defect.",
+      fix: "Point `--build` at the directory that contains the built `index.html` (a standard `vite build` writes it at the dist root), and re-run for the first-load number.",
+      value: 1,
+      ease: 3,
+      safety: 5,
+    },
+  ];
 }

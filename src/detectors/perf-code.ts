@@ -15,6 +15,7 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
+import type { TargetFramework } from "../scan/framework-detect.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 
 export type { SourceInput } from "./common.js";
@@ -303,7 +304,7 @@ function isOneShotImgSrc(el: ts.JsxOpeningElement | ts.JsxSelfClosingElement, sf
   return false;
 }
 
-function detectRawImgElement(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+function detectRawImgElement(sources: Map<string, ts.SourceFile>, nextId: NextId, isVite: boolean): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     if (isRenderOnce(path, sf)) continue; // email/PDF templates render once — re-render classes don't apply
@@ -316,14 +317,18 @@ function detectRawImgElement(sources: Map<string, ts.SourceFile>, nextId: NextId
     if (!first) continue;
     findings.push(
       makeFinding(nextId, {
-        title: `Raw <img> instead of next/image (${hits.length}× in ${path})`,
+        title: isVite
+          ? `Raw <img> without dimensions or lazy-loading (${hits.length}× in ${path})`
+          : `Raw <img> instead of next/image (${hits.length}× in ${path})`,
         severity: "Perf",
         confidence: "Likely",
         taxonomy: "M7 — Raw <img> instead of next/image",
         location: loc(path, sf, first),
         evidence: `\`${first.getText(sf).slice(0, 80)}\` — served at original size/format with no lazy-loading or srcset, and no reserved layout box.`,
         impact: "Slower LCP (unoptimized bytes, no priority hints) and CLS from late-loading unsized images.",
-        fix: "Use `next/image` (automatic resizing, modern formats, lazy-load, layout reservation); add `priority` on the LCP image.",
+        fix: isVite
+          ? "Set explicit `width`/`height` (reserves the layout box, prevents CLS) and `loading=\"lazy\"` `decoding=\"async\"` on below-the-fold images; for build-time responsive/optimized formats use `vite-imagetools` (an `<img srcset>` per size)."
+          : "Use `next/image` (automatic resizing, modern formats, lazy-load, layout reservation); add `priority` on the LCP image.",
         value: 3,
         ease: 4,
         safety: 5,
@@ -806,10 +811,13 @@ function mountDataReads(effectBody: ts.Node): ts.CallExpression[] {
   return reads;
 }
 
-function detectClientFetchEffect(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+function detectClientFetchEffect(sources: Map<string, ts.SourceFile>, nextId: NextId, isVite: boolean): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (leadingDirective(sf) !== "use client") continue; // Server Components fetch server-side — that's the fix, not the bug
+    // On Next the "fix" is a Server Component fetch, so only `'use client'` files are the bug. A
+    // Vite SPA has no server-render path — every module is client — so the directive never appears
+    // and every useEffect fetch is in scope (#577).
+    if (!isVite && leadingDirective(sf) !== "use client") continue;
     if (isRenderOnce(path, sf)) continue;
     if (importsDataFetchLib(sf)) continue;
     const hits: ts.CallExpression[] = [];
@@ -830,9 +838,13 @@ function detectClientFetchEffect(sources: Map<string, ts.SourceFile>, nextId: Ne
         confidence: "Review",
         taxonomy: "M7 — Client fetch in useEffect",
         location: loc(path, sf, first),
-        evidence: `\`${first.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` runs on mount inside useEffect in a 'use client' component${hits.length > 1 ? ` (first of ${hits.length})` : ""} — the data round-trip starts only after the JS bundle downloads, parses, and hydrates, with no caching or request de-duplication.`,
-        impact: "A serial network waterfall (HTML → JS → data) plus a loading spinner on every visit; concurrent mounts of the component each refetch. A Server Component fetch ships the data in the initial HTML; a cache hook de-dupes on the client.",
-        fix: "Fetch in a Server Component (or route loader) and pass the data down; if it must stay client-side (third-party API, live widget), use a cache-aware hook (useSWR / React Query) instead of raw fetch-in-effect.",
+        evidence: `\`${first.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` runs on mount inside useEffect in a ${isVite ? "client component (Vite SPA)" : "'use client' component"}${hits.length > 1 ? ` (first of ${hits.length})` : ""} — the data round-trip starts only after the JS bundle downloads, parses, and hydrates, with no caching or request de-duplication.`,
+        impact: isVite
+          ? "A serial network waterfall (HTML → JS → data) plus a loading spinner on every visit; concurrent mounts of the component each refetch with no caching or de-duplication."
+          : "A serial network waterfall (HTML → JS → data) plus a loading spinner on every visit; concurrent mounts of the component each refetch. A Server Component fetch ships the data in the initial HTML; a cache hook de-dupes on the client.",
+        fix: isVite
+          ? "Move the read behind a cache-aware hook (useSWR / React Query / a route loader) instead of raw fetch-in-effect, so requests are cached, de-duplicated, and revalidated across mounts."
+          : "Fetch in a Server Component (or route loader) and pass the data down; if it must stay client-side (third-party API, live widget), use a cache-aware hook (useSWR / React Query) instead of raw fetch-in-effect.",
         value: 3,
         ease: 3,
         safety: 4,
@@ -915,24 +927,30 @@ function heavyLibOf(spec: string): string | undefined {
   return undefined;
 }
 
-function detectHeavyClientImport(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+function detectHeavyClientImport(sources: Map<string, ts.SourceFile>, nextId: NextId, isVite: boolean): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (leadingDirective(sf) !== "use client") continue;
+    // A Vite SPA emits no `'use client'` directive — the whole bundle IS the client, so a static
+    // heavy import in ANY module lands in first-load JS (#577). On Next, only Client Components do.
+    if (!isVite && leadingDirective(sf) !== "use client") continue;
     for (const stmt of sf.statements) {
       if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
       const lib = heavyLibOf(stmt.moduleSpecifier.text);
       if (!lib) continue;
       findings.push(
         makeFinding(nextId, {
-          title: `Heavy library ${lib} statically imported in a 'use client' module`,
+          title: isVite
+            ? `Heavy library ${lib} statically imported into the client bundle`
+            : `Heavy library ${lib} statically imported in a 'use client' module`,
           severity: "Perf",
           confidence: "Likely",
           taxonomy: "M7 — Heavy import in client bundle",
           location: loc(path, sf, stmt),
-          evidence: `\`${stmt.getText(sf).slice(0, 100)}\` — ${lib} is a known-heavy package and this file is a Client Component, so it loads in the route's first-load JS even before the feature is used.`,
+          evidence: `\`${stmt.getText(sf).slice(0, 100)}\` — ${lib} is a known-heavy package and ${isVite ? "this is a Vite SPA where every module ships to the client" : "this file is a Client Component"}, so it loads in the route's first-load JS even before the feature is used.`,
           impact: "Hundreds of KB (or more) of JS downloaded, parsed, and executed on first paint for a feature the user may never open.",
-          fix: `Load the component that needs ${lib} with \`next/dynamic\` (client-only, \`ssr: false\` if appropriate) so the chunk loads on demand.`,
+          fix: isVite
+            ? `Load the component that needs ${lib} with \`React.lazy(() => import(...))\` behind \`<Suspense>\` (a dynamic \`import()\`) so its chunk is fetched on demand instead of in the entry bundle.`
+            : `Load the component that needs ${lib} with \`next/dynamic\` (client-only, \`ssr: false\` if appropriate) so the chunk loads on demand.`,
           value: 4,
           ease: 3,
           safety: 4,
@@ -1038,7 +1056,7 @@ function detectUnoptimizedBarrelImports(files: SourceInput[], sources: Map<strin
 
 // --- D1. Manual Google Fonts stylesheet [LOW] ------------------------------------
 
-function detectManualFontLink(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+function detectManualFontLink(sources: Map<string, ts.SourceFile>, nextId: NextId, isVite: boolean): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     forEachJsxElement(sf, (el) => {
@@ -1054,14 +1072,18 @@ function detectManualFontLink(sources: Map<string, ts.SourceFile>, nextId: NextI
       if (!href || !href.includes("fonts.googleapis.com") || rel !== "stylesheet") return;
       findings.push(
         makeFinding(nextId, {
-          title: "Web font loaded via manual <link> instead of next/font",
+          title: isVite
+            ? "Web font loaded via a render-blocking <link> stylesheet"
+            : "Web font loaded via manual <link> instead of next/font",
           severity: "Low",
           confidence: "Likely",
           taxonomy: "M7 — Manual font stylesheet",
           location: loc(path, sf, el),
           evidence: `\`<link rel="stylesheet" href="${href.slice(0, 60)}…">\` — a render-blocking third-party stylesheet fetched at runtime.`,
           impact: "Extra connection + blocking CSS on every cold visit, and FOUT/layout shift (CLS) when the font swaps in.",
-          fix: "Use `next/font/google` — fonts are self-hosted at build time with `size-adjust` fallbacks, removing the runtime request and the shift.",
+          fix: isVite
+            ? "Self-host the font with `@fontsource/<family>` (or `@fontsource-variable/*`) imported in your entry module — removes the runtime Google Fonts request and the swap; add `font-display: swap` and a `size-adjust` fallback to cut CLS."
+            : "Use `next/font/google` — fonts are self-hosted at build time with `size-adjust` fallbacks, removing the runtime request and the shift.",
           value: 2,
           ease: 4,
           safety: 5,
@@ -1344,6 +1366,156 @@ function detectNestedLoopJoin(sources: Map<string, ts.SourceFile>, nextId: NextI
   return findings;
 }
 
+// --- F1. Eager import.meta.glob [PERF] — Vite only --------------------------------
+//
+// `import.meta.glob("./x/*.js", { eager: true })` is a Vite build-time primitive that inlines
+// every module the pattern matches directly into the importing chunk (the default, lazy, form
+// returns a map of dynamic-import functions instead). At module top level that set lands in the
+// entry chunk — the whole matched directory ships up front even if only one file is ever used.
+
+function hasEagerTrue(opts: ts.ObjectLiteralExpression): boolean {
+  return opts.properties.some(
+    (p) =>
+      ts.isPropertyAssignment(p) &&
+      ts.isIdentifier(p.name) &&
+      p.name.text === "eager" &&
+      p.initializer.kind === ts.SyntaxKind.TrueKeyword,
+  );
+}
+
+function detectImportMetaGlobEager(sources: Map<string, ts.SourceFile>, nextId: NextId, isVite: boolean): Finding[] {
+  if (!isVite) return []; // `import.meta.glob` is a Vite-only build primitive
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    const hits: ts.CallExpression[] = [];
+    const visit = (n: ts.Node) => {
+      if (
+        ts.isCallExpression(n) &&
+        ts.isPropertyAccessExpression(n.expression) &&
+        n.expression.name.text === "glob" &&
+        ts.isMetaProperty(n.expression.expression) &&
+        n.expression.expression.name.text === "meta"
+      ) {
+        const opts = n.arguments[1];
+        if (opts && ts.isObjectLiteralExpression(opts) && hasEagerTrue(opts)) hits.push(n);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    const first = hits[0];
+    if (!first) continue;
+    findings.push(
+      makeFinding(nextId, {
+        title: `Eager import.meta.glob pulls every matched module into the chunk (${hits.length}× in ${path})`,
+        severity: "Perf",
+        confidence: "Likely",
+        taxonomy: "M7 — Eager import.meta.glob",
+        location: loc(path, sf, first),
+        evidence: `\`${first.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` uses \`{ eager: true }\`${hits.length > 1 ? ` (first of ${hits.length})` : ""}, so Vite inlines every file the glob matches into this module's chunk at build time instead of code-splitting them behind dynamic import.`,
+        impact: "Every module the pattern matches is bundled and executed up front — the whole set ships in the importing chunk (the entry chunk when this runs at module top level), regardless of which ones the user actually needs.",
+        fix: "Drop `eager: true` (the default is lazy) and call the returned `() => import(...)` functions where each module is actually needed, so Vite code-splits them into separate on-demand chunks.",
+        value: 3,
+        ease: 4,
+        safety: 4,
+      }),
+    );
+  }
+  return findings;
+}
+
+// --- F2. Route components statically imported instead of React.lazy [PERF] — Vite only -----
+//
+// On a Vite SPA there is no per-route framework code-splitting (Next's `app/`/`pages/` directory
+// does it automatically). If every route's component is a plain top-level import, all of them ship
+// in the entry chunk and the initial JS grows with the whole app. The fix is `React.lazy(() =>
+// import("./Page"))` + `<Suspense>`, which emits one chunk per route fetched on navigation. Guarded
+// to files that actually define react-router routes so a non-router `<Route>` never triggers it.
+
+const REACT_ROUTER_SPECIFIER = /^react-router(-dom)?$/;
+
+function isLazyCallee(expr: ts.Expression): boolean {
+  if (ts.isIdentifier(expr)) return expr.text === "lazy";
+  return ts.isPropertyAccessExpression(expr) && expr.name.text === "lazy";
+}
+
+function detectUnsplitRouteComponents(sources: Map<string, ts.SourceFile>, nextId: NextId, isVite: boolean): Finding[] {
+  if (!isVite) return [];
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    let usesRouter = false;
+    const staticImports = new Set<string>();
+    for (const stmt of sf.statements) {
+      if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+      if (REACT_ROUTER_SPECIFIER.test(stmt.moduleSpecifier.text)) usesRouter = true;
+      const clause = stmt.importClause;
+      if (!clause) continue;
+      if (clause.name) staticImports.add(clause.name.text); // default import
+      if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+        for (const el of clause.namedBindings.elements) staticImports.add(el.name.text);
+      }
+    }
+    if (!usesRouter) continue;
+
+    // Names bound to lazy(...) / React.lazy(...) are already code-split — exempt.
+    const lazyNames = new Set<string>();
+    const collectLazy = (n: ts.Node) => {
+      if (
+        ts.isVariableDeclaration(n) &&
+        ts.isIdentifier(n.name) &&
+        n.initializer &&
+        ts.isCallExpression(n.initializer) &&
+        isLazyCallee(n.initializer.expression)
+      ) {
+        lazyNames.add(n.name.text);
+      }
+      ts.forEachChild(n, collectLazy);
+    };
+    collectLazy(sf);
+
+    const unsplit = new Set<string>();
+    let firstEl: ts.JsxOpeningElement | ts.JsxSelfClosingElement | undefined;
+    forEachJsxElement(sf, (el) => {
+      if (el.tagName.getText(sf) !== "Route") return;
+      for (const attr of el.attributes.properties) {
+        if (!ts.isJsxAttribute(attr)) continue;
+        const attrName = attr.name.getText(sf);
+        let comp: string | undefined;
+        if (attrName === "element") {
+          const expr = jsxAttrExpression(attr);
+          if (expr && (ts.isJsxElement(expr) || ts.isJsxSelfClosingElement(expr))) {
+            comp = (ts.isJsxElement(expr) ? expr.openingElement : expr).tagName.getText(sf);
+          }
+        } else if (attrName === "component") {
+          const expr = jsxAttrExpression(attr);
+          if (expr && ts.isIdentifier(expr)) comp = expr.text;
+        }
+        if (comp && staticImports.has(comp) && !lazyNames.has(comp)) {
+          unsplit.add(comp);
+          firstEl ??= el;
+        }
+      }
+    });
+    if (unsplit.size === 0 || !firstEl) continue;
+    const list = [...unsplit];
+    findings.push(
+      makeFinding(nextId, {
+        title: `${list.length} route component${list.length === 1 ? "" : "s"} statically imported instead of React.lazy (${path})`,
+        severity: "Perf",
+        confidence: "Review",
+        taxonomy: "M7 — Route not code-split",
+        location: loc(path, sf, firstEl),
+        evidence: `Route components eagerly imported and mounted without \`React.lazy(() => import(...))\`: ${list.slice(0, 8).join(", ")}${list.length > 8 ? ` … and ${list.length - 8} more` : ""} — all of them ship in the entry chunk instead of loading when their route is visited.`,
+        impact: "Every route's code downloads on the first page load even though the user sees one route at a time — the SPA's initial JS grows with the whole app rather than the landing route. (A tiny app is fine; confirm the app has enough per-route weight to matter.)",
+        fix: "Load route components with `React.lazy(() => import('./Page'))` and wrap the `<Routes>` in `<Suspense fallback={…}>`, so Vite emits one chunk per route fetched on navigation.",
+        value: 3,
+        ease: 3,
+        safety: 4,
+      }),
+    );
+  }
+  return findings;
+}
+
 // --- Orchestrator --------------------------------------------------------------------
 
 /**
@@ -1351,9 +1523,15 @@ function detectNestedLoopJoin(sources: Map<string, ts.SourceFile>, nextId: NextI
  * Finding[] (src/findings.ts). Pass the project's full relevant .ts/.tsx source set plus
  * its next.config/babel config files — the React Compiler gate reads the config to decide
  * whether the manual-memo classes are real findings or informational.
+ *
+ * `framework` (from src/scan/framework-detect.ts) switches the client-JS tiers to their Vite
+ * shape (#577): on a Vite SPA every module is client, so the heavy-import and fetch-in-effect
+ * checks drop the `'use client'` gate, the Vite-only glob/route-splitting checks turn on, and the
+ * raw-<img>/font remediation text branches. Omitted or `next`/`other` → the Next behavior as before.
  */
-export function detectPerfCodeFindings(files: SourceInput[]): Finding[] {
+export function detectPerfCodeFindings(files: SourceInput[], framework?: TargetFramework): Finding[] {
   const compilerOn = reactCompilerEnabled(files);
+  const isVite = framework === "vite";
   const sources = new Map(
     files.filter((f) => /\.(ts|tsx|jsx|mjs)$/.test(f.path)).map((f) => [f.path, parse(f.path, f.text)]),
   );
@@ -1364,17 +1542,19 @@ export function detectPerfCodeFindings(files: SourceInput[]): Finding[] {
     ...detectUnresolvableCompilerFlag(files, nextId),
     ...detectContextValueLiteral(sources, nextId, compilerOn),
     ...detectInlinePropLiterals(sources, nextId, compilerOn),
-    ...detectRawImgElement(sources, nextId),
+    ...detectRawImgElement(sources, nextId, isVite),
     ...detectIndexAsKey(sources, nextId, compilerOn),
     ...detectSortInJsx(sources, nextId),
     ...detectStateSprawl(sources, nextId),
     ...detectAwaitInLoop(sources, nextId),
     ...detectUnboundedSelect(sources, nextId),
-    ...detectClientFetchEffect(sources, nextId),
+    ...detectClientFetchEffect(sources, nextId, isVite),
     ...detectWholeLibraryImport(sources, nextId),
-    ...detectHeavyClientImport(sources, nextId),
+    ...detectHeavyClientImport(sources, nextId, isVite),
     ...detectUnoptimizedBarrelImports(files, sources, nextId),
-    ...detectManualFontLink(sources, nextId),
+    ...detectManualFontLink(sources, nextId, isVite),
+    ...detectImportMetaGlobEager(sources, nextId, isVite),
+    ...detectUnsplitRouteComponents(sources, nextId, isVite),
     ...detectMiddlewareFetch(sources, nextId),
     ...detectSyncIoInHandler(sources, nextId),
     ...detectJsonDeepClone(sources, nextId),
