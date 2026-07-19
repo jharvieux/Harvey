@@ -9,10 +9,12 @@ import {
   buildProvisioningPlan,
   detectClientSecuritySuite,
   discoverMigrationDirs,
+  discoverSchemaFiles,
   interpretClientSuiteRun,
   type ClientSecuritySuite,
   type ProvisioningPlan,
   readRepoLayout,
+  readSchemaSql,
   type RepoLayout,
   runDynamicValidation,
   type StandUpRunner,
@@ -21,6 +23,7 @@ import type { Finding } from "./findings.js";
 
 const layout = (over: Partial<RepoLayout> = {}): RepoLayout => ({
   migrationDirs: ["/repo/supabase/migrations"],
+  schemaFiles: [],
   scripts: { dev: "next dev", build: "next build" },
   externalSeamDeps: [],
   ...over,
@@ -37,7 +40,7 @@ create table documents (
   body text
 );
 `;
-const plan = (l: RepoLayout = layout()): ProvisioningPlan => buildProvisioningPlan(l, MIGRATION_SQL);
+const plan = (l: RepoLayout = layout()): ProvisioningPlan => buildProvisioningPlan(l, MIGRATION_SQL, "/repo");
 
 describe("assessStandUpAbility (#450 — can we stand this up, and how fully?)", () => {
   it("is a hard no-go with no migrations — there is no RLS surface to probe", () => {
@@ -211,7 +214,7 @@ describe("detectClientSecuritySuite (#508 — presence only, the run is the oper
 
 describe("buildProvisioningPlan (#514 — own stack, client migrations, generic seed, pentest)", () => {
   it("orders start → apply-migrations → seed → pentest and carries the seeded table surface", () => {
-    const p = buildProvisioningPlan(layout(), MIGRATION_SQL);
+    const p = buildProvisioningPlan(layout(), MIGRATION_SQL, "/repo");
     expect(p.steps.map((s) => s.kind)).toEqual(["start", "apply-migrations", "seed", "pentest"]);
     expect(p.seed.scopedTables).toContain("documents");
     expect(p.tables).toContain("documents:tenant_id");
@@ -311,9 +314,9 @@ describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", ()
   });
 
   it("surfaces seed warnings (no scoped tables ⇒ nothing to leak) as limitations", () => {
-    const noScope = buildProvisioningPlan(layout(), "create table settings (\n  id uuid primary key,\n  k text\n);");
+    const noScope = buildProvisioningPlan(layout(), "create table settings (\n  id uuid primary key,\n  k text\n);", "/repo");
     const r = run({ plan: noScope });
-    expect(r.limitations.join(" ")).toMatch(/no tenant-scoped tables/);
+    expect(r.limitations.join(" ")).toMatch(/no scoped tables/);
   });
 
   // #450 acceptance: the emitted M2.pass.json must round-trip through findFreshPass → ran.
@@ -338,5 +341,44 @@ describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", ()
       expect(ranFromPass(pass.artifact, "dynamic pen-test").status).toBe("ran");
       expect(pass.artifact.findings).toHaveLength(1);
     }
+  });
+});
+
+describe("#574 — standalone root schema.sql discovery + stand-up ability", () => {
+  const root = mkdtempSync(join(tmpdir(), "harvey-schemafile-"));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  it("discovers a root schema.sql that declares a table (no supabase/migrations)", () => {
+    const dir = join(root, "vite-export");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "schema.sql"), "create table notes (id uuid primary key, owner_id uuid not null);");
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: { build: "vite build" } }));
+    const { files } = discoverSchemaFiles(dir);
+    expect(files).toEqual([join(dir, "schema.sql")]);
+    const layout = readRepoLayout(dir);
+    expect(layout.migrationDirs).toEqual([]);
+    expect(layout.schemaFiles).toEqual([join(dir, "schema.sql")]);
+  });
+
+  it("stands up a schema-file target (GO) and applies it as the schema", () => {
+    const layout: RepoLayout = { migrationDirs: [], schemaFiles: [join(root, "vite-export", "schema.sql")], scripts: { build: "vite build" }, externalSeamDeps: [] };
+    const v = assessStandUpAbility(layout);
+    expect(v.canStandUp).toBe(true);
+    expect(v.limitations.join(" ")).toMatch(/standalone schema file/);
+    expect(readSchemaSql(layout)).toContain("create table notes");
+    const plan = buildProvisioningPlan(layout, readSchemaSql(layout), join(root, "vite-export"));
+    expect(plan.schemaFiles).toHaveLength(1);
+    expect(plan.projectRoot).toBe(join(root, "vite-export"));
+    expect(plan.steps.find((s) => s.kind === "apply-migrations")?.detail).toMatch(/standalone schema file/);
+  });
+
+  it("a genuinely schema-less target is an honest NO-GO listing the probed locations", () => {
+    const bare = join(root, "bare");
+    mkdirSync(bare, { recursive: true });
+    writeFileSync(join(bare, "package.json"), "{}");
+    const v = assessStandUpAbility(readRepoLayout(bare));
+    expect(v.canStandUp).toBe(false);
+    expect(v.reason).toMatch(/Probed: supabase\/migrations/);
+    expect(v.reason).toMatch(/schema\.sql/);
   });
 });
