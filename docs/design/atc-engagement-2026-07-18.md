@@ -101,6 +101,33 @@ silent skip (CLAUDE.md coverage doctrine).
 > `npm install`, disclosed). **No genuine ATC M2 finding** (0 leaks; the 1 residual scoped skip is a Harvey seed
 > limitation, not an ATC vuln). _Superseded Addendum 3's 78/92 partial proof._
 
+> **Addendum 5 — 2026-07-19 (M2 isolation proof LIFTED to 92/92 = 100% — reuse migration-seeded reference
+> data, Harvey #665).** The last residual of Addendum 4 (`legal_consents`, cascading from its NOT NULL FK
+> `document_id` -> the also-skipped non-scoped lookup `legal_documents`) is closed. Root cause was a distinct,
+> un-designed class: `legal_documents` ships its OWN migration-seeded reference rows (`legal_consent.sql:90`
+> inserts `('tou',1)`, `('privacy_policy',1)`, …) under `UNIQUE(document_type, version)`, and the generic
+> one-row lookup INSERT re-inserted `('tou',1)`, colliding on that UNIQUE key → the lookup SAVEPOINT-skipped,
+> so the child's FK dangled and `legal_consents` skipped too. **The fix (general, not ATC-specific):** during
+> live introspection the seed now samples one existing row's referenced-key value for every FK parent table
+> (`src/pentest/schema-introspect.ts` `existingParentRowsQuery`), and when a NOT NULL FK targets a NON-scoped
+> lookup that already holds rows, it REUSES that existing row (references its id) instead of inserting a fresh
+> colliding parent (`two-tenant-seed.ts` — a key-participating FK still gets a dedicated one/two-row parent so
+> the two child rows can differ; an empty lookup inserts as before). This is the "reuse migration-seeded
+> reference data" class. M2 was re-run live against a `/private/tmp` copy of `apps/main` on a fresh isolated
+> stack (project `harvey-dv-59b96e9ca1`, non-default ports api=56191/db=56192; **185 migrations applied
+> cleanly, stack torn down clean** — 0 Harvey containers/volumes left, no foreign volumes touched, #604
+> re-verified). **Result: 92 of the 92 scoped tables SEEDED and were probed — ZERO seed skips, 100% of the
+> scoped isolation surface** (up from 91/92). Verified positively on the live stack: all 92 scoped tables hold
+> BOTH tenants' rows; `legal_consents` seeds 2 rows (one per tenant) whose `document_id` FK joins validly to an
+> existing `legal_documents` row; `legal_documents` still holds exactly its 5 migration-seeded rows (0
+> Harvey-inserted rows) — the reuse works, no UNIQUE collision. **The live cross-tenant PostgREST matrix RAN
+> over all 92 seeded tables (both tenants' rows present per table) and found ZERO cross-tenant leaks (0
+> findings)** -> the runtime tenant-isolation PROOF is now **92/92 scoped tables, 0 leaks = 100% coverage** —
+> ATC's complete scoped isolation surface exercised live with no leak. Tier-2 app-route probes still degraded
+> to PostgREST-only (a standalone `npm install` of the monorepo `apps/main` fails on `workspace:*` deps,
+> disclosed, not silent). **No genuine ATC M2 finding** (0 leaks; the last residual was a Harvey seed-generality
+> limit, now closed). _Superseded Addendum 4's 91/92 proof._
+
 ---
 
 ## 1. Target enumeration
