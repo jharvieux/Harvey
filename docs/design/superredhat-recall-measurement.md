@@ -14,6 +14,80 @@ predicate is missing") — those especially test Harvey's dynamic M2 tier.
 This is a MEASUREMENT — every caught/missed below is grounded in a Harvey run's actual output
 observed on this date, not recall. No Harvey source was changed.
 
+---
+
+# 2026-07-18 RE-SCORE — full three tiers incl. the SEMANTIC (LLM) tier
+
+**This section supersedes the 6/12 body below.** The original measurement scored only the mechanical
+and dynamic tiers and predated the Vite / App-Router coverage campaign. This re-score runs **all three
+tiers** — mechanical, **semantic (the paid M1 LLM review, absent from the prior score)**, and dynamic
+— against the `vulnerable` branch after pulling the merged detectors (#571, #578, #590, #592, #593).
+Isolated Docker (`project_id srh-rescore`, DB ports 65360-65366, app 65367); stack torn down (Docker
+`ps -aq` = 0) after. Grounded in real runs; no Harvey source changed.
+
+## New tally: 12 caught / 12 (100%) — up from 6/12
+
+| Tier | Findings it caught | vs prior |
+|------|--------------------|----------|
+| **Mechanical** (`quick-scan` + `detect-static` + `pii-classify --schema`) | **11** — F-01,02,03,04,05,06,07,08,09(1 of 3 facets),10,12. Miss: **F-11** (no static CSRF/rate-limit detector). | 6 → 11 |
+| **Semantic (LLM)** (manual `/vuln-scan`-style review of source, triaged vs `fp-rules.txt`) | **12** — all findings incl. all 3 facets of F-09; independently confirms the manual F-03/F-04/F-11. | new tier |
+| **Dynamic (M2)** (`dynamic-validate --execute`, autonomous stand-up) | **4 proven live** — F-02, F-03, F-04, F-11. | 0 → 4 |
+| **Union (a finding = caught if any tier caught it)** | **12 / 12** | 6 → 12 |
+
+**What changed the result vs the old 6/12:**
+- **Mechanical 6 → 11.** The App-Router taint detectors that were dark in the prior run all fired on
+  the exact planted lines: `harvey-idor-param` ×3 (F-03), `harvey-mass-assignment` ×2 (F-07),
+  `harvey-ssrf-fetch` ×2 (F-05), `harvey-template-injection` (F-12 SSTI facet), `harvey-permissive-cors`
+  on the object-literal wildcard (F-10), and `harvey-authed-no-role-check` (F-04, now the correct
+  mechanism, not the old filename heuristic). The Express-vs-App-Router "systematic gap" the prior
+  section blamed for F-03/F-05/F-07/F-10/F-12-SSTI is **closed** for this target.
+- **Dynamic 0 → 4.** M2 now models this target's shape: per-user `owner_id` seed (2 scoped tables) and
+  **custom HS256 auth — it discovered the signing secret in source and minted an app session** (#571),
+  so the authenticated app-route probes reached the real paths. Proven live: 8× cross-tenant/anon
+  PostgREST reads on `notes` + `api_tokens` (**F-02**), `M2-APP-IDOR-OBJECT` on `/api/notes/<id>`
+  (**F-03**), `M2-APP-BFLA-ADMIN` on `/api/admin/users` (**F-04**), `M2-APP-CSRF` on `/api/notes`
+  (**F-11**). (MASS-ASSIGNMENT and NO-RATE-LIMIT probes ran but were not proven live here — F-07 is
+  covered mechanically; the rate-limit facet of F-11 is tracked by #159. Reported, not skipped.)
+- **Semantic is what carries F-11 and completes F-09.** F-11 has no static detector at all — only the
+  semantic review and the M2 CSRF probe catch it. F-09's two mechanically-missed facets (sign-side
+  **no `expiresIn`** at `jwt.ts:17`, hardcoded fallback secret `"notevault-dev-secret"` at `jwt.ts:6`)
+  are caught **only** by the semantic tier; mechanical got just the unpinned-algorithm facet.
+
+## Per-finding re-score (2026-07-18)
+
+| # | Status | Tier(s) | Evidence (from this date's runs) |
+|---|--------|---------|-----------------------------------|
+| F-01 | **CAUGHT** | mechanical; semantic | `[Critical] Committed credential` (`supabase-service-role-jwt`, decoded `role:service_role`) + `[High] jwt` at `lib/supabaseAdmin.ts:15`. Semantic also flags the `NEXT_PUBLIC_`-prefixed service-role key as browser-bundled. |
+| F-02 | **CAUGHT** | mechanical; **dynamic**; semantic | Mechanical: 4× `[Critical] Migration table without RLS (static)` at `0001_init.sql:4,13,22,28`. Dynamic: 8× `M2-EXPLORE` cross-tenant/**anon** reads of `notes` + `api_tokens` via PostgREST — the RLS-off leak proven live. |
+| F-03 | **CAUGHT** | mechanical; **dynamic**; semantic | Mechanical: `harvey-idor-param` at `notes/[id]/route.ts:15,30,42` (GET/PATCH/DELETE by id, no owner predicate). Dynamic: `M2-APP-IDOR-OBJECT` proven at `/api/notes/<uuid>`. **(was MISS)** |
+| F-04 | **CAUGHT** | mechanical; **dynamic**; semantic | Mechanical: `[High] harvey-authed-no-role-check` at `admin/users/route.ts:7` + `[High] Client-side authorization decision` at `admin/page.tsx`. Dynamic: `M2-APP-BFLA-ADMIN` proven at `/api/admin/users`. **(was PARTIAL — now correct mechanism)** |
+| F-05 | **CAUGHT** | mechanical; semantic | 2× `harvey-ssrf-fetch` at `avatar/route.ts:7` + `import/route.ts:15` (cross-file taint into `fetchRemote` now traced). **(was MISS)** |
+| F-06 | **CAUGHT** | mechanical; semantic | `harvey-dangerously-set-inner-html` + `-stored` at `notes/[id]/page.tsx:21`. |
+| F-07 | **CAUGHT** | mechanical; semantic | 2× `harvey-mass-assignment` at `notes/route.ts:29` + `notes/[id]/route.ts:29` (`insert/update({ ...body })` from `await req.json()`). **(was MISS)** |
+| F-08 | **CAUGHT** | mechanical; semantic | `harvey-insecure-random-token` at `tokens.ts:12` (`Math.random`) + `harvey-weak-hash-security` at `tokens.ts:19` (MD5 of an API token). |
+| F-09 | **CAUGHT** (mechanical 1/3 facets; semantic 3/3) | mechanical; **semantic** | Mechanical: `[High] harvey-jwt-verify-noalg` at `jwt.ts:23` (unpinned alg). Semantic adds the two mechanically-dark facets: no `expiresIn` at `jwt.sign` (`jwt.ts:17`) + hardcoded fallback secret `"notevault-dev-secret"` (`jwt.ts:6`). Mechanizable → **#595**. |
+| F-10 | **CAUGHT** | mechanical; semantic | `harvey-permissive-cors` at `lib/cors.ts:3` — the object-literal wildcard `Access-Control-Allow-Origin:"*"` now matched. **(was MISS)** |
+| F-11 | **CAUGHT** | **dynamic**; **semantic** (mechanical MISS) | Dynamic: `M2-APP-CSRF` proven at `/api/notes` (cross-origin state-changing request accepted). Semantic: no CSRF/same-origin guard + no rate limiting on mutating/auth routes. No static detector fired — mechanical still misses this outright. **(was MISS)** |
+| F-12 | **CAUGHT** (both facets) | mechanical; semantic | Dep facet: `[Medium] Known-vulnerable dependency ejs@3.1.6` (2 OSV hits incl. the template-injection advisory). SSTI facet: `[High] harvey-template-injection` at `render/route.ts:8` (`ejs.render(await req.json().template)`). **(SSTI facet was MISS)** |
+
+## Semantic tier — findings it caught that mechanical missed
+
+- **F-11** (CSRF / no rate limiting): no static detector exists; semantic and the M2 CSRF probe are the
+  only tiers that catch it. **Not cleanly static-mechanizable** — CSRF here is a Bearer-auth caveat and
+  rate-limit is an absence-of-control best proven dynamically (already tracked by #159); left to M2 +
+  #159 rather than a noisy static rule.
+- **F-09 facets** (no `expiresIn`, hardcoded Node secret fallback): semantic-only, and **both are
+  structurally mechanizable** — filed as **#595** (`harvey-jwt-sign-noexpiry` + `harvey-node-secret-fallback`).
+
+## Guard / isolation notes (fail-loud)
+
+Docker was isolated to `project_id srh-rescore` on ports 65360-65367 and fully torn down after the run
+(`docker ps -aq` = 0, no residual `srh` volumes). M2 recorded its one limitation in-output (per-user
+offline plan → seed applied live with the two real user ids); the MASS-ASSIGNMENT / NO-RATE-LIMIT
+probes ran and are reported as *not proven live here* rather than silently dropped.
+
+---
+
 ## How Harvey was run
 
 - **M1 static (mechanical):** `pnpm quick-scan --dir <target> --findings-out <f>` — 45 raw findings
@@ -87,9 +161,14 @@ both as loud in-output limitations rather than skipping:
    paths. My run's Tier-2 verify temp dir was created but wrote no `verify.json` (0 proven). Separately,
    the `MASS-ASSIGNMENT` probe is hard-wired to `PATCH /api/profile`, a route this target doesn't have.
 
-Neither mismatch is a bug in the target — both are shapes M2 doesn't yet model. On a per-user +
-custom-auth App Router app, M2 stands up cleanly and proves nothing. (Contrast vandyand, an org-tenant
-Supabase-Auth app, where the same M2 pipeline proved 2 findings live.)
+Neither mismatch is a bug in the target — both were shapes M2 didn't yet model **on 2026-07-16**.
+**This is now false — see the 2026-07-18 re-score at the top of this doc.** After #571 (per-user
+`owner_id` seed + custom-auth app-session minting), #590 (root-schema stand-up + BFLA), and #593
+(IDOR-object + CSRF probes), M2 stands up on this exact per-user + custom-auth App Router app **and
+proves 4 findings live** (8 cross-tenant PostgREST reads + IDOR-OBJECT + BFLA-ADMIN + CSRF). The
+original "stands up cleanly and proves nothing" claim below was true only for the 2026-07-16 code and
+must not be quoted as current. (Contrast vandyand, an org-tenant Supabase-Auth app, where the same M2
+pipeline proved 2 findings live.)
 
 ## Tally by tier
 
