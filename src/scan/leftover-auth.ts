@@ -21,7 +21,12 @@ const GREP_PATTERNS: { id: string; regex: RegExp; title: string }[] = [
 ];
 
 const SENSITIVE_ROUTE_SEGMENT = /(^|\/)(debug|seed|admin|api\/dev)(\/|$|\.)/i;
-const AUTH_HINT = /(getServerSession|auth\(\)|requireAuth|withAuth|assertAuth|supabase\.auth\.getUser|createServerClient)/;
+// #568: recognize the BARE session-accessor wrappers (getUser/getSession/getCurrentUser/…), not only
+// the stock supabase.auth.getUser() METHOD call. A route that reads the session through a plain
+// top-level helper — `const user = await getUser(req)` (the vandyand app/api/admin/revenue shape) —
+// authenticates just as authoritatively and must not be labelled "Unauthenticated debug/admin route"
+// (the #562 false-premise class, fixed there for harvey-route-noauth). `auth()` covers next-auth v5.
+const AUTH_HINT = /(getServerSession|getSession|getUser|getCurrentUser|getAuthUser|getAuthenticatedUser|auth\(\)|requireAuth|withAuth|assertAuth|supabase\.auth\.getUser|createServerClient)/;
 const ROUTE_FILE = /(^|\/)(route\.(ts|tsx|js)|pages\/api\/.*\.(ts|tsx|js))$/;
 
 // B7 (#71): a login/signup/OTP/password-reset route with no rate-limiter hint — an attacker can
