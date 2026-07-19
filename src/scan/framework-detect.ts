@@ -9,8 +9,9 @@
 // a real Next app's SSR checks.
 
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { loadSources } from "../detectors/load-sources.js";
+import { discoverTargets } from "../pentest/targets.js";
 
 export type TargetFramework = "next" | "vite" | "other";
 
@@ -45,4 +46,35 @@ export function detectTargetFramework(dir: string): TargetFramework {
   if (hasViteConfig || hasDep(pkgText, "vite") || (hasIndexHtml && usesImportMetaEnv)) return "vite";
 
   return "other";
+}
+
+// Monorepo-aware resolution (#597). `detectTargetFramework` inspects a SINGLE dir's own
+// manifest/config, so at a monorepo ROOT — where vite.config/next.config live in `apps/*`, not the
+// root — it returns `other`, and the M9 SSR gate (which only suppresses on `vite`) runs the SSR
+// family over the whole tree and false-fires on the Vite app's files. That is the #575 regression:
+// the single-app Vite fix silently returns for anyone who scans the repo root (the default
+// engagement entry point). This resolves a framework PER workspace so the M9 gate can suppress the
+// SSR/App-Router family per-app. Workspace enumeration reuses `discoverTargets` (pentest/targets):
+// the same pnpm-workspace.yaml / package.json `workspaces` / glob expansion the M2/M4/M5 passes use.
+interface WorkspaceFramework {
+  /** Workspace directory relative to `root`, POSIX-separated ("" for the root itself). */
+  rel: string;
+  framework: TargetFramework;
+}
+
+export function detectWorkspaceFrameworks(root: string): WorkspaceFramework[] {
+  return discoverTargets(root).apps.map((a) => ({
+    rel: a.path === root ? "" : relative(root, a.path).split(sep).join("/"),
+    framework: detectTargetFramework(a.path),
+  }));
+}
+
+// Workspace-relative dirs of every non-root Vite workspace under `root`. The M9 gate suppresses the
+// SSR/App-Router family for files under any of these prefixes even when the repo root's OWN verdict
+// is `next`/`other`. A single-app repo enumerates only the root (rel === "") and returns [] — its
+// suppression is the whole-target `detectTargetFramework(root) === "vite"` path, unchanged.
+export function viteWorkspaces(root: string): string[] {
+  return detectWorkspaceFrameworks(root)
+    .filter((w) => w.rel !== "" && w.framework === "vite")
+    .map((w) => w.rel);
 }
