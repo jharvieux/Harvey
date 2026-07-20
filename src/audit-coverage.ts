@@ -79,6 +79,11 @@ export const MODULES_NEVER_EXECUTED: ReadonlySet<AuditModule> = neverExecutedMod
 //   no local stack). Mirrors coverage-scorecard.ts's status of the same name.
 export type ModuleStatus = "ran" | "partial" | "requires-live-run";
 
+// #682: distinguishes a `partial` caused by a BLOCKED sub-step (crashed/could not run) whose
+// sibling sub-step still ran and surfaced findings, from a partial that produced nothing. Mirrors
+// findings.ts's SubStatus (the report schema keeps its own copy, as CoverageStatus already does).
+export type ModuleSubStatus = "sub-step-blocked";
+
 export interface ModuleCoverage {
   module: AuditModule;
   status: ModuleStatus;
@@ -90,6 +95,9 @@ export interface ModuleCoverage {
   // #506: on a monorepo, a per-app/per-DB tier records one row per enumerated instance; this labels
   // WHICH app or Supabase project the row covers. Absent ⇒ a single-instance (whole-target) row.
   instance?: string;
+  // #682: on a `partial` row, marks that a sub-step was blocked while a sibling sub-step ran and
+  // surfaced findings — the deliverable badges it apart from a partial that produced nothing.
+  subStatus?: ModuleSubStatus;
 }
 
 // Which environments the engagement actually has. Optional: when supplied, a gap is annotated with

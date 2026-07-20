@@ -18,6 +18,13 @@ export const PRECISION_TIERS = ["high", "review"] as const;
 // prevent.
 export const COVERAGE_STATUSES = ["ran", "partial", "requires-live-run"] as const;
 
+// #682: a partial row's sub-status. "sub-step-blocked" flags a module marked `partial` because one
+// sub-step was BLOCKED (crashed / could not run) while a sibling sub-step COMPLETED and surfaced
+// findings — so the reader can tell "we ran part of this and here's what we found" apart from a
+// requires-live-run that produced nothing. Set by the probe (M8's test-intent tier survives a
+// blocked Stryker run — the #623 silent drop this closes); absent ⇒ an ordinary row.
+export const SUB_STATUSES = ["sub-step-blocked"] as const;
+
 // Engagement baseline diff (#457). A finding's standing relative to the prior audit of the same
 // client: "persistent" (matched by identity in both), "new" (only this run), "resolved" (only the
 // prior run). Set by src/audit-diff.ts, never hand-typed. Absent ⇒ no baseline was supplied.
@@ -27,6 +34,7 @@ export type Severity = (typeof SEVERITIES)[number];
 export type Confidence = (typeof CONFIDENCES)[number];
 export type PrecisionTier = (typeof PRECISION_TIERS)[number];
 export type CoverageStatus = (typeof COVERAGE_STATUSES)[number];
+export type SubStatus = (typeof SUB_STATUSES)[number];
 export type BaselineStatus = (typeof BASELINE_STATUSES)[number];
 
 export interface CoverageRow {
@@ -41,6 +49,9 @@ export interface CoverageRow {
   // #506: which app/Supabase project this row covers, on a monorepo per-app/per-DB tier. Absent ⇒
   // a whole-target row.
   instance?: string;
+  // #682: on a `partial` row, "sub-step-blocked" means a sub-step was blocked while a sibling ran
+  // and surfaced findings — the renderer badges it distinctly from a partial that produced nothing.
+  subStatus?: SubStatus;
 }
 
 export interface Finding {
@@ -184,6 +195,9 @@ function validateCoverage(coverage: unknown, errors: string[]): void {
     }
     if (row.detail !== undefined && typeof row.detail !== "string") errors.push(`${at}.detail: expected string`);
     if (row.instance !== undefined && typeof row.instance !== "string") errors.push(`${at}.instance: expected string`);
+    if (row.subStatus !== undefined && !SUB_STATUSES.includes(row.subStatus as SubStatus)) {
+      errors.push(`${at}.subStatus: "${String(row.subStatus)}" not one of ${SUB_STATUSES.join("/")}`);
+    }
     // A non-"ran" row without a reason is a silent skip wearing a status — the exact failure the
     // ledger exists to surface. Mirrors buildAuditCoverage's gap rule (src/audit-coverage.ts).
     if (row.status !== "ran" && (typeof row.reason !== "string" || row.reason.trim() === "")) {
