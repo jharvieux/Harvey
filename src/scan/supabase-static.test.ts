@@ -9,6 +9,7 @@ import {
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsStatic,
   checkOpenSignupConfig,
+  inferAuthMethodsFromSource,
   type TenancyOverride,
 } from "./supabase-static.js";
 
@@ -160,6 +161,63 @@ describe("checkOpenSignupConfig (#588)", () => {
   it("scopes by section — the [auth.sms] siblings are not flagged", () => {
     const dir = writeConfig("[auth]\nenable_signup = false\n\n[auth.sms]\nenable_signup = true\nenable_confirmations = false\n");
     expect(checkOpenSignupConfig(dir)).toEqual([]);
+  });
+
+  // #671 — the email-confirmation advisor is conditional on email auth actually being used.
+  it("keeps SB-EMAIL-CONFIRM-OFF a Medium when email auth is in use", () => {
+    const dir = writeConfig("[auth.email]\nenable_confirmations = false\n");
+    const f = checkOpenSignupConfig(dir, { email: true, phone: false }).find((x) => x.id === "SB-EMAIL-CONFIRM-OFF")!;
+    expect(f.severity).toBe("Medium");
+    expect(f.title).not.toContain("conditional");
+  });
+
+  it("reframes SB-EMAIL-CONFIRM-OFF to an Info conditional on an OAuth-only app (email off)", () => {
+    const dir = writeConfig("[auth.email]\nenable_confirmations = false\n");
+    const f = checkOpenSignupConfig(dir, { email: false, phone: false }).find((x) => x.id === "SB-EMAIL-CONFIRM-OFF")!;
+    expect(f.severity).toBe("Info");
+    expect(f.title).toContain("conditional");
+  });
+});
+
+describe("inferAuthMethodsFromSource (#671)", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function writeRepo(files: Record<string, string>): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-authinfer-"));
+    for (const [rel, content] of Object.entries(files)) {
+      const full = join(root, rel);
+      mkdirSync(join(full, ".."), { recursive: true });
+      writeFileSync(full, content);
+    }
+    return root;
+  }
+
+  it("infers email auth in use from a signInWithPassword call", () => {
+    const dir = writeRepo({ "src/login.ts": "await supabase.auth.signInWithPassword({ email, password });" });
+    expect(inferAuthMethodsFromSource(dir)).toEqual({ email: true, phone: false });
+  });
+
+  it("infers email OFF (conditional) for an OAuth-only app", () => {
+    const dir = writeRepo({ "src/login.ts": "await supabase.auth.signInWithOAuth({ provider: 'google' });" });
+    expect(inferAuthMethodsFromSource(dir)).toEqual({ email: false, phone: false });
+  });
+
+  it("infers phone OTP in use and email off when only phone OTP is called", () => {
+    const dir = writeRepo({ "src/login.ts": "await supabase.auth.signInWithOtp({ phone: '+15551234567' });" });
+    expect(inferAuthMethodsFromSource(dir)).toEqual({ email: false, phone: true });
+  });
+
+  it("returns undefined for both when there is no auth evidence at all", () => {
+    const dir = writeRepo({ "src/util.ts": "export const noop = () => {};" });
+    expect(inferAuthMethodsFromSource(dir)).toEqual({ email: undefined, phone: undefined });
+  });
+
+  it("reads email/OAuth enablement from supabase/config.toml provider toggles", () => {
+    const dir = writeRepo({
+      "supabase/config.toml": "[auth.email]\nenable_signup = true\n\n[auth.external.github]\nenabled = true\n",
+    });
+    expect(inferAuthMethodsFromSource(dir)).toEqual({ email: true, phone: false });
   });
 });
 
