@@ -28,6 +28,7 @@ import {
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsStatic,
   checkOpenSignupConfig,
+  inferAuthMethodsFromSource,
   type TenancyOverride,
 } from "./supabase-static.js";
 import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
@@ -124,7 +125,9 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     findings.push(...checkMigrationDynamicSqlInjection(scanDir));
     findings.push(...checkMigrationRlsInitplanStatic(scanDir));
     findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
-    findings.push(...checkOpenSignupConfig(scanDir));
+    // #671 — gate the email-confirmation advisor on whether email auth is actually used (source
+    // heuristic): an OAuth-only app gets a conditional note, not an asserted Medium.
+    findings.push(...checkOpenSignupConfig(scanDir, inferAuthMethodsFromSource(scanDir)));
     findings.push(...checkWebExtensionManifest(scanDir));
 
     // Supply chain.
