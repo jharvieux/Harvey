@@ -376,6 +376,61 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
   });
 });
 
+// #682: M8 has two sub-steps — the source-only test-intent tier and the Stryker mutation tier. When
+// the mutation sub-step is BLOCKED (a non-zero exit / unrecognized output, e.g. the #623 harness
+// failure) the probe must NOT drop to requires-live-run and discard the test-intent tier's already-
+// produced findings (the ATC silent drop). It degrades to partial WITH those findings and flags the
+// blocked sub-step — unless the test-intent tier could not scan either, which is a genuine not-run.
+describe("a blocked M8 mutation sub-step keeps the test-intent tier's findings (#682)", () => {
+  const m8Static = { id: "M8-53", taxonomy: "M8 — Tenant-isolation test mocks the DB client" } as unknown as Finding;
+  const withStatic = (over: Partial<RunContext>): RunContext =>
+    ctx({
+      captureDir: "/cap",
+      readFindings: (p: string) => (p.endsWith("M8-static.json") ? [m8Static] : []),
+      readArtifact: () => undefined,
+      ...over,
+    });
+
+  it("a non-zero mutation-scan exit reads partial+sub-step-blocked and keeps the test-intent findings", () => {
+    const blocked = withStatic({
+      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: false, output: "TypeError undefined (harness #623)" } : { ok: true, output: cleanOutput(argv) }),
+    });
+    const { recorded, findings } = runAudit(AUDIT_RUNNERS, blocked);
+    const m8 = recorded.find((r) => r.module === "M8");
+    expect(m8?.status).toBe("partial");
+    expect(m8?.status).not.toBe("requires-live-run");
+    expect(m8?.subStatus).toBe("sub-step-blocked");
+    expect(m8?.reason).toMatch(/mutation tier blocked/i);
+    // The completed sub-step's findings survive into the deliverable — the silent drop this closes.
+    expect(findings.map((f) => f.id)).toContain("M8-53");
+  });
+
+  it("an unrecognized mutation verdict also degrades to partial+sub-step-blocked, findings kept", () => {
+    const unknown = withStatic({
+      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: "not json at all" } : { ok: true, output: cleanOutput(argv) }),
+    });
+    const { recorded, findings } = runAudit(AUDIT_RUNNERS, unknown);
+    const m8 = recorded.find((r) => r.module === "M8");
+    expect(m8?.status).toBe("partial");
+    expect(m8?.subStatus).toBe("sub-step-blocked");
+    expect(findings.map((f) => f.id)).toContain("M8-53");
+  });
+
+  it("stays requires-live-run (no findings produced) when the test-intent tier could not scan either", () => {
+    const bothDown = ctx({
+      exec: (_c, argv) => {
+        if (argv.includes("mutation-scan")) return { ok: false, output: "crash" };
+        if (argv.includes("detect-static")) return { ok: true, output: "loaded 0 source files (0 product-code) from /empty" };
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    });
+    const m8 = status(AUDIT_RUNNERS, bothDown, "M8");
+    expect(m8?.status).toBe("requires-live-run");
+    expect(m8?.subStatus).toBeUndefined();
+    expect(m8?.reason).toMatch(/could not scan either/);
+  });
+});
+
 describe("a flag is intent, not evidence — no flag alone produces ran (#311/#356)", () => {
   // Every tier flag set, but the flag-gated operator/live passes leave nothing the orchestrator can
   // observe. None of the modules whose `ran` was previously flag-derived may read ran.
