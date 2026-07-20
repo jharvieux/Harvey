@@ -1,0 +1,194 @@
+// #679 ENV-SCHEMA — env-var completeness. Diffs the set of `process.env.X` reads across the
+// target's product source against the set of keys DECLARED in its env schema module(s). A read of
+// an UNDECLARED key is a finding (config drift: an undocumented required var that a fresh deploy
+// can silently miss, or a typo'd read that reads `undefined`); a declared key that is NEVER read is
+// Info (a dead declaration). Reads inside the schema module itself and in test/fixture files don't
+// count — the schema module's job IS to touch `process.env`. If no env schema module is found,
+// emits nothing: no schema, no diff.
+//
+// This is a COMPLETENESS check (a two-set diff), not the code-SHAPE detection that
+// src/detectors/handrolled.ts does over `process.env` — that class is new here.
+//
+// Review tier, never free-count: locating the schema module and extracting its declared key set is
+// heuristic across several real-world shapes (@t3-oss `createEnv`, a `z.object` over `process.env`,
+// or a plain exported map wiring `process.env.X` into named fields), so it is a signal to review,
+// not a ground-truth verdict.
+
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import ts from "typescript";
+import type { Finding } from "../findings.js";
+import { loc, parse, type SourceInput } from "../detectors/common.js";
+import { NON_PRODUCT } from "../detectors/load-sources.js";
+import { mechanicalFinding } from "./common.js";
+
+const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/;
+const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage", "out"]);
+
+// A file that DECLARES the env surface — recognized by SHAPE, not just a name, so neither a
+// `lib/env.js` that merely does `process.env.NODE_ENV = "..."` nor a helper that validates one
+// config value with zod is mistaken for the app's env schema:
+//   - the @t3-oss `createEnv(...)` builder anywhere;
+//   - a schema that validates the WHOLE process.env object (`schema.parse(process.env)` /
+//     `.safeParse(process.env)`) — the canonical zod/valibot env-schema shape;
+//   - a module NAMED `env.<ext>` that actually enumerates at least one env key.
+const SCHEMA_PATH = /(^|\/)env\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/;
+const CREATE_ENV = /\bcreateEnv\s*\(/;
+const PARSE_ENV = /\.(parse|safeParse)\s*\(\s*process\.env\b/;
+
+// Shape of an environment-variable key: UPPER_SNAKE (covers NEXT_PUBLIC_*/VITE_* too).
+const ENV_KEY = /^[A-Z][A-Z0-9_]*$/;
+
+// Runtime/framework-provided vars that legitimately go undeclared in an app's own schema — reads
+// of these are not config-drift findings even when the schema doesn't list them.
+const BUILTIN_ENV = new Set([
+  "NODE_ENV", "CI", "PORT", "HOST", "HOSTNAME", "PWD", "HOME", "PATH", "TZ", "TMPDIR", "LANG",
+  "NEXT_RUNTIME", "ANALYZE",
+  "VERCEL", "VERCEL_ENV", "VERCEL_URL", "VERCEL_REGION", "VERCEL_BRANCH_URL",
+]);
+
+// `process.env` recognized as a `process.env` property/element base.
+function isProcessEnv(node: ts.Expression): boolean {
+  return ts.isPropertyAccessExpression(node) && node.name.text === "env" && ts.isIdentifier(node.expression) && node.expression.text === "process";
+}
+
+// The LHS of `process.env.X = …` is a WRITE (e.g. the P-NODE-ENV-NOT-PROD footgun), not a read of
+// X and not a declaration of it — a different class owns that.
+function isAssignmentTarget(node: ts.Node): boolean {
+  const p = node.parent;
+  return !!p && ts.isBinaryExpression(p) && p.left === node && p.operatorToken.kind === ts.SyntaxKind.EqualsToken;
+}
+
+// The env key READ by a `process.env.X` / `process.env["X"]` access, if this node is one (writes
+// excluded).
+function envKeyOf(node: ts.Node): string | undefined {
+  if (isAssignmentTarget(node)) return undefined;
+  if (ts.isPropertyAccessExpression(node) && isProcessEnv(node.expression)) return node.name.text;
+  if (ts.isElementAccessExpression(node) && isProcessEnv(node.expression) && ts.isStringLiteralLike(node.argumentExpression)) {
+    return node.argumentExpression.text;
+  }
+  return undefined;
+}
+
+function isSchemaModule(file: SourceInput, sf: ts.SourceFile): boolean {
+  if (CREATE_ENV.test(file.text)) return true;
+  if (PARSE_ENV.test(file.text)) return true;
+  // Named `env.*` counts only if it genuinely declares an env key — not just any file so named.
+  return SCHEMA_PATH.test(file.path) && declaredKeys(sf).size > 0;
+}
+
+// Keys DECLARED by a schema module: UPPER_SNAKE object-literal property names (createEnv
+// server/client blocks, a z.object shape) UNION the `process.env.X` keys it wires up (runtimeEnv
+// maps, `export const env = { url: process.env.DATABASE_URL }`).
+function declaredKeys(sf: ts.SourceFile): Set<string> {
+  const keys = new Set<string>();
+  const visit = (n: ts.Node): void => {
+    if (ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) {
+      const name = n.name;
+      const text = ts.isIdentifier(name) ? name.text : ts.isStringLiteralLike(name) ? name.text : undefined;
+      if (text && ENV_KEY.test(text)) keys.add(text);
+    }
+    const read = envKeyOf(n);
+    if (read) keys.add(read);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return keys;
+}
+
+interface ParsedSource {
+  path: string;
+  sf: ts.SourceFile;
+}
+
+// First read site (path:line) of every `process.env.X` key across product code, excluding the
+// schema modules themselves.
+function collectReads(sources: ParsedSource[], schemaPaths: Set<string>): Map<string, string> {
+  const reads = new Map<string, string>();
+  for (const { path, sf } of sources) {
+    if (schemaPaths.has(path)) continue;
+    const visit = (n: ts.Node): void => {
+      const key = envKeyOf(n);
+      if (key && !reads.has(key)) reads.set(key, loc(path, sf, n));
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  return reads;
+}
+
+export function detectEnvSchemaFindings(files: SourceInput[]): Finding[] {
+  const sources: ParsedSource[] = files
+    .filter((f) => SOURCE_EXT.test(f.path) && !NON_PRODUCT.test(f.path))
+    .map((f) => ({ path: f.path, sf: parse(f.path, f.text) }));
+
+  const schemaFiles = sources.filter(({ path, sf }) => isSchemaModule({ path, text: sf.getFullText() }, sf));
+  if (schemaFiles.length === 0) return [];
+
+  const schemaPaths = new Set(schemaFiles.map((f) => f.path));
+  const declared = new Set<string>();
+  for (const { sf } of schemaFiles) for (const k of declaredKeys(sf)) declared.add(k);
+  // A schema module we can't extract any keys from can't ground a diff — stay silent rather than
+  // flag every read in the app as "undeclared".
+  if (declared.size === 0) return [];
+
+  const reads = collectReads(sources, schemaPaths);
+  const schemaLoc = `${schemaFiles[0]!.path}:1`;
+  const findings: Finding[] = [];
+
+  for (const [key, location] of reads) {
+    if (declared.has(key) || BUILTIN_ENV.has(key)) continue;
+    const clientExposed = key.startsWith("NEXT_PUBLIC_") || key.startsWith("VITE_");
+    findings.push(
+      mechanicalFinding({
+        id: `ENV-undeclared-read-${key}`,
+        title: `\`process.env.${key}\` is read but not declared in the env schema`,
+        severity: "Low",
+        category: "Configuration",
+        taxonomy: "Env var read but not declared in env schema",
+        location,
+        evidence: `\`process.env.${key}\` is read in ${location} but ${key} is not among the keys declared in the env schema module (${schemaFiles[0]!.path}).`,
+        impact: clientExposed
+          ? `${key} is a client-exposed (${key.startsWith("VITE_") ? "VITE_" : "NEXT_PUBLIC_"}) variable read without a schema declaration: it is bundled to the browser and, being undeclared, is neither validated nor documented — a missing value ships \`undefined\` to clients with no build-time error.`
+          : `An undeclared required var is not validated at startup and is missing from the schema's single source of truth: a fresh environment can omit it and the app reads \`undefined\` at runtime instead of failing fast at boot. It can also be a typo'd key that will always read \`undefined\`.`,
+        fix: `Add ${key} to the env schema module (${schemaFiles[0]!.path}) so it is validated and documented, or remove the read if the variable is obsolete.`,
+        precisionTier: "review",
+      }),
+    );
+  }
+
+  for (const key of declared) {
+    if (reads.has(key) || BUILTIN_ENV.has(key)) continue;
+    findings.push(
+      mechanicalFinding({
+        id: `ENV-unused-declaration-${key}`,
+        title: `\`${key}\` is declared in the env schema but never read`,
+        severity: "Info",
+        category: "Configuration",
+        taxonomy: "Env var declared in env schema but never read",
+        location: schemaLoc,
+        evidence: `${key} is declared in the env schema module (${schemaFiles[0]!.path}) but no \`process.env.${key}\` read appears anywhere in product source.`,
+        impact: "A declared-but-unread variable is dead configuration: it forces operators to provision a value the app never uses, and can hide a rename where the read was updated but the declaration was not.",
+        fix: `Remove ${key} from the env schema if it is obsolete, or wire up the read it was added for.`,
+        precisionTier: "review",
+      }),
+    );
+  }
+
+  return findings;
+}
+
+function walk(dir: string, root: string, out: SourceInput[]): void {
+  for (const entry of readdirSync(dir)) {
+    if (SKIP_DIRS.has(entry)) continue;
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) walk(full, root, out);
+    else if (SOURCE_EXT.test(entry)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
+  }
+}
+
+export function scanEnvSchema(projectDir: string): Finding[] {
+  const files: SourceInput[] = [];
+  walk(projectDir, projectDir, files);
+  return detectEnvSchemaFindings(files);
+}
