@@ -444,15 +444,30 @@ const m8: ModuleRunner = {
     // to the loud "re-run with --install" partial rather than the orchestrator silently installing.
     const installArg = ctx.allowTargetInstall ? ["--install"] : [];
     const command = `pnpm mutation-scan ${ctx.targetDir}${ctx.allowTargetInstall ? " --install" : ""}`;
+    // #682: when the mutation sub-step is blocked (a non-zero exit or unrecognized output — e.g. the
+    // #623 harness failure), the source-only test-intent sub-step above may already have run and
+    // produced findings. Degrading to requires-live-run would DISCARD them — the silent omission the
+    // coverage doctrine forbids — so if the test-intent tier scanned, record partial WITH its
+    // findings and flag the blocked sub-step; only when it too could not scan is this a not-run.
+    const mutationBlocked = (why: string): ProbeOutcome =>
+      staticScanned
+        ? {
+            status: "partial",
+            subStatus: "sub-step-blocked",
+            detail: `${staticCmd} (test-intent tier)`,
+            reason: `mutation tier blocked (${why}); the source-only test-intent tier still ran, so its findings are kept rather than dropped (#682)`,
+            ...(staticFindings.length ? { findings: staticFindings } : {}),
+          }
+        : { status: "requires-live-run", reason: `mutation tier blocked and the test-intent tier could not scan either — ${why}` };
     const { ok, output } = ctx.exec("pnpm", ["mutation-scan", ctx.targetDir, ...installArg, ...(outPath ? ["--out", outPath] : [])]);
-    if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
+    if (!ok) return mutationBlocked(`${command} exited non-zero: ${trimOut(output)}`);
     const artifact = readArtifact(ctx, outPath);
     const verdict = mutationVerdict(artifact ?? output);
     if (verdict.kind === "partial") {
       const findings = [...artifactFindings(artifact), ...staticFindings];
       return findings.length ? { status: "partial", detail: command, reason: verdict.note, findings } : { status: "partial", detail: command, reason: verdict.note };
     }
-    if (verdict.kind === "unknown") return { status: "requires-live-run", reason: `mutation-scan produced no recognizable verdict — cannot confirm M8 ran: ${trimOut(output)}` };
+    if (verdict.kind === "unknown") return mutationBlocked(`mutation-scan produced no recognizable verdict: ${trimOut(output)}`);
     const findings = [...artifactFindings(artifact), ...staticFindings];
     return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
   },

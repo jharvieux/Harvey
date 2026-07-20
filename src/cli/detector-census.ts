@@ -32,6 +32,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/counter-race.ts": "M1",
   "src/scan/bola-owner.ts": "M1",
   "src/scan/secret-rotation.ts": "M1",
+  "src/scan/env-schema.ts": "M1",
   "src/scan/webext-manifest.ts": "M1",
   "src/scan/secrets.ts": "M1",
   "src/scan/dependencies.ts": "M1",
