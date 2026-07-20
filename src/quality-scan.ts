@@ -389,7 +389,15 @@ export function touchesTenantSupabasePath(source: string): boolean {
 
 // fileLineCounts is caller-supplied (read from disk) so this stays a pure,
 // testable transform — and so the reported line count is measured, not guessed.
-export function knipToFindings(report: KnipReport, fileLineCounts: Record<string, number> = {}): Finding[] {
+// #696: inferredEntryFiles names files whose scope had NO knip config, so Harvey inferred the entry
+// graph. A file "unused" under an inferred graph is not confirmed dead code — it could be a
+// dynamically-registered entry Harvey's globs missed — so those FILE findings drop to review tier.
+// Unused EXPORTS/TYPES are not entry-contingent in the same way and are unaffected.
+export function knipToFindings(
+  report: KnipReport,
+  fileLineCounts: Record<string, number> = {},
+  inferredEntryFiles: Set<string> = new Set(),
+): Finding[] {
   const findings: Finding[] = [];
   let n = 0;
 
@@ -397,27 +405,36 @@ export function knipToFindings(report: KnipReport, fileLineCounts: Record<string
     n += 1;
     const lines = fileLineCounts[file];
     const securityPath = touchesSecurityPath(file);
+    const inferred = inferredEntryFiles.has(file);
     const unreferenced = lines === undefined ? "Entire file is unreferenced." : `Entire file (${lines} lines) is unreferenced.`;
+    const securityImpact = securityPath
+      ? `${unreferenced} Sits in an auth/guard/security path — confirm where authorization is actually enforced before assuming this is dead weight (cross-check against the M1 authorization review).`
+      : unreferenced;
     findings.push({
       id: `M5-${String(n).padStart(2, "0")}`,
       title: securityPath ? `Unused security-relevant file: ${file}` : `Unused file: ${file}`,
       severity: securityPath ? "Medium" : "Low",
-      confidence: "Confirmed",
+      confidence: inferred ? "Review" : "Confirmed",
       category: "Maintainability",
       taxonomy: "M5 — Slop / dead code",
       location: file,
       status: "Open",
-      evidence: "knip: file is never imported from any entry point.",
-      impact: securityPath
-        ? `${unreferenced} Sits in an auth/guard/security path — confirm where authorization is actually enforced before assuming this is dead weight (cross-check against the M1 authorization review).`
-        : unreferenced,
-      fix: "Delete the file (confirm it isn't a planned/unwired entry point first).",
+      evidence: inferred
+        ? "knip: file is never imported given Harvey-inferred entry points (target ships no knip config)."
+        : "knip: file is never imported from any entry point.",
+      impact: inferred
+        ? `${securityImpact} Unreachable given Harvey-inferred entry points — the target ships no knip config, so this is a review candidate, not confirmed dead code.`
+        : securityImpact,
+      fix: inferred
+        ? "Confirm the file isn't a dynamically-registered entry (route handler, plugin, config-referenced module) Harvey's inferred entry graph missed; if it's genuinely unreferenced, delete it."
+        : "Delete the file (confirm it isn't a planned/unwired entry point first).",
       value: securityPath ? 4 : 2,
       ease: 5,
       safety: 4,
-      // knip's dead-file detection is deterministic given its entry config — ~100%
-      // precise once the framework/dynamic-ref FP class is configured (issue #72).
-      precisionTier: "high",
+      // knip's dead-file detection is deterministic given its entry config — ~100% precise once the
+      // framework/dynamic-ref FP class is configured (issue #72). With Harvey-inferred entries the
+      // graph itself is uncertain, so those file findings are review tier, not high (#696).
+      precisionTier: inferred ? "review" : "high",
     });
   }
 

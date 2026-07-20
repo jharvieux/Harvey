@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { detectTargetFramework, detectWorkspaceFrameworks, viteWorkspaces } from "./framework-detect.js";
+import { buildInferredKnipConfig, detectTargetFramework, detectWorkspaceFrameworks, viteWorkspaces } from "./framework-detect.js";
 
 // Each case writes a throwaway target tree (the probe is disk-based — it must see vite.config /
 // index.html that the in-memory detector source set never carries) and asserts the coarse shape.
@@ -82,6 +82,43 @@ describe("detectTargetFramework (#573)", () => {
       "vite.config.js": `export default {};\n`,
     });
     expect(detectTargetFramework(dir)).toBe("vite");
+  });
+});
+
+// #696: the knip config Harvey generates for a config-less scope. The universal entry set (test
+// files above all) is the measured lever; the framework globs add app/route entries per shape.
+describe("buildInferredKnipConfig (#696)", () => {
+  it("always declares the universal test/script/config entry globs (the dominant lever)", () => {
+    for (const fw of ["next", "vite", "other"] as const) {
+      const entry = buildInferredKnipConfig(fw).entry as string[];
+      expect(entry).toContain("**/*.{test,spec}.{ts,tsx,js,jsx}");
+      expect(entry).toContain("load-tests/**/*.{ts,js}");
+      expect(entry).toContain("scripts/**/*.{ts,js,mjs}");
+    }
+  });
+
+  it("adds Next app-router / pages / middleware entries for a Next scope", () => {
+    const entry = buildInferredKnipConfig("next").entry as string[];
+    expect(entry.some((g) => g.startsWith("app/**/") && g.includes("page"))).toBe(true);
+    expect(entry.some((g) => g.startsWith("src/app/**/"))).toBe(true);
+    expect(entry).toContain("middleware.{ts,js}");
+    expect(entry).toContain("next.config.{js,mjs,cjs,ts}");
+  });
+
+  it("adds Vite index.html / main entries for a Vite scope", () => {
+    const entry = buildInferredKnipConfig("vite").entry as string[];
+    expect(entry).toContain("index.html");
+    expect(entry).toContain("src/main.{ts,tsx,js,jsx}");
+    expect(entry).toContain("vite.config.{ts,js,mjs,cjs}");
+  });
+
+  it("adds no framework globs for an `other` scope (universal set only)", () => {
+    const entry = buildInferredKnipConfig("other").entry as string[];
+    expect(entry.some((g) => g.includes("app/**") || g.includes("index.html"))).toBe(false);
+  });
+
+  it("carries the #695 ignoreExportsUsedInFile default", () => {
+    expect(buildInferredKnipConfig("next").ignoreExportsUsedInFile).toEqual({ interface: true, type: true });
   });
 });
 

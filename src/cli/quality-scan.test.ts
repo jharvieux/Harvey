@@ -157,3 +157,113 @@ describe("quality-scan CLI — M5 discloses uncertain knip entry resolution on a
     expect(disclosure?.evidence).toContain("isn't resolvable");
   }, 30000);
 });
+
+// #696: a config-less scan target gives knip no way to infer non-app entry points (test files above
+// all), so it floods the unused-files list with test-only-imported libs. Harvey generates a knip
+// config (test/script/load-test globs + framework entries) for a config-less scope, so those files
+// resolve — but because the entry graph is INFERRED, the residual unused-FILE findings drop to
+// review tier.
+const write = (repo: string, rel: string, text: string) => {
+  mkdirSync(dirname(join(repo, rel)), { recursive: true });
+  writeFileSync(join(repo, rel), text);
+};
+
+function configlessNextFixture(): string {
+  const repo = mkdtempSync(join(tmpdir(), "harvey-quality-next-cli-"));
+  dirs.push(repo);
+  // `next` dep → detectTargetFramework === "next"; ships NO knip config, so Harvey infers entries.
+  write(repo, "package.json", JSON.stringify({ name: "next-fixture", private: true, version: "0.0.0", type: "module", dependencies: { next: "14.2.0" } }));
+  write(repo, "app/page.tsx", 'import { used } from "../lib/used.js";\nexport default function Page() {\n  return used;\n}\n');
+  write(repo, "lib/used.ts", 'export const used = "u";\n');
+  // Reachable ONLY through a test file — knip would flag it dead without the generated test-glob
+  // entry. Its survival is the proof the test-glob lever works.
+  write(repo, "lib/testonly.ts", 'export const testHelper = "t";\n');
+  write(repo, "lib/testonly.test.ts", 'import { testHelper } from "./testonly.js";\nconsole.log(testHelper);\n');
+  // Genuinely dead: no entry (inferred or otherwise) reaches it — must still surface.
+  write(repo, "lib/dead.ts", 'export const dead = "d";\n');
+  return repo;
+}
+
+describe("quality-scan CLI — M5 generates a knip config for a config-less scope so entries resolve (#696)", () => {
+  it("does not flag a test-only-imported lib (test globs make the test an entry), still flags a genuinely-dead lib as review-tier", () => {
+    const findings = runCli(configlessNextFixture());
+    const unusedFile = (name: string) => findings.find((f) => f.taxonomy.startsWith("M5 —") && f.title.startsWith("Unused") && f.location.endsWith(name));
+
+    // test-only-imported file rescued by the generated test glob
+    expect(unusedFile("lib/testonly.ts")).toBeUndefined();
+    // page-imported file rescued by the generated app-router entry glob
+    expect(unusedFile("lib/used.ts")).toBeUndefined();
+
+    // genuinely-dead file still surfaces — but at review tier, since the entry graph was inferred
+    const dead = unusedFile("lib/dead.ts");
+    expect(dead).toBeDefined();
+    expect(dead?.confidence).toBe("Review");
+    expect(dead?.precisionTier).toBe("review");
+    expect(dead?.impact).toContain("Harvey-inferred entry points");
+  }, 30000);
+});
+
+function configlessViteFixture(): string {
+  const repo = mkdtempSync(join(tmpdir(), "harvey-quality-vite696-cli-"));
+  dirs.push(repo);
+  write(repo, "package.json", JSON.stringify({ name: "vite696", private: true, version: "0.0.0", type: "module" }));
+  write(repo, "vite.config.ts", "export default {};\n");
+  write(repo, "index.html", '<!doctype html>\n<html>\n  <body>\n    <script type="module" src="/src/main.ts"></script>\n  </body>\n</html>\n');
+  write(repo, "src/main.ts", 'import { used } from "./used.js";\nconsole.log(used);\n');
+  write(repo, "src/used.ts", 'export const used = "u";\n');
+  write(repo, "src/dead.ts", 'export const dead = "d";\n');
+  return repo;
+}
+
+describe("quality-scan CLI — M5 resolves Vite entries (index.html/main/vite.config) from a generated config (#696)", () => {
+  it("rescues vite.config.ts and main-reachable files, still flags a dead file at review tier", () => {
+    const findings = runCli(configlessViteFixture());
+    const unusedFile = (name: string) => findings.find((f) => f.taxonomy.startsWith("M5 —") && f.title.startsWith("Unused") && f.location.endsWith(name));
+
+    // index.html/main entry declared by the generated Vite globs keeps main.ts + its import used;
+    // vite.config.ts is declared an entry so it is no longer over-reported.
+    expect(unusedFile("vite.config.ts")).toBeUndefined();
+    expect(unusedFile("src/main.ts")).toBeUndefined();
+    expect(unusedFile("src/used.ts")).toBeUndefined();
+
+    const dead = unusedFile("src/dead.ts");
+    expect(dead).toBeDefined();
+    expect(dead?.confidence).toBe("Review");
+  }, 30000);
+});
+
+function ownKnipConfigFixture(): string {
+  const repo = mkdtempSync(join(tmpdir(), "harvey-quality-ownknip-cli-"));
+  dirs.push(repo);
+  write(repo, "package.json", JSON.stringify({ name: "ownknip", private: true, version: "0.0.0", type: "module" }));
+  // The target's OWN knip config names a NON-standard entry Harvey's inferred globs would never
+  // declare. If Harvey overrode entries, custom-entry.ts (and reachable.ts) would show unused.
+  write(repo, "knip.json", JSON.stringify({ entry: ["custom-entry.ts"] }));
+  write(repo, "custom-entry.ts", 'import { thing } from "./reachable.js";\nconsole.log(thing);\n');
+  // LocalProps: exported, used only in-file → proves the #695 ignoreExportsUsedInFile merge STILL
+  // happens even though entries are the target's own.
+  write(repo, "reachable.ts", "export interface LocalProps {\n  x: number;\n}\nexport const thing: LocalProps = { x: 1 };\n");
+  write(repo, "dead.ts", 'export const dead = "d";\n');
+  return repo;
+}
+
+describe("quality-scan CLI — M5 never overrides a target's own knip entry config (#696), only merges ignoreExportsUsedInFile (#695)", () => {
+  it("respects the target's entries (its config governs) and keeps its file findings Confirmed", () => {
+    const findings = runCli(ownKnipConfigFixture());
+    const unusedFile = (name: string) => findings.find((f) => f.taxonomy.startsWith("M5 —") && f.title.startsWith("Unused") && f.location.endsWith(name));
+
+    // reachable via the TARGET's own custom entry — proves Harvey did not override entries.
+    expect(unusedFile("reachable.ts")).toBeUndefined();
+
+    // dead file surfaces at Confirmed tier — the target supplied its own entry graph, so its file
+    // findings are NOT the review-tier inferred kind.
+    const dead = unusedFile("dead.ts");
+    expect(dead).toBeDefined();
+    expect(dead?.confidence).toBe("Confirmed");
+    expect(dead?.precisionTier).toBe("high");
+
+    // the #695 merge still applies: an interface exported and used only in-file is not over-reported.
+    const typeFinding = findings.find((f) => f.title.includes("Exported-but-unreferenced type") && f.evidence.includes("LocalProps"));
+    expect(typeFinding).toBeUndefined();
+  }, 30000);
+});

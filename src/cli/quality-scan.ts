@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, type SecurityPathFile } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
 import { discoverTargets } from "../pentest/targets.js";
+import { buildInferredKnipConfig, detectTargetFramework } from "../scan/framework-detect.js";
 import {
   duplicationSummary,
   JSCPD_IGNORE_GLOBS,
@@ -186,22 +187,36 @@ function scopeKnipConfig(dir: string): Record<string, unknown> | "unmergeable" |
   return undefined;
 }
 
-function runKnip(dir: string): KnipReport {
+// #696: a config-less scope's unused-FILE findings are contingent on the entry graph WE inferred,
+// so `entriesInferred` is threaded out to knipToFindings to down-rank them to review tier — a scope
+// that supplied its own config keeps confirmed file findings.
+function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean } {
   const existing = scopeKnipConfig(dir);
-  let args = ["--reporter", "json", "--no-exit-code"];
+  const plainArgs = ["--reporter", "json", "--no-exit-code"];
+  let args = plainArgs;
   let cleanup: (() => void) | undefined;
-  // Inject only when the target hasn't set the option itself (respect their choice) and its config
-  // is safely mergeable; a write failure falls back to an unmodified run.
-  if (existing !== "unmergeable" && !(existing && "ignoreExportsUsedInFile" in existing)) {
-    try {
-      const merged = { ...(existing ?? {}), ignoreExportsUsedInFile: { interface: true, type: true } };
-      writeFileSync(join(dir, HARVEY_KNIP_CONFIG), JSON.stringify(merged));
-      args = ["-c", HARVEY_KNIP_CONFIG, ...args];
-      cleanup = () => rmSync(join(dir, HARVEY_KNIP_CONFIG), { force: true });
-    } catch {
-      cleanup = undefined;
-      args = ["--reporter", "json", "--no-exit-code"];
+  let entriesInferred = false;
+  const writeConfig = (config: Record<string, unknown>) => {
+    writeFileSync(join(dir, HARVEY_KNIP_CONFIG), JSON.stringify(config));
+    args = ["-c", HARVEY_KNIP_CONFIG, ...plainArgs];
+    cleanup = () => rmSync(join(dir, HARVEY_KNIP_CONFIG), { force: true });
+  };
+  try {
+    if (existing === undefined) {
+      // No config of its own: knip can't infer non-app entries (tests above all) and floods the
+      // unused-files list. Generate framework-derived + universal entry globs so it doesn't (#696).
+      writeConfig(buildInferredKnipConfig(detectTargetFramework(dir)));
+      entriesInferred = true;
+    } else if (existing !== "unmergeable" && !("ignoreExportsUsedInFile" in existing)) {
+      // The scope HAS its own config: merge only the ignoreExportsUsedInFile default, never override
+      // its entries — they know their app (#695).
+      writeConfig({ ...existing, ignoreExportsUsedInFile: { interface: true, type: true } });
     }
+  } catch {
+    // a write failure falls back to an unmodified, non-inferred run
+    cleanup = undefined;
+    args = plainArgs;
+    entriesInferred = false;
   }
   try {
     const out = execFileSync(knipBin, args, {
@@ -210,7 +225,7 @@ function runKnip(dir: string): KnipReport {
       timeout: TIMEOUT_MS,
       killSignal: "SIGKILL",
     });
-    return JSON.parse(out.toString("utf8")) as KnipReport;
+    return { report: JSON.parse(out.toString("utf8")) as KnipReport, entriesInferred };
   } finally {
     cleanup?.();
   }
@@ -299,6 +314,8 @@ const jscpdGaps: ScanGap[] = [];
 const knipReports: KnipReport[] = [];
 const knipGaps: ScanGap[] = [];
 const knipUncertainScopes: ScanGap[] = [];
+// #696: files whose scope had Harvey-inferred entries — their unused-FILE findings are review tier.
+const inferredEntryFiles = new Set<string>();
 
 // #544: one whole-repo jscpd pass — paths already come back relative to targetDir, so no
 // per-workspace re-anchoring is needed. See the header for why duplication is measured whole-repo.
@@ -316,7 +333,7 @@ for (const scope of scopes) {
   const label = scopeLabel(scope);
   const workspaceRel = relative(targetDir, scope);
   try {
-    const report = runKnip(scope);
+    const { report, entriesInferred } = runKnip(scope);
     // #580: computed BEFORE re-anchoring report.files below — knipEntryUncertainReason's ratio
     // only cares about the count, and countSourceFiles/hasViteEntryMarkers/isViteResolvable all
     // operate on the real scope dir, not the merged-report-relative path.
@@ -324,6 +341,9 @@ for (const scope of scopes) {
     if (uncertainReason) knipUncertainScopes.push({ scope: label, reason: uncertainReason });
     report.files = report.files.map((f) => prefixed(workspaceRel, f));
     for (const issue of report.issues) issue.file = prefixed(workspaceRel, issue.file);
+    // #696: record the (now target-relative) files whose entries Harvey inferred, so their file
+    // findings are review-tier after mergeKnipReports flattens per-scope reports into one.
+    if (entriesInferred) for (const f of report.files) inferredEntryFiles.add(f);
     knipReports.push(report);
   } catch (err) {
     const reason = gapReason(err);
@@ -352,7 +372,7 @@ if (knipReport) {
 const findings: Finding[] = [
   ...jscpdToFindings(jscpdReport),
   ...divergedFindings,
-  ...(knipReport ? knipToFindings(knipReport, fileLineCounts) : []),
+  ...(knipReport ? knipToFindings(knipReport, fileLineCounts, inferredEntryFiles) : []),
 ];
 // #505: a gap disclosure coexists with real findings from the scopes that DID complete — unlike
 // the old whole-repo-or-nothing shape, a monorepo run can be a genuine partial (2 of 3 workspaces
