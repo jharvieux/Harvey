@@ -1,0 +1,10 @@
+// Product code that reads process.env. Some keys are declared in env.ts, some are not.
+export function loadConfig() {
+  const db = process.env.DATABASE_URL; // declared + read → clean
+  const stripe = process.env.STRIPE_SECRET_KEY; // declared + read → clean
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL; // declared + read → clean
+  const email = process.env["SENDGRID_API_KEY"]; // undeclared read (bracket access) → finding
+  const analytics = process.env.NEXT_PUBLIC_ANALYTICS_ID; // client-exposed undeclared → finding
+  const mode = process.env.NODE_ENV; // runtime builtin → ignored
+  return { db, stripe, appUrl, email, analytics, mode };
+}
