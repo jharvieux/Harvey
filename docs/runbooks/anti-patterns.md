@@ -2,7 +2,7 @@
 
 Recurring bug-class patterns identified in the 2026-05-26 Greptile audit. Each pattern has a preventive mechanism (ESLint rule, slop-check pattern, doctrine line, or test probe).
 
-**Provenance**: this is Harvey's vendored copy of ATC's canonical D-091 catalog. Items 1–20 and 22–27 are vendored (near-verbatim, ATC codebase paths retained as illustrative examples) from ATC's `docs/runbooks/anti-patterns.md`; item 21 is Harvey-specific (see below). Last synced from ATC @ `04a565d` (2026-07-19), which carries **28** classes; Harvey covers ATC classes **1–26**. ATC's later Harvey-audit classes **27–28** (parameter-only SECURITY DEFINER oracles; env-schema secret registration + rotation pairs) are **not yet vendored** — Harvey's `docs/scan-extras.txt` already covers the SECURITY DEFINER lens semantically. Run `pnpm brief-freshness <target-repo>` to diff this vendored copy against a target that ships its own D-091 catalog.
+**Provenance**: this is Harvey's vendored copy of ATC's canonical D-091 catalog. Items 1–20 and 22–29 are vendored (near-verbatim, ATC codebase paths retained as illustrative examples) from ATC's `docs/runbooks/anti-patterns.md`; item 21 is Harvey-specific (see below). Last synced from ATC @ `04a565d` (2026-07-19), which carries **28** classes — Harvey now covers **all** ATC classes **1–28** (Harvey's +1 offset from item 22 onward: ATC 21–28 = Harvey 22–29). Harvey total = **29** (28 vendored + 1 Harvey-specific). Run `pnpm brief-freshness <target-repo>` to diff this vendored copy against a target that ships its own D-091 catalog.
 
 ## 1. Stub-shaped code
 
@@ -363,6 +363,40 @@ Vendored from ATC's canonical catalog (there numbered 21–26) @ commit `04a565d
 **Prevention**:
 - **Doctrine** (CLAUDE.md): "A webhook handler that updates state based on the event payload must compare `event.created_at` against the last-applied event's timestamp (or `source_version` against `last_applied_version`), or re-fetch the live state from the provider before applying. Replay protection (signature + dedup) prevents *the same event* re-firing; ordering protection prevents *a stale event* overwriting fresh state."
 - **Code pattern**: before `.update({state_field: event.new_state})`, check `event.created_at > row.last_event_at` (or similar), or re-fetch the canonical state from the provider and apply conditionally.
+
+---
+
+## Harvey-audit patterns (external audit, 2026-07; Harvey-hardening PR)
+
+Vendored from ATC's canonical catalog (there numbered 27–28) @ commit `04a565d`. Harvey renumbers to **28–29** (the same +1 offset as the Round-3 block). These two classes originated in Harvey's own external audit of ATC; ATC's CI-gate names below are ATC-specific, retained as illustrative examples. In Harvey's product both are M1 semantic-pass lenses (`docs/scan-extras.txt`), and item 29's mechanical half is also covered by the env-schema-completeness (#679) and rotation-pair (#680) detectors.
+
+### 28. SECURITY DEFINER functions must scope to the caller — no parameter-only oracles
+
+**Symptom**: A `SECURITY DEFINER` function takes an identifier parameter and returns status/existence (or performs a privileged write) without consulting `auth.uid()`/`auth.jwt()`/caller context anywhere in its body. DEFINER runs as the owner and bypasses RLS, so every role the function is granted to can probe arbitrary IDs — a tenant-status/existence enumeration oracle, or (the write case) an escalation primitive.
+
+**Codebase instances**:
+- `tenant_is_active(target_tenant_id)` — parameter-only tenant-status oracle (Harvey M1 finding, refs #2006 — reviewed and accepted as documented; frozen in the baseline)
+- 18 further DEFINER write sites + 5 read sites frozen in `scripts/rls-semantics-baseline.txt` pending review
+
+**Why slips through**: the function works perfectly for its intended caller; the oracle is only visible by asking "who ELSE can call this, with whose IDs?" — which no happy-path test asks. RLS being enabled on the underlying table gives false comfort (DEFINER bypasses it).
+
+**Prevention**:
+- **CI gate**: `pnpm check:rls-policy-semantics` (the `definer-authz` and `definer-oracle` sub-checks) — NEW un-caller-scoped DEFINER functions fail; existing ones are frozen in `scripts/rls-semantics-baseline.txt`.
+- **Doctrine** (CLAUDE.md #27): a DEFINER function must verify the caller (own-row, role, or tenant membership via `auth.uid()`/`auth.jwt()`) before returning data or writing, or have EXECUTE revoked from client roles.
+
+### 29. Every secret registers in the env schema at integration time, with a rotation path
+
+**Symptom**: A secret is consumed via a raw `process.env.X` read that never appears in the app's canonical env schema (`apps/<app>/src/lib/env.ts`), and/or its verify site is a single static comparison with no `_CURRENT`/`_PREVIOUS` acceptance — so the secret is invisible to boot validation and the secret inventory, and cannot be rotated without an outage.
+
+**Codebase instances**:
+- `MAIN_APP_ADMIN_API_KEY` — static non-rotating seam bearer, absent from the main app's env schema (Harvey M1 finding, refs #2002; strategy-B fix pending)
+- 53 undeclared `process.env` reads (35 distinct vars) frozen in `scripts/env-schema-baseline.txt` (refs #2004)
+
+**Why slips through**: the read works in every environment where the var happens to be set; the gaps (typo'd var silently undefined, un-inventoried secret, rotation requiring simultaneous redeploys) only bite operationally.
+
+**Prevention**:
+- **CI gate** (mechanical half): `pnpm check:env-schema` — a NEW `process.env` read of an identifier not declared in that app's env schema fails; existing debt is frozen in `scripts/env-schema-baseline.txt`.
+- **Reviewer-enforced half (honest limitation)**: the rotation-pair requirement — verify sites accepting `_CURRENT` **and** `_PREVIOUS` values (the `SERVICE_JWT_*`/`FORENSICS_ENCRYPTION_KEY_*` pattern) instead of one static bearer comparison — is NOT mechanically checked; no static scan can tell a rotating verify site from a static one reliably. The audit agents and this catalog entry carry that half.
 
 ---
 

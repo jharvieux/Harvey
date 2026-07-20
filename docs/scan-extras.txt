@@ -9,9 +9,12 @@
 # Supabase/Next.js SaaS. Ordered by blast radius. Stack-generic (no client
 # file paths). Derived from the D-091 taxonomy.
 #
-# Catalog sync: covers D-091 classes 1-26 (see docs/runbooks/anti-patterns.md),
-# synced from ATC canonical @ 04a565d (2026-07-19, 28 classes). The Round-3
-# integrity/concurrency classes (ATC 21-26) are in the MEDIUM section below.
+# Catalog sync: covers ALL D-091 classes (see docs/runbooks/anti-patterns.md),
+# synced from ATC canonical @ 04a565d (2026-07-19, 28 ATC classes; Harvey total
+# 29 = 28 vendored + 1 Harvey-specific). Round-3 integrity/concurrency classes
+# (ATC 21-26 = Harvey 22-27) are in the MEDIUM section; the two Harvey-audit
+# classes (ATC 27-28 = Harvey 28-29) are the SECURITY DEFINER lens (HIGH) and the
+# env-schema secret-registration lens (LOW).
 
 ## APPLICABILITY — gate every rule before it becomes a finding
 
@@ -34,11 +37,13 @@ DETECT-first (from code/schema), ask only for facts not in the repo, infer last.
 - DB uniqueness for dedup          [when: code dedupes via SELECT-then-INSERT / maybeSingle]
 - Bounded query on growing table   [when: a `.select()` reads a user-growing table]
 - Webhook ordering / stale-apply   [when: a webhook updates state from the event payload]
+- SECURITY DEFINER caller-scope    [when: a `SECURITY DEFINER` function/RPC exists]
+- Secret env-schema registration   [when: a `process.env` secret read exists]
 
 ## DETECT DEEPER before falling back to "confirm intent"
 
 Don't stop at the advisor's summary — read the actual artifacts; most "ambiguous" findings resolve to a verdict:
-- SECURITY DEFINER exposure: READ THE FUNCTION BODY (`pg_get_functiondef`). Uses `auth.uid()`/`auth.jwt()` to
+- SECURITY DEFINER exposure [D-091 #28]: READ THE FUNCTION BODY (`pg_get_functiondef`). Uses `auth.uid()`/`auth.jwt()` to
   constrain by the caller → caller-scoped (OK). Filters only by a parameter (target_tenant_id/user_id) with no
   caller check → returns data for arbitrary IDs (NOT OK). [ATC: 2 of 3 cleared, only tenant_is_active flagged.]
 - RLS-enabled-no-policy: CHECK THE GRANTS (`information_schema.role_table_grants`). No anon/authenticated SELECT
@@ -97,7 +102,14 @@ OK-when / NOT-OK-when so they can self-resolve. Never assert; never silently dro
   the caller's RLS. Flag definer functions exposed via PostgREST/RPC that read or
   write tenant data without re-checking the caller's identity inside the function,
   and triggers that mutate across tenants. `SECURITY INVOKER` is the safe default;
-  a definer function needs an explicit in-function authorization check.
+  a definer function needs an explicit in-function authorization check. The
+  headline sub-shape: a PARAMETER-ONLY ORACLE — a definer function that takes an
+  id parameter and returns status/existence (or performs a privileged write)
+  consulting NO `auth.uid()`/`auth.jwt()`/caller context anywhere in its body, so
+  every granted role can probe arbitrary IDs (a tenant-status/existence
+  enumeration oracle, or an escalation primitive). Ask "who ELSE can call this,
+  with whose IDs?"; RLS being enabled on the underlying table is false comfort
+  (DEFINER bypasses it). [D-091 #28]
 
 - CLIENT-SUPPLIED SECURITY-RELEVANT VALUE TRUSTED SERVER-SIDE. A server handler
   that uses a client-supplied price, discount, trial length, role, or other
@@ -188,6 +200,17 @@ OK-when / NOT-OK-when so they can self-resolve. Never assert; never silently dro
 
 - UNJUSTIFIED FIRE-AND-FORGET ASYNC. `void someAsync()` in a serverless route —
   the host can kill the process before the work completes.
+
+- SECRET NOT REGISTERED IN THE ENV SCHEMA / NO ROTATION PATH. A secret consumed
+  via a raw `process.env.X` read that never appears in the app's canonical env
+  schema (e.g. `src/lib/env.ts`) is invisible to boot validation and the secret
+  inventory (a typo'd var is silently `undefined`; the secret is un-inventoried).
+  Separately, a verify site that does a single static comparison with no
+  `_CURRENT`/`_PREVIOUS` acceptance cannot be rotated without an outage. Flag both:
+  undeclared `process.env` secret reads, and static bearer/secret compares that
+  admit only one value. Complements the mechanical detectors (#679 env-schema
+  completeness, #680 rotation-pair) — the semantic pass names the rotation half no
+  static scan can prove. [D-091 #29]
 
 ## NEXT.JS APP ROUTER — boundary & rendering (M9)
 
