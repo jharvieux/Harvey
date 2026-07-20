@@ -192,7 +192,13 @@ function completenessBanner(rows) {
 // Replaces the hand-typed meta.outOfScope as the source of truth; outOfScope is demoted to a note.
 function coverageSection(rows, m) {
   const body = rows.map((r) => {
-    const s = COV[r.status] ?? COV["requires-live-run"];
+    // #682: a partial whose status is a BLOCKED sub-step (its sibling sub-step still ran and
+    // surfaced findings) is badged distinctly from an ordinary partial — the reader must be able to
+    // tell "we ran part of this and here's what we found" from "produced nothing".
+    const blocked = r.status === "partial" && r.subStatus === "sub-step-blocked";
+    const s = blocked
+      ? { label: "Partial — sub-step blocked", c: "#b88600", bg: "#fffbeb", bd: "#fde68a" }
+      : COV[r.status] ?? COV["requires-live-run"];
     const note = r.status === "ran" ? esc(r.detail ?? "") : esc(r.reason ?? "");
     // #506: a per-app/per-DB row names its instance so a monorepo's second app/DB is a visible row,
     // never folded into the module's headline.

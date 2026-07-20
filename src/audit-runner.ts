@@ -15,7 +15,7 @@
 //      hand back the exact silent pass the gate exists to prevent. It goes in `failures`, which
 //      fails loud on its own.
 
-import { AUDIT_MODULES, type AuditModule, type EngagementEnv, type ModuleCoverage, MODULES } from "./audit-coverage.js";
+import { AUDIT_MODULES, type AuditModule, type EngagementEnv, type ModuleCoverage, type ModuleSubStatus, MODULES } from "./audit-coverage.js";
 import type { Finding } from "./findings.js";
 
 // What a probe reports about its OWN execution. It is deliberately not ModuleCoverage: a probe may
@@ -27,9 +27,12 @@ import type { Finding } from "./findings.js";
 // (module × instance). Absent ⇒ a single-instance target (the common case) — unchanged.
 // `hotspots` (#515): M3's worst-first top-K hotspot file list, surfaced so the assembler can enrich
 // EVERY module's findings with an onHotspot/hotspotRank tag. Only the M3 probe sets it.
+// #682: `subStatus: "sub-step-blocked"` on a partial says a sub-step was BLOCKED while a sibling
+// sub-step ran and surfaced `findings` — so a blocked Stryker run never discards the test-intent
+// tier's findings by degrading to requires-live-run (which carries none).
 export type ProbeOutcome =
   | { status: "ran"; detail: string; findings?: Finding[]; instance?: string; hotspots?: string[] }
-  | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string; hotspots?: string[] }
+  | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string; hotspots?: string[]; subStatus?: ModuleSubStatus }
   | { status: "requires-live-run"; reason: string; instance?: string };
 
 // The seam that keeps this engine testable and offline: probes reach the outside world only through
@@ -192,7 +195,7 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
       recorded.push(
         outcome.status === "requires-live-run"
           ? { module, status: "requires-live-run", reason: outcome.reason, ...instance }
-          : { module, status: outcome.status, detail: outcome.detail, ...(outcome.status === "partial" ? { reason: outcome.reason } : {}), ...instance },
+          : { module, status: outcome.status, detail: outcome.detail, ...(outcome.status === "partial" ? { reason: outcome.reason, ...(outcome.subStatus ? { subStatus: outcome.subStatus } : {}) } : {}), ...instance },
       );
       // #620: on a monorepo fan-out each app's probe emits the SAME finding ids (SLOP-01, M9-01, …),
       // so the assembled document had duplicate ids and --findings-out failed schema validation —
