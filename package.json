@@ -30,6 +30,7 @@
     "corpus-drift": "tsx src/cli/corpus-drift.ts",
     "handrolled-frequency": "tsx src/cli/handrolled-frequency.ts",
     "detector-census": "tsx src/cli/detector-census.ts",
+    "brief-freshness": "tsx src/cli/brief-freshness.ts",
     "audit-coverage": "tsx src/cli/audit-coverage.ts",
     "record-pass": "tsx src/cli/record-pass.ts",
     "dynamic-validate": "tsx src/cli/dynamic-validate.ts",
