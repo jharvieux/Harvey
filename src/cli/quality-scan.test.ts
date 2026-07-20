@@ -114,6 +114,40 @@ function misresolvedViteFixture(): string {
   return repo;
 }
 
+// #693/AoP#566: Harvey merges knip's `ignoreExportsUsedInFile: { interface, type }` into the scan
+// so a component Props/option type used only within its own file (exported by convention) isn't
+// over-reported, while a type exported and referenced nowhere still surfaces. Pins the injection
+// end-to-end through the CLI; the mechanism itself was verified directly against knip 5.88.1.
+function exportedTypesFixture(): string {
+  const repo = mkdtempSync(join(tmpdir(), "harvey-quality-types-cli-"));
+  dirs.push(repo);
+  const write = (rel: string, text: string) => {
+    mkdirSync(dirname(join(repo, rel)), { recursive: true });
+    writeFileSync(join(repo, rel), text);
+  };
+  write("package.json", JSON.stringify({ name: "types-fixture", private: true, version: "0.0.0", type: "module" }));
+  write("src/index.ts", 'import { Widget } from "./widget.js";\nexport function main() {\n  return Widget({ label: "x" });\n}\n');
+  write(
+    "src/widget.ts",
+    // WidgetProps: exported, used only in-file → must be suppressed by the injected config.
+    // OrphanType: exported, referenced nowhere → must still surface (review-tier, not dead-code delete).
+    "export interface WidgetProps {\n  label: string;\n}\nexport interface OrphanType {\n  gone: boolean;\n}\nexport function Widget(props: WidgetProps) {\n  return props.label;\n}\n",
+  );
+  return repo;
+}
+
+describe("quality-scan CLI — M5 injects knip ignoreExportsUsedInFile so exported-by-convention types aren't over-reported (#693/AoP#566)", () => {
+  it("suppresses a Props type used only in-file but still reports a truly-unreferenced exported type", () => {
+    const findings = runCli(exportedTypesFixture());
+    const typeFinding = findings.find((f) => f.title.includes("Exported-but-unreferenced type"));
+    expect(typeFinding).toBeDefined();
+    expect(typeFinding?.evidence).toContain("OrphanType");
+    expect(typeFinding?.evidence).not.toContain("WidgetProps");
+    // and it stays the de-escalated review tier from #693, never confirmed dead code
+    expect(typeFinding?.confidence).toBe("Review");
+  }, 30000);
+});
+
 describe("quality-scan CLI — M5 discloses uncertain knip entry resolution on a mis-resolved Vite target (#580)", () => {
   it("raises M5-99 when vite.config.ts/index.html are present but `vite` isn't resolvable", () => {
     const findings = runCli(misresolvedViteFixture());

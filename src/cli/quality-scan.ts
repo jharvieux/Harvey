@@ -151,14 +151,69 @@ function runJscpd(dir: string): JscpdReport {
   }
 }
 
+// #693/AoP#566: knip's `ignoreExportsUsedInFile` has no CLI flag (config-file only, verified on
+// knip 5.88.1). We default it to { interface, type } so a type used only to annotate its own file —
+// a component Props/option type exported by convention — is not reported as unused, while a type
+// exported and referenced NOWHERE still is. We MERGE it into the scope's own knip config, never
+// replace it: replacing would drop the target's entry config and re-flood the unused-files list.
+const HARVEY_KNIP_CONFIG = ".knip.harvey.json";
+
+// The scope's own knip config as a mergeable object, or "unmergeable" for a comment-bearing/code
+// config we won't risk re-serializing, or undefined when there is none. A root config in an
+// ANCESTOR dir is deliberately not consulted: knip run per-workspace treats the scope dir as its
+// own root and auto-detects entries, so there is nothing there to preserve.
+function scopeKnipConfig(dir: string): Record<string, unknown> | "unmergeable" | undefined {
+  const jsonPath = join(dir, "knip.json");
+  if (existsSync(jsonPath)) {
+    try {
+      return JSON.parse(readFileSync(jsonPath, "utf8")) as Record<string, unknown>;
+    } catch {
+      return "unmergeable";
+    }
+  }
+  if (["knip.jsonc", "knip.ts", "knip.js", "knip.config.ts", "knip.config.js"].some((n) => existsSync(join(dir, n)))) {
+    return "unmergeable";
+  }
+  const pkgPath = join(dir, "package.json");
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { knip?: Record<string, unknown> };
+      if (pkg.knip) return pkg.knip;
+    } catch {
+      // a malformed package.json is knip's own error to report, not ours to merge
+    }
+  }
+  return undefined;
+}
+
 function runKnip(dir: string): KnipReport {
-  const out = execFileSync(knipBin, ["--reporter", "json", "--no-exit-code"], {
-    cwd: dir,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: TIMEOUT_MS,
-    killSignal: "SIGKILL",
-  });
-  return JSON.parse(out.toString("utf8")) as KnipReport;
+  const existing = scopeKnipConfig(dir);
+  let args = ["--reporter", "json", "--no-exit-code"];
+  let cleanup: (() => void) | undefined;
+  // Inject only when the target hasn't set the option itself (respect their choice) and its config
+  // is safely mergeable; a write failure falls back to an unmodified run.
+  if (existing !== "unmergeable" && !(existing && "ignoreExportsUsedInFile" in existing)) {
+    try {
+      const merged = { ...(existing ?? {}), ignoreExportsUsedInFile: { interface: true, type: true } };
+      writeFileSync(join(dir, HARVEY_KNIP_CONFIG), JSON.stringify(merged));
+      args = ["-c", HARVEY_KNIP_CONFIG, ...args];
+      cleanup = () => rmSync(join(dir, HARVEY_KNIP_CONFIG), { force: true });
+    } catch {
+      cleanup = undefined;
+      args = ["--reporter", "json", "--no-exit-code"];
+    }
+  }
+  try {
+    const out = execFileSync(knipBin, args, {
+      cwd: dir,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
+    return JSON.parse(out.toString("utf8")) as KnipReport;
+  } finally {
+    cleanup?.();
+  }
 }
 
 function lineCount(dir: string, relPath: string): number | undefined {
