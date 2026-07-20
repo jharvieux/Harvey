@@ -17,6 +17,7 @@ import { scanSecretRotation } from "./secret-rotation.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
+import { scanJobTenantScope } from "./job-tenant-scope.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { resolveBundleScan, scanSecrets } from "./secrets.js";
@@ -159,6 +160,9 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // owner id (BOLA). AST dataflow, incl. plain .js.
     findings.push(...scanBolaOwner(scanDir));
 
+    // #681 — service-role query in a background-job path (Inngest/cron/queue/worker) with no
+    // tenant predicate at all. AST dataflow, incl. plain .js.
+    findings.push(...scanJobTenantScope(scanDir));
     // #680 — a static secret verified with a single equality/HMAC check and no dual-secret
     // rotation window (inter-service seams only; inert when no verify site exists).
     findings.push(...scanSecretRotation(scanDir));
