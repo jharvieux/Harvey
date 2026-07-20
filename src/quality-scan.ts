@@ -422,32 +422,62 @@ export function knipToFindings(report: KnipReport, fileLineCounts: Record<string
   }
 
   for (const issue of report.issues) {
-    const deadExports = [...issue.exports, ...issue.types].map((e) => e.name);
-    if (deadExports.length === 0) continue;
-    n += 1;
     const securityPath = touchesSecurityPath(issue.file);
-    const partialImpact = `${deadExports.length} unused export${deadExports.length === 1 ? "" : "s"} — exact line reduction needs a manual look (knip reports the declaration, not its body size).`;
-    findings.push({
-      id: `M5-${String(n).padStart(2, "0")}`,
-      title: securityPath ? `Unused exports in security-relevant file: ${issue.file}` : `Unused exports in ${issue.file}`,
-      severity: securityPath ? "Medium" : "Low",
-      confidence: "Confirmed",
-      category: "Maintainability",
-      taxonomy: "M5 — Slop / dead code",
-      location: issue.file,
-      status: "Open",
-      evidence: `knip: unreferenced export(s) ${deadExports.join(", ")}.`,
-      impact: securityPath
-        ? `${partialImpact} Defined but never called in an auth/guard/security path — confirm where authz is actually enforced before dismissing as dead weight (cross-check against the M1 authorization review).`
-        : partialImpact,
-      fix: "Delete the unused exports, or inline them if they're only used internally.",
-      value: securityPath ? 4 : 2,
-      ease: 4,
-      safety: 4,
-      // knip's dead-export detection is deterministic given its entry config — ~100%
-      // precise once the framework/dynamic-ref FP class is configured (issue #72).
-      precisionTier: "high",
-    });
+
+    // Unused VALUE exports — genuine dead code once entry config is set (#72): confirmed and
+    // grade-counted, "delete or inline".
+    if (issue.exports.length > 0) {
+      const names = issue.exports.map((e) => e.name);
+      n += 1;
+      const partialImpact = `${names.length} unused export${names.length === 1 ? "" : "s"} — exact line reduction needs a manual look (knip reports the declaration, not its body size).`;
+      findings.push({
+        id: `M5-${String(n).padStart(2, "0")}`,
+        title: securityPath ? `Unused exports in security-relevant file: ${issue.file}` : `Unused exports in ${issue.file}`,
+        severity: securityPath ? "Medium" : "Low",
+        confidence: "Confirmed",
+        category: "Maintainability",
+        taxonomy: "M5 — Slop / dead code",
+        location: issue.file,
+        status: "Open",
+        evidence: `knip: unreferenced export(s) ${names.join(", ")}.`,
+        impact: securityPath
+          ? `${partialImpact} Defined but never called in an auth/guard/security path — confirm where authz is actually enforced before dismissing as dead weight (cross-check against the M1 authorization review).`
+          : partialImpact,
+        fix: "Delete the unused exports, or inline them if they're only used internally.",
+        value: securityPath ? 4 : 2,
+        ease: 4,
+        safety: 4,
+        // Deterministic given entry config (#72) — but this "~100% precise" claim covers files and
+        // VALUE exports only. Exported types are handled below at review tier, not here (#693).
+        precisionTier: "high",
+      });
+    }
+
+    // Unused exported TYPES — NOT dead code by default (#693 / AoP#566). A component `Props`/
+    // options interface is normally used in-file (annotating its own component) and exported by
+    // convention; knip flags the redundant `export`, not an unused type. Report as a review-tier
+    // triage item — never a grade-counted "delete this".
+    if (issue.types.length > 0) {
+      const names = issue.types.map((t) => t.name);
+      n += 1;
+      findings.push({
+        id: `M5-${String(n).padStart(2, "0")}`,
+        title: `Exported-but-unreferenced type(s) in ${issue.file}`,
+        severity: "Low",
+        confidence: "Review",
+        category: "Maintainability",
+        taxonomy: "M5 — Slop / dead code",
+        location: issue.file,
+        status: "Open",
+        evidence: `knip: exported type(s) not imported by name elsewhere: ${names.join(", ")}.`,
+        impact: `${names.length} exported type${names.length === 1 ? "" : "s"} with no external importer. Often not dead: component Props/option types are commonly exported by convention and used only within their own file.`,
+        fix: "Remove the `export` keyword if the type is only used in this file; leave it exported (with a one-line note) if it's an intentional public/convention surface — don't delete without checking.",
+        value: 1,
+        ease: 4,
+        safety: 4,
+        precisionTier: "review",
+      });
+    }
   }
 
   return findings;

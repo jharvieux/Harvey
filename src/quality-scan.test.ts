@@ -401,23 +401,37 @@ describe("knipToFindings", () => {
     expect(fileFinding?.impact).toBe("Entire file is unreferenced.");
   });
 
-  it("groups unused exports and types per file, and skips files with none", () => {
+  it("splits value exports (confirmed dead code) from exported types (review-tier), skipping clean files (#693)", () => {
     const findings = knipToFindings(knipReport);
-    const mixed = findings.find((f) => f.location === "src/mixed.ts");
-    expect(mixed?.evidence).toContain("neverImported");
-    expect(mixed?.evidence).toContain("UnusedType");
+    const valueExport = findings.find((f) => f.location === "src/mixed.ts" && f.confidence === "Confirmed");
+    const typeExport = findings.find((f) => f.location === "src/mixed.ts" && f.confidence === "Review");
+    // The unused VALUE export is confirmed dead code, grade-counted.
+    expect(valueExport?.evidence).toContain("neverImported");
+    expect(valueExport?.evidence).not.toContain("UnusedType");
+    // The exported TYPE is a separate review-tier triage item, not "delete this dead code".
+    expect(typeExport?.evidence).toContain("UnusedType");
+    expect(typeExport?.title).toContain("Exported-but-unreferenced type");
     expect(findings.find((f) => f.location === "src/clean.ts")).toBeUndefined();
   });
 
-  it("does not claim a precise line reduction for partial dead exports", () => {
+  it("does not claim a precise line reduction for partial dead value exports", () => {
     const findings = knipToFindings(knipReport);
-    const mixed = findings.find((f) => f.location === "src/mixed.ts");
-    expect(mixed?.impact).toContain("manual look");
+    const valueExport = findings.find((f) => f.location === "src/mixed.ts" && f.confidence === "Confirmed");
+    expect(valueExport?.impact).toContain("manual look");
   });
 
-  it("tags every finding at the high precision tier (issue #72 calibration)", () => {
+  it("tags files and value exports at high precision, but exported types at review tier — not grade-counted (#693)", () => {
     const findings = knipToFindings(knipReport);
-    expect(findings.every((f) => f.precisionTier === "high")).toBe(true);
+    const highTier = findings.filter((f) => f.precisionTier === "high");
+    const reviewTier = findings.filter((f) => f.precisionTier === "review");
+    // The unused file and the value export stay high/confirmed.
+    expect(highTier.every((f) => f.confidence === "Confirmed")).toBe(true);
+    expect(highTier.some((f) => f.location === "src/dead.ts")).toBe(true);
+    // The exported type is review-tier and does NOT tell the reader to delete it.
+    expect(reviewTier).toHaveLength(1);
+    expect(reviewTier[0]?.confidence).toBe("Review");
+    expect(reviewTier[0]?.fix).not.toContain("Delete");
+    expect(reviewTier[0]?.fix).toContain("export");
   });
 });
 
