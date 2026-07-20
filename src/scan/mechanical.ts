@@ -13,6 +13,7 @@ import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { scanBolaOwner } from "./bola-owner.js";
 import { scanCounterRace } from "./counter-race.js";
+import { scanSecretRotation } from "./secret-rotation.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
@@ -158,6 +159,9 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // owner id (BOLA). AST dataflow, incl. plain .js.
     findings.push(...scanBolaOwner(scanDir));
 
+    // #680 — a static secret verified with a single equality/HMAC check and no dual-secret
+    // rotation window (inter-service seams only; inert when no verify site exists).
+    findings.push(...scanSecretRotation(scanDir));
     // #679 — env-schema completeness: `process.env.X` reads not declared in the target's env
     // schema module (undeclared read → finding; declared-but-unread → Info). No schema, no diff.
     findings.push(...scanEnvSchema(scanDir));
