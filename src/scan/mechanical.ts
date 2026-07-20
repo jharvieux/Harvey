@@ -15,6 +15,7 @@ import { scanBolaOwner } from "./bola-owner.js";
 import { scanCounterRace } from "./counter-race.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
+import { scanJobTenantScope } from "./job-tenant-scope.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { resolveBundleScan, scanSecrets } from "./secrets.js";
@@ -153,6 +154,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #433 — authenticated pages/api handler scoping a service-role query by a request-supplied
     // owner id (BOLA). AST dataflow, incl. plain .js.
     findings.push(...scanBolaOwner(scanDir));
+
+    // #681 — service-role query in a background-job path (Inngest/cron/queue/worker) with no
+    // tenant predicate at all. AST dataflow, incl. plain .js.
+    findings.push(...scanJobTenantScope(scanDir));
 
     // M6 free-tier indicators (#267) — product code only; test/fixture files aren't audit
     // findings. package.json stays in the set: the class-merge dep-gate reads it.
