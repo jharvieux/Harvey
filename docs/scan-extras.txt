@@ -8,6 +8,10 @@
 # generic AI reviewers and presence-checking scanners miss in multi-tenant
 # Supabase/Next.js SaaS. Ordered by blast radius. Stack-generic (no client
 # file paths). Derived from the D-091 taxonomy.
+#
+# Catalog sync: covers D-091 classes 1-26 (see docs/runbooks/anti-patterns.md),
+# synced from ATC canonical @ 04a565d (2026-07-19, 28 classes). The Round-3
+# integrity/concurrency classes (ATC 21-26) are in the MEDIUM section below.
 
 ## APPLICABILITY — gate every rule before it becomes a finding
 
@@ -24,6 +28,12 @@ DETECT-first (from code/schema), ask only for facts not in the repo, infer last.
 - CSRF                             [when: cookie-based auth]  (Bearer-only → N/A)
 - Password-strength / leaked-pw    [when: email/password auth is enabled]  (OAuth-only → N/A)
 - Data-sensitivity weighting       DETECTED, never asked — see M10 (PII dictionary)
+- Claim-before-send double-send    [when: a batch/cron/queue job sends externally then stamps a row]
+- Non-atomic dependent writes      [when: a handler performs 2+ dependent writes]
+- Idempotency-Key on external send [when: a retryable context calls an external send/charge API]
+- DB uniqueness for dedup          [when: code dedupes via SELECT-then-INSERT / maybeSingle]
+- Bounded query on growing table   [when: a `.select()` reads a user-growing table]
+- Webhook ordering / stale-apply   [when: a webhook updates state from the event payload]
 
 ## DETECT DEEPER before falling back to "confirm intent"
 
@@ -132,6 +142,44 @@ OK-when / NOT-OK-when so they can self-resolve. Never assert; never silently dro
 - STATE-MACHINE TRANSITIONS NOT VALIDATED AT THE BOUNDARY. `transitionTo(
   body.target)` etc. that trusts a caller-supplied target without asserting it is
   enum-valid AND a permitted transition from the current state.
+
+- CLAIM-BEFORE-SEND IN BATCH/CRON SENDERS. A batch/cron/queue job that performs
+  an external send (email/webhook/charge) and THEN stamps the row (`sent_at`)
+  double-sends on retry or concurrent overlap. Want a CAS-claim FIRST —
+  `.update({sent_at}).is('sent_at', null).select('id')`, skip the send when zero
+  rows were claimed. Stamp-after-send in a send loop is the tell. [D-091 #22]
+
+- NON-ATOMIC DEPENDENT MULTI-WRITES. A handler writing 2+ rows where one depends
+  on the other (credit+debit, parent+child, split records) with no single-
+  transaction wrapper. A crash between the writes + retry duplicates or drops one
+  side, breaking a state invariant. Want a Postgres RPC (one atomic commit) OR
+  per-row idempotency (unique key + 23505-catch) whose short-circuit still runs
+  the LATER writes. [D-091 #23]
+
+- MISSING IDEMPOTENCY KEY ON EXTERNAL SENDS. A retryable context (Inngest / cron /
+  webhook handler) calling an external API (Resend/Stripe/Apify) without an
+  `Idempotency-Key` header derived from immutable identifiers → a retry sends or
+  charges twice. Want `Idempotency-Key: sha256(tenant_id|entity_id|op)` on every
+  such call. [D-091 #24]
+
+- SELECT-THEN-INSERT DEDUP WITHOUT A DB UNIQUE CONSTRAINT. App code dedupes by
+  querying-then-inserting but the schema has no `UNIQUE` index → a race between the
+  SELECT and INSERT writes a duplicate, and a later `.maybeSingle()` then throws.
+  `.maybeSingle()` is not a substitute for `UNIQUE(a,b)` + a 23505 handler. [D-091 #25]
+
+- UNBOUNDED QUERY ON A USER-GROWING TABLE. A `.select()` on an unbounded table
+  (messages, bookings, *_log, notifications, posts) with no `.limit()`/`.range()`.
+  PostgREST silently truncates at `max-rows` (Supabase default 1000); with
+  `.order()` ascending the truncation DROPS THE NEWEST ROWS — silent data loss,
+  not an error. Want explicit `.limit()` / pagination. [D-091 #26]
+
+- WEBHOOK STATE APPLIED WITHOUT ORDERING PROTECTION. Extends the HIGH webhook-
+  replay lens: at-least-once + unordered delivery means a stale re-delivery or an
+  out-of-order older event can overwrite fresher state. Signature + dedup stops the
+  SAME event firing twice; it does NOT stop an OLD event overwriting a NEW one.
+  Want a monotonic guard — compare `event.created_at`/`source_version` against the
+  last-applied value before `.update()`, or re-fetch canonical state from the
+  provider. [D-091 #27]
 
 ## LOW — hardening
 

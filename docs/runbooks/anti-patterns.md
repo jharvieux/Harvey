@@ -2,6 +2,8 @@
 
 Recurring bug-class patterns identified in the 2026-05-26 Greptile audit. Each pattern has a preventive mechanism (ESLint rule, slop-check pattern, doctrine line, or test probe).
 
+**Provenance**: this is Harvey's vendored copy of ATC's canonical D-091 catalog. Items 1–20 and 22–27 are vendored (near-verbatim, ATC codebase paths retained as illustrative examples) from ATC's `docs/runbooks/anti-patterns.md`; item 21 is Harvey-specific (see below). Last synced from ATC @ `04a565d` (2026-07-19), which carries **28** classes; Harvey covers ATC classes **1–26**. ATC's later Harvey-audit classes **27–28** (parameter-only SECURITY DEFINER oracles; env-schema secret registration + rotation pairs) are **not yet vendored** — Harvey's `docs/scan-extras.txt` already covers the SECURITY DEFINER lens semantically. Run `pnpm brief-freshness <target-repo>` to diff this vendored copy against a target that ships its own D-091 catalog.
+
 ## 1. Stub-shaped code
 
 **Symptom**: a function's signature or shape suggests one behavior; the body silently delivers a subset.
@@ -271,6 +273,96 @@ A valid HMAC proves the body was signed, not that it's *fresh*; a captured-then-
 **Why slips through**: validation and authorization look identical in a diff; a reviewer sees `auth()` called and a zod-parsed body and moves on, without checking which party the ownership value's binding traces back to.
 
 **Prevention**: Harvey's mechanical layer catches the narrow, AST-provable slice — `detectClientSuppliedOwnerId` (`src/detectors/app-router.ts`, taxonomy `M1 — Client-supplied owner id trusted by authenticated action`) fires only when all four hold: an ownership-column `.eq()` (never a bare `id`), on a mutating chain, whose value roots in a parameter rather than a session binding, with no explicit session-vs-client comparison guarding it — emitted `review`/`Likely`, never free-count, since the AST can't see authorization living in a wrapper it can't reach. Corpus: `P-AUTHN-CLIENT-OWNER(-DELETE)` + two negatives (`src/scan/calibration/m9-authz.entries.ts`; ground truth in `targets/calibration/GROUND-TRUTH.md`). The two related shapes #221 catalogued — trusting a client-supplied security-relevant *value* (price/trial/role) and a permission check present *only* in the UI — need business/whole-program context an AST pass doesn't have, so they stay semantic/paid-tier: see the two new `docs/scan-extras.txt` HIGH-section lenses and the existing B14/B15 corpus fixtures (`P-CLIENT-PAYMENT-AMOUNT`/`P-CLIENT-PRIV-HEADER`, `P-CLIENT-RENDER-AUTHZ`/`P-MW-SOLE-AUTHZ`).
+
+---
+
+## Round-3 patterns (post 2026-07-01 principal architecture review)
+
+Vendored from ATC's canonical catalog (there numbered 21–26) @ commit `04a565d`. Harvey renumbers to **22–27** because Harvey's item 21 (client-supplied owner id) is Harvey-specific and has no ATC counterpart. Codebase instances/paths below are ATC's, retained as illustrative examples (as items 1–20 are). These six classes are concurrency / idempotency / integrity shapes — Harvey surfaces them in the M1 semantic pass (`docs/scan-extras.txt`, MEDIUM section) and, where a live stack exists, the M2 dynamic pen-test; none is a mechanical-tier AST detector.
+
+### 22. Claim-before-send in batch jobs
+
+**Symptom**: A batch job that sends (email/webhook/external call) then stamps the row has sent twice on overlap or retry. A late sender can flip the sent flag while an early retry of the same job is mid-send.
+
+**Codebase instances (2 found)**:
+- `apps/main/src/lib/cron/task-reminders-fire.ts` (Greptile-flagged — #1581)
+- `apps/main/src/inngest/precruise-generate-and-send.ts`, `apps/main/src/inngest/pre-cruise-email-scheduler.ts` (Greptile-flagged — #1582)
+
+**Why slips through**: single-run tests pass. Catching requires concurrent job overlap or a strict retry within the send window — both invisible in normal testing.
+
+**Prevention**:
+- **Doctrine** (CLAUDE.md): "In batch senders, CAS-claim the row FIRST using `.update({sent_at: <val>}).is('sent_at', null).select('id')`. Skip the send if zero rows were claimed. Stamp-after-send will double-send on retry."
+- **Code pattern**: For every `.send()` / `.dispatch()` in a loop, ensure a guarding `.update().is('sent_at', null)` precedes it, with the returned rowcount check.
+
+### 23. Collectively-atomic multi-writes
+
+**Symptom**: Two or more dependent writes where a mid-sequence failure + retry duplicates or drops one side. A process crashes after row A commits but before row B, so the retry succeeds for row B but row A was already written — a state invariant is broken (split credits/debits, half-created relationships, orphaned records).
+
+**Codebase instances (4 found)**:
+- `apps/main/src/lib/import/promote.ts`, `apps/main/src/inngest/import-pipeline.ts` (Greptile-flagged — #1576)
+- `apps/main/src/inngest/commission-split-on-received.ts` (Greptile-flagged — #1578)
+- `apps/main/src/lib/ai/batch/reconcile.ts`, `apps/main/src/lib/ai/batch/flush.ts` (Greptile-flagged — #1599)
+- `apps/main/src/app/api/groups/route.ts` (Greptile-flagged — #1600)
+
+**Why slips through**: happy-path tests write both rows successfully; the crash-in-between race is invisible without chaos injection.
+
+**Prevention**:
+- **Doctrine** (CLAUDE.md): "If a handler writes 2+ rows where one logically depends on the other, either (1) wrap both in a Postgres RPC (single atomic commit), or (2) ensure every row is individually idempotent (unique key + 23505-catch), AND the idempotency short-circuit doesn't skip LATER writes."
+- **Code pattern**: Mark such functions with `// collectively-atomic-writes: <reason>` and verify in code review.
+- **Test fixture**: error-injection probe (planned) will inject crash after row 1, assert retry succeeds without duplication.
+
+### 24. Deterministic idempotency keys on external sends
+
+**Symptom**: A retryable context sends to an external API (Resend, Stripe, Apify) without passing an `Idempotency-Key` header derived from stable identifiers — two retries send twice, or the API de-duplicates across different logical requests.
+
+**Codebase instance (1 found)**:
+- `apps/main/src/lib/email/send.ts` (Greptile-flagged — #1580)
+
+**Why slips through**: the Resend/Stripe API de-dup window is often minutes or hours; single-run tests don't retry and happy-path never hits the window.
+
+**Prevention**:
+- **Doctrine** (CLAUDE.md): "Every `.send()` / Stripe/Apify call from a retryable context (Inngest, webhook handler, cron) must pass an `Idempotency-Key` header derived from immutable identifiers (message_id, booking_id, event_id) + operation type. Format: `sha256(tenant_id|message_id|version)` or similar."
+- **Code pattern**: `fetch(url, { headers: { 'Idempotency-Key': idempotencyKey(...) } })`.
+
+### 25. DB uniqueness wherever app code assumes it
+
+**Symptom**: Code deduplicates with SELECT-then-INSERT (query for existing, insert if missing) but the schema has no UNIQUE index. A race: between the SELECT and INSERT, another request writes the same row — first request's INSERT succeeds with a duplicate, then `.maybeSingle()` on a later read fails.
+
+**Codebase instances (1 found, 3 dedup sites)**:
+- `apps/main/src/lib/import/promote.ts` (Greptile-flagged — #1575; commissions/bookings/contacts dedup all route through this file)
+
+**Why slips through**: the race is low-probability; tests run serially.
+
+**Prevention**:
+- **Doctrine** (CLAUDE.md): "If code dedupes on (a, b), schema MUST have `UNIQUE(a, b)` + a 23505 handler. `.maybeSingle()` is not a substitute."
+- **Runbook**: add a migration checklist item: "Every `INSERT ... ON CONFLICT` block or SELECT-then-INSERT pattern must reference a UNIQUE constraint in the schema."
+
+### 26. Bounded queries on user-growing tables
+
+**Symptom**: A `.select()` on a table that grows unbounded (messages, bookings, email_log, ai_call_log, notifications, forum_posts) has no `.limit()` or pagination. PostgREST silently truncates to `max-rows` (hard default 1000 on Supabase), and with `.order('id')` ascending the truncation **drops the newest rows** — data loss by default.
+
+**Codebase instances (2 found)**:
+- `apps/main/src/lib/chat/conversation-history.ts` (Greptile-flagged — #1587)
+- `apps/main/src/app/api/quotes/route.ts`, `apps/main/src/app/api/groups/route.ts`, `apps/main/src/app/api/admin/resource-utilization/route.ts`, `apps/main/src/app/api/admin/legal-docs/route.ts` (Greptile-flagged — #1588)
+
+**Why slips through**: the limit is silent (no error, just fewer rows). Tests with small datasets fit under the cap.
+
+**Prevention**:
+- **Doctrine** (CLAUDE.md): "Every `.select()` on a user-growing table carries `.limit(<N>)` and/or `.range(from, to)`. No unbounded cursor queries."
+- **ESLint** (proposed): `atc/no-unbounded-user-table-query` — flag `.from(<table>).select(...)` on known user-growing tables without a `.limit()` or `.range()`.
+
+### 27. Webhook state-application needs ordering protection, not just replay dedup
+
+**Symptom**: At-least-once delivery + unordered delivery means a stale re-delivery or an out-of-order newer message can overwrite fresh state. Replay dedup alone (signature + nonce) prevents the same request firing twice, but not a replayed *old* request overwriting a *new* one from the same provider.
+
+**Codebase instance (1 found, fixed)**:
+- `apps/main/src/lib/stripe/webhook-handler.ts` (Greptile-flagged — #1583; fixed in PR #1642 via `subscription_status_event_at` ordering guard)
+
+**Why slips through**: the ordering hazard is orthogonal to signature validation; signature tests pass because they test the same event replayed, not different events arriving out of order.
+
+**Prevention**:
+- **Doctrine** (CLAUDE.md): "A webhook handler that updates state based on the event payload must compare `event.created_at` against the last-applied event's timestamp (or `source_version` against `last_applied_version`), or re-fetch the live state from the provider before applying. Replay protection (signature + dedup) prevents *the same event* re-firing; ordering protection prevents *a stale event* overwriting fresh state."
+- **Code pattern**: before `.update({state_field: event.new_state})`, check `event.created_at > row.last_event_at` (or similar), or re-fetch the canonical state from the provider and apply conditionally.
 
 ---
 
