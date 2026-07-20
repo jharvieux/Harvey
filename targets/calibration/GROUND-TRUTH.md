@@ -1893,6 +1893,27 @@ positives caught (61 at high/free-count, 15 connected N/A); 139/139 M1 static ne
 M9 census 4 positives / 4 negatives** (the #465-widened server-action shapes — see Batch
 M9-authz below). The dry-run scorecard is unchanged (the 12 planted bugs are a separate ledger).
 
+## Batch B18 (#684) — service-role query in a background-job path with no tenant predicate
+
+Operator-directed (#684): the #681 JOB-TENANT-SCOPE class graduates into the scored M1 recall
+corpus, mirroring how #433 (bola-owner) and #353 (counter-race) each earned a scored positive+
+negative. The detector already ships (`src/scan/job-tenant-scope.ts`, registered as
+`scanJobTenantScope` in `runMechanicalScan`); this batch only adds its fixtures + answer-key rows so
+the class is measured by the live gate, not just its co-located unit test.
+
+| bug | verdict | rule / reason |
+|---|---|---|
+| JOB-TENANT-SCOPE | **graduated (review)** | `scanJobTenantScope` (`src/scan/job-tenant-scope.ts`) AST: a service-rooted `.from(X).select/update/delete(...)` in a background-job path (`inngest`/`jobs`/`queues`/`workers`/`app/api/cron`) with NO in-chain tenant predicate (`.eq`/`.in`/`.filter`/`.match` on a tenant/owner column). Discriminator: the MISSING predicate itself — a job has no request/session, so the RLS-bypassing client returns/mutates rows across every tenant (ATC finding #2003). Stays review: the AST can't see a wrapper/RPC enforcing scoping out of view (suppress with `// d091-allow:service-role-tenant`). |
+
+### B18 positive + benign sibling
+
+| id | location | class / why |
+|---|---|---|
+| P-JOB-TENANT-SCOPE | `src/inngest/import-inbound.ts` | `admin.from("gmail_inbound_messages").select("*")` in an Inngest job with no tenant predicate — cross-tenant read. Caught at review by `scanJobTenantScope`. |
+| N-JOB-TENANT-SCOPED | `src/inngest/import-inbound-safe.ts` | same service-role read scoped by `.eq("tenant_id", event.data.tenantId)` — the explicit predicate confines the read to one tenant, so nothing fires. Cleared. |
+
+Answer key: `src/scan/calibration/b18-job-tenant-scope.entries.ts`.
+
 ## Batch M9-authz (#221/#318, widened by #465) — client-supplied owner id trusted by a server action
 
 #221 catalogued one recurring class three ways; only the first proved mechanically detectable at
