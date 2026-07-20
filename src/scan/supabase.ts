@@ -47,6 +47,7 @@ import { parseAdvisorFindings, type AdvisorsResponse } from "./supabase-advisors
 import { runSplinter } from "./supabase-splinter.js";
 import {
   checkAuthConfig,
+  deriveAuthMethods,
   checkAutoExposedTables,
   checkColumnGrantsToClientRoles,
   checkCronJobs,
@@ -168,11 +169,15 @@ function bucketPolicyCounts(rows: { bucket_id: string; count: number }[]): Recor
 async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch): Promise<Finding[]> {
   const findings: Finding[] = [];
 
-  const advisors = await managementApiGet<AdvisorsResponse>(`/projects/${ref}/advisors/security`, token, fetchImpl);
-  findings.push(...parseAdvisorFindings(advisors));
-
+  // #671 — read the auth config first so its enabled-methods signal (external_email_enabled /
+  // external_phone_enabled) can gate the password/OTP-specific advisor lints too: on an OAuth-only
+  // project the leaked-password advisor is a not-applicable false positive, not an asserted Medium.
   const authConfig = await managementApiGet<AuthConfig>(`/projects/${ref}/config/auth`, token, fetchImpl);
-  findings.push(...checkAuthConfig(authConfig));
+  const authMethods = deriveAuthMethods(authConfig);
+  findings.push(...checkAuthConfig(authConfig, authMethods));
+
+  const advisors = await managementApiGet<AdvisorsResponse>(`/projects/${ref}/advisors/security`, token, fetchImpl);
+  findings.push(...parseAdvisorFindings(advisors, authMethods));
 
   const tables = await managementApiQuery<TableInfo[]>(ref, TABLES_SQL, token, fetchImpl);
   findings.push(...checkAutoExposedTables(tables));

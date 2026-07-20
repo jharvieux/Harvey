@@ -146,3 +146,48 @@ describe("parseAdvisorFindings — Batch B8 connected-tier lint set", () => {
     expect(findings.every((f) => f.mechanical && f.precisionTier === "high")).toBe(true);
   });
 });
+
+// #671 — the leaked-password / OTP advisor lints are gated on whether the auth method they protect
+// is actually enabled (from the live GoTrue /config/auth external.* flags). ATC (OAuth-only) filed a
+// Medium leaked-password protection finding here that was a not-applicable false positive.
+const LEAKED_PW_FIXTURE: AdvisorsResponse = {
+  lints: [
+    {
+      name: "auth_leaked_password_protection",
+      title: "Leaked Password Protection Disabled",
+      level: "WARN",
+      description: "Leaked password protection is currently disabled.",
+      cache_key: "auth_leaked_password_protection",
+    },
+    {
+      name: "auth_otp_long_expiry",
+      title: "OTP Long Expiry",
+      level: "WARN",
+      cache_key: "auth_otp_long_expiry",
+    },
+  ],
+};
+
+describe("parseAdvisorFindings — #671 auth-method gating", () => {
+  it("keeps leaked-password protection a Medium when password (email) auth is enabled", () => {
+    const findings = parseAdvisorFindings(LEAKED_PW_FIXTURE, { email: true, phone: false });
+    const f = findings.find((x) => x.taxonomy === "auth_leaked_password_protection")!;
+    expect(f.severity).toBe("Medium"); // WARN → Medium, un-gated
+    expect(f.title).not.toContain("conditional");
+  });
+
+  it("reframes leaked-password protection to an Info conditional on an OAuth-only project (email off)", () => {
+    const findings = parseAdvisorFindings(LEAKED_PW_FIXTURE, { email: false, phone: false });
+    const f = findings.find((x) => x.taxonomy === "auth_leaked_password_protection")!;
+    expect(f.severity).toBe("Info");
+    expect(f.confidence).toBe("N/A");
+    expect(f.title).toContain("conditional");
+    // OTP advisor also downgrades when neither email nor phone OTP is in use.
+    expect(findings.find((x) => x.taxonomy === "auth_otp_long_expiry")!.severity).toBe("Info");
+  });
+
+  it("leaves the advisor asserted when no authMethods signal is supplied (back-compat / local scans)", () => {
+    const findings = parseAdvisorFindings(LEAKED_PW_FIXTURE);
+    expect(findings.find((x) => x.taxonomy === "auth_leaked_password_protection")!.severity).toBe("Medium");
+  });
+});

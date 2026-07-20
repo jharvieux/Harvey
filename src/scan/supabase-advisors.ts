@@ -9,6 +9,7 @@
 
 import type { Finding, Severity } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
+import { eitherEnabled, gateOnAuthMethod, type AuthMethodState, type AuthMethods } from "./supabase-config.js";
 
 export interface AdvisorLint {
   name: string;
@@ -51,9 +52,19 @@ function entityLocation(lint: AdvisorLint): string {
   return "project-level";
 }
 
-export function parseAdvisorFindings(response: AdvisorsResponse): Finding[] {
-  return response.lints.map((lint, i) =>
-    mechanicalFinding({
+// #671 — advisor lints that only apply to a specific auth method, and how to read that method's
+// enablement from AuthMethods. When the connected scan supplies authMethods (derived from the live
+// GoTrue /config/auth), an inapplicable one of these (e.g. auth_leaked_password_protection on an
+// OAuth-only project) is reframed to an Info conditional instead of an asserted Medium.
+const AUTH_METHOD_GATED_LINTS: Record<string, { label: string; state: (m: AuthMethods) => AuthMethodState }> = {
+  auth_leaked_password_protection: { label: "password authentication", state: (m) => m.email },
+  auth_otp_long_expiry: { label: "email or SMS OTP", state: (m) => eitherEnabled(m.email, m.phone) },
+  auth_otp_short: { label: "email or SMS OTP", state: (m) => eitherEnabled(m.email, m.phone) },
+};
+
+export function parseAdvisorFindings(response: AdvisorsResponse, authMethods?: AuthMethods): Finding[] {
+  return response.lints.map((lint, i) => {
+    const input = {
       id: `SB-ADV-${lint.cache_key ?? `${lint.name}-${i + 1}`}`,
       title: lint.title,
       severity: CURATED_SEVERITY[lint.name] ?? LEVEL_SEVERITY[lint.level],
@@ -63,7 +74,9 @@ export function parseAdvisorFindings(response: AdvisorsResponse): Finding[] {
       evidence: lint.detail ?? lint.description ?? lint.title,
       impact: lint.description ?? lint.title,
       fix: lint.remediation ?? "See the Supabase database linter docs for this lint.",
-      precisionTier: "high",
-    }),
-  );
+      precisionTier: "high" as const,
+    };
+    const gate = authMethods && AUTH_METHOD_GATED_LINTS[lint.name];
+    return mechanicalFinding(gate ? gateOnAuthMethod(input, gate.label, gate.state(authMethods)) : input);
+  });
 }
