@@ -8,6 +8,13 @@
 # generic AI reviewers and presence-checking scanners miss in multi-tenant
 # Supabase/Next.js SaaS. Ordered by blast radius. Stack-generic (no client
 # file paths). Derived from the D-091 taxonomy.
+#
+# Catalog sync: covers ALL D-091 classes (see docs/runbooks/anti-patterns.md),
+# synced from ATC canonical @ 04a565d (2026-07-19, 28 ATC classes; Harvey total
+# 29 = 28 vendored + 1 Harvey-specific). Round-3 integrity/concurrency classes
+# (ATC 21-26 = Harvey 22-27) are in the MEDIUM section; the two Harvey-audit
+# classes (ATC 27-28 = Harvey 28-29) are the SECURITY DEFINER lens (HIGH) and the
+# env-schema secret-registration lens (LOW).
 
 ## APPLICABILITY — gate every rule before it becomes a finding
 
@@ -24,11 +31,19 @@ DETECT-first (from code/schema), ask only for facts not in the repo, infer last.
 - CSRF                             [when: cookie-based auth]  (Bearer-only → N/A)
 - Password-strength / leaked-pw    [when: email/password auth is enabled]  (OAuth-only → N/A)
 - Data-sensitivity weighting       DETECTED, never asked — see M10 (PII dictionary)
+- Claim-before-send double-send    [when: a batch/cron/queue job sends externally then stamps a row]
+- Non-atomic dependent writes      [when: a handler performs 2+ dependent writes]
+- Idempotency-Key on external send [when: a retryable context calls an external send/charge API]
+- DB uniqueness for dedup          [when: code dedupes via SELECT-then-INSERT / maybeSingle]
+- Bounded query on growing table   [when: a `.select()` reads a user-growing table]
+- Webhook ordering / stale-apply   [when: a webhook updates state from the event payload]
+- SECURITY DEFINER caller-scope    [when: a `SECURITY DEFINER` function/RPC exists]
+- Secret env-schema registration   [when: a `process.env` secret read exists]
 
 ## DETECT DEEPER before falling back to "confirm intent"
 
 Don't stop at the advisor's summary — read the actual artifacts; most "ambiguous" findings resolve to a verdict:
-- SECURITY DEFINER exposure: READ THE FUNCTION BODY (`pg_get_functiondef`). Uses `auth.uid()`/`auth.jwt()` to
+- SECURITY DEFINER exposure [D-091 #28]: READ THE FUNCTION BODY (`pg_get_functiondef`). Uses `auth.uid()`/`auth.jwt()` to
   constrain by the caller → caller-scoped (OK). Filters only by a parameter (target_tenant_id/user_id) with no
   caller check → returns data for arbitrary IDs (NOT OK). [ATC: 2 of 3 cleared, only tenant_is_active flagged.]
 - RLS-enabled-no-policy: CHECK THE GRANTS (`information_schema.role_table_grants`). No anon/authenticated SELECT
@@ -87,7 +102,14 @@ OK-when / NOT-OK-when so they can self-resolve. Never assert; never silently dro
   the caller's RLS. Flag definer functions exposed via PostgREST/RPC that read or
   write tenant data without re-checking the caller's identity inside the function,
   and triggers that mutate across tenants. `SECURITY INVOKER` is the safe default;
-  a definer function needs an explicit in-function authorization check.
+  a definer function needs an explicit in-function authorization check. The
+  headline sub-shape: a PARAMETER-ONLY ORACLE — a definer function that takes an
+  id parameter and returns status/existence (or performs a privileged write)
+  consulting NO `auth.uid()`/`auth.jwt()`/caller context anywhere in its body, so
+  every granted role can probe arbitrary IDs (a tenant-status/existence
+  enumeration oracle, or an escalation primitive). Ask "who ELSE can call this,
+  with whose IDs?"; RLS being enabled on the underlying table is false comfort
+  (DEFINER bypasses it). [D-091 #28]
 
 - CLIENT-SUPPLIED SECURITY-RELEVANT VALUE TRUSTED SERVER-SIDE. A server handler
   that uses a client-supplied price, discount, trial length, role, or other
@@ -133,6 +155,44 @@ OK-when / NOT-OK-when so they can self-resolve. Never assert; never silently dro
   body.target)` etc. that trusts a caller-supplied target without asserting it is
   enum-valid AND a permitted transition from the current state.
 
+- CLAIM-BEFORE-SEND IN BATCH/CRON SENDERS. A batch/cron/queue job that performs
+  an external send (email/webhook/charge) and THEN stamps the row (`sent_at`)
+  double-sends on retry or concurrent overlap. Want a CAS-claim FIRST —
+  `.update({sent_at}).is('sent_at', null).select('id')`, skip the send when zero
+  rows were claimed. Stamp-after-send in a send loop is the tell. [D-091 #22]
+
+- NON-ATOMIC DEPENDENT MULTI-WRITES. A handler writing 2+ rows where one depends
+  on the other (credit+debit, parent+child, split records) with no single-
+  transaction wrapper. A crash between the writes + retry duplicates or drops one
+  side, breaking a state invariant. Want a Postgres RPC (one atomic commit) OR
+  per-row idempotency (unique key + 23505-catch) whose short-circuit still runs
+  the LATER writes. [D-091 #23]
+
+- MISSING IDEMPOTENCY KEY ON EXTERNAL SENDS. A retryable context (Inngest / cron /
+  webhook handler) calling an external API (Resend/Stripe/Apify) without an
+  `Idempotency-Key` header derived from immutable identifiers → a retry sends or
+  charges twice. Want `Idempotency-Key: sha256(tenant_id|entity_id|op)` on every
+  such call. [D-091 #24]
+
+- SELECT-THEN-INSERT DEDUP WITHOUT A DB UNIQUE CONSTRAINT. App code dedupes by
+  querying-then-inserting but the schema has no `UNIQUE` index → a race between the
+  SELECT and INSERT writes a duplicate, and a later `.maybeSingle()` then throws.
+  `.maybeSingle()` is not a substitute for `UNIQUE(a,b)` + a 23505 handler. [D-091 #25]
+
+- UNBOUNDED QUERY ON A USER-GROWING TABLE. A `.select()` on an unbounded table
+  (messages, bookings, *_log, notifications, posts) with no `.limit()`/`.range()`.
+  PostgREST silently truncates at `max-rows` (Supabase default 1000); with
+  `.order()` ascending the truncation DROPS THE NEWEST ROWS — silent data loss,
+  not an error. Want explicit `.limit()` / pagination. [D-091 #26]
+
+- WEBHOOK STATE APPLIED WITHOUT ORDERING PROTECTION. Extends the HIGH webhook-
+  replay lens: at-least-once + unordered delivery means a stale re-delivery or an
+  out-of-order older event can overwrite fresher state. Signature + dedup stops the
+  SAME event firing twice; it does NOT stop an OLD event overwriting a NEW one.
+  Want a monotonic guard — compare `event.created_at`/`source_version` against the
+  last-applied value before `.update()`, or re-fetch canonical state from the
+  provider. [D-091 #27]
+
 ## LOW — hardening
 
 - ERROR-MESSAGE SCHEMA DISCLOSURE. Raw DB/Postgres error `.message`/`.details`
@@ -140,6 +200,17 @@ OK-when / NOT-OK-when so they can self-resolve. Never assert; never silently dro
 
 - UNJUSTIFIED FIRE-AND-FORGET ASYNC. `void someAsync()` in a serverless route —
   the host can kill the process before the work completes.
+
+- SECRET NOT REGISTERED IN THE ENV SCHEMA / NO ROTATION PATH. A secret consumed
+  via a raw `process.env.X` read that never appears in the app's canonical env
+  schema (e.g. `src/lib/env.ts`) is invisible to boot validation and the secret
+  inventory (a typo'd var is silently `undefined`; the secret is un-inventoried).
+  Separately, a verify site that does a single static comparison with no
+  `_CURRENT`/`_PREVIOUS` acceptance cannot be rotated without an outage. Flag both:
+  undeclared `process.env` secret reads, and static bearer/secret compares that
+  admit only one value. Complements the mechanical detectors (#679 env-schema
+  completeness, #680 rotation-pair) — the semantic pass names the rotation half no
+  static scan can prove. [D-091 #29]
 
 ## NEXT.JS APP ROUTER — boundary & rendering (M9)
 

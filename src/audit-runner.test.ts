@@ -526,6 +526,67 @@ describe("M6 credits its free indicator layer without a --llm flag (#397)", () =
   });
 });
 
+// #683 (sibling of #682): M6's --llm run has two sub-steps — the free indicator tier (detect-static)
+// and the paid simplify-scan packet. When simplify-scan is BLOCKED (non-zero exit) the probe must NOT
+// drop to requires-live-run and discard the indicator tier's already-collected findings (the same
+// silent drop #682 closed for M8). It degrades to partial WITH those findings and flags the blocked
+// sub-step — unless the indicator tier could not scan either, which is a genuine not-run.
+describe("a blocked M6 simplify-scan keeps the indicator tier's findings (#683)", () => {
+  const llmEnv = { env: { connected: false, dynamic: false, llm: true } };
+  const m6Indicator = {
+    id: "M6IND-01",
+    title: "t",
+    severity: "Info",
+    confidence: "Confirmed",
+    category: "Maintainability",
+    taxonomy: "M6 — Indicator: JSON deep-equal",
+    location: "l",
+    status: "Open",
+    evidence: "e",
+    impact: "i",
+    fix: "f",
+    value: 1,
+    ease: 1,
+    safety: 1,
+  } as unknown as Finding;
+  const withIndicator = (over: Partial<RunContext>): RunContext =>
+    ctx({
+      ...llmEnv,
+      captureDir: "/cap",
+      readFindings: (p: string) => (p.endsWith("M6.json") ? [m6Indicator] : []),
+      ...over,
+    });
+
+  it("a non-zero simplify-scan reads partial+sub-step-blocked and keeps the indicator findings", () => {
+    const blocked = withIndicator({
+      exec: (_c, argv) => (argv.includes("simplify-scan") ? { ok: false, output: "packet assembly crashed" } : { ok: true, output: cleanOutput(argv) }),
+    });
+    const { recorded, findings } = runAudit(AUDIT_RUNNERS, blocked);
+    const m6 = recorded.find((r) => r.module === "M6");
+    expect(m6?.status).toBe("partial");
+    expect(m6?.status).not.toBe("requires-live-run");
+    expect(m6?.subStatus).toBe("sub-step-blocked");
+    expect(m6?.reason).toMatch(/simplify-scan sub-step blocked/i);
+    // The completed sub-step's findings survive into the deliverable — the silent drop this closes.
+    expect(findings.map((f) => f.id)).toContain("M6IND-01");
+  });
+
+  it("stays requires-live-run (no findings) when the indicator tier could not scan either", () => {
+    const bothDown = ctx({
+      ...llmEnv,
+      exec: (_c, argv) => {
+        if (argv.includes("simplify-scan")) return { ok: false, output: "crash" };
+        if (argv.includes("detect-static")) return { ok: true, output: "loaded 0 source files (0 product-code) from /empty" };
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    });
+    const m6 = status(AUDIT_RUNNERS, bothDown, "M6");
+    expect(m6?.status).toBe("requires-live-run");
+    expect(m6?.subStatus).toBeUndefined();
+    expect(m6?.reason).toMatch(/could not scan either/);
+  });
+});
+
 describe("M3 derives ran from a real vitals parse, never a no-op exit (#314)", () => {
   it("records ran when hotspot-scan emits the ranked table (vitals report parsed)", () => {
     expect(status(AUDIT_RUNNERS, {}, "M3")?.status).toBe("ran");
