@@ -2,8 +2,8 @@
   {
     "phase": "M1 + supply chain",
     "module": "mechanical scan (secrets, deps, semgrep, supply-chain, leftover-auth)",
-    "ms": 13111,
-    "findingCount": 278,
+    "ms": 13266.3,
+    "findingCount": 332,
     "notes": "secrets (trufflehog+gitleaks), dependency CVEs (osv-scanner + curated Next.js ranges), semgrep, supply-chain, leftover-auth grep — all ran live against the target, except the two live npm-registry checks (license compliance, slopsquat) which are skipped to keep this artifact network-independent."
   },
   {
@@ -18,6 +18,6 @@
     "module": "PII/PHI/PCI data map (tools/pii-classify.mjs, static migration-SQL feed)",
     "ms": 8.8,
     "findingCount": 9,
-    "notes": "114 columns classified across 9 tables with PII/PHI/PCI hits."
+    "notes": "119 columns classified across 9 tables with PII/PHI/PCI hits."
   }
 ]

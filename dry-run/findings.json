@@ -6275,6 +6275,24 @@
     "precisionTier": "review"
   },
   {
+    "id": "AUTH-job-tenant-scope-gmail_inbound_messages-src-inngest-import-inbound-ts",
+    "title": "src/inngest/import-inbound.ts — service-role `select` on `gmail_inbound_messages` in a background-job path with no tenant predicate",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Service-role query in a background-job path with no tenant predicate",
+    "location": "src/inngest/import-inbound.ts:13",
+    "status": "Open",
+    "evidence": "Heuristic \"job-tenant-scope\": a service-role `.select()` on `.from(\"gmail_inbound_messages\")` in a background-job path (src/inngest/import-inbound.ts) carries no tenant-scoping predicate (`.eq`/`.in`/`.filter`/`.match` on a tenant/owner column). Annotate the site `// d091-allow:service-role-tenant` if a wrapper or RPC enforces scoping the AST can't see.",
+    "impact": "A background job runs with no request or session, so the service-role client bypasses RLS and this query reads (or writes) rows across every tenant. With no explicit tenant filter, one tenant's job can expose or mutate another tenant's data — exactly the class of ATC finding #2003.",
+    "fix": "Scope the query to the job's tenant (e.g. `.eq(\"tenant_id\", tenantId)` from the job payload/context), or if a wrapper/RPC already enforces tenancy, annotate the site `// d091-allow:service-role-tenant`.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review"
+  },
+  {
     "id": "SECRET-rotation-pair-REVALIDATE_SECRET-pages-api-isr-rebuild-secret-js",
     "title": "pages/api/isr-rebuild-secret.js — `REVALIDATE_SECRET` verified with no rotation-pair acceptance window",
     "severity": "Medium",
