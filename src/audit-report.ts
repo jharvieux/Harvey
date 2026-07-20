@@ -22,6 +22,7 @@ export function coverageLedger(recorded: ModuleCoverage[], env?: EngagementEnv):
     ...(r.instance ? { instance: r.instance } : {}),
     ...(r.reason ? { reason: r.reason } : {}),
     ...(r.detail ? { detail: r.detail } : {}),
+    ...(r.subStatus ? { subStatus: r.subStatus } : {}),
   }));
 }
 
