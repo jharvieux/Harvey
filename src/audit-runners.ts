@@ -332,7 +332,23 @@ const m6: ModuleRunner = {
       return { status: "requires-live-run", reason: withRejectedPass("paid LLM tier not in scope, and detect-static could not confirm the free indicator layer ran either (scanned 0 source files or failed) — M6's packet needs a reviewer to produce a verdict (#267). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass (#420)", pass.reason) };
     }
     const { ok, output, command } = runCli(ctx, "simplify-scan", [ctx.targetDir]);
-    if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
+    // #683 (sibling of #682): when the paid simplify-scan sub-step is blocked, the free indicator
+    // sub-step above may already have scanned and produced findings. Degrading to requires-live-run
+    // would DISCARD them — the silent omission the coverage doctrine forbids — so if the indicator
+    // tier scanned, record partial WITH its findings and flag the blocked sub-step; only when it too
+    // could not scan is this a not-run.
+    if (!ok) {
+      const why = `${command} exited non-zero: ${trimOut(output)}`;
+      return indicatorScanned
+        ? {
+            status: "partial",
+            subStatus: "sub-step-blocked",
+            detail: indicatorCommand,
+            reason: withRejectedPass(`simplify-scan sub-step blocked (${why}); the free indicator layer still ran, so its findings are kept rather than dropped (#683)`, pass.reason),
+            ...(indicatorFindings.length ? { findings: indicatorFindings } : {}),
+          }
+        : { status: "requires-live-run", reason: `simplify-scan blocked and the free indicator layer could not scan either — ${why}` };
+    }
     return {
       status: "partial",
       detail: command,
