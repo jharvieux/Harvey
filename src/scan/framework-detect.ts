@@ -48,6 +48,71 @@ export function detectTargetFramework(dir: string): TargetFramework {
   return "other";
 }
 
+// #696: a third-party scan target usually ships NO knip config, so knip can't infer non-app entry
+// points and over-reports them — and everything they reach — as unused files. The dominant cause is
+// NOT app-router pages (knip's Next plugin already resolves those): it's TEST files (knip recognizes
+// no vitest/jest config), plus load-tests and scripts. MEASURED on ATC apps/main (config-less Next
+// app, deps installed): baseline 581 unused files; a generated config declaring test globs +
+// load-tests + scripts + framework entries collapsed it to 6, a plausible reviewable residual.
+// App-router globs alone only moved 581→579 — the test/script globs are the lever. We generate this
+// config ONLY for a scope with no config of its own (src/cli/quality-scan.ts); a target that ships
+// its own knip config knows its app and its entries are never overridden.
+const NEXT_APP_ROUTE_FILES =
+  "{page,layout,template,default,route,loading,error,not-found,global-error,sitemap,robots,manifest,opengraph-image,twitter-image,icon,apple-icon}";
+
+function frameworkEntryGlobs(framework: TargetFramework): string[] {
+  if (framework === "next") {
+    return [
+      `src/app/**/${NEXT_APP_ROUTE_FILES}.{ts,tsx,js,jsx}`,
+      `app/**/${NEXT_APP_ROUTE_FILES}.{ts,tsx,js,jsx}`,
+      "src/pages/**/*",
+      "pages/**/*",
+      "src/middleware.{ts,js}",
+      "middleware.{ts,js}",
+      "src/instrumentation.{ts,js}",
+      "instrumentation.{ts,js}",
+      "next.config.{js,mjs,cjs,ts}",
+    ];
+  }
+  if (framework === "vite") {
+    return ["index.html", "vite.config.{ts,js,mjs,cjs}", "src/main.{ts,tsx,js,jsx}"];
+  }
+  return [];
+}
+
+// knip's OWN default entry patterns (verified in node_modules/knip ConfigurationChief.js,
+// `{index,cli,main}` × DEFAULT_EXTENSIONS at root and under src/). A config `entry` REPLACES these
+// defaults rather than extending them, so we must re-declare them or a plain lib/app whose entry is
+// src/index.ts would suddenly read as an unused file (measured: it broke the #693 fixture).
+const KNIP_DEFAULT_ENTRY_GLOBS = [
+  "{index,cli,main}.{js,mjs,cjs,jsx,ts,tsx,mts,cts}",
+  "src/{index,cli,main}.{js,mjs,cjs,jsx,ts,tsx,mts,cts}",
+];
+
+// Entries every framework shares — the big lever (test files above all). Independent of framework
+// detection so an `other` (no recognized framework) target still gets its tests/scripts declared.
+const UNIVERSAL_ENTRY_GLOBS = [
+  "**/*.{test,spec}.{ts,tsx,js,jsx}",
+  "test/**/*.{ts,tsx}",
+  "tests/**/*.{ts,tsx}",
+  "src/test/**/*.{ts,tsx}",
+  "load-tests/**/*.{ts,js}",
+  "scripts/**/*.{ts,js,mjs}",
+  "*.config.{js,mjs,cjs,ts}",
+  "**/*.d.ts",
+];
+
+// The knip config Harvey generates for a config-less scope: framework-derived entries + the
+// universal set, plus the same ignoreExportsUsedInFile default the merge path uses (#695). Pure so
+// it's unit-testable directly. Because these entries are INFERRED (not the target's own), the CLI
+// marks the resulting unused-FILE findings as review-tier rather than confirmed dead code.
+export function buildInferredKnipConfig(framework: TargetFramework): Record<string, unknown> {
+  return {
+    entry: [...KNIP_DEFAULT_ENTRY_GLOBS, ...frameworkEntryGlobs(framework), ...UNIVERSAL_ENTRY_GLOBS],
+    ignoreExportsUsedInFile: { interface: true, type: true },
+  };
+}
+
 // Monorepo-aware resolution (#597). `detectTargetFramework` inspects a SINGLE dir's own
 // manifest/config, so at a monorepo ROOT — where vite.config/next.config live in `apps/*`, not the
 // root — it returns `other`, and the M9 SSR gate (which only suppresses on `vite`) runs the SSR
