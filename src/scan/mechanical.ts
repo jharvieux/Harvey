@@ -13,6 +13,7 @@ import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { scanBolaOwner } from "./bola-owner.js";
 import { scanCounterRace } from "./counter-race.js";
+import { scanEnvSchema } from "./env-schema.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
@@ -156,6 +157,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #433 — authenticated pages/api handler scoping a service-role query by a request-supplied
     // owner id (BOLA). AST dataflow, incl. plain .js.
     findings.push(...scanBolaOwner(scanDir));
+
+    // #679 — env-schema completeness: `process.env.X` reads not declared in the target's env
+    // schema module (undeclared read → finding; declared-but-unread → Info). No schema, no diff.
+    findings.push(...scanEnvSchema(scanDir));
 
     // M6 free-tier indicators (#267) — product code only; test/fixture files aren't audit
     // findings. package.json stays in the set: the class-merge dep-gate reads it.
