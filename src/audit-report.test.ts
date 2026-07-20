@@ -70,6 +70,36 @@ describe("assembleEngagementDocument (#312)", () => {
   });
 });
 
+// #682: a module marked `partial` because a sub-step was BLOCKED still contributes the findings its
+// completed sub-step produced, and its coverage row carries the sub-step-blocked marker so the table
+// can badge it apart from a partial/requires-live-run that produced nothing.
+describe("sub-step-blocked partials keep findings and stay distinguishable (#682)", () => {
+  const env682 = { connected: false, dynamic: false, llm: false };
+  const recorded682 = (): ModuleCoverage[] => {
+    const rows: ModuleCoverage[] = AUDIT_MODULES.map((m) => ({ module: m, status: "ran" as const, detail: `ran ${m}` }));
+    rows[AUDIT_MODULES.indexOf("M8")] = { module: "M8", status: "partial", subStatus: "sub-step-blocked", detail: "test-intent tier", reason: "mutation tier blocked; the test-intent tier still ran (#682)" };
+    return rows;
+  };
+
+  it("surfaces the blocked module's completed-sub-step findings in the assembled doc, and validates", () => {
+    const doc = assembleEngagementDocument(recorded682(), env682, [finding("M8-53")], meta);
+    expect(doc.findings.map((f) => f.id)).toContain("M8-53");
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+
+  it("carries subStatus onto the coverage row so the table badges it distinctly", () => {
+    const row = coverageLedger(recorded682(), env682).find((r) => r.module === "M8");
+    expect(row?.status).toBe("partial");
+    expect(row?.subStatus).toBe("sub-step-blocked");
+  });
+
+  it("leaves an ordinary partial without a subStatus — it reads as a plain partial", () => {
+    const plain = recorded682();
+    plain[AUDIT_MODULES.indexOf("M8")] = { module: "M8", status: "partial", detail: "code tier", reason: "code tier only" };
+    expect(coverageLedger(plain, env682).find((r) => r.module === "M8")?.subStatus).toBeUndefined();
+  });
+});
+
 describe("dedupeFindings", () => {
   it("collapses byte-identical duplicates (the shared-CLI capture case) but keeps distinct findings", () => {
     const a = finding("F-1");
