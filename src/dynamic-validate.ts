@@ -475,7 +475,7 @@ export function runDynamicValidation(opts: {
 
 // A single Supabase project inside a (possibly mono-) repo: its own migrations/schema, its own app
 // dir, and a stable label for the per-DB coverage rows.
-export interface ProjectLayout {
+interface ProjectLayout {
   label: string; // path relative to the repo root, or the repo basename for a single-project target
   appDir: string; // the app root beside this project's supabase/ dir (the dir we build/boot + probe)
   layout: RepoLayout; // scoped to THIS project's migrations only — so its seed matches its applied schema
