@@ -109,7 +109,10 @@ function candidatePaths(base: string): string[] {
 // (`@/*` → `@/`) and the repo-relative directory it maps to (`["./src/*"]` under baseUrl "." →
 // `src`). Only wildcard (`*`) entries are modelled — the create-next-app convention and the
 // overwhelmingly common real-world shape.
-interface PathAlias {
+// Exported so other cross-file detectors (e.g. src/scan/service-role-literal.ts, #664) can reuse
+// the same import-resolution logic instead of re-implementing it — "one implementation so the
+// surfaces can't drift apart", same rationale as src/detectors/owner-id.ts.
+export interface PathAlias {
   prefix: string;
   baseDir: string;
 }
@@ -119,7 +122,7 @@ interface PathAlias {
 // tolerates the comments/trailing commas tsconfig commonly carries. With no config paths in the
 // set, fall back to Next.js's own `@/*`→root default rather than giving up — the vast majority of
 // otherwise-unresolved specifiers are exactly that scaffolding default.
-function collectPathAliases(files: SourceInput[]): PathAlias[] {
+export function collectPathAliases(files: SourceInput[]): PathAlias[] {
   const configs = files
     .filter((f) => /(^|\/)(tsconfig|jsconfig)\.json$/.test(f.path))
     .sort((a, b) => a.path.split("/").length - b.path.split("/").length);
@@ -163,7 +166,7 @@ function resolveAliasedImport(specifier: string, allPaths: Set<string>, aliases:
   return undefined;
 }
 
-function resolveImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
+export function resolveImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
   return resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(specifier, allPaths, aliases);
 }
 

@@ -17,6 +17,8 @@ import {
   readSchemaSql,
   type RepoLayout,
   runDynamicValidation,
+  runMultiProjectDynamicValidation,
+  splitLayoutByProject,
   type StandUpRunner,
 } from "./dynamic-validate.js";
 import type { Finding } from "./findings.js";
@@ -393,5 +395,109 @@ describe("#574 — standalone root schema.sql discovery + stand-up ability", () 
     expect(v.canStandUp).toBe(false);
     expect(v.reason).toMatch(/Probed: supabase\/migrations/);
     expect(v.reason).toMatch(/schema\.sql/);
+  });
+});
+
+describe("splitLayoutByProject (#610 — one entry per Supabase project)", () => {
+  it("a single-migration repo is one project covering the whole target", () => {
+    const projects = splitLayoutByProject("/repo", layout());
+    expect(projects).toHaveLength(1);
+    expect(projects[0]!.appDir).toBe("/repo");
+    expect(projects[0]!.layout.migrationDirs).toEqual(["/repo/supabase/migrations"]);
+  });
+
+  it("a monorepo yields one project per apps/*/supabase/migrations, each scoped to its own dir", () => {
+    const mono = layout({ migrationDirs: ["/repo/apps/main/supabase/migrations", "/repo/apps/rag/supabase/migrations"] });
+    const projects = splitLayoutByProject("/repo", mono);
+    expect(projects.map((p) => p.label)).toEqual(["apps/main", "apps/rag"]);
+    expect(projects.map((p) => p.appDir)).toEqual(["/repo/apps/main", "/repo/apps/rag"]);
+    // each project's layout carries ONLY its own migrations — so its derived seed matches the DB
+    // that is actually stood up (never the concatenation of every project's schema, #610).
+    expect(projects[0]!.layout.migrationDirs).toEqual(["/repo/apps/main/supabase/migrations"]);
+    expect(projects[1]!.layout.migrationDirs).toEqual(["/repo/apps/rag/supabase/migrations"]);
+  });
+
+  it("a schema-file target (no migrations dir) is a single project", () => {
+    const projects = splitLayoutByProject("/repo", layout({ migrationDirs: [], schemaFiles: ["/repo/schema.sql"] }));
+    expect(projects).toHaveLength(1);
+    expect(projects[0]!.appDir).toBe("/repo");
+  });
+});
+
+describe("runMultiProjectDynamicValidation (#610 — stand up + probe EVERY project)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "harvey-dynval-multi-"));
+  // A real monorepo fixture on disk: each app ships its OWN supabase/migrations (the orchestrator
+  // reads each project's SQL to derive its offline seed preview).
+  const repo = mkdtempSync(join(tmpdir(), "harvey-monorepo-"));
+  for (const app of ["main", "rag"]) {
+    const mig = join(repo, "apps", app, "supabase", "migrations");
+    mkdirSync(mig, { recursive: true });
+    writeFileSync(join(mig, "0001_init.sql"), `create table tenants (id uuid primary key, name text not null);\ncreate table ${app}_docs (id uuid primary key, tenant_id uuid not null, body text);`);
+  }
+  afterAll(() => { rmSync(dir, { recursive: true, force: true }); rmSync(repo, { recursive: true, force: true }); });
+  const now = () => "2026-07-21T12:00:00.000Z";
+  const mono = layout({ migrationDirs: [join(repo, "apps/main/supabase/migrations"), join(repo, "apps/rag/supabase/migrations")] });
+
+  it("stands up + probes BOTH DBs, tears each stack down, and rolls up per-DB coverage rows", () => {
+    const stops: string[] = [];
+    const r = runMultiProjectDynamicValidation({
+      targetDir: repo, layout: mono, artifactsDir: dir, now,
+      makeProject: (project) => ({ runner: runner(), stop: () => stops.push(project.label) }),
+    });
+    expect(stops).toEqual(["apps/main", "apps/rag"]); // every stack torn down
+    expect(r.standUp).toBe(true);
+    expect(r.coverage).toBe("full");
+    // one rolled-up artifact carrying BOTH DBs' findings, id-tagged so they don't collide
+    const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
+    expect(written.target).toBe(repo);
+    expect(written.findings).toHaveLength(2);
+    expect(written.findings.map((f: Finding) => f.id).sort()).toEqual(["M2-IDOR-1-apps-main", "M2-IDOR-1-apps-rag"]);
+    expect(written.summary).toMatch(/across 2 Supabase project\(s\)/);
+    // per-DB rows, both named — never a single blended verdict
+    expect(r.limitations.join("\n")).toMatch(/DB "apps\/main": coverage=full/);
+    expect(r.limitations.join("\n")).toMatch(/DB "apps\/rag": coverage=full/);
+  });
+
+  it("an honest per-DB partial: one DB can't stand up, the other still probes and emits", () => {
+    const r = runMultiProjectDynamicValidation({
+      targetDir: repo, layout: mono, artifactsDir: dir, now,
+      makeProject: (project) => ({
+        runner: project.label === "apps/rag"
+          ? runner({ standUpDb: () => ({ ok: false, output: "supabase start: docker not running" }) })
+          : runner(),
+        stop: () => undefined,
+      }),
+    });
+    // the failed DB is disclosed by name (fail-loud), the healthy one still produced evidence
+    expect(r.limitations.join("\n")).toMatch(/DB "apps\/rag":.*not stood up.*docker not running/);
+    expect(r.coverage).toBe("postgrest-only"); // not rounded up to full — one DB was not probed
+    expect(r.artifactPath).not.toBeNull();
+    const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
+    expect(written.findings).toHaveLength(1); // only the DB that stood up
+  });
+
+  it("when NO project stands up, writes no artifact and says so per DB — never a silent clean ran", () => {
+    const r = runMultiProjectDynamicValidation({
+      targetDir: repo, layout: mono, artifactsDir: dir, now,
+      makeProject: () => ({ runner: runner({ standUpDb: () => ({ ok: false, output: "docker not running" }) }), stop: () => undefined }),
+    });
+    expect(r.standUp).toBe(false);
+    expect(r.coverage).toBe("none");
+    expect(r.artifactPath).toBeNull();
+  });
+
+  it("a single-project target keeps its findings verbatim (no DB-label id suffix)", () => {
+    const single = mkdtempSync(join(tmpdir(), "harvey-single-"));
+    const mig = join(single, "supabase", "migrations");
+    mkdirSync(mig, { recursive: true });
+    writeFileSync(join(mig, "0001.sql"), "create table tenants (id uuid primary key);\ncreate table docs (id uuid primary key, tenant_id uuid not null);");
+    const r = runMultiProjectDynamicValidation({
+      targetDir: single, layout: layout({ migrationDirs: [mig] }), artifactsDir: dir, now,
+      makeProject: () => ({ runner: runner(), stop: () => undefined }),
+    });
+    expect(r.findings.map((f) => f.id)).toEqual(["M2-IDOR-1"]);
+    const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
+    expect(written.summary).toMatch(/dynamic validation \(full coverage\)/);
+    rmSync(single, { recursive: true, force: true });
   });
 });
