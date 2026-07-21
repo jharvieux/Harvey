@@ -13,6 +13,8 @@ import {
   mutationScore,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
+  reRootReportToApp,
+  rootScopedMutateGlobs,
   rootWorkspaceTestFinding,
   rootWorkspaceTestModuleRecord,
   scaffoldStrykerConfig,
@@ -630,5 +632,69 @@ describe("detectRootWorkspaceTestSuite (#623)", () => {
     expect(record.status).toBe("partial");
     expect(record.note).toMatch(/#623/);
     expect(record.note).toMatch(/not suite-absent/);
+  });
+});
+
+// #655: closes the #623 measurement gap — a root-scoped run's mutate globs and report file keys
+// live in a different coordinate space (relative to the workspace ROOT) than an ordinary per-app
+// run's (relative to the app). These two pure transforms are the seam between them; the CLI wires
+// them around an actual Stryker invocation, which these fixture-based tests deliberately do not
+// attempt (see #655's task note — no live Stryker run needed to prove the scoping logic).
+describe("rootScopedMutateGlobs (#655)", () => {
+  it("re-roots positive globs under the app's path from the workspace root", () => {
+    expect(rootScopedMutateGlobs("apps/foo", ["src/**/*.{js,ts}", "lib/**/*.ts"])).toEqual([
+      "apps/foo/src/**/*.{js,ts}",
+      "apps/foo/lib/**/*.ts",
+    ]);
+  });
+
+  it("leaves negated exclusion globs untouched — they are not app-specific", () => {
+    expect(rootScopedMutateGlobs("apps/foo", ["src/**/*.ts", "!**/*.test.*", "!**/node_modules/**"])).toEqual([
+      "apps/foo/src/**/*.ts",
+      "!**/*.test.*",
+      "!**/node_modules/**",
+    ]);
+  });
+
+  it("is the inverse re-rooting scaffoldStrykerConfig's per-app globs need for a root cwd", () => {
+    const appGlobs = scaffoldStrykerConfig("vitest", ["src"]).mutate as string[];
+    const rootGlobs = rootScopedMutateGlobs("apps/foo", appGlobs);
+    expect(rootGlobs[0]).toBe("apps/foo/src/**/*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}");
+    // the four negated excludes are unchanged, just re-rooted-globs-adjacent
+    expect(rootGlobs.slice(1)).toEqual(appGlobs.slice(1));
+  });
+});
+
+describe("reRootReportToApp (#655)", () => {
+  const rawReport: StrykerReport = {
+    files: {
+      "apps/foo/src/a.ts": { mutants: [mutant({ status: "Killed" })] },
+      "apps/foo/src/b.ts": { mutants: [mutant({ status: "Survived" })] },
+    },
+  };
+
+  it("strips the app's root-relative prefix so downstream code sees ordinary app-relative keys", () => {
+    const { report, dropped } = reRootReportToApp(rawReport, "apps/foo");
+    expect(Object.keys(report.files).sort()).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(dropped).toEqual([]);
+  });
+
+  it("drops (and reports) any file outside the app's prefix instead of mis-attributing it", () => {
+    const mixed: StrykerReport = {
+      files: { ...rawReport.files, "packages/shared/src/c.ts": { mutants: [mutant({ status: "Killed" })] } },
+    };
+    const { report, dropped } = reRootReportToApp(mixed, "apps/foo");
+    expect(Object.keys(report.files).sort()).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(dropped).toEqual(["packages/shared/src/c.ts"]);
+  });
+
+  it("round-trips with rootScopedMutateGlobs: a report produced under root-rooted globs re-roots back to the app-rooted view", () => {
+    const appGlobs = scaffoldStrykerConfig("vitest", ["src"]).mutate as string[];
+    const rootGlobs = rootScopedMutateGlobs("apps/foo", appGlobs);
+    // Every file the root-rooted globs would mutate carries the "apps/foo/" prefix Stryker's report
+    // would use as its key when run with cwd = the workspace root.
+    expect(rootGlobs.every((g) => g.startsWith("!") || g.startsWith("apps/foo/"))).toBe(true);
+    const { report } = reRootReportToApp(rawReport, "apps/foo");
+    expect(report.files["src/a.ts"]).toBeDefined();
   });
 });
