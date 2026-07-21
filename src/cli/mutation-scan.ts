@@ -77,6 +77,8 @@ import {
   mutationNotRunModuleRecord,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
+  reRootReportToApp,
+  rootScopedMutateGlobs,
   rootWorkspaceTestFinding,
   rootWorkspaceTestModuleRecord,
   SCAFFOLD_SOURCE_DIRS,
@@ -111,10 +113,14 @@ if (!targetArg) {
 const targetDir = resolve(targetArg);
 const stubCheck = process.argv.includes("--stub-check");
 const detectOnly = process.argv.includes("--detect-only");
-const configPath = arg("--config");
+// #655: mutable — a successful root-scoped run (see attemptRootScopedRun below) redirects these to
+// its own re-rooted report + reference config so the rest of the file's normal report-shaping path
+// (report reading, scope verification, findings) runs unchanged, as if this were an ordinary
+// per-app --report/--config invocation.
+let configPath = arg("--config");
 const concurrency = arg("--concurrency");
 const incremental = process.argv.includes("--incremental");
-const reportPath = arg("--report");
+let reportPath = arg("--report");
 const hotspotsPath = arg("--hotspots");
 const outPath = arg("--out");
 const install = process.argv.includes("--install");
@@ -241,6 +247,81 @@ function collectAncestorSignals(dir: string): AncestorTestSignals[] {
   return out;
 }
 
+// #503: replicate the test env the target itself declares (TZ/LANG/LC_ALL from its runner config,
+// test script, or CI workflow) when running its suite — under the audit machine's ambient env an
+// env-fragile suite fails its dry run and M8 voids. Applies to stub-check, ordinary Stryker runs,
+// and the root-scoped run below — computed here (ahead of the no-test-suite check) because the
+// root-scoped attempt needs it before that check has finished.
+const detectedEnv: DetectedEnvVar[] = detectTestEnv(collectEnvSourceFiles(targetDir));
+const suiteEnv = { ...process.env, ...Object.fromEntries(detectedEnv.map((e) => [e.key, e.value])) };
+if (detectedEnv.length) {
+  console.error(`replicating target-declared test env (#503): ${detectedEnv.map((e) => `${e.key}=${e.value} (from ${e.source})`).join(", ")}`);
+}
+
+// #655: given a detected workspace-root suite, try to actually MEASURE this app by invoking the
+// root's own runner with mutate globs scoped to this app — the #623 gap disclosure is the fallback
+// when that isn't possible, not the only outcome. Never called under --detect-only (which must
+// never invoke Stryker, #470) or --stub-check (a different, non-Stryker measurement tier).
+function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ancestors: AncestorTestSignals[]): { reportPath: string; refConfigPath: string } | { degradeReason: string } {
+  const rootPkg = ancestors.find((a) => a.dir === rootSuite.root)?.pkg;
+  const runner = detectTestRunner(rootPkg);
+  if (!runner) return { degradeReason: `no recognized test runner (vitest/jest/mocha) detected in the root package.json at ${rootSuite.root} to scaffold a Stryker config for` };
+
+  const presentDirs = SCAFFOLD_SOURCE_DIRS.filter((d) => existsSync(join(targetDir, d)));
+  if (presentDirs.length === 0) return { degradeReason: `no recognized source directory (${SCAFFOLD_SOURCE_DIRS.join(", ")}) under ${targetDir} to scope root-scoped mutate globs to` };
+
+  const missingPkgs = ["@stryker-mutator/core", runner.plugin].filter((p) => !existsSync(join(rootSuite.root, "node_modules", ...p.split("/"))));
+  if (missingPkgs.length && !install) {
+    return { degradeReason: `the workspace root has a ${runner.runner} suite but no Stryker install there (${missingPkgs.join(", ")} missing) — re-run with --install to provision them at the root via \`npm install --no-save\` and measure this app via a root-scoped run` };
+  }
+  if (missingPkgs.length) {
+    console.error(`#655: installing ${missingPkgs.join(" + ")} into the workspace root ${rootSuite.root} (npm install --no-save)...`);
+    try {
+      execFileSync("npm", ["install", "--no-save", "--no-audit", "--no-fund", "-D", ...missingPkgs], { cwd: rootSuite.root, stdio: ["ignore", "inherit", "inherit"] });
+    } catch (err) {
+      return { degradeReason: `could not install ${missingPkgs.join(" + ")} at the workspace root (npm install --no-save failed: ${(err as Error).message.slice(0, 200)})` };
+    }
+  }
+
+  const appCfg = scaffoldStrykerConfig(runner.runner, presentDirs);
+  const appRelFromRoot = relative(rootSuite.root, targetDir).split(sep).join("/");
+  const rootCfg = { ...appCfg, mutate: rootScopedMutateGlobs(appRelFromRoot, (appCfg.mutate as string[] | undefined) ?? []) };
+
+  const scaffoldDir = mkdtempSync(join(tmpdir(), "harvey-stryker-root-scaffold-"));
+  const rootCfgPath = join(scaffoldDir, "stryker.root.config.json");
+  const refCfgPath = join(scaffoldDir, "stryker.app-reference.config.json");
+  writeFileSync(rootCfgPath, JSON.stringify(rootCfg, null, 2) + "\n");
+  writeFileSync(refCfgPath, JSON.stringify(appCfg, null, 2) + "\n");
+  console.error(`#655: root-scoped mutation run — invoking the ${runner.runner} suite at ${rootSuite.root} (${rootSuite.reason}), mutate scoped to ${appRelFromRoot} (${JSON.stringify(rootCfg.mutate)})`);
+
+  // Package directories existing (checked above) doesn't guarantee node_modules/.bin/stryker was
+  // hoisted there too — pnpm workspace hoisting can differ from a plain npm install's layout — so
+  // this still degrades rather than lets runStryker's ENOENT throw crash the whole CLI.
+  let run: { dryRunFailure?: string };
+  try {
+    run = runStryker(rootCfgPath, rootSuite.root);
+  } catch (err) {
+    return { degradeReason: (err as Error).message };
+  }
+  if (run.dryRunFailure) return { degradeReason: `root-scoped Stryker's initial dry run failed: ${run.dryRunFailure}` };
+
+  const rawReportPath = join(rootSuite.root, "reports", "mutation", "mutation.json");
+  if (!existsSync(rawReportPath)) return { degradeReason: `root-scoped Stryker run produced no report at ${rawReportPath} (see the Stryker output above)` };
+
+  const rawReport = JSON.parse(readFileSync(rawReportPath, "utf8")) as StrykerReport;
+  const { report, dropped } = reRootReportToApp(rawReport, appRelFromRoot);
+  if (dropped.length) {
+    console.error(`⚠ #655: ${dropped.length} mutated file(s) from the root run fell outside ${appRelFromRoot} and were dropped from this app's measurement (e.g. ${dropped.slice(0, 3).join(", ")}) — should not happen when mutate globs are scoped correctly`);
+  }
+  if (Object.keys(report.files).length === 0) {
+    return { degradeReason: `root-scoped Stryker run covered zero files under ${appRelFromRoot} (${dropped.length} file(s) reported, all outside the app's scope)` };
+  }
+
+  const reRootedReportPath = join(scaffoldDir, "mutation.app-scoped.json");
+  writeFileSync(reRootedReportPath, JSON.stringify(report, null, 2) + "\n");
+  return { reportPath: reRootedReportPath, refConfigPath: refCfgPath };
+}
+
 // #224: no test script / no known test-runner dep / no Stryker config means Stryker literally
 // can't run here — that's itself a High-severity M8 finding (zero automated coverage on a
 // codebase in an audit's scope), not a wrapper failure. Report it and mark M8 coverage partial
@@ -252,20 +333,40 @@ if (!reportPath) {
   if (missing) {
     // #623: before declaring suite-absent, check whether the target is an app whose tests live at
     // a monorepo root — a false "no test suite" on a well-tested app reads as zero coverage.
-    const rootSuite = detectRootWorkspaceTestSuite(collectAncestorSignals(targetDir));
+    const ancestors = collectAncestorSignals(targetDir);
+    const rootSuite = detectRootWorkspaceTestSuite(ancestors);
     if (rootSuite) {
-      console.error(`✗ ${targetDir}: no per-app test suite, but a workspace-ROOT suite exists at ${rootSuite.root} (${rootSuite.reason}) — measurement gap, not 'no test suite' (#623).`);
-      console.error(`M8 coverage: partial (root-workspace suite not reachable per-app, #623) — emitting the measurement-gap finding instead of M8-00.`);
-      const output = { finding: rootWorkspaceTestFinding(rootSuite), moduleRecord: rootWorkspaceTestModuleRecord(rootSuite) };
-      const json = JSON.stringify(output, null, 2);
-      if (outPath) {
-        writeFileSync(outPath, json + "\n");
-        console.error(`wrote M8 finding to ${outPath}`);
+      // #655: attempt a real root-scoped measurement — but never under --detect-only (must never
+      // invoke Stryker) or --stub-check (a distinct, non-Stryker measurement tier).
+      const attempt = !detectOnly && !stubCheck ? attemptRootScopedRun(rootSuite, ancestors) : undefined;
+      if (attempt && "reportPath" in attempt) {
+        console.error(`✓ ${targetDir}: measured via a root-scoped mutation run at ${rootSuite.root} (#655) — an app-scoped measurement, not the #623 gap disclosure.`);
+        reportPath = attempt.reportPath;
+        configPath = attempt.refConfigPath;
       } else {
-        console.log(json);
+        const why = attempt ? ` — attempted a root-scoped run but could not complete it (${attempt.degradeReason})` : "";
+        console.error(`✗ ${targetDir}: no per-app test suite, but a workspace-ROOT suite exists at ${rootSuite.root} (${rootSuite.reason}) — measurement gap, not 'no test suite' (#623)${why}.`);
+        console.error(`M8 coverage: partial (root-workspace suite not reachable per-app, #623) — emitting the measurement-gap finding instead of M8-00.`);
+        // #655: an attempted-and-failed root-scoped run gets its reason folded into the
+        // machine-readable note too, not just stderr — this repo's doctrine is "say so in the
+        // OUTPUT", and a client report only ever sees the artifact, never this process's stderr.
+        const baseRecord = rootWorkspaceTestModuleRecord(rootSuite);
+        const moduleRecord = attempt
+          ? { ...baseRecord, note: `${baseRecord.note} Attempted a root-scoped run (#655) but could not complete it: ${attempt.degradeReason}.` }
+          : baseRecord;
+        const output = { finding: rootWorkspaceTestFinding(rootSuite), moduleRecord };
+        const json = JSON.stringify(output, null, 2);
+        if (outPath) {
+          writeFileSync(outPath, json + "\n");
+          console.error(`wrote M8 finding to ${outPath}`);
+        } else {
+          console.log(json);
+        }
+        process.exit(0);
       }
-      process.exit(0);
     }
+  }
+  if (missing && !reportPath) {
     const why = reason ?? "no automated test suite detected";
     console.error(`✗ ${targetDir}: no automated test suite detected (${why}) — mutation testing has nothing to run against.`);
     console.error(`M8 coverage: partial (no test suite) — emitting the "no automated test suite" finding instead.`);
@@ -290,15 +391,6 @@ if (detectOnly) {
   if (outPath) writeFileSync(outPath, json + "\n");
   else console.log(json);
   process.exit(0);
-}
-
-// #503: replicate the test env the target itself declares (TZ/LANG/LC_ALL from its runner config,
-// test script, or CI workflow) when running its suite — under the audit machine's ambient env an
-// env-fragile suite fails its dry run and M8 voids. Applies to both stub-check and Stryker runs.
-const detectedEnv: DetectedEnvVar[] = detectTestEnv(collectEnvSourceFiles(targetDir));
-const suiteEnv = { ...process.env, ...Object.fromEntries(detectedEnv.map((e) => [e.key, e.value])) };
-if (detectedEnv.length) {
-  console.error(`replicating target-declared test env (#503): ${detectedEnv.map((e) => `${e.key}=${e.value} (from ${e.source})`).join(", ")}`);
 }
 
 // #373: the fast pre-Stryker deletion-survival pass. Everything below (Stryker invocation,
@@ -403,7 +495,10 @@ function emitAndExit(output: Record<string, unknown>, stderrNote: string): never
 // #503: Stryker's output is captured (then echoed) rather than streamed, so a failed initial dry
 // run — the target's own suite failing unmutated, which writes NO report — can be recognized and
 // surfaced as its own verdict instead of falling through to "mutation report not found".
-function runStryker(cfgPath: string | undefined): { dryRunFailure?: string } {
+// #655: `cwd` defaults to the target (the ordinary per-app invocation) but a root-scoped run
+// passes the workspace root instead — Stryker itself, and the local-bin lookup below, both need to
+// execute from wherever the config's `mutate` globs are relative to.
+function runStryker(cfgPath: string | undefined, cwd: string = targetDir): { dryRunFailure?: string } {
   const strykerArgs = ["run"];
   if (cfgPath) strykerArgs.push(cfgPath);
   if (concurrency) strykerArgs.push("--concurrency", concurrency);
@@ -413,12 +508,12 @@ function runStryker(cfgPath: string | undefined): { dryRunFailure?: string } {
 
   // Prefer the target's own install over PATH — clients that ship Stryker have it in
   // node_modules/.bin, not globally.
-  const localBin = join(targetDir, "node_modules", ".bin", "stryker");
+  const localBin = join(cwd, "node_modules", ".bin", "stryker");
   const strykerBin = existsSync(localBin) ? localBin : "stryker";
   try {
     // Stryker exits non-zero when the mutation score is under its configured break threshold —
     // that's not a wrapper failure, the report is still written; only a missing binary should throw.
-    const stdout = execFileSync(strykerBin, strykerArgs, { cwd: targetDir, encoding: "utf8", env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+    const stdout = execFileSync(strykerBin, strykerArgs, { cwd, encoding: "utf8", env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
     process.stderr.write(stdout);
     return {};
   } catch (err) {
