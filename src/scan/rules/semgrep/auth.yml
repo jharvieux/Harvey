@@ -337,6 +337,32 @@ rules:
           - pattern: $C.from($T).update($BODY)
           - pattern: $C.from($T).insert($BODY)
 
+  # #663 (M1 #614 follow-up): the pg/Express analogue of harvey-mass-assignment-bare — the raw
+  # `req.body` reaches a repo write function's payload argument directly, no field allowlist. The
+  # sink is name-gated to a write-verb prefix (update|insert|create|save|set) so this does NOT
+  # match every `$FN($_, req.body)` — an arbitrary id-parameterized call (validation, logging) never
+  # matches, only a call whose own name says it persists the payload. Bare identifier form ONLY (the
+  # literal `req.body` expression as the argument, not a variable merely derived from it) — a
+  # reconstructed/allowlisted object has a different AST shape and stays dark, same precision
+  # discipline as the bare-variable Supabase rule above. Review tier (WARNING/MEDIUM): a static rule
+  # can't prove no allowlist runs inside the named function.
+  - id: harvey-pg-mass-assignment
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      The whole request body is passed directly as a repo write function's payload — mass
+      assignment. A caller can set any column the write path exposes (role/is_admin/price) by
+      adding it to the JSON body. Destructure and pass an explicit list of allowed fields instead.
+    patterns:
+      - pattern: $FN($ID, req.body)
+      - metavariable-regex:
+          metavariable: $FN
+          regex: (?i)^(update|insert|create|save|set)[A-Za-z0-9_]*$
+
   # #614: a privilege/role decision is taken directly from a client-supplied request field. A plain
   # Express (or any HTTP) handler reads `req.body.isAdmin` / `req.body.role` / `req.query.*` and uses
   # it as an authorization gate or persists it — the client names its own privilege level (privilege

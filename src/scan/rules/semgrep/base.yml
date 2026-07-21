@@ -149,6 +149,13 @@ rules:
           - patterns:
               - pattern: '{ ..., origin: "*", ... }'
               - pattern: "{ ..., credentials: true, ... }"
+          # #663: the `origin: true` variant — the cors lib reflects the REQUEST's Origin header
+          # verbatim (equivalent to a wildcard in effect, since every origin is echoed back), so
+          # paired with credentials it is exactly as dangerous as `origin: "*"`. Same both-keys
+          # gate as the #614 branch above.
+          - patterns:
+              - pattern: "{ ..., origin: true, ... }"
+              - pattern: "{ ..., credentials: true, ... }"
 
   # Service-role key referenced inside a Client Component ("use client"). Gating on the
   # "use client" directive is the high-precision signal: it means the module (and the key) ships
@@ -197,42 +204,15 @@ rules:
           metavariable: $K
           regex: ^VITE_[A-Z0-9_]*(SERVICE_ROLE|SERVICE_KEY)[A-Z0-9_]*$
 
-  # #611 Gap A: a Supabase service_role key HARDCODED as a JWT string literal and passed to
-  # createClient (independent of import.meta.env, which harvey-vite-service-role-in-client above
-  # already covers). The nocode-rescue residual: the client module inlines the key as a literal —
-  # either straight into createClient(URL, "eyJ…", …) or via a service-role-named const that
-  # createClient then uses (semgrep's constant propagation resolves the identifier to the literal,
-  # so this one branch catches both). Precision is held by requiring an ACTUAL service_role token,
-  # not any JWT: the $JWT literal must carry one of the three base64-alignment encodings of
-  # `role":"service_role"` in its payload (an anon key — meant to be public — never matches), and the
-  # well-known local-dev `supabase-demo` key is excluded so a committed local key does not free-count.
-  # A legitimate server admin client reads the key from process.env (not a string literal), so it
-  # never matches. Critical → free count. Overlaps gitleaks' decoded-claim rule on the same token but
-  # adds the createClient-construction context; a bare leaked literal with NO createClient is left to
-  # gitleaks. NOTE: a service_role literal reaching createClient through process.env or an imported
-  # const in another file is out of single-file reach, and the demo-key exclusion is signature-based,
-  # not the gitleaks known-public correlation (see #611 follow-up).
-  - id: harvey-service-role-literal
-    languages: [javascript, typescript]
-    severity: ERROR
-    metadata:
-      confidence: HIGH
-      category: security
-      harveySeverity: Critical
-    message: >
-      A Supabase service_role key is hardcoded as a JWT string literal and used to build a client.
-      Anyone with the source (or the shipped bundle, in a Vite/no-code SPA) gets full RLS bypass.
-      Never inline a service_role key; keep it server-side and read it from a secret store/env.
-    patterns:
-      - pattern-either:
-          - pattern: createClient($URL, "$JWT")
-          - pattern: createClient($URL, "$JWT", ...)
-      - metavariable-regex:
-          metavariable: $JWT
-          regex: .*(cm9sZSI6InNlcnZpY2Vfcm9s|JvbGUiOiJzZXJ2aWNlX3JvbG|yb2xlIjoic2VydmljZV9yb2x)
-      - metavariable-regex:
-          metavariable: $JWT
-          regex: ^(?!.*(YmFzZS1kZW|Jhc2UtZGVt|iYXNlLWRlb)).*$
+  # #611 Gap A / #664: a Supabase service_role key HARDCODED as a JWT string literal and passed to
+  # createClient used to be matched here by a base64-alignment SIGNATURE (three regex encodings of
+  # `role":"service_role`). #664 replaced that with an actual TS/AST detector that base64-decodes
+  # the JWT payload and checks the claim exactly (src/scan/service-role-literal.ts, run in
+  # runMechanicalScan) — exact regardless of claim spacing/key order, plus real cross-file
+  # const-propagation (an exported literal imported into the module that calls createClient) and a
+  # decode-based (not signature-based) "supabase-demo" exclusion. Retired here so the two engines
+  # don't double-fire on the same construct; see service-role-literal.ts's header for the full gap
+  # writeup.
 
   # #565: a browser LLM client constructed with dangerouslyAllowBrowser: true — the canonical no-code
   # "the AI key is in the bundle" footgun. The SDK requires this flag to run in a browser precisely
