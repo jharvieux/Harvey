@@ -31,6 +31,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/hosting-headers.ts": "M1",
   "src/scan/counter-race.ts": "M1",
   "src/scan/bola-owner.ts": "M1",
+  "src/scan/pg-idor.ts": "M1",
   "src/scan/job-tenant-scope.ts": "M1",
   "src/scan/secret-rotation.ts": "M1",
   "src/scan/env-schema.ts": "M1",

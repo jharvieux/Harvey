@@ -149,6 +149,13 @@ rules:
           - patterns:
               - pattern: '{ ..., origin: "*", ... }'
               - pattern: "{ ..., credentials: true, ... }"
+          # #663: the `origin: true` variant — the cors lib reflects the REQUEST's Origin header
+          # verbatim (equivalent to a wildcard in effect, since every origin is echoed back), so
+          # paired with credentials it is exactly as dangerous as `origin: "*"`. Same both-keys
+          # gate as the #614 branch above.
+          - patterns:
+              - pattern: "{ ..., origin: true, ... }"
+              - pattern: "{ ..., credentials: true, ... }"
 
   # Service-role key referenced inside a Client Component ("use client"). Gating on the
   # "use client" directive is the high-precision signal: it means the module (and the key) ships
