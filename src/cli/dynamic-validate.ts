@@ -20,11 +20,10 @@ import { join, resolve } from "node:path";
 import { cloneAtPin } from "../scan/corpus-clone.js";
 import {
   assessStandUpAbility,
-  buildProvisioningPlan,
   detectClientSecuritySuite,
   readRepoLayout,
-  readSchemaSql,
-  runDynamicValidation,
+  runMultiProjectDynamicValidation,
+  splitLayoutByProject,
 } from "../dynamic-validate.js";
 import { createLiveStandUp } from "../pentest/live-standup.js";
 
@@ -71,37 +70,47 @@ if (!out) {
   process.exit(2);
 }
 
-const migrationSql = readSchemaSql(layout);
-const plan = buildProvisioningPlan(layout, migrationSql, targetDir);
-console.log(`  seed: two ${plan.seed.dataModel === "user" ? "users" : "tenants"} (${plan.seed.dataModel} model) across ${plan.seed.scopedTables.length} scoped table(s)${plan.tables ? ` (HARVEY_TABLES=${plan.tables})` : ""}`);
-for (const w of plan.seed.warnings) console.log(`  seed-warning: ${w}`);
+// #610 — a monorepo ships >1 Supabase project (apps/*/supabase/migrations). Stand up + probe EACH in
+// turn, each on its own isolated stack (project-id/ports), and roll the per-DB outcomes into one M2
+// deliverable. A single-project target is exactly one project here.
+const projects = splitLayoutByProject(targetDir, layout);
+if (projects.length > 1) {
+  console.log(`  monorepo: ${projects.length} Supabase project(s) — standing up + probing each in turn: ${projects.map((p) => p.label).join(", ")}`);
+}
 
-const clientSuite = detectClientSecuritySuite(targetDir);
-if (clientSuite.present) console.log(`  client suite (bonus): ${clientSuite.detail}`);
-
-// The real autonomous live runner: supabase start → apply client migrations → create two auth
-// users → apply the generic two-tenant seed → run the live PostgREST matrix. --allow-destructive
-// is safe here: every probe hits the disposable local seed inside the stand-up boundary.
-const { runner, workdir, projectId, ports, customAuth, stop } = createLiveStandUp({
-  plan,
-  safeScope: { allowDestructive: true, allowNonLocal: false },
+// The real autonomous live runner: supabase start → apply client migrations → create two auth users
+// → apply the generic two-tenant seed → run the live PostgREST matrix. --allow-destructive is safe
+// here: every probe hits the disposable local seed inside the stand-up boundary. One per project, on
+// its own project-id/ports; the orchestrator tears each stack down before the next binds its ports.
+const result = runMultiProjectDynamicValidation({
+  targetDir,
+  layout,
+  artifactsDir: resolve(out),
+  now: () => new Date().toISOString(),
+  makeProject: (project, plan) => {
+    const tag = projects.length > 1 ? `[${project.label}] ` : "";
+    console.log(`  ${tag}seed: two ${plan.seed.dataModel === "user" ? "users" : "tenants"} (${plan.seed.dataModel} model) across ${plan.seed.scopedTables.length} scoped table(s)${plan.tables ? ` (HARVEY_TABLES=${plan.tables})` : ""}`);
+    for (const w of plan.seed.warnings) console.log(`  ${tag}seed-warning: ${w}`);
+    const clientSuite = detectClientSecuritySuite(project.appDir);
+    if (clientSuite.present) console.log(`  ${tag}client suite (bonus): ${clientSuite.detail}`);
+    const { runner, workdir, projectId, ports, customAuth, stop } = createLiveStandUp({
+      plan,
+      safeScope: { allowDestructive: true, allowNonLocal: false },
+    });
+    console.log(`  ${tag}live stand-up workdir: ${workdir}`);
+    console.log(`  ${tag}isolation: project-id ${projectId} on ports api=${ports.api} db=${ports.db} (#604 — teardown scoped to this project only)`);
+    console.log(`  ${tag}app auth: ${customAuth.reason}`);
+    return { runner, clientSuite, stop };
+  },
 });
-console.log(`  live stand-up workdir: ${workdir}`);
-console.log(`  isolation: project-id ${projectId} on ports api=${ports.api} db=${ports.db} (#604 — teardown scoped to this project only)`);
-console.log(`  app auth: ${customAuth.reason}`);
 
-try {
-  const result = runDynamicValidation({ targetDir, layout, plan, artifactsDir: resolve(out), now: () => new Date().toISOString(), runner, clientSuite });
-  console.log(`\n${result.reason}`);
-  for (const l of result.limitations) console.log(`  limitation: ${l}`);
-  for (const n of result.notes) console.log(`  note: ${n}`);
-  console.log(`  findings: ${result.findings.length}`);
-  if (result.artifactPath) {
-    console.log(`M2 pass artifact → ${result.artifactPath} (run-audit --artifacts-dir ${resolve(out)} now derives M2 ran)`);
-  } else {
-    console.error("no M2 artifact written — the target could not be validated dynamically (see reason above)");
-    process.exitCode = 1;
-  }
-} finally {
-  stop(); // ALWAYS tear the stack down + restore the client seed, even on failure.
+console.log(`\n${result.reason}`);
+for (const l of result.limitations) console.log(`  limitation: ${l}`);
+for (const n of result.notes) console.log(`  note: ${n}`);
+console.log(`  findings: ${result.findings.length}`);
+if (result.artifactPath) {
+  console.log(`M2 pass artifact → ${result.artifactPath} (run-audit --artifacts-dir ${resolve(out)} now derives M2 ran)`);
+} else {
+  console.error("no M2 artifact written — the target could not be validated dynamically (see reason above)");
+  process.exitCode = 1;
 }

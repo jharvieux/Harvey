@@ -18,7 +18,7 @@
 // users, seeds two tenants, and runs the PostgREST matrix with no operator step (#159/#161).
 
 import { type Dirent, existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
 import type { Finding } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
@@ -348,47 +348,51 @@ interface DynamicValidationResult {
   findings: Finding[];
 }
 
-// Orchestrate one target: assess → stand up DB (apply client migrations + seed two tenants) →
-// (run app) → pen-test → (bonus: the client's own suite) → emit M2.pass.json. A step that can't
-// complete returns a reasoned failure and writes NO artifact — a target we couldn't stand up must
-// never read as a clean `ran` (the guard the whole coverage system exists to enforce) — EXCEPT a
-// clean-migration failure, which IS an M2 finding and so DOES emit an artifact carrying it (#514).
-export function runDynamicValidation(opts: {
+// The outcome of probing ONE Supabase project (one stood-up DB). The artifact-writing decision lives
+// in the caller so the same probe body serves the single-project path and the per-DB monorepo loop.
+interface ProbeResult {
+  standUp: boolean;
+  coverage: Coverage;
+  reason: string;
+  limitations: string[];
+  notes: string[];
+  findings: Finding[];
+  producedEvidence: boolean; // stood up + probed, OR a migration-apply M2 finding — warrants an artifact
+  artifactSummary?: string; // the summary to use when this project's evidence is the whole artifact
+}
+
+// Probe one Supabase project: assess → stand up its DB (apply its migrations + seed two tenants) →
+// (run its app) → pen-test → (bonus: the client's own suite). Pure over the injected runner; the
+// caller (single-project or per-DB loop) decides what artifact to write. `appDir` is the project's
+// own app root (== targetDir for a single-project repo; the app dir beside `supabase/` in a monorepo).
+function probeOneProject(opts: {
   targetDir: string;
+  appDir: string;
   layout: RepoLayout;
   plan: ProvisioningPlan;
-  artifactsDir: string;
-  now: () => string; // injected clock (ISO string) so the result is deterministic under test
   runner: StandUpRunner;
-  clientSuite?: ClientSecuritySuite; // detected client suite to try as a bonus signal
-}): DynamicValidationResult {
-  const { targetDir, layout, plan, artifactsDir, now, runner, clientSuite } = opts;
-  const base = { target: targetDir, artifactPath: null, findings: [] as Finding[], notes: [] as string[] };
+  clientSuite?: ClientSecuritySuite;
+}): ProbeResult {
+  const { targetDir, appDir, layout, plan, runner, clientSuite } = opts;
 
   const verdict = assessStandUpAbility(layout);
   if (!verdict.canStandUp) {
-    return { ...base, standUp: false, coverage: "none", reason: `could not stand up ${targetDir}: ${verdict.reason}`, limitations: verdict.limitations };
+    return { standUp: false, coverage: "none", reason: `could not stand up ${targetDir}: ${verdict.reason}`, limitations: verdict.limitations, notes: [], findings: [], producedEvidence: false };
   }
 
-  const db = runner.standUpDb(targetDir, plan);
+  const db = runner.standUpDb(appDir, plan);
   if (!db.ok) {
     if (db.seedApplyFailed) {
       // Harvey's OWN two-tenant seed failed to apply — the client's migrations DID apply, so this is
       // NOT M2-PROVISION-MIGRATE and carries no client finding. Fail loud with the real seed error so
       // M2 reads as requires-live-run for a harness reason, not a false "schema won't provision" (#598).
-      return { ...base, standUp: false, coverage: "none", reason: `Harvey's two-tenant seed failed to apply (a harness/seed issue, not a client migration defect): ${db.output}`, limitations: verdict.limitations };
+      return { standUp: false, coverage: "none", reason: `Harvey's two-tenant seed failed to apply (a harness/seed issue, not a client migration defect): ${db.output}`, limitations: verdict.limitations, notes: [], findings: [], producedEvidence: false };
     }
     if (db.migrationApplyFailed) {
-      const finding = migrationApplyFinding(targetDir, db.output);
-      const artifact = buildPassArtifact({
-        module: "M2", target: targetDir, pass: "dynamic", generatedAt: now(),
-        summary: "client migrations did not apply cleanly to a fresh local stack — recorded as an M2 finding",
-        findings: [finding],
-      });
-      const artifactPath = writePassArtifact(artifactsDir, artifact);
-      return { ...base, standUp: false, coverage: "none", reason: `client migrations failed to apply (recorded as an M2 finding, not skipped): ${db.output}`, limitations: verdict.limitations, artifactPath, findings: [finding] };
+      const finding = migrationApplyFinding(appDir, db.output);
+      return { standUp: false, coverage: "none", reason: `client migrations failed to apply (recorded as an M2 finding, not skipped): ${db.output}`, limitations: verdict.limitations, notes: [], findings: [finding], producedEvidence: true, artifactSummary: "client migrations did not apply cleanly to a fresh local stack — recorded as an M2 finding" };
     }
-    return { ...base, standUp: false, coverage: "none", reason: `stand-up failed for ${targetDir}: ${db.output}`, limitations: verdict.limitations };
+    return { standUp: false, coverage: "none", reason: `stand-up failed for ${targetDir}: ${db.output}`, limitations: verdict.limitations, notes: [], findings: [], producedEvidence: false };
   }
 
   let coverage = verdict.coverage;
@@ -407,16 +411,16 @@ export function runDynamicValidation(opts: {
   }
 
   if (coverage === "full") {
-    const app = runner.runApp(targetDir);
+    const app = runner.runApp(appDir);
     if (!app.ok) {
       coverage = "postgrest-only";
       limitations.push(`the app failed to run (${app.output}) — degraded to PostgREST-only probing`);
     }
   }
 
-  const pt = runner.pentest(targetDir, coverage);
+  const pt = runner.pentest(appDir, coverage);
   if (!pt.ok) {
-    return { ...base, standUp: false, coverage, reason: `pen-test failed against the local stack: ${pt.output}`, limitations, notes };
+    return { standUp: false, coverage, reason: `pen-test failed against the local stack: ${pt.output}`, limitations, notes, findings: [], producedEvidence: false };
   }
 
   const findings = [...pt.findings];
@@ -424,26 +428,151 @@ export function runDynamicValidation(opts: {
   // Bonus signal only (#514: the client's suite is never the mechanism). Counted as evidence ONLY
   // if it proved it exercised the DB; a skipped suite is disclosed, never trusted (#508).
   if (clientSuite?.present && runner.clientSuite) {
-    const res = runner.clientSuite(targetDir, clientSuite);
+    const res = runner.clientSuite(appDir, clientSuite);
     const outcome = interpretClientSuiteRun(res.output);
     if (!outcome.exercised) {
       limitations.push(`client's own security suite (${clientSuite.detail}) was present but did not exercise the DB — ${outcome.reason}; not counted as M2 evidence (Harvey's own pentest.ts is the mechanism)`);
     } else if (!res.ok) {
-      findings.push(clientSuiteFailureFinding(targetDir, res.output));
+      findings.push(clientSuiteFailureFinding(appDir, res.output));
       notes.push(`client's own security suite ran and FAILED — captured as an M2 finding (${outcome.reason})`);
     } else {
       notes.push(`client's own security suite ran and passed against the seeded stack (bonus signal: ${outcome.reason})`);
     }
   }
 
-  const artifact = buildPassArtifact({
-    module: "M2",
-    target: targetDir,
-    pass: "dynamic",
-    generatedAt: now(),
-    summary: `dynamic validation (${coverage} coverage); ${findings.length} finding(s)`,
-    findings,
+  return { standUp: true, coverage, reason: `dynamic validation ran (${coverage})`, limitations, notes, findings, producedEvidence: true };
+}
+
+// Orchestrate one target: assess → stand up DB (apply client migrations + seed two tenants) →
+// (run app) → pen-test → (bonus: the client's own suite) → emit M2.pass.json. A step that can't
+// complete returns a reasoned failure and writes NO artifact — a target we couldn't stand up must
+// never read as a clean `ran` (the guard the whole coverage system exists to enforce) — EXCEPT a
+// clean-migration failure, which IS an M2 finding and so DOES emit an artifact carrying it (#514).
+export function runDynamicValidation(opts: {
+  targetDir: string;
+  layout: RepoLayout;
+  plan: ProvisioningPlan;
+  artifactsDir: string;
+  now: () => string; // injected clock (ISO string) so the result is deterministic under test
+  runner: StandUpRunner;
+  clientSuite?: ClientSecuritySuite; // detected client suite to try as a bonus signal
+}): DynamicValidationResult {
+  const { targetDir, layout, plan, artifactsDir, now, runner, clientSuite } = opts;
+  const r = probeOneProject({ targetDir, appDir: targetDir, layout, plan, runner, clientSuite });
+  let artifactPath: string | null = null;
+  if (r.producedEvidence) {
+    const artifact = buildPassArtifact({
+      module: "M2", target: targetDir, pass: "dynamic", generatedAt: now(),
+      summary: r.artifactSummary ?? `dynamic validation (${r.coverage} coverage); ${r.findings.length} finding(s)`,
+      findings: r.findings,
+    });
+    artifactPath = writePassArtifact(artifactsDir, artifact);
+  }
+  return { target: targetDir, standUp: r.standUp, coverage: r.coverage, reason: r.reason, limitations: r.limitations, notes: r.notes, artifactPath, findings: r.findings };
+}
+
+// ---- monorepo: stand up + probe EVERY Supabase project (#610) ---------------
+
+// A single Supabase project inside a (possibly mono-) repo: its own migrations/schema, its own app
+// dir, and a stable label for the per-DB coverage rows.
+interface ProjectLayout {
+  label: string; // path relative to the repo root, or the repo basename for a single-project target
+  appDir: string; // the app root beside this project's supabase/ dir (the dir we build/boot + probe)
+  layout: RepoLayout; // scoped to THIS project's migrations only — so its seed matches its applied schema
+}
+
+// Split a repo's layout into one entry per Supabase project. A monorepo (>1 migrations dir) yields one
+// project per `apps/*/supabase/migrations`, each scoped to its OWN migrations so the derived seed
+// matches the DB that is actually stood up (the concatenated-seed-vs-single-DB mismatch, #610). A
+// single-project or schema-file target yields exactly one project covering the whole repo.
+export function splitLayoutByProject(targetDir: string, layout: RepoLayout): ProjectLayout[] {
+  if (layout.migrationDirs.length <= 1) {
+    return [{ label: basename(targetDir) || targetDir, appDir: targetDir, layout }];
+  }
+  return layout.migrationDirs.map((dir) => {
+    const appDir = join(dir, "..", ".."); // <app>/supabase/migrations → <app>
+    return {
+      label: relative(targetDir, appDir) || basename(appDir),
+      appDir,
+      layout: { migrationDirs: [dir], schemaFiles: [], scripts: layout.scripts, externalSeamDeps: layout.externalSeamDeps },
+    };
   });
-  const artifactPath = writePassArtifact(artifactsDir, artifact);
-  return { target: targetDir, standUp: true, coverage, reason: `dynamic validation ran (${coverage})`, limitations, notes, artifactPath, findings };
+}
+
+// Prefix a rolled-up finding with its DB label so two projects that emit the same finding id (e.g. each
+// failing to provision → M2-PROVISION-MIGRATE) stay distinct and the location names which DB.
+function tagFindingWithProject(f: Finding, label: string): Finding {
+  const slug = label.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "db";
+  return { ...f, id: `${f.id}-${slug}`, location: `${label}: ${f.location}` };
+}
+
+// Overall coverage across the per-DB rows: full only when EVERY project stood up at full coverage,
+// none when NONE stood up, else the honest middle (postgrest-only) — never rounded up.
+function rollUpCoverage(results: ProbeResult[]): Coverage {
+  if (results.every((r) => !r.standUp)) return "none";
+  if (results.every((r) => r.standUp && r.coverage === "full")) return "full";
+  return "postgrest-only";
+}
+
+// Stand up and probe EVERY Supabase project in a (mono-)repo, one isolated stack at a time, and roll
+// the per-DB outcomes into a single M2 deliverable (#610). Each project gets its own runner + teardown
+// from `makeProject` (the CLI hands back a fresh createLiveStandUp per plan, on its own project-id/
+// ports); a project that can't stand up is recorded as an honest per-DB partial, never dropped, and
+// the others still run. One rolled-up M2.pass.json carries the union of findings so run-audit derives
+// a single `ran` for the whole engagement. For a single-project repo this is exactly one project.
+export function runMultiProjectDynamicValidation(opts: {
+  targetDir: string;
+  layout: RepoLayout;
+  artifactsDir: string;
+  now: () => string;
+  makeProject: (project: ProjectLayout, plan: ProvisioningPlan) => { runner: StandUpRunner; clientSuite?: ClientSecuritySuite; stop: () => void };
+}): DynamicValidationResult {
+  const { targetDir, layout, artifactsDir, now, makeProject } = opts;
+  const projects = splitLayoutByProject(targetDir, layout);
+
+  const results: ProbeResult[] = [];
+  const findings: Finding[] = [];
+  const limitations: string[] = [];
+  const notes: string[] = [];
+
+  for (const project of projects) {
+    const sql = readSchemaSql(project.layout);
+    const plan = buildProvisioningPlan(project.layout, sql, project.appDir);
+    const made = makeProject(project, plan);
+    let r: ProbeResult;
+    try {
+      r = probeOneProject({ targetDir: project.appDir, appDir: project.appDir, layout: project.layout, plan, runner: made.runner, clientSuite: made.clientSuite });
+    } finally {
+      made.stop(); // tear this project's stack down before the next binds its ports
+    }
+    results.push(r);
+    // Only tag/prefix in the multi-project case; a single-project repo keeps its findings verbatim.
+    for (const f of r.findings) findings.push(projects.length > 1 ? tagFindingWithProject(f, project.label) : f);
+    const prefix = projects.length > 1 ? `DB "${project.label}": ` : "";
+    limitations.push(`${prefix}coverage=${r.coverage}${r.standUp ? "" : " (not stood up)"} — ${r.reason}`);
+    for (const l of r.limitations) limitations.push(`${prefix}${l}`);
+    for (const n of r.notes) notes.push(`${prefix}${n}`);
+  }
+
+  const producedEvidence = results.some((r) => r.producedEvidence);
+  const coverage = rollUpCoverage(results);
+  const standUp = results.some((r) => r.standUp);
+
+  let artifactPath: string | null = null;
+  if (producedEvidence) {
+    const perDb = projects.map((p, i) => `${p.label}=${results[i]!.coverage}`).join(", ");
+    const artifact = buildPassArtifact({
+      module: "M2", target: targetDir, pass: "dynamic", generatedAt: now(),
+      summary: projects.length > 1
+        ? `dynamic validation across ${projects.length} Supabase project(s) [${perDb}]; ${findings.length} finding(s)`
+        : `dynamic validation (${coverage} coverage); ${findings.length} finding(s)`,
+      findings,
+    });
+    artifactPath = writePassArtifact(artifactsDir, artifact);
+  }
+
+  const reason = projects.length > 1
+    ? `dynamic validation across ${projects.length} Supabase project(s): ${projects.map((p, i) => `${p.label} (${results[i]!.coverage})`).join(", ")}`
+    : results[0]!.reason;
+  return { target: targetDir, standUp, coverage, reason, limitations, notes, artifactPath, findings };
 }

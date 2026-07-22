@@ -13,7 +13,9 @@ import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { scanBolaOwner } from "./bola-owner.js";
 import { scanCounterRace } from "./counter-race.js";
+import { scanPgIdor } from "./pg-idor.js";
 import { scanSecretRotation } from "./secret-rotation.js";
+import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
@@ -159,6 +161,14 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #433 — authenticated pages/api handler scoping a service-role query by a request-supplied
     // owner id (BOLA). AST dataflow, incl. plain .js.
     findings.push(...scanBolaOwner(scanDir));
+
+    // #663 — Express + pg repo-function IDOR: an authenticated handler passes a client-supplied
+    // id straight into a name-gated read-by-id repo function, no ownership comparison.
+    findings.push(...scanPgIdor(scanDir));
+
+    // #664 — service_role key hardcoded as a JWT literal (same-file or cross-file const) and
+    // passed to createClient. Real base64 decode + role/iss claim check, incl. plain .js.
+    findings.push(...scanServiceRoleLiteral(scanDir));
 
     // #681 — service-role query in a background-job path (Inngest/cron/queue/worker) with no
     // tenant predicate at all. AST dataflow, incl. plain .js.

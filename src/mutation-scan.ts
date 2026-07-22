@@ -436,6 +436,36 @@ export function rootWorkspaceTestModuleRecord(info: RootWorkspaceTestSuite): { s
   };
 }
 
+// #655: closes the #623 measurement gap — rather than only DISCLOSING that the app's suite lives
+// at the workspace root, the CLI now invokes Stryker there. scaffoldStrykerConfig's mutate globs
+// are relative to wherever Stryker's cwd is; a per-app scaffold (cwd = the app) produces app-
+// relative globs like "src/**/*.{...}", but a root-scoped run's cwd is the WORKSPACE ROOT, so those
+// same globs must be re-rooted under the app's path from the root or Stryker would mutate the
+// entire monorepo instead of just this app. The negated exclusion globs (test/spec/d.ts/
+// node_modules) stay as-is — they are not app-specific, and re-rooting them would only narrow what
+// they exclude, not what they scope to.
+export function rootScopedMutateGlobs(appRelFromRoot: string, appGlobs: readonly string[]): string[] {
+  return appGlobs.map((g) => (g.startsWith("!") ? g : `${appRelFromRoot}/${g}`));
+}
+
+// #655: the flip side of rootScopedMutateGlobs — a root-scoped run's report keys files relative to
+// the root cwd it executed from (e.g. "apps/foo/src/x.ts"). Stripping the app's root-relative
+// prefix lets the rest of the pipeline (summarizeMutationReport, verifyMutationScope, the CLI's
+// output shaping) treat the result exactly like an ordinary per-app run's target-relative report,
+// with no separate code path. A key that does NOT carry the prefix is outside the app's scoped
+// mutate globs — Stryker should never produce one since it only mutates matched files, so it is
+// dropped rather than silently mis-attributed to this app, and the caller is told how many/which.
+export function reRootReportToApp(report: StrykerReport, appRelFromRoot: string): { report: StrykerReport; dropped: string[] } {
+  const prefix = `${appRelFromRoot}/`;
+  const files: Record<string, StrykerFileReport> = {};
+  const dropped: string[] = [];
+  for (const [key, val] of Object.entries(report.files)) {
+    if (key.startsWith(prefix)) files[key.slice(prefix.length)] = val;
+    else dropped.push(key);
+  }
+  return { report: { ...report, files }, dropped };
+}
+
 // #503: a target's suite can pass ONLY under a specific process env (ATC: a timezone-sensitive
 // test that needs the process to START with TZ=Pacific/Honolulu — a runtime process.env.TZ
 // reassignment does not re-init Node's timezone). Stryker's initial dry run then fails under the

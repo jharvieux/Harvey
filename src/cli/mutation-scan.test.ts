@@ -270,3 +270,94 @@ describe("mutation-scan monorepo root-workspace suite (#623, child process)", ()
     expect(parsed.finding.id).toBe("M8-00");
   });
 });
+
+// #655: closes the #623 measurement gap — WITHOUT --detect-only, the CLI must actually ATTEMPT a
+// root-scoped Stryker run instead of jumping straight to the gap disclosure. Neither fixture below
+// has a Stryker install anywhere (this suite runs with no stryker on PATH, like #470's), so both
+// exercise a distinct degrade rung of that attempt — proving it is really invoked, not skipped —
+// while a live Stryker run itself stays out of scope for a unit/CLI test (see #655's task note).
+describe("mutation-scan monorepo root-scoped run attempt (#655, child process)", () => {
+  function runCliOn(target: string, extraArgs: string[]): { status: number; out: string } {
+    const outPath = join(target, "m8-out.json");
+    try {
+      execFileSync("node_modules/.bin/tsx", [CLI, target, ...extraArgs, "--out", outPath], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
+      });
+      return { status: 0, out: readFileSync(outPath, "utf8") };
+    } catch (err) {
+      const e = err as { status?: number };
+      return { status: e.status ?? 1, out: "" };
+    }
+  }
+
+  it("degrades naming 'no recognized source directory' when the app has none of the scaffold's known dirs to scope to", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-monorepo-nosrc-"));
+    dirs.push(root);
+    mkdirSync(join(root, ".git"), { recursive: true });
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "root", private: true, workspaces: ["apps/*"], scripts: { "test:cross-tenant": "vitest run" }, devDependencies: { vitest: "^3.0.0" } }),
+    );
+    writeFileSync(join(root, "vitest.workspace.ts"), `export default ["apps/*"];\n`);
+    const app = join(root, "apps", "main");
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(app, "package.json"), JSON.stringify({ name: "@app/main", dependencies: {} }));
+    writeFileSync(join(app, "index.ts"), `export const main = () => 1;\n`); // no src/lib/app/etc dir to scope to
+
+    const { status, out } = runCliOn(app, []); // no --detect-only: the attempt must fire
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
+    expect(parsed.finding.id).toBe("M8-04");
+    expect(parsed.moduleRecord.status).toBe("partial");
+    expect(parsed.moduleRecord.note).toMatch(/Attempted a root-scoped run \(#655\)/);
+    expect(parsed.moduleRecord.note).toMatch(/no recognized source directory/);
+  });
+
+  it("degrades naming the missing Stryker packages + --install when the app HAS a scopable source dir", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-monorepo-withsrc-"));
+    dirs.push(root);
+    mkdirSync(join(root, ".git"), { recursive: true });
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "root", private: true, workspaces: ["apps/*"], scripts: { "test:cross-tenant": "vitest run" }, devDependencies: { vitest: "^3.0.0" } }),
+    );
+    writeFileSync(join(root, "vitest.workspace.ts"), `export default ["apps/*"];\n`);
+    const app = join(root, "apps", "main");
+    mkdirSync(join(app, "src"), { recursive: true });
+    writeFileSync(join(app, "package.json"), JSON.stringify({ name: "@app/main", dependencies: {} }));
+    writeFileSync(join(app, "src", "index.ts"), `export const main = () => 1;\n`);
+
+    const { status, out } = runCliOn(app, []); // no --detect-only, no --install
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
+    expect(parsed.finding.id).toBe("M8-04");
+    expect(parsed.moduleRecord.note).toMatch(/Attempted a root-scoped run \(#655\)/);
+    expect(parsed.moduleRecord.note).toMatch(/no Stryker install there/);
+    expect(parsed.moduleRecord.note).toMatch(/@stryker-mutator\/core/);
+    expect(parsed.moduleRecord.note).toMatch(/--install/);
+  });
+
+  it("--detect-only takes precedence over #655 — never attempts the root-scoped run, unchanged #623 disclosure", () => {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-monorepo-detectonly-"));
+    dirs.push(root);
+    mkdirSync(join(root, ".git"), { recursive: true });
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "root", private: true, workspaces: ["apps/*"], scripts: { "test:cross-tenant": "vitest run" }, devDependencies: { vitest: "^3.0.0" } }),
+    );
+    writeFileSync(join(root, "vitest.workspace.ts"), `export default ["apps/*"];\n`);
+    const app = join(root, "apps", "main");
+    mkdirSync(join(app, "src"), { recursive: true });
+    writeFileSync(join(app, "package.json"), JSON.stringify({ name: "@app/main", dependencies: {} }));
+    writeFileSync(join(app, "src", "index.ts"), `export const main = () => 1;\n`);
+
+    const { status, out } = runCliOn(app, ["--detect-only"]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
+    expect(parsed.finding.id).toBe("M8-04");
+    expect(parsed.moduleRecord.note).not.toMatch(/Attempted a root-scoped run/);
+  });
+});
