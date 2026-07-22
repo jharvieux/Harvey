@@ -14,6 +14,7 @@ import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { scanBolaOwner } from "./bola-owner.js";
 import { scanCounterRace } from "./counter-race.js";
 import { scanPgIdor } from "./pg-idor.js";
+import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
@@ -165,6 +166,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #663 — Express + pg repo-function IDOR: an authenticated handler passes a client-supplied
     // id straight into a name-gated read-by-id repo function, no ownership comparison.
     findings.push(...scanPgIdor(scanDir));
+
+    // #701 (#663 remainder) — Express + pg excessive data exposure: res.json(...) names a
+    // curated sensitive field directly, spreads a same-function object that does, or hands
+    // back a same-function "SELECT *" row untouched.
+    findings.push(...scanPgResponseExposure(scanDir));
 
     // #664 — service_role key hardcoded as a JWT literal (same-file or cross-file const) and
     // passed to createClient. Real base64 decode + role/iss claim check, incl. plain .js.
