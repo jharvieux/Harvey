@@ -1514,56 +1514,13 @@ function detectStoragePublicUrl(sf: ts.SourceFile, path: string, nextId: NextId)
   return findings;
 }
 
-// --- 32. Hand-rolled SPA route guard (#628, dep-gated on react-router) ------------
-// The ProtectedRoute/RequireAuth idiom: a component that conditionally redirects with
-// react-router's <Navigate> and otherwise renders the route's children (`children` / <Outlet/>).
-// A redirect-only component (a <Navigate> with no children) and a plain layout (<Outlet/> with no
-// redirect) each stay silent — only the fork that gates children behind a redirect is the shape.
-// Dep-gated on react-router: with none in the tree a same-named local <Navigate> is not this idiom
-// and the gate stays shut.
-
-const ROUTER_GUARD_DEPS = ["react-router", "react-router-dom"];
-
-function jsxTagNameIs(node: ts.Node, name: string): boolean {
-  const tag = ts.isJsxSelfClosingElement(node)
-    ? node.tagName
-    : ts.isJsxElement(node)
-      ? node.openingElement.tagName
-      : undefined;
-  return tag !== undefined && ts.isIdentifier(tag) && tag.text === name;
-}
-
-function enclosingFunctionLike(node: ts.Node): ts.Node | undefined {
-  let cur: ts.Node | undefined = node.parent;
-  while (cur) {
-    if (ts.isArrowFunction(cur) || ts.isFunctionDeclaration(cur) || ts.isFunctionExpression(cur)) return cur;
-    cur = cur.parent;
-  }
-  return undefined;
-}
-
-function detectRouteGuard(sf: ts.SourceFile, path: string, nextId: NextId, gateOpen: boolean): Finding[] {
-  if (!gateOpen) return [];
-  const findings: Finding[] = [];
-  const flagged = new Set<ts.Node>();
-  const visit = (node: ts.Node) => {
-    if (jsxTagNameIs(node, "Navigate")) {
-      const fn = enclosingFunctionLike(node);
-      if (fn && !flagged.has(fn) && (subtreeHasIdentifier(fn, "children") || subtreeHas(fn, (n) => jsxTagNameIs(n, "Outlet")))) {
-        flagged.add(fn);
-        const f = makeIndicator(nextId, sf, path, fn, {
-          title: "Looks hand-rolled: SPA route guard — may be worth investigating",
-          taxonomy: "M6 — Indicator: hand-rolled route guard",
-          evidence: `a component that conditionally redirects with a Navigate element and otherwise renders the route's children — a by-hand auth route-guard fork (framework and auth-library route guards already handle the redirect and return-path edges).`,
-        });
-        if (f) findings.push(f);
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sf);
-  return findings;
-}
+// Catalogue item "hand-rolled SPA route guard" (#628 follow-up, #638): attempted and RETIRED, not
+// shipped as an indicator. #654 briefly shipped a ProtectedRoute/RequireAuth detector (a component
+// conditionally redirecting with <Navigate> and otherwise rendering children/<Outlet>), but #638's
+// analysis found that shape has no framework/stdlib primitive it reinvents — react-router ships no
+// built-in guard component, so composing one from <Navigate>/<Outlet> is exactly the idiomatic,
+// documented way to gate a route, not a hand-rolled reinvention. Flagging it would false-fire on
+// ordinary idiomatic react-router use. Recorded EXCLUDED in docs/design/m6-handrolled-catalogue.md.
 
 // --- 31. Clipboard copy via deprecated execCommand (catalogue 95) ----------------
 // document.execCommand("copy"|"cut") — the deprecated clipboard path (needs a hidden element and
@@ -1611,7 +1568,6 @@ export function detectHandrolledFindings(files: SourceInput[]): Finding[] {
   const emailRegexGateOpen = depGatePresent(files, EMAIL_SCHEMA_DEPS);
   const pathGetGateOpen = depGatePresent(files, PATH_GET_DEPS);
   const envSchemaGateOpen = depGatePresent(files, ENV_SCHEMA_DEPS);
-  const routerGuardGateOpen = depGatePresent(files, ROUTER_GUARD_DEPS);
   const findings: Finding[] = [];
   for (const f of files) {
     if (!/\.(ts|tsx|jsx|mjs)$/.test(f.path)) continue;
@@ -1651,7 +1607,6 @@ export function detectHandrolledFindings(files: SourceInput[]): Finding[] {
       ...detectViteEnvCoercion(sf, f.path, nextId, envSchemaGateOpen),
       ...detectStoragePublicUrl(sf, f.path, nextId),
       ...detectClipboardExecCommand(sf, f.path, nextId),
-      ...detectRouteGuard(sf, f.path, nextId, routerGuardGateOpen),
     );
   }
   return findings;

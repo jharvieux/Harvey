@@ -316,21 +316,24 @@ unwound.
      `MODE` check against a non-boolean literal, and the built-in `PROD` boolean all stay silent —
      locked by the `vite-env/negative-with-dep` fixture, which mirrors the bare reads in
      `targets/calibration/src/lib/*`.
-   - **Hand-rolled SPA route guards — SHIPPED (#654), real-target precision still UNVALIDATED (#638
-     stays open).** `M6 — Indicator: hand-rolled route guard` (`detectRouteGuard`,
-     `src/detectors/handrolled.ts` detector 32), dep-gated on react-router (`ROUTER_GUARD_DEPS =
-     ["react-router", "react-router-dom"]`). #628's analysis warned this shape has no crisp syntactic
-     signature separating a reinvention (`RequireAuth`/`ProtectedRoute`, a `useEffect` calling
-     `navigate('/login')`) from the idiomatic `<Navigate>`/`useNavigate` redirect, so the live
-     precision question is whether it **false-fires on idiomatic react-router guards**. That question
-     is still UNVALIDATED against a real target. The 2026-07-19 AoP run could NOT answer it: AoP (an
-     operator-owned real Vite SPA) has **no react-router dependency at all**, so the dep-gate was
-     CLOSED and the detector was inert — AoP navigates via a `useState<Screen>('title')` +
-     `setScreen(...)` screen state machine (`apps/web/src/App.tsx`), giving the react-router-gated
-     detector no surface to fire on. Real-target precision therefore still needs a Vite/SPA target
-     that actually uses react-router guards; #638 remains open pending such a target. (Correction:
-     #654 shipped this detector, but this bullet had drifted to "Not shipped / deferred" — the
-     catalogue lagged the code; fixed here.)
+   - **Hand-rolled SPA route guards — EXCLUDED (#638, retired 2026-07-21).** #654 briefly shipped
+     `M6 — Indicator: hand-rolled route guard` (`detectRouteGuard`), dep-gated on react-router,
+     firing on a `ProtectedRoute`/`RequireAuth`-shaped component that conditionally redirects with
+     `<Navigate>` and otherwise renders `children`/`<Outlet>`. #638 was opened to validate whether
+     that shape false-fires on **idiomatic** react-router use, per #628's original warning. The
+     2026-07-19 AoP run could not settle it (AoP has no react-router dependency, so the dep-gate
+     never opened) — but the question does not need an external target to answer: react-router
+     ships no built-in guard component at all; composing one out of `<Navigate>` (redirect) and
+     `children`/`<Outlet>` (pass-through) is the library's own documented pattern for gating a route
+     on auth state, not a reinvention of anything react-router provides. There is no standard
+     replacement to name — the "hand-rolled" form *is* the idiomatic form, the same test this
+     catalogue already applies to entries like 46 (JSON fetch wrapper) and 56 (basic-auth encode).
+     The detector's own shipped positive fixture is, line for line, the textbook idiomatic guard —
+     which is itself the proof that the indicator was flagging correct code. Retired: `detectRouteGuard`,
+     `ROUTER_GUARD_DEPS`, and its fixtures/tests removed from `src/detectors/handrolled.ts` /
+     `handrolled.test.ts`; the file now carries a short header note recording the retirement in place
+     of the detector. (Corrects the prior revision of this bullet, which read "SHIPPED … still
+     UNVALIDATED" — that was the state before this resolution, not after.)
 4. **The boundary checks** — SETTLED 2026-07-16 (#406): 74 → BOUNDARY → M7 (`detectUnboundedSelect`
    fires on the fetch-all variant, probed); 18/47/65/67/72/102 verified non-overlapping — each
    stays MAYBE with the evidence and the remaining blocker recorded in its reason cell. One
@@ -356,12 +359,12 @@ Framework detection resolved correctly: repo root `other` (configs live under `a
 `vite`, `viteWorkspaces` = `["apps/web"]`, so M9's SSR/App-Router family was suppressed per-workspace
 and emitted one `M9 — Not applicable (non-Next SPA)` note with zero SSR false-fires.
 
-- **Hand-rolled route guard (#654, `detectRouteGuard`) — INCONCLUSIVE (dep-gate closed, detector
-  inert).** The detector IS shipped and dep-gated on react-router; AoP has no react-router, so the
-  gate was CLOSED and it never ran. AoP is therefore NOT a valid test target for this detector's
-  precision — it neither confirms nor refutes the idiomatic-`<Navigate>`/`useNavigate` false-fire
-  question #638 raises. That question stays open (see Follow-up item 3); it needs a Vite/SPA target
-  that actually uses react-router guards.
+- **Hand-rolled route guard (#654, `detectRouteGuard`) — INCONCLUSIVE here (dep-gate closed,
+  detector inert); since RETIRED (#638, see Follow-up item 3).** AoP has no react-router, so the
+  dep-gate was CLOSED on this run and the detector never fired — AoP was not a valid target for its
+  precision question. That question was subsequently settled without needing a real target: the
+  shape the detector flagged is react-router's own documented composition idiom, not a reinvention,
+  so the detector was retired rather than kept pending an external validation target.
 - **SPA-root error boundary (#627, `detectSpaRootErrorBoundary`) — correctly SILENT (true
   negative).** AoP mounts `<ErrorBoundary>…<App/>…</ErrorBoundary>` at the SPA root in
   `apps/web/src/main.tsx`, so the absence detector correctly did not fire. Verified by reading the
