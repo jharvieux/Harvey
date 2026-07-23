@@ -2,7 +2,27 @@
 // supply-chain, leftover-auth, supabase-*). Keeps Finding construction consistent so
 // every module fills the schema's required fields the same way.
 
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import type { SourceInput } from "../detectors/common.js";
 import type { Finding, PrecisionTier, Severity } from "../findings.js";
+
+const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
+const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
+
+// Recursive file-tree walk shared by the detectors that scan their own tree rather than the
+// shared loadSources() pass (pages/api and job paths are commonly plain .js, which
+// loadSources() excludes). Was copy-pasted verbatim across bola-owner.ts, job-tenant-scope.ts,
+// and leftover-auth.ts — extracted here so a fix/hardening lands once, not three times (#766).
+export function walkSourceFiles(dir: string, root: string = dir, out: SourceInput[] = []): SourceInput[] {
+  for (const entry of readdirSync(dir)) {
+    if (SKIP_DIRS.has(entry)) continue;
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) walkSourceFiles(full, root, out);
+    else if (SOURCE_EXT.test(entry)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
+  }
+  return out;
+}
 
 // A mechanical pass has no human triage step, so BFTB inputs (value/ease/safety) can't be
 // judged per-finding yet — these are conservative per-severity defaults, overridable by

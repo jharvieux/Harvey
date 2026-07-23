@@ -13,13 +13,11 @@
 // (`// d091-allow:service-role-tenant`, mirroring the target's D-091 allow convention) suppresses
 // a site whose tenancy is enforced elsewhere.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { callChainNames, loc, parse, type SourceInput } from "../detectors/common.js";
 import { collectServiceClientNames, isServiceRooted, OWNERSHIP_COLUMN } from "../detectors/owner-id.js";
-import { mechanicalFinding } from "./common.js";
+import { mechanicalFinding, walkSourceFiles } from "./common.js";
 
 // Background-job paths, by conventional location. `src/inngest`, `src/jobs`, and the bare
 // `inngest`/`jobs`/`queues`/`workers` segments cover the common Inngest/queue/worker layouts;
@@ -32,7 +30,6 @@ const JOB_PATH = /(^|\/)(inngest|jobs|queues|workers)\/|(^|\/)app\/api\/cron\//;
 const ALLOW_ANNOTATION = "d091-allow:service-role-tenant";
 
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
-const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
 
 // The read/write verbs whose absence of a tenant predicate is a cross-tenant exposure. `.insert`
 // is excluded: an insert names the tenant in its payload, it does not select WHOSE rows come back.
@@ -142,17 +139,6 @@ export function detectJobTenantScopeFindings(files: SourceInput[]): Finding[] {
   return files.filter((f) => JOB_PATH.test(f.path) && SOURCE_EXT.test(f.path)).flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
 }
 
-function walk(dir: string, root: string, out: SourceInput[]): void {
-  for (const entry of readdirSync(dir)) {
-    if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, root, out);
-    else if (SOURCE_EXT.test(entry)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
-  }
-}
-
 export function scanJobTenantScope(projectDir: string): Finding[] {
-  const files: SourceInput[] = [];
-  walk(projectDir, projectDir, files);
-  return detectJobTenantScopeFindings(files);
+  return detectJobTenantScopeFindings(walkSourceFiles(projectDir));
 }
