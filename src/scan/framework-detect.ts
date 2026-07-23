@@ -21,7 +21,7 @@ export type TargetFramework = "next" | "vite" | "other";
 // surface to analyze on a Prisma/Postgres app (all tenant isolation is app-layer, where the
 // ORM-agnostic pg-idor/bola-owner/etc. detectors already run), so it records that tier N/A by
 // architecture instead of letting the absence of RLS pass as an implicit gap.
-type TargetOrm = "prisma" | "supabase" | "unknown";
+export type TargetOrm = "prisma" | "supabase" | "unknown";
 
 const NEXT_CONFIGS = ["next.config.js", "next.config.mjs", "next.config.cjs", "next.config.ts"];
 const VITE_CONFIGS = ["vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cjs"];

@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildCoverageMatrix, CORPUS, mechanicalCorpus, moduleCensus, scoreEntry, type CorpusEntry } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
@@ -14,6 +15,9 @@ import { b15NextjsAuthzEntries } from "./calibration/b15-nextjs-authz.entries.js
 import { b17RaceUnscopedEntries } from "./calibration/b17-race-unscoped.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { m9AuthzEntries } from "./calibration/m9-authz.entries.js";
+import { m9CheckEntries } from "./calibration/m9-checks.entries.js";
+import type { TargetFramework } from "./framework-detect.js";
+import type { SourceInput } from "../detectors/app-router.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { scanBolaOwner } from "./bola-owner.js";
@@ -874,6 +878,72 @@ describe("#221 authz corpus (live detectAppRouterFindings output over the commit
     expect(m.positivesCaughtHigh).toBe(0);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
+  });
+});
+
+describe("#848 M9 per-check corpus (live detectAppRouterFindings over the committed __fixtures__)", () => {
+  // Each of the nine non-owner-id M9 checks bound to its detector's own committed fixtures. Fixtures
+  // are loaded from src/detectors/__fixtures__/<dir>/<kind> and path-prefixed to the entry's
+  // globally-unique `m9-corpus/<check>/<kind>` location, then scored with the SAME scoreEntry the
+  // rest of the corpus uses — so the answer key can't drift from what the scanner emits, and no
+  // file lands in the scanned calibration target.
+  const FIXTURES_ROOT = fileURLToPath(new URL("../detectors/__fixtures__/", import.meta.url));
+  function loadPrefixed(dir: string, prefix: string): SourceInput[] {
+    const root = join(FIXTURES_ROOT, dir);
+    const files: SourceInput[] = [];
+    const walk = (d: string) => {
+      for (const e of readdirSync(d)) {
+        const full = join(d, e);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (e.endsWith(".txt")) files.push({ path: `${prefix}/${relative(root, full).replace(/\.txt$/, "").split(sep).join("/")}`, text: readFileSync(full, "utf8") });
+      }
+    };
+    walk(root);
+    return files;
+  }
+
+  const CHECKS: { check: string; dir: string; neg: string; framework?: TargetFramework }[] = [
+    { check: "leak", dir: "server-client-leak", neg: "negative" },
+    { check: "serveronly", dir: "missing-server-only", neg: "negative" },
+    { check: "action-auth", dir: "server-action-auth", neg: "negative" },
+    { check: "action-validation", dir: "server-action-validation", neg: "negative" },
+    { check: "cache", dir: "cache-config", neg: "negative" },
+    { check: "waterfall", dir: "waterfall", neg: "negative" },
+    { check: "dynamic", dir: "dynamic-rendering", neg: "negative" },
+    { check: "ssr", dir: "ssr-browser-api", neg: "negative-typeof" },
+    { check: "spa", dir: "spa-error-boundary", neg: "negative-has-boundary", framework: "vite" },
+  ];
+
+  it("catches each check's planted positive at review tier and clears its boundary negative", () => {
+    // Every M9 check the corpus names must have exactly one pos + one neg entry backing it.
+    expect(m9CheckEntries.filter((e) => e.kind === "positive")).toHaveLength(CHECKS.length);
+    expect(m9CheckEntries.filter((e) => e.kind === "negative")).toHaveLength(CHECKS.length);
+
+    for (const { check, dir, neg, framework } of CHECKS) {
+      const posEntry = m9CheckEntries.find((e) => e.location === `m9-corpus/${check}/positive`);
+      const negEntry = m9CheckEntries.find((e) => e.location === `m9-corpus/${check}/negative`);
+      expect(posEntry, `${check} positive entry`).toBeDefined();
+      expect(negEntry, `${check} negative entry`).toBeDefined();
+
+      const posFindings = detectAppRouterFindings(loadPrefixed(`${dir}/positive`, `m9-corpus/${check}/positive`), framework);
+      const posRow = scoreEntry(posEntry!, posFindings);
+      expect(posRow.pass, `${posEntry!.id}: ${posRow.detail}`).toBe(true);
+      expect(posRow.caughtTier, posEntry!.id).toBe("review");
+
+      const negFindings = detectAppRouterFindings(loadPrefixed(`${dir}/${neg}`, `m9-corpus/${check}/negative`), framework);
+      const negRow = scoreEntry(negEntry!, negFindings);
+      expect(negRow.pass, `${negEntry!.id}: ${negRow.detail}`).toBe(true);
+      expect(negRow.highFlagged, `${negEntry!.id} must not be a free-count FP`).toBe(false);
+    }
+  });
+
+  it("keeps the whole M9-check class out of the free count (review tier only)", () => {
+    // No M9 heuristic may inflate the security free count — every positive is review, not high.
+    for (const { check, dir, framework } of CHECKS) {
+      const findings = detectAppRouterFindings(loadPrefixed(`${dir}/positive`, `m9-corpus/${check}/positive`), framework);
+      const m = buildCoverageMatrix(findings, m9CheckEntries.filter((e) => e.location === `m9-corpus/${check}/positive`));
+      expect(m.positivesCaughtHigh, check).toBe(0);
+    }
   });
 });
 

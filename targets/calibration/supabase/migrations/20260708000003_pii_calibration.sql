@@ -25,6 +25,16 @@ create table public.pii_calibration_fixture (
   national_id text,               -- M10-P-NATIONAL-ID -> NATIONAL_ID / SENSITIVE_PII / medium (review tier)
   -- M10-P-* planted positive (#377 denormalized-PII JSON container review flag)
   profile jsonb,                  -- M10-P-JSON-BLOB  -> OPAQUE_JSON_BLOB / PII / low (review flag, not asserted)
+  -- M10-P-* planted positive (#850 free-text column review flag)
+  case_notes text,                -- M10-P-FREE-TEXT  -> FREE_TEXT_REVIEW / PII / low (review flag, not asserted)
+  -- M10-P-* planted positive (#856a blood_type PHI — carved out of the _type descriptor exclusion)
+  blood_type text,                -- M10-P-BLOOD-TYPE -> BLOOD_TYPE / PHI / high
+  -- M10-P-* planted positives (#856b new dictionary concepts)
+  salary numeric,                 -- M10-P-SALARY     -> COMPENSATION / SENSITIVE_PII / medium (review tier)
+  age integer,                    -- M10-P-AGE        -> AGE / PII / low (review tier — HIPAA quasi-identifier)
+  mothers_maiden_name text,       -- M10-P-MAIDEN     -> MAIDEN_NAME / SENSITIVE_PII / high
+  security_question text,         -- M10-P-SECURITY-QA -> SECURITY_QA / SENSITIVE_PII / high
+  orientation text,               -- M10-P-ORIENTATION -> SPECIAL_CATEGORY / SENSITIVE_PII / medium (review tier)
   -- M10-N-* benign lookalikes (the classifier's own exclusion pass must clear these)
   email_category text,            -- M10-N-EMAIL-CAT     -> descriptor suffix, not the value
   awaiting_dob_reprompt boolean,  -- M10-N-DOB-FLAG      -> boolean flag, not a DOB value
@@ -33,6 +43,9 @@ create table public.pii_calibration_fixture (
   is_pinned boolean,              -- M10-N-PINNED-FLAG   -> UI pinned flag, not a payment-card PIN (#376)
   has_photo boolean,              -- M10-N-HAS-PHOTO     -> boolean photo flag, not an image column (#378)
   ui_state jsonb,                 -- M10-N-UI-STATE      -> jsonb outside the container vocabulary (#377)
+  health_score integer,           -- M10-N-HEALTH-SCORE  -> technical suffix on `health`, not medical data (#856)
+  race_id uuid,                   -- M10-N-RACE-ID       -> FK-shaped `_id`, not race/ethnicity (#856)
+  screen_orientation text,        -- M10-N-SCREEN-ORIENT -> UI display orientation, not sexual orientation (#856)
   created_at timestamptz not null default now()
 );
 
