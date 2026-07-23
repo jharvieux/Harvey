@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
-import type { AttachedRef, CreatedRef, ItemInput, Tracker } from "./types.js";
+import { TrackerError } from "./http.js";
+import { makePacer } from "./rate-limit.js";
+import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "./types.js";
 import { fileFindings, filingEligibility, findingMarker, findingToTicket, planTickets, ticketLabels } from "./findings-to-tickets.js";
 
 function finding(over: Partial<Finding> = {}): Finding {
@@ -37,7 +39,9 @@ function fakeTracker(existingMarkers: Record<string, CreatedRef> = {}) {
       calls.push({ op: "findByMarker", arg: marker });
       return existingMarkers[marker] ?? null;
     },
-    async updateStory(): Promise<void> {},
+    async updateStory(id: string, patch: UpdateStoryPatch): Promise<void> {
+      calls.push({ op: "updateStory", arg: { id, patch } });
+    },
   };
   return { tracker, calls };
 }
@@ -109,7 +113,7 @@ describe("#824 paid-tier / content gate", () => {
     expect(plan.tickets).toHaveLength(0);
     expect(plan.epics).toHaveLength(0);
     expect(plan.excluded).toHaveLength(2);
-    expect(plan.excluded[0].reason).toContain("paid-tier add-on");
+    expect(plan.excluded[0]?.reason).toContain("paid-tier add-on");
   });
 
   it("on a paid run, drops Info-severity and Review-confidence indicators but keeps actionable findings", () => {
@@ -166,6 +170,52 @@ describe("fileFindings dispatch + dedup", () => {
     expect(res.created).toHaveLength(0);
     expect(res.skipped).toEqual([{ marker, ref: { id: "S-99", url: "https://tracker/99" } }]);
     expect(calls.some((c) => c.op === "createEpic" || c.op === "createStory")).toBe(false);
+  });
+
+  it("#747 --update patches an already-filed ticket instead of skipping it", async () => {
+    const f = finding();
+    const marker = findingMarker(f);
+    const { tracker, calls } = fakeTracker({ [marker]: { id: "S-99", url: "https://tracker/99" } });
+
+    const res = await fileFindings(tracker, [f], { grouping: "flat", paid: true, update: true });
+
+    expect(res.skipped).toHaveLength(0);
+    expect(res.updated).toEqual([{ marker, ref: { id: "S-99", url: "https://tracker/99" } }]);
+    const upd = calls.find((c) => c.op === "updateStory");
+    expect((upd?.arg as { id: string }).id).toBe("S-99");
+  });
+
+  it("#747 backs off on a 429 during filing without creating a duplicate", async () => {
+    const clock = { t: 0 };
+    const pacer = makePacer({ baseBackoffMs: 1, now: () => clock.t, sleep: async (ms: number) => void (clock.t += ms) });
+    let attempts = 0;
+    const created: string[] = [];
+    const tracker: Tracker = {
+      async createEpic(input: ItemInput): Promise<CreatedRef> {
+        attempts++;
+        if (attempts === 1) throw new TrackerError("POST", "u", 429, "secondary rate limit");
+        created.push(input.title);
+        return { id: "E-1", url: "u" };
+      },
+      async createStory(): Promise<CreatedRef> {
+        return { id: "S-1", url: "u" };
+      },
+      async setLabels(): Promise<void> {},
+      async setEstimate(): Promise<void> {},
+      async attachBrief(): Promise<AttachedRef> {
+        return { url: "x" };
+      },
+      async findByMarker(): Promise<CreatedRef | null> {
+        return null;
+      },
+      async updateStory(): Promise<void> {},
+    };
+
+    const res = await fileFindings(tracker, [finding()], { grouping: "flat", paid: true, pacer });
+
+    expect(attempts).toBe(2); // retried the 429 once
+    expect(created).toEqual(["[Critical] Missing RLS on orders"]); // created exactly once — no duplicate
+    expect(res.created).toHaveLength(1);
   });
 
   it("flat mode files each finding as a standalone issue with its labels", async () => {

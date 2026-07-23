@@ -12,7 +12,7 @@
 import { execFileSync } from "node:child_process";
 import type { SuggestedFix } from "../findings.js";
 
-export interface VerifyResult {
+interface VerifyResult {
   verified: boolean;
   detail: string;
 }
@@ -20,14 +20,14 @@ export interface VerifyResult {
 // A command run (exit 0 = pass) after the diff is applied, to confirm the fix achieves its stated
 // effect. The cleanest case is M8: a diff that adds a mutant-killing test, whose effect command runs
 // that test and confirms it passes against the fixed code. Absent ⇒ apply-clean is the only gate.
-export interface VerifyOptions {
+interface VerifyOptions {
   targetDir: string; // a disposable checkout of the target the diff is written against
   effectCommand?: string[]; // e.g. ["node", "-e", "..."] or ["pnpm", "vitest", "run", "kill-mutant.test.ts"]
   run?: Runner; // injectable for tests; defaults to a child-process runner
 }
 
 type CmdResult = { ok: boolean; output: string };
-export type Runner = (file: string, args: string[], input: string | undefined, cwd: string) => CmdResult;
+type Runner = (file: string, args: string[], input: string | undefined, cwd: string) => CmdResult;
 
 const defaultRunner: Runner = (file, args, input, cwd) => {
   try {
@@ -55,7 +55,7 @@ export function verifySuggestedFix(diff: string, opts: VerifyOptions): VerifyRes
   const applied = git(["apply", "-"]);
   if (!applied.ok) return { verified: false, detail: `apply failed: ${applied.output.trim()}` };
   try {
-    const [file, ...args] = opts.effectCommand;
+    const [file = "", ...args] = opts.effectCommand; // guaranteed non-empty by the guard above
     const effect = run(file, args, undefined, opts.targetDir);
     const cmd = opts.effectCommand.join(" ");
     return effect.ok

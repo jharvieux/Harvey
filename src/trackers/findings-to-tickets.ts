@@ -23,6 +23,7 @@ import { createHash } from "node:crypto";
 import type { Confidence, Finding, Severity } from "../findings.js";
 import { findingIdentity } from "../audit-diff.js";
 import { renderFixSection } from "./fix-diff.js";
+import { makePacer, type Pacer } from "./rate-limit.js";
 import type { CreatedRef, ItemInput, Tracker } from "./types.js";
 
 export type Grouping = "flat" | "grouped";
@@ -37,6 +38,13 @@ export interface FileOptions {
   // closed: unless the caller asserts a paid engagement, nothing is filed at all, so a misconfigured
   // free run can never dump indicators into a client's tracker.
   paid?: boolean;
+  // #747: when a finding was already filed by a prior run, UPDATE its ticket body/labels instead of
+  // skipping it. Default false (the safe re-audit default — never clobber a client's edits/comments
+  // unless the operator opts in).
+  update?: boolean;
+  // #747: rate-limiter for the bulk write. Default paces nothing but backs off on a 429; a caller can
+  // pass a configured pacer (spacing/interval) for a large audit against a strict tracker quota.
+  pacer?: Pacer;
 }
 
 // #824: filing eligibility. Free-tier output is Info-severity / Review-confidence *indicators* (M6
@@ -49,7 +57,7 @@ export interface FileOptions {
 const NON_FILEABLE_SEVERITIES: readonly Severity[] = ["Info", "Watch"];
 const NON_FILEABLE_CONFIDENCES: readonly Confidence[] = ["Review", "N/A"];
 
-export interface Exclusion {
+interface Exclusion {
   finding: Finding;
   reason: string;
 }
@@ -102,7 +110,8 @@ interface TicketPlan {
 
 interface FileResult {
   created: { marker: string; ref: CreatedRef }[];
-  skipped: { marker: string; ref: CreatedRef }[]; // already filed by a prior run
+  skipped: { marker: string; ref: CreatedRef }[]; // already filed by a prior run (default re-audit behavior)
+  updated: { marker: string; ref: CreatedRef }[]; // #747: already-filed tickets patched under --update
   excluded: Exclusion[]; // #824: findings the gate held back (disclosed, never silently dropped)
   epicsCreated: number;
   epicsReused: number;
@@ -200,31 +209,40 @@ export function planTickets(findings: Finding[], opts: FileOptions = {}): Ticket
 // authorization. Grouped mode creates/reuses a category epic before filing its stories under it.
 export async function fileFindings(tracker: Tracker, findings: Finding[], opts: FileOptions = {}): Promise<FileResult> {
   const plan = planTickets(findings, opts);
-  const result: FileResult = { created: [], skipped: [], excluded: plan.excluded, epicsCreated: 0, epicsReused: 0 };
+  const result: FileResult = { created: [], skipped: [], updated: [], excluded: plan.excluded, epicsCreated: 0, epicsReused: 0 };
+  // #747: every tracker call goes through the pacer — spacing + backoff-and-retry on a rate limit.
+  const pacer = opts.pacer ?? makePacer();
+  const call = <T>(fn: () => Promise<T>) => pacer.run(fn);
 
   const epicIdByCategory = new Map<string, string>();
   for (const epic of plan.epics) {
-    const existing = await tracker.findByMarker(epic.marker);
+    const existing = await call(() => tracker.findByMarker(epic.marker));
     if (existing) {
       epicIdByCategory.set(epic.category, existing.id);
       result.epicsReused++;
       continue;
     }
-    const ref = await tracker.createEpic({ title: epic.title, description: epic.body });
+    const ref = await call(() => tracker.createEpic({ title: epic.title, description: epic.body }));
     epicIdByCategory.set(epic.category, ref.id);
     result.epicsCreated++;
   }
 
   for (const t of plan.tickets) {
-    const existing = await tracker.findByMarker(t.marker);
+    const existing = await call(() => tracker.findByMarker(t.marker));
     if (existing) {
-      result.skipped.push({ marker: t.marker, ref: existing });
+      // #747: --update patches the already-filed ticket; the default skips it (never clobber edits).
+      if (opts.update) {
+        await call(() => tracker.updateStory(existing.id, { body: t.body, labels: t.labels }));
+        result.updated.push({ marker: t.marker, ref: existing });
+      } else {
+        result.skipped.push({ marker: t.marker, ref: existing });
+      }
       continue;
     }
     const input: ItemInput = { title: t.title, description: t.body };
     const epicId = plan.grouping === "grouped" ? epicIdByCategory.get(t.group || "Uncategorized") : undefined;
-    const ref = epicId ? await tracker.createStory(input, epicId) : await tracker.createEpic(input);
-    await tracker.setLabels(ref.id, t.labels);
+    const ref = epicId ? await call(() => tracker.createStory(input, epicId)) : await call(() => tracker.createEpic(input));
+    await call(() => tracker.setLabels(ref.id, t.labels));
     result.created.push({ marker: t.marker, ref });
   }
 

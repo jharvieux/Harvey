@@ -10,10 +10,24 @@ export class TrackerError extends Error {
     readonly url: string,
     readonly status: number,
     readonly responseBody: string,
+    // #747: the server's Retry-After (in ms), when it sent one on a 429/secondary-rate-limit. Lets
+    // the pacer honor the advised wait instead of guessing. Undefined ⇒ no header, pacer backs off.
+    readonly retryAfterMs?: number,
   ) {
     super(`${method} ${url} -> ${status}: ${responseBody.slice(0, 500)}`);
     this.name = "TrackerError";
   }
+}
+
+// Parse a Retry-After header (RFC 7231: delta-seconds or an HTTP-date) into milliseconds. Returns
+// undefined when absent or unparseable — the pacer then falls back to exponential backoff.
+function parseRetryAfter(res: Response): number | undefined {
+  const raw = res.headers.get("retry-after");
+  if (!raw) return undefined;
+  const secs = Number(raw);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const when = Date.parse(raw);
+  return Number.isNaN(when) ? undefined : Math.max(0, when - Date.now());
 }
 
 interface TrackerRequest {
@@ -26,7 +40,7 @@ export async function trackerFetch(fetchImpl: typeof fetch, url: string, req: Tr
   const res = await fetchImpl(url, req);
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new TrackerError(req.method, url, res.status, body);
+    throw new TrackerError(req.method, url, res.status, body, parseRetryAfter(res));
   }
   return res;
 }
