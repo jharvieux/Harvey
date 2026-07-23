@@ -564,11 +564,19 @@ const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): Pro
   const hintPath = instanceName ? ctx.schemaHints?.[instanceName] : ctx.schemaHint;
   const hint = hintPath ? [hintPath] : [];
   const candidates = [...hint, ...SCHEMA_CANDIDATE_SUBPATHS.map((sub) => join(appPath, sub))];
-  const schema = candidates.find((c) => ctx.exists(c));
-  if (!schema) return { status: "requires-live-run", reason: `no live DB and no schema found — nothing to classify. Probed: ${candidates.join(", ")}. pii-classify --schema accepts a migrations dir (supabase/prisma/drizzle) or a schema.sql file (#529)`, ...instance };
-  const detail = `pnpm pii-classify --schema ${schema}`;
+  const conventional = candidates.find((c) => ctx.exists(c));
+  // #770: launch-mvp (root `initial_supabase_table_schema.sql`) and nocode-rescue (nested
+  // `before/schema.sql`) ship schema DDL under neither a hint nor a conventionally-named location —
+  // fall back to a bounded, CREATE-TABLE-filtered discovery before declaring nothing to classify.
+  const discovered = conventional ? undefined : ctx.discoverSchemaFiles?.(appPath);
+  const schemas = conventional ? [conventional] : (discovered?.files ?? []);
+  if (schemas.length === 0) {
+    const probed = [...candidates, ...(discovered?.probed ?? [])];
+    return { status: "requires-live-run", reason: `no live DB and no schema found — nothing to classify. Probed: ${probed.join(", ")}. pii-classify --schema accepts a migrations dir (supabase/prisma/drizzle) or a schema.sql file (#529)`, ...instance };
+  }
+  const detail = `pnpm pii-classify --schema ${schemas.join(" ")}`;
   const schemaOnly = "schema tier only — no live DB, so row-level data was not sampled";
-  const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", schema, ...(outPath ? ["--out", outPath] : [])]);
+  const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", ...schemas, ...(outPath ? ["--out", outPath] : [])]);
   if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify --schema exited non-zero: ${trimOut(output)}`, ...instance };
   if (!outPath) return { status: "partial", detail, reason: `${schemaOnly}. And ${M10_NOT_COLLECTED}`, ...instance };
   const findings = readCaptured(ctx, outPath);

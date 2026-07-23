@@ -1,7 +1,10 @@
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type AuditModule } from "./audit-coverage.js";
 import { assertRegistryComplete, formatFailures, type ModuleRunner, type ProbeOutcome, type RunContext } from "./audit-runner.js";
+import { discoverSchemaFiles } from "./dynamic-validate.js";
 import type { Finding } from "./findings.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
@@ -267,6 +270,86 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
       if (row.status !== "ran") expect(row.reason, `${row.module} must say why`).toBeTruthy();
     }
     expect(buildAuditCoverage(recorded, ctx().env).gaps).toEqual([]);
+  });
+});
+
+// #770: the schema tier's candidate probe only recognized conventionally-named/located schema DDL
+// (supabase/migrations, prisma/migrations, drizzle, db/migrations, db, migrations, schema.sql) — a
+// target shipping it anywhere else (launch-mvp's root `initial_supabase_table_schema.sql`,
+// nocode-rescue's nested `before/schema.sql`) got a misleading "nothing to classify" even though real
+// schema DDL sat right there on disk. Real temp-dir fixtures (not the fake in-memory ctx() above)
+// prove discovery finds them and the probe actually uses what it found.
+describe("M10 discovers schema DDL beyond the conventional locations (#770)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  it("finds a root-level, unconventionally-named schema file (launch-mvp shape) and classifies it", () => {
+    const app = mkdtempSync(join(tmpdir(), "harvey-m10-launch-mvp-"));
+    dirs.push(app);
+    writeFileSync(join(app, "initial_supabase_table_schema.sql"), "create table customers (id uuid primary key, email text not null);");
+
+    const seenArgv: string[][] = [];
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+      targetDir: app,
+      exists: existsSync,
+      discoverSchemaFiles,
+      exec: (_c, argv) => {
+        if (argv.includes("pii-classify")) seenArgv.push(argv);
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    })).recorded.find((r) => r.module === "M10");
+
+    expect(m10?.status).toBe("partial");
+    expect(m10?.reason).toMatch(/schema tier only/);
+    expect(seenArgv[0]).toContain(join(app, "initial_supabase_table_schema.sql"));
+  });
+
+  it("finds a nested schema.sql under a non-conventional directory (nocode-rescue shape)", () => {
+    const app = mkdtempSync(join(tmpdir(), "harvey-m10-nocode-rescue-"));
+    dirs.push(app);
+    mkdirSync(join(app, "before"));
+    writeFileSync(join(app, "before", "schema.sql"), "create table applicants (id uuid primary key, customer_ssn text);");
+
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync, discoverSchemaFiles })).recorded.find((r) => r.module === "M10");
+
+    expect(m10?.status).toBe("partial");
+    expect(m10?.detail).toMatch(/before[/\\]schema\.sql/);
+  });
+
+  // The exact pre-#770 symptom: without discovery wired, the SAME fixture the fix above classifies
+  // goes right back to "nothing to classify" — proving discovery (not the parser) closed the gap.
+  it("without discovery wired, the same launch-mvp-shaped fixture reverts to the pre-#770 'nothing to classify' gap", () => {
+    const app = mkdtempSync(join(tmpdir(), "harvey-m10-no-discovery-"));
+    dirs.push(app);
+    writeFileSync(join(app, "initial_supabase_table_schema.sql"), "create table customers (id uuid primary key, email text not null);");
+
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync })).recorded.find((r) => r.module === "M10");
+    expect(m10?.status).toBe("requires-live-run");
+    expect(m10?.reason).toMatch(/nothing to classify/);
+  });
+
+  it("feeds every discovered file to pii-classify when schema DDL is scattered across more than one unconventional location", () => {
+    const app = mkdtempSync(join(tmpdir(), "harvey-m10-multi-"));
+    dirs.push(app);
+    writeFileSync(join(app, "initial_supabase_table_schema.sql"), "create table customers (id uuid primary key, email text not null);");
+    mkdirSync(join(app, "before"));
+    writeFileSync(join(app, "before", "schema.sql"), "create table applicants (id uuid primary key, customer_ssn text);");
+
+    const seenArgv: string[][] = [];
+    runAudit(AUDIT_RUNNERS, ctx({
+      targetDir: app,
+      exists: existsSync,
+      discoverSchemaFiles,
+      exec: (_c, argv) => {
+        if (argv.includes("pii-classify")) seenArgv.push(argv);
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    }));
+    const schemaArgs = seenArgv[0]!.slice(seenArgv[0]!.indexOf("--schema") + 1);
+    expect(schemaArgs).toContain(join(app, "initial_supabase_table_schema.sql"));
+    expect(schemaArgs).toContain(join(app, "before", "schema.sql"));
   });
 });
 

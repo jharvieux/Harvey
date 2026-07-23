@@ -88,6 +88,14 @@ export interface RunContext {
   // so an app with an unconventional layout still gets real M10 schema classification instead of
   // being limited to the conventional-location probe alone. Absent ⇒ no per-app hints supplied.
   schemaHints?: Record<string, string>;
+  // #770: real-filesystem discovery for the schema tier, tried after the hint and the conventional-
+  // location probe both miss — a bounded, CREATE-TABLE-filtered search for schema DDL living
+  // somewhere neither recognizes (a root-level or nested schema.sql under an unconventional name,
+  // e.g. launch-mvp's `initial_supabase_table_schema.sql`, nocode-rescue's `before/schema.sql`).
+  // Wired to dynamic-validate.ts's discoverSchemaFiles (already built and tested for M2's stand-up
+  // probe) in the real driver. Absent ⇒ the probe keeps its prior conventional-location-only
+  // behaviour — no regression for a caller (or test double) that hasn't wired it.
+  discoverSchemaFiles?: (dir: string) => { files: string[]; probed: string[] };
   // #520: per-Supabase-project DB connection URLs for M10's live tier, keyed by project ref. On a
   // multi-project connected run the M10 probe classifies each ref whose URL is present here and
   // records requires-live-run for any ref without one — so each enumerated project is either
