@@ -35,7 +35,7 @@ export interface FileOptions {
 
 // A single finding mapped to what a tracker item should contain. `marker` is also embedded at the
 // end of `body`; it is surfaced separately so the orchestrator can look it up without re-parsing.
-export interface PlannedTicket {
+interface PlannedTicket {
   finding: Finding;
   title: string;
   body: string; // markdown, marker appended
@@ -45,20 +45,20 @@ export interface PlannedTicket {
 }
 
 // A category epic to create in grouped mode (its own dedup marker so a re-audit reuses it).
-export interface PlannedEpic {
+interface PlannedEpic {
   category: string;
   title: string;
   body: string;
   marker: string;
 }
 
-export interface TicketPlan {
+interface TicketPlan {
   grouping: Grouping;
   epics: PlannedEpic[]; // [] in flat mode
   tickets: PlannedTicket[];
 }
 
-export interface FileResult {
+interface FileResult {
   created: { marker: string; ref: CreatedRef }[];
   skipped: { marker: string; ref: CreatedRef }[]; // already filed by a prior run
   epicsCreated: number;
