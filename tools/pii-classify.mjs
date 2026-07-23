@@ -32,7 +32,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { parseColumns } from "../src/migration-sql-parse.js";
+import { parseClassifiableColumns } from "../src/migration-sql-parse.js";
 import { parsePrismaSchema } from "../src/prisma-schema-parse.js";
 
 const RULES = [
@@ -42,8 +42,13 @@ const RULES = [
   [/(date_of_birth|(^|_)dob(_|$)|birth_?date)/, "DOB", "PII", "high"],
   [/(^|_)(phone|mobile|telephone|cell)(_|$)/, "PHONE", "PII", "high"],
   [/(^|_)fax(_|$)/, "FAX", "PII", "high"],
-  [/passport/, "PASSPORT", "SENSITIVE_PII", "high"],
+  [/(^|_)passport(_|$)/, "PASSPORT", "SENSITIVE_PII", "high"],
   [/(driver_?licen[cs]e|license_number)/, "DRIVERS_LICENSE", "SENSITIVE_PII", "high"],
+  // #856: mother's maiden name and security question/answer are identity-verification / account-
+  // recovery secrets (knowledge-based auth) — SENSITIVE_PII. Placed before the generic NAME rules so
+  // `maiden_name` asserts MAIDEN_NAME (high) rather than falling through to the ambiguous NAME? flag.
+  [/(maiden_name|mother_?maiden|mothers_maiden)/, "MAIDEN_NAME", "SENSITIVE_PII", "high"],
+  [/(security_question|security_answer|secret_question|secret_answer)/, "SECURITY_QA", "SENSITIVE_PII", "high"],
   // #379: generic national/government-ID catch-all — the identifier shape non-US schemas use
   // (DLP/Presidio ship per-country recognizers; this is the fallback infotype for the rest).
   // Medium, not high: "ID card number" schemes vary widely, so it's a catch-all, not a validated
@@ -81,14 +86,27 @@ const RULES = [
   [/(^|_)(ip|ip_address)(_|$)/, "IP", "PII", "medium"],
   [/(first_name|last_name|full_name|surname|given_name|middle_name)/, "NAME", "PII", "medium"],
   [/(^|_)username(_|$)/, "USERNAME_HANDLE", "PII", "low"],
+  // #856: salary/compensation is sensitive personal-financial data; age is a HIPAA quasi-identifier
+  // (an exact age >89 is a Safe Harbor identifier). Age is token-bounded so it never fires on `page`,
+  // `usage`, `language`, `average`, `image`, `message`, etc.
+  [/(^|_)(salary|compensation|annual_income)(_|$)/, "COMPENSATION", "SENSITIVE_PII", "medium"],
+  [/(^|_)age(_|$)/, "AGE", "PII", "low"],
   [/(^|_)(address|street|city|zip|postal|postcode)(_|$)/, "ADDRESS", "PII", "medium"],
   [/(latitude|longitude|(^|_)geo|(^|_)lat(_|$)|(^|_)lng(_|$))/, "GEO", "PII", "low"],
   // --- GDPR Art. 9 special categories ---
   [/(political_(affiliation|party)|union_member(ship)?)/, "POLITICAL_OR_UNION", "SENSITIVE_PII", "high"],
   [/(genetic|dna_|genome)/, "GENETIC", "SENSITIVE_PII", "high"],
-  [/(gender|ethnicit|(^|_)race(_|$)|religion|sexual)/, "SPECIAL_CATEGORY", "SENSITIVE_PII", "medium"],
+  // #856: word-bound each concept as a snake_case token and add `orientation` (sexual orientation).
+  // Bounding cuts substring FPs; the AMBIGUOUS_TECHNICAL_SUFFIX + UI_ORIENTATION exclusions (below)
+  // then clear the token-level FPs boundaries can't (race_id, race_condition, screen_orientation).
+  [/(^|_)(gender|ethnicity|ethnic|race|religion|religious|sexual|orientation)(_|$)/, "SPECIAL_CATEGORY", "SENSITIVE_PII", "medium"],
   [/(^|_)(nationality|citizenship)(_|$)/, "NATIONALITY", "SENSITIVE_PII", "medium"],
-  [/(health|diagnosis|medical|patient|prescription|(^|_)icd(_|$))/, "HEALTH", "PHI", "high"],
+  // #856: blood_type is genuine PHI — carved out of DESCRIPTOR_SUFFIX_PATTERN's `_type` exclusion
+  // (see exclusionReason) so it isn't swallowed the way `record_type`/`email_category` are.
+  [/(^|_)blood_?type(_|$)/, "BLOOD_TYPE", "PHI", "high"],
+  // #856: word-bound `health` so it matches the concept as a token (mental_health, health_data) and
+  // the AMBIGUOUS_TECHNICAL_SUFFIX exclusion then clears health_score/-condition/-count lookalikes.
+  [/((^|_)health(_|$)|diagnosis|medical|patient|prescription|(^|_)icd(_|$))/, "HEALTH", "PHI", "high"],
   [/(^|_)name(_|$)/, "NAME?", "PII", "low"], // ambiguous: product/display name — review
   // #233: widened to also catch `tax_number` (`vat_id` was already covered by the `vat`
   // alternative below since it's word-bounded, not literal `tax_id`/`vat`).
@@ -115,9 +133,21 @@ const BOOLEAN_FLAG_NAME_PATTERN =
 const INFRA_HEALTH_PATTERN =
   /(^|_)(vendor|service|system|api|db|database|server|infra|upstream|integration|endpoint|app|deployment|pipeline|job|worker|queue)_?health(_|$)/;
 // Suffix meaning "a category/type OF the concept," not the concept's value (e.g. email_category,
-// address_type). Tradeoff: this would also swallow a genuine "blood_type" PHI column if one were
-// ever added to the dictionary — none currently is, but flagging the tradeoff for future tuning.
+// address_type). #856: `blood_type` is the one genuine PHI value ending in `_type` — carved out
+// below so the exclusion kills `record_type`/`email_category` without swallowing it.
 const DESCRIPTOR_SUFFIX_PATTERN = /_(category|type|kind|class)$/;
+const DESCRIPTOR_SUFFIX_CARVEOUT = /(^|_)blood_?type$/;
+// #856: the ambiguous special-category / health concepts (`race`, `health`, …) are legitimate as a
+// token (mental_health, race/ethnicity) but collide with unrelated technical columns — `race_id`
+// (an FK), `race_condition` (concurrency), `health_score` (a metric). A clearly-technical suffix on
+// one of those infotypes is the FP; word boundaries alone can't catch it (`_id`/`_score` ARE token
+// boundaries). Scoped to SPECIAL_CATEGORY/HEALTH so it never suppresses `passport_id`, `ssn_...`, etc.
+const AMBIGUOUS_CONCEPT_INFOTYPES = new Set(["SPECIAL_CATEGORY", "HEALTH"]);
+const AMBIGUOUS_TECHNICAL_SUFFIX = /_(id|score|condition|count)$/;
+// #856: `orientation` genuinely means sexual orientation on HR/dating schemas, but screen/page/
+// device/layout orientation is UI furniture — excluded so the bare-`orientation` addition doesn't
+// flood every app that stores a display orientation.
+const UI_ORIENTATION = /(^|_)(screen|page|device|text|layout|landscape|portrait|display)_orientation(_|$)/;
 // #233: an entity's own display name on a table that IS that entity (organizations.name,
 // tenants.company_name) is the org's name, not a person's — the NAME/NAME? rules can't tell
 // "whose name" a bare `name` column holds without the table it lives on.
@@ -136,7 +166,15 @@ function exclusionReason(column, sqlType, infotype, tableName) {
   }
   if (BOOLEAN_FLAG_NAME_PATTERN.test(column)) return "boolean-flag naming, not a data value";
   if (INFRA_HEALTH_PATTERN.test(column)) return "infra/system health-check naming, not medical health data";
-  if (DESCRIPTOR_SUFFIX_PATTERN.test(column)) return "descriptor suffix — categorizes the concept, isn't the value";
+  if (DESCRIPTOR_SUFFIX_PATTERN.test(column) && !DESCRIPTOR_SUFFIX_CARVEOUT.test(column)) {
+    return "descriptor suffix — categorizes the concept, isn't the value";
+  }
+  if (AMBIGUOUS_CONCEPT_INFOTYPES.has(infotype) && AMBIGUOUS_TECHNICAL_SUFFIX.test(column)) {
+    return "technical suffix (_id/_score/_condition/_count) on an ambiguous special-category/health term — not the sensitive value";
+  }
+  if (infotype === "SPECIAL_CATEGORY" && UI_ORIENTATION.test(column)) {
+    return "UI display orientation (screen/page/device), not sexual orientation";
+  }
   if (NAME_INFOTYPES.has(infotype) && tableName && ORG_ENTITY_TABLE_PATTERN.test(String(tableName).toLowerCase())) {
     return "entity display name on an org/tenant/company table — not personal PII";
   }
@@ -174,6 +212,22 @@ const JSON_CONTAINER_TYPE_PATTERN = /^jsonb?$/;
 const JSON_CONTAINER_NAME_PATTERN =
   /(^|_)(metadata|profile|details|custom_fields|extra_data|settings|preferences|raw_data|payload|attributes|info)(_|$)/;
 
+// #850: free-text columns (notes/comments/bio/description/body/content) are where regulated data
+// hides in real apps, and name-only matching is structurally blind to their VALUES. A text-typed
+// column with a narrative-shaped name gets a LOW-confidence FREE_TEXT_REVIEW flag — "review this
+// column's contents for unstructured PII/PHI", a flag, never an assertion (mirrors #377's json
+// container flag). This is the interim NAME-based visibility flag so the blind spot appears in the
+// output; the full fix is a content-reading semantic classifier (deferred, #855). Type-gated (only
+// free-text-shaped types) and vocabulary-scoped so it doesn't flag every string column — still
+// FP-prone (an email `body`, a product `description`), which is exactly why it's low-confidence
+// review, not a classification. Checked LAST, so any higher-signal dictionary/type hit wins first.
+const FREE_TEXT_TYPE_PATTERN = /^(text|character varying|varchar|character|char|citext|string)/;
+const FREE_TEXT_NAME_PATTERN = /(^|_)(notes?|comments?|bio|description|body|content|remarks?|memo)(_|$)/;
+
+// Review-flag infotypes are surfaced as "look inside this column", never counted as asserted PII —
+// they get their own list in the report and stay out of the asserted headline (#377/#850).
+const REVIEW_FLAG_INFOTYPES = new Set(["OPAQUE_JSON_BLOB", "FREE_TEXT_REVIEW"]);
+
 /**
  * @typedef {{infotype: string, category: "PII"|"SENSITIVE_PII"|"PHI"|"PCI"|"SECRET", confidence: "high"|"medium"|"low"}} ClassifyResult
  */
@@ -207,6 +261,10 @@ export function classifyColumn(column, sqlType, tableName) {
   // `*_store`/`*_config` table keeps its higher-signal SECRET classification.
   if (sqlType && JSON_CONTAINER_TYPE_PATTERN.test(String(sqlType).toLowerCase()) && JSON_CONTAINER_NAME_PATTERN.test(c)) {
     return { infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" };
+  }
+  // #850: last, so any higher-signal dictionary/type/table hit above wins over the free-text flag.
+  if (sqlType && FREE_TEXT_TYPE_PATTERN.test(String(sqlType).toLowerCase()) && FREE_TEXT_NAME_PATTERN.test(c)) {
+    return { infotype: "FREE_TEXT_REVIEW", category: "PII", confidence: "low" };
   }
   return null;
 }
@@ -318,17 +376,22 @@ const PCI_NEVER_STORE = new Set(["CVV", "PIN", "TRACK_DATA"]);
  * @param {{tier: "schema"|"live"}} opts
  */
 export function dataMapToFindings(dataMap, { tier }) {
+  // #853: state the scope so the divergence between tiers is visible, not silent — the live path
+  // reads information_schema (includes views) but only the `public` schema; the static path parses
+  // CREATE TABLE + ALTER TABLE ADD COLUMN but not views/matviews/generated columns.
   const source =
     tier === "live"
-      ? "live information_schema.columns inventory (read-only)"
-      : "static migration-SQL schema parse (no DB connection)";
+      ? "live information_schema.columns inventory (read-only), public schema only — auth/storage/other schemas not inventoried"
+      : "static migration-SQL schema parse (no DB connection), CREATE TABLE + ALTER TABLE ADD COLUMN columns only — views, materialized views, and generated columns are not parsed on this tier";
   const tables = Object.keys(dataMap).sort(
     (a, b) => dataMap[b].severityScore - dataMap[a].severityScore || a.localeCompare(b),
   );
   return tables.map((table, i) => {
     const t = dataMap[table];
-    const asserted = t.columns.filter((c) => c.infotype !== "OPAQUE_JSON_BLOB");
-    const reviewFlags = t.columns.filter((c) => c.infotype === "OPAQUE_JSON_BLOB");
+    const asserted = t.columns.filter((c) => !REVIEW_FLAG_INFOTYPES.has(c.infotype));
+    const reviewFlags = t.columns.filter((c) => REVIEW_FLAG_INFOTYPES.has(c.infotype));
+    const jsonFlags = reviewFlags.filter((c) => c.infotype === "OPAQUE_JSON_BLOB");
+    const freeTextFlags = reviewFlags.filter((c) => c.infotype === "FREE_TEXT_REVIEW");
     const neverStore = t.infotypes.filter((x) => PCI_NEVER_STORE.has(x));
     const compliance = [
       t.phi && "PHI — HIPAA applicability",
@@ -339,7 +402,11 @@ export function dataMapToFindings(dataMap, { tier }) {
       id: `M10-${String(i + 1).padStart(2, "0")}`,
       title: asserted.length
         ? `Table \`${table}\` holds ${t.categories.join("/")} data (${[...new Set(asserted.map((c) => c.infotype))].join(", ")})`
-        : `Table \`${table}\` has JSON container column(s) to review for nested PII`,
+        : freeTextFlags.length && !jsonFlags.length
+          ? `Table \`${table}\` has free-text column(s) to review for unstructured PII/PHI`
+          : jsonFlags.length && !freeTextFlags.length
+            ? `Table \`${table}\` has JSON container column(s) to review for nested PII`
+            : `Table \`${table}\` has free-text and JSON container column(s) to review for PII`,
       severity: t.severity,
       confidence: "Review",
       category: "Data classification",
@@ -351,8 +418,11 @@ export function dataMapToFindings(dataMap, { tier }) {
         asserted.length
           ? `Classified columns: ${asserted.map((c) => `${c.column} → ${c.infotype} (${c.category}, ${c.confidence})`).join("; ")}.`
           : "",
-        reviewFlags.length
-          ? `Review for nested PII (flagged, not asserted — #377): ${reviewFlags.map((c) => c.column).join(", ")} — denormalization-container json column(s); inspect their keys.`
+        jsonFlags.length
+          ? `Review for nested PII (flagged, not asserted — #377): ${jsonFlags.map((c) => c.column).join(", ")} — denormalization-container json column(s); inspect their keys.`
+          : "",
+        freeTextFlags.length
+          ? `Review for unstructured PII/PHI (flagged, not asserted — #850): ${freeTextFlags.map((c) => c.column).join(", ")} — free-text column(s) whose values a name-only scan can't see; inspect for names/SSNs/health details.`
           : "",
         `Severity score ${t.severityScore} → ${t.severity}.`,
       ]
@@ -371,7 +441,8 @@ export function dataMapToFindings(dataMap, { tier }) {
         "Confirm each classified column is genuinely needed and that the table's RLS/grants scope reads to the owning tenant/user.",
         neverStore.length ? "Remove the sensitive-authentication-data column(s) — they may not be stored post-authorization under PCI-DSS." : "",
         t.secret ? "Move stored credentials to a secret manager or encrypt them with keys the DB role cannot read." : "",
-        reviewFlags.length ? "Inspect the flagged JSON container(s); promote any nested PII to first-class columns so it is classified and protected explicitly." : "",
+        jsonFlags.length ? "Inspect the flagged JSON container(s); promote any nested PII to first-class columns so it is classified and protected explicitly." : "",
+        freeTextFlags.length ? "Review the flagged free-text column(s) for unstructured PII/PHI; a content-classification pass or structured fields make regulated data visible and protectable." : "",
       ]
         .filter(Boolean)
         .join(" "),
@@ -463,6 +534,32 @@ function selftest() {
     ["metadata", "PII", "low", "jsonb"],
     ["ui_state", null, null, "jsonb"],
     ["profile", null, null, "text"],
+    // #850: free-text columns are review-flagged (low) only on a text-shaped type
+    ["case_notes", "PII", "low", "text"],
+    ["comment", "PII", "low", "varchar"],
+    ["bio", "PII", "low", "text"],
+    ["notes", null, null], // no type → free-text gate can't fire
+    ["notes", null, null, "integer"], // non-text type is not a free-text column
+    ["title", null, null, "text"], // outside the narrative vocabulary
+    // #856: blood_type PHI (carved out of the _type descriptor exclusion)
+    ["blood_type", "PHI", "high"],
+    ["patient_blood_type", "PHI", "high"],
+    // #856: new dictionary concepts
+    ["salary", "SENSITIVE_PII", "medium"],
+    ["compensation", "SENSITIVE_PII", "medium"],
+    ["age", "PII", "low"],
+    ["mothers_maiden_name", "SENSITIVE_PII", "high"],
+    ["maiden_name", "SENSITIVE_PII", "high"],
+    ["security_question", "SENSITIVE_PII", "high"],
+    ["security_answer", "SENSITIVE_PII", "high"],
+    ["orientation", "SENSITIVE_PII", "medium"],
+    // #856: over-broad-regex FP guards (word boundary + technical-suffix / UI-orientation exclusions)
+    ["health_score", null, null],
+    ["race_id", null, null],
+    ["race_condition", null, null],
+    ["screen_orientation", null, null],
+    ["page_count", null, null], // age is token-bounded, so this is not AGE
+    ["usage", null, null], // age is token-bounded, so this is not AGE
   ];
   let ok = 0;
   for (const [col, cat, conf, sqlType, tableName] of cases) {
@@ -476,13 +573,21 @@ function selftest() {
   process.exit(ok === cases.length ? 0 : 1);
 }
 
-function report(cols) {
+// #853: scope disclosure printed at the end of every run so a reader never mistakes the tier's
+// coverage limits for a clean bill of health.
+const SCOPE_NOTE = {
+  live: "Scope: public schema only — auth/storage/other schemas were not inventoried (#853).",
+  schema: "Scope: CREATE TABLE + ALTER TABLE ADD COLUMN columns only — views, materialized views, and generated columns are not parsed on the static tier (#853).",
+};
+
+function report(cols, { tier = "schema", unknownType = [] } = {}) {
   const dataMap = buildDataMap(cols);
   const tables = Object.keys(dataMap);
-  // #377: OPAQUE_JSON_BLOB hits are review flags ("look inside this container"), not asserted
-  // PII — they get their own list below and stay out of the asserted headline count, mirroring
-  // how low-confidence hits stay out of the calibration free/high count.
-  const reviewFlags = tables.flatMap((t) => dataMap[t].columns.filter((c) => c.infotype === "OPAQUE_JSON_BLOB").map((c) => `${t}.${c.column}`));
+  // #377/#850: review-flag hits ("look inside this column") are not asserted PII — they get their
+  // own lists below and stay out of the asserted headline count.
+  const reviewFlags = tables.flatMap((t) =>
+    dataMap[t].columns.filter((c) => REVIEW_FLAG_INFOTYPES.has(c.infotype)).map((c) => ({ ref: `${t}.${c.column}`, infotype: c.infotype })),
+  );
   const hitCount = tables.reduce((n, t) => n + dataMap[t].columns.length, 0) - reviewFlags.length;
   const byCat = {};
   for (const t of tables) for (const c of dataMap[t].categories) byCat[c] = (byCat[c] || 0) + 1;
@@ -493,10 +598,23 @@ function report(cols) {
   for (const t of tables.sort((a, b) => dataMap[b].severityScore - dataMap[a].severityScore)) {
     console.log(`  ${t} → ${dataMap[t].severity} (${dataMap[t].severityScore}): ${dataMap[t].infotypes.join(", ")}`);
   }
-  if (reviewFlags.length) {
-    console.log(`\nReview for nested PII — ${reviewFlags.length} JSON container column(s), flagged not asserted (#377):`);
-    for (const f of reviewFlags) console.log(`  ${f} — denormalization-container name on a json/jsonb column; inspect its keys for nested PII`);
+  const jsonRefs = reviewFlags.filter((f) => f.infotype === "OPAQUE_JSON_BLOB").map((f) => f.ref);
+  const freeTextRefs = reviewFlags.filter((f) => f.infotype === "FREE_TEXT_REVIEW").map((f) => f.ref);
+  if (jsonRefs.length) {
+    console.log(`\nReview for nested PII — ${jsonRefs.length} JSON container column(s), flagged not asserted (#377):`);
+    for (const f of jsonRefs) console.log(`  ${f} — denormalization-container name on a json/jsonb column; inspect its keys for nested PII`);
   }
+  if (freeTextRefs.length) {
+    console.log(`\nReview for unstructured PII/PHI — ${freeTextRefs.length} free-text column(s), flagged not asserted (#850):`);
+    for (const f of freeTextRefs) console.log(`  ${f} — narrative-shaped free-text column; a name-only scan can't see its values, inspect for names/SSNs/health details`);
+  }
+  // #851: fail loud — columns whose SQL type isn't recognized were classified by NAME only, so the
+  // type-based signals that couldn't apply are visible rather than the columns silently vanishing.
+  if (unknownType.length) {
+    console.log(`\n⚠ ${unknownType.length} column(s) had an unrecognized SQL type (enum/custom/char/money/xml/array) — classified by NAME only; jsonb-container and boolean-flag signals could not apply (#851):`);
+    for (const c of unknownType) console.log(`  ${c.table_name}.${c.column_name} (type ${c.data_type})`);
+  }
+  console.log(`\n${SCOPE_NOTE[tier]}`);
   return dataMap;
 }
 
@@ -506,20 +624,23 @@ async function inventory() {
   const cols =
     await sql`SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, ordinal_position`;
   await sql.end();
-  writeFindingsOut(report(cols), "live");
+  writeFindingsOut(report(cols, { tier: "live" }), "live");
 }
 
 /**
- * Classifies every column declared in migration SQL text (`CREATE TABLE` statements) via
- * src/migration-sql-parse.ts's parseColumns, so M10 can run on source alone (#250) instead of
- * needing SUPABASE_DB_URL. Same under-extract-rather-than-mis-extract philosophy as that parser:
- * a formatting shape it doesn't recognize yields fewer columns, never a wrong one.
+ * Classifies every column declared in migration SQL text via src/migration-sql-parse.ts's
+ * parseClassifiableColumns — CREATE TABLE (#250) plus ALTER TABLE ADD COLUMN (#852), including
+ * columns whose type is outside the recognized SQL_TYPES allow-list (enum/custom/char/…, #851),
+ * which are classified by NAME and returned in `unknownType` so the caller can disclose them rather
+ * than drop them silently. Under-extract-rather-than-mis-extract: a shape it doesn't recognize
+ * yields fewer columns, never a wrong one.
  * @param {string} sql concatenated migration SQL (one or more files)
- * @returns {{columns: {table_name: string, column_name: string, data_type?: string}[], dataMap: ReturnType<typeof buildDataMap>}}
+ * @returns {{columns: {table_name: string, column_name: string, data_type?: string}[], dataMap: ReturnType<typeof buildDataMap>, unknownType: {table_name: string, column_name: string, data_type?: string}[]}}
  */
 export function classifyMigrationSql(sql) {
-  const columns = parseColumns(sql);
-  return { columns, dataMap: buildDataMap(columns) };
+  const { columns, unknownType } = parseClassifiableColumns(sql);
+  const all = [...columns, ...unknownType];
+  return { columns: all, dataMap: buildDataMap(all), unknownType };
 }
 
 /**
@@ -563,13 +684,14 @@ function prismaSchemaToSql(schemaPath) {
   }
 }
 
-// Columns for a schema.prisma target: the target's local Prisma CLI generating SQL (reusing
-// parseColumns) when available, else the fallback DSL parser (#758) — either way the same
-// {table_name, column_name, data_type} shape a SQL-schema target's columns already have.
+// Columns for a schema.prisma target: the target's local Prisma CLI generating SQL (reusing the
+// SQL parser, which now surfaces enum/custom columns via unknownType — #851/#854) when available,
+// else the fallback DSL parser (#758) — either way the same {table_name, column_name, data_type}
+// shape a SQL-schema target's columns already have, in the {columns, unknownType} envelope.
 function columnsFromPrismaSchema(schemaPath) {
   const sql = prismaSchemaToSql(schemaPath);
-  if (sql) return parseColumns(sql);
-  return parsePrismaSchema(readFileSync(schemaPath, "utf8"));
+  if (sql) return parseClassifiableColumns(sql);
+  return { columns: parsePrismaSchema(readFileSync(schemaPath, "utf8")), unknownType: [] };
 }
 
 // Reads every *.sql file under `target` (sorted, so migrations apply in filename order) if it's a
@@ -601,10 +723,11 @@ function schemaTargets() {
 }
 
 // #758: a `.prisma` target is Prisma DSL, not SQL — classified via columnsFromPrismaSchema
-// (CLI-generated SQL, falling back to the schema.prisma parser) instead of parseColumns directly.
+// (CLI-generated SQL, falling back to the schema.prisma parser). Returns {columns, unknownType},
+// the same envelope parseClassifiableColumns produces for a SQL target (#851/#852).
 function columnsForTarget(target) {
   if (target.endsWith(".prisma")) return columnsFromPrismaSchema(target);
-  return parseColumns(readSchemaSql(target));
+  return parseClassifiableColumns(readSchemaSql(target));
 }
 
 function classifyFromSchema() {
@@ -615,12 +738,15 @@ function classifyFromSchema() {
     console.error(`Usage: pii-classify --schema <path> [<path> ...] (each a supabase/migrations dir, a single .sql file, or a schema.prisma file)${detail}`);
     process.exit(1);
   }
-  const columns = targets.flatMap(columnsForTarget);
-  if (columns.length === 0) {
+  const results = targets.map(columnsForTarget);
+  const columns = results.flatMap((r) => r.columns);
+  const unknownType = results.flatMap((r) => r.unknownType);
+  const all = [...columns, ...unknownType];
+  if (all.length === 0) {
     console.error(`No columns found via ${targets.join(", ")} — check the path(s) (expects supabase/migrations/*.sql shape, a standalone schema.sql with CREATE TABLE, or a schema.prisma with model declarations).`);
     process.exit(1);
   }
-  writeFindingsOut(report(columns), "schema");
+  writeFindingsOut(report(all, { tier: "schema", unknownType }), "schema");
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
