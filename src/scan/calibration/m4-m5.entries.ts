@@ -28,6 +28,14 @@ export const m4m5Entries: CorpusEntry[] = [
   // the v1 path vocabulary — proves the widened file selection, not just the detector.
   { module: "M4", id: "M4-P-DIVERGED-TENANT-WIDENED", kind: "positive", cls: "Diverged tenant-scoped supabase query outside the security path vocabulary", location: "customer.store.ts", match: ["diverged"], expectedTier: "review", note: "dup/stores/customer.store.ts and order.store.ts hold structurally-identical supabase queries that disagree on the tenant-scoping literal ('organisation_id' vs 'org_id') — neither path matches touchesSecurityPath, so only touchesTenantSupabasePath's content-based admission (#399) puts them in front of divergedCloneFindings at all. divergedCloneFindings -> M4-DIV-* reviewFinding (High severity, review tier)." },
 
+  // #809: the opt-in whole-repo extension (wholeRepoDivergedCloneFindings). A config builder
+  // duplicated between two plain report-export files — neither auth/guard/security-path nor
+  // tenant-scoped supabase query, so divergedCloneFindings' narrow admission (#360/#399) never
+  // sees this pair; only the whole-repo pass does, at Medium severity and generic wording (never
+  // the security framing) since it carries no security guarantee.
+  { module: "M4", id: "M4-P-DIVERGED-WIDE", kind: "positive", cls: "Diverged config builder outside the security-path and tenant-supabase vocabulary", location: "export-config-a.ts", match: ["diverged"], expectedTier: "review", note: "dup/wide/export-config-a.ts and export-config-b.ts hold a structurally-identical buildExportJobConfig whose row-limit literal has drifted (500 vs 2000). wholeRepoDivergedCloneFindings -> M4-DIVW-* reviewFinding (Medium severity, review tier, M4_DIVERGED_WIDE_TAXONOMY)." },
+  { module: "M4", id: "M4-N-DIVERGED-WIDE-DISTINCT", kind: "negative", cls: "Independently-written non-security function of similar size", location: "notification-format.ts", note: "dup/wide/notification-format.ts is a similar token mass to buildExportJobConfig but structurally distinct (loop + string building, not an object-literal config) — the whole-repo pass must not pair it with anything. Guards the near-miss detector's similarity floor against 'similar size' FPs outside the narrow pass's fixture set." },
+
   // #365: the "genuine small clone" boundary pair — one fixture, two contracts. The 9-line
   // pricing-tier ladder is real logic (not boilerplate) under MIN_SIGNIFICANT_LINES: it must NOT
   // become an individual finding (M4-N-SMALL-FLOOR) and MUST be counted by the aggregate M4-00

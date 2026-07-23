@@ -4,7 +4,7 @@
 // exact clone and drops out of M4 entirely — which is precisely when it becomes the
 // "patched one copy, missed the other" bug the M4 spec calls a bug-multiplier.
 //
-// Scope is deliberately narrow to keep the false-positive rate defensible:
+// divergedCloneFindings' scope is deliberately narrow to keep the false-positive rate defensible:
 //   - only files the caller already screened as security-relevant — path-based
 //     (touchesSecurityPath, the shared #226/#361 signal) OR, since #399, content-based (a
 //     supabase query scoped by a tenant-key literal, touchesTenantSupabasePath — the per-entity
@@ -16,6 +16,11 @@
 //     drift ('tenant_id' vs 'owner_id'), inconsistent identifier mapping, or a small
 //     structural edit (statement added/removed) at >=90% token similarity.
 //
+// #809 adds wholeRepoDivergedCloneFindings — the same divergence math, opt-in and un-scoped by
+// file selection (the caller may pass any subset, including non-security files), generic wording
+// and Medium severity instead of the security framing, plus a volume cap since the caller can no
+// longer be relied on to hand-pick a small file set.
+//
 // Everything emitted is REVIEW tier (reviewFinding) — "these two checks disagree; which one is
 // right?" is an adjudication question, not a mechanical verdict. Full Type-4 semantic clone
 // detection remains out of scope (an open research problem; see #360).
@@ -25,6 +30,10 @@ import type { Finding } from "./findings.js";
 import { reviewFinding } from "./review-tier.js";
 
 export const M4_DIVERGED_TAXONOMY = "M4 — Diverged security-path clone";
+// #809: the opt-in whole-repo extension's taxonomy — deliberately distinct from the taxonomy
+// above so a report can tell "diverged security check" (High, always-on) apart from "diverged
+// clone somewhere in the codebase" (Medium, opt-in) at a glance.
+export const M4_DIVERGED_WIDE_TAXONOMY = "M4 — Diverged clone (whole-repo)";
 
 export interface SecurityPathFile {
   /** Target-relative path, e.g. "lib/auth/require-tenant.ts". */
@@ -201,6 +210,31 @@ interface Family {
   divergences: Divergence[];
 }
 
+// Union-find over the flagged pairs -> one family per connected component, largest first. Shared
+// by both the security-path pass and the #809 whole-repo pass — the family-collapsing rationale
+// (one adjudication per drifted group, not one per pair) applies identically to either scope.
+function buildFamilies(divergences: Divergence[]): Family[] {
+  const parent = new Map<FnTokens, FnTokens>();
+  const find = (x: FnTokens): FnTokens => {
+    const p = parent.get(x) ?? x;
+    if (p === x) return x;
+    const root = find(p);
+    parent.set(x, root);
+    return root;
+  };
+  for (const d of divergences) parent.set(find(d.a), find(d.b));
+
+  const families = new Map<FnTokens, Family>();
+  for (const d of divergences) {
+    const root = find(d.a);
+    const fam = families.get(root) ?? { members: [], divergences: [] };
+    for (const fn of [d.a, d.b]) if (!fam.members.includes(fn)) fam.members.push(fn);
+    fam.divergences.push(d);
+    families.set(root, fam);
+  }
+  return [...families.values()].sort((a, b) => b.members.length - a.members.length);
+}
+
 function familyFinding(fam: Family, i: number): Finding {
   const members = [...fam.members].sort((a, b) => a.path.localeCompare(b.path) || a.startLine - b.startLine);
   const loc = (f: FnTokens): string => `${f.path}:${f.startLine}-${f.endLine}`;
@@ -236,7 +270,7 @@ function familyFinding(fam: Family, i: number): Finding {
 
 // The entry point. `files` must already be the security-relevant subset (the caller applies
 // touchesSecurityPath and, since #399, touchesTenantSupabasePath) — this pass is scoped, not
-// repo-wide, by design (#360).
+// repo-wide, by design (#360). For whole-repo coverage, see wholeRepoDivergedCloneFindings (#809).
 export function divergedCloneFindings(files: SecurityPathFile[]): Finding[] {
   const fns = files.flatMap(functionsOf);
   const divergences: Divergence[] = [];
@@ -249,28 +283,101 @@ export function divergedCloneFindings(files: SecurityPathFile[]): Finding[] {
       if (d) divergences.push(d);
     }
   }
+  return buildFamilies(divergences).map(familyFinding);
+}
 
-  // Union-find over the flagged pairs -> one family per connected component.
-  const parent = new Map<FnTokens, FnTokens>();
-  const find = (x: FnTokens): FnTokens => {
-    const p = parent.get(x) ?? x;
-    if (p === x) return x;
-    const root = find(p);
-    parent.set(x, root);
-    return root;
-  };
-  for (const d of divergences) parent.set(find(d.a), find(d.b));
+// #809: the whole-repo counterpart's finding shape — same evidence math (aligned literal diffs or
+// LCS similarity), but generic wording and Medium (not High) severity: a hit here is NOT known to
+// guard a tenant/auth boundary the way divergedCloneFindings' security-path admission guarantees,
+// so it never earns the security framing. Still review tier — "did a fix land in one copy and not
+// the others" is an adjudication question regardless of scope.
+function wideFamilyFinding(fam: Family, i: number): Finding {
+  const members = [...fam.members].sort((a, b) => a.path.localeCompare(b.path) || a.startLine - b.startLine);
+  const loc = (f: FnTokens): string => `${f.path}:${f.startLine}-${f.endLine}`;
+  const aligned = fam.divergences.filter((d) => d.diffs);
+  const best = aligned[0] ?? [...fam.divergences].sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0))[0]!;
+  const pairEvidence = best.diffs
+    ? `${best.a.name} (${best.a.path}) and ${best.b.name} (${best.b.path}) are structurally IDENTICAL but disagree at ${best.diffs.length} token position(s): ${best.diffs.slice(0, MAX_DIFFS_SHOWN).join("; ")}${best.diffs.length > MAX_DIFFS_SHOWN ? "; …" : ""}`
+    : `${best.a.name} (${best.a.path}) and ${best.b.name} (${best.b.path}) are ${Math.round((best.similarity ?? 0) * 100)}% token-identical after normalization — a copy-pasted block with statement(s) added, removed, or reordered`;
+  const memberList = members.slice(0, MAX_MEMBERS_SHOWN).map(loc).join(" ↔ ");
+  const overflow = members.length > MAX_MEMBERS_SHOWN ? ` (+${members.length - MAX_MEMBERS_SHOWN} more)` : "";
 
-  const families = new Map<FnTokens, Family>();
-  for (const d of divergences) {
-    const root = find(d.a);
-    const fam = families.get(root) ?? { members: [], divergences: [] };
-    for (const fn of [d.a, d.b]) if (!fam.members.includes(fn)) fam.members.push(fn);
-    fam.divergences.push(d);
-    families.set(root, fam);
+  return reviewFinding({
+    id: `M4-DIVW-${String(i + 1).padStart(2, "0")}`,
+    title:
+      members.length === 2
+        ? `Diverged clone: ${members[0]!.path}::${members[0]!.name} ↔ ${members[1]!.path}::${members[1]!.name}`
+        : `Diverged clone family (${members.length} functions): ${members[0]!.name} et al.`,
+    severity: "Medium",
+    category: "Duplication debt",
+    taxonomy: M4_DIVERGED_WIDE_TAXONOMY,
+    location: memberList + overflow,
+    evidence: `${members.length} near-identical copies of one block have drifted apart. Worst pair: ${pairEvidence}.`,
+    question: "These copies started identical and now disagree — is the divergence intentional, or did a fix/behavior change land in one copy and not the other(s)?",
+    impact: "An edited copy of duplicated logic is a maintenance bug-multiplier: a change (bugfix, new case, behavior tweak) applied to one copy was, by definition, not applied to the others.",
+    fix: "Diff the copies, decide which behavior is correct, and centralize the logic at one choke point so future edits cannot drift.",
+    okWhen: "The call sites genuinely require different behavior and each copy is individually correct — the resemblance is historical, not a broken contract.",
+    notOkWhen: "The copies were meant to behave identically and one carries a stale or incomplete edit.",
+  });
+}
+
+// #809: disclosed volume-cap gap, mirroring the jscpdUnavailableFinding/knipUnavailableFinding
+// shape already used for M4/M5 partial coverage (src/quality-scan.ts) — a capped whole-repo pass
+// is a disclosed partial, never a silent under-count (the coverage guard, CLAUDE.md).
+function volumeCapFinding(consideredCount: number, cap: number): Finding {
+  return reviewFinding({
+    id: "M4-98",
+    title: "M4 whole-repo diverged-clone pass truncated (volume cap)",
+    severity: "Info",
+    category: "Maintainability",
+    taxonomy: M4_DIVERGED_WIDE_TAXONOMY,
+    location: "(repo-wide)",
+    evidence: `${consideredCount} functions were extracted repo-wide; only the first ${cap} (by path, then name) were compared to keep the whole-repo near-miss pass tractable.`,
+    question: "Is the codebase past this scan's volume cap large enough that a scoped, per-package re-run is warranted for full coverage?",
+    impact: "Whole-repo diverged-clone coverage is partial on a codebase this large — a disclosed volume cap, not a finding of zero further divergence in the untested remainder.",
+    fix: "Re-run scoped to a subdirectory (e.g. one app/package at a time) to get full comparison coverage of the remainder.",
+    okWhen: "The remainder was reviewed by a separate scoped run, or the codebase's size genuinely puts further near-miss review out of scope for this engagement.",
+    notOkWhen: "No follow-up scoped run ever covers the functions this cap dropped.",
+  });
+}
+
+// Default bound on how many extracted functions the whole-repo pass will pairwise-compare.
+// Comparison is O(n^2) in function count (bounded further by the length-ratio window below), so a
+// hard cap keeps a large codebase's scan tractable and reproducible instead of ever hanging.
+const MAX_WIDE_FUNCTIONS = 4000;
+
+// #809: whole-repo Type-3 near-miss pass (opt-in, review tier — see src/cli/quality-scan.ts's
+// --whole-repo-diverged flag). Unlike divergedCloneFindings, `files` need not be security-relevant
+// — callers pass the codebase (or the non-security complement of it, to avoid double-reporting
+// pairs the security-path pass already covers). Two volume controls bound the O(n^2) comparison
+// that a hand-picked small subset never needed:
+//   - a hard cap (maxFunctions) on how many extracted functions enter comparison at all, applied
+//     in a deterministic order (path, then name) so a capped run is reproducible; a cap hit is
+//     DISCLOSED (M4-98), never a silent drop (the coverage guard, CLAUDE.md);
+//   - a sorted sliding window keyed off the same MIN_LENGTH_RATIO compare() already enforces, so
+//     pairs that could never reach MIN_SIMILARITY are never even enumerated, not just rejected —
+//     this changes nothing about which pairs fire (compare() is unchanged), only how many pairs
+//     the loop itself considers.
+export function wholeRepoDivergedCloneFindings(files: SecurityPathFile[], opts: { maxFunctions?: number } = {}): Finding[] {
+  const maxFunctions = opts.maxFunctions ?? MAX_WIDE_FUNCTIONS;
+  const allFns = files.flatMap(functionsOf).sort((a, b) => a.path.localeCompare(b.path) || a.name.localeCompare(b.name));
+  const capped = allFns.length > maxFunctions;
+  const fns = capped ? allFns.slice(0, maxFunctions) : allFns;
+
+  const byLength = [...fns].sort((a, b) => a.norm.length - b.norm.length);
+  const divergences: Divergence[] = [];
+  for (let i = 0; i < byLength.length; i++) {
+    const a = byLength[i]!;
+    for (let j = i + 1; j < byLength.length; j++) {
+      const b = byLength[j]!;
+      if (b.norm.length > a.norm.length / MIN_LENGTH_RATIO) break; // sorted ascending: nothing further can reach MIN_LENGTH_RATIO
+      if (a.path === b.path) continue; // cross-file only, mirroring #232's M4 discipline
+      const d = compare(a, b);
+      if (d) divergences.push(d);
+    }
   }
 
-  return [...families.values()]
-    .sort((a, b) => b.members.length - a.members.length)
-    .map(familyFinding);
+  const findings = buildFamilies(divergences).map(wideFamilyFinding);
+  if (capped) findings.push(volumeCapFinding(allFns.length, maxFunctions));
+  return findings;
 }

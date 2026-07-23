@@ -33,7 +33,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { divergedCloneFindings, type SecurityPathFile } from "../diverged-clones.js";
+import { divergedCloneFindings, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { buildInferredKnipConfig, detectTargetFramework } from "../scan/framework-detect.js";
@@ -66,9 +66,13 @@ const outIdx = args.indexOf("--out");
 const outPath = outIdx >= 0 ? args[outIdx + 1] : undefined;
 const timeoutIdx = args.indexOf("--timeout");
 const timeoutSeconds = timeoutIdx >= 0 ? Number(args[timeoutIdx + 1]) : 120;
+// #809: opt-in whole-codebase Type-3 near-miss pass, on top of the always-on security-path pass —
+// see the header comment above securityPathFiles for why this stays opt-in (noisier, no security
+// guarantee, review tier).
+const wholeRepoDiverged = args.includes("--whole-repo-diverged");
 
 if (!targetArg) {
-  console.error("usage: pnpm quality-scan <target-dir> [--out findings.quality.json] [--timeout <seconds>]");
+  console.error("usage: pnpm quality-scan <target-dir> [--out findings.quality.json] [--timeout <seconds>] [--whole-repo-diverged]");
   process.exit(2);
 }
 if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
@@ -271,6 +275,23 @@ function securityPathFiles(dir: string, rel = ""): SecurityPathFile[] {
   return files;
 }
 
+// #809: every eligible source file, for the opt-in --whole-repo-diverged pass. Same skip rules as
+// securityPathFiles (generated/vendored/build dirs, test files) minus the security-relevance gate
+// — the caller excludes securityPathFiles' admitted set from this to avoid double-reporting the
+// same family once under each taxonomy.
+function allSourceFiles(dir: string, rel = ""): SecurityPathFile[] {
+  const files: SecurityPathFile[] = [];
+  for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+    const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...allSourceFiles(dir, relPath));
+    } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
+      files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
+    }
+  }
+  return files;
+}
+
 // #580: filesystem facts for src/quality-scan.ts's knipEntryUncertainReason. countSourceFiles
 // reuses the same SKIP_DIRS/SOURCE_EXT/SKIP_FILE walk shape as securityPathFiles above (total
 // count instead of a security-relevant subset) so the ratio denominator matches what knip could
@@ -357,7 +378,18 @@ const jscpdReport = mergeJscpdReports(jscpdReports);
 // #360/#399: the Type-3 near-miss layer jscpd structurally cannot provide — diverged copies of
 // security checks. Scoped to securityPathFiles's admitted subset (touchesSecurityPath OR
 // touchesTenantSupabasePath).
-const divergedFindings = divergedCloneFindings(securityPathFiles(targetDir));
+const narrowFiles = securityPathFiles(targetDir);
+const divergedFindings = divergedCloneFindings(narrowFiles);
+
+// #809: opt-in whole-codebase extension. Runs over the COMPLEMENT of narrowFiles — every other
+// eligible source file — so a security-path family is never reported twice (once High under
+// M4_DIVERGED_TAXONOMY above, once Medium under M4_DIVERGED_WIDE_TAXONOMY here).
+let wholeRepoDivergedFindings: Finding[] = [];
+if (wholeRepoDiverged) {
+  const narrowPaths = new Set(narrowFiles.map((f) => f.path));
+  const wideFiles = allSourceFiles(targetDir).filter((f) => !narrowPaths.has(f.path));
+  wholeRepoDivergedFindings = wholeRepoDivergedCloneFindings(wideFiles);
+}
 
 const knipReport = knipReports.length ? mergeKnipReports(knipReports) : undefined;
 
@@ -372,6 +404,7 @@ if (knipReport) {
 const findings: Finding[] = [
   ...jscpdToFindings(jscpdReport),
   ...divergedFindings,
+  ...wholeRepoDivergedFindings,
   ...(knipReport ? knipToFindings(knipReport, fileLineCounts, inferredEntryFiles) : []),
 ];
 // #505: a gap disclosure coexists with real findings from the scopes that DID complete — unlike
@@ -387,7 +420,8 @@ if (knipUncertainScopes.length) findings.push(knipEntryUncertainFinding(knipUnce
 const dup = duplicationSummary(jscpdReport);
 console.error(
   `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s), ${dup.subThresholdCloneCount} sub-threshold small clone(s) disclosed in M4-00 (#365), ${divergedFindings.length} diverged security-path clone pair(s) (#360, review tier)` +
-    (jscpdGaps.length ? `, whole-repo scan incomplete (#544, see M4-99)` : ""),
+    (jscpdGaps.length ? `, whole-repo scan incomplete (#544, see M4-99)` : "") +
+    (wholeRepoDiverged ? `, ${wholeRepoDivergedFindings.filter((f) => f.id !== "M4-98").length} diverged clone(s) outside the security path (#809, review tier)` : ""),
 );
 if (knipReport) {
   console.error(
