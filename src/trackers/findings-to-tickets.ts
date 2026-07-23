@@ -20,8 +20,10 @@
 // preview provably cannot touch the network. fileFindings is the only path that writes.
 
 import { createHash } from "node:crypto";
-import type { Finding } from "../findings.js";
+import type { Confidence, Finding, Severity } from "../findings.js";
 import { findingIdentity } from "../audit-diff.js";
+import { renderFixSection } from "./fix-diff.js";
+import { makePacer, type Pacer } from "./rate-limit.js";
 import type { CreatedRef, ItemInput, Tracker } from "./types.js";
 
 export type Grouping = "flat" | "grouped";
@@ -31,6 +33,53 @@ export interface FileOptions {
   // Disambiguates markers across engagements sharing one tracker (e.g. two clients' audits filed to
   // the same Jira project). Folded into every marker's hash. Default "harvey".
   engagement?: string;
+  // #824: the ticket-filing add-on is a PAID-tier product. `paid` is the engagement's tier signal
+  // (run-audit's --connected; CLAUDE.md: "paid = a connected engagement"). Default FALSE — fail
+  // closed: unless the caller asserts a paid engagement, nothing is filed at all, so a misconfigured
+  // free run can never dump indicators into a client's tracker.
+  paid?: boolean;
+  // #747: when a finding was already filed by a prior run, UPDATE its ticket body/labels instead of
+  // skipping it. Default false (the safe re-audit default — never clobber a client's edits/comments
+  // unless the operator opts in).
+  update?: boolean;
+  // #747: rate-limiter for the bulk write. Default paces nothing but backs off on a 429; a caller can
+  // pass a configured pacer (spacing/interval) for a large audit against a strict tracker quota.
+  pacer?: Pacer;
+}
+
+// #824: filing eligibility. Free-tier output is Info-severity / Review-confidence *indicators* (M6
+// hand-rolled hints, jscpd small-clones, perf heuristics) — too noisy to file into a client's own
+// tracker. Two guards, both fail-loud (a dropped finding is returned with a reason, never silently
+// discarded):
+//   - Content filter (primary): a finding below the filing threshold is excluded whatever the tier.
+//   - Availability guard (secondary): on a free-tier engagement the add-on is unavailable — every
+//     finding is excluded, even a Confirmed/Critical one.
+const NON_FILEABLE_SEVERITIES: readonly Severity[] = ["Info", "Watch"];
+const NON_FILEABLE_CONFIDENCES: readonly Confidence[] = ["Review", "N/A"];
+
+interface Exclusion {
+  finding: Finding;
+  reason: string;
+}
+
+// Partition findings into what may be filed and what is held back (with a per-finding reason for
+// disclosure). A finding is fileworthy only on a paid engagement AND when its severity is actionable
+// (not Info/Watch) AND its confidence is triage-worthy (not Review/N/A).
+export function filingEligibility(findings: Finding[], paid: boolean): { fileable: Finding[]; excluded: Exclusion[] } {
+  const fileable: Finding[] = [];
+  const excluded: Exclusion[] = [];
+  for (const f of findings) {
+    if (!paid) {
+      excluded.push({ finding: f, reason: "free-tier engagement — ticket filing is a paid-tier add-on" });
+    } else if (NON_FILEABLE_SEVERITIES.includes(f.severity)) {
+      excluded.push({ finding: f, reason: `${f.severity}-severity indicator, below the paid-tier filing threshold` });
+    } else if (NON_FILEABLE_CONFIDENCES.includes(f.confidence)) {
+      excluded.push({ finding: f, reason: `${f.confidence}-confidence indicator, below the paid-tier filing threshold` });
+    } else {
+      fileable.push(f);
+    }
+  }
+  return { fileable, excluded };
 }
 
 // A single finding mapped to what a tracker item should contain. `marker` is also embedded at the
@@ -56,11 +105,14 @@ interface TicketPlan {
   grouping: Grouping;
   epics: PlannedEpic[]; // [] in flat mode
   tickets: PlannedTicket[];
+  excluded: Exclusion[]; // #824: findings held back by the paid-tier / content gate, with reasons
 }
 
 interface FileResult {
   created: { marker: string; ref: CreatedRef }[];
-  skipped: { marker: string; ref: CreatedRef }[]; // already filed by a prior run
+  skipped: { marker: string; ref: CreatedRef }[]; // already filed by a prior run (default re-audit behavior)
+  updated: { marker: string; ref: CreatedRef }[]; // #747: already-filed tickets patched under --update
+  excluded: Exclusion[]; // #824: findings the gate held back (disclosed, never silently dropped)
   epicsCreated: number;
   epicsReused: number;
 }
@@ -90,12 +142,15 @@ export function ticketLabels(f: Finding): string[] {
   return labels;
 }
 
-function ticketBody(f: Finding, marker: string): string {
+function ticketBody(f: Finding, marker: string, paid: boolean): string {
   const lines: string[] = [`**Severity:** ${f.severity} · **Confidence:** ${f.confidence}`, ""];
   if (f.impact) lines.push(`**Impact:** ${f.impact}`, "");
   lines.push(`**Location:** \`${f.location}\``, "");
   if (f.evidence) lines.push("**Evidence:**", "", f.evidence, "");
   if (f.fix) lines.push("**Fix:** " + f.fix, "");
+  // #825: on a paid engagement, surface the applicable diff under the prose fix — but only if it was
+  // mechanically verified (applies cleanly + effect confirmed). An unverified proposal is never filed.
+  if (paid && f.suggestedFix?.verified && f.suggestedFix.diff.trim()) lines.push(...renderFixSection(f.suggestedFix));
   const meta: string[] = [];
   if (f.taxonomy) meta.push(`taxonomy: ${f.taxonomy}`);
   if (f.category) meta.push(`category: ${f.category}`);
@@ -113,7 +168,7 @@ export function findingToTicket(f: Finding, opts: FileOptions = {}): PlannedTick
   return {
     finding: f,
     title: `[${f.severity}] ${f.title}`,
-    body: ticketBody(f, marker),
+    body: ticketBody(f, marker, opts.paid ?? false),
     labels: ticketLabels(f),
     marker,
     group: opts.grouping === "flat" ? "" : f.category,
@@ -125,9 +180,12 @@ export function findingToTicket(f: Finding, opts: FileOptions = {}): PlannedTick
 export function planTickets(findings: Finding[], opts: FileOptions = {}): TicketPlan {
   const grouping: Grouping = opts.grouping ?? "grouped";
   const engagement = opts.engagement ?? "harvey";
-  const tickets = findings.map((f) => findingToTicket(f, { ...opts, grouping }));
+  // #824: only fileworthy findings are planned; the rest are carried as `excluded` (with reasons) so
+  // a preview/confirm can disclose "N not filed, why" rather than silently dropping them.
+  const { fileable, excluded } = filingEligibility(findings, opts.paid ?? false);
+  const tickets = fileable.map((f) => findingToTicket(f, { ...opts, grouping }));
 
-  if (grouping === "flat") return { grouping, epics: [], tickets };
+  if (grouping === "flat") return { grouping, epics: [], tickets, excluded };
 
   const epics: PlannedEpic[] = [];
   const seen = new Set<string>();
@@ -143,7 +201,7 @@ export function planTickets(findings: Finding[], opts: FileOptions = {}): Ticket
       marker,
     });
   }
-  return { grouping, epics, tickets };
+  return { grouping, epics, tickets, excluded };
 }
 
 // File the plan through a tracker, skipping anything a prior run already filed (dedup via the
@@ -151,31 +209,40 @@ export function planTickets(findings: Finding[], opts: FileOptions = {}): Ticket
 // authorization. Grouped mode creates/reuses a category epic before filing its stories under it.
 export async function fileFindings(tracker: Tracker, findings: Finding[], opts: FileOptions = {}): Promise<FileResult> {
   const plan = planTickets(findings, opts);
-  const result: FileResult = { created: [], skipped: [], epicsCreated: 0, epicsReused: 0 };
+  const result: FileResult = { created: [], skipped: [], updated: [], excluded: plan.excluded, epicsCreated: 0, epicsReused: 0 };
+  // #747: every tracker call goes through the pacer — spacing + backoff-and-retry on a rate limit.
+  const pacer = opts.pacer ?? makePacer();
+  const call = <T>(fn: () => Promise<T>) => pacer.run(fn);
 
   const epicIdByCategory = new Map<string, string>();
   for (const epic of plan.epics) {
-    const existing = await tracker.findByMarker(epic.marker);
+    const existing = await call(() => tracker.findByMarker(epic.marker));
     if (existing) {
       epicIdByCategory.set(epic.category, existing.id);
       result.epicsReused++;
       continue;
     }
-    const ref = await tracker.createEpic({ title: epic.title, description: epic.body });
+    const ref = await call(() => tracker.createEpic({ title: epic.title, description: epic.body }));
     epicIdByCategory.set(epic.category, ref.id);
     result.epicsCreated++;
   }
 
   for (const t of plan.tickets) {
-    const existing = await tracker.findByMarker(t.marker);
+    const existing = await call(() => tracker.findByMarker(t.marker));
     if (existing) {
-      result.skipped.push({ marker: t.marker, ref: existing });
+      // #747: --update patches the already-filed ticket; the default skips it (never clobber edits).
+      if (opts.update) {
+        await call(() => tracker.updateStory(existing.id, { body: t.body, labels: t.labels }));
+        result.updated.push({ marker: t.marker, ref: existing });
+      } else {
+        result.skipped.push({ marker: t.marker, ref: existing });
+      }
       continue;
     }
     const input: ItemInput = { title: t.title, description: t.body };
     const epicId = plan.grouping === "grouped" ? epicIdByCategory.get(t.group || "Uncategorized") : undefined;
-    const ref = epicId ? await tracker.createStory(input, epicId) : await tracker.createEpic(input);
-    await tracker.setLabels(ref.id, t.labels);
+    const ref = epicId ? await call(() => tracker.createStory(input, epicId)) : await call(() => tracker.createEpic(input));
+    await call(() => tracker.setLabels(ref.id, t.labels));
     result.created.push({ marker: t.marker, ref });
   }
 

@@ -318,14 +318,71 @@ in the set.
 Report run 4 as **"the reviewer agreed 4/4 positives and 2/3 negatives on this rubric set"** —
 never as an M6 precision figure.
 
+### 3.5 The two-reviewer protocol (#813)
+
+Runs 3 and 4 made reviewer variance a measured fact (§3.4 finding 1): two fresh contexts, the
+same packet, the same rubric, opposite verdicts on `framework-adapter.ts`. A single pass is
+therefore a datapoint, not a verdict — so as of #813 the **paid M6 verdict is never asserted
+from a single reviewer pass**.
+
+**The protocol:**
+
+1. **Two independent passes.** Two reviewers each receive the *identical* `pnpm simplify-scan`
+   packet as their sole input, in fresh contexts that share no state and cannot see each other's
+   output. Same-model self-consistency is acceptable (runs 3 and 4 were both Claude Fable 5);
+   *independence of context* is the load-bearing property, and each pass must carry a distinct
+   `reviewer` id — the comparison tool rejects a self-comparison outright.
+2. **Machine-readable verdicts.** Each writeup ends with the verdict block the packet's
+   "Verdict format" section specifies: one `flag`/`spare` row per packet file, every file listed
+   exactly once. An unlisted file is reported loudly as uncompared — it never defaults to
+   `spare`, per the repo's silent-omission doctrine.
+3. **Mechanical comparison.** `pnpm exec tsx src/cli/m6-agreement.ts <a.json> <b.json>`
+   (`src/m6-agreement.ts`, tested in `m6-agreement.test.ts`) computes agreement — it is never
+   eyeballed. The tool refuses passes over different targets and self-comparisons.
+4. **Routing.** Unanimous flags proceed to the existing human triage (§5) as candidate findings.
+   Unanimous spares are spared. A **split goes to a human adjudicator with both reviewers'
+   recorded arguments — it never goes straight into a report, as neither a finding nor a
+   silent spare.** Files reviewed by only one pass are surfaced as uncompared and must be
+   resolved (re-reviewed or adjudicated) before the verdict artifact is recorded.
+5. **Reporting.** The agreement figure is a rubric-agreement number for that pair of passes on
+   that packet — the tool's own output says so, and it is never quoted as M6 precision.
+
+**Recorded agreement baseline (2026-07-16 pair, transcribed 2026-07-23).** The first recorded
+baseline is the runs 3 and 4 pair — the two genuinely independent fresh-context passes this
+repo already has — transcribed from §3.3/§3.4 and the GROUND-TRUTH run log into the #813
+verdict format at `docs/design/m6-eval-runs/2026-07-16-run{3,4}.verdict.json`, with the tool's
+output recorded verbatim at `docs/design/m6-eval-runs/2026-07-16-run3-vs-run4.agreement.txt`:
+**agreed 5/6 on the co-reviewed files** (both flagged all four positives, both spared
+`depdrop.ts`), one split (`framework-adapter.ts` — the adjudicated outcome is the recorded
+key: spare), and `reconcile.ts` uncompared (run 3 predates it, #325). This is a transcription
+of two historical passes, not a new execution; its provenance caveats live in the run-log
+sections it was transcribed from.
+
+**What the baseline does NOT yet cover.** The corpus expanded to twelve files in the same #813
+batch (§4), and no paired two-reviewer run over the expanded corpus exists yet — producing one
+requires two genuinely independent fresh contexts, which the batch agent that landed this
+protocol could not honestly provide from within one session. That run is tracked as #830 (the
+#813 remainder); until it lands, the recorded baseline speaks only for the seven-file corpus.
+
+Run 4's second finding (§3.4 — the packet gave reviewers no way to check dependency-tree
+claims) is closed separately: since #396 the packet embeds the target's dependency manifest and
+standing rule 3 forbids dep-tree claims from memory.
+
 ## 4. The labeled corpus
 
-`targets/calibration/simplify/` — seven files, four positives + three negatives (paired by shape
-so each positive has a visually-similar negative that should NOT be flagged, forcing the reviewer
-to reason about the *why*, not just pattern-match "this shape looks reusable"). The three
-negatives now cover all three FP classes `quality-extras.txt` names: the deliberate dep-drop, the
-framework/library contract, and — added 2026-07-16, #325 — the single-use helper kept as a
-testability seam.
+`targets/calibration/simplify/` — twelve files, seven positives + five negatives (expanded
+2026-07-23 from seven, #813). Wherever possible a positive is paired by shape with a
+visually-similar negative that should NOT be flagged, forcing the reviewer to reason about the
+*why*, not just pattern-match "this shape looks reusable". The negatives cover all three FP
+classes `quality-extras.txt` names — the deliberate dep-drop (`depdrop.ts`, `csv.ts`), the
+framework/library contract (`framework-adapter.ts`), and the single-use helper kept as a
+testability seam (`reconcile.ts`, `proration.ts`) — with the #813 additions giving the dep-drop
+and seam classes a second instance each, so a reviewer cannot memorize one exemplar per class.
+The #813 positives also extend coverage beyond the hand-rolled-primitive class to two
+previously-unrepresented rubric rows: inconsistent patterns (`dates.ts`) and
+premature/speculative generality (`pipeline.ts`). Per the #290 bar, every discriminator is in
+the code (a `// WHY:` block, a pure/I-O split, three divergent implementations of one task) —
+no fixture announces its own verdict.
 
 | id | file | class | should flag? |
 |---|---|---|---|
@@ -333,9 +390,14 @@ testability seam.
 | M6-P-GROUPBY | `group.ts` | hand-rolled array group-by reduce | yes — name `Object.groupBy`/`Map.groupBy`/lodash-es `groupBy` |
 | M6-P-UUID | `id.ts` | hand-rolled random-id string builder | yes — name `crypto.randomUUID()` |
 | M6-P-OVERABSTRACT | `manager.ts` | single-implementation `interface` + factory wrapping one concrete class | yes — collapse to the concrete code |
+| M6-P-DEEPEQUAL | `deep-equal.ts` | hand-rolled recursive deep-equality (added 2026-07-23, #813) | yes — name `node:util` `isDeepStrictEqual` / lodash-es `isEqual` |
+| M6-P-INCONSISTENT | `dates.ts` | the same task (format a `Date` as `YYYY-MM-DD`) implemented three different ways in one file — the rubric's "inconsistent patterns" row (added 2026-07-23, #813) | yes — converge on one, name which |
+| M6-P-SPECGEN | `pipeline.ts` | a register/run transform-pipeline extension point with exactly one registered transform — the rubric's "premature/speculative generality" row (added 2026-07-23, #813) | yes — collapse to a direct call until a second transform exists |
 | M6-N-DEPDROP | `depdrop.ts` | small reimplementation, `// WHY:` comment records a deliberate heavy-dep tradeoff | no |
 | M6-N-FRAMEWORK | `framework-adapter.ts` | single-implementation class shaped like `manager.ts`, but `implements SupportedStorage` (a `@supabase/supabase-js` type) and is passed to `createClient`'s `auth.storage` — the library calls it; rebuilt 2026-07-15 (#290) | no |
 | M6-N-SEAM | `reconcile.ts` | single-use helper shaped like the over-abstraction class (`reconcileTotals`, one caller), but it is the exported pure money-math half of a function whose other half is Supabase I/O — inlining it would entangle the logic with the network (the brief's own MISSING SEAMS failure); added 2026-07-16 (#325) | no |
+| M6-N-CSVDROP | `csv.ts` | a hand-rolled CSV field parser shaped like the classic reinvention (`papaparse`/`csv-parse` exist), paired with `deep-equal.ts` by shape, but a `// WHY:` block records the deliberate bounded-format tradeoff and its revisit condition — the dep-drop FP class, second instance (added 2026-07-23, #813) | no |
+| M6-N-PRORATE | `proration.ts` | exported pure proration math (`prorateUpgradeCharge`) with exactly one caller whose other half is billing-API I/O (`applyPlanChange` → `fetch`) — the testability-seam FP class, second instance, discriminated by the pure/I-O split in the code, no comment asserting it (added 2026-07-23, #813) | no |
 
 Full answer key with reasoning: `targets/calibration/GROUND-TRUTH.md` §"M6 (#72) — Simplification
 / reuse rubric-eval corpus".

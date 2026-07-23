@@ -1714,10 +1714,12 @@ its own co-located fixture pairs in `handrolled.test.ts`, not by this corpus, an
 shape presence, never a verdict. Per the spec preamble item 2 as revised 2026-07-15: indicators
 free and non-grading, verdicts paid.)
 
-Fixtures: `targets/calibration/simplify/` — four planted reinventions to flag, three benign
-lookalikes to spare, paired by shape so the reviewer has to reason about *why* (a `// WHY:`
-tradeoff comment, a framework contract, a testability seam) rather than pattern-match on shape
-alone.
+Fixtures: `targets/calibration/simplify/` — seven planted items to flag, five benign
+lookalikes to spare (expanded 2026-07-23 from 4+3, #813), paired by shape where possible so the
+reviewer has to reason about *why* (a `// WHY:` tradeoff comment, a framework contract, a
+testability seam) rather than pattern-match on shape alone. The #813 expansion gives the
+dep-drop and testability-seam FP classes a second instance each and adds two positive classes
+the corpus previously lacked (inconsistent patterns, premature/speculative generality).
 
 ### M6 positives — planted reinventions (should be flagged for replacement)
 
@@ -1727,6 +1729,9 @@ alone.
 | M6-P-GROUPBY | `simplify/group.ts` | a hand-rolled array group-by reduce → `Object.groupBy` / `Map.groupBy` / lodash-es `groupBy` |
 | M6-P-UUID | `simplify/id.ts` | a hand-rolled random-id string builder (`Math.random()`-based) → `crypto.randomUUID()` |
 | M6-P-OVERABSTRACT | `simplify/manager.ts` | a single-implementation `InvoiceManager` interface + `createInvoiceManager` factory wrapping one concrete class → collapse to the concrete code |
+| M6-P-DEEPEQUAL | `simplify/deep-equal.ts` | a hand-rolled recursive deep-equality function → `node:util` `isDeepStrictEqual` / lodash-es `isEqual`. Added 2026-07-23 (#813). |
+| M6-P-INCONSISTENT | `simplify/dates.ts` | the same task — format a `Date` as `YYYY-MM-DD` — implemented three different ways in one file (`getFullYear` string-building, `toISOString().slice`, `Intl.DateTimeFormat("en-CA")`); the rubric's "inconsistent patterns" row → converge on one, name which. Added 2026-07-23 (#813). |
+| M6-P-SPECGEN | `simplify/pipeline.ts` | a `registerExportTransform`/`runExportPipeline` extension point with exactly one registered transform; the rubric's "premature/speculative generality" row → collapse to a direct call until a second transform exists. Added 2026-07-23 (#813). |
 
 ### M6 negatives — benign lookalikes (should NOT be flagged)
 
@@ -1735,6 +1740,8 @@ alone.
 | M6-N-DEPDROP | `simplify/depdrop.ts` | a small hand-rolled `throttle`, shaped like `debounce.ts`, but carries a `// WHY:` comment recording a deliberate tradeoff (drop a heavy dep for an 8-line function) — `quality-extras.txt` "FALSE POSITIVES": note the tradeoff, don't flag as a defect. |
 | M6-N-FRAMEWORK | `simplify/framework-adapter.ts` | a single-implementation class shaped like `manager.ts`'s over-abstraction, but the shape is imposed by a library contract the code itself demonstrates: `CookieSessionStorage implements SupportedStorage`, the type `@supabase/supabase-js` re-exports from `@supabase/auth-js`, and the instance is passed to `createClient`'s `auth.storage` option — so auth-js really does call `getItem`/`setItem`/`removeItem` on it. The `getItem → string \| null` signature and the `isServer` flag are the library's, not the author's; collapsing the class would break the option's type. `quality-extras.txt` "FALSE POSITIVES": an abstraction mandated by a framework/library contract. **Rebuilt 2026-07-15 (#290)** — see "M6-N-FRAMEWORK rebuild" below. |
 | M6-N-SEAM | `simplify/reconcile.ts` | a single-use helper shaped like the over-abstraction class (`reconcileTotals` has exactly one caller, `monthlyReconciliation`), but the helper is the testability seam the brief itself demands: it is the pure money-math half of a function whose other half is Supabase I/O. Inlining it into its one caller would entangle the calculation with the network — the exact "MISSING SEAMS — business logic entangled with I/O so it can't be tested without the DB/network" failure `quality-extras.txt`'s SUPPORTABILITY section names — and it is exported, so a test can exercise the money math with no client at all. `quality-extras.txt` "FALSE POSITIVES": a single-use helper that exists for testability/seam reasons. The contract is in the code (pure exported helper + I/O-entangled sole caller), not asserted in a comment — the #290 bar. **Added 2026-07-16 (#325)**; the same FP class on the M5 mechanical side is handled by `detectSingleUseHelper`'s non-exported-only scope (#370). |
+| M6-N-CSVDROP | `simplify/csv.ts` | a hand-rolled CSV field parser, shaped like the classic library reinvention (`papaparse`/`csv-parse` exist) and paired with `deep-equal.ts` by shape, but its `// WHY:` block records the deliberate tradeoff (one bounded, spec-published bank format vs a new install/audit surface) *and* the revisit condition — `quality-extras.txt` "FALSE POSITIVES": the deliberate dep-drop, second instance so a reviewer can't memorize `depdrop.ts` as "the" WHY fixture. Added 2026-07-23 (#813). |
+| M6-N-PRORATE | `simplify/proration.ts` | exported pure proration math (`prorateUpgradeCharge`) with exactly one caller (`applyPlanChange`) whose other half is billing-API I/O (`fetch`) — the testability-seam FP class, second instance after `reconcile.ts`. The discriminator is the pure/I-O split in the code, no comment asserting it (the #290 bar): inlining the math into its `fetch`-entangled caller would make the money calculation untestable without the network. Added 2026-07-23 (#813). |
 
 ### M6 eval status
 
@@ -1817,10 +1824,21 @@ real published types cited above. This is the same footing as every other fixtur
 none of which compile; an M6 reviewer reads source, it does not typecheck. If the corpus ever gains a
 real install, this fixture should typecheck as-is.
 
+**Two-reviewer protocol + corpus expansion (2026-07-23, #813).** The paid M6 verdict is no
+longer asserted from a single reviewer pass: two independent fresh-context passes over the
+identical packet, compared mechanically by `pnpm exec tsx src/cli/m6-agreement.ts` — unanimous
+flags to human triage, splits to a human adjudicator, uncompared files surfaced loudly. The
+recorded agreement baseline is the runs 3 vs 4 pair (agreed 5/6 co-reviewed files, split on
+`framework-adapter.ts`), transcribed at `docs/design/m6-eval-runs/`. The corpus expanded from
+seven to twelve files in the same batch (rows marked #813 above); **no paired two-reviewer run
+over the expanded corpus exists yet** — it needs two genuinely independent contexts and is
+tracked as #830 (the #813 remainder). Protocol: `docs/design/m6-simplification-eval.md` §3.5.
+
 Full write-up: `docs/design/m6-simplification-eval.md` §3.1 (run 1), §3.2 (run 2), §3.3 (run 3),
-§3.4 (run 4, the first over the seven-file corpus). Whatever a run produces, report it as
-**"reviewer agreed N/4 positives, M/3 negatives"** (M/2 for runs 1–3, which predate M6-N-SEAM) —
-never as an "M6 precision" percentage.
+§3.4 (run 4, the first over the seven-file corpus), §3.5 (the two-reviewer protocol, #813).
+Whatever a run produces, report it as **"reviewer agreed N/7 positives, M/5 negatives"** (N/4 +
+M/2 for runs 1–3 and N/4 + M/3 for run 4, which predate the #813 expansion) — never as an
+"M6 precision" percentage.
 
 ## Known-public/test-credential recognizer (issues #210, #211, #225)
 

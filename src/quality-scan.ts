@@ -327,6 +327,37 @@ export function knipEntryUncertainFinding(reason: string): Finding {
   };
 }
 
+// #810: knip normally needs the TARGET's node_modules installed, because it LOADS the target's own
+// knip config and every framework plugin config (vite.config.ts, next.config.ts, ...) — and those
+// config files import packages that don't resolve without the deps, so knip aborts and M5 produced
+// only the M5-00 "did not complete" gap (zero dead-code findings). quality-scan now RE-RUNS knip
+// with every knip plugin disabled and Harvey-inferred entry points (buildDegradedKnipConfig) so no
+// target config file is loaded at all — it produces dead-code findings from source alone. Those
+// findings are review-tier (the unused-FILE ones are entry-graph-contingent, same as #696's
+// inferred-entry path) and this M5-98 row discloses that the scope ran in that reduced mode rather
+// than a clean, deps-resolved run — a visible partial per the coverage guard, not a silent degrade.
+// Distinct id from M5-00 (didn't complete AT ALL) and M5-99 (completed but entry resolution looks
+// untrustworthy) so the three failure/limitation shapes stay legible in the report.
+export function knipReducedTierFinding(reason: string): Finding {
+  return {
+    id: "M5-98",
+    title: "M5 dead-code scan ran in reduced (no-dependencies) mode for one or more scopes",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Maintainability",
+    taxonomy: "M5 — Slop / dead code",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `knip could not load the target's own config, so it re-ran with all plugins disabled and Harvey-inferred entry points: ${reason}`,
+    impact:
+      "The M5 findings for the affected scope(s) come from a source-only run with no dependency/plugin resolution — the unused-FILE findings above are review-tier (an inferred entry graph, not the target's real one) and may over-report files that are plugin-registered entries. Real dead code is still surfaced; treat file findings as review candidates, not confirmed.",
+    fix: "Install the target repo's dependencies (npm/pnpm/yarn install) so knip can load the target's own config and framework plugin configs, then re-run `pnpm quality-scan` for confirmed (non-review) file findings.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
+}
+
 // #505: quality-scan now runs jscpd/knip per workspace (monorepo target) rather than once over the
 // whole target, so their reports need merging back into one before the existing jscpdToFindings /
 // knipToFindings transforms run — those stay single-report, unchanged and still independently

@@ -267,3 +267,46 @@ describe("quality-scan CLI — M5 never overrides a target's own knip entry conf
     expect(typeFinding).toBeUndefined();
   }, 30000);
 });
+
+// #810: the "NEEDS target npm install" prereq. This fixture ships a vite.config.ts that imports an
+// uninstalled plugin (@vitejs/plugin-react) — exactly what a target with no node_modules looks like:
+// knip aborts trying to LOAD that plugin config (MEASURED against knip 5.88.1: exit 2, no JSON).
+// Before #810 M5 produced only the M5-00 "did not complete" gap (zero findings). Now it re-runs with
+// every knip plugin disabled + inferred entries and surfaces the dead file at review tier, disclosing
+// the reduced mode as M5-98. A regression that drops the retry produces M5-00 and no dead-code finding.
+function noNodeModulesViteFixture(): string {
+  const repo = mkdtempSync(join(tmpdir(), "harvey-quality-noinstall-cli-"));
+  dirs.push(repo);
+  write(repo, "package.json", JSON.stringify({ name: "noinstall", private: true, version: "0.0.0", type: "module", devDependencies: { vite: "^5.0.0", "@vitejs/plugin-react": "^4.0.0" } }));
+  // Imports an uninstalled plugin → knip can't load this config without the target's node_modules.
+  write(repo, "vite.config.ts", 'import { defineConfig } from "vite";\nimport react from "@vitejs/plugin-react";\nexport default defineConfig({ plugins: [react()] });\n');
+  write(repo, "index.html", '<!doctype html>\n<html>\n  <body>\n    <script type="module" src="/src/main.ts"></script>\n  </body>\n</html>\n');
+  write(repo, "src/main.ts", 'import { used } from "./used.js";\nconsole.log(used);\n');
+  write(repo, "src/used.ts", 'export const used = "u";\n');
+  write(repo, "src/dead.ts", 'export const dead = "d";\n');
+  return repo;
+}
+
+describe("quality-scan CLI — M5 runs without the target's node_modules via a plugins-disabled retry (#810)", () => {
+  it("produces dead-code findings on a no-node_modules target and discloses the reduced tier as M5-98, not the M5-00 gap", () => {
+    const findings = runCli(noNodeModulesViteFixture());
+    const unusedFile = (name: string) => findings.find((f) => f.taxonomy.startsWith("M5 —") && f.title.startsWith("Unused") && f.location.endsWith(name));
+
+    // The dead file is surfaced even though knip could not load the target's config — at review tier
+    // (entries were inferred by the degraded retry, same contingency as #696).
+    const dead = unusedFile("src/dead.ts");
+    expect(dead).toBeDefined();
+    expect(dead?.confidence).toBe("Review");
+    expect(dead?.precisionTier).toBe("review");
+
+    // main-reachable file is NOT flagged — the inferred Vite/index.html entry globs still resolve it.
+    expect(unusedFile("src/used.ts")).toBeUndefined();
+
+    // reduced-mode disclosure present; the "did not complete" gap is NOT (it DID complete via retry).
+    const reduced = findings.find((f) => f.id === "M5-98");
+    expect(reduced).toBeDefined();
+    expect(reduced?.taxonomy).toContain("M5");
+    expect(reduced?.fix).toContain("dependencies");
+    expect(findings.find((f) => f.id === "M5-00")).toBeUndefined();
+  }, 30000);
+});

@@ -2,21 +2,21 @@
   {
     "phase": "M1 + supply chain",
     "module": "mechanical scan (secrets, deps, semgrep, supply-chain, leftover-auth)",
-    "ms": 14289.8,
-    "findingCount": 352,
+    "ms": 14491.7,
+    "findingCount": 353,
     "notes": "secrets (trufflehog+gitleaks), dependency CVEs (osv-scanner + curated Next.js ranges), semgrep, supply-chain, leftover-auth grep — all ran live against the target, except the two live npm-registry checks (license compliance, slopsquat) which are skipped to keep this artifact network-independent."
   },
   {
     "phase": "M1 detect-deeper",
     "module": "grant/definer classifiers (static migration-SQL feed, no live DB)",
-    "ms": 1.8,
+    "ms": 2,
     "findingCount": 2,
     "notes": "exposedTo for SECURITY DEFINER functions is an assumed default (Postgres grants EXECUTE to PUBLIC unless revoked; no REVOKE found) — see ASSUMED_DEFAULT_FUNCTION_EXPOSURE. No-policy-table candidates require only structural RLS/policy presence, no live grants."
   },
   {
     "phase": "M10",
     "module": "PII/PHI/PCI data map (tools/pii-classify.mjs, static migration-SQL feed)",
-    "ms": 7.2,
+    "ms": 8.3,
     "findingCount": 9,
     "notes": "119 columns classified across 9 tables with PII/PHI/PCI hits."
   }
