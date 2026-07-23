@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -289,10 +289,34 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
     try {
       execFileSync(
         join(repoRoot, "node_modules", ".bin", "jscpd"),
-        [dupDir, "--reporters", "json", "--output", outDir, "--threshold", "100", "--absolute", "--silent", "--noTips", "--ignore", JSCPD_IGNORE_GLOBS.join(",")],
+        [
+          dupDir,
+          "--reporters",
+          "json",
+          "--output",
+          outDir,
+          "--threshold",
+          "100",
+          "--absolute",
+          "--silent",
+          "--noTips",
+          // #838: gitignore-aware repo-root detection walks up from dupDir into this repo's real
+          // .git — in a worktree checkout that's a FILE pointing at the primary checkout's gitdir,
+          // and reading it from a sandboxed subprocess throws ENOENT deep inside jscpd's own
+          // error-swallowing pipeline, so it silently writes no report at all. `dupDir` is a fixed
+          // fixture dir already covered by the explicit --ignore globs below, so gitignore
+          // awareness adds nothing here — disabling it sidesteps the repo walk entirely.
+          "--no-gitignore",
+          "--ignore",
+          JSCPD_IGNORE_GLOBS.join(","),
+        ],
         { stdio: ["ignore", "ignore", "pipe"] },
       );
-      const report = JSON.parse(readFileSync(join(outDir, "jscpd-report.json"), "utf8")) as JscpdReport;
+      const reportPath = join(outDir, "jscpd-report.json");
+      if (!existsSync(reportPath)) {
+        throw new Error(`jscpd exited without writing a report to ${reportPath} — expected real M4 findings from ${dupDir}`);
+      }
+      const report = JSON.parse(readFileSync(reportPath, "utf8")) as JscpdReport;
       for (const dup of report.duplicates) {
         dup.firstFile.name = relative(dupDir, resolve(dup.firstFile.name));
         dup.secondFile.name = relative(dupDir, resolve(dup.secondFile.name));

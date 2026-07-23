@@ -27,10 +27,12 @@
 //      ~/.cache/harvey/chrome-for-testing so repeat runs skip the download. See
 //      docs/design/m7-chrome-provisioning.md.
 // A run that still measures nothing (NO_FCP on every reachable candidate) is surfaced as the
-// fail-loud M7L-00 disclosure, never a silent clean. Note: a chrome that LAUNCHES but yields
-// NO_FCP does not fall through to the next candidate — only a launch failure (an exception) does;
-// retrying across candidates on a soft NO_FCP result is a known structural gap, unchanged by #818
-// (tracked as a follow-up, not solved here).
+// fail-loud M7L-00 disclosure, never a silent clean. A chrome that LAUNCHES but yields NO_FCP (or
+// any other Lighthouse runtimeError) on the first route is treated the same as a launch failure —
+// killed, and the resolution order falls through to the next candidate (#841) — by verifying each
+// auto-resolved candidate against that first route as part of selecting it, not just checking that
+// it launched. An explicit LIGHTHOUSE_CHROME_PATH override is exempt: it "always wins" (no
+// fallthrough), so a soft failure there still propagates as-is.
 //
 // chrome-launcher spawns Chrome as a raw child_process; a bad path (e.g. a stale
 // LIGHTHOUSE_CHROME_PATH) makes Node emit an unhandled 'error' event on that child process, which
@@ -55,6 +57,7 @@ import { launch, type LaunchedChrome, type Options as LaunchOptions } from "chro
 import runLighthouse from "lighthouse";
 import type { Finding } from "../findings.js";
 import { lighthouseRunErrorReason, lighthouseUnavailableFinding, parseLighthouseFindings, serveCommand, type LighthousePageResult, type LighthouseResult } from "../lighthouse.js";
+import { tryChromeCandidates, type ChromeCandidate } from "../lighthouse-chrome-candidates.js";
 import { detectTargetFramework } from "../scan/framework-detect.js";
 
 // Value-flags consume the next token; --route repeats. Anything left over is the target dir.
@@ -201,8 +204,11 @@ function safeLaunch(opts: LaunchOptions): Promise<LaunchedChrome> {
   });
 }
 
-// Launches Chrome for Lighthouse — see the browser-resolution order in the header comment.
-async function launchChrome(): Promise<LaunchedChrome> {
+// Launches Chrome for Lighthouse and verifies it against `probeRoute` — see the browser-resolution
+// order in the header comment and #841 on why verification is part of candidate selection, not a
+// separate step. Returns the already-audited first page alongside the chrome so main() doesn't pay
+// for a second Lighthouse run against the same route.
+async function launchChrome(probeBase: string, probeRoute: string): Promise<{ chrome: LaunchedChrome; firstPage: LighthousePageResult }> {
   // #818: --disable-dev-shm-usage avoids the renderer crashing on the small /dev/shm typical of
   // sandboxed/containerized hosts (a documented root cause of headless Chrome's "page did not
   // paint any content" / NO_FCP, independent of which chromePath below produces the crash);
@@ -210,9 +216,28 @@ async function launchChrome(): Promise<LaunchedChrome> {
   // candidate, not just the bundled one, since any of them can hit the same failure mode.
   const chromeFlags = ["--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"];
   const override = process.env.LIGHTHOUSE_CHROME_PATH;
-  if (override) return safeLaunch({ chromeFlags, chromePath: override });
+  if (override) {
+    // An explicit override "always wins" (see header comment) — no fallthrough on a soft failure
+    // here, only on the earlier ENOENT-style launch failure (#556, still handled by safeLaunch).
+    const chrome = await safeLaunch({ chromeFlags, chromePath: override });
+    return { chrome, firstPage: await auditRoute(probeBase, probeRoute, chrome.port) };
+  }
 
-  let lastErr: Error = new Error("no Chrome candidate was reachable");
+  // #841: a candidate that launches but can't measure `probeRoute` (NO_FCP or any other Lighthouse
+  // runtimeError) is no more usable than one that failed to launch — kill it and re-throw so
+  // tryChromeCandidates (src/lighthouse-chrome-candidates.ts) falls through to the next candidate
+  // exactly like it already does for a thrown safeLaunch.
+  async function attempt(chromePath: string | undefined): Promise<{ chrome: LaunchedChrome; firstPage: LighthousePageResult }> {
+    const chrome = await safeLaunch({ chromeFlags, chromePath });
+    try {
+      return { chrome, firstPage: await auditRoute(probeBase, probeRoute, chrome.port) };
+    } catch (err) {
+      await chrome.kill();
+      throw err;
+    }
+  }
+
+  const candidates: ChromeCandidate<{ chrome: LaunchedChrome; firstPage: LighthousePageResult }>[] = [];
 
   // #818: try the Playwright chromium this repo already vendors FIRST — it needs no system
   // install and no network, so CWV is not gated on either. Skippable via
@@ -220,30 +245,28 @@ async function launchChrome(): Promise<LaunchedChrome> {
   // machine that does have this candidate, mirroring LIGHTHOUSE_SKIP_SYSTEM_CHROME).
   if (!process.env.LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM) {
     const bundled = await playwrightChromePath();
-    if (bundled) {
-      try {
-        return await safeLaunch({ chromeFlags, chromePath: bundled });
-      } catch (err) {
-        lastErr = err instanceof Error ? err : new Error(String(err));
-      }
-    }
+    if (bundled) candidates.push({ label: "bundled-playwright", attempt: () => attempt(bundled) });
   }
 
   if (!process.env.LIGHTHOUSE_SKIP_SYSTEM_CHROME) {
-    try {
-      return await safeLaunch({ chromeFlags });
-    } catch (err) {
-      lastErr = err instanceof Error ? err : new Error(String(err));
-    }
+    candidates.push({ label: "system", attempt: () => attempt(undefined) });
   }
 
   // Network-dependent provisioning is the last resort now — every earlier candidate is either
   // already on disk (bundled) or already installed (system), so this is the only step that can
-  // fail purely because the host has no network access.
-  const provisioned = await provisionChrome();
-  if (provisioned) return safeLaunch({ chromeFlags, chromePath: provisioned });
+  // fail purely because the host has no network access. Resolved lazily (inside attempt(), not
+  // here) so it's only ever invoked when reached — an earlier candidate succeeding must not pay
+  // for a provisioning check.
+  candidates.push({
+    label: "provisioned",
+    attempt: async () => {
+      const provisioned = await provisionChrome();
+      if (!provisioned) throw new Error("no Chrome could be provisioned");
+      return attempt(provisioned);
+    },
+  });
 
-  throw lastErr;
+  return tryChromeCandidates(candidates);
 }
 
 async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
@@ -292,6 +315,7 @@ async function resolveTarget(): Promise<{ base: string; cleanup: () => void }> {
 
 async function auditRoute(base: string, route: string, chromePort: number): Promise<LighthousePageResult> {
   const url = `${base}${route.startsWith("/") ? route : `/${route}`}`;
+  console.error(`lighthouse: auditing ${url} …`);
   const runnerResult = await runLighthouse(url, { port: chromePort, output: "json", logLevel: "error", onlyCategories: ["performance"] });
   if (!runnerResult) throw new Error(`Lighthouse returned no result for ${url}`);
   const lhr = runnerResult.lhr as unknown as LighthouseResult;
@@ -308,11 +332,10 @@ async function main(): Promise<void> {
     const target = await resolveTarget();
     cleanup = target.cleanup;
 
-    const chrome = await launchChrome();
+    const { chrome, firstPage } = await launchChrome(target.base, routes[0]!);
     try {
-      const pages: LighthousePageResult[] = [];
-      for (const route of routes) {
-        console.error(`lighthouse: auditing ${target.base}${route} …`);
+      const pages: LighthousePageResult[] = [firstPage];
+      for (const route of routes.slice(1)) {
         pages.push(await auditRoute(target.base, route, chrome.port));
       }
       const findings = parseLighthouseFindings(pages);
