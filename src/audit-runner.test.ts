@@ -135,24 +135,42 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     expect(runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M5")?.status).toBe("ran");
   });
 
-  // #401: the free-tier test-intent detectors are source-only AST passes (src/detectors/test-intent.ts)
-  // — no installed deps needed — so a target without node_modules should read partial (source tier
-  // covered), not the blanket requires-live-run StrykerJS alone would justify.
-  it("M8 falls back to the test-intent tier without node_modules, reporting partial not requires-live-run", () => {
-    const noDeps = ctx({ exists: (p) => !p.endsWith("node_modules") });
+  // #771: mutation-scan's own suite-absence check is a static package.json/test-file read — no
+  // installed deps needed — so it must be invoked (and its verdict trusted) whether or not
+  // node_modules exists. A target that genuinely HAS a suite but no node_modules degrades through
+  // mutation-scan's own ladder (partial, naming --install) rather than a blanket M8-probe fallback.
+  it("M8 without node_modules still invokes mutation-scan, reading its suite-exists-no-install verdict as partial", () => {
+    const noDeps = ctx({
+      exists: (p) => !p.endsWith("node_modules"),
+      exec: (_c, argv) =>
+        argv.includes("mutation-scan")
+          ? { ok: true, output: JSON.stringify({ moduleRecord: { status: "partial", note: "Mutation scoring did not run: the target has a vitest suite but no Stryker install (@stryker-mutator/core, @stryker-mutator/vitest-runner missing) — re-run with --install to provision them." } }) }
+          : { ok: true, output: cleanOutput(argv) },
+    });
     const m8 = runAudit(AUDIT_RUNNERS, noDeps).recorded.find((r) => r.module === "M8");
     expect(m8?.status).toBe("partial");
-    expect(m8?.reason).toMatch(/test-intent/i);
+    expect(m8?.reason).toMatch(/--install/);
   });
 
-  it("M8 stays requires-live-run without node_modules when the test-intent pass itself found nothing to scan", () => {
-    const emptyNoDeps = ctx({
+  // #771: the bug this regression guards — a no-package.json / no-tests target has no node_modules
+  // EITHER, and the M8 probe used to short-circuit before ever calling mutation-scan, so the M8-00
+  // zero-coverage finding was never emitted (a bare "partial, add node_modules" with no verdict).
+  // mutation-scan's suite-absence detection needs no installed deps, so it must run regardless and
+  // its `noSuite` verdict must read `ran` with the M8-00 finding captured into the deliverable —
+  // exactly the #754 no-suite mapping, now reachable from a target with no node_modules too.
+  it("M8 — a no-package.json / no-tests target (no node_modules) still reads ran with the M8-00 finding (#771)", () => {
+    const noSuiteRecord = { status: "partial" as const, noSuite: true, note: "No automated test suite found (no package.json found; no known test-runner dependency; no stryker.conf.*) — mutation scan could not run." };
+    const artifact = { finding: { id: "M8-00" }, moduleRecord: noSuiteRecord };
+    const noPackageJson = ctx({
       exists: (p) => !p.endsWith("node_modules"),
-      exec: (_c, argv) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files (0 product-code) from /empty" } : { ok: true, output: cleanOutput(argv) }),
+      captureDir: "/capture",
+      readArtifact: () => artifact,
+      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : { ok: true, output: cleanOutput(argv) }),
     });
-    const m8 = runAudit(AUDIT_RUNNERS, emptyNoDeps).recorded.find((r) => r.module === "M8");
-    expect(m8?.status).toBe("requires-live-run");
-    expect(m8?.reason).toMatch(/no node_modules/);
+    const { recorded, findings } = runAudit(AUDIT_RUNNERS, noPackageJson);
+    const m8 = recorded.find((r) => r.module === "M8");
+    expect(m8?.status).toBe("ran");
+    expect(findings.map((f) => f.id)).toContain("M8-00");
   });
 
   it("M2 is requires-live-run without a dynamic stack, and never silently absent", () => {

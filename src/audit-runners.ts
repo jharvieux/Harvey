@@ -432,6 +432,14 @@ const testIntentFindings = (findings: Finding[]): Finding[] => findings.filter((
 // moduleRecord (dry-run failure #503, degraded ladder rung #513, scoped subset run #504 — a suite
 // EXISTS but the measurement fell short) → partial with its note; a full Stryker report with no
 // moduleRecord → ran.
+// #771: mutation-scan is ALWAYS invoked, node_modules or not — its own suite-absence check
+// (detectNoTestSuite) is a static read of package.json/test files, no installed deps required, so
+// it already tells "genuinely no tests" (→ noSuite moduleRecord → ran, above) from "a suite exists
+// but Stryker isn't installed" (mutation-scan's own scaffold step degrades that case to a partial
+// moduleRecord naming `--install`). A prior version of this probe short-circuited on missing
+// node_modules BEFORE calling mutation-scan at all, so a target with no tests and no node_modules
+// (the common case) never got the M8-00 finding — it read a bare "partial, add node_modules" with
+// no verdict. Removed; mutation-scan's own ladder is the single source of truth here.
 // #312/#420 capture note: mutation-scan's --out artifact is an OBJECT ({ summary, ... } or
 // { finding, moduleRecord }), not a bare Finding[], AND --out diverts the verdict off stdout into
 // that object. So when capturing, this probe reads BOTH its status verdict and its findings from the
@@ -445,24 +453,13 @@ const m8: ModuleRunner = {
   module: "M8",
   run: (ctx) => {
     // #401: the free-tier test-intent detectors (src/detectors/test-intent.ts) are source-only AST
-    // passes — they need no installed deps, so a target without node_modules still gets real M8
-    // coverage instead of a blanket requires-live-run. Run this first so its status/findings are
-    // available whether or not the mutation tier below can proceed.
+    // passes — they need no installed deps. Run this first so its status/findings are available
+    // whether or not the mutation tier below can proceed (and are kept, not dropped, if it can't).
     const staticOutPath = ctx.captureDir ? join(ctx.captureDir, "M8-static.json") : undefined;
     const staticCmd = `pnpm detect-static ${ctx.targetDir}`;
     const staticRun = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(staticOutPath ? ["--out", staticOutPath] : [])]);
     const staticScanned = staticRun.ok ? filesScanned(staticRun.output) : undefined;
     const staticFindings = staticScanned ? testIntentFindings(readCaptured(ctx, staticOutPath)) : [];
-
-    if (!hasNodeModules(ctx)) {
-      if (!staticScanned) return { status: "requires-live-run", reason: `target has no node_modules — StrykerJS needs the target's installed deps and test suite; the source-only test-intent pass also could not confirm a scan: ${trimOut(staticRun.output)}` };
-      return {
-        status: "partial",
-        detail: `${staticCmd} (test-intent tier)`,
-        reason: "source (test-intent) tier only — target has no node_modules, so StrykerJS mutation testing could not run (`npm install` in the target to unlock it) (#401)",
-        ...(staticFindings.length ? { findings: staticFindings } : {}),
-      };
-    }
 
     const outPath = captureOut(ctx, "M8");
     // #523: --install (provisioning missing Stryker packages into the target, executing its npm
