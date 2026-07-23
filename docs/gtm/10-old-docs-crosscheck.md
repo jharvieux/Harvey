@@ -51,14 +51,45 @@ their numbers as unverified-until-retested (repo doctrine). Where they conflict 
    is consistent with it; no change needed, but the detailed table is worth keeping as
    the operational spec behind the free tier.
 
-6. **The arXiv/ACM evidence** (old, tagged verified): Copilot Code Review caught zero
-   critical vulns across 7 benchmark datasets (arXiv 2509.13650); ~30% of AI-generated
-   code carries security weaknesses, LLM remediation fixes only ~55% (ACM 10.1145/3716848);
-   `service_role` bypasses all RLS by design (generalanalysis.com). These are strong,
-   citable "why automated review isn't enough" proof points for the differentiation
-   pillar. **Recommendation:** re-verify each (they're a year old) and, if they hold,
-   add to the "a scan is not an audit" content. Not yet folded in pending re-verification
-   — flagged here so they aren't lost.
+6. **The arXiv/ACM evidence** (old, tagged verified) — **re-verified against primary
+   sources 2026-07-23 (#732), all three hold:**
+   - **CONFIRMED** — Copilot Code Review caught zero critical vulns across 7 benchmark
+     datasets. Source: Amro & Alalfi, "GitHub's Copilot Code Review: Can AI Spot Security
+     Flaws Before You Commit?", arXiv:2509.13650 (submitted 2025-09-17; checked
+     2026-07-23 at https://arxiv.org/abs/2509.13650). Full text: "Across 7 benchmark
+     datasets, which collectively included hundreds of documented vulnerabilities (e.g.,
+     SQL injection, insecure deserialization, cross-site scripting), Copilot generated a
+     total of fewer than 20 comments"; "The failure to detect even one instance of a
+     critical vulnerability (e.g., SQL injection or XSS) strongly indicates that
+     Copilot's current review model is not security-aware in any practical sense."
+   - **CONFIRMED** — ~30% of AI-generated code carries security weaknesses; LLM
+     remediation fixes only ~55%. Source: "Security Weaknesses of Copilot-Generated Code
+     in GitHub Projects: An Empirical Study", *ACM Transactions on Software Engineering
+     and Methodology* (2025), DOI 10.1145/3716848 (arXiv preprint 2310.02059; checked
+     2026-07-23 at https://dl.acm.org/doi/10.1145/3716848 and
+     https://arxiv.org/abs/2310.02059). Finding: "Around 30% of code snippets have
+     security weaknesses" across 733 snippets from Copilot/CodeWhisperer/Codeium in real
+     GitHub projects, spanning 43 distinct CWEs. **Nuance the old summary elided:** the
+     ~55% remediation figure is the *best-case* rate — Copilot Chat's plain "fix" command
+     resolves only 19.3% of flagged issues; 55.5% is reached only with an "enhanced
+     prompt" plus the static-analysis tool's warning message fed back in. Cite the ~55%
+     as "with guided/enhanced prompting," not as Copilot's default remediation rate.
+   - **CONFIRMED** — `service_role` bypasses RLS by design. Re-sourced to Supabase's own
+     docs (stronger primary source than the old generalanalysis.com citation) — checked
+     2026-07-23 at https://supabase.com/docs/guides/database/postgres/row-level-security
+     and https://supabase.com/docs/guides/troubleshooting/why-is-my-service-role-key-client-getting-rls-errors-or-not-returning-data-7_1K9z:
+     "Supabase provides special 'Service' keys, which can be used to bypass RLS. These
+     should never be used in the browser or exposed to customers." A service-role client
+     is authenticated to PostgREST as the `service_role` Postgres role, which carries the
+     `BYPASSRLS` attribute — RLS is skipped entirely for that connection. The docs don't
+     use the literal phrase "by design," but the bypass is the documented, intended
+     behavior, not a defect — the claim holds.
+
+   These are strong, citable "why automated review isn't enough" proof points for the
+   differentiation pillar and now ready to fold into the "a scan is not an audit" content
+   (`02-positioning-messaging.md`) — **not done here**: this crosscheck doc is the only
+   `docs/gtm/*` file this pass is authorized to touch (#732 scope), so the actual fold-in
+   into positioning content is left as a follow-up.
 
 ## Where the new strategy diverges from the old (deliberately)
 
@@ -89,7 +120,8 @@ work, and their reusable insights are now folded in or flagged.
 
 The old docs contributed **four concrete additions** to the new strategy (the
 questionnaire trigger, the SOC 2 referral angle, the cold-email-collapse tactic, and the
-AI-review-is-weak evidence set — the last pending re-verification), plus confirmation
+AI-review-is-weak evidence set — re-verified 2026-07-23, all three sources confirmed,
+see item 6), plus confirmation
 that the fundraise-diligence angle and free-tier framing were already independently
 covered. No load-bearing gap was found. The deliberate divergences (broader vibe-coding
 wedge, founder-first ICP, ten modules) are choices, not omissions, and reflect the newer

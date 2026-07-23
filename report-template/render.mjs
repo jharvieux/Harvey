@@ -217,6 +217,40 @@ function coverageSection(rows, m) {
     <div class="kv" style="margin-top:10px"><b>Out of scope</b> ${esc(m.outOfScope)}</div>`;
 }
 
+// Per-module confidence & known limitations (#822). Competitors sell on a transparent-limitations
+// story; before this, Harvey's hedges (unverified advisor path, lab-not-field CWV, packet-not-
+// verdict, mechanical-tier precision) lived scattered across code comments/docs, invisible to the
+// client. These are properties of the METHOD itself — not derived from what fired this engagement
+// — so the table is static and renders one line per module regardless of findings. Keyed by module
+// id to match audit-coverage.ts's AUDIT_MODULES / the coverage ledger's r.module (same manual-sync
+// mirroring note as coverageSection above: render.mjs is plain JS, not built from src/*.ts).
+const MODULE_LIMITATIONS = {
+  M1: { name: "Multi-tenant security", note: "Mechanical/config detectors are pattern-based against a calibration corpus, not exhaustive. LLM semantic findings carry a Confidence tag (Likely/Review) until manually confirmed. Live RLS/policy review needs connected-tier DB access." },
+  M2: { name: "Local pen-test (dynamic)", note: "Proves isolation against a freshly seeded local stack with synthetic tenants — confirms the app as configured, not production data or config drift since deploy." },
+  M3: { name: "Hotspot analysis", note: "Churn × complexity ranking depends on git history depth; a shallow clone or young repo yields a thin signal." },
+  M4: { name: "Duplication", note: "Mechanical clone detection; some duplication may be intentional (generated code, fixtures) — reviewed, not auto-excluded." },
+  M5: { name: "Slop / dead code", note: "Flags candidate unused exports/code mechanically; some may be public API or dynamically referenced — review before pruning." },
+  M6: { name: "Simplification / maintainability", note: "The free tier is non-grading indicators only. The paid verdict is a reviewed judgment over a packet — an unreviewed packet is not a verdict." },
+  M7: { name: "Performance", note: "DB advisor findings reflect the platform's own heuristics, not independently re-verified. Core Web Vitals/Lighthouse figures are a single LAB run, not field/real-user data." },
+  M8: { name: "Test quality", note: "A mutation score is only as good as its stated scope — a scoped run is not a whole-repo coverage claim (see Test quality below when present)." },
+  M9: { name: "App Router boundary/rendering", note: "AST pattern coverage of App Router conventions, not full framework-semantics execution." },
+  M10: { name: "Data classification (PII/PHI/PCI)", note: "Classification is derived from column/schema naming and structure. A JSON/JSONB container is flagged for review, not asserted, and its actual contents are not read." },
+};
+
+// Rendered alongside (never instead of) the coverage ledger — coverage says whether a module ran
+// this engagement; this says what its result proves and doesn't, independent of that. Same gate as
+// coverageSection (no ledger ⇒ no section) so the two never appear out of sync.
+function limitationsSection(rows) {
+  const present = new Set(rows.map((r) => r.module));
+  const body = Object.entries(MODULE_LIMITATIONS)
+    .filter(([id]) => present.has(id))
+    .map(([id, mod]) => `<tr><td class="b">${esc(id)}</td><td>${esc(mod.name)}</td><td>${esc(mod.note)}</td></tr>`)
+    .join("");
+  return `<h2>Confidence &amp; limitations</h2>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">What each module's result does and does not prove — independent of whether it ran this engagement (see Module coverage above for that).</div>
+    <table class="cov"><tr><th>Module</th><th>Area</th><th>Known limitations</th></tr>${body}</table>`;
+}
+
 // #319: a mutation score in the DELIVERABLE is never a bare percentage. A high score over a scoped
 // `mutate` set ("100% over lib/pdf/launch.ts" on an otherwise-untested repo) reads as a repo-level
 // test-quality claim and would be a misrepresentation — the same trust-budget risk as the security
@@ -375,6 +409,7 @@ function buildHtml(data) {
     <div class="kv"><b>Reviewed</b> ${esc(m.scope)}</div>
     <div class="kv"><b>Tooling</b> ${esc(m.methodology)}</div>
     ${data.coverage?.length ? coverageSection(data.coverage, m) : `<div class="kv"><b>Out of scope</b> ${esc(m.outOfScope)}</div>`}
+    ${data.coverage?.length ? limitationsSection(data.coverage) : ""}
     ${data.testQuality ? testQualitySection(data.testQuality) : ""}
     <h2>Findings</h2>
     ${sorted.map(findingCard).join("")}
