@@ -54,6 +54,18 @@ export interface CoverageRow {
   subStatus?: SubStatus;
 }
 
+// #825: an applicable remediation for a finding — the paid-tier upgrade of the prose `fix` into a
+// mergeable unified diff. INERT / for-review: Harvey never auto-applies it (mirrors the security
+// /patch skill's human-review posture). Only a mechanically-verified fix is ever attached to a
+// ticket (src/trackers/fix-diff.ts verifySuggestedFix) — an unverified proposal is dropped, not
+// filed. Populated by a paid-tier pass (the M6 verdict / M7 triage / M8 mutant-kill pass that
+// already has an LLM/human in the loop), never by the deterministic scan.
+export interface SuggestedFix {
+  diff: string; // git-apply-compatible unified diff
+  verified: boolean; // applies cleanly (+ effect confirmed where a ground-truth check exists)
+  verification?: string; // how it was verified, surfaced in the ticket body
+}
+
 export interface Finding {
   id: string;
   title: string;
@@ -66,6 +78,9 @@ export interface Finding {
   evidence: string;
   impact: string;
   fix: string;
+  // #825: paid-tier applicable diff, surfaced under the prose `fix` in a filed ticket. Absent ⇒
+  // prose-only (free tier, or no diff was produced/verified).
+  suggestedFix?: SuggestedFix;
   // BFTB inputs, each 1–5: business value of fixing, ease of fix, safety of fix.
   value: number;
   ease: number;
@@ -296,6 +311,16 @@ export function validateFindings(data: unknown): ValidationResult {
     }
     if (f.reviewFlagOnly !== undefined && typeof f.reviewFlagOnly !== "boolean") {
       errors.push(`${at}.reviewFlagOnly: expected boolean`);
+    }
+    if (f.suggestedFix !== undefined) {
+      const sf = f.suggestedFix;
+      if (!isRecord(sf)) {
+        errors.push(`${at}.suggestedFix: expected an object`);
+      } else {
+        if (typeof sf.diff !== "string" || sf.diff.trim() === "") errors.push(`${at}.suggestedFix.diff: expected a non-empty unified diff string`);
+        if (typeof sf.verified !== "boolean") errors.push(`${at}.suggestedFix.verified: expected boolean`);
+        if (sf.verification !== undefined && typeof sf.verification !== "string") errors.push(`${at}.suggestedFix.verification: expected string`);
+      }
     }
     if (f.reviewFlagColumns !== undefined) {
       if (!Array.isArray(f.reviewFlagColumns) || f.reviewFlagColumns.some((c) => typeof c !== "string")) {
