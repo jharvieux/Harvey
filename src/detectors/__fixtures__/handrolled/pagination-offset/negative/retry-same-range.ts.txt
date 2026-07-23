@@ -1,0 +1,11 @@
+// A retry loop that re-issues the SAME range on failure — the bound never changes across
+// iterations, so this is retry, not manual pagination. Must not flag.
+export async function fetchWithRetry(supabase: SupabaseClient, from: number, to: number) {
+  let attempt = 0;
+  while (attempt < 3) {
+    const { data, error } = await supabase.from("posts").select("*").range(from, to);
+    if (!error) return data;
+    attempt++;
+  }
+  throw new Error("failed after retries");
+}

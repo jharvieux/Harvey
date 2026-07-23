@@ -1,0 +1,13 @@
+// A retry library is already in the dependency tree, but this loop retries at a CONSTANT delay —
+// no backoff growth — so it must not be flagged as the backoff shape (growth is the signal).
+export async function withConstantDelayRetry<T>(fn: () => Promise<T>): Promise<T> {
+  const delay = 100;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error("unreachable");
+}

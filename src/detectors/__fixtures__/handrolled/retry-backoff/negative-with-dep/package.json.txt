@@ -1,0 +1,6 @@
+{
+  "name": "retry-backoff-negative-with-dep",
+  "dependencies": {
+    "p-retry": "^6.2.0"
+  }
+}

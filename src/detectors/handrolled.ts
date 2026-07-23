@@ -15,9 +15,9 @@
 //     (`M7 — JSON deep-clone`) already catches that exact node shape. Emitting it under M6 too
 //     would repeat the M5-knip/M5-slop double-count #278 had to unwind, so M6 cross-references
 //     the M7 class instead of re-detecting it (measured: both fired on the same line in dogfood).
-//   • retry/backoff did not graduate: its benign case is depdrop-shaped — telling the real thing
-//     from the justified one needs judgment, so it stays LLM-tier.
-//   • Supabase pagination reinvention is deferred: needs cross-statement correlation.
+//   • retry/backoff and Supabase pagination reinvention were deferred here (retry/backoff's benign
+//     case is depdrop-shaped; pagination needs cross-statement correlation) but have since
+//     graduated (#814, batch 5) — see items 32/33 below for how each resolved its deferral.
 // The class-merge detector is gated on a merge library already being in the target's dependency
 // tree — hand-rolling one when no such dep exists is the deliberate dep-drop shape, not a
 // reinvention indicator. The gate itself is generic (`depGatePresent`, #406); its consumers are
@@ -45,7 +45,7 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
-import { parse, type NextId, type SourceInput } from "./common.js";
+import { callChainNames, parse, type NextId, type SourceInput } from "./common.js";
 
 // One shared, deliberately hedged pair — the tier split lives in these two strings as much as in
 // the detectors. Neither may ever name a concrete replacement.
@@ -1552,6 +1552,131 @@ function detectClipboardExecCommand(sf: ts.SourceFile, path: string, nextId: Nex
   return findings;
 }
 
+// --- 32. Retry loop with manual exponential backoff (catalogue 45, #814) --------
+// Ruled in #395: the benign case is judgment-bearing (a plain retry loop can be entirely
+// deliberate — depdrop.ts is the archetype). Graduated here the same way class-merge/date-math/
+// email-regex/env-json/Vite-env did: dep-gated on a retry library already being in the tree, so a
+// codebase with nothing to reinvent against never flags. The shape itself is the conjunction of
+// three ingredients in the SAME loop body — a try/catch (retry-on-failure), a manual sleep via
+// `new Promise(resolve => setTimeout(resolve, …))`, and a self-multiplying/exponential delay
+// (`delay *= 2`, `delay = delay * 2`, `Math.pow`, `**`) — the backoff. A plain retry loop with a
+// CONSTANT delay (no growth) never flags: growth is what makes it "backoff", not just "retry".
+
+const RETRY_DEPS = ["p-retry", "async-retry", "promise-retry", "retry", "cockatiel", "exponential-backoff", "ts-retry-promise"];
+
+function isSleepPromise(node: ts.Node): boolean {
+  return (
+    ts.isNewExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === "Promise" &&
+    (node.arguments?.length ?? 0) >= 1 &&
+    subtreeHasIdentifierCall(node.arguments![0] as ts.Expression, "setTimeout")
+  );
+}
+
+function isBackoffGrowth(node: ts.Node): boolean {
+  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === "Math" && node.expression.name.text === "pow") {
+    return true;
+  }
+  if (!ts.isBinaryExpression(node)) return false;
+  const k = node.operatorToken.kind;
+  if (k === ts.SyntaxKind.AsteriskEqualsToken || k === ts.SyntaxKind.AsteriskAsteriskEqualsToken) return true;
+  if (k === ts.SyntaxKind.AsteriskToken || k === ts.SyntaxKind.AsteriskAsteriskToken) {
+    const isGrowthLiteral = (e: ts.Expression) => ts.isNumericLiteral(e) && Number(e.text) >= 2;
+    return isGrowthLiteral(node.left) || isGrowthLiteral(node.right);
+  }
+  return false;
+}
+
+function detectRetryBackoffLoop(sf: ts.SourceFile, path: string, nextId: NextId, gateOpen: boolean): Finding[] {
+  if (!gateOpen) return [];
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isWhileStatement(node) || ts.isDoStatement(node) || ts.isForStatement(node)) {
+      const body = node.statement;
+      if (subtreeHas(body, ts.isCatchClause) && subtreeHas(body, isSleepPromise) && subtreeHas(body, isBackoffGrowth)) {
+        const f = makeIndicator(nextId, sf, path, node, {
+          title: "Looks hand-rolled: retry loop with manual exponential backoff — may be worth investigating",
+          taxonomy: "M6 — Indicator: retry/backoff loop",
+          evidence: "loop retries inside a try/catch with a hand-timed setTimeout-based delay that grows each attempt (a manual backoff), while a retry library is already in the dependency tree.",
+        });
+        if (f) findings.push(f);
+        return; // one finding per loop — don't also match a nested loop inside the same body
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
+// --- 33. Manual pagination via a mutated range/offset (catalogue 73, #814) ------
+// Deferred in #395 as cross-statement by definition: a Supabase `.range(from, to)` call PLUS
+// "nearby offset math" — the offset/limit bound is a variable that is ALSO reassigned elsewhere
+// in the same loop (`offset += pageSize`, `page++`, …), the shape of manually looping through
+// every page to reconstruct the full result set by hand. A single one-shot `.range()` call for one
+// UI page (the ordinary, correct use of `.range()`, no loop) never flags, and a loop that reuses
+// the SAME range bounds every iteration (e.g. retrying one page) never flags either — only a bound
+// that changes across iterations is the reinvention. Never fires on M7's `Unbounded select` shape
+// (that's the ABSENCE of `.range()`/`.limit()`; this needs `.range()` present) — no double-count.
+
+function collectIdentifierNames(node: ts.Node): Set<string> {
+  const names = new Set<string>();
+  const visit = (n: ts.Node) => {
+    if (ts.isIdentifier(n)) names.add(n.text);
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return names;
+}
+
+function isIdentifierMutated(scope: ts.Node, name: string): boolean {
+  return subtreeHas(scope, (n) => {
+    if ((ts.isPostfixUnaryExpression(n) || ts.isPrefixUnaryExpression(n)) && ts.isIdentifier(n.operand) && n.operand.text === name) {
+      return n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken;
+    }
+    if (ts.isBinaryExpression(n) && ts.isIdentifier(n.left) && n.left.text === name) {
+      const k = n.operatorToken.kind;
+      if (k === ts.SyntaxKind.PlusEqualsToken || k === ts.SyntaxKind.MinusEqualsToken) return true;
+      // `offset = offset + pageSize` — a plain reassignment whose RHS still references the same
+      // name (growth), as opposed to a reset (`offset = 0`) which must NOT count as mutation.
+      if (k === ts.SyntaxKind.EqualsToken) return collectIdentifierNames(n.right).has(name);
+    }
+    return false;
+  });
+}
+
+function detectManualPaginationOffset(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isWhileStatement(node) || ts.isDoStatement(node) || ts.isForStatement(node)) {
+      const body = node.statement;
+      const rangeCalls: ts.CallExpression[] = [];
+      const collect = (n: ts.Node) => {
+        if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "range" && n.arguments.length === 2 && callChainNames(n).includes("from")) {
+          rangeCalls.push(n);
+        }
+        ts.forEachChild(n, collect);
+      };
+      collect(body);
+      for (const rc of rangeCalls) {
+        const names = new Set([...collectIdentifierNames(rc.arguments[0] as ts.Expression), ...collectIdentifierNames(rc.arguments[1] as ts.Expression)]);
+        if ([...names].some((nm) => isIdentifierMutated(body, nm))) {
+          const f = makeIndicator(nextId, sf, path, rc, {
+            title: "Looks hand-rolled: pagination via a manually incremented offset — may be worth investigating",
+            taxonomy: "M6 — Indicator: manual pagination offset",
+            evidence: `\`${rc.getText(sf).replace(/\s+/g, " ").slice(0, 70)}\` — the \`.range()\` bound is reassigned elsewhere in the same loop, the shape of manually paging through the whole result set (off-by-one and page-size drift are easy to get wrong by hand).`,
+          });
+          if (f) findings.push(f);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return findings;
+}
+
 // --- Orchestrator ----------------------------------------------------------------
 
 /**
@@ -1568,6 +1693,7 @@ export function detectHandrolledFindings(files: SourceInput[]): Finding[] {
   const emailRegexGateOpen = depGatePresent(files, EMAIL_SCHEMA_DEPS);
   const pathGetGateOpen = depGatePresent(files, PATH_GET_DEPS);
   const envSchemaGateOpen = depGatePresent(files, ENV_SCHEMA_DEPS);
+  const retryGateOpen = depGatePresent(files, RETRY_DEPS);
   const findings: Finding[] = [];
   for (const f of files) {
     if (!/\.(ts|tsx|jsx|mjs)$/.test(f.path)) continue;
@@ -1607,6 +1733,11 @@ export function detectHandrolledFindings(files: SourceInput[]): Finding[] {
       ...detectViteEnvCoercion(sf, f.path, nextId, envSchemaGateOpen),
       ...detectStoragePublicUrl(sf, f.path, nextId),
       ...detectClipboardExecCommand(sf, f.path, nextId),
+      // #814: the deferred retry/backoff + Supabase-pagination classes, graduated via the same
+      // dep-gate discipline (retry/backoff) and a cross-statement offset-mutation correlation
+      // (manual pagination) that #395 originally deferred them for lacking.
+      ...detectRetryBackoffLoop(sf, f.path, nextId, retryGateOpen),
+      ...detectManualPaginationOffset(sf, f.path, nextId),
     );
   }
   return findings;
