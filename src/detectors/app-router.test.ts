@@ -507,6 +507,73 @@ describe("SSR-only browser API misuse (#381)", () => {
   });
 });
 
+const SEGMENT_CFG = "M9 — Unsafe route segment config";
+const SEGMENT_CONFLICT = "M9 — Conflicting route segment config";
+const MISSING_SUSPENSE = "M9 — Missing Suspense boundary";
+
+// #846. Route segment config (dynamic/revalidate/...) is now validated, plus a missing-Suspense
+// check around dynamic reads.
+describe("route segment config & missing Suspense (#846)", () => {
+  it("flags force-static on a route that reads a dynamic API", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/dashboard/page.tsx", text: `import { cookies } from "next/headers";\nexport const dynamic = "force-static";\nexport default function Page() {\n  const t = cookies().get("session");\n  return <div>{t?.value}</div>;\n}\n` },
+    ]);
+    const hits = findings.filter((f) => f.taxonomy === SEGMENT_CFG);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ severity: "High", category: "Security" });
+  });
+
+  it("flags force-static on an auth-gated route", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/account/page.tsx", text: `import { getServerSession } from "next-auth";\nexport const dynamic = "force-static";\nexport default async function Page() {\n  const session = await getServerSession();\n  return <div>{session?.user?.name}</div>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(SEGMENT_CFG);
+  });
+
+  it("does not flag force-static on a plain public/static page", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/about/page.tsx", text: `export const dynamic = "force-static";\nexport default function Page() {\n  return <div>About us</div>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SEGMENT_CFG);
+  });
+
+  it("flags force-dynamic combined with a positive revalidate (dead config)", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/feed/page.tsx", text: `export const dynamic = "force-dynamic";\nexport const revalidate = 3600;\nexport default function Page() {\n  return <div/>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(SEGMENT_CONFLICT);
+  });
+
+  it("flags force-static combined with revalidate = 0 (contradiction)", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/feed/page.tsx", text: `export const dynamic = "force-static";\nexport const revalidate = 0;\nexport default function Page() {\n  return <div/>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(SEGMENT_CONFLICT);
+  });
+
+  it("does not flag a coherent revalidate-only config", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/feed/page.tsx", text: `export const revalidate = 60;\nexport default function Page() {\n  return <div/>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SEGMENT_CONFLICT);
+    expect(taxonomies(findings)).not.toContain(SEGMENT_CFG);
+  });
+
+  it("flags a page that reads a dynamic API and fetches data with no <Suspense> boundary", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/feed/page.tsx", text: `import { cookies } from "next/headers";\nexport default async function Page() {\n  const t = cookies().get("t");\n  const data = await fetch("https://api.example.com/feed");\n  return <div>{t?.value}</div>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(MISSING_SUSPENSE);
+  });
+
+  it("does not flag a missing Suspense boundary when one is present", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/feed/page.tsx", text: `import { Suspense } from "react";\nimport { cookies } from "next/headers";\nexport default async function Page() {\n  const t = cookies().get("t");\n  const data = await fetch("https://api.example.com/feed");\n  return <Suspense fallback={null}><div>{t?.value}</div></Suspense>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(MISSING_SUSPENSE);
+  });
+});
+
 const UNBOUNDED = "M9 — Unbounded/self-calling route or edge fn";
 
 // #843. The M9 brief's "unbounded / self-calling route or edge fn" surface: a route/edge handler

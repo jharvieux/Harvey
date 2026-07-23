@@ -1293,6 +1293,168 @@ function detectUnboundedRouteOrEdge(sources: Map<string, ts.SourceFile>, nextId:
   return findings;
 }
 
+// --- Route segment config & missing Suspense [MED] (#846) -------------------
+//
+// Next.js route segment config (`export const dynamic / revalidate / fetchCache / runtime`) governs
+// how a route renders and caches. Two failure modes carry real correctness/security weight:
+//   (a) `dynamic = "force-static"` on a route that reads auth/session or a dynamic API — the
+//       personalized page is frozen into the static cache and served to everyone (stale, and a
+//       cross-user isolation bug), or would build-error on the dynamic read.
+//   (b) contradictory config — `force-dynamic` with a positive `revalidate` (revalidate is dead),
+//       or `force-static` with `revalidate = 0` (force-static caches forever) — a config whose two
+//       halves cancel, so the author's intent is silently not what ships.
+// Separately, a page that reads a dynamic API and fetches data with NO `<Suspense>` boundary
+// forgoes streaming/PPR: the whole route blocks on the dynamic work instead of streaming a static
+// shell first.
+const ROUTE_SEGMENT_FILE = /\/(page|layout|route)\.tsx?$/;
+
+interface SegmentConfig {
+  dynamic?: string;
+  dynamicNode?: ts.Node;
+  revalidate?: number | "false";
+  revalidateNode?: ts.Node;
+}
+
+function collectSegmentConfig(sf: ts.SourceFile): SegmentConfig {
+  const cfg: SegmentConfig = {};
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt) || !stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    for (const decl of stmt.declarationList.declarations) {
+      if (!ts.isIdentifier(decl.name) || !decl.initializer) continue;
+      if (decl.name.text === "dynamic" && ts.isStringLiteral(decl.initializer)) {
+        cfg.dynamic = decl.initializer.text;
+        cfg.dynamicNode = decl.initializer;
+      } else if (decl.name.text === "revalidate") {
+        if (ts.isNumericLiteral(decl.initializer)) {
+          cfg.revalidate = Number(decl.initializer.text);
+          cfg.revalidateNode = decl.initializer;
+        } else if (decl.initializer.kind === ts.SyntaxKind.FalseKeyword) {
+          cfg.revalidate = "false";
+          cfg.revalidateNode = decl.initializer;
+        }
+      }
+    }
+  }
+  return cfg;
+}
+
+function detectRouteSegmentConfig(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    if (leadingDirective(sf) === "use client") continue;
+    if (!ROUTE_SEGMENT_FILE.test(path)) continue;
+    const cfg = collectSegmentConfig(sf);
+    if (cfg.dynamic === undefined && cfg.revalidate === undefined) continue;
+
+    if (cfg.dynamic === "force-static") {
+      const dyn = readsDynamicApi(sf);
+      const authed = AUTH_PATTERN.test(sf.text);
+      if (dyn || authed) {
+        const why = dyn ? "reads a dynamic API (cookies/headers/searchParams)" : "checks the caller's session/auth";
+        findings.push(
+          makeFinding(nextId, {
+            title: `\`dynamic = "force-static"\` on a route that ${dyn ? "reads dynamic data" : "is auth-gated"}`,
+            severity: "High",
+            confidence: "Review",
+            category: "Security",
+            taxonomy: "M9 — Unsafe route segment config",
+            location: loc(path, sf, cfg.dynamicNode ?? sf),
+            evidence: `This route sets \`export const dynamic = "force-static"\` yet ${why}. Force-static renders once at build and serves the same cached HTML to every request.`,
+            impact: "A personalized/auth-scoped page is frozen into the static cache and served to all users — stale at best, one user's data leaking to others at worst — or the build errors on the dynamic read.",
+            fix: `Remove \`force-static\` (let the route render dynamically), or if the page really is public and static, stop reading the per-request/auth data here.`,
+            value: 5,
+            ease: 4,
+            safety: 4,
+          }),
+        );
+      }
+    }
+
+    const conflict =
+      cfg.dynamic === "force-dynamic" && typeof cfg.revalidate === "number" && cfg.revalidate > 0
+        ? `\`dynamic = "force-dynamic"\` never caches, so \`revalidate = ${cfg.revalidate}\` is dead config`
+        : cfg.dynamic === "force-static" && cfg.revalidate === 0
+          ? `\`dynamic = "force-static"\` caches indefinitely, so \`revalidate = 0\` (always revalidate) is contradictory`
+          : undefined;
+    if (conflict) {
+      findings.push(
+        makeFinding(nextId, {
+          title: `Conflicting route segment config (\`dynamic\` vs \`revalidate\`)`,
+          severity: "Medium",
+          confidence: "Review",
+          category: "Performance",
+          taxonomy: "M9 — Conflicting route segment config",
+          location: loc(path, sf, cfg.revalidateNode ?? cfg.dynamicNode ?? sf),
+          evidence: `${conflict} — the two settings cancel, so this route does not render/cache the way the config reads.`,
+          impact: "The route's actual caching behaviour is not what the config states, so a perf/freshness decision is silently ineffective.",
+          fix: "Keep the setting that expresses the intent and remove the one it overrides.",
+          value: 3,
+          ease: 5,
+          safety: 5,
+        }),
+      );
+    }
+  }
+  return findings;
+}
+
+function fileHasSuspense(sf: ts.SourceFile): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = node.tagName.getText(sf);
+      if (tag === "Suspense" || tag.endsWith(".Suspense")) found = true;
+    }
+    if (!found) ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+function hasAsyncDataFetch(sf: ts.SourceFile): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isAwaitExpression(node) && ts.isCallExpression(node.expression)) {
+      const call = node.expression;
+      if (isDbQueryChain(call) || (ts.isIdentifier(call.expression) && call.expression.text === "fetch")) found = true;
+    }
+    if (!found) ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+function detectMissingSuspenseBoundary(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    if (leadingDirective(sf) === "use client") continue;
+    if (!/\/(page|layout)\.tsx?$/.test(path)) continue;
+    // Only meaningful when a dynamic read AND real async data-fetching coexist with no boundary —
+    // that's the case where a static shell could stream while the dynamic data resolves.
+    if (!readsDynamicApi(sf) || !hasAsyncDataFetch(sf) || fileHasSuspense(sf)) continue;
+
+    findings.push(
+      makeFinding(nextId, {
+        title: `Dynamic read + data fetch with no <Suspense> boundary`,
+        severity: "Low",
+        confidence: "Review",
+        category: "Performance",
+        taxonomy: "M9 — Missing Suspense boundary",
+        location: path,
+        evidence: `${path} reads a dynamic API and awaits data yet renders no \`<Suspense>\` boundary — the whole route blocks on the dynamic work instead of streaming a static shell first.`,
+        impact: "Without a Suspense boundary the route can't partially prerender or stream: the user waits for all server data before seeing anything, and the static parts can't be cached separately.",
+        fix: "Wrap the dynamic-data subtree in a `<Suspense fallback={…}>` boundary so the static shell renders immediately and the dynamic part streams in.",
+        value: 3,
+        ease: 3,
+        safety: 5,
+      }),
+    );
+  }
+  return findings;
+}
+
 // --- Non-Supabase data-layer coverage (#844) --------------------------------
 //
 // The three data-layer checks — server→client leak, unsafe/missing cache config, data-fetching
@@ -1366,6 +1528,8 @@ function runAppRouterPass(files: SourceInput[], nextId: NextId, orm?: TargetOrm)
     ...detectAccidentalDynamicRendering(sources, nextId),
     ...detectSsrBrowserApiMisuse(sources, nextId),
     ...detectUnboundedRouteOrEdge(sources, nextId),
+    ...detectRouteSegmentConfig(sources, nextId),
+    ...detectMissingSuspenseBoundary(sources, nextId),
   ];
 }
 
