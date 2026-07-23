@@ -1,0 +1,8 @@
+import { supabase } from "./db";
+
+// `.eq("id", …)` is a primary-key point lookup — at most one row regardless of table size, the
+// same bounded shape as `.in("id", [...])` and `.single()` (#816 triage FP shape).
+export async function getInvoice(invoiceId: string) {
+  const { data } = await supabase.from("invoices").select("*").eq("id", invoiceId);
+  return data?.[0] ?? null;
+}

@@ -11,6 +11,9 @@
 //                         absorbs any regression it would ever catch (#372 comment).
 //   • CALL-COUNT-ONLY   — toHaveBeenCalled/Times() as the only assertion; call count stands in
 //                         for any claim about behavior (#372 comment).
+//   • SHAPE-ONLY        — a test that parses a response body but asserts only incidental facts
+//                         (success status / nonzero count / existence), never a business value
+//                         from the data — "asserts WHAT, not WHY" mechanized (#821).
 //
 // Method mirrors src/detectors/slop.ts: TypeScript compiler API over SourceInput[], Finding[]
 // out, every class gated by a positive+negative fixture pair (test-intent.test.ts, the #61
@@ -48,7 +51,9 @@ function makeFinding(
     safety: number;
   },
 ): Finding {
-  return { id: nextId(), status: "Open", category: "Test quality", ...input };
+  // Every class here is a heuristic — review is the conservative precision floor, and a finding
+  // reaching a calibration scorer untiered silently mis-scores (#327, same default as perf-code).
+  return { id: nextId(), status: "Open", category: "Test quality", precisionTier: "review", ...input };
 }
 
 // --- test-block and assertion plumbing ---------------------------------------
@@ -596,6 +601,111 @@ function detectRlsMockedDb(ctx: TestFileContext, byPath: ReadonlyMap<string, Sou
   return findings;
 }
 
+// --- SHAPE-ONLY response assertions — "asserts WHAT, not WHY" (#821) ----------------
+
+// Category 3 of the intent brief (docs/quality-extras.txt via docs/m8-test-quality.md §4):
+// a test that PARSES a response body and then asserts only incidental facts about it — a
+// success status, a nonzero count, mere existence — never a business VALUE from the data it
+// read. "Returns 200 with 2 rows" passes even when the rows belong to the wrong tenant.
+// Mechanized STRUCTURALLY, not by keyword: the trigger is "body consumed + every assertion
+// incidental", classified from the assertion's subject and matcher shape, so it works on any
+// route/handler test regardless of naming. Two deliberate boundaries keep denial tests silent:
+//   • a specific ERROR status (`toBe(403)`, `toBe(false)` on res.ok, `.not` chains) is the
+//     business claim of a denial path — substantive, never incidental;
+//   • emptiness (`toHaveLength(0)`, `.length === 0`) is a business claim ("the other tenant
+//     sees nothing") — only NONZERO counts are incidental.
+// A test that never touches the body (a pure status smoke test) is a legitimate health check
+// and is out of scope — the class is specifically "the data was in hand and went unexamined".
+
+const STATUS_PROPS = new Set(["status", "statusCode", "ok"]);
+const EXISTENCE_MATCHERS = new Set(["toBeTruthy", "toBeDefined", "toBeInstanceOf"]);
+const NEGATED_EXISTENCE_MATCHERS = new Set(["toBeNull", "toBeUndefined", "toBeFalsy"]);
+
+// Final property name of an assertion subject: `res.status` → "status", `rows.length` →
+// "length", `res.status()` (call form) → "status".
+function subjectName(e: ts.Expression | undefined): string | undefined {
+  if (!e) return undefined;
+  if (ts.isPropertyAccessExpression(e)) return e.name.text;
+  if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression)) return e.expression.name.text;
+  return undefined;
+}
+
+function incidentalKind(a: Assertion): "status" | "count" | "existence" | undefined {
+  if (a.kind !== "expect") return undefined; // assert/should bodies aren't classifiable — treat as substantive
+  const negated = a.chain.includes("not");
+  const subject = subjectName(a.expectArg);
+  if (subject !== undefined && STATUS_PROPS.has(subject)) {
+    const arg = a.matcherArg;
+    if (arg && ts.isNumericLiteral(arg) && Number(arg.text) >= 400) return undefined; // a specific error status IS the denial claim
+    if (arg && arg.kind === ts.SyntaxKind.FalseKeyword) return undefined; // expect(res.ok).toBe(false) — denial
+    if (negated) return undefined; // .not on a status is a denial-shaped claim
+    return "status";
+  }
+  if (a.matcher === "toHaveLength" || (subject === "length" && a.matcher !== undefined && EQUALITY_MATCHERS.has(a.matcher))) {
+    const arg = a.matcherArg;
+    if (arg && ts.isNumericLiteral(arg) && Number(arg.text) > 0 && !negated) return "count";
+    return undefined; // toHaveLength(0)/length===0 asserts EMPTINESS — a business (denial) claim
+  }
+  if (a.matcher === undefined) return "existence"; // bare expect(x) with no matcher claims nothing
+  if (!negated && EXISTENCE_MATCHERS.has(a.matcher)) return "existence";
+  if (negated && NEGATED_EXISTENCE_MATCHERS.has(a.matcher)) return "existence";
+  return undefined;
+}
+
+// The block read the response's data: a zero-arg `.json()` call (fetch/Next Response — the
+// arg'd form is response CONSTRUCTION, `NextResponse.json({...})`), or a `.body` access on a
+// receiver that also has a status property read in the block (the supertest/express response
+// signature — structural, so `document.body` never matches).
+function consumesResponseBody(block: TestBlock): boolean {
+  let jsonCall = false;
+  const bodyReceivers = new Set<string>();
+  const statusReceivers = new Set<string>();
+  const visit = (n: ts.Node) => {
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "json" && n.arguments.length === 0) {
+      jsonCall = true;
+    }
+    if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression)) {
+      if (n.name.text === "body") bodyReceivers.add(n.expression.text);
+      if (STATUS_PROPS.has(n.name.text)) statusReceivers.add(n.expression.text);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(block.fn.body!);
+  return jsonCall || [...bodyReceivers].some((r) => statusReceivers.has(r));
+}
+
+function detectShapeOnlyAssertions(ctx: TestFileContext, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  // Page-object indirection hides the real assertions from this file — same exemption (and
+  // rationale) as ASSERTION-FREE.
+  if (ctx.imports.some((i) => BROWSER_E2E_MODULE.test(i.specifier))) return findings;
+  for (const block of ctx.blocks) {
+    const substantive = block.assertions.filter((a) => !a.meta);
+    if (substantive.length === 0) continue;
+    if (!consumesResponseBody(block)) continue;
+    const kinds = substantive.map(incidentalKind);
+    if (kinds.includes(undefined)) continue; // at least one business-value assertion — cleared
+    if (!kinds.includes("status") && !kinds.includes("count")) continue; // anchor on a status/count claim
+    const shapes = [...new Set(kinds)].join(" + ");
+    findings.push(
+      makeFinding(nextId, {
+        title: `Asserts response shape, not business values: "${block.title || "(unnamed)"}"`,
+        severity: "Medium",
+        confidence: "Review",
+        taxonomy: "M8 — Asserts response shape, not business values",
+        location: `${ctx.file.path}:${lineOf(ctx.sf, block.node)}`,
+        evidence: `The test reads the response body, but every assertion is incidental (${shapes}) — nothing checks a value FROM the data it parsed.`,
+        impact: `"Returns a success status with N items" still passes when the items are wrong — wrong tenant's rows, corrupted fields, or an unfiltered query. The WHAT (a response came back) is asserted; the WHY (it is the RIGHT response) is not.`,
+        fix: "Assert at least one business value from the parsed body — e.g. that every returned row belongs to the requesting user/tenant, or that a known seeded record's fields come back exactly.",
+        value: 4,
+        ease: 4,
+        safety: 5,
+      }),
+    );
+  }
+  return findings;
+}
+
 // --- Happy-path-only coverage on security/money-critical code (#386, layer 1) -------
 
 // The issue's own keyword list (auth, tenant, rls, payment, price, discount, refund) applied
@@ -696,6 +806,7 @@ export function detectTestIntentFindings(files: SourceInput[]): Finding[] {
       ...detectTautological(ctx, nextId),
       ...detectSnapshotOnly(ctx, nextId),
       ...detectCallCountOnly(ctx, nextId),
+      ...detectShapeOnlyAssertions(ctx, nextId),
       ...detectRlsMockedDb(ctx, byPath, nextId),
     );
   }

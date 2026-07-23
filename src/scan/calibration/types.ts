@@ -43,3 +43,24 @@ export interface CorpusEntry {
   expectedTier?: ExpectedTier;
   note: string;
 }
+
+// Labeled corpus row for the M7/M8 heuristic precision gate (#823). Unlike CorpusEntry — scored
+// against one shared Finding[] by location substring — a HeuristicEntry names a FIXTURE DIR that
+// the gate scans itself (src/scan/heuristic-precision.ts), because the M7 code / M8 intent
+// detectors are pure functions over SourceInput[] with per-class option axes (React Compiler
+// on/off, Next vs Vite) that a single shared scan cannot express.
+export interface HeuristicEntry {
+  id: string;
+  module: "M7" | "M8";
+  kind: CorpusKind;
+  cls: string;
+  // Fixture dir relative to src/detectors/__fixtures__/ (e.g. "perf/sort-in-jsx/positive").
+  dir: string;
+  // Exact Finding.taxonomy the class emits. Omitted on a negative = ANY finding from the
+  // module's detectors counts as a false fire (e.g. the render-once dir must be fully silent).
+  taxonomy?: string;
+  // M7 axes: run with the Vite framework flag / with a React-Compiler-on next.config appended.
+  framework?: "vite";
+  compilerOn?: boolean;
+  note: string;
+}

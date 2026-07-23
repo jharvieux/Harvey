@@ -1,0 +1,32 @@
+import { describe, expect, it } from "vitest";
+import { GET } from "./route";
+
+function makeRequest(url: string, userId: string) {
+  return new Request(url, { headers: { "x-user-id": userId } });
+}
+
+describe("GET /api/orders", () => {
+  // Asserts a business VALUE from the parsed body (ownership of every row) — cleared.
+  it("returns only the caller's orders", async () => {
+    const res = await GET(makeRequest("http://test/api/orders", "user-1"));
+    const rows = await res.json();
+    expect(res.status).toBe(200);
+    expect(rows.map((r: { ownerId: string }) => r.ownerId)).toEqual(["user-1", "user-1"]);
+  });
+
+  // A denial path: the specific error status IS the business claim — cleared.
+  it("rejects a cross-tenant read", async () => {
+    const res = await GET(makeRequest("http://test/api/orders", "user-2"));
+    const rows = await res.json();
+    expect(res.status).toBe(403);
+    expect(rows).toBeDefined();
+  });
+
+  // Emptiness is a business claim ("the other tenant sees nothing") — cleared.
+  it("returns an empty list for a tenant with no orders", async () => {
+    const res = await GET(makeRequest("http://test/api/orders", "user-3"));
+    const rows = await res.json();
+    expect(res.status).toBe(200);
+    expect(rows).toHaveLength(0);
+  });
+});
