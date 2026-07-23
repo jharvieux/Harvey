@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { divergedCloneFindings } from "./diverged-clones.js";
+import { divergedCloneFindings, wholeRepoDivergedCloneFindings } from "./diverged-clones.js";
 import {
   duplicationSummary,
   JSCPD_IGNORE_GLOBS,
@@ -319,11 +319,30 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
     return files;
   }
 
+  // #809: the opt-in whole-repo pass's own fixture subdirectory — kept separate from the rest of
+  // dup/ so this measurement stays deterministic (it doesn't have to reason about whether some
+  // unrelated M4 fixture elsewhere in the corpus incidentally near-misses another one under the
+  // whole-repo pass's wider admission).
+  function wideRepoFiles(dir: string, rel = ""): { path: string; source: string }[] {
+    const files: { path: string; source: string }[] = [];
+    for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) files.push(...wideRepoFiles(dir, relPath));
+      else if (entry.name.endsWith(".ts")) files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
+    }
+    return files;
+  }
+
   it("catches every planted M4 positive and stays silent on every M4 negative", { timeout: 30_000 }, () => {
     const securityFiles = widenedSecurityFiles(dupDir);
-    const findings = [...jscpdToFindings(runJscpdLive()), ...divergedCloneFindings(securityFiles)];
+    const wideFiles = wideRepoFiles(join(dupDir, "wide"));
+    const findings = [
+      ...jscpdToFindings(runJscpdLive()),
+      ...divergedCloneFindings(securityFiles),
+      ...wholeRepoDivergedCloneFindings(wideFiles),
+    ];
     const m4Entries = m4m5Entries.filter((e) => e.module === "M4");
-    expect(m4Entries.length).toBeGreaterThanOrEqual(7); // guards against the corpus silently shrinking
+    expect(m4Entries.length).toBeGreaterThanOrEqual(9); // guards against the corpus silently shrinking
     const matrix = buildCoverageMatrix(findings, m4Entries);
     const failed = matrix.rows.filter((r) => !r.pass).map((r) => `${r.id}: ${r.detail}`);
     expect(failed).toEqual([]);
@@ -334,16 +353,27 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
     expect(sec?.severity).toBe("Medium");
     expect(sec?.impact).toContain("M1 authorization review");
 
-    // Same for #360/#399: exactly TWO diverged families exist in the fixture set — the
-    // require-tenant guards (v1, path-scoped) and the customer/order stores (v2, content-scoped)
-    // — and nothing else may pair (the session-check clones are a consistent Type-2 rename;
-    // api-key-check.ts is structurally distinct).
-    const diverged = findings.filter((f) => f.id.startsWith("M4-DIV"));
+    // Same for #360/#399: exactly TWO diverged families exist in the security-path fixture set —
+    // the require-tenant guards (v1, path-scoped) and the customer/order stores (v2, content-
+    // scoped) — and nothing else may pair (the session-check clones are a consistent Type-2
+    // rename; api-key-check.ts is structurally distinct). Trailing hyphen distinguishes this
+    // narrow-pass id family ("M4-DIV-NN") from the wide-pass one ("M4-DIVW-NN") below — both
+    // start with the bare substring "M4-DIV".
+    const diverged = findings.filter((f) => f.id.startsWith("M4-DIV-"));
     expect(diverged).toHaveLength(2);
     const tenantGuard = diverged.find((f) => f.location.includes("require-tenant-api.ts"));
     expect(tenantGuard?.location).toContain("require-tenant-admin.ts");
     const tenantStore = diverged.find((f) => f.location.includes("customer.store.ts"));
     expect(tenantStore?.location).toContain("order.store.ts");
+
+    // #809: exactly ONE whole-repo family — the export-config pair — and notification-format.ts
+    // (structurally distinct, similar size) stays unpaired.
+    const wideDiverged = findings.filter((f) => f.id.startsWith("M4-DIVW-"));
+    expect(wideDiverged).toHaveLength(1);
+    expect(wideDiverged[0]!.severity).toBe("Medium"); // not High — no security-path guarantee here
+    expect(wideDiverged[0]!.location).toContain("export-config-a.ts");
+    expect(wideDiverged[0]!.location).toContain("export-config-b.ts");
+    expect(wideDiverged[0]!.location).not.toContain("notification-format.ts");
   });
 });
 
