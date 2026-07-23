@@ -1,0 +1,65 @@
+// INTENTIONALLY VULNERABLE M2 cross-tenant fixture for the Harvey pen-test kit (#796). Never deploy.
+// A minimal Prisma membership app — User <- TeamMember(teamId, userId, role) -> Team + two
+// tenant-scoped resource models (Document, ApiKey). The HTTP route is the ONLY tenancy gate (no
+// PostgREST, no RLS), so a team route that skips the membership check is a cross-tenant BOLA leak.
+// The offline standing check src/pentest/prisma-xtenant-fixture.test.ts drives the real
+// crossTenantProbe against this app's two team routes: /members is properly scoped (must stay clean),
+// /documents is unscoped (must prove a leak).
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id      String       @id @default(cuid())
+  email   String       @unique
+  name    String?
+  members TeamMember[]
+}
+
+model Team {
+  id        String       @id @default(cuid())
+  slug      String       @unique
+  name      String?
+  members   TeamMember[]
+  documents Document[]
+  apiKeys   ApiKey[]
+}
+
+enum Role {
+  ADMIN
+  OWNER
+  MEMBER
+}
+
+model TeamMember {
+  id     String @id @default(cuid())
+  teamId String
+  userId String
+  role   Role   @default(MEMBER)
+  team   Team   @relation(fields: [teamId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@unique([teamId, userId])
+}
+
+// A tenant-scoped resource: every row belongs to exactly one team.
+model Document {
+  id     String @id @default(cuid())
+  teamId String
+  title  String
+  team   Team   @relation(fields: [teamId], references: [id])
+}
+
+// A second tenant-scoped resource (secret material) — team-scoped like Document.
+model ApiKey {
+  id     String @id @default(cuid())
+  teamId String
+  secret String
+  team   Team   @relation(fields: [teamId], references: [id])
+}
