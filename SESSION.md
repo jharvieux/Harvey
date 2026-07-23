@@ -2,15 +2,188 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-17 (session end. Third sweep + follow-ons: executable backlog EMPTY; #493 corrected 3 wrong OWASP mappings; dry-run-drift fixed at the root (#497–#500) — both dry-run artifacts now regenerated + gated, deterministic dry-run made network-independent, CLAUDE.md regen rule added. NEXT SESSION = M6-corpus trio, corpus now DECIDED (ATC + our six public test repos). See the NEXT SESSION block up top. Earlier sweeps further down still stand.)_
+_Last updated: 2026-07-22 (added the GTM / marketing-site workstream block below — separate from the scanner engineering. The 2026-07-21 issue-sweep block and earlier remain historical/current for the engineering side.)_
 
-## NEXT SESSION — the M6-corpus trio (#267 / #406 / #413)
+## GTM / marketing workstream (2026-07-21/22) — NEW, separate from the M1–M10 scanner work
 
-The one substantial piece of product work left. Design/build session, not a sweep. Sequence: assemble the corpus → measure per-pattern frequency (#413) → graduate the catalogue's YES column + wire the mechanical subset (#406) → the top-100 build-out (#267). Also needs a free/paid ruling (spec-72 currently locks M6 to LLM-only) and supervised brief edits (docs/quality-extras.txt, docs/design/*).
+A full go-to-market strategy and a marketing website were built this session. This is a
+distinct workstream from the audit-tool engineering below; the GTM/business issues
+(#2/#4/#10–#13) remain the tracker home for business items. Nothing here touches the
+scanner code or the calibration gate.
 
-**CORPUS — DECIDED (operator, 2026-07-17): use ATC + the public repos we already test against.** Do NOT block on sourcing a fresh dedicated AI-generated corpus (#413's original framing). The corpus for the frequency measurement is: **ATC** (jharvieux/atc) plus the six external-corpus repos already pinned in `src/scan/external-corpus.ts` — proposit, boxyhq/saas-starter-kit, devtodollars/mvp-boilerplate, saas-lite, Wallens11/supabase-multi-tenant-starter, vercel/nextjs-subscription-payments. First step next session: confirm which of these were AI-built vs. professionally maintained (operator input), since #413's real point stands as a *caveat* — measuring on a mix of AI-MVP repos + curated kits yields "frequency in our test corpus," a pragmatic proxy, not pure AI-generation frequency. That's an accepted starting point; refine later only if the mixed-corpus numbers prove too noisy to graduate a YES.
+- **Strategy lives in `docs/gtm/` — 12 docs, start at `00-overview.md`.** Built fresh
+  from a verified deep-research market pass; prior GTM docs (`docs/go-no-go.md`,
+  `outreach-template.md`, `free-tier-scope.md`) were deliberately NOT used as input
+  (operator direction), then cross-checked after in `10-old-docs-crosscheck.md` (four
+  real items folded back in: the enterprise-questionnaire trigger, the SOC 2 referral
+  angle, cold-email-collapse tactic, and an AI-review-is-weak evidence set pending
+  re-verification).
+- **Brand DECIDED: "Harvey" = "QA leader in a box".** Whole-codebase readiness verdict
+  across ten EQUAL modules; **security is one module + an acquisition hook only, never
+  the product's frame** (recurring operator correction — see the
+  [[harvey-full-quality-suite-not-security-only]] memory; I defaulted to security twice).
+  Positioning/pillars/ICP in `02-positioning-messaging.md`.
+- **Domain DECIDED: `harvey-qa.com`** (operator, 2026-07-22 — switched from the earlier
+  `harvey.review` after it was taken at purchase; puts "Harvey QA" in the domain, a `.com`,
+  no-hyphen `harveyqa.com` worth grabbing defensively). "Harvey" bare is unwinnable in
+  search (harvey.ai legal-AI) — ranking comes from content, never the brand token.
+- **Pricing DECIDED: size-banded (lines of code), three tiers**, in `03-pricing-packaging.md`:
+  Free $0 / **Connected** (full source review + live-DB read, from $500) / **Full**
+  (everything incl. local stand-up + live pen-test + mutation testing, from $1,000).
+  Connected is the cheaper paid tier, Full the premium — the pen-test/stand-up is the
+  expensive work, so it's the top tier and "Full" now genuinely means everything. Scales
+  small→large, enterprise/regulated = custom. Auto-quoted from LOC measured during the
+  free scan.
+- **Acquisition hooks in `11-acquisition-hooks.md`:** security (verified-demand door),
+  scalability/load-readiness (moment hook) + "app feels slow" (felt-pain lane), "AI slop"
+  (framed at the AI, not the founder), the "re-fixing the same modules" umbrella, launch-
+  readiness, diligence, compliance/PII. Each is a separate content/landing lane funneling
+  to the one free scan. Demand only VERIFIED for the security cluster — validate the
+  others before investing.
+- **Marketing site BUILT: `site/` (in THIS repo).** Real Next.js 15 app (App Router,
+  hand-authored theme-aware CSS), homepage ported 1:1 from
+  `docs/gtm/content/homepage-prototype.html`. **`npm run build` is green** (verified).
+  SEO/AEO wired: Organization/Service/FAQ JSON-LD, `llms.txt`, sitemap, robots, metadata,
+  favicon. It has its own package.json/tsconfig/build and is **excluded from the root
+  `pnpm verify` toolchain** (eslint + vitest ignore `site`, like `epic-builder-web`; knip
+  and tsconfig are already `src`-scoped). (Originally built as a sibling `../harvey-review/`;
+  moved into the repo per operator, 2026-07-22.)
+- **LIVE IN PRODUCTION at https://harvey-qa.com** (deployed 2026-07-22, #722 done). Hosted
+  by the Vercel project **`harvey`** (`prj_53NH7eOFAxXwoSKAMYO8Ye93qEer`, team
+  `jharvieux-1491s-projects`). The git link to `jharvieux/Harvey` is **`sourceless`** (no
+  push-to-deploy), so deploys are **CLI-driven**: `cd site && vercel --prod --yes`. Project
+  config: rootDirectory cleared to null + framework `nextjs` (was a stale `intake-site`);
+  `site/.vercel/` holds the link. NOTE: because deploys are CLI, pushing `site/` to `main`
+  does NOT auto-deploy — redeploy via the CLI after changes.
+- **Remaining before the form works:** set `RESEND_API_KEY`, `SCAN_NOTIFY_TO`, `RESEND_FROM`
+  in the Vercel `harvey` project env (#721). Until then `/api/scan` returns a 503
+  "not set up yet" (verified live) — graceful, no lost leads silently.
+- **Positioning BROADENED (2026-07-22, operator):** homepage brand/title is now
+  **"Codebase QA for AI-Generated Apps"** (was Supabase-specific) — "code" kept
+  discoverable via meta/keywords/body/`llms.txt`. Site changes live: per-stack "what we
+  check" section (Supabase/Next.js/Vite), the "1 in 10" stat now cites CVE-2025-48757,
+  the tools-comparison expanded to two tables (each tool's job → Harvey does all + more,
+  naming Snyk/Dependabot/ESLint/SonarQube/CodeRabbit), module 1 renamed **"Access control
+  & data security"** (so single-tenant teams see value), the mutation-testing line
+  reworded, and a **"Findings to tickets"** paid add-on (auto-file findings into
+  GitHub/Jira/Linear/GitLab/Azure — automation tracked in **#733**). Strategy docs
+  realigned: `00-overview`, `02-positioning`, `06-seo-aeo`.
+- **All outstanding GTM/site work is tracked in #721–#733** (label `audit-service`): site
+  form/deploy/pages (#721–#725), content + research (#726/#727/#732), hooks (#728),
+  partnerships/brand/social (#729/#730/#731), findings-to-tickets automation (#733).
+  Existing #10 (demand validation) and #11 (LLC/terms) remain valid; the #2 epic body is
+  stale (commented with the refresh).
+- **CLAUDE.md relay (operator, agents don't edit CLAUDE.md):** two optional additions
+  proposed — (1) note that the marketing site now lives at `site/` (excluded from root
+  verify like `epic-builder-web`; deploy via `cd site && vercel --prod --yes`); (2) a
+  "Bash cwd resets between calls — always `cd <dir> && …` in one command" doctrine bullet
+  (I ran deploys from the repo root 3× this session; also saved as the
+  [[cd-into-target-dir-same-command]] memory). Wording given to the operator; not yet in
+  CLAUDE.md.
+- **Delivery note:** the homepage prototype is a self-contained HTML file in-repo
+  (`docs/gtm/content/homepage-prototype.html`, openable in any browser); the real site is
+  the Next.js app. Do NOT rely on claude.ai Artifact preview links — the operator can't
+  open them; deliver files in-repo or to the side panel.
 
-**ATC also does double duty as the first REAL engagement target** — clears **#283** (M6 never run against a real target) and gives every module real signal. `[[atc-supabase-topology]]` records read-only prod DB access via the `supabase-main` MCP — **VERIFY that access first (measure, don't recall)** before relying on it. Plan: verify ATC access → run the full audit against ATC (clears #283, exercises M6 for real) → run the M6 hand-rolled-pattern frequency pass across the ATC-plus-six corpus (#413) → graduate/​wire (#406) → build out (#267).
+## This session (2026-07-21) — issue sweep, 10 issues merged
+
+Ran `/issue-sweep` over 26 open issues; 10 executable, 16 excluded (EPICs, GTM/business, external-project responsible-disclosure, and M2 items that need a deployed target: #159/#161/#4). Six batches, all merged into `main` with `verify` green:
+
+- **#698 (M8 #655)** — true root-scoped mutation run for monorepos: invoke the root runner, scope mutate globs to the app under audit; was previously only the #623 detection gap.
+- **#699 (M2 #610/#617/#658)** — monorepo per-project stand-up (every Supabase project's migrations, isolated stack each), FK-to-auth owner-column seeding (`author_id` etc.), and auth-attack probe wired into the live-standup factory.
+- **#700 (M1 #663/#664)** — Express+pg IDOR / mass-assign / CORS detectors + hardened service-role-literal (JWT decode, demo-key correlation, cross-file const). **res.json exposure sub-class deferred → remainder #701 (OPEN).**
+- **#704 (M2 #669/#670)** — stored/second-order XSS confirmation logic + M1-finding→exploit-seed derivation, source-side + fixtures. **Live booted-target exercise deferred → remainders #702/#703 (OPEN).**
+- **#705 (M2 #675)** — `--bizlogic` seed generator from route + schema introspection, new `pentest --mode=bizlogic-gen`.
+- **#706 (M6 #638)** — RESOLVED: retired the false-firing `detectRouteGuard` indicator (its own positive fixture was idiomatic react-router code) and recorded EXCLUDED in `docs/design/m6-handrolled-catalogue.md`. M6 detector count 32→31; M1 calibration gate unaffected (190/193, 178/178); dry-run byte-identical.
+
+### Follow-up arc after the sweep (all merged + LIVE-VALIDATED this session)
+- **#707 (M1 #701)** — res.json excessive-data-exposure detector shipped (narrow name-gated; zero new corpus FPs). #701 CLOSED.
+- **#709** — CLAUDE.md relay MERGED (operator-authorized): enriched the #545 autonomous-M2 sentence (per-DB monorepo stand-up #610 / FK-owner seeding #617 / auth-attack wiring #658) and refreshed the gate figure to **197/200 static positives, 189/189 negatives** (re-measured, not recalled).
+- **Live exercise vs a stood-up `cipherx-vulnerability-lab`** (docker + supabase CLI local; target cloned in scratch):
+  - **#702 (stored XSS confirm) — PROVEN live**, CLOSED. Wrote `<script>` into `support_tickets.description`, read it back unescaped from `/api/tickets/search?format=html`.
+  - **#703 (finding→seed derivation) — bug found, FIXED (#710), then PROVEN live**, CLOSED. `extractParam` anchored to the sink line not the input read → 0 sinks on real scan output; #710 scans the enclosing handler body → real `m1-findings.json` now derives the SSRF sink (0→1) and the live canary out-of-band callback fires.
+  - **#708 (probeInjection false-negative on ILIKE-context SQLi) — found live, FIXED (#711), then PROVEN live**, CLOSED. Widened `DB_ERROR` fingerprint + ILIKE-context boolean/timing payloads; all three signals fire on `search_tickets_unsafe`.
+- **#161 seam probes — WIRED + reachability-proven live, CLOSED.** Diagnosed the structural blocker (`TargetProfile.seams` was populated only in `calibration-fixture.ts`; `buildTargetProfile` never set it). Fixed across three PRs: **#714** route-based seam-discovery (classifies inbound webhook receivers — excludes outbound `fetch(url)` SSRF — plus service-JWT and `/internal` routes; `buildTargetProfile(baseUrl)` populates `profile.seams`); **#716** precision fix (a verify-then-200-empty receiver like boxyhq dsync no longer false-positives — gate the proven verdict on `hasNonTrivialBody`; found in the #718 investigation); **#719** monorepo behind-the-gateway service detection (service-auth-wrapped routes / sibling internal service-URL env / service-app name → `serviceEndpoints`, grounded against ATC). **Live-proven** against `nextjs-subscription-payments`: `profile.seams.webhookEndpoints` populated live, `CROSS-SERVICE-WEBHOOK` ran end-to-end → not-vulnerable (400). #161 CLOSED.
+- **#713 filed + FIXED (#716) + CLOSED** — the bare-2xx webhook FP the investigation caught.
+- **Corpus seam-target investigation (per operator ask):** no corpus repo ships an *unverified* seam (every receiver verifies). Best public self-provisioning exerciser = `nextjs-subscription-payments` (webhook, not-vulnerable). ATC = only full-3-probe surface (all hardened). boxyhq richest but not Supabase-standable. Others: no seam.
+- **#712 filed** — minor: `active-exploit --findings` `loadSeeds` doesn't normalize the scan-scope temp-copy path prefix (raw scan output fails route match; normal pipeline unaffected). Source-only.
+- **#717 filed** — residual: the seam probes' *proven* branches + NO-RATE-LIMIT loop (#159) need a target shipping insecure surfaces (no corpus target does).
+- **#718 filed** — build a Harvey-owned deliberately-vulnerable Supabase/Next fixture (insecure webhook / unfronted internal route / alg:none service-JWT / un-rate-limited high-value flow + negative controls + answer key) that stands up under `dynamic-validate --execute`. **This one fixture unblocks the entire live-testing backlog: #717 (seam proven branches) + #159 (rate-limit loop) + #715's live monorepo validation.**
+
+**Still open after all this — LIVE-TESTING backlog all funnels through #718:** #159 (rate-limit proven branch), #717 (seam proven branches), #718 (the vulnerable fixture that unblocks both), #712 (minor, source-only). Non-agent-workable: #2/#632 epics, #10–#13 GTM, #168/#214–#219 external disclosures, #4 Tier-2 blocked on Tier-1.
+
+## Where things stand (2026-07-18/19) — pipeline functional, six apps recall-tested, ATC engagement delivered
+
+**The pipeline is functional and hardened.** The abort-fallout chain plus a large coverage campaign landed:
+- **M2 is autonomous + isolated:** `dynamic-validate --execute` provisions its own local Supabase (unique project-id/ports, scoped teardown that never touches foreign volumes — #604/#609), applies the target's migrations incl. a root `schema.sql` (#574), seeds two tenants with a `handle_new_user`-trigger-safe / CHECK-constraint-aware seed (#598/#622), mints custom (non-Supabase) JWT sessions (#571), and runs live cross-tenant + IDOR-object + CSRF + member-vs-admin BFLA probes (#567/#587/#591). Stub-check is checkout-safe (#600).
+- **App-Router taint sources** (`await req.json()`, `{params}`, `new URL(req.url).searchParams`) added to the M1 taint rules (#570) — the primary-stack gap that was silently missing IDOR/SSRF/mass-assign/SSTI on Next.js App Router.
+- **Vite/no-code coverage:** framework detection (#573), monorepo-aware M9 gate (#597, no SSR false-fire on Vite workspaces), Vite M1 secrets/RLS/client-authz/CORS/headers (#565/#576/#578/#586), M7 Vite perf tier + dist bundle reader (#577), M5 knip-uncertainty disclosure (#580).
+- **The semantic (LLM) tier is now run on every recall target** — it is the difference between a scanner and an auditor (see the scores).
+
+**Six real apps recall-tested (full three-tier: mechanical + semantic + dynamic), reports in `docs/design/*-recall-measurement.md`:**
+- SuperRedHat/secure-code-review-demo **12/12** (was 6/12 pre-campaign)
+- thecipherxpro/cipherx-vulnerability-lab **20/21** (semantic carried 20/20)
+- yagaMI-Reverse/nocode-rescue **8/8** (was 1/8; validated the Vite campaign)
+- yoanbernabeu/SupatestVibeDemo **9/9** (semantic-ONLY; target is deliberately linter-proof)
+- Bum-Boo/vibe-dummy-test-kit — recall 47/49 and **0 FALSE POSITIVES** (the precision oracle held)
+- **aop** (jharvieux/AoP, operator-owned Vite monorepo) — strong posture, no High/Critical; 16 hardening findings filed in jharvieux/AoP #541–#556
+
+**ATC full engagement DELIVERED — the valid retry (2026-07-18/19):** all ten modules × both apps (main, rag) + extension + packages × both Supabase DBs; connected tier read-only via supabase-main + supabase-rag MCP. Report: `docs/design/atc-engagement-2026-07-18.md`. **13 findings filed in jharvieux/ATC #2000–#2012** (5 Medium, rest Low/Info); ATC's app-code + DB isolation is exceptionally hardened, **no cross-tenant path found**, 0 verified secrets in 49MB git history. Coverage ledger fully fail-loud.
+
+## This session (2026-07-19) — M2 isolation proof, monorepo harness fixes, detector wave, pen-test parity kickoff
+
+**THE ATC RUNTIME ISOLATION PROOF IS COMPLETE — 92/92 tables = 100% coverage, 0 cross-tenant leaks.** M2 stood up its own isolated stack, applied ATC's 185 migrations, seeded two tenants, and ran the live cross-tenant PostgREST matrix over the FULL scoped surface. The seed evolved through four stages this session: introspection (#650) → SAVEPOINT skip+disclose (#649, 78/92) → constraint-shape-aware values (#656, 91/92) → reuse of migration-seeded lookup rows (#665, **92/92**). Fully autonomous, general (helps every future engagement), 0 leaks across all 92 tables. Recorded in `docs/design/atc-engagement-2026-07-18.md` (Addendum 5 + M2 ledger row updated to full proof). (App-route probe tier degraded to PostgREST-only on ATC's `workspace:*` npm-install — disclosed.)
+
+**ATC finding correction (operator-confirmed):** the leaked-password-protection Medium (ATC#2007) was reframed to not-applicable — ATC is OAuth/social-only, no password auth surface. ATC#2007 closed as conditional; engagement doc row 9 downgraded (12 active findings + 1 conditional); underlying Harvey detector gap = **#671** (gate password-only auth advisors on whether password auth is enabled).
+
+**M2 seed was redesigned twice to get there:** (1) it now **introspects the live post-migration schema** (`information_schema`/`pg_catalog`) instead of parsing migration text — killed the whole daterange/dropped-column/array/type-evolution failure class (#650, closed #646); (2) **per-table SAVEPOINT skip+disclose** (#652, closed #649) — one unsatisfiable table no longer aborts the entire seed; it skips+discloses and the rest seed. This makes the seed robust against ANY real app, not just ATC.
+
+**The monorepo harness bugs the ATC run surfaced are ALL FIXED + merged:** #619 (isGitRepoRoot case-insensitive-FS silent secret-scan skip — now device+inode identity), #620 (per-app finding-ID collisions blocked `--findings-out`), #621 (M6 packet ignored hotspot scope → 105MB), #624 (M3 vitals CWD), #623 (M8 root-workspace dark), #607 (M8 stub-check workspace-symlink stale-code).
+
+**Mechanical-detector wave (precision-gated per the operator directive "don't limit ourselves to only what we've verified"):** M6 react-router route-guard + vite-env (#628), M9 SPA error-boundary (#627, PR #654), M8 vitest detectors — unrestored spyOn / in-source coverage / vi.hoisted (#629). **M1 plain-Express taint sources + service-role Gap A (#614/#611) IN FLIGHT** (operator approved "build both, precision-gated").
+
+**Pen-test parity (epic #632) kicked off:** the **auth-attack probe suite (#633) SHIPPED** — enumeration, JWT tampering (alg=none/strip/expiry/tenant-swap), password-reset abuse, auth rate-limit — as `pentest --mode=auth-attack`, fixture-tested.
+
+### IN FLIGHT: none — all dispatched work merged. Awaiting operator steer.
+**DONE this session (all merged):** ATC 92/92 100% isolation proof (#649/#656/#665); full pen-test-parity epic #632 (#633/#634/#635/#636/#637); M1 Express+service-role (#614/#611); AoP Vite-detector validation (#627/#628 correct, #638 open); M6/M9 detectors (#628/#627); M8 vitest (#629, vi.mock #660 EXCLUDED); monorepo harness bugs (#619/#620/#621/#623/#624/#607); auth-advisor gating (#671, from the ATC leaked-password FP → ATC#2007 reframed). Engagement doc = 12 active + 1 conditional finding.
+
+### Steering options — RESOLVED by the 2026-07-21 sweep
+(a) #663/#664 → DONE in PR #700 (res.json sub-class → remainder #701); (b) #675 bizlogic generator → DONE in PR #705; (c) live parity suites still need a DEPLOYED vulnerable target → #702/#703/#159/#161 remain OPEN; (d) #638 route-guard → RESOLVED as EXCLUDED in PR #706 (decidable from react-router's API surface, no external SPA needed); (e) operator's own direction — open.
+
+**✅ PEN-TEST PARITY EPIC #632 — COMPLETE (all 5 suites built + merged):** #633 auth-attack, #634 active-exploitation (SSRF canary/XSS/injection), #635 file-upload, #636 race/TOCTOU, #637 business-logic (threat-model-driven). Merge-train reconciled the shared `pentest.ts` (additive union + closed the shared-trailing-brace collapse). **Remaining = LIVE exercise only:** run each `--mode` against a booted vulnerable target to convert requires-live-run rows into proven verdicts — #670 (active-exploit/upload), #159/#161 (rate-limit/seams), #675 (bizlogic `--bizlogic` seed generator). No such target ships these surfaces yet.
+
+**DONE this batch:** #656/#666 (constraint-shape seed → **ATC 91/92**, #656 CLOSED). #634/#668 active-exploit. #614/#611 (M1 Express taint + service-role JWT-literal, gate PASS 189/192 pos / 177/177 neg, PR #662) → #614/#611/#644 CLOSED; FP-risky remainders #663/#664. #660 vi.mock → **EXCLUDED** (live repro; premise stale; PR #667, closed). AoP validation (PR #661) → #627/#628 validated correct on real Vite; #638 OPEN (route-guard shipped-but-unvalidated).
+
+### ⚠️ CLAUDE.md RELAY (operator edit — agents can't touch CLAUDE.md)
+The "Measure, don't recall" bullet's gate figure is now stale after #614/#662. It reads "186/189 static positives, negatives 170/170 … batch (#595/#601/#602/#611/#613/#616/#625)". Freshly measured: **189/192 static positives, 177/177 negatives**; append **#614** to the batch list. Recommended: update numbers to `189/192 static positives, negatives 177/177` + add `#614`. (Relayed to operator 2026-07-19.)
+
+### AoP Vite-detector validation — DONE (PR #661, doc-only), with a caveat
+Ran the batch-4 Vite detectors against real AoP (`~/ClaudeCodeProjects/AoP`, operator-owned Vite SPA), source-only. **Framework detection correct** (apps/web=vite, root=other since configs live under apps/*, per-workspace M9 gating → zero SSR false-fires). **#627 SPA error-boundary detector validated CORRECT** (silent — AoP genuinely mounts `<ErrorBoundary>` at root in main.tsx; the M6 hand-rolled-ErrorBoundary indicator correctly fired TP on ErrorBoundary.tsx:21). **#628 vite-env validated CORRECT** (silent — bare `import.meta.env` reads). **Route-guard (#638) INCONCLUSIVE, NOT resolved:** the detector `detectRouteGuard` IS shipped (#654, `handrolled.ts:1545`, dep-gated on react-router) — but AoP has NO react-router (uses a `useState<Screen>` state machine), so the dep-gate stayed closed and the detector never ran. **#638 stays OPEN** — its real question (does it false-fire on idiomatic `<Navigate>` guards?) needs a real react-router SPA target. (Caught the AoP agent's initial write-up marking the shape "not shipped/EXCLUDED" — verified against `origin/main` that it ships; correction in flight.)
+
+Lane discipline this session: 3 disjoint lanes (semgrep / pentest / detectors) + dry-run regen only on the semgrep lane. Cap raised to 4-in-flight per operator.
+
+## NEXT / QUEUED
+- **Pen-test parity remainder (epic #632):** #634 active-exploitation (live SSRF canary + reflected-XSS + injection verification), #635 file-upload attacks, #636 race/TOCTOU, #637 business-logic (fable). All pentest-lane — serialize behind #656.
+- **Fold #656 result into the ATC report.** (#658 auth-attack wiring, #610 multi-DB M2 stand-up, #617 FK-to-auth seed, #655 root-scoped mutation, #638 route-guard — all DONE in the 2026-07-21 sweep.)
+- **Live-target-gated (need a deployed vulnerable target that ships the surfaces):** #702 (stored-XSS live confirm), #703 (M1-finding seed live exercise), #159/#161 (rate-limit / inter-service seams).
+- **#701** — M1 res.json excessive-data-exposure detector (Express+pg): needs paired pos/neg fixtures + a `validate-calibration` gate pass with zero new corpus FPs. **The one source-only follow-up open.** (#660 vi.mock and #644 umbrella are both CLOSED.)
+- **#671 (queued, next free slot) — finding-framing precision:** gate leaked-password-protection (+ other password-only auth advisors) on whether password auth is actually enabled. Origin: ATC is OAuth-only, so the Medium was a not-applicable FP (ATC#2007 reframed→closed). Detection: connected = `/auth/v1/settings` `external.email`; source = which auth methods the code calls (`signInWithPassword` vs OAuth-only) + `config.toml [auth.email]`. When unconfirmable → conditional, never asserted Medium.
+- **OWED (after #665 lands):** reframe the leaked-password finding in `docs/design/atc-engagement-2026-07-18.md` from Medium to conditional/not-applicable (ATC OAuth-only) — deferred now because #665 owns that doc.
+- **Not agent-workable:** disclosure sends #168/#214–#219 (operator action), business/GTM #2/#4/#10–#13.
+
+**Gate figure:** run `validate-calibration` — never quote; #648 refreshed the CLAUDE.md figure this session. Per-module detector counts: run `pnpm detector-census` (M8 now +3 from #659).
+
+**M6-corpus / #413:** provenance classified 2026-07-18 (comment on #413) — only devtodollars + ATC are unambiguously AI-generated; genuinely-vibe-coded-on-this-exact-stack is scarce. #267/#406 DONE; #283 cleared by the ATC + Cravab real-target M6 runs.
+
+## 2026-07-17 (later) — first real-target ATC full-audit ATTEMPT — ABORTED as not valid  ⟶ SUPERSEDED 2026-07-19 (the retry succeeded; see the top section — the failures below were all fixed and the engagement was delivered)
+
+Ran the "works" against the local ATC checkout (both apps, both live Supabase DBs, real creds). It produced real signal but was **aborted by the operator as not a valid audit** because of a chain of process/harness failures — the value of the run is the failure list, now all filed. **Do not treat the `reports/atc/` artifacts as a delivered audit.**
+
+**What failed (→ issues):** reported "audit done" over a partial ledger (#509); ran M1 LLM semantic passes BEFORE vitals/M3 so hotspots fed nothing (#502); **scoped the M8 mutation run to the security surface, invalidating whole-suite M8** (#504) — root cause was treating security as "flagship" (#510) + a wrong "Stryker is multi-hour" assumption (it's fast — ~20k mutants/15min; memory `stryker-is-fast` written); M4/M5 hung on the whole monorepo, only did apps/main first (#505), and per-app/per-DB tiers (M7 advisors, M10 live) only hit one app/DB until prompted (#506); wrongly declared vitals unavailable when it's a plugin install (#507); M2 never actually ran (fixtures skipped) (#508). Third-party portability gaps ATC masked (it already had Stryker/test-DB/fixtures): #512/#513/#514 (fable). Cross-module hotspot prioritization, esp. M6 maintainability: #515. Deliverable completeness must derive from the ledger: #509. Full-engagement runbook: #511.
+
+**Real findings the run DID surface (worth keeping as leads for the real retry):** M1 core-isolation is strong (416 RLS policies all gate on `auth_user_in_tenant`, JWT fail-closed, webhook replay guard correct); the one notable security item = `tenantClient` UPDATE path doesn't sanitize `tenant_id` in the SET payload (latent cross-tenant write, no confirmed call site); M10 data-classification is the real high-severity signal (gmail_oauth_tokens, contacts, booking_passengers passport/DOB); M8 tenant-isolation tests mock the DB client (53 sites) so they can't catch RLS regressions; live SECURITY DEFINER `tenant_is_active` is an existence oracle. ATC#1999 (TZ-brittle test) also found.
+
+**Process notes:** ATC prod is reachable read-only via `supabase-main` MCP (ref `mfaknjyqiwcjojukcnea`); RAG DB is `supabase-rag` (`jjznkprbotkqqnuvcost`). Connected-tier creds: the Supabase access token is on the MCP server config (NOT in ATC `.env.local` despite expectation); `SUPABASE_DB_URL`/`SUPABASE_RAG_DB_URL` are in ATC `.env.local`. Full Stryker needs `TZ=Pacific/Honolulu` (ATC#1999). All background scans were killed and `.stryker-tmp` cleaned; ATC repo left clean (scan output only in gitignored paths).
 
 ## 2026-07-17 issue-sweep #3 — drain (5 PRs merged, 6 issues closed — net −4)
 

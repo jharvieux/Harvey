@@ -1,0 +1,458 @@
+{
+  "grade": "F",
+  "score": 0,
+  "gradeScope": "F — hygiene only; tenant isolation and authz not assessed.",
+  "riskDisclosure": "Tenant isolation and authorization were NOT assessed from source — those need the deep scan (LLM semantic review + live RLS/auth pen test). This grade covers mechanically-verifiable hygiene only; it is not a statement that the app is secure.",
+  "total": 13,
+  "countsBySeverity": {
+    "Critical": 12,
+    "High": 0,
+    "Medium": 0,
+    "Low": 1,
+    "Perf": 0,
+    "Info": 0,
+    "Watch": 0
+  },
+  "categories": [
+    {
+      "category": "Secret exposure",
+      "count": 12
+    },
+    {
+      "category": "Supply chain",
+      "count": 1
+    }
+  ],
+  "findings": [
+    {
+      "id": "SEC-GL-source-7",
+      "title": "Hardcoded HTTP Authorization Bearer token literal (harvey-http-authorization-bearer)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/apps/main/test/unit/pricing/apify-token-in-header.test.ts:86",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SEC-GL-source-10",
+      "title": "Database connection URI with an inline password (harvey-db-uri-credentials)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/docs/runbooks/supabase-setup.md:55",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SEC-GL-source-11",
+      "title": "Database connection URI with an inline password (harvey-db-uri-credentials)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/docs/runbooks/supabase-setup.md:60",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SEC-GL-source-15",
+      "title": "Database connection URI with an inline password (harvey-db-uri-credentials)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/tests/fixtures/nightly-failures/unhandled-error-ansi.log:7",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SEC-GL-source-16",
+      "title": "Hardcoded HTTP Authorization Bearer token literal (harvey-http-authorization-bearer)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/tests/fixtures/nightly-failures/unhandled-error-ansi.log:8",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SEC-GL-source-17",
+      "title": "Database connection URI with an inline password (harvey-db-uri-credentials)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/tests/unit/scripts/parse-nightly-failures.test.ts:75",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SEC-GL-source-18",
+      "title": "Database connection URI with an inline password (harvey-db-uri-credentials)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/tests/unit/scripts/parse-nightly-failures.test.ts:84",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SEC-GL-source-19",
+      "title": "Hardcoded HTTP Authorization Bearer token literal (harvey-http-authorization-bearer)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/tests/unit/scripts/parse-nightly-failures.test.ts:91",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SEC-GL-source-21",
+      "title": "Database connection URI with an inline password (harvey-db-uri-credentials)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/tests/unit/scripts/psql-invocation.test.ts:14",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SEC-GL-source-22",
+      "title": "Database connection URI with an inline password (harvey-db-uri-credentials)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/tests/unit/scripts/psql-invocation.test.ts:22",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SEC-GL-source-23",
+      "title": "Database connection URI with an inline password (harvey-db-uri-credentials)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/tests/unit/scripts/redact-secrets.test.ts:13",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SEC-GL-source-24",
+      "title": "Database connection URI with an inline password (harvey-db-uri-credentials)",
+      "severity": "Critical",
+      "category": "Secret exposure",
+      "taxonomy": "Committed credential",
+      "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/tests/unit/scripts/redact-secrets.test.ts:47",
+      "risk": "An unambiguous committed credential; treat it as live until proven otherwise."
+    },
+    {
+      "id": "SUP-UNPINNED",
+      "title": "22 dependencies declared with an unpinned version range",
+      "severity": "Low",
+      "category": "Supply chain",
+      "taxonomy": "Unpinned dependency",
+      "location": "package.json",
+      "risk": "A compromised upstream publish (or the next semver-compatible release) can land in installs without review, unless a lockfile is committed and enforced in CI."
+    }
+  ],
+  "informational": [],
+  "indicators": [],
+  "handrolled": [
+    {
+      "taxonomy": "M6 — Indicator: currency formatting",
+      "shape": "currency formatting",
+      "title": "Looks hand-rolled: currency formatting via symbol + toFixed concatenation — may be worth investigating",
+      "total": 23,
+      "files": [
+        {
+          "file": "apps/main/src/app/(admin)/admin/resources/_client.tsx",
+          "locations": [
+            "apps/main/src/app/(admin)/admin/resources/_client.tsx:86",
+            "apps/main/src/app/(admin)/admin/resources/_client.tsx:382",
+            "apps/main/src/app/(admin)/admin/resources/_client.tsx:451",
+            "apps/main/src/app/(admin)/admin/resources/_client.tsx:452"
+          ]
+        },
+        {
+          "file": "apps/main/src/lib/pricing/apify-pricing-adapter.ts",
+          "locations": [
+            "apps/main/src/lib/pricing/apify-pricing-adapter.ts:132",
+            "apps/main/src/lib/pricing/apify-pricing-adapter.ts:133",
+            "apps/main/src/lib/pricing/apify-pricing-adapter.ts:142",
+            "apps/main/src/lib/pricing/apify-pricing-adapter.ts:189"
+          ]
+        },
+        {
+          "file": "scripts/draft-signature-features.ts",
+          "locations": [
+            "scripts/draft-signature-features.ts:212",
+            "scripts/draft-signature-features.ts:221",
+            "scripts/draft-signature-features.ts:228",
+            "scripts/draft-signature-features.ts:232"
+          ]
+        },
+        {
+          "file": "scripts/eval/ocr-deck-plans/run-haiku-vision.ts",
+          "locations": [
+            "scripts/eval/ocr-deck-plans/run-haiku-vision.ts:86",
+            "scripts/eval/ocr-deck-plans/run-haiku-vision.ts:97",
+            "scripts/eval/ocr-deck-plans/run-haiku-vision.ts:106",
+            "scripts/eval/ocr-deck-plans/run-haiku-vision.ts:113"
+          ]
+        },
+        {
+          "file": "scripts/eval/ocr-deck-plans/compare-and-report.ts",
+          "locations": [
+            "scripts/eval/ocr-deck-plans/compare-and-report.ts:179",
+            "scripts/eval/ocr-deck-plans/compare-and-report.ts:180",
+            "scripts/eval/ocr-deck-plans/compare-and-report.ts:191"
+          ]
+        },
+        {
+          "file": "apps/main/src/lib/external/cruisemapper/cruisemapper-actor.ts",
+          "locations": [
+            "apps/main/src/lib/external/cruisemapper/cruisemapper-actor.ts:69",
+            "apps/main/src/lib/external/cruisemapper/cruisemapper-actor.ts:72"
+          ]
+        },
+        {
+          "file": "apps/main/src/components/groups/CreateGroupClient.tsx",
+          "locations": [
+            "apps/main/src/components/groups/CreateGroupClient.tsx:275"
+          ]
+        },
+        {
+          "file": "apps/main/src/lib/external/cruisemapper/itinerary-mapper.ts",
+          "locations": [
+            "apps/main/src/lib/external/cruisemapper/itinerary-mapper.ts:110"
+          ]
+        }
+      ]
+    },
+    {
+      "taxonomy": "M6 — Indicator: email-shape regex",
+      "shape": "email-shape regex",
+      "title": "Looks hand-rolled: email-shape validation regex — may be worth investigating",
+      "total": 11,
+      "files": [
+        {
+          "file": "apps/main/src/app/api/admin/email-samples/route.ts",
+          "locations": [
+            "apps/main/src/app/api/admin/email-samples/route.ts:261"
+          ]
+        },
+        {
+          "file": "apps/main/src/app/api/auth/microsoft-email-prompt/route.ts",
+          "locations": [
+            "apps/main/src/app/api/auth/microsoft-email-prompt/route.ts:80"
+          ]
+        },
+        {
+          "file": "apps/main/src/app/api/groups/[id]/invitations/route.ts",
+          "locations": [
+            "apps/main/src/app/api/groups/[id]/invitations/route.ts:100"
+          ]
+        },
+        {
+          "file": "apps/main/src/app/api/tenant/email-templates/[type]/send-preview/route.ts",
+          "locations": [
+            "apps/main/src/app/api/tenant/email-templates/[type]/send-preview/route.ts:69"
+          ]
+        },
+        {
+          "file": "apps/main/src/app/signup/complete/page.tsx",
+          "locations": [
+            "apps/main/src/app/signup/complete/page.tsx:38"
+          ]
+        },
+        {
+          "file": "apps/main/src/lib/auth/microsoft-email-recovery.ts",
+          "locations": [
+            "apps/main/src/lib/auth/microsoft-email-recovery.ts:53"
+          ]
+        },
+        {
+          "file": "apps/main/src/lib/booking/validation.ts",
+          "locations": [
+            "apps/main/src/lib/booking/validation.ts:13"
+          ]
+        },
+        {
+          "file": "apps/main/src/lib/help-ai/pii-redaction.ts",
+          "locations": [
+            "apps/main/src/lib/help-ai/pii-redaction.ts:92"
+          ]
+        },
+        {
+          "file": "apps/main/src/lib/import/validation.ts",
+          "locations": [
+            "apps/main/src/lib/import/validation.ts:198"
+          ]
+        },
+        {
+          "file": "scripts/lib/redact-secrets.ts",
+          "locations": [
+            "scripts/lib/redact-secrets.ts:39"
+          ]
+        },
+        {
+          "file": "scripts/parse-nightly-failures.mjs",
+          "locations": [
+            "scripts/parse-nightly-failures.mjs:26"
+          ]
+        }
+      ]
+    },
+    {
+      "taxonomy": "M6 — Indicator: cookie serialization",
+      "shape": "cookie serialization",
+      "title": "Looks hand-rolled: cookie-header serialization — may be worth investigating",
+      "total": 8,
+      "files": [
+        {
+          "file": "apps/main/src/lib/chat/anon-session-cookie.ts",
+          "locations": [
+            "apps/main/src/lib/chat/anon-session-cookie.ts:63",
+            "apps/main/src/lib/chat/anon-session-cookie.ts:64"
+          ]
+        },
+        {
+          "file": "apps/main/src/app/api/auth/microsoft-email-prompt/route.ts",
+          "locations": [
+            "apps/main/src/app/api/auth/microsoft-email-prompt/route.ts:142"
+          ]
+        },
+        {
+          "file": "apps/main/src/app/api/crm/contacts/route.ts",
+          "locations": [
+            "apps/main/src/app/api/crm/contacts/route.ts:140"
+          ]
+        },
+        {
+          "file": "apps/main/src/app/settings/privacy/cookies/page.tsx",
+          "locations": [
+            "apps/main/src/app/settings/privacy/cookies/page.tsx:21"
+          ]
+        },
+        {
+          "file": "apps/main/src/components/admin-shell/collapsed-cookie.ts",
+          "locations": [
+            "apps/main/src/components/admin-shell/collapsed-cookie.ts:39"
+          ]
+        },
+        {
+          "file": "apps/main/src/components/privacy/CookieConsentBanner.tsx",
+          "locations": [
+            "apps/main/src/components/privacy/CookieConsentBanner.tsx:39"
+          ]
+        },
+        {
+          "file": "apps/main/src/components/tenant-console/collapsed-cookie.ts",
+          "locations": [
+            "apps/main/src/components/tenant-console/collapsed-cookie.ts:18"
+          ]
+        }
+      ]
+    },
+    {
+      "taxonomy": "M6 — Indicator: cookie parsing",
+      "shape": "cookie parsing",
+      "title": "Looks hand-rolled: cookie-header parsing — may be worth investigating",
+      "total": 3,
+      "files": [
+        {
+          "file": "apps/main/src/app/consent/page.tsx",
+          "locations": [
+            "apps/main/src/app/consent/page.tsx:56"
+          ]
+        },
+        {
+          "file": "apps/main/src/app/settings/privacy/cookies/page.tsx",
+          "locations": [
+            "apps/main/src/app/settings/privacy/cookies/page.tsx:13"
+          ]
+        },
+        {
+          "file": "apps/main/src/components/privacy/CookieConsentBanner.tsx",
+          "locations": [
+            "apps/main/src/components/privacy/CookieConsentBanner.tsx:29"
+          ]
+        }
+      ]
+    },
+    {
+      "taxonomy": "M6 — Indicator: random-string id",
+      "shape": "random-string id",
+      "title": "Looks hand-rolled: random-string id from Math.random() — may be worth investigating",
+      "total": 3,
+      "files": [
+        {
+          "file": "tests/e2e/_provision-tenant.ts",
+          "locations": [
+            "tests/e2e/_provision-tenant.ts:56",
+            "tests/e2e/_provision-tenant.ts:74"
+          ]
+        },
+        {
+          "file": "apps/main/test/error-injection/_helpers.ts",
+          "locations": [
+            "apps/main/test/error-injection/_helpers.ts:197"
+          ]
+        }
+      ]
+    },
+    {
+      "taxonomy": "M6 — Indicator: base64url conversion",
+      "shape": "base64url conversion",
+      "title": "Looks hand-rolled: URL-safe base64 conversion via replace chain — may be worth investigating",
+      "total": 2,
+      "files": [
+        {
+          "file": "apps/main/src/app/api/webhooks/gmailpubsub/route.ts",
+          "locations": [
+            "apps/main/src/app/api/webhooks/gmailpubsub/route.ts:298"
+          ]
+        },
+        {
+          "file": "apps/main/src/lib/privacy/customer-hash.ts",
+          "locations": [
+            "apps/main/src/lib/privacy/customer-hash.ts:27"
+          ]
+        }
+      ]
+    },
+    {
+      "taxonomy": "M6 — Indicator: class-string merge",
+      "shape": "class-string merge",
+      "title": "Looks hand-rolled: class-string merge — may be worth investigating",
+      "total": 1,
+      "files": [
+        {
+          "file": "apps/main/src/components/ui/file-drop-zone.tsx",
+          "locations": [
+            "apps/main/src/components/ui/file-drop-zone.tsx:159"
+          ]
+        }
+      ]
+    },
+    {
+      "taxonomy": "M6 — Indicator: JSON deep-equal",
+      "shape": "JSON deep-equal",
+      "title": "Looks hand-rolled: deep equality via JSON string comparison — may be worth investigating",
+      "total": 1,
+      "files": [
+        {
+          "file": "apps/rag/src/inngest/platform-settings-reconcile.ts",
+          "locations": [
+            "apps/rag/src/inngest/platform-settings-reconcile.ts:131"
+          ]
+        }
+      ]
+    }
+  ],
+  "sample": {
+    "id": "SEC-GL-source-10",
+    "title": "Database connection URI with an inline password (harvey-db-uri-credentials)",
+    "severity": "Critical",
+    "category": "Secret exposure",
+    "taxonomy": "Committed credential",
+    "location": "[source] /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-3Kbuk5/docs/runbooks/supabase-setup.md:55",
+    "risk": "An unambiguous committed credential; treat it as live until proven otherwise.",
+    "fix": "Rotate the credential if live, remove from source/history, and add to .gitignore."
+  },
+  "reviewTierExcluded": 230,
+  "locked": true,
+  "gated": [
+    "The fix / remediation steps for every finding above",
+    "The DEEP scan: LLM semantic review + live RLS/auth pen test",
+    "Re-scan, monitoring, and PR checks",
+    "Exportable report (PDF / SARIF)"
+  ]
+}

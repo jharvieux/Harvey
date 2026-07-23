@@ -1,0 +1,36 @@
+[
+  {
+    "id": "M7-01",
+    "title": "214 unused indexes",
+    "severity": "Low",
+    "confidence": "Confirmed",
+    "category": "Performance",
+    "taxonomy": "Index hygiene",
+    "location": "public.tenants, public.stripe_webhook_events, public.supervisor_review_queue, public.contacts, public.quotes, public.forensics_log, public.reconciliation_review_queue, public.ai_batch_requests, +81 more",
+    "precisionTier": "high",
+    "status": "Open",
+    "evidence": "Supabase performance advisor: unused_index. e.g. \"Index \\`tenants_type_idx\\` on table \\`public.tenants\\` has not been used\"",
+    "impact": "Write & storage overhead for an index the query planner isn't using.",
+    "fix": "DROP INDEX CONCURRENTLY after confirming it doesn't back a rare-but-critical path or a UNIQUE constraint.",
+    "value": 2,
+    "ease": 2,
+    "safety": 3
+  },
+  {
+    "id": "M7-02",
+    "title": "5 unindexed foreign keys",
+    "severity": "Perf",
+    "confidence": "Confirmed",
+    "category": "Performance",
+    "taxonomy": "Missing index",
+    "location": "public.email_retry_content",
+    "precisionTier": "high",
+    "status": "Open",
+    "evidence": "Supabase performance advisor: unindexed_foreign_keys. e.g. \"Table \\`public.email_retry_content\\` has a foreign key \\`email_retry_content_last_send_log_id_fkey\\` without a covering index. This can lead to suboptimal query performance.\"",
+    "impact": "Sequential scans on parent UPDATE/DELETE and FK JOINs; degrades at scale.",
+    "fix": "Additive covering-index migration for each listed foreign key.",
+    "value": 4,
+    "ease": 5,
+    "safety": 5
+  }
+]
