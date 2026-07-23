@@ -1,8 +1,9 @@
 // A minimal multi-tenant Prisma/Postgres schema — no Supabase, so tenant isolation is app-layer,
-// not DB-level RLS. Fixture for the #757 ORM-detection + RLS-gating tests, and (#758) the M10
+// not DB-level RLS. Fixture for the #757 ORM-detection + RLS-gating tests, (#758) the M10
 // schema.prisma classification tests: Customer carries an email/phone/address/payment-ref column
 // so a Prisma-only app (no supabase/migrations, no generated prisma/migrations SQL) still produces
-// a real M10 PII/PCI data map.
+// a real M10 PII/PCI data map, and (#761) the M7 static index review: Note.userId is the
+// unindexed-FK positive, Comment.noteId (@@index-covered) is the negative.
 generator client {
   provider = "prisma-client-js"
 }
@@ -25,6 +26,15 @@ model Note {
   body   String
   userId String
   user   User   @relation(fields: [userId], references: [id])
+}
+
+model Comment {
+  id     String @id @default(cuid())
+  body   String
+  noteId String
+  note   Note   @relation(fields: [noteId], references: [id])
+
+  @@index([noteId])
 }
 
 model Customer {
