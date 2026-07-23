@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
 import { validateFindings } from "../src/findings.js";
 import { buildDataMap, classifyColumn, classifyMigrationSql, classifyWithFallback, dataMapToFindings } from "./pii-classify.mjs";
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const CLI = join(REPO_ROOT, "tools", "pii-classify.mjs");
 
 describe("classifyColumn — true positives across the taxonomy", () => {
   it("matches HIPAA/GDPR contact & identity PII at high confidence", () => {
@@ -475,5 +483,54 @@ describe("classifyWithFallback — LLM semantic-pass hook", () => {
     expect(map.users.infotypes.sort()).toEqual(["EMAIL", "USERNAME_HANDLE"]);
     const handleHit = map.users.columns.find((c) => c.column === "contact_handle");
     expect(handleHit?.source).toBe("semantic");
+  });
+});
+
+// #770: the M10 probe's discovery fallback (src/audit-runners.ts) may hand --schema more than one
+// target when a project's schema DDL is scattered across unconventional locations — a root-level
+// file (launch-mvp) plus a nested one (nocode-rescue) in the same run. This drives the real CLI
+// (not classifyMigrationSql in-process) to prove the argv-parsing change actually reads and
+// concatenates every target, not just the first.
+describe("pii-classify --schema CLI — multiple targets (#770)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  it("classifies columns from a single unconventionally-named schema file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-pii-schema-"));
+    dirs.push(dir);
+    const schema = join(dir, "initial_supabase_table_schema.sql");
+    writeFileSync(schema, "create table customers (\n  id uuid primary key,\n  email text not null\n);\n");
+    const outPath = join(dir, "out.json");
+
+    execFileSync("node_modules/.bin/tsx", [CLI, "--schema", schema, "--out", outPath], { cwd: REPO_ROOT, encoding: "utf8" });
+
+    const findings = JSON.parse(readFileSync(outPath, "utf8"));
+    expect(findings.some((f: { location: string }) => f.location === "customers")).toBe(true);
+  });
+
+  it("concatenates two targets passed after a single --schema flag, classifying columns from both", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-pii-schema-multi-"));
+    dirs.push(dir);
+    const root = join(dir, "initial_supabase_table_schema.sql");
+    writeFileSync(root, "create table customers (\n  id uuid primary key,\n  email text not null\n);\n");
+    mkdirSync(join(dir, "before"));
+    const nested = join(dir, "before", "schema.sql");
+    writeFileSync(nested, "create table applicants (\n  id uuid primary key,\n  customer_ssn text\n);\n");
+    const outPath = join(dir, "out.json");
+
+    execFileSync("node_modules/.bin/tsx", [CLI, "--schema", root, nested, "--out", outPath], { cwd: REPO_ROOT, encoding: "utf8" });
+
+    const findings = JSON.parse(readFileSync(outPath, "utf8"));
+    const locations = findings.map((f: { location: string }) => f.location);
+    expect(locations).toContain("customers");
+    expect(locations).toContain("applicants");
+  });
+
+  it("errors out (rather than silently classifying nothing) when a --schema target does not exist", () => {
+    expect(() =>
+      execFileSync("node_modules/.bin/tsx", [CLI, "--schema", "/does/not/exist.sql"], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
+    ).toThrow();
   });
 });

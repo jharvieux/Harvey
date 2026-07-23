@@ -21,6 +21,12 @@
 // mixing them for the SAME app is not meaningful — the bare path never applies once >1 app is
 // enumerated.
 //
+// #770: when neither a hint nor the conventional-location probe finds anything, the schema tier
+// falls back to discovering schema DDL itself — a bounded, CREATE-TABLE-filtered search for a
+// schema.sql living somewhere unconventional (a project root under an unrelated name, or nested
+// under a directory the probe doesn't know to look in). No flag needed; this only ever narrows the
+// "nothing to classify" gap, never overrides a hint or a conventional match.
+//
 // Per-DB M10 live classification (#520): on a multi-project connected run, each --supabase project's
 // live DB is classified against its own connection URL, read from `SUPABASE_DB_URL_<REF>` (the ref
 // uppercased, non-alphanumerics → `_`; the first ref also falls back to plain SUPABASE_DB_URL). A
@@ -77,6 +83,7 @@ import { applyBaseline } from "../audit-diff.js";
 import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit-execution-log.js";
 import { formatFailures, runAudit, type RunContext } from "../audit-runner.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
+import { discoverSchemaFiles } from "../dynamic-validate.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { isGitRepoRoot } from "../scan/secrets.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
@@ -204,6 +211,7 @@ const ctx: RunContext = {
   allowTargetInstall: args.includes("--allow-target-install"),
   schemaHint,
   schemaHints,
+  discoverSchemaFiles,
   supabaseDbUrls,
   isGitRepoRoot,
 };

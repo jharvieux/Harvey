@@ -9,11 +9,13 @@
 //   pnpm pii-classify --selftest
 //   SUPABASE_DB_URL=... pnpm pii-classify                    # inventory a live DB (read-only)
 //   pnpm pii-classify --schema supabase/migrations           # static schema, no DB needed (#250)
+//   pnpm pii-classify --schema before/schema.sql init.sql    # multiple targets (#770), concatenated
 //
-// The --schema path parses `CREATE TABLE` columns straight out of migration SQL (a directory of
-// *.sql files, or a single .sql file) via src/migration-sql-parse.ts's parseColumns — the same
-// under-extract-rather-than-mis-extract parser the M1 detect-deeper classifiers use — so this
-// runs the identical classifier over source-only engagements instead of needing a live DB.
+// The --schema path parses `CREATE TABLE` columns straight out of migration SQL (one or more
+// targets, each a directory of *.sql files or a single .sql file) via src/migration-sql-parse.ts's
+// parseColumns — the same under-extract-rather-than-mis-extract parser the M1 detect-deeper
+// classifiers use — so this runs the identical classifier over source-only engagements instead of
+// needing a live DB.
 // Requires `tsx` (the `pnpm pii-classify` script) rather than plain `node`, since it imports a
 // TypeScript source file directly.
 //
@@ -529,15 +531,28 @@ function readSchemaSql(target) {
     .join("\n\n");
 }
 
+// #770: every argv entry after --schema up to the next --flag is a target — the M10 probe
+// (src/audit-runners.ts) passes more than one when its schema DDL was discovered scattered across
+// multiple unconventional locations, so nothing it found is dropped for lack of a single-path CLI.
+// A single target (the common case) behaves exactly as before.
+function schemaTargets() {
+  const start = process.argv.indexOf("--schema") + 1;
+  const targets = [];
+  for (let i = start; i < process.argv.length && !process.argv[i].startsWith("--"); i++) targets.push(process.argv[i]);
+  return targets;
+}
+
 function classifyFromSchema() {
-  const target = process.argv[process.argv.indexOf("--schema") + 1];
-  if (!target || !existsSync(target)) {
-    console.error(`Usage: pii-classify --schema <path to a supabase/migrations dir or a single .sql file>${target ? ` — ${target} does not exist` : ""}`);
+  const targets = schemaTargets();
+  const missing = targets.filter((t) => !existsSync(t));
+  if (targets.length === 0 || missing.length) {
+    const detail = missing.length ? ` — ${missing.join(", ")} does not exist` : "";
+    console.error(`Usage: pii-classify --schema <path> [<path> ...] (each a supabase/migrations dir or a single .sql file)${detail}`);
     process.exit(1);
   }
-  const { columns } = classifyMigrationSql(readSchemaSql(target));
+  const { columns } = classifyMigrationSql(targets.map(readSchemaSql).join("\n\n"));
   if (columns.length === 0) {
-    console.error(`No \`create table\` columns found via ${target} — check the path (expects supabase/migrations/*.sql shape).`);
+    console.error(`No \`create table\` columns found via ${targets.join(", ")} — check the path(s) (expects supabase/migrations/*.sql shape or a standalone schema.sql with CREATE TABLE).`);
     process.exit(1);
   }
   writeFindingsOut(report(columns), "schema");
