@@ -1,0 +1,536 @@
+<title>Harvey — Codebase QA for Supabase Apps</title>
+<style>
+  :root {
+    --bg: #F1F3F5;
+    --surface: #FFFFFF;
+    --surface-2: #FBFCFC;
+    --text: #14181F;
+    --muted: #55606D;
+    --faint: #8A94A1;
+    --line: #DCE1E7;
+    --line-strong: #C6CDD5;
+    --accent: #B67400;
+    --accent-mark: #F2A900;
+    --accent-wash: #FBEFD2;
+    --accent-contrast: #1A1205;
+    --critical: #C4383D;
+    --critical-wash: #F8E5E5;
+    --review: #B67400;
+    --review-wash: #FBEFD2;
+    --pass: #1B8F53;
+    --pass-wash: #DDF1E6;
+    --shadow: 0 1px 2px rgba(20,24,31,.04), 0 12px 32px -12px rgba(20,24,31,.14);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B0E13; --surface: #141922; --surface-2: #10151D; --text: #E7ECF2;
+      --muted: #99A3B0; --faint: #656F7C; --line: #222A35; --line-strong: #2F3945;
+      --accent: #F2A900; --accent-mark: #F2A900; --accent-wash: #2A2110; --accent-contrast: #120C00;
+      --critical: #EF5A5F; --critical-wash: #2C1719; --review: #F2A900; --review-wash: #2A2110;
+      --pass: #3DBE7C; --pass-wash: #14241B;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 18px 40px -16px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #F1F3F5; --surface: #FFFFFF; --surface-2: #FBFCFC; --text: #14181F;
+    --muted: #55606D; --faint: #8A94A1; --line: #DCE1E7; --line-strong: #C6CDD5;
+    --accent: #B67400; --accent-mark: #F2A900; --accent-wash: #FBEFD2; --accent-contrast: #1A1205;
+    --critical: #C4383D; --critical-wash: #F8E5E5; --review: #B67400; --review-wash: #FBEFD2;
+    --pass: #1B8F53; --pass-wash: #DDF1E6;
+    --shadow: 0 1px 2px rgba(20,24,31,.04), 0 12px 32px -12px rgba(20,24,31,.14);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0B0E13; --surface: #141922; --surface-2: #10151D; --text: #E7ECF2;
+    --muted: #99A3B0; --faint: #656F7C; --line: #222A35; --line-strong: #2F3945;
+    --accent: #F2A900; --accent-mark: #F2A900; --accent-wash: #2A2110; --accent-contrast: #120C00;
+    --critical: #EF5A5F; --critical-wash: #2C1719; --review: #F2A900; --review-wash: #2A2110;
+    --pass: #3DBE7C; --pass-wash: #14241B;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 18px 40px -16px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 17px; line-height: 1.6; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  .wrap { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  .narrow { max-width: 760px; }
+  a { color: inherit; }
+  h1, h2, h3 { text-wrap: balance; margin: 0; }
+
+  .eyebrow { font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); display: inline-flex; align-items: center; gap: 8px; }
+  .eyebrow::before { content: ""; width: 22px; height: 1px; background: var(--accent); opacity: .6; }
+
+  header.nav { position: sticky; top: 0; z-index: 50; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: saturate(1.2) blur(10px); border-bottom: 1px solid var(--line); }
+  .nav-in { display: flex; align-items: center; justify-content: space-between; height: 62px; }
+  .brand { font-family: var(--mono); font-weight: 700; font-size: 17px; letter-spacing: -.01em; display: inline-flex; align-items: center; gap: 9px; text-decoration: none; }
+  .brand .dot { width: 9px; height: 9px; border-radius: 2px; background: var(--accent-mark); box-shadow: 0 0 0 3px var(--accent-wash); }
+  .brand .tld { color: var(--faint); font-weight: 500; }
+  .nav-links { display: flex; align-items: center; gap: 26px; }
+  .nav-links a { font-size: 14px; color: var(--muted); text-decoration: none; }
+  .nav-links a:hover { color: var(--text); }
+  .theme-toggle { background: none; border: 1px solid var(--line-strong); color: var(--muted); width: 34px; height: 34px; border-radius: 8px; cursor: pointer; font-size: 15px; display: grid; place-items: center; }
+  .theme-toggle:hover { color: var(--text); border-color: var(--faint); }
+  .btn { font-family: var(--sans); font-size: 14px; font-weight: 600; cursor: pointer; border-radius: 9px; padding: 10px 16px; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; border: 1px solid transparent; transition: transform .08s ease, background .15s ease; }
+  .btn-primary { background: var(--accent-mark); color: var(--accent-contrast); }
+  .btn-primary:hover { transform: translateY(-1px); }
+  .btn-ghost { background: transparent; color: var(--text); border-color: var(--line-strong); }
+  .btn-ghost:hover { border-color: var(--faint); }
+  .nav .btn { padding: 8px 14px; }
+  @media (max-width: 720px) { .nav-links a:not(.btn) { display: none; } }
+
+  section { padding: 84px 0; border-bottom: 1px solid var(--line); }
+  .sec-head { display: flex; flex-direction: column; gap: 16px; margin-bottom: 40px; }
+  h2 { font-size: clamp(26px, 3.4vw, 36px); font-weight: 700; letter-spacing: -.02em; line-height: 1.12; }
+  .sec-head p { margin: 0; color: var(--muted); font-size: 18px; max-width: 640px; }
+
+  .hero { padding: 68px 0 88px; border-bottom: 1px solid var(--line); }
+  .hero-grid { display: grid; grid-template-columns: 1fr; gap: 48px; }
+  @media (min-width: 960px) { .hero-grid { grid-template-columns: 1fr 1.08fr; align-items: center; gap: 56px; } }
+  .hero h1 { font-size: clamp(34px, 5.2vw, 54px); font-weight: 760; letter-spacing: -.032em; line-height: 1.05; margin: 20px 0 0; }
+  .hero h1 em { font-style: normal; color: var(--accent); background: linear-gradient(180deg, transparent 62%, var(--accent-wash) 62%); padding: 0 2px; }
+  .hero p.lede { color: var(--muted); font-size: 19px; margin: 22px 0 0; max-width: 520px; }
+  .hero-cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+  .trust { font-family: var(--mono); font-size: 12.5px; color: var(--faint); margin-top: 18px; display: flex; align-items: center; gap: 8px; }
+  .trust svg { width: 14px; height: 14px; flex: none; }
+
+  /* ---- hero scorecard ---- */
+  .scorecard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+  .sc-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+  .sc-top .lbl { font-family: var(--mono); font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  .sc-top .repo { font-family: var(--mono); font-size: 13px; color: var(--text); font-weight: 600; }
+  .sc-verdict { display: flex; align-items: center; gap: 10px; }
+  .sc-verdict .grade { font-family: var(--mono); font-weight: 700; font-size: 13px; color: var(--critical); background: var(--critical-wash); padding: 5px 11px; border-radius: 8px; letter-spacing: .02em; }
+  .sc-list { display: flex; flex-direction: column; }
+  .sc-row { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 12px; padding: 11px 18px; border-bottom: 1px solid var(--line); opacity: 0; transform: translateY(3px); }
+  .sc-row.in { opacity: 1; transform: none; transition: opacity .35s ease, transform .35s ease; }
+  .sc-row:last-child { border-bottom: none; }
+  .sc-row .n { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .sc-row .mod { font-size: 13.5px; font-weight: 560; color: var(--text); }
+  .sc-row .fnd { font-family: var(--mono); font-size: 11.5px; color: var(--muted); display: block; margin-top: 1px; }
+  .st { font-family: var(--mono); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 3px 9px; border-radius: 20px; white-space: nowrap; }
+  .st.crit { color: var(--critical); background: var(--critical-wash); }
+  .st.rev { color: var(--review); background: var(--review-wash); }
+  .st.pass { color: var(--pass); background: var(--pass-wash); }
+
+  .cols { display: grid; grid-template-columns: 1fr; gap: 20px; }
+  @media (min-width: 780px) { .cols { grid-template-columns: repeat(3, 1fr); } }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 26px; }
+  .card h3 { font-size: 18px; font-weight: 680; letter-spacing: -.01em; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15.5px; line-height: 1.55; }
+  .card .ic { width: 30px; height: 30px; border-radius: 8px; background: var(--accent-wash); color: var(--accent); display: grid; place-items: center; flex: none; }
+  .card .ic svg { width: 17px; height: 17px; }
+
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  table.cmp { width: 100%; border-collapse: collapse; font-size: 15px; min-width: 560px; }
+  table.cmp th, table.cmp td { text-align: left; padding: 15px 20px; border-bottom: 1px solid var(--line); }
+  table.cmp thead th { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); font-weight: 600; }
+  table.cmp thead th:last-child { color: var(--accent); }
+  table.cmp tbody td { color: var(--muted); }
+  table.cmp td:first-child { color: var(--text); font-weight: 500; }
+  table.cmp td.c { text-align: center; width: 120px; }
+  table.cmp tr:last-child td { border-bottom: none; }
+  .yes { color: var(--pass); font-weight: 700; }
+  .no { color: var(--faint); }
+  table.cmp td.c.hl { background: color-mix(in srgb, var(--accent-wash) 55%, transparent); }
+
+  .mods { display: grid; grid-template-columns: 1fr; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--surface); }
+  @media (min-width: 680px) { .mods { grid-template-columns: 1fr 1fr; } }
+  .mod { display: flex; gap: 16px; padding: 20px 22px; border-bottom: 1px solid var(--line); }
+  @media (min-width: 680px) { .mod:nth-child(odd) { border-right: 1px solid var(--line); } }
+  .mod:hover { background: var(--surface-2); }
+  .mod .n { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--accent); padding-top: 3px; min-width: 24px; }
+  .mod h3 { font-size: 16px; font-weight: 640; margin-bottom: 3px; }
+  .mod p { margin: 0; font-size: 14px; color: var(--muted); }
+
+  .steps { display: grid; grid-template-columns: 1fr; gap: 22px; counter-reset: s; }
+  @media (min-width: 780px) { .steps { grid-template-columns: repeat(3, 1fr); } }
+  .step { position: relative; padding-top: 20px; border-top: 2px solid var(--line-strong); }
+  .step::before { counter-increment: s; content: counter(s, decimal-leading-zero); font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent); position: absolute; top: -1px; left: 0; transform: translateY(-140%); }
+  .step h3 { font-size: 18px; font-weight: 660; margin-bottom: 7px; }
+  .step p { margin: 0; color: var(--muted); font-size: 15.5px; }
+
+  .proves { display: grid; grid-template-columns: 1fr; gap: 16px; }
+  @media (min-width: 780px) { .proves { grid-template-columns: 1fr 1fr; } }
+  .prove { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; }
+  .prove .ph { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .prove h3 { font-size: 16.5px; font-weight: 660; letter-spacing: -.01em; }
+  .tier-pill { font-family: var(--mono); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 3px 8px; border-radius: 6px; white-space: nowrap; }
+  .tier-pill.full { color: var(--accent); background: var(--accent-wash); }
+  .tier-pill.conn { color: var(--pass); background: var(--pass-wash); }
+  .prove .free { color: var(--muted); font-size: 14px; margin: 0; }
+  .prove .paid { color: var(--text); font-size: 14.5px; font-weight: 550; margin: 8px 0 0; padding-left: 13px; border-left: 2px solid var(--accent-mark); line-height: 1.5; }
+
+  .matrix-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  table.matrix { width: 100%; border-collapse: collapse; min-width: 580px; font-size: 14.5px; }
+  table.matrix th, table.matrix td { padding: 13px 18px; border-bottom: 1px solid var(--line); text-align: left; }
+  table.matrix thead th { font-family: var(--mono); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); font-weight: 600; vertical-align: bottom; text-align: center; }
+  table.matrix thead th:first-child { text-align: left; }
+  table.matrix thead th .p { display: block; font-size: 11px; color: var(--faint); font-weight: 500; text-transform: none; letter-spacing: 0; margin-top: 4px; }
+  table.matrix thead th.feat { color: var(--accent); }
+  table.matrix td.cap { color: var(--text); font-weight: 500; }
+  table.matrix td.dot { text-align: center; width: 118px; font-size: 15px; font-family: var(--mono); }
+  table.matrix .on { color: var(--accent-mark); font-size: 17px; }
+  table.matrix .off { color: var(--faint); opacity: .55; }
+  table.matrix td.feat { background: color-mix(in srgb, var(--accent-wash) 42%, transparent); }
+  table.matrix tr:last-child td { border-bottom: none; }
+  .grp td { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); background: var(--surface-2); padding-top: 9px; padding-bottom: 9px; }
+
+  .price-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+  @media (min-width: 820px) { .price-grid { grid-template-columns: repeat(3, 1fr); } }
+  .tier { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 28px; display: flex; flex-direction: column; }
+  .tier.feature { border-color: var(--accent-mark); box-shadow: var(--shadow); position: relative; }
+  .tier.feature::after { content: "Everything included"; position: absolute; top: -11px; left: 28px; font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; background: var(--accent-mark); color: var(--accent-contrast); padding: 4px 9px; border-radius: 6px; }
+  .tier .tname { font-family: var(--mono); font-size: 13px; letter-spacing: .04em; color: var(--muted); }
+  .tier .amt { font-size: 34px; font-weight: 740; letter-spacing: -.02em; margin: 12px 0 2px; }
+  .tier .amt small { font-size: 15px; font-weight: 500; color: var(--faint); letter-spacing: 0; }
+  .tier ul { list-style: none; margin: 20px 0 24px; padding: 0; display: flex; flex-direction: column; gap: 11px; }
+  .tier li { font-size: 14.5px; color: var(--muted); display: flex; gap: 10px; align-items: flex-start; }
+  .tier li svg { width: 15px; height: 15px; flex: none; color: var(--accent); margin-top: 4px; }
+  .tier .btn { margin-top: auto; justify-content: center; }
+
+  .ledger { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 30px; }
+  .ledger-row { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 13.5px; }
+  .ledger-row:last-child { border-bottom: none; }
+  .ledger-row .m { flex: 1; color: var(--text); }
+  .pill { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; padding: 3px 9px; border-radius: 20px; font-family: var(--mono); }
+  .pill.ran { color: var(--pass); background: var(--pass-wash); }
+  .pill.part { color: var(--review); background: var(--review-wash); }
+  .ledger-row .why { color: var(--faint); font-size: 12px; }
+
+  .final { text-align: center; border-bottom: none; }
+  .final h2 { max-width: 640px; margin: 0 auto; }
+  .final .hero-cta { justify-content: center; }
+  .final .trust { justify-content: center; }
+
+  footer { padding: 44px 0 60px; }
+  .foot-in { display: flex; flex-wrap: wrap; gap: 22px 30px; justify-content: space-between; align-items: center; }
+  .foot-links { display: flex; flex-wrap: wrap; gap: 20px; }
+  .foot-links a { font-size: 13.5px; color: var(--muted); text-decoration: none; }
+  .foot-links a:hover { color: var(--text); }
+  .foot-note { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sc-row { opacity: 1; transform: none; }
+    .btn:hover { transform: none; }
+  }
+</style>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a href="#" class="brand"><span class="dot"></span>harvey<span class="tld">-qa</span></a>
+    <nav class="nav-links">
+      <a href="#audit">The audit</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#ledger">How we report</a>
+      <button class="theme-toggle" id="themeBtn" aria-label="Toggle theme">◐</button>
+      <a href="#scan" class="btn btn-primary">Run the free scan</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <!-- HERO -->
+  <div class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <span class="eyebrow">Codebase QA for Supabase &amp; Next.js</span>
+        <h1>The QA leader your codebase <em>never had.</em></h1>
+        <p class="lede">Harvey checks your whole app — security, tests, performance, data, maintainability — and hands you one readiness verdict you can act on. It's the senior quality review you can't yet justify hiring for.</p>
+        <div class="hero-cta">
+          <a href="#scan" class="btn btn-primary">Run the free scan →</a>
+          <a href="#sample" class="btn btn-ghost">See a sample report</a>
+        </div>
+        <p class="trust">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          No database, no credentials, no production contact. Just point us at your repo.
+        </p>
+      </div>
+
+      <!-- the thesis: one readiness verdict across the whole codebase -->
+      <figure class="scorecard" id="card" style="margin:0;">
+        <div class="sc-top">
+          <div><div class="lbl">Readiness report</div><div class="repo">your-saas · main</div></div>
+          <div class="sc-verdict"><span class="lbl">Verdict</span><span class="grade">Not ready to scale</span></div>
+        </div>
+        <div class="sc-list" id="scList">
+          <div class="sc-row"><span class="n">01</span><span><span class="mod">Multi-tenant security</span><span class="fnd">cross-tenant read possible</span></span><span class="st crit">Critical</span></div>
+          <div class="sc-row"><span class="n">02</span><span><span class="mod">Live pen-test</span><span class="fnd">boundary crossed, 2 tenants</span></span><span class="st crit">Critical</span></div>
+          <div class="sc-row"><span class="n">03</span><span><span class="mod">Hotspots</span><span class="fnd">3 files hold 60% of churn</span></span><span class="st rev">Review</span></div>
+          <div class="sc-row"><span class="n">04</span><span><span class="mod">Duplication</span><span class="fnd">8% duplicated logic</span></span><span class="st rev">Review</span></div>
+          <div class="sc-row"><span class="n">05</span><span><span class="mod">Dead code</span><span class="fnd">14 unused exports</span></span><span class="st pass">Clean</span></div>
+          <div class="sc-row"><span class="n">06</span><span><span class="mod">Maintainability</span><span class="fnd">hand-rolled auth, use a library</span></span><span class="st rev">Review</span></div>
+          <div class="sc-row"><span class="n">07</span><span><span class="mod">Performance</span><span class="fnd">2 N+1 queries, 1 missing index</span></span><span class="st crit">Critical</span></div>
+          <div class="sc-row"><span class="n">08</span><span><span class="mod">Test quality</span><span class="fnd">41% of tests can't actually fail</span></span><span class="st rev">Review</span></div>
+          <div class="sc-row"><span class="n">09</span><span><span class="mod">App Router boundaries</span><span class="fnd">server env reachable from client</span></span><span class="st rev">Review</span></div>
+          <div class="sc-row"><span class="n">10</span><span><span class="mod">Data classification</span><span class="fnd">PII in 3 unprotected columns</span></span><span class="st rev">Review</span></div>
+        </div>
+      </figure>
+    </div>
+  </div>
+
+  <!-- PROBLEM -->
+  <section>
+    <div class="wrap narrow sec-head">
+      <span class="eyebrow">Why this matters</span>
+      <h2>You shipped fast. Do you actually know what you shipped?</h2>
+      <p>No QA team, no senior lead reviewing every merge — just you and an assistant that says it's fine. The result is a codebase you can't see the true state of: which tests can't catch a bug, where the data's exposed, what falls over at scale.</p>
+    </div>
+    <div class="wrap narrow">
+      <p style="color:var(--muted); font-size:17px; margin:0;">Most founders find out the hard way. To take one example: when researchers reviewed public apps built with AI tools, roughly <b style="color:var(--text)">one in ten was exposing user data</b> — a blind spot no one on the team could see. Shipping fast was the right call. Harvey shows you the real state of what you built — before it costs you.</p>
+    </div>
+  </section>
+
+  <!-- DIFFERENTIATION -->
+  <section id="audit">
+    <div class="wrap sec-head">
+      <span class="eyebrow">One audit vs. ten tools</span>
+      <h2>A scanner gives you noise. Harvey gives you a verdict.</h2>
+      <p>You could buy a security scanner, a coverage tool, a perf monitor, and a linter — and still not know if you're ready. Harvey is the senior read that runs all of it and tells you what actually matters for <i>your</i> app.</p>
+    </div>
+    <div class="wrap cols">
+      <div class="card">
+        <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18M7 14l3-3 3 3 5-6"/></svg></span>The whole picture</h3>
+        <p>Ten dimensions in one audit — security, tests, performance, data, maintainability — rolled into a single readiness verdict, not ten disconnected dashboards.</p>
+      </div>
+      <div class="card">
+        <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg></span>Judgment, not alerts</h3>
+        <p>Ranked by what matters for your codebase — a senior read, not four thousand linter warnings you'll ignore. Every finding comes with the fix.</p>
+      </div>
+      <div class="card">
+        <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg></span>We prove it, live</h3>
+        <p>Where it counts, we don't just flag — we stand up a copy of your stack and prove it. A cross-tenant leak isn't a warning; it's the row we shouldn't have been able to read.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMPARE -->
+  <section>
+    <div class="wrap narrow sec-head">
+      <span class="eyebrow">Tools vs. a leader</span>
+      <h2>The questions a stack of tools can't answer.</h2>
+    </div>
+    <div class="wrap">
+      <div class="table-scroll">
+        <table class="cmp">
+          <thead><tr><th>Question about your codebase</th><th class="c">Tools</th><th class="c">Harvey</th></tr></thead>
+          <tbody>
+            <tr><td>Flags syntax patterns &amp; known CVEs</td><td class="c"><span class="yes">✓</span></td><td class="c hl"><span class="yes">✓</span></td></tr>
+            <tr><td>Which of my tests can't actually catch a bug?</td><td class="c"><span class="no">—</span></td><td class="c hl"><span class="yes">✓</span></td></tr>
+            <tr><td>Can one tenant read another's data?</td><td class="c"><span class="no">—</span></td><td class="c hl"><span class="yes">✓</span> proven live</td></tr>
+            <tr><td>What will fall over when traffic scales?</td><td class="c"><span class="no">—</span></td><td class="c hl"><span class="yes">✓</span></td></tr>
+            <tr><td>Where is unprotected PII sitting?</td><td class="c"><span class="no">—</span></td><td class="c hl"><span class="yes">✓</span></td></tr>
+            <tr><td>One verdict across the whole codebase</td><td class="c"><span class="no">—</span></td><td class="c hl"><span class="yes">✓</span> 10 modules</td></tr>
+            <tr><td>Tells me what it did <i>not</i> check</td><td class="c"><span class="no">—</span></td><td class="c hl"><span class="yes">✓</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="color:var(--faint); font-size:14px; margin:16px 0 0; font-family:var(--mono);">Keep your tools — they're good continuous hygiene. Harvey answers a different question: is this codebase actually ready?</p>
+    </div>
+  </section>
+
+  <!-- MODULES -->
+  <section>
+    <div class="wrap sec-head">
+      <span class="eyebrow">Ten modules · equal weight</span>
+      <h2>Everything Harvey checks before you scale.</h2>
+      <p>No module is the headline. The deliverable is the true state of your codebase across all ten — a readiness verdict, not a single-issue report.</p>
+    </div>
+    <div class="wrap">
+      <div class="mods">
+        <div class="mod"><span class="n">01</span><div><h3>Multi-tenant security</h3><p>Cross-tenant isolation, RLS, auth boundaries.</p></div></div>
+        <div class="mod"><span class="n">02</span><div><h3>Live pen-test</h3><p>A real attack on a live copy of your stack.</p></div></div>
+        <div class="mod"><span class="n">03</span><div><h3>Hotspot analysis</h3><p>Where complexity and change collide.</p></div></div>
+        <div class="mod"><span class="n">04</span><div><h3>Duplication</h3><p>Copy-pasted logic that drifts out of sync.</p></div></div>
+        <div class="mod"><span class="n">05</span><div><h3>Dead code</h3><p>What's shipped but never runs.</p></div></div>
+        <div class="mod"><span class="n">06</span><div><h3>Maintainability</h3><p>Hand-rolled code with a better replacement.</p></div></div>
+        <div class="mod"><span class="n">07</span><div><h3>Performance</h3><p>N+1 queries, missing indexes, Core Web Vitals.</p></div></div>
+        <div class="mod"><span class="n">08</span><div><h3>Test quality</h3><p>Which of your tests can't actually catch a bug.</p></div></div>
+        <div class="mod"><span class="n">09</span><div><h3>App Router boundaries</h3><p>Server→client leaks, Server Action auth.</p></div></div>
+        <div class="mod"><span class="n">10</span><div><h3>Data classification</h3><p>Every piece of PII / PHI / PCI, and where it lives.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEPS -->
+  <section id="scan">
+    <div class="wrap sec-head">
+      <span class="eyebrow">How it works</span>
+      <h2>Start free. The full audit goes where a scan can't.</h2>
+    </div>
+    <div class="wrap steps">
+      <div class="step"><h3>Point us at your repo</h3><p>Read-only access with git history, or a code archive. No database, no keys, no production contact. Same-day turnaround.</p></div>
+      <div class="step"><h3>Get your readiness report</h3><p>All ten modules over your source, in plain English, ranked by what matters — a read on what your code indicates, yours to keep whether or not you buy.</p></div>
+      <div class="step"><h3>Go deeper</h3><p>The paid audit does what source alone can't: stands up your stack and proves findings live, tests whether your tests actually catch bugs, and reviews your live database. Different depth — not more of the same.</p></div>
+    </div>
+  </section>
+
+  <!-- PAID-ONLY -->
+  <section>
+    <div class="wrap sec-head">
+      <span class="eyebrow">Free indicates · the audit proves</span>
+      <h2>What the free scan can't tell you.</h2>
+      <p>The free scan reads your source and reports what it <i>indicates</i>. A whole class of findings doesn't exist until Harvey runs the deeper tiers — no amount of static analysis can surface them.</p>
+    </div>
+    <div class="wrap">
+      <div class="proves" style="margin-bottom:22px;">
+        <div class="prove">
+          <div class="ph"><span class="tier-pill full">Full audit</span><h3>Proven cross-tenant access</h3></div>
+          <p class="free">Free scan: flags an RLS policy that <i>looks</i> like it leaks across tenants.</p>
+          <p class="paid">Harvey logs in as one tenant and pulls another's records — the actual row you should never have been able to see.</p>
+        </div>
+        <div class="prove">
+          <div class="ph"><span class="tier-pill full">Full audit</span><h3>Tests that can't catch a bug</h3></div>
+          <p class="free">Free scan: notes which tests exist and look thin.</p>
+          <p class="paid">Harvey runs mutation testing — breaks your code on purpose and reports which tests still pass anyway.</p>
+        </div>
+      </div>
+
+      <div class="matrix-scroll">
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th>What you actually get</th>
+              <th>Free scan<span class="p">$0</span></th>
+              <th>Connected<span class="p">from $500</span></th>
+              <th class="feat">Full audit<span class="p">from $1,000</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="grp"><td colspan="4">Reads your source</td></tr>
+            <tr><td class="cap">Findings across all ten modules</td><td class="dot"><span class="on">●</span></td><td class="dot"><span class="on">●</span></td><td class="dot feat"><span class="on">●</span></td></tr>
+            <tr><td class="cap">False positives triaged out</td><td class="dot"><span class="off">—</span></td><td class="dot"><span class="on">●</span></td><td class="dot feat"><span class="on">●</span></td></tr>
+            <tr><td class="cap">Fixes named, not just flagged</td><td class="dot"><span class="off">—</span></td><td class="dot"><span class="on">●</span></td><td class="dot feat"><span class="on">●</span></td></tr>
+            <tr class="grp"><td colspan="4">Reads your production database</td></tr>
+            <tr><td class="cap">Live database + Supabase advisors</td><td class="dot"><span class="off">—</span></td><td class="dot"><span class="on">●</span></td><td class="dot feat"><span class="on">●</span></td></tr>
+            <tr><td class="cap">Drift between prod and your migrations</td><td class="dot"><span class="off">—</span></td><td class="dot"><span class="on">●</span></td><td class="dot feat"><span class="on">●</span></td></tr>
+            <tr><td class="cap">PII protection verified in production</td><td class="dot"><span class="off">—</span></td><td class="dot"><span class="on">●</span></td><td class="dot feat"><span class="on">●</span></td></tr>
+            <tr class="grp"><td colspan="4">Stands up &amp; attacks your app</td></tr>
+            <tr><td class="cap">Cross-tenant access proven on a live stack</td><td class="dot"><span class="off">—</span></td><td class="dot"><span class="off">—</span></td><td class="dot feat"><span class="on">●</span></td></tr>
+            <tr><td class="cap">Tests broken on purpose to see which fail</td><td class="dot"><span class="off">—</span></td><td class="dot"><span class="off">—</span></td><td class="dot feat"><span class="on">●</span></td></tr>
+            <tr><td class="cap">Auth, endpoint &amp; service-seam attacks</td><td class="dot"><span class="off">—</span></td><td class="dot"><span class="off">—</span></td><td class="dot feat"><span class="on">●</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="color:var(--faint); font-size:14px; margin:16px 0 0; font-family:var(--mono);">The free scan is a real ten-module read of your source. Connected adds your live database; Full adds standing up and attacking a running copy — the only way to prove a flaw instead of flagging it.</p>
+    </div>
+  </section>
+
+  <!-- PRICING -->
+  <section id="pricing">
+    <div class="wrap sec-head">
+      <span class="eyebrow">Transparent pricing</span>
+      <h2>No "book a call to hear the price."</h2>
+      <p>Publishing prices is deliberate — most boutique auditors hide them behind a call. Pricing scales with your codebase size, so a weekend project and an enterprise monorepo never pay the same.</p>
+    </div>
+    <div class="wrap price-grid">
+      <div class="tier">
+        <span class="tname">FREE SCAN</span>
+        <div class="amt">$0</div>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>Source-only, no credentials</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>All ten modules, static findings</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>Same-day, yours to keep</li>
+        </ul>
+        <a href="#scan" class="btn btn-ghost">Run the free scan</a>
+      </div>
+      <div class="tier">
+        <span class="tname">CONNECTED AUDIT</span>
+        <div class="amt">$500<small> / from · by size</small></div>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>All ten modules, reviewed with real verdicts</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>Live database: RLS, Supabase advisors, drift</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>PII protection verified in production</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>Read-only access — nothing stood up</li>
+        </ul>
+        <a href="#scan" class="btn btn-ghost">Start with a free scan</a>
+      </div>
+      <div class="tier feature">
+        <span class="tname">FULL AUDIT</span>
+        <div class="amt">$1,000<small> / from · by size</small></div>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>Everything in the Connected audit</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>We stand up your stack and attack it live</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>Cross-tenant access &amp; auth flaws proven</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>Mutation-tested tests + investor-ready summary</li>
+        </ul>
+        <a href="#scan" class="btn btn-primary">Start with a free scan</a>
+      </div>
+    </div>
+    <div class="wrap" style="margin-top:26px;">
+      <div class="table-scroll">
+        <table class="cmp">
+          <thead><tr><th>Codebase size <span style="font-weight:400;color:var(--faint);text-transform:none;letter-spacing:0;">· measured automatically</span></th><th class="c">Free scan</th><th class="c">Connected</th><th class="c">Full audit</th></tr></thead>
+          <tbody>
+            <tr><td>Small · under 10k lines</td><td class="c">$0</td><td class="c">$500</td><td class="c">$1,000</td></tr>
+            <tr><td>Medium · 10k–50k lines</td><td class="c">$0</td><td class="c">$1,500</td><td class="c">$3,000</td></tr>
+            <tr><td>Large · 50k–150k lines</td><td class="c">$0</td><td class="c">$3,500</td><td class="c">$7,000</td></tr>
+            <tr><td>Enterprise · 150k+ / monorepo / regulated</td><td class="c">$0</td><td class="c">Custom</td><td class="c">Custom</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="foot-note" style="margin-top:14px;">We measure your codebase size during the free scan and quote from it — generated and vendored code doesn't count. Launch pricing; for context, source-only "vibe-code" audits run $1,500–$5,000 and a traditional pentest $4,000–$12,000 regardless of app size.</p>
+    </div>
+  </section>
+
+  <!-- LEDGER -->
+  <section id="ledger">
+    <div class="wrap sec-head">
+      <span class="eyebrow">How we report</span>
+      <h2>Harvey tells you what it <i>didn't</i> check.</h2>
+      <p>An unstated limitation reads as a clean bill of health. So every Harvey report carries a coverage ledger — each module, its status, and the reason if it couldn't run. No silent gaps.</p>
+    </div>
+    <div class="wrap narrow">
+      <div class="ledger">
+        <div class="ledger-row"><span class="m">M8 · Test quality</span><span class="why">mutation run complete</span><span class="pill ran">Ran</span></div>
+        <div class="ledger-row"><span class="m">M1 · Multi-tenant security</span><span class="why">RLS + auth reviewed</span><span class="pill ran">Ran</span></div>
+        <div class="ledger-row"><span class="m">M7 · Performance (DB advisors)</span><span class="why">needs a connected database</span><span class="pill part">Not run</span></div>
+        <div class="ledger-row"><span class="m">M10 · Data classification (live)</span><span class="why">needs a connected database</span><span class="pill part">Not run</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL -->
+  <section class="final">
+    <div class="wrap">
+      <span class="eyebrow" style="justify-content:center;">Start free</span>
+      <h2 style="margin-top:16px;">Find out what's actually in your codebase.</h2>
+      <div class="hero-cta">
+        <a href="#scan" class="btn btn-primary">Run the free scan →</a>
+        <a href="#sample" class="btn btn-ghost">See a sample report</a>
+      </div>
+      <p class="trust">Source-only, no credentials, yours to keep — then see what the full audit can prove that a scan can't.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot-in">
+    <a href="#" class="brand"><span class="dot"></span>harvey<span class="tld">-qa</span></a>
+    <nav class="foot-links">
+      <a href="#audit">The audit</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#sample">Sample report</a>
+      <a href="#">Blog &amp; research</a>
+      <a href="#">Responsible disclosure</a>
+      <a href="#">Data handling</a>
+    </nav>
+    <span class="foot-note">© Harvey · codebase QA for Supabase apps</span>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById('themeBtn');
+    btn.addEventListener('click', function () {
+      var cur = root.getAttribute('data-theme');
+      if (!cur) { cur = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+      root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+    });
+    // Scorecard rows tally in on load.
+    var rows = document.querySelectorAll('#scList .sc-row');
+    var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce) { rows.forEach(function (r) { r.classList.add('in'); }); }
+    else { rows.forEach(function (r, i) { setTimeout(function () { r.classList.add('in'); }, 140 + i * 110); }); }
+  })();
+</script>

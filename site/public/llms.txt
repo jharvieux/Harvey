@@ -1,0 +1,49 @@
+# Harvey
+
+> Codebase QA for AI-generated apps — a senior quality leader in a box. (Also: AI-generated
+> code review, vibe-coded app audit.) Harvey runs a ten-module audit across security, tests,
+> performance, data, and maintainability, and returns one readiness verdict. It goes deepest
+> on the stacks AI tools generate most: Supabase, Next.js, and Vite. Built for founders who
+> shipped fast (often with AI tools like Cursor, Claude, Lovable, Bolt, or v0) and have no QA
+> team.
+
+## What Harvey is
+
+Harvey is a productized codebase audit for AI-generated apps — an independent review of the
+code your AI wrote. It is not a single-issue security scanner. It reviews the whole codebase
+the way a senior quality/QA leader would and hands the founder a plain-English readiness
+verdict. Security is one of ten equally weighted modules. Coverage is deepest on Supabase,
+Next.js, and Vite, but the ten modules apply to any codebase.
+
+## The ten modules
+
+1. Multi-tenant security — cross-tenant isolation, Row-Level Security, auth boundaries.
+2. Live pen-test — a real attack on a stood-up copy of the stack (proves flaws, not flags).
+3. Hotspot analysis — where code complexity and churn collide.
+4. Duplication — copy-pasted logic that drifts out of sync.
+5. Dead code — shipped but never run.
+6. Maintainability — hand-rolled code with a better replacement.
+7. Performance — N+1 queries, missing indexes, Core Web Vitals, scalability.
+8. Test quality — which tests cannot actually catch a bug (mutation-tested).
+9. App Router boundaries — server-to-client leaks, Server Action auth.
+10. Data classification — every piece of PII/PHI/PCI, and where it lives.
+
+## Tiers
+
+- Free scan ($0): source-only static findings across all ten modules. No credentials.
+- Connected audit (from $500, priced by codebase size): the full review with real
+  verdicts plus a read of the live database (RLS, Supabase advisors, prod drift, PII).
+- Full audit (from $1,000, priced by codebase size): everything in Connected plus Harvey
+  stands up a copy of the stack and attacks it live, and runs full mutation testing.
+
+Pricing scales by codebase size (small / medium / large / enterprise), measured
+automatically during the free scan. Enterprise and regulated codebases are custom-quoted.
+
+## Who it is for
+
+Solo founders and small teams (2–5 people) running a Supabase + Next.js SaaS with real
+users and no dedicated QA or security function.
+
+## Contact
+
+Website: https://harvey-qa.com

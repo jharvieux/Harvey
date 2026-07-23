@@ -1,0 +1,65 @@
+[
+  {
+    "title": "SECURITY DEFINER RPC `tenant_is_active` is an existence/status oracle for arbitrary tenant IDs",
+    "severity": "Low",
+    "taxonomy": "M1 — SECURITY DEFINER exposure",
+    "location": "public.tenant_is_active(target_tenant_id uuid) — live DB (supabase-main), exposed via /rest/v1/rpc/tenant_is_active",
+    "description": "The function is SECURITY DEFINER and EXECUTE-able by the `authenticated` role, but its body filters ONLY by the target_tenant_id parameter with no auth.uid()/caller-membership check (unlike its siblings auth_user_in_tenant and auth_user_can_access_conversation, which both constrain by auth.uid()). Any signed-in user can call the RPC with an arbitrary tenant UUID and learn whether that tenant exists and is active — a cross-tenant existence/status oracle. Practical exploitability is low because tenant IDs are unguessable UUIDs, but it violates least-privilege on the exposed API.",
+    "evidence": "STABLE SECURITY DEFINER; body: SELECT EXISTS (SELECT 1 FROM public.tenants WHERE id = target_tenant_id AND status = 'active') — no auth.uid() predicate.",
+    "okWhen": "The function is only ever intended to be called BY RLS policies (as definer), not directly by clients — in which case EXECUTE should be revoked from `authenticated` while policies keep using it.",
+    "notOkWhen": "Signed-in users can call /rest/v1/rpc/tenant_is_active directly with a guessed/known tenant UUID (current state).",
+    "confidence": "high",
+    "remediation": "REVOKE EXECUTE ON FUNCTION public.tenant_is_active(uuid) FROM authenticated (RLS policies invoking it as definer are unaffected), or switch to SECURITY INVOKER, or add an auth.uid() membership check.",
+    "source": "M1 connected (live DB DETECT-DEEPER, pg_get_functiondef + advisor 0029)"
+  },
+  {
+    "title": "SECURITY DEFINER functions `auth_user_in_tenant` / `auth_user_can_access_conversation` verified caller-scoped (NOT findings)",
+    "severity": "Info",
+    "taxonomy": "M1 — SECURITY DEFINER exposure (cleared)",
+    "location": "public.auth_user_in_tenant(uuid), public.auth_user_can_access_conversation(uuid,uuid)",
+    "description": "Both advisor-flagged (0029) as authenticated-executable SECURITY DEFINER. Reading the bodies clears them: each constrains results by auth.uid() (the caller's own active user row within target_tenant_id), so a caller can only probe their OWN membership/conversation access — no cross-tenant data is returned. Recorded as verified-safe so the advisor WARN is adjudicated, not left ambiguous.",
+    "evidence": "auth_user_in_tenant: WHERE auth_user_id = auth.uid() AND tenant_id = target_tenant_id AND status='active'. auth_user_can_access_conversation: constrains c.user_id to the auth.uid() user, or tenant_owner/agent of the same tenant.",
+    "okWhen": "Always — caller-scoped by auth.uid().",
+    "notOkWhen": "N/A (verified safe).",
+    "confidence": "high",
+    "source": "M1 connected (live DB DETECT-DEEPER)"
+  },
+  {
+    "title": "Vestigial client SELECT grant on RLS-locked reference tables `pricing_seat_ladder` and `tier_definitions`",
+    "severity": "Low",
+    "taxonomy": "M1 — RLS grant/policy mismatch",
+    "location": "public.pricing_seat_ladder, public.tier_definitions — live DB grants (supabase-main)",
+    "description": "Both tables have RLS ENABLED with NO policy (deny-all to anon/authenticated) yet still grant SELECT to anon and authenticated. Because RLS-enabled-no-policy denies regardless of the grant, the SELECT grant is vestigial: the intended service-role-only reads work (service_role has BYPASSRLS), but any client SELECT via PostgREST silently returns empty. This is a hygiene/clarity issue, NOT a data leak (no cross-tenant rows are exposed). Both tables are documented as global service-role-only reference data (see table comments / PLATFORM_READABLE_TABLES).",
+    "evidence": "role_table_grants: pricing_seat_ladder → anon SELECT, authenticated SELECT; tier_definitions → anon SELECT, authenticated SELECT. Both tables rls_enabled=true, 0 policies.",
+    "okWhen": "The grant is intentional future-proofing and no client feature relies on reading these via the anon/authenticated key.",
+    "notOkWhen": "A client feature is expected to read these tables via PostgREST — it will silently receive an empty result (broken feature), or the vestigial grant is simply removed for least-privilege.",
+    "confidence": "high",
+    "remediation": "REVOKE SELECT ON public.pricing_seat_ladder, public.tier_definitions FROM anon, authenticated (they are service-role-only), or add an explicit read policy if client reads are actually intended.",
+    "source": "M1 connected (live DB DETECT-DEEPER, role_table_grants + advisor 0008)"
+  },
+  {
+    "title": "10 of 12 RLS-enabled-no-policy tables verified deny-all by design (incl. personal_access_tokens) — noted, not findings",
+    "severity": "Info",
+    "taxonomy": "M1 — RLS-enabled-no-policy (cleared)",
+    "location": "public.{apify_spend_ledger, cruisemapper_url_inventory, destination_images, destination_images_cache, personal_access_tokens, pricing_cache, reconciliation_review_queue, stripe_price_map, supervisor_review_queue, vendor_health}",
+    "description": "Advisor 0008 flagged 12 tables as RLS-enabled-no-policy. Checking role_table_grants: these 10 grant anon/authenticated only TRIGGER/TRUNCATE/REFERENCES (Supabase's default grants, none reachable via the PostgREST data API) — no SELECT/INSERT/UPDATE/DELETE. RLS-enabled-no-policy is therefore deny-all to anon/authenticated by design, matching fp-rules ('RLS-enabled-no-policy on a service-role-only table is safe by design'). Notably personal_access_tokens (sensitive) is correctly locked.",
+    "evidence": "No SELECT/DML grant to anon or authenticated on any of the 10; service_role (BYPASSRLS) reads them server-side.",
+    "okWhen": "Always — deny-all by design; server-side service-role code is the only reader.",
+    "notOkWhen": "N/A (verified). Contrast: RLS OFF with no policy would be exposed — not the case here (all 12 have RLS enabled).",
+    "confidence": "high",
+    "source": "M1 connected (live DB DETECT-DEEPER)"
+  },
+  {
+    "title": "Supabase Auth: leaked-password protection (HaveIBeenPwned) disabled",
+    "severity": "Low",
+    "taxonomy": "M1 — Auth hardening",
+    "location": "Supabase Auth config (project mfaknjyqiwcjojukcnea) — advisor auth_leaked_password_protection",
+    "description": "Supabase Auth's compromised-password check against HaveIBeenPwned is disabled. If email/password sign-up is enabled, users can register/keep passwords known to be in breach corpora. A one-toggle hardening improvement.",
+    "evidence": "Security advisor: auth_leaked_password_protection — 'Leaked password protection is currently disabled.'",
+    "okWhen": "The project is OAuth/SSO-only (no email+password auth) — then this is N/A.",
+    "notOkWhen": "Email/password auth is enabled for any tenant (verify in Auth providers).",
+    "confidence": "medium",
+    "remediation": "Enable leaked-password protection in Supabase Auth settings; consider enabling minimum password strength.",
+    "source": "M1 connected (security advisor)"
+  }
+]

@@ -1,0 +1,15 @@
+[
+  {
+    "title": "Mechanical secret scan: 12 Critical 'committed credential' hits — all triaged as test/doc placeholders (false positives)",
+    "severity": "Low",
+    "taxonomy": "M1 — Secret exposure (triaged)",
+    "location": "apps/main/test/**, tests/**, docs/runbooks/supabase-setup.md",
+    "description": "quick-scan (gitleaks tier) graded ATC 'F' driven by 12 Critical 'committed credential' findings (deduped from 244 raw working-tree hits). Every one is in a TRACKED test file, test fixture, or runbook doc, and every sampled value is a dummy/example: `Bearer <test-token>` in a header-assertion test; `postgres://postgres:...@db.<project-ref>.supabase.co` (literal <project-ref>) in supabase-setup.md; `postgres://dbuser:...@db.example.com` in redact-secrets.test.ts (a test FOR the secret-redaction utility); `db.abcxyz.supabase.co` in psql-invocation.test.ts. None is a live credential. trufflehog (which verifies) found 0 verified and 0 unverified secrets across the repo, corroborating. The real .env.local / *.pem local secrets are gitignored and NOT committed.",
+    "evidence": "12/12 hits in test|fixture|doc paths; sampled 4 → all placeholder (example.com, <project-ref>, abcxyz, test-token). trufflehog verified_secrets=0, unverified_secrets=0.",
+    "okWhen": "The remaining unsampled hits are also confirmed placeholders (spot-check advised) and a gitleaks allowlist is added for test/fixture/doc paths so the grade reflects real risk.",
+    "notOkWhen": "Any flagged value resolves to a real project ref + real password/token (none found in the sample).",
+    "confidence": "high",
+    "remediation": "Add a gitleaks .gitleaksignore / allowlist for test, fixture, and runbook-doc paths (or an inline allowlist regex for example.com / <project-ref> / abcxyz). This clears the false 'F' and lets a real committed secret stand out. Keep *.pem and .env* gitignored (already the case).",
+    "source": "M1 mechanical (quick-scan gitleaks/trufflehog) + manual triage"
+  }
+]

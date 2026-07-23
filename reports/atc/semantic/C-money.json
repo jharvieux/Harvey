@@ -1,0 +1,13 @@
+[
+  {
+    "title": "Booking cancellation never claws back an 'available' (queued-but-not-transferred) payout — money leaks to the sub-host",
+    "severity": "Medium",
+    "taxonomy": "M1 — money-movement integrity (incomplete clawback / state-machine gap)",
+    "location": "apps/main/src/app/api/bookings/[id]/cancel/route.ts:223-332",
+    "description": "The §14.9 cancellation clawback handles payout.status 'pending' (zeroes the row via CAS) and 'available|processing|paid' ONLY when payout.stripe_transfer_id is set (Stripe reversal). But an 'available' payout is one that payouts-mark-available flipped from 'pending' and that payouts-execute-transfer has NOT yet transferred — and stripe_transfer_id is written only at the 'processing'→'paid' settle step (payouts-execute-transfer.ts:168-177). So an 'available' row ALWAYS has stripe_transfer_id == null, the `if (payout.stripe_transfer_id)` block is skipped, and the handler returns `{ clawback: \"no_action\" }`. The commission is left un-waived and the payout stays 'available', so the next payouts-execute-transfer cron tick transfers the money to the sub-host for a cancelled booking. The route's own header comment claims \"payout 'available' or later (within 60d) → Stripe Connect reversal,\" but you cannot reverse a transfer that was never created — the correct action for 'available' is to cancel/zero the row like the 'pending' branch does. Not a cross-tenant leak; a platform-side money-integrity gap on the money path.",
+    "evidence": "if (\n  payout.status === \"available\" ||\n  payout.status === \"processing\" ||\n  payout.status === \"paid\"\n) {\n  ...\n  if (payout.stripe_transfer_id) {\n    // Stripe reversal ...\n  }\n}\nreturn Response.json({ ok: true, clawback: \"no_action\" });",
+    "okWhen": "An 'available' payout is not reachable at cancel time while its commission is still 'received'/'partial' (e.g. some other path already moved the commission to 'disputed'/'waived' and short-circuits at cancel/route.ts:151), OR business policy is that once a commission is genuinely received the sub-host keeps the payout regardless of a later booking cancellation.",
+    "notOkWhen": "A booking can be cancelled while its payout_records row is 'available' and its commission is 'received'/'partial' — then the transfer cron pays the sub-host on the next tick with no clawback, no waive, and no negative platform_revenue row.",
+    "confidence": "medium"
+  }
+]
