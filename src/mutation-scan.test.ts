@@ -6,8 +6,10 @@ import {
   detectRootWorkspaceTestSuite,
   detectTestEnv,
   detectTestRunner,
+  detectTs7TsconfigCrash,
   dryRunFailureFinding,
   dryRunFailureModuleRecord,
+  isIncompatibleTypeScript7,
   isPlaceholderSpec,
   mutationNotRunModuleRecord,
   mutationScore,
@@ -22,7 +24,9 @@ import {
   summarizeMutationReport,
   survivingMutantFindings,
   toReportRows,
+  TS7_TSCONFIG_BYPASS_FILENAME,
   verifyMutationScope,
+  withTs7TsconfigBypass,
   type AncestorTestSignals,
   type StrykerMutant,
   type StrykerReport,
@@ -456,6 +460,34 @@ describe("detectTestRunner / scaffoldStrykerConfig (#513)", () => {
     expect(record.status).toBe("partial");
     expect(record.note).toContain("no recognized test runner");
     expect(record.note).toMatch(/full mutation.*--stub-check.*test-intent.*M8-00/s);
+  });
+});
+
+describe("TS7 tsconfig-preprocessor bypass (#773)", () => {
+  it("flags TypeScript 7 and newer as incompatible, and pre-7 versions as fine", () => {
+    expect(isIncompatibleTypeScript7("7.0.2")).toBe(true);
+    expect(isIncompatibleTypeScript7("8.1.0")).toBe(true);
+    expect(isIncompatibleTypeScript7("5.9.3")).toBe(false);
+    expect(isIncompatibleTypeScript7("6.9.9")).toBe(false);
+    expect(isIncompatibleTypeScript7(undefined)).toBe(false);
+  });
+
+  it("withTs7TsconfigBypass adds tsconfigFile without mutating or dropping the original config", () => {
+    const original = { testRunner: "vitest", coverageAnalysis: "perTest", mutate: ["src/**/*.ts"] };
+    const patched = withTs7TsconfigBypass(original);
+    expect(patched).toMatchObject({ testRunner: "vitest", coverageAnalysis: "perTest", mutate: ["src/**/*.ts"] });
+    expect(patched.tsconfigFile).toBe(TS7_TSCONFIG_BYPASS_FILENAME);
+    expect(original).not.toHaveProperty("tsconfigFile"); // never mutates the input
+  });
+
+  it("detectTs7TsconfigCrash recognizes the exact upstream crash signature, with or without the `ts.` receiver", () => {
+    expect(detectTs7TsconfigCrash("TypeError: ts.parseConfigFileTextToJson is not a function")).toBe(true);
+    expect(detectTs7TsconfigCrash("    at TSConfigPreprocessor.rewriteTSConfigFile (parseConfigFileTextToJson is not a function)")).toBe(true);
+  });
+
+  it("detectTs7TsconfigCrash does not fire on unrelated Stryker output (no false positives)", () => {
+    expect(detectTs7TsconfigCrash("Final mutation score of 42.00 is lower than break threshold")).toBe(false);
+    expect(detectTs7TsconfigCrash("")).toBe(false);
   });
 });
 

@@ -57,6 +57,14 @@
 // versions may differ, in which case pass --report explicitly.
 // --hotspots points at a text file, one repo-relative path per line (e.g. the M3 hotspot file
 // list), used to flag surviving mutants that sit on a security/perf hotspot as top priority.
+//
+// TS7 (#773): TypeScript 7's native/Go rewrite broke Stryker's own sandbox tsconfig preprocessor
+// (it calls the classic compiler API, which TS7's restructured package no longer exports) — every
+// Stryker run against a TS7 target used to crash with no report written. Detected proactively from
+// the installed `typescript/package.json` and worked around by patching a COPY of whichever Stryker
+// config is about to run (see src/mutation-scan.ts's TS7_TSCONFIG_BYPASS_FILENAME comment); a
+// non-JSON target config that can't be safely patched, or a crash the proactive check missed,
+// degrades to a precise partial verdict naming the incompatibility instead of an opaque failure.
 
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -72,8 +80,10 @@ import {
   detectRootWorkspaceTestSuite,
   detectTestEnv,
   detectTestRunner,
+  detectTs7TsconfigCrash,
   dryRunFailureFinding,
   dryRunFailureModuleRecord,
+  isIncompatibleTypeScript7,
   mutationNotRunModuleRecord,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
@@ -88,6 +98,7 @@ import {
   survivingMutantFindings,
   toReportRows,
   verifyMutationScope,
+  withTs7TsconfigBypass,
   type AncestorTestSignals,
   type DetectedEnvVar,
   type PackageJsonForTestDetection,
@@ -144,6 +155,19 @@ function readTargetPackageJson(): PackageJsonForTestDetection | undefined {
   if (!existsSync(pkgPath)) return undefined;
   try {
     return JSON.parse(readFileSync(pkgPath, "utf8")) as PackageJsonForTestDetection;
+  } catch {
+    return undefined;
+  }
+}
+
+// #773: the version Stryker's dynamic `import("typescript")` would actually resolve — read from
+// wherever Stryker will run from (the target for an ordinary run, the workspace root for a #655
+// root-scoped run), not from a declared semver range, which may not match what's installed.
+function readInstalledTypeScriptVersion(dir: string): string | undefined {
+  const pkgPath = join(dir, "node_modules", "typescript", "package.json");
+  if (!existsSync(pkgPath)) return undefined;
+  try {
+    return (JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: string }).version;
   } catch {
     return undefined;
   }
@@ -287,23 +311,35 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
   const appRelFromRoot = relative(rootSuite.root, targetDir).split(sep).join("/");
   const rootCfg = { ...appCfg, mutate: rootScopedMutateGlobs(appRelFromRoot, (appCfg.mutate as string[] | undefined) ?? []) };
 
+  // #773: the reference config (rootCfg's mutate globs are read back from this for #504 scope
+  // verification, not passed to Stryker) stays UNpatched — only the config Stryker actually runs
+  // needs the bypass.
+  const tsVersion = readInstalledTypeScriptVersion(rootSuite.root);
+  const rootCfgForStryker = isIncompatibleTypeScript7(tsVersion) ? withTs7TsconfigBypass(rootCfg) : rootCfg;
+
   const scaffoldDir = mkdtempSync(join(tmpdir(), "harvey-stryker-root-scaffold-"));
   const rootCfgPath = join(scaffoldDir, "stryker.root.config.json");
   const refCfgPath = join(scaffoldDir, "stryker.app-reference.config.json");
-  writeFileSync(rootCfgPath, JSON.stringify(rootCfg, null, 2) + "\n");
+  writeFileSync(rootCfgPath, JSON.stringify(rootCfgForStryker, null, 2) + "\n");
   writeFileSync(refCfgPath, JSON.stringify(appCfg, null, 2) + "\n");
   console.error(`#655: root-scoped mutation run — invoking the ${runner.runner} suite at ${rootSuite.root} (${rootSuite.reason}), mutate scoped to ${appRelFromRoot} (${JSON.stringify(rootCfg.mutate)})`);
+  if (isIncompatibleTypeScript7(tsVersion)) {
+    console.error(`#773: workspace root TypeScript is v${tsVersion} — bypassing Stryker's incompatible tsconfig preprocessor for this root-scoped run`);
+  }
 
   // Package directories existing (checked above) doesn't guarantee node_modules/.bin/stryker was
   // hoisted there too — pnpm workspace hoisting can differ from a plain npm install's layout — so
   // this still degrades rather than lets runStryker's ENOENT throw crash the whole CLI.
-  let run: { dryRunFailure?: string };
+  let run: { dryRunFailure?: string; ts7Crash?: boolean };
   try {
     run = runStryker(rootCfgPath, rootSuite.root);
   } catch (err) {
     return { degradeReason: (err as Error).message };
   }
   if (run.dryRunFailure) return { degradeReason: `root-scoped Stryker's initial dry run failed: ${run.dryRunFailure}` };
+  if (run.ts7Crash) {
+    return { degradeReason: `root-scoped Stryker crashed with the known Stryker/TypeScript-7 tsconfig-preprocessor incompatibility signature (#773: "parseConfigFileTextToJson is not a function") — a tooling gap, not a defect in the target` };
+  }
 
   const rawReportPath = join(rootSuite.root, "reports", "mutation", "mutation.json");
   if (!existsSync(rawReportPath)) return { degradeReason: `root-scoped Stryker run produced no report at ${rawReportPath} (see the Stryker output above)` };
@@ -507,7 +543,7 @@ function emitAndExit(output: Record<string, unknown>, stderrNote: string): never
 // #655: `cwd` defaults to the target (the ordinary per-app invocation) but a root-scoped run
 // passes the workspace root instead — Stryker itself, and the local-bin lookup below, both need to
 // execute from wherever the config's `mutate` globs are relative to.
-function runStryker(cfgPath: string | undefined, cwd: string = targetDir): { dryRunFailure?: string } {
+function runStryker(cfgPath: string | undefined, cwd: string = targetDir): { dryRunFailure?: string; ts7Crash?: boolean } {
   const strykerArgs = ["run"];
   if (cfgPath) strykerArgs.push(cfgPath);
   if (concurrency) strykerArgs.push("--concurrency", concurrency);
@@ -534,6 +570,11 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): { dry
     process.stderr.write(captured);
     const dryRun = detectDryRunFailure(captured);
     if (dryRun.failed) return { dryRunFailure: dryRun.detail };
+    // #773: the reactive safety net — fires when the proactive TS7 bypass below wasn't applied
+    // (non-JSON target config) or missed the incompatibility (TypeScript resolved from outside the
+    // dir this tool checked). Caught by exact crash signature so this never falls through to the
+    // opaque "mutation report not found" this incompatibility used to produce.
+    if (detectTs7TsconfigCrash(captured)) return { ts7Crash: true };
     // Non-ENOENT, no dry-run failure: (likely) a break-threshold exit; fall through to read the report.
     return {};
   }
@@ -547,6 +588,32 @@ function degradeExit(reason: string): never {
     { moduleRecord: mutationNotRunModuleRecord(reason) },
     `✗ M8 mutation tier did not run: ${reason}\nM8 coverage: partial (degraded ladder rung, #513) — emitting the machine-readable verdict instead.`,
   );
+}
+
+// #773: proactive TS7 fix — applied right before the real Stryker invocation, so it covers all
+// three ways a config path reaches this point (the target's own default config, --config, or the
+// #513 scaffold). Returns the ORIGINAL path unchanged when TS7 isn't detected. When it is, a JSON
+// config gets a patched COPY (never rewrites the target's own file); a non-JSON config can't be
+// safely rewritten without executing arbitrary code from the target, so that degrades immediately
+// instead of guaranteeing a crash a few lines later.
+function applyTs7BypassIfNeeded(cfgPath: string | undefined, cwd: string): string | undefined {
+  const tsVersion = readInstalledTypeScriptVersion(cwd);
+  if (!cfgPath || !isIncompatibleTypeScript7(tsVersion)) return cfgPath;
+  const incompatibility = `the target's installed TypeScript is v${tsVersion} — Stryker's core sandbox tsconfig preprocessor (ts.parseConfigFileTextToJson) requires the classic TypeScript compiler API, which TypeScript 7's native/Go rewrite no longer exports (#773); this is a known Stryker/TS7 tooling incompatibility, not a defect in the target`;
+  if (!cfgPath.endsWith(".json")) {
+    degradeExit(`${incompatibility}, and the Stryker config at ${cfgPath} is not JSON so Harvey cannot safely patch it to bypass the incompatibility`);
+  }
+  let cfg: Record<string, unknown>;
+  try {
+    cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as Record<string, unknown>;
+  } catch (err) {
+    degradeExit(`${incompatibility}, and ${cfgPath} could not be read to patch around it (${(err as Error).message.slice(0, 200)})`);
+  }
+  const bypassDir = mkdtempSync(join(tmpdir(), "harvey-stryker-ts7-bypass-"));
+  const bypassPath = join(bypassDir, "stryker.ts7-bypass.config.json");
+  writeFileSync(bypassPath, JSON.stringify(withTs7TsconfigBypass(cfg), null, 2) + "\n");
+  console.error(`#773: target TypeScript is v${tsVersion} — patched a copy of the Stryker config at ${bypassPath} so Stryker's tsconfig preprocessor no-ops instead of crashing on TS7's restructured compiler API`);
+  return bypassPath;
 }
 
 // #513: no Stryker config anywhere — scaffold one for the target's detected test runner instead of
@@ -585,11 +652,16 @@ let resolvedReportPath: string;
 if (reportPath) {
   resolvedReportPath = resolve(reportPath);
 } else {
-  const run = runStryker(effectiveConfigPath);
+  const run = runStryker(applyTs7BypassIfNeeded(effectiveConfigPath, targetDir));
   if (run.dryRunFailure) {
     emitAndExit(
       { finding: dryRunFailureFinding(run.dryRunFailure, detectedEnv), moduleRecord: dryRunFailureModuleRecord(run.dryRunFailure, detectedEnv) },
       `✗ Stryker's initial dry run failed — the target suite does not pass under the invoked env: ${run.dryRunFailure}\nM8 coverage: partial (dry-run failure, #503) — emitting the env-fragile-suite finding instead.`,
+    );
+  }
+  if (run.ts7Crash) {
+    degradeExit(
+      `Stryker crashed with the exact signature of the known Stryker/TypeScript-7 tsconfig-preprocessor incompatibility (#773: "parseConfigFileTextToJson is not a function") — TypeScript 7's native/Go rewrite no longer exports the classic compiler API Stryker's core sandbox preprocessor calls unconditionally; this is a tooling gap, not a defect in the target`,
     );
   }
   resolvedReportPath = join(targetDir, "reports", "mutation", "mutation.json");
