@@ -12,6 +12,7 @@ import {
   jscpdUnavailableFinding,
   knipEntryUncertainFinding,
   knipEntryUncertainReason,
+  knipReducedTierFinding,
   knipToFindings,
   knipUnavailableFinding,
   mergeJscpdReports,
@@ -571,6 +572,25 @@ describe("knipEntryUncertainReason (#580)", () => {
     const report: KnipReport = { files: ["a.ts", "b.ts", "c.ts"], issues: [] };
     const reason = knipEntryUncertainReason(report, 3, false, true);
     expect(reason).toBeUndefined();
+  });
+});
+
+// #810: the reduced-mode disclosure — knip couldn't load the target's config (no node_modules), so
+// M5 re-ran with plugins disabled. A distinct row from both M5-00 (didn't complete) and M5-99
+// (completed but untrustworthy), because the cause and remediation differ.
+describe("knipReducedTierFinding (#810)", () => {
+  it("discloses the reduced no-deps run as M5-98, distinct from the M5-00 gap and M5-99 uncertain rows", () => {
+    const finding = knipReducedTierFinding("apps/web: Cannot find module '@vitejs/plugin-react'");
+    expect(finding.id).toBe("M5-98");
+    expect(finding.id).not.toBe("M5-00");
+    expect(finding.id).not.toBe("M5-99");
+    expect(finding.severity).toBe("Info");
+    expect(finding.confidence).toBe("N/A");
+    expect(finding.taxonomy).toContain("M5");
+    expect(finding.evidence).toContain("@vitejs/plugin-react");
+    expect(finding.evidence).toContain("plugins disabled");
+    // tells the operator how to get confirmed (non-review) findings back
+    expect(finding.fix).toContain("dependencies");
   });
 });
 
