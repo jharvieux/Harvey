@@ -20,7 +20,7 @@
 // preview provably cannot touch the network. fileFindings is the only path that writes.
 
 import { createHash } from "node:crypto";
-import type { Finding } from "../findings.js";
+import type { Confidence, Finding, Severity } from "../findings.js";
 import { findingIdentity } from "../audit-diff.js";
 import type { CreatedRef, ItemInput, Tracker } from "./types.js";
 
@@ -31,6 +31,46 @@ export interface FileOptions {
   // Disambiguates markers across engagements sharing one tracker (e.g. two clients' audits filed to
   // the same Jira project). Folded into every marker's hash. Default "harvey".
   engagement?: string;
+  // #824: the ticket-filing add-on is a PAID-tier product. `paid` is the engagement's tier signal
+  // (run-audit's --connected; CLAUDE.md: "paid = a connected engagement"). Default FALSE — fail
+  // closed: unless the caller asserts a paid engagement, nothing is filed at all, so a misconfigured
+  // free run can never dump indicators into a client's tracker.
+  paid?: boolean;
+}
+
+// #824: filing eligibility. Free-tier output is Info-severity / Review-confidence *indicators* (M6
+// hand-rolled hints, jscpd small-clones, perf heuristics) — too noisy to file into a client's own
+// tracker. Two guards, both fail-loud (a dropped finding is returned with a reason, never silently
+// discarded):
+//   - Content filter (primary): a finding below the filing threshold is excluded whatever the tier.
+//   - Availability guard (secondary): on a free-tier engagement the add-on is unavailable — every
+//     finding is excluded, even a Confirmed/Critical one.
+const NON_FILEABLE_SEVERITIES: readonly Severity[] = ["Info", "Watch"];
+const NON_FILEABLE_CONFIDENCES: readonly Confidence[] = ["Review", "N/A"];
+
+export interface Exclusion {
+  finding: Finding;
+  reason: string;
+}
+
+// Partition findings into what may be filed and what is held back (with a per-finding reason for
+// disclosure). A finding is fileworthy only on a paid engagement AND when its severity is actionable
+// (not Info/Watch) AND its confidence is triage-worthy (not Review/N/A).
+export function filingEligibility(findings: Finding[], paid: boolean): { fileable: Finding[]; excluded: Exclusion[] } {
+  const fileable: Finding[] = [];
+  const excluded: Exclusion[] = [];
+  for (const f of findings) {
+    if (!paid) {
+      excluded.push({ finding: f, reason: "free-tier engagement — ticket filing is a paid-tier add-on" });
+    } else if (NON_FILEABLE_SEVERITIES.includes(f.severity)) {
+      excluded.push({ finding: f, reason: `${f.severity}-severity indicator, below the paid-tier filing threshold` });
+    } else if (NON_FILEABLE_CONFIDENCES.includes(f.confidence)) {
+      excluded.push({ finding: f, reason: `${f.confidence}-confidence indicator, below the paid-tier filing threshold` });
+    } else {
+      fileable.push(f);
+    }
+  }
+  return { fileable, excluded };
 }
 
 // A single finding mapped to what a tracker item should contain. `marker` is also embedded at the
@@ -56,11 +96,13 @@ interface TicketPlan {
   grouping: Grouping;
   epics: PlannedEpic[]; // [] in flat mode
   tickets: PlannedTicket[];
+  excluded: Exclusion[]; // #824: findings held back by the paid-tier / content gate, with reasons
 }
 
 interface FileResult {
   created: { marker: string; ref: CreatedRef }[];
   skipped: { marker: string; ref: CreatedRef }[]; // already filed by a prior run
+  excluded: Exclusion[]; // #824: findings the gate held back (disclosed, never silently dropped)
   epicsCreated: number;
   epicsReused: number;
 }
@@ -125,9 +167,12 @@ export function findingToTicket(f: Finding, opts: FileOptions = {}): PlannedTick
 export function planTickets(findings: Finding[], opts: FileOptions = {}): TicketPlan {
   const grouping: Grouping = opts.grouping ?? "grouped";
   const engagement = opts.engagement ?? "harvey";
-  const tickets = findings.map((f) => findingToTicket(f, { ...opts, grouping }));
+  // #824: only fileworthy findings are planned; the rest are carried as `excluded` (with reasons) so
+  // a preview/confirm can disclose "N not filed, why" rather than silently dropping them.
+  const { fileable, excluded } = filingEligibility(findings, opts.paid ?? false);
+  const tickets = fileable.map((f) => findingToTicket(f, { ...opts, grouping }));
 
-  if (grouping === "flat") return { grouping, epics: [], tickets };
+  if (grouping === "flat") return { grouping, epics: [], tickets, excluded };
 
   const epics: PlannedEpic[] = [];
   const seen = new Set<string>();
@@ -143,7 +188,7 @@ export function planTickets(findings: Finding[], opts: FileOptions = {}): Ticket
       marker,
     });
   }
-  return { grouping, epics, tickets };
+  return { grouping, epics, tickets, excluded };
 }
 
 // File the plan through a tracker, skipping anything a prior run already filed (dedup via the
@@ -151,7 +196,7 @@ export function planTickets(findings: Finding[], opts: FileOptions = {}): Ticket
 // authorization. Grouped mode creates/reuses a category epic before filing its stories under it.
 export async function fileFindings(tracker: Tracker, findings: Finding[], opts: FileOptions = {}): Promise<FileResult> {
   const plan = planTickets(findings, opts);
-  const result: FileResult = { created: [], skipped: [], epicsCreated: 0, epicsReused: 0 };
+  const result: FileResult = { created: [], skipped: [], excluded: plan.excluded, epicsCreated: 0, epicsReused: 0 };
 
   const epicIdByCategory = new Map<string, string>();
   for (const epic of plan.epics) {

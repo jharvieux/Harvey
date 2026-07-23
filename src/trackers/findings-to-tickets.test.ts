@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
 import type { AttachedRef, CreatedRef, ItemInput, Tracker } from "./types.js";
-import { fileFindings, findingMarker, findingToTicket, planTickets, ticketLabels } from "./findings-to-tickets.js";
+import { fileFindings, filingEligibility, findingMarker, findingToTicket, planTickets, ticketLabels } from "./findings-to-tickets.js";
 
 function finding(over: Partial<Finding> = {}): Finding {
   return {
@@ -75,22 +75,63 @@ describe("findingToTicket mapping", () => {
 describe("planTickets (dry-run / preview)", () => {
   it("is pure — computing a preview touches no tracker (no API calls possible)", () => {
     // The function takes no Tracker; a preview provably cannot write. This is the dry-run guarantee.
-    const plan = planTickets([finding(), finding({ id: "F-02", category: "Performance" })]);
+    const plan = planTickets([finding(), finding({ id: "F-02", category: "Performance" })], { paid: true });
     expect(plan.tickets).toHaveLength(2);
     expect(plan.epics.map((e) => e.category).sort()).toEqual(["Multi-tenant isolation", "Performance"]);
   });
 
   it("flat grouping yields no epics", () => {
-    const plan = planTickets([finding()], { grouping: "flat" });
+    const plan = planTickets([finding()], { grouping: "flat", paid: true });
     expect(plan.epics).toEqual([]);
     expect(plan.grouping).toBe("flat");
+  });
+});
+
+describe("#824 paid-tier / content gate", () => {
+  it("files nothing on a free-tier engagement, disclosing each held-back finding with a reason", () => {
+    const plan = planTickets([finding(), finding({ id: "F-02" })], { paid: false });
+    expect(plan.tickets).toHaveLength(0);
+    expect(plan.epics).toHaveLength(0);
+    expect(plan.excluded).toHaveLength(2);
+    expect(plan.excluded[0].reason).toContain("paid-tier add-on");
+  });
+
+  it("on a paid run, drops Info-severity and Review-confidence indicators but keeps actionable findings", () => {
+    const { fileable, excluded } = filingEligibility(
+      [
+        finding({ id: "keep", severity: "Critical", confidence: "Confirmed" }),
+        finding({ id: "info", severity: "Info", confidence: "Confirmed" }),
+        finding({ id: "watch", severity: "Watch", confidence: "Confirmed" }),
+        finding({ id: "review", severity: "High", confidence: "Review" }),
+        finding({ id: "na", severity: "High", confidence: "N/A" }),
+      ],
+      true,
+    );
+    expect(fileable.map((f) => f.id)).toEqual(["keep"]);
+    expect(excluded.map((e) => e.finding.id)).toEqual(["info", "watch", "review", "na"]);
+    expect(excluded.every((e) => e.reason.includes("filing threshold"))).toBe(true);
+  });
+
+  it("an all-Info/Review free-tier findings set yields zero tickets", () => {
+    const noisy = [finding({ severity: "Info", confidence: "Review" }), finding({ id: "F-02", severity: "Watch", confidence: "Review" })];
+    const plan = planTickets(noisy, { paid: false });
+    expect(plan.tickets).toHaveLength(0);
+    expect(plan.excluded).toHaveLength(2);
+  });
+
+  it("fileFindings on a free-tier run writes nothing and surfaces the exclusions", async () => {
+    const { tracker, calls } = fakeTracker();
+    const res = await fileFindings(tracker, [finding()], { grouping: "flat", paid: false });
+    expect(res.created).toHaveLength(0);
+    expect(res.excluded).toHaveLength(1);
+    expect(calls.some((c) => c.op === "createEpic" || c.op === "createStory")).toBe(false);
   });
 });
 
 describe("fileFindings dispatch + dedup", () => {
   it("grouped mode creates one epic per category and files findings as stories under it", async () => {
     const { tracker, calls } = fakeTracker();
-    const res = await fileFindings(tracker, [finding(), finding({ id: "F-02", category: "Performance" })], { grouping: "grouped" });
+    const res = await fileFindings(tracker, [finding(), finding({ id: "F-02", category: "Performance" })], { grouping: "grouped", paid: true });
 
     expect(res.epicsCreated).toBe(2);
     expect(res.created).toHaveLength(2);
@@ -104,7 +145,7 @@ describe("fileFindings dispatch + dedup", () => {
     const marker = findingMarker(f);
     const { tracker, calls } = fakeTracker({ [marker]: { id: "S-99", url: "https://tracker/99" } });
 
-    const res = await fileFindings(tracker, [f], { grouping: "flat" });
+    const res = await fileFindings(tracker, [f], { grouping: "flat", paid: true });
 
     expect(res.created).toHaveLength(0);
     expect(res.skipped).toEqual([{ marker, ref: { id: "S-99", url: "https://tracker/99" } }]);
@@ -113,7 +154,7 @@ describe("fileFindings dispatch + dedup", () => {
 
   it("flat mode files each finding as a standalone issue with its labels", async () => {
     const { tracker, calls } = fakeTracker();
-    const res = await fileFindings(tracker, [finding()], { grouping: "flat" });
+    const res = await fileFindings(tracker, [finding()], { grouping: "flat", paid: true });
 
     expect(res.epicsCreated).toBe(0);
     expect(res.created).toHaveLength(1);
