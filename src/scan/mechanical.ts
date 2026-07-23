@@ -14,6 +14,7 @@ import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { scanBolaOwner } from "./bola-owner.js";
 import { scanCounterRace } from "./counter-race.js";
 import { scanPgIdor } from "./pg-idor.js";
+import { scanPrismaTenantScope } from "./prisma-tenant-scope.js";
 import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
@@ -211,6 +212,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // curated sensitive field directly, spreads a same-function object that does, or hands
     // back a same-function "SELECT *" row untouched.
     findings.push(...scanPgResponseExposure(scanDir));
+
+    // #760 — Prisma-idiom cross-tenant BOLA: a `prisma.<model>.<verb>({ where: { id } })` read/
+    // write filtered by primary key alone, with no tenant/owner column. ORM-agnostic app-layer
+    // class — a Prisma app has no RLS, so the where clause is the only isolation gate.
+    findings.push(...scanPrismaTenantScope(scanDir));
 
     // #664 — service_role key hardcoded as a JWT literal (same-file or cross-file const) and
     // passed to createClient. Real base64 decode + role/iss claim check, incl. plain .js.
