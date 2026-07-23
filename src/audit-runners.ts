@@ -539,9 +539,11 @@ const M10_NOT_COLLECTED =
 // #529: pii-classify --schema accepts ANY directory of *.sql or a single .sql file, so M10's
 // schema tier is not limited to supabase/migrations. Probe the conventional schema locations in
 // priority order and classify the first that exists, so a non-Supabase target (Prisma/Drizzle/
-// pg_dump) gets real M10 classification instead of a bare "nothing to classify". schema.prisma
-// itself is Prisma-DSL, not SQL the parser reads, so we target prisma/migrations (the derived
-// migration.sql) — pii-classify's readSchemaSql recurses into it.
+// pg_dump) gets real M10 classification instead of a bare "nothing to classify". prisma/migrations
+// (the generated migration.sql, which pii-classify's readSchemaSql recurses into) is tried first —
+// #758: a Prisma app that hasn't generated any migrations yet (schema.prisma is its only source of
+// truth) still gets real classification via the schema.prisma candidates below, lower-priority
+// because a generated SQL migration reflects the actually-applied shape when both exist.
 const SCHEMA_CANDIDATE_SUBPATHS = [
   join("supabase", "migrations"),
   join("prisma", "migrations"),
@@ -550,6 +552,8 @@ const SCHEMA_CANDIDATE_SUBPATHS = [
   "db",
   "migrations",
   "schema.sql",
+  "schema.prisma",
+  join("prisma", "schema.prisma"),
 ];
 
 // #506/#538: the schema tier is per-app — each app can carry its own schema layout. Runs against

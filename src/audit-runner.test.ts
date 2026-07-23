@@ -228,9 +228,10 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
   });
 
   it("M10 has nothing to classify with neither a DB nor any conventional schema layout", () => {
-    // #529: the probe now tries supabase/migrations, prisma/migrations, drizzle/, db/, schema.sql —
-    // so "nothing to classify" means none of them exist, and the reason lists what was probed.
-    const bare = ctx({ exists: (p) => !/(migrations|drizzle|\/db$|schema\.sql)/.test(p) });
+    // #529/#758: the probe now tries supabase/migrations, prisma/migrations, drizzle/, db/,
+    // schema.sql, schema.prisma — so "nothing to classify" means none of them exist, and the
+    // reason lists what was probed.
+    const bare = ctx({ exists: (p) => !/(migrations|drizzle|\/db$|schema\.(sql|prisma))/.test(p) });
     const m10 = runAudit(AUDIT_RUNNERS, bare).recorded.find((r) => r.module === "M10");
     expect(m10?.status).toBe("requires-live-run");
     expect(m10?.reason).toMatch(/nothing to classify/);
@@ -350,6 +351,60 @@ describe("M10 discovers schema DDL beyond the conventional locations (#770)", ()
     const schemaArgs = seenArgv[0]!.slice(seenArgv[0]!.indexOf("--schema") + 1);
     expect(schemaArgs).toContain(join(app, "initial_supabase_table_schema.sql"));
     expect(schemaArgs).toContain(join(app, "before", "schema.sql"));
+  });
+});
+
+// #758: a Prisma app declares its schema in schema.prisma, not SQL migrations — before this, a
+// Prisma app that hadn't generated any migrations yet (the common shape for a freshly-scaffolded or
+// `prisma db push`-only app) had no candidate the schema-tier probe recognized at all, and fell all
+// the way to "nothing to classify" even with a real, readable schema sitting right there.
+describe("M10 classifies a Prisma app's schema.prisma when no migrations have been generated (#758)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  it("finds prisma/schema.prisma and feeds it to pii-classify --schema", () => {
+    const app = mkdtempSync(join(tmpdir(), "harvey-m10-prisma-schema-"));
+    dirs.push(app);
+    mkdirSync(join(app, "prisma"), { recursive: true });
+    writeFileSync(join(app, "prisma", "schema.prisma"), "model Customer {\n  id String @id\n  email String\n}\n");
+
+    const seenArgv: string[][] = [];
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({
+      targetDir: app,
+      exists: existsSync,
+      exec: (_c, argv) => {
+        if (argv.includes("pii-classify")) seenArgv.push(argv);
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    })).recorded.find((r) => r.module === "M10");
+
+    expect(m10?.status).toBe("partial");
+    expect(m10?.detail).toMatch(/prisma[/\\]schema\.prisma/);
+    expect(seenArgv[0]).toContain(join(app, "prisma", "schema.prisma"));
+  });
+
+  it("finds a root-level schema.prisma too", () => {
+    const app = mkdtempSync(join(tmpdir(), "harvey-m10-prisma-root-"));
+    dirs.push(app);
+    writeFileSync(join(app, "schema.prisma"), "model Customer {\n  id String @id\n  email String\n}\n");
+
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync })).recorded.find((r) => r.module === "M10");
+    expect(m10?.status).toBe("partial");
+    expect(m10?.detail).toMatch(/schema\.prisma/);
+  });
+
+  it("prefers a generated prisma/migrations SQL migration over the raw schema.prisma when both exist", () => {
+    const app = mkdtempSync(join(tmpdir(), "harvey-m10-prisma-both-"));
+    dirs.push(app);
+    mkdirSync(join(app, "prisma", "migrations", "0001_init"), { recursive: true });
+    writeFileSync(join(app, "prisma", "migrations", "0001_init", "migration.sql"), 'create table "Customer" (id text primary key, email text);');
+    writeFileSync(join(app, "prisma", "schema.prisma"), "model Customer {\n  id String @id\n  email String\n}\n");
+
+    const m10 = runAudit(AUDIT_RUNNERS, ctx({ targetDir: app, exists: existsSync })).recorded.find((r) => r.module === "M10");
+    expect(m10?.detail).toMatch(/prisma[/\\]migrations/);
+    expect(m10?.detail).not.toMatch(/schema\.prisma/);
   });
 });
 

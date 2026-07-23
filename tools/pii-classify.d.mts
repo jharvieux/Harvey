@@ -31,3 +31,4 @@ export function buildDataMap(
   resolve?: (col: ColumnInfo) => ClassifyResult | null,
 ): Record<string, TableDataMapEntry>;
 export function classifyMigrationSql(sql: string): { columns: ColumnInfo[]; dataMap: Record<string, TableDataMapEntry> };
+export function classifyPrismaSchema(schema: string): { columns: ColumnInfo[]; dataMap: Record<string, TableDataMapEntry> };

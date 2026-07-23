@@ -10,12 +10,18 @@
 //   SUPABASE_DB_URL=... pnpm pii-classify                    # inventory a live DB (read-only)
 //   pnpm pii-classify --schema supabase/migrations           # static schema, no DB needed (#250)
 //   pnpm pii-classify --schema before/schema.sql init.sql    # multiple targets (#770), concatenated
+//   pnpm pii-classify --schema prisma/schema.prisma          # Prisma DSL, not SQL (#758)
 //
 // The --schema path parses `CREATE TABLE` columns straight out of migration SQL (one or more
 // targets, each a directory of *.sql files or a single .sql file) via src/migration-sql-parse.ts's
 // parseColumns — the same under-extract-rather-than-mis-extract parser the M1 detect-deeper
 // classifiers use — so this runs the identical classifier over source-only engagements instead of
-// needing a live DB.
+// needing a live DB. A target ending in `.prisma` isn't SQL at all — a Prisma app declares its
+// schema in `schema.prisma`, not migration files, so that target is handled separately (#758): the
+// target's own local Prisma CLI generates the equivalent SQL (`prisma migrate diff --from-empty`),
+// which then feeds the SAME parseColumns parser; when the CLI isn't runnable (no local install),
+// a lightweight schema.prisma model/field parser (src/prisma-schema-parse.ts) produces the columns
+// directly instead.
 // Requires `tsx` (the `pnpm pii-classify` script) rather than plain `node`, since it imports a
 // TypeScript source file directly.
 //
@@ -23,9 +29,11 @@
 // every hit goes through an exclusion pass before it's returned, and ambiguous names get "low"
 // confidence rather than an assertion, so they're flagged for review, not treated as fact.
 
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { parseColumns } from "../src/migration-sql-parse.js";
+import { parsePrismaSchema } from "../src/prisma-schema-parse.js";
 
 const RULES = [
   // --- HIPAA PHI identifiers / GDPR contact & identity PII ---
@@ -514,6 +522,56 @@ export function classifyMigrationSql(sql) {
   return { columns, dataMap: buildDataMap(columns) };
 }
 
+/**
+ * Classifies a schema.prisma file's declared models directly via the fallback parser (src/prisma-
+ * schema-parse.ts), bypassing any Prisma-CLI attempt — the CLI-independent entry point so a test
+ * (and CI, with no target Prisma install anywhere) proves the fallback path itself, not just the
+ * CLI happy path (#758). columnsFromPrismaSchema (below) is what the real --schema CLI path calls,
+ * which tries the CLI first and falls back to this same parser.
+ * @param {string} schema raw schema.prisma text
+ * @returns {{columns: {table_name: string, column_name: string, data_type?: string}[], dataMap: ReturnType<typeof buildDataMap>}}
+ */
+export function classifyPrismaSchema(schema) {
+  const columns = parsePrismaSchema(schema);
+  return { columns, dataMap: buildDataMap(columns) };
+}
+
+// #758: the schema.prisma's own project root — Prisma resolves relative to the directory the
+// schema lives in, or its parent when the schema sits at the conventional `prisma/schema.prisma`
+// location — that's where a target's own `prisma` devDependency would be installed.
+function prismaProjectRoot(schemaPath) {
+  const dir = dirname(schemaPath);
+  return basename(dir) === "prisma" ? dirname(dir) : dir;
+}
+
+// Runs the target's OWN locally-installed prisma CLI — never a global or network install — to emit
+// the SQL Prisma itself would generate to create this schema from empty, so it feeds the SAME
+// CREATE TABLE parser (parseColumns) every SQL-schema target goes through: a Prisma-native table/
+// column mapping (@@map/@map, relation scalars resolved to their FK column) beats re-deriving it.
+// Returns null (never throws) when the target has no local prisma CLI — the caller falls back to
+// the schema.prisma model/field parser instead of failing the whole classification.
+function prismaSchemaToSql(schemaPath) {
+  const bin = join(prismaProjectRoot(schemaPath), "node_modules", ".bin", process.platform === "win32" ? "prisma.cmd" : "prisma");
+  if (!existsSync(bin)) return null;
+  try {
+    return execFileSync(bin, ["migrate", "diff", "--from-empty", "--to-schema-datamodel", schemaPath, "--script"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return null;
+  }
+}
+
+// Columns for a schema.prisma target: the target's local Prisma CLI generating SQL (reusing
+// parseColumns) when available, else the fallback DSL parser (#758) — either way the same
+// {table_name, column_name, data_type} shape a SQL-schema target's columns already have.
+function columnsFromPrismaSchema(schemaPath) {
+  const sql = prismaSchemaToSql(schemaPath);
+  if (sql) return parseColumns(sql);
+  return parsePrismaSchema(readFileSync(schemaPath, "utf8"));
+}
+
 // Reads every *.sql file under `target` (sorted, so migrations apply in filename order) if it's a
 // directory, or `target` itself if it's a single .sql file — the same shape src/cli/dry-run.ts's
 // readMigrations uses for supabase/migrations/. Recursive (#299): Prisma's migration.sql files
@@ -542,17 +600,24 @@ function schemaTargets() {
   return targets;
 }
 
+// #758: a `.prisma` target is Prisma DSL, not SQL — classified via columnsFromPrismaSchema
+// (CLI-generated SQL, falling back to the schema.prisma parser) instead of parseColumns directly.
+function columnsForTarget(target) {
+  if (target.endsWith(".prisma")) return columnsFromPrismaSchema(target);
+  return parseColumns(readSchemaSql(target));
+}
+
 function classifyFromSchema() {
   const targets = schemaTargets();
   const missing = targets.filter((t) => !existsSync(t));
   if (targets.length === 0 || missing.length) {
     const detail = missing.length ? ` — ${missing.join(", ")} does not exist` : "";
-    console.error(`Usage: pii-classify --schema <path> [<path> ...] (each a supabase/migrations dir or a single .sql file)${detail}`);
+    console.error(`Usage: pii-classify --schema <path> [<path> ...] (each a supabase/migrations dir, a single .sql file, or a schema.prisma file)${detail}`);
     process.exit(1);
   }
-  const { columns } = classifyMigrationSql(targets.map(readSchemaSql).join("\n\n"));
+  const columns = targets.flatMap(columnsForTarget);
   if (columns.length === 0) {
-    console.error(`No \`create table\` columns found via ${targets.join(", ")} — check the path(s) (expects supabase/migrations/*.sql shape or a standalone schema.sql with CREATE TABLE).`);
+    console.error(`No columns found via ${targets.join(", ")} — check the path(s) (expects supabase/migrations/*.sql shape, a standalone schema.sql with CREATE TABLE, or a schema.prisma with model declarations).`);
     process.exit(1);
   }
   writeFindingsOut(report(columns), "schema");
