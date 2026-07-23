@@ -1,0 +1,13 @@
+[
+  {
+    "title": "Customer quote-access token stored and compared in plaintext (no hash at rest)",
+    "severity": "Low",
+    "taxonomy": "M1 — Insecure token storage / defense-in-depth gap",
+    "location": "apps/main/src/app/api/quotes/[id]/send/route.ts:61",
+    "description": "The public, unauthenticated quote-view/accept surface is gated by `quotes.customer_access_token`, a 256-bit random bearer token. It is minted with randomBytes(32).toString('base64url') and stored VERBATIM in the quotes table, then resolved by a direct plaintext equality lookup in the public accept route (public/quote/[token]/select/route.ts:28 `.eq('customer_access_token', token)`). Because the token is 256-bit it is not guessable, so this is not a Critical/High. But it is stored in cleartext alongside the data it protects, unlike the sibling public-chat surface which hashes its token (SHA-256) before storing/looking up (public/chat/[token]/route.ts:94-100, `sha256Hex(token)` against `public_access_token_hash`). A read-only breach of the quotes table (log dump, backup leak, SQL-read-only compromise) therefore yields directly-usable capability tokens that let an attacker view customer PII on the quote and flip the quote to 'accepted'. Hashing at rest would make a leaked column inert. Inconsistent with the codebase's own PAT handling (personal_access_tokens stores only token_hash — integrations/tokens/route.ts:101) and its public-chat token handling.",
+    "evidence": "// quotes/[id]/send/route.ts:61\n      update.customer_access_token = randomBytes(32).toString(\"base64url\");\n\n// public/quote/[token]/select/route.ts:25-29\n  const { data: quoteData } = await svc\n    .from(\"quotes\")\n    .select(\"id, tenant_id, status\")\n    .eq(\"customer_access_token\", token)   // plaintext compare, token stored cleartext\n    .maybeSingle();\n\n// contrast — public/chat/[token]/route.ts hashes before storage/lookup:\n  const tokenHash = sha256Hex(token);\n    .eq(\"public_access_token_hash\", tokenHash)",
+    "okWhen": "The quotes table (and its backups/logs) is treated as a secrets store with the same at-rest controls as password hashes, AND the operational threat model accepts that a read-only DB exposure hands out live capability tokens. Also OK if there is an accepted-risk decision to keep quote tokens plaintext for support/debuggability.",
+    "notOkWhen": "You want a leaked/backed-up quotes row to be inert (defense-in-depth against DB-read-only compromise), or you want token handling consistent with personal_access_tokens and the public-chat surface, both of which store only a SHA-256 hash. Fix: store sha256(token) in a customer_access_token_hash column and compare the hash, mirroring public-chat.",
+    "confidence": "medium"
+  }
+]

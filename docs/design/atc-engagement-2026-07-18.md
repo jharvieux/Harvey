@@ -166,7 +166,7 @@ Legend: **ran** = all in-scope classes executed · **partial** = some classes ra
 | M1 | git-history secrets (TruffleHog) | mechanical | ran (clean) | **orchestrator falsely skipped it (Harvey #619)**; run manually: 26,311 chunks / 49MB, **0 verified, 0 unverified secrets** |
 | M1 | main DB | connected (live RLS/advisors) | ran | read-only `get_advisors(security)` + DDL review |
 | M1 | rag DB | connected (live RLS/advisors) | ran | read-only `get_advisors(security)` + DDL review |
-| **M2** Local pen-test (dynamic) | apps/main / main DB | dynamic | **ran (partial proof)** | isolated stack stood up + 185 migrations applied + torn down cleanly (#604); constraint-shape-aware seed (#656, four shapes) seeded **91/92 scoped tables** (up from 78 — only `legal_consents` still skips, a cascade from the migration-seed-collision on `legal_documents`, Harvey #665); the live cross-tenant PostgREST matrix ran over the 91 and found **0 leaks → runtime isolation proof on 91/92** (Addendum 4). Tier-2 app-route probes degraded to PostgREST-only (`workspace:*` install). M2 pass artifact emitted |
+| **M2** Local pen-test (dynamic) | apps/main / main DB | dynamic | **ran (full proof)** | isolated stack stood up + 185 migrations applied + torn down cleanly (#604); the seed evolved through introspection (#650) → SAVEPOINT skip+disclose (#649, 78/92) → constraint-shape-aware values (#656, 91/92) → reuse of migration-seeded lookup rows (#665) to seed **92/92 scoped tables = 100%**; the live cross-tenant PostgREST matrix ran over all 92 and found **0 leaks → runtime isolation proof on 92/92** (Addendum 5). Tier-2 app-route probes degraded to PostgREST-only (`workspace:*` install). M2 pass artifact emitted |
 | M2 | apps/rag / rag DB | dynamic | requires-live-run | second backend not stood up — the runner applies only `migrationDirs[0]` (Harvey #610); would need a per-DB stand-up |
 | **M3** Hotspot analysis | monorepo | vitals | ran | orchestrator failed (abs-path CWD bug, Harvey #624); re-run via `--report` capture → 56 findings (50 truck-factor-1, 5 co-change, 1 AI-authored high-churn); top-10 hotspots feed M1/M6/M8 |
 | **M4** Duplication | apps/main | jscpd | **partial** | jscpd did not complete on the workspace (M4-99 disclosure, Harvey #505) |
@@ -212,11 +212,13 @@ RS256 service JWTs. No cross-tenant data-exposure path was found in the reviewed
 | 6 | Low | M1 | [#2004](https://github.com/jharvieux/ATC/issues/2004) | `RAG_WEBHOOK_SECRET` has no rotation pair (hardening) |
 | 7 | Low | M1 | [#2005](https://github.com/jharvieux/ATC/issues/2005) | `rag_retrieval_log_daily` RLS policy is `USING(TRUE)` — isolation rests on the grant layer only |
 | 8 | Low | M1 | [#2006](https://github.com/jharvieux/ATC/issues/2006) | `tenant_is_active()` SECURITY DEFINER RPC is a parameter-only tenant-status oracle (documented/accepted) |
-| 9 | Medium | M1-live | [#2007](https://github.com/jharvieux/ATC/issues/2007) | Supabase Auth leaked-password protection disabled (main production DB) |
+| 9 | ~~Medium~~ N/A¹ | M1-live | [#2007](https://github.com/jharvieux/ATC/issues/2007) | Leaked-password protection off — **not applicable: ATC is OAuth/social-only** (no password auth); reframed to conditional, revisit if password auth is ever enabled |
 | 10 | Low | M7 | [#2008](https://github.com/jharvieux/ATC/issues/2008) | RAG Supabase DB advisor hardening: RLS init-plan + extensions-in-public + unindexed FKs |
 | 11 | Medium | M6 | [#2009](https://github.com/jharvieux/ATC/issues/2009) | `precruise-generate-and-send` hand-rolls LLM JSON parsing → use provider structured output |
 | 12 | Low | M6 | [#2010](https://github.com/jharvieux/ATC/issues/2010) | Standardize route-body validation on zod; hand-rolled cookie parse → `next/headers` |
 | 13 | Info | M10 | [#2011](https://github.com/jharvieux/ATC/issues/2011) | PII data-map: 12 JSONB container columns need nested-PII review (main DB) |
+
+¹ **#2007 leaked-password protection — reframed to not-applicable (2026-07-19, operator-confirmed).** ATC authenticates via OAuth/social only; password (email+password) auth is not enabled, so leaked-password protection (HaveIBeenPwned, which only acts on password flows) has no surface to protect. Downgraded from Medium to a conditional note — revisit only if password auth is ever enabled. Underlying Harvey detector gap (flagged the advisor without checking whether password auth is in use) filed as Harvey #671. So the deliverable is **12 active findings + 1 conditional/not-applicable**.
 
 ### Notable false positives triaged OUT (high-signal deliverable)
 - **Stripe webhook replay** — `constructEvent` (5-min tolerance) + atomic idempotency insert + DB-level CAS staleness guard. Belt and braces.

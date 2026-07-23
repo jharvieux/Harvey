@@ -1,0 +1,44 @@
+[
+  {
+    "id": "M10-01",
+    "title": "Table `knowledge_ingestion_queue` has JSON container column(s) to review for nested PII",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Data classification",
+    "taxonomy": "M10 — Data classification (PII/PHI/PCI)",
+    "location": "knowledge_ingestion_queue",
+    "status": "Open",
+    "evidence": "static migration-SQL schema parse (no DB connection); name/type classification only — no values were read. Review for nested PII (flagged, not asserted — #377): raw_metadata — denormalization-container json column(s); inspect their keys. Severity score 0.3 → Low.",
+    "impact": "Any over-broad read path (RLS gap, leaked service key, injectable query) on `knowledge_ingestion_queue` exposes PII data.",
+    "fix": "Confirm each classified column is genuinely needed and that the table's RLS/grants scope reads to the owning tenant/user. Inspect the flagged JSON container(s); promote any nested PII to first-class columns so it is classified and protected explicitly.",
+    "value": 2,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "reviewFlagOnly": true,
+    "reviewFlagColumns": [
+      "raw_metadata"
+    ]
+  },
+  {
+    "id": "M10-02",
+    "title": "Table `tenant_registry_shadow` holds PII data (NAME?)",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Data classification",
+    "taxonomy": "M10 — Data classification (PII/PHI/PCI)",
+    "location": "tenant_registry_shadow",
+    "status": "Open",
+    "evidence": "static migration-SQL schema parse (no DB connection); name/type classification only — no values were read. Classified columns: display_name → NAME? (PII, low). Severity score 0.3 → Low.",
+    "impact": "Any over-broad read path (RLS gap, leaked service key, injectable query) on `tenant_registry_shadow` exposes PII data.",
+    "fix": "Confirm each classified column is genuinely needed and that the table's RLS/grants scope reads to the owning tenant/user.",
+    "value": 2,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "reviewFlagOnly": false,
+    "reviewFlagColumns": []
+  }
+]

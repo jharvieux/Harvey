@@ -1,0 +1,24 @@
+[
+  {
+    "title": "Service JWT verifier tolerates absent iss/aud claims during rollout (token-confusion residual risk)",
+    "severity": "Low",
+    "taxonomy": "M1 — Broken authentication / token audience confusion",
+    "location": "apps/rag/src/lib/auth/verify-service-jwt.ts:157-187",
+    "description": "verifyServiceJwt enforces iss/aud only when the claims are PRESENT; a signature-valid token carrying neither iss nor aud is accepted (with a console.warn) to support a staged rollout (#1773/#1843). Because every RAG route authorizes off this same verifier and the signature is the only hard gate, any token minted with the RAG public key's private counterpart but WITHOUT iss/aud is accepted regardless of its intended audience. This is a genuine cross-service token-confusion weakening, but it is an explicitly documented, issue-tracked, rollout-gated exception with an inline justification, and the strict flip (hard-reject absence) is tracked in #1843. Per fp-rules (documented exception) it belongs in an accepted-risk appendix, not a headline. Residual exposure is realized only if the same signing key is reused by another ATC service that omits aud.",
+    "evidence": "if (issClaim === undefined || audValues.length === 0) {\n    // Attributable rollout signal (#1843). ...\n    console.warn(\"[verifyServiceJwt] token missing iss/aud claims — allowing during #1773 rollout; will hard-reject once the #1843 strict flip lands\", {...});\n}",
+    "okWhen": "A single dedicated RS256 signing key is used only by atc-main to mint RAG service tokens, so no other-audience token can be signed with the accepted key; and the #1843 strict flip lands once absent-claim warns reach zero in prod.",
+    "notOkWhen": "The same SERVICE_JWT private key is (or becomes) shared with another service that mints tokens without an aud claim — those tokens would authenticate to the RAG service and inherit whatever tenant_id/service_identifier they carry.",
+    "confidence": "high"
+  },
+  {
+    "title": "rag_retrieval_log_daily RLS policy is USING(TRUE) — cross-tenant analytics exposed the instant any anon/authenticated grant is added",
+    "severity": "Low",
+    "taxonomy": "M1 — Tenant isolation / fragile RLS (latent)",
+    "location": "apps/rag/supabase/migrations/0017_retrieval_log_aggregate.sql:26-27",
+    "description": "rag_retrieval_log_daily holds per-tenant retrieval request counts + latency aggregates (tenant_id, day, outcome). Its only SELECT policy is `USING (TRUE)` — every role that can reach the table sees every tenant's rows. Today this is NOT exploitable: I verified against the live RAG database that anon/authenticated/public hold ZERO table grants on this (and every other RAG table), so PostgREST denies them at the grant layer before RLS is evaluated (confirmed empty grantee set; RLS enabled). It is flagged as latent fragility, not a live leak: unlike the deny-all (zero-policy) tables, this permissive policy means the ONLY thing preventing cross-tenant exposure is the absence of a grant — one accidental `GRANT SELECT ... TO authenticated` (or a Supabase default-privilege change) turns it into a cross-tenant metadata leak with no second layer. rag_media_assets:51 has the same shape but is scope-filtered (global-or-own-tenant), so it degrades more gracefully.",
+    "evidence": "CREATE POLICY rag_retrieval_log_daily_select ON public.rag_retrieval_log_daily\n  FOR SELECT USING (TRUE);\n-- No INSERT/UPDATE/DELETE policies — service-role bypasses RLS.",
+    "okWhen": "anon/authenticated hold no table-level grant on rag_retrieval_log_daily (verified true as of this review) — the grant layer is the effective control and the permissive policy never comes into play.",
+    "notOkWhen": "A grant is ever added to anon or authenticated on this table (directly or via ALTER DEFAULT PRIVILEGES): USING(TRUE) then returns every tenant's retrieval analytics to any holder of the project's anon key.",
+    "confidence": "high"
+  }
+]

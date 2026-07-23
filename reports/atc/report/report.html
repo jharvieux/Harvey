@@ -1,0 +1,501 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+  :root{--ink:#0f172a;--muted:#64748b;--line:#e5e7eb;--accent:#2563eb}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);font-size:12px;line-height:1.5}
+  .page{padding:48px 54px}
+  .cover-band{height:8px;background:linear-gradient(90deg,#0f172a,#2563eb)}
+  h1{font-size:30px;letter-spacing:.5px;margin:0 0 2px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:2px}
+  .conf{display:inline-block;margin-top:10px;font-size:10px;letter-spacing:2px;color:#b3261e;border:1px solid #b3261e;border-radius:3px;padding:2px 8px;font-weight:700}
+  .grid{display:flex;gap:24px;margin-top:26px;align-items:center}
+  .card{border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  .headline{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;margin-top:22px;font-size:13px}
+  .headline b{color:#15803d}
+  .pill{display:inline-block;background:#dcfce7;color:#15803d;border-radius:999px;padding:2px 10px;font-weight:700;font-size:11px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;color:var(--muted);font-size:11px}
+  .leg i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
+  h2{font-size:15px;margin:26px 0 10px;padding-bottom:6px;border-bottom:2px solid var(--ink);letter-spacing:.3px}
+  .bar-row{display:grid;grid-template-columns:34px 90px 1fr;gap:10px;align-items:center;margin:7px 0}
+  .bar-score{font-weight:800;text-align:right}
+  .bar-track{background:#f1f5f9;border-radius:5px;height:12px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:5px}
+  .bar-label{font-size:11.5px}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);font-size:11.5px;vertical-align:top}
+  th{background:#f8fafc;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+  .action th{background:#0f172a;color:#fff}
+  .b{font-weight:800}
+  .findings{page-break-before:always}
+  .finding{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:12px 14px;margin:12px 0;page-break-inside:avoid}
+  .finding-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .fid{font-weight:800;color:var(--accent)}
+  .ftitle{font-weight:700;font-size:13px;flex:1;min-width:240px}
+  .badge{color:#fff;border-radius:5px;padding:2px 9px;font-size:10px;font-weight:700;letter-spacing:.3px}
+  .badge.bftb{}
+  .finding-meta{color:var(--muted);font-size:10.5px;margin:7px 0 9px}
+  .finding-meta code{background:#f1f5f9;border-radius:4px;padding:1px 5px}
+  .status{font-weight:700;color:#334155}
+  .vesc{font-variant-numeric:tabular-nums}
+  .kv{margin:4px 0;font-size:11.5px}.kv b{display:inline-block;width:64px;color:var(--muted);font-weight:700}
+  .cat{font-size:13px;font-weight:800;margin:18px 0 2px;color:#0f172a}
+  .na{border-left:3px solid #cbd5e1;background:#f8fafc;border-radius:6px;padding:8px 12px;margin:7px 0;font-size:11px;color:#475569}
+  .na .fid{color:#64748b}
+  .crit{background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 10px;margin:7px 0 2px;font-size:11px}
+  .crit .cu{color:#92400e;font-weight:700;margin-bottom:4px}
+  .crit .ok{color:#15803d;font-weight:700}.crit .notok{color:#b3261e;font-weight:700}
+  .cov-badge{border-radius:5px;padding:1px 8px;font-size:10px;font-weight:700;letter-spacing:.3px;white-space:nowrap}
+  table.cov td:first-child{white-space:nowrap;font-weight:800}
+  .tq{display:flex;gap:16px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-top:6px}
+  .tq-score{font-size:30px;font-weight:800;color:#0f172a;white-space:nowrap}
+  .tq-unit{font-size:12px;font-weight:700;color:var(--muted);margin-left:3px}
+  .tq-body code{background:#f1f5f9;border-radius:4px;padding:1px 5px}
+  .progress{display:flex;align-items:center;gap:28px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 20px;margin-top:14px}
+  .progress-title{font-size:12px;font-weight:800;color:#15803d;text-transform:uppercase;letter-spacing:.5px}
+  .progress-stats{display:flex;gap:26px}
+  .pstat{text-align:center}
+  .pnum{font-size:26px;font-weight:800;line-height:1}
+  .plabel{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:2px}
+  </style></head><body>
+  <div class="cover-band"></div>
+  <div class="page">
+    <h1>Security &amp; Health Audit</h1>
+    <div class="sub">ATC (self-audit — first real full ten-module engagement) — Multi-tenant Supabase/Next.js SaaS monorepo — apps/main (travel-agent platform) + apps/rag (embeddings/knowledge service), two Supabase projects</div>
+    <div class="sub">2026-07-17 · main @ 2be7c3d8 (working tree) · Prepared by Harvey</div>
+    <div class="conf">CONFIDENTIAL</div>
+
+    <div class="grid">
+      <div class="card"><svg width="190" height="120" viewBox="0 0 190 120">
+    <path d="M 23.00 100.00 A 72 72 0 0 1 167.00 100.00" fill="none" stroke="#e5e7eb" stroke-width="14" stroke-linecap="round"/>
+    <path d="M 23.00 100.00 A 72 72 0 0 1 153.25 57.68" fill="none" stroke="#15803d" stroke-width="14" stroke-linecap="round"/>
+    <text x="95" y="92" text-anchor="middle" font-size="34" font-weight="800" fill="#0f172a">8</text>
+    <text x="95" y="112" text-anchor="middle" font-size="12" fill="#64748b">/ 10 health</text>
+  </svg></div>
+      <div class="card" style="text-align:center"><svg width="140" height="140" viewBox="0 0 140 140"><path d="M 70.91 18.01 A 52 52 0 0 1 99.83 27.40" fill="none" stroke="#b3261e" stroke-width="16" stroke-linecap="round"/><path d="M 101.29 28.47 A 52 52 0 0 1 119.17 53.07" fill="none" stroke="#d9730d" stroke-width="16" stroke-linecap="round"/><path d="M 119.73 54.80 A 52 52 0 0 1 101.29 111.53" fill="none" stroke="#b88600" stroke-width="16" stroke-linecap="round"/><path d="M 99.83 112.60 A 52 52 0 0 1 20.27 54.80" fill="none" stroke="#3b7ea1" stroke-width="16" stroke-linecap="round"/><path d="M 20.83 53.07 A 52 52 0 0 1 38.71 28.47" fill="none" stroke="#7c3aed" stroke-width="16" stroke-linecap="round"/><path d="M 40.17 27.40 A 52 52 0 0 1 69.09 18.01" fill="none" stroke="#64748b" stroke-width="16" stroke-linecap="round"/>
+    <text x="70" y="66" text-anchor="middle" font-size="26" font-weight="800" fill="#0f172a">20</text>
+    <text x="70" y="84" text-anchor="middle" font-size="10" fill="#64748b">findings</text></svg><div class="legend" style="justify-content:center"><span class="leg"><i style="background:#b3261e"></i>Critical 2</span><span class="leg"><i style="background:#d9730d"></i>High 2</span><span class="leg"><i style="background:#b88600"></i>Medium 4</span><span class="leg"><i style="background:#3b7ea1"></i>Low 8</span><span class="leg"><i style="background:#7c3aed"></i>Perf 2</span><span class="leg"><i style="background:#64748b"></i>Info 2</span></div></div>
+      <div class="card" style="flex:1">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Tenant isolation</div>
+        <div style="font-size:22px;font-weight:800;margin:4px 0 10px">HOLDS — 416 RLS policies all gate on auth_user_in_tenant(tenant_id); zero USING(true); JWT verification fail-closed. One latent cross-tenant WRITE gap in the tenantClient UPDATE path (no confirmed call site) is the only isolation finding. <span class="pill">verified</span></div>
+        <div style="display:flex;gap:10px">
+          <div style="text-align:center"><div style="font-size:22px;font-weight:800;color:#b3261e">2</div><div style="font-size:10px;color:var(--muted)">Critical</div></div><div style="text-align:center"><div style="font-size:22px;font-weight:800;color:#d9730d">2</div><div style="font-size:10px;color:var(--muted)">High</div></div><div style="text-align:center"><div style="font-size:22px;font-weight:800;color:#b88600">4</div><div style="font-size:10px;color:var(--muted)">Medium</div></div><div style="text-align:center"><div style="font-size:22px;font-weight:800;color:#3b7ea1">8</div><div style="font-size:10px;color:var(--muted)">Low</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="headline">First full ten-module audit run against a REAL target (clears the never-run-on-real-target gap) and against BOTH monorepo apps + both Supabase DBs. Tenant isolation holds; no Critical or High SECURITY finding survived triage. The security signal is 6 semantic findings (3 Medium, 3 Low) — the notable one a latent cross-tenant WRITE via tenantClient's UPDATE path — plus a live-DB SECURITY DEFINER existence oracle (tenant_is_active). The mechanical secret scan's grade-F/12-Critical was fully triaged to false positives (test/doc placeholders; trufflehog verified 0). The real high-severity signal is in DATA CLASSIFICATION (M10: gmail_oauth_tokens and contacts hold Critical-class data; booking_passengers holds passport/DOB) and TEST QUALITY (M8: 27.8% mutation score with ~50% of code uncovered, and 53 tenant-isolation tests that mock the DB client so they cannot catch an RLS regression). Consistent with the June 2026-06-27 self-audit's 'tenant isolation holds' verdict; this run adds the tenantClient UPDATE finding and the two-app/live-DB coverage the prior run lacked.</div>
+
+    
+
+    <h2>Top bang-for-the-buck</h2>
+    <div class="bar-row"><div class="bar-score" style="color:hsl(9, 88%, 41%)">80</div>
+      <div class="bar-track"><div class="bar-fill" style="width:80%;background:hsl(9, 88%, 41%)"></div></div>
+      <div class="bar-label">RAG citation source_url rendered as an anchor href with no scheme validation — stored/DOM XSS</div></div><div class="bar-row"><div class="bar-score" style="color:hsl(16, 88%, 43%)">64</div>
+      <div class="bar-track"><div class="bar-fill" style="width:64%;background:hsl(16, 88%, 43%)"></div></div>
+      <div class="bar-label">tenantClient UPDATE path does not sanitize tenant_id in the SET payload — latent cross-tenant write</div></div><div class="bar-row"><div class="bar-score" style="color:hsl(18, 88%, 43%)">60</div>
+      <div class="bar-track"><div class="bar-fill" style="width:60%;background:hsl(18, 88%, 43%)"></div></div>
+      <div class="bar-label">gmail_oauth_tokens stores OAuth access/refresh tokens and API keys (Critical-class data)</div></div><div class="bar-row"><div class="bar-score" style="color:hsl(18, 88%, 43%)">60</div>
+      <div class="bar-track"><div class="bar-fill" style="width:60%;background:hsl(18, 88%, 43%)"></div></div>
+      <div class="bar-label">SECURITY DEFINER RPC tenant_is_active is an existence/status oracle for arbitrary tenant IDs</div></div><div class="bar-row"><div class="bar-score" style="color:hsl(18, 88%, 43%)">60</div>
+      <div class="bar-track"><div class="bar-fill" style="width:60%;background:hsl(18, 88%, 43%)"></div></div>
+      <div class="bar-label">Mechanical secret scan grade F is entirely false positives — 12 Critical hits are test/doc placeholders</div></div><div class="bar-row"><div class="bar-score" style="color:hsl(22, 88%, 43%)">51</div>
+      <div class="bar-track"><div class="bar-fill" style="width:51%;background:hsl(22, 88%, 43%)"></div></div>
+      <div class="bar-label">Booking cancellation never claws back an 'available' (queued-but-not-transferred) payout</div></div>
+
+    <h2>Action plan</h2>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Everything BFTB &gt; 75, plus every Critical/High security finding. </div>
+    <table class="action"><tr><th>#</th><th>Action</th><th>Why</th><th>BFTB</th><th>Owner</th></tr>
+    <tr><td>1</td><td class="b">Confirm the service-role-only lock (verified today), ensure tokens are encrypted at rest / stored in a vault rather than plaintext columns, enforce refresh rotation + revocation on disconnect, and add access auditing. Table is empty now — get this right before the Gmail integration ships (currently 501/gated).</td><td>gmail_oauth_tokens stores OAuth access/refresh tokens and API keys (Critical-class data) — Critical</td><td class="b" style="color:hsl(18, 88%, 43%)">60</td><td>Eng</td></tr><tr><td>2</td><td class="b">No action on the data itself (legitimately held). Prioritize real (non-mocked) RLS regression tests on contacts and the CRM read paths; confirm retention/export/delete (CCPA) flows cover it.</td><td>contacts holds customer PII (names, emails, phones) — Critical sensitivity weighting — Critical</td><td class="b" style="color:hsl(23, 88%, 44%)">48</td><td>Eng</td></tr><tr><td>3</td><td class="b">Confirm tenant RLS + service-role locks on each (spot-verified clean today); review the 4 JSONB container columns for nested PII; ensure passport/DOB/payment fields are covered by retention + encryption posture and by real isolation tests.</td><td>booking_passengers holds passport numbers + DOB; tenants holds payment refs (PCI); forensics_log/trip_* hold secrets — High</td><td class="b" style="color:hsl(23, 88%, 44%)">48</td><td>Eng</td></tr><tr><td>4</td><td class="b">Add real RLS regression tests that run against a seeded two-tenant local stack (the M2 dynamic tier) and assert tenant A cannot read/write tenant B's rows — not mocked-client unit tests. This is also why M2 (dynamic) should be stood up.</td><td>53 tenant-isolation tests mock the DB client — they cannot catch an RLS/tenant regression — High</td><td class="b" style="color:hsl(27, 88%, 44%)">40</td><td>Eng</td></tr><tr><td>5</td><td class="b">Validate the scheme at render (allow only http/https) or sanitize at ingestion; reuse the app's existing safe-redirect/URL parsing helper.</td><td>RAG citation source_url rendered as an anchor href with no scheme validation — stored/DOM XSS — Medium</td><td class="b" style="color:hsl(9, 88%, 41%)">80</td><td>Operator</td></tr>
+    </table>
+    
+  </div>
+
+  <div class="page findings">
+    <h2>Scope &amp; methodology</h2>
+    <div class="kv"><b>Reviewed</b> Both monorepo apps. apps/main: 269 API routes, 22 auth-lib + db-layer files, proxy.ts, money/AI/admin surfaces (5 parallel semantic passes). apps/rag: 24 routes, 59 src files, vector store (1 semantic pass). Mechanical tiers (M4/M5/M6/M7-code/M8-intent/M9) over the whole repo root. Connected tier: live security+performance advisors and live PII classification against BOTH Supabase projects (main mfaknjyqiwcjojukcnea, rag jjznkprbotkqqnuvcost), read-only. Live DETECT-DEEPER on the 3 flagged SECURITY DEFINER functions and all RLS-enabled-no-policy grants.</div>
+    <div class="kv"><b>Tooling</b> src/cli tools run directly (the operator module workflow) rather than the run-audit orchestrator, chiefly because the orchestrator's M5 (knip) probe hangs on ATC's full monorepo workspace resolution. Mechanical: quick-scan (M1), quality-scan (M4/M5), detect-static (M6/M7/M8/M9), pii-classify (M10). Semantic M1: 6 parallel review subagents (5 over apps/main, 1 over apps/rag) applying docs/scan-extras.txt + docs/fp-rules.txt, each with an explicit verified-safe section. Connected: Supabase advisors + live pii-classify via MCP/DB-URL on BOTH projects; SECURITY DEFINER bodies read via pg_get_functiondef and RLS/grants via role_table_grants on both live DBs (verdicts measured, not recalled). M8 mutation: a fresh scoped StrykerJS run (auth/audit/api routes, ~20k mutants, ~15 min) plus ATC's own whole-repo Jun-17 report; a fresh whole-repo run is tens of minutes (not run this session).</div>
+    <h2>Module coverage</h2>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">All ten audit modules, and whether each was assessed on this engagement. A module marked <b style="color:#b3261e">Not assessed</b> produced no findings because it did not run — <b>this is not a clean result</b>; the reason is stated.</div>
+    <table class="cov"><tr><th>Module</th><th>Area</th><th>Status</th><th>What ran / why not</th></tr><tr><td class="b">M1</td><td>Multi-tenant security (lead)</td>
+      <td><span class="cov-badge" style="color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0">Assessed</span></td>
+      <td>mechanical (quick-scan, grade F → 12 Critical secrets all triaged to test/doc-placeholder false positives; trufflehog 0 verified) + semantic (6 parallel review passes over apps/main + apps/rag, docs/scan-extras.txt lens) + connected/live (advisors both DBs; 3 SECURITY DEFINER bodies + all RLS-no-policy grants adjudicated on both live DBs; RAG vector-store isolation + RS256 JWT verifier verified live)</td></tr><tr><td class="b">M2</td><td>Local pen-test (dynamic)</td>
+      <td><span class="cov-badge" style="color:#b3261e;background:#fef2f2;border:1px solid #fecaca">Not assessed</span></td>
+      <td>No two-tenant local Supabase stack stood up this run. dynamic-validate returned NO-GO: it searches &lt;target&gt;/supabase/migrations, which is empty in ATC's monorepo layout (real migrations live under apps/main/supabase/migrations and apps/rag/supabase/migrations). Operator/live work — see #159/#161; harness monorepo-path gap noted.</td></tr><tr><td class="b">M3</td><td>Hotspot analysis</td>
+      <td><span class="cov-badge" style="color:#b3261e;background:#fef2f2;border:1px solid #fecaca">Not assessed</span></td>
+      <td>vitals_cli.py (external plugin) is not on PATH in this environment, so hotspot-scan could not produce the M3 ranked table. A .vitals/store.db exists but no capture was replayable this run.</td></tr><tr><td class="b">M4</td><td>Duplication</td>
+      <td><span class="cov-badge" style="color:#b88600;background:#fffbeb;border:1px solid #fde68a">Partial</span></td>
+      <td>jscpd RAN over apps/main (400 duplication clones + 23 diverged-clone near-misses). Scoped to apps/main because the whole-monorepo quality-scan hung on the knip stage; apps/rag duplication not separately censused.</td></tr><tr><td class="b">M5</td><td>Slop / dead code</td>
+      <td><span class="cov-badge" style="color:#b88600;background:#fffbeb;border:1px solid #fde68a">Partial</span></td>
+      <td>BOTH tiers ran, but on apps/main scope: the static M5-slop tier via detect-static whole-repo (505 single-use-helper + unused imports/narrating comments/orphan TODOs), and knip dead-code via quality-scan on apps/main (840 findings). The whole-MONOREPO knip hung on workspace resolution, so apps/rag's knip dead-code tier was not separately run — hence partial, not ran.</td></tr><tr><td class="b">M6</td><td>Simplification / maintainability</td>
+      <td><span class="cov-badge" style="color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0">Assessed</span></td>
+      <td></td></tr><tr><td class="b">M7</td><td>Performance</td>
+      <td><span class="cov-badge" style="color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0">Assessed</span></td>
+      <td>code tier (detect-static: 86 findings — await-in-loop N+1 ×45, client fetch in useEffect ×22, state sprawl ×16) + connected DB advisors on BOTH projects (main: 214 unused indexes / 5 unindexed FKs; rag: unused indexes + 4 unindexed FKs + 1 WARN auth_rls_initplan on rag_media_assets).</td></tr><tr><td class="b">M8</td><td>Test quality</td>
+      <td><span class="cov-badge" style="color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0">Assessed</span></td>
+      <td>test-intent tier (detect-static: 89 findings — 53 tenant-isolation tests mock the DB client, 21 call-count-only, 9 assertion-free, 3 happy-path-only on security-critical) + mutation score from ATC's own Stryker reports: 27.8% whole-repo (Jun-17 broad) and 29.4% on a fresh Jul-17 auth/audit/api-route scoped run; ~50% of mutants sit on code with no test coverage.</td></tr><tr><td class="b">M9</td><td>App Router boundary/rendering</td>
+      <td><span class="cov-badge" style="color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0">Assessed</span></td>
+      <td>detect-static: 76 findings — data-fetching waterfall ×54, SSR-only API misuse ×15, accidental dynamic rendering ×5, unsafe/missing cache config ×2.</td></tr><tr><td class="b">M10</td><td>Data classification (PII/PHI/PCI)</td>
+      <td><span class="cov-badge" style="color:#15803d;background:#f0fdf4;border:1px solid #bbf7d0">Assessed</span></td>
+      <td>live classification against BOTH DBs (main: 50 findings incl. 2 Critical / 7 High; rag: 2 Low) + schema tier over both apps' migrations. Live rows sampled read-only.</td></tr></table>
+    <div class="kv" style="margin-top:10px"><b>Out of scope</b> M2 dynamic pen-test: requires-live-run — dynamic-validate returned NO-GO because it looks for top-level supabase/migrations (ATC's live under apps/{main,rag}/supabase/migrations), and a two-tenant local stack was not stood up this run. M3 hotspot analysis: requires-live-run — vitals_cli.py is not on PATH in this environment. M7 Lighthouse/Core-Web-Vitals not run this session. M5 knip dead-code did not complete on the full monorepo (hung on workspace resolution); the static M5-slop indicator tier did run and a scoped apps/main knip was launched.</div>
+    
+    <h2>Findings</h2>
+    <div class="finding">
+    <div class="finding-head">
+      <span class="fid">M10-01</span>
+      <span class="ftitle">gmail_oauth_tokens stores OAuth access/refresh tokens and API keys (Critical-class data)</span>
+      <span class="badge" style="background:#b3261e">Critical</span>
+      <span class="badge bftb" style="background:hsl(18, 88%, 43%)">BFTB 60</span>
+      <span class="badge" style="background:#facc15;color:#1f2937">Review</span>
+      
+    </div>
+    <div class="finding-meta">Data classification · M10 — Secret/credential store · <code>apps/main DB — public.gmail_oauth_tokens (live, 0 rows currently)</code> · <span class="status">Open — data-classification disclosure</span>
+      · <span class="vesc">V5·E3·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> pii-classify (live) flagged AUTH_TOKEN + API_KEY column classes. RLS enabled, service-role-only grants (verified deny-all to anon/authenticated).</div>
+    <div class="kv"><b>Impact</b> Compromise of this table = takeover of connected Gmail accounts (read customer mail, send as tenant). Highest-sensitivity store in the schema; must have the strictest access + encryption-at-rest posture and short-lived tokens.</div>
+    <div class="kv"><b>Fix</b> Confirm the service-role-only lock (verified today), ensure tokens are encrypted at rest / stored in a vault rather than plaintext columns, enforce refresh rotation + revocation on disconnect, and add access auditing. Table is empty now — get this right before the Gmail integration ships (currently 501/gated).</div>
+    
+    <div class="crit"><div class="cu">When this is OK vs. not — confirm against your design:</div>
+      <div><span class="ok">✓ OK when</span> Service-role-only (confirmed), tokens encrypted/vaulted, rotation + revocation implemented.</div>
+      <div><span class="notok">✗ Not OK when</span> Tokens stored plaintext, or any client-role grant is added later.</div></div>
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M10-02</span>
+      <span class="ftitle">contacts holds customer PII (names, emails, phones) — Critical sensitivity weighting</span>
+      <span class="badge" style="background:#b3261e">Critical</span>
+      <span class="badge bftb" style="background:hsl(23, 88%, 44%)">BFTB 48</span>
+      <span class="badge" style="background:#facc15;color:#1f2937">Review</span>
+      
+    </div>
+    <div class="finding-meta">Data classification · M10 — PII/SENSITIVE_PII store · <code>apps/main DB — public.contacts (live, 9 rows)</code> · <span class="status">Open — data-classification disclosure</span>
+      · <span class="vesc">V4·E3·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> pii-classify (live): NAME, EMAIL, PHONE classes. RLS enabled with tenant policies (contacts is a tenant-scoped table).</div>
+    <div class="kv"><b>Impact</b> Core CRM PII. A tenant-isolation regression here is a direct customer-data breach — which is why the M8 finding that tenant-isolation tests mock the DB client (M8-01) matters most on exactly these tables.</div>
+    <div class="kv"><b>Fix</b> No action on the data itself (legitimately held). Prioritize real (non-mocked) RLS regression tests on contacts and the CRM read paths; confirm retention/export/delete (CCPA) flows cover it.</div>
+    
+    <div class="crit"><div class="cu">When this is OK vs. not — confirm against your design:</div>
+      <div><span class="ok">✓ OK when</span> Tenant RLS enforced (verified) AND covered by tests that exercise real RLS, not a mocked client.</div>
+      <div><span class="notok">✗ Not OK when</span> Isolation is only asserted by tests that mock the DB client (current state — see M8-01).</div></div>
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M10-03</span>
+      <span class="ftitle">booking_passengers holds passport numbers + DOB; tenants holds payment refs (PCI); forensics_log/trip_* hold secrets</span>
+      <span class="badge" style="background:#d9730d">High</span>
+      <span class="badge bftb" style="background:hsl(23, 88%, 44%)">BFTB 48</span>
+      <span class="badge" style="background:#facc15;color:#1f2937">Review</span>
+      
+    </div>
+    <div class="finding-meta">Data classification · M10 — Sensitive-PII / PCI / secret stores · <code>apps/main DB — public.{booking_passengers (PASSPORT, DOB, NAME), tenants (PAYMENT_REF, EMAIL, PHONE, ADDRESS), forensics_log (API_KEY), trip_itineraries/trip_resources (AUTH_TOKEN), tenant_branding (EMAIL, API_KEY), host_adapters (HEALTH), auth_attempts (IP, EMAIL)}</code> · <span class="status">Open — data-classification disclosure</span>
+      · <span class="vesc">V4·E3·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> pii-classify (live) — 7 High-severity tables. Plus JSONB 'review for nested PII' flags on gmail_inbound_messages.raw_payload, booking_line_items.item_details, inbound_emails.raw_payload, weather_forecast_cache.payload.</div>
+    <div class="kv"><b>Impact</b> Passport + DOB is sensitive-PII (travel/identity-theft exposure); payment refs are PCI-adjacent; stored API keys/auth tokens are secret-class. These raise the blast radius of any isolation or access-control slip and drive breach-notification obligations.</div>
+    <div class="kv"><b>Fix</b> Confirm tenant RLS + service-role locks on each (spot-verified clean today); review the 4 JSONB container columns for nested PII; ensure passport/DOB/payment fields are covered by retention + encryption posture and by real isolation tests.</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M8-01</span>
+      <span class="ftitle">53 tenant-isolation tests mock the DB client — they cannot catch an RLS/tenant regression</span>
+      <span class="badge" style="background:#d9730d">High</span>
+      <span class="badge bftb" style="background:hsl(27, 88%, 44%)">BFTB 40</span>
+      <span class="badge" style="background:#2563eb;color:#fff">Confirmed</span>
+      
+    </div>
+    <div class="finding-meta">Test quality · M8 — Tenant-isolation test mocks the DB client · <code>apps/main/test/unit/{auth/ssr-client.test.ts, db/tenant-client.test.ts, db/platform-admin-audit.test.ts, ...} (53 sites)</code> · <span class="status">Open</span>
+      · <span class="vesc">V5·E2·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> detect-static test-intent tier: 53 High-severity findings where tests asserting tenant isolation mock the Supabase/DB client, so the assertion exercises the mock's behavior, not real RLS. A test that can't fail when the isolation logic breaks is not protecting the isolation.</div>
+    <div class="kv"><b>Impact</b> The exact tables that hold Critical/High PII (contacts, booking_passengers) are 'covered' by tests that would stay green through an RLS regression. This is the highest-value test-quality gap given the M10 data sensitivity, and it undercuts the confidence the RLS audit otherwise earns.</div>
+    <div class="kv"><b>Fix</b> Add real RLS regression tests that run against a seeded two-tenant local stack (the M2 dynamic tier) and assert tenant A cannot read/write tenant B's rows — not mocked-client unit tests. This is also why M2 (dynamic) should be stood up.</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M1-02</span>
+      <span class="ftitle">RAG citation source_url rendered as an anchor href with no scheme validation — stored/DOM XSS</span>
+      <span class="badge" style="background:#b88600">Medium</span>
+      <span class="badge bftb" style="background:hsl(9, 88%, 41%)">BFTB 80</span>
+      <span class="badge" style="background:#ca8a04;color:#fff">Likely</span>
+      
+    </div>
+    <div class="finding-meta">Security · M1 — Stored XSS (untrusted URL) · <code>apps/main/src/components/chat/MessageSources.tsx:55</code> · <span class="status">Open</span>
+      · <span class="vesc">V4·E5·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> A RAG citation's source_url (user-ingested during knowledge ingestion, never scheme-validated) is rendered as &lt;a href={source_url}&gt;. A javascript: or data: URL executes on click.</div>
+    <div class="kv"><b>Impact</b> Intra-tenant stored/DOM XSS: a poisoned ingested document's citation URL runs script in a coordinator's browser on click. Gated by ingestion + a click, so Medium.</div>
+    <div class="kv"><b>Fix</b> Validate the scheme at render (allow only http/https) or sanitize at ingestion; reuse the app's existing safe-redirect/URL parsing helper.</div>
+    
+    <div class="crit"><div class="cu">When this is OK vs. not — confirm against your design:</div>
+      <div><span class="ok">✓ OK when</span> source_url is scheme-validated (http/https only) at ingestion or render.</div>
+      <div><span class="notok">✗ Not OK when</span> Raw user-ingested URL is placed in href (current state).</div></div>
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M1-01</span>
+      <span class="ftitle">tenantClient UPDATE path does not sanitize tenant_id in the SET payload — latent cross-tenant write</span>
+      <span class="badge" style="background:#b88600">Medium</span>
+      <span class="badge bftb" style="background:hsl(16, 88%, 43%)">BFTB 64</span>
+      <span class="badge" style="background:#ca8a04;color:#fff">Likely</span>
+      
+    </div>
+    <div class="finding-meta">Security · M1 — Tenant isolation (write) · <code>apps/main/src/lib/db/tenant-client.ts:90</code> · <span class="status">Open</span>
+      · <span class="vesc">V5·E4·S4</span></div>
+    
+    <div class="kv"><b>Evidence</b> The tenantClient Proxy overrides tenant_id on insert/upsert (hardening the payload), but on UPDATE it only appends the .eq('tenant_id', ctx.tenant_id) WHERE filter and passes the SET payload through untouched. A handler that spreads untrusted input into .update() on a tenant-scoped table could set tenant_id to an attacker-named value, reassigning the row OUT of its tenant.</div>
+    <div class="kv"><b>Impact</b> Cross-tenant WRITE (row hand-off) if any update handler forwards client-controlled fields including tenant_id. The WHERE filter guarantees you can only update your OWN rows, but nothing stops the new tenant_id from pointing elsewhere. Mechanism certain; no confirmed exploitable call site was found in scope (hence Medium/Likely).</div>
+    <div class="kv"><b>Fix</b> In the UPDATE branch of the proxy, strip/override tenant_id in the SET payload the same way insert/upsert already do (defense-in-depth, one place). Optionally add a DB-level WITH CHECK on tenant-scoped update policies so the write is rejected server-side too.</div>
+    
+    <div class="crit"><div class="cu">When this is OK vs. not — confirm against your design:</div>
+      <div><span class="ok">✓ OK when</span> Every update call site passes an explicit whitelist that excludes tenant_id.</div>
+      <div><span class="notok">✗ Not OK when</span> Any handler spreads req.body into .update() on a tenant-scoped table.</div></div>
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M1-03</span>
+      <span class="ftitle">Booking cancellation never claws back an 'available' (queued-but-not-transferred) payout</span>
+      <span class="badge" style="background:#b88600">Medium</span>
+      <span class="badge bftb" style="background:hsl(22, 88%, 43%)">BFTB 51</span>
+      <span class="badge" style="background:#ca8a04;color:#fff">Likely</span>
+      
+    </div>
+    <div class="finding-meta">Correctness · M1 — Money integrity · <code>apps/main/src/app/api/bookings/[id]/cancel/route.ts:223-332</code> · <span class="status">Open</span>
+      · <span class="vesc">V4·E4·S4</span></div>
+    
+    <div class="kv"><b>Evidence</b> 'available' payout rows always have stripe_transfer_id == null (set only at paid-settle), so the Stripe-reversal branch is skipped and the handler returns no_action. The route header claims 'available → reversal', which the code does not do; the next transfer cron then pays the sub-host for a cancelled booking.</div>
+    <div class="kv"><b>Impact</b> Platform-side money leak: a sub-host can be paid for a cancelled booking when the payout was queued-but-not-yet-transferred at cancel time. Not cross-tenant. Reachability depends on commission state at cancel time.</div>
+    <div class="kv"><b>Fix</b> In the cancel handler, transition 'available' payouts to a cancelled/withheld state (not just the transferred→reversal path) so the transfer cron skips them; add a test for cancel-while-available.</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M8-02</span>
+      <span class="ftitle">Mutation score 27.8% whole-repo (29.4% on the auth/audit/API scope); ~50% of code has no test coverage</span>
+      <span class="badge" style="background:#b88600">Medium</span>
+      <span class="badge bftb" style="background:hsl(31, 88%, 45%)">BFTB 32</span>
+      <span class="badge" style="background:#2563eb;color:#fff">Confirmed</span>
+      
+    </div>
+    <div class="finding-meta">Test quality · M8 — Mutation / coverage · <code>apps/main + apps/rag (StrykerJS; ATC's own reports, whole-repo Jun-17 + fresh auth/audit/api Jul-17)</code> · <span class="status">Open</span>
+      · <span class="vesc">V4·E2·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> Overall 52,152 mutants: 14,119 killed, 10,237 survived, 26,488 no-coverage → 27.8%. Fresh scoped run (263 files, auth/audit/api routes): 29.4%. Denial/boundary survivors concentrate on security-adjacent lib: sign-service-jwt.ts (12/19), pii-scrubber.ts (13/23), billing/payment-state.ts (4/7), memory/dob.ts (13/15), rag-auth. Caveat: the mutate scope includes API routes ATC tests via e2e (not unit), so no-coverage overstates true untested-ness for the route layer.</div>
+    <div class="kv"><b>Impact</b> Half the mutated code has no test able to detect a behavior change; boundary/negation logic in security-adjacent files (JWT signing, PII scrubbing, payment state, DOB handling) is where survivors cluster — a class of silent-regression risk.</div>
+    <div class="kv"><b>Fix</b> Add boundary/negation tests to the flagged lib files (start with sign-service-jwt, pii-scrubber, payment-state, dob); wire the e2e suite into the mutation coverage picture so route-layer 'no-coverage' reflects reality.</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M1-04</span>
+      <span class="ftitle">SECURITY DEFINER RPC tenant_is_active is an existence/status oracle for arbitrary tenant IDs</span>
+      <span class="badge" style="background:#3b7ea1">Low</span>
+      <span class="badge bftb" style="background:hsl(18, 88%, 43%)">BFTB 60</span>
+      <span class="badge" style="background:#2563eb;color:#fff">Confirmed</span>
+      
+    </div>
+    <div class="finding-meta">Security · M1 — SECURITY DEFINER exposure · <code>apps/main DB — public.tenant_is_active(uuid), exposed via /rest/v1/rpc/tenant_is_active</code> · <span class="status">Open</span>
+      · <span class="vesc">V3·E5·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> Body: SELECT EXISTS(SELECT 1 FROM public.tenants WHERE id=target_tenant_id AND status='active') — no auth.uid()/caller check, unlike its two siblings (auth_user_in_tenant, auth_user_can_access_conversation) which are both caller-scoped and were verified safe. EXECUTE is granted to authenticated.</div>
+    <div class="kv"><b>Impact</b> Any signed-in user can confirm whether an arbitrary tenant UUID exists and is active. Low practical exploitability (tenant IDs are unguessable UUIDs) but a least-privilege violation on the exposed API.</div>
+    <div class="kv"><b>Fix</b> REVOKE EXECUTE ON FUNCTION public.tenant_is_active(uuid) FROM authenticated (RLS policies calling it as definer are unaffected), or switch to SECURITY INVOKER, or add an auth.uid() membership predicate.</div>
+    
+    <div class="crit"><div class="cu">When this is OK vs. not — confirm against your design:</div>
+      <div><span class="ok">✓ OK when</span> Only RLS policies call it (as definer) — then revoke EXECUTE from authenticated.</div>
+      <div><span class="notok">✗ Not OK when</span> Clients can call the RPC directly (current state).</div></div>
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M1-08</span>
+      <span class="ftitle">Mechanical secret scan grade F is entirely false positives — 12 Critical hits are test/doc placeholders</span>
+      <span class="badge" style="background:#3b7ea1">Low</span>
+      <span class="badge bftb" style="background:hsl(18, 88%, 43%)">BFTB 60</span>
+      <span class="badge" style="background:#2563eb;color:#fff">Confirmed</span>
+      
+    </div>
+    <div class="finding-meta">Security · M1 — Secret exposure (triaged) · <code>apps/main/test/**, tests/**, docs/runbooks/supabase-setup.md</code> · <span class="status">Triaged — recommend scanner allowlist</span>
+      · <span class="vesc">V3·E5·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> quick-scan graded ATC F on 12 Critical 'committed credential' findings (from 244 raw gitleaks working-tree hits). All 12 are in tracked test/fixture/doc files; sampled values are placeholders (example.com, &lt;project-ref&gt;, abcxyz, a redact-secrets.test.ts fixture). trufflehog (which verifies) found 0 verified and 0 unverified secrets. Real .env.local/*.pem are gitignored, not committed.</div>
+    <div class="kv"><b>Impact</b> No real exposure. The value here is the triage itself: the free-tier grade F would alarm a client; the paid triage shows it's noise — the product's free→paid precision story on a real repo.</div>
+    <div class="kv"><b>Fix</b> Add a gitleaks allowlist for test/fixture/runbook-doc paths (or example.com/&lt;project-ref&gt;/abcxyz patterns) so the grade reflects real risk and a genuine committed secret would stand out. Spot-check the ~unsampled hits to close the loop.</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M1-09</span>
+      <span class="ftitle">RAG rag_retrieval_log_daily has a permissive USING(TRUE) RLS policy (latent — grant layer currently denies)</span>
+      <span class="badge" style="background:#3b7ea1">Low</span>
+      <span class="badge bftb" style="background:hsl(23, 88%, 44%)">BFTB 48</span>
+      <span class="badge" style="background:#2563eb;color:#fff">Confirmed</span>
+      
+    </div>
+    <div class="finding-meta">Security · M1 — Permissive RLS (latent) · <code>apps/rag/supabase/migrations/...0017:26 — public.rag_retrieval_log_daily</code> · <span class="status">Open</span>
+      · <span class="vesc">V3·E4·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> The rag_retrieval_log_daily RLS policy is USING(TRUE). Verified live: anon/authenticated/public hold ZERO table grants on every RAG table, so the grant layer denies before RLS runs — no live cross-tenant exposure today. It is the one permissive policy in the RAG DB where a single stray GRANT would immediately leak cross-tenant retrieval analytics with no second layer to catch it.</div>
+    <div class="kv"><b>Impact</b> No live leak (grant layer denies). Latent defense-in-depth gap: a future GRANT SELECT to a client role on this table would expose all tenants' retrieval-analytics rows.</div>
+    <div class="kv"><b>Fix</b> Replace USING(TRUE) with a tenant predicate (tenant_id = auth_user_tenant or the RAG JWT tenant claim), so isolation does not rest solely on the absence of a grant.</div>
+    
+    <div class="crit"><div class="cu">When this is OK vs. not — confirm against your design:</div>
+      <div><span class="ok">✓ OK when</span> The table never receives a client-role grant (current state).</div>
+      <div><span class="notok">✗ Not OK when</span> Any anon/authenticated SELECT grant is added to rag_retrieval_log_daily.</div></div>
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M1-05</span>
+      <span class="ftitle">Vestigial client SELECT grant on RLS-locked reference tables (pricing_seat_ladder, tier_definitions)</span>
+      <span class="badge" style="background:#3b7ea1">Low</span>
+      <span class="badge bftb" style="background:hsl(27, 88%, 44%)">BFTB 40</span>
+      <span class="badge" style="background:#2563eb;color:#fff">Confirmed</span>
+      
+    </div>
+    <div class="finding-meta">Security · M1 — RLS grant/policy mismatch · <code>apps/main DB — public.pricing_seat_ladder, public.tier_definitions</code> · <span class="status">Open</span>
+      · <span class="vesc">V2·E5·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> Both have RLS enabled with NO policy (deny-all) yet still grant SELECT to anon+authenticated. RLS denies regardless, so the grant is vestigial; a client PostgREST read silently returns empty. Both documented as service-role-only reference data.</div>
+    <div class="kv"><b>Impact</b> Not a data leak (no rows exposed). Hygiene / least-privilege, and a latent 'silently-broken client read' if a feature ever tries to read them via the anon/authenticated key.</div>
+    <div class="kv"><b>Fix</b> REVOKE SELECT ... FROM anon, authenticated (service-role-only), or add an explicit read policy if client reads are actually intended.</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M1-06</span>
+      <span class="ftitle">Customer quote-access token stored and compared in plaintext (hashed elsewhere)</span>
+      <span class="badge" style="background:#3b7ea1">Low</span>
+      <span class="badge bftb" style="background:hsl(28, 88%, 44%)">BFTB 38</span>
+      <span class="badge" style="background:#ca8a04;color:#fff">Likely</span>
+      
+    </div>
+    <div class="finding-meta">Security · M1 — Token at rest · <code>apps/main/src/app/api/quotes/[id]/send/route.ts:61 (quotes.customer_access_token)</code> · <span class="status">Open</span>
+      · <span class="vesc">V3·E4·S4</span></div>
+    
+    <div class="kv"><b>Evidence</b> The public quote-accept token is 256-bit random but stored/compared in plaintext, while the codebase's PAT and public-chat tokens are SHA-256 hashed at rest.</div>
+    <div class="kv"><b>Impact</b> Not guessable; risk only materializes under a read-only DB/backup breach (then the token is directly usable). Defense-in-depth / consistency gap.</div>
+    <div class="kv"><b>Fix</b> Hash the quote-access token at rest (match the PAT pattern): store SHA-256, compare hashes.</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M1-10</span>
+      <span class="ftitle">RAG service-JWT verifier tolerates absent iss/aud claims during a documented rollout</span>
+      <span class="badge" style="background:#3b7ea1">Low</span>
+      <span class="badge bftb" style="background:hsl(31, 88%, 45%)">BFTB 32</span>
+      <span class="badge" style="background:#facc15;color:#1f2937">Review</span>
+      
+    </div>
+    <div class="finding-meta">Security · M1 — JWT validation (hardening) · <code>apps/rag/src/lib/auth/verify-service-jwt.ts:157-187</code> · <span class="status">Open (issue-tracked exception #1773/#1843)</span>
+      · <span class="vesc">V2·E4·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> The verifier pins RS256, checks exp/iat(±5min), kid allowlist, and Redis jti replay, but tolerates absent iss/aud during a documented signing rollout. Signature is the hard gate.</div>
+    <div class="kv"><b>Impact</b> Residual token-confusion risk only if the RS256 signing key is shared with another service that omits aud — otherwise none. Appendix-grade.</div>
+    <div class="kv"><b>Fix</b> Once the rollout completes, make iss/aud mandatory (remove the tolerance branch) so a shared-key confusion attack is impossible by construction.</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M6-01</span>
+      <span class="ftitle">Maintainability: hand-rolled base64url + 11× duplicated email regex + scattered currency formatting</span>
+      <span class="badge" style="background:#3b7ea1">Low</span>
+      <span class="badge bftb" style="background:hsl(31, 88%, 45%)">BFTB 32</span>
+      <span class="badge" style="background:#facc15;color:#1f2937">Review</span>
+      
+    </div>
+    <div class="finding-meta">Maintainability · M6 — Reinvention (verdict) · <code>apps/main (base64url: lib/privacy/customer-hash.ts:27, webhooks/gmailpubsub/route.ts:298; email regex: 11 route handlers; currency: 23 display sites)</code> · <span class="status">Open (rollup — first M6 verdict on a real target)</span>
+      · <span class="vesc">V2·E4·S5</span></div>
+    
+    <div class="kv"><b>Evidence</b> 52 hand-rolled indicators triaged: genuine — base64url manual replace-chain where Node's .toString('base64url') exists (2, one in a security-adjacent PII hash); the same email regex copy-pasted 11×; manual $${cents/100} currency formatting at 23 sites (partial — several have bespoke rounding Intl can't do). Non-actionable/suppressed: cookie header strings (idiomatic), random-string-id (all in test code), class-merge, deep-equal.</div>
+    <div class="kv"><b>Impact</b> Consistency/maintainability, no correctness or security risk. No reinvented crypto/auth/tenancy primitive was found (those hand-rolled security primitives — constant-time-equal, hmac-jwt, postgrest-filter escaping — were reviewed by the M1 core-isolation pass and judged sound).</div>
+    <div class="kv"><b>Fix</b> Use buf.toString('base64url'); extract one shared email validator (or Zod .email()); centralize a formatCents() helper preserving intentional rounding.</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M1-07</span>
+      <span class="ftitle">tenantClient service-role passthrough surfaces (PLATFORM_READABLE_TABLES; .storage/.functions/.rest) rely on caller self-scoping</span>
+      <span class="badge" style="background:#3b7ea1">Low</span>
+      <span class="badge bftb" style="background:hsl(32, 88%, 45%)">BFTB 29</span>
+      <span class="badge" style="background:#facc15;color:#1f2937">Review</span>
+      
+    </div>
+    <div class="finding-meta">Security · M1 — Tenant isolation (defense-in-depth) · <code>apps/main/src/lib/db/tenant-client.ts:144, 153</code> · <span class="status">Open</span>
+      · <span class="vesc">V3·E3·S4</span></div>
+    
+    <div class="kv"><b>Evidence</b> PLATFORM_READABLE_TABLES passthrough is single-layer service-role with no RLS backstop (email_log, nullable tenant_id, sits in that set relying on caller self-scoping); the top-level proxy blocks only rpc/schema, leaving .storage/.functions/.rest as raw unscoped service-role surfaces.</div>
+    <div class="kv"><b>Impact</b> No confirmed leak — these are used by trusted server code today. But they are the paths where a future careless caller would bypass tenant scoping with no second layer to catch it.</div>
+    <div class="kv"><b>Fix</b> Add an RLS backstop or an explicit tenant filter on the platform-readable set (esp. email_log); consider narrowing/scoping the .storage/.functions/.rest passthrough or documenting the required caller discipline.</div>
+    
+    <div class="crit"><div class="cu">When this is OK vs. not — confirm against your design:</div>
+      <div><span class="ok">✓ OK when</span> Only trusted server code reaches these and applies its own tenant filter.</div>
+      <div><span class="notok">✗ Not OK when</span> An untrusted-input-reachable caller uses the passthrough without self-scoping.</div></div>
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M7-01</span>
+      <span class="ftitle">DB advisor debt: 214 unused indexes + 5 unindexed FKs (main), plus a per-row RLS initplan on rag_media_assets (rag)</span>
+      <span class="badge" style="background:#7c3aed">Perf</span>
+      <span class="badge bftb" style="background:hsl(32, 88%, 45%)">BFTB 29</span>
+      <span class="badge" style="background:#2563eb;color:#fff">Confirmed</span>
+      
+    </div>
+    <div class="finding-meta">Performance · M7 — DB advisors · <code>main DB (mfaknjyqiwcjojukcnea) + rag DB (jjznkprbotkqqnuvcost)</code> · <span class="status">Open</span>
+      · <span class="vesc">V3·E4·S3</span></div>
+    
+    <div class="kv"><b>Evidence</b> main: 214 unused_index (89 tables) + 5 unindexed_foreign_keys on email_retry_content (incl. tenant_id). rag: ~20 unused_index + 4 unindexed FKs + 1 WARN auth_rls_initplan on rag_media_assets ('rag_media_assets_select re-evaluates auth.&lt;function&gt;() per row').</div>
+    <div class="kv"><b>Impact</b> Write-amplification + storage debt (unused indexes) and slow FK joins (email_retry_content, incl. the RLS-relevant tenant_id FK). The rag_media_assets initplan degrades that policy's query at scale.</div>
+    <div class="kv"><b>Fix</b> Add covering indexes on email_retry_content FKs (esp. tenant_id); rewrite the rag_media_assets policy to use (select auth.&lt;function&gt;()) per the Supabase initplan guidance; review the unused-index list for removal after confirming they aren't reserved for planned queries.</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M9-01</span>
+      <span class="ftitle">App Router rendering/data-fetching hygiene: 76 findings led by 54 data-fetching waterfalls</span>
+      <span class="badge" style="background:#7c3aed">Perf</span>
+      <span class="badge bftb" style="background:hsl(32, 88%, 45%)">BFTB 29</span>
+      <span class="badge" style="background:#ca8a04;color:#fff">Likely</span>
+      
+    </div>
+    <div class="finding-meta">Performance · M9 — App Router boundary/rendering · <code>apps/main + apps/rag (detect-static M9 AST)</code> · <span class="status">Open (rollup)</span>
+      · <span class="vesc">V3·E3·S4</span></div>
+    
+    <div class="kv"><b>Evidence</b> 76 M9 findings: data-fetching waterfall ×54 (sequential awaits that could be parallel), SSR-only API misuse ×15, accidental dynamic rendering ×5 (pages opting out of static that don't need per-request data), unsafe/missing cache config ×2.</div>
+    <div class="kv"><b>Impact</b> Latency (serial fetches), unnecessary dynamic rendering (lost caching/perf), and a few SSR/browser-API boundary mismatches. Hygiene/perf, not security.</div>
+    <div class="kv"><b>Fix</b> Parallelize independent awaits (Promise.all) on the 54 waterfall sites; audit the 5 accidental-dynamic pages for static eligibility; fix the SSR-only API misuse sites. Prioritize by route traffic (M3 hotspots would rank these — deferred).</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M5-01</span>
+      <span class="ftitle">Dead code / slop: 840 knip dead-code findings (apps/main) + 505 static single-use-helper indicators</span>
+      <span class="badge" style="background:#64748b">Info</span>
+      <span class="badge bftb" style="background:hsl(36, 88%, 46%)">BFTB 19</span>
+      <span class="badge" style="background:#facc15;color:#1f2937">Review</span>
+      
+    </div>
+    <div class="finding-meta">Slop / dead code · M5 — Dead code + slop indicators · <code>apps/main (knip) + whole repo (detect-static M5-slop tier)</code> · <span class="status">Open (rollup — apps/rag knip not separately run)</span>
+      · <span class="vesc">V2·E3·S4</span></div>
+    
+    <div class="kv"><b>Evidence</b> knip on apps/main: 840 dead-code findings (unused exports/files/deps). detect-static M5-slop (whole repo): 505 single-use-helper, 5 unused-import, 4 narrating-comment, 3 single-call-wrapper, 2 orphan-TODO, 1 each else-after-return/rethrow-catch/AI-comment-phrasing. Whole-monorepo knip hung; apps/rag's knip dead-code tier not separately run.</div>
+    <div class="kv"><b>Impact</b> Maintainability debt. 840 knip items on apps/main is a large dead-code surface (unused exports/files) worth a cleanup sweep; the single-use-helper count is Info by design. apps/rag dead-code census incomplete — fail-loud, not clean.</div>
+    <div class="kv"><b>Fix</b> Run knip per-app (apps/rag next); triage the 840 apps/main items (many are likely safe deletions — knip is high-precision on unused exports); review single-use-helpers for inlining.</div>
+    
+    
+  </div><div class="finding">
+    <div class="finding-head">
+      <span class="fid">M4-01</span>
+      <span class="ftitle">Duplication: 400 jscpd clones + 23 diverged-clone near-misses (apps/main)</span>
+      <span class="badge" style="background:#64748b">Info</span>
+      <span class="badge bftb" style="background:hsl(36, 88%, 46%)">BFTB 19</span>
+      <span class="badge" style="background:#facc15;color:#1f2937">Review</span>
+      
+    </div>
+    <div class="finding-meta">Duplication · M4 — Duplication · <code>apps/main (jscpd + diverged-clone pass)</code> · <span class="status">Open (rollup — apps/rag not separately censused)</span>
+      · <span class="vesc">V2·E3·S4</span></div>
+    
+    <div class="kv"><b>Evidence</b> quality-scan on apps/main: 400 duplication clones + 23 diverged-clone near-misses (the #360 tenant-key/supabase-query heuristic pass). Test-file clones are not elevated to security severity (#400).</div>
+    <div class="kv"><b>Impact</b> Maintainability: duplicated logic drifts. The 23 diverged clones matter more than raw count — near-identical blocks that have started to diverge are where a fix applied to one copy silently misses the others (relevant for the 11× duplicated email regex in M6-01).</div>
+    <div class="kv"><b>Fix</b> Prioritize the 23 diverged clones for consolidation; sample the 400 exact clones for extract-shared-helper candidates. Run jscpd on apps/rag to complete the census.</div>
+    
+    
+  </div>
+    
+    
+    
+  </div>
+  </body></html>

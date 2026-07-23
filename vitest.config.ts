@@ -10,6 +10,6 @@ import { configDefaults, defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     // ".claude/**": agent worktrees are full repo copies (see eslint.config.mjs).
-    exclude: [...configDefaults.exclude, "targets/**", "epic-builder-web/**", ".claude/**"],
+    exclude: [...configDefaults.exclude, "targets/**", "epic-builder-web/**", "site/**", ".claude/**"],
   },
 });
