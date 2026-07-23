@@ -7,7 +7,17 @@
 //
 // vitals is an EXTERNAL plugin, not a dependency of this repo (CLAUDE.md M3 row: run, don't
 // build), and `vitals_cli.py` is often NOT on PATH in agent sandboxes (#314) — pass --report
-// with a captured `vitals_cli.py report --json <dir>` output in that case.
+// with a captured `vitals_cli.py report --json <dir>` output in that case. vitals does NOT need a
+// pre-captured `.vitals` store: `report` computes churn×complexity directly from git, so it runs
+// on a cold target (a fresh `.vitals`-less repo) as long as the plugin itself is installed.
+//
+// #808: the installed vitals is asserted to report EXPECTED_VITALS_VERSION before its report is
+// trusted — a mismatch fails loud with expected/actual, not a downstream array-missing error.
+// #807 reduced tier: when the vitals plugin is entirely UNAVAILABLE, this does not fail — Harvey
+// computes its own churn×complexity ranking from git history + a complexity proxy, prints an
+// "M3 REDUCED TIER" banner, and marks the artifact `reduced:true` so callers disclose it as
+// `partial` (ranked table only; no coupling / knowledge-risk / AI-provenance). It still fails loud
+// if neither vitals nor git history is available.
 //
 //   pnpm exec tsx src/cli/hotspot-scan.ts <target-dir> [--report <vitals.json>]
 //     [--out <m3.json>] [--hotspots-out <file>] [--findings <file>]... [--top <k>]
@@ -29,7 +39,16 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
 import type { Finding } from "../findings.js";
-import { crossReferenceHotspots, rankHotspots, toFactFindings, topKFiles, type VitalsReport } from "../hotspot-scan.js";
+import { buildFallbackReport, complexityProxy, crossReferenceHotspots, type FallbackFile, rankHotspots, toFactFindings, topKFiles, type VitalsReport } from "../hotspot-scan.js";
+
+// #808: the vitals version src/hotspot-scan.ts's VitalsReport shape is verified against (#94/#369).
+// A mismatch fails loud with expected/actual BEFORE the report schema-drift check, so version drift
+// is reported as such rather than as a generic array-missing error.
+const EXPECTED_VITALS_VERSION = "0.2.0";
+
+// Source-file extensions the reduced tier (#807) counts for churn/complexity. Mirrors the intent of
+// vitals' own is_source_file gate — enough to keep the churn×complexity ranking on real code.
+const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|java|rs|php|c|cc|cpp|h|hpp|cs|swift|kt|scala)$/;
 
 const args = process.argv.slice(2);
 
@@ -88,68 +107,108 @@ const hotspotsOutPath = arg("--hotspots-out");
 const topK = Number(arg("--top") ?? 10);
 const findingsPaths = args.flatMap((a, i) => (a === "--findings" && args[i + 1] ? [args[i + 1]!] : []));
 
-function loadReport(): VitalsReport {
-  let raw: string;
-  if (reportPath) {
-    raw = readFileSync(resolve(reportPath), "utf8");
-  } else {
-    // Try PATH first (existing behavior)
-    const attemptedPaths: string[] = ["vitals_cli.py on PATH"];
-    try {
-      // #624: vitals reads its precomputed store from `./.vitals/store.db` relative to CWD, so it
-      // must run WITH cwd set to the target — otherwise, run from the Harvey worktree, it finds no
-      // store and exits "No source files found", which was misreported as "plugin unavailable".
-      raw = execFileSync("vitals_cli.py", ["report", "--json", targetDir], { cwd: targetDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    } catch (err) {
-      const e = err as { code?: string; stderr?: string; message?: string };
-
-      // Try plugin discovery locations if PATH failed
-      if (e.code === "ENOENT") {
-        const pluginPath = discoverVitalsCli();
-        if (pluginPath) {
-          try {
-            raw = execFileSync("python3", [pluginPath, "report", "--json", targetDir], { cwd: targetDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-            console.log(`✓ Found vitals_cli.py at ${pluginPath}`);
-          } catch (err2) {
-            const e2 = err2 as { stderr?: string; message?: string };
-            const detail = e2.stderr || e2.message || "vitals_cli.py failed";
-            attemptedPaths.push(pluginPath);
-            console.error(`✗ vitals_cli.py found at ${pluginPath} but failed: ${detail}`);
-            console.error(`  Searched locations: ${attemptedPaths.join(", ")}`);
-            process.exit(1);
-          }
-        } else {
-          const detail = "vitals_cli.py not found on PATH or in plugin install locations (#507)";
-          const pluginLocations = [
-            `${homedir()}/.claude/plugins/marketplaces/vitals/scripts/vitals_cli.py`,
-            `${homedir()}/.claude/plugins/cache/vitals/*/scripts/vitals_cli.py`,
-          ];
-          console.error(`✗ ${detail}`);
-          console.error(`  Searched locations: ${attemptedPaths.concat(pluginLocations).join(", ")}`);
-          console.error(`  Solutions:`);
-          console.error(`    1. Install vitals plugin: follow https://github.com/vitals-ai/vitals docs`);
-          console.error(`    2. Or run vitals locally and pass the capture: --report <vitals.json>`);
-          process.exit(1);
-        }
-      } else {
-        const detail = e.stderr || e.message || "vitals_cli.py failed";
-        console.error(`✗ vitals_cli.py error: ${detail}`);
-        console.error(`  Searched locations: ${attemptedPaths.join(", ")}`);
-        process.exit(1);
-      }
-    }
-  }
+function parseReport(raw: string): VitalsReport {
   const parsed = JSON.parse(raw) as VitalsReport;
   // Fail loud on schema drift: a report without these arrays is not the verified #94 shape.
   const missing = (["hotspots", "coupling", "knowledge_risk"] as const).filter((k) => !Array.isArray(parsed[k]));
   if (missing.length) {
-    console.error(`✗ vitals report is missing expected array(s): ${missing.join(", ")} — schema drift from the #94-verified vitals 0.2.0 shape; re-verify src/hotspot-scan.ts against the installed vitals version`);
+    console.error(`✗ vitals report is missing expected array(s): ${missing.join(", ")} — schema drift from the #94-verified vitals ${EXPECTED_VITALS_VERSION} shape; re-verify src/hotspot-scan.ts against the installed vitals version`);
     process.exit(1);
   }
   return parsed;
 }
 
-const report = loadReport();
+// #808: run vitals' `version` subcommand and fail loud on drift. ENOENT (binary/python absent) means
+// "not installed" — the caller falls back to the reduced tier; any other error, or a version other
+// than EXPECTED, is a broken contract and exits.
+function checkVersion(bin: string, prefixArgs: string[]): "ok" | "absent" {
+  let out: string;
+  try {
+    out = execFileSync(bin, [...prefixArgs, "version"], { cwd: targetDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (err) {
+    const e = err as { code?: string; stderr?: string; message?: string };
+    if (e.code === "ENOENT") return "absent";
+    console.error(`✗ vitals \`version\` check failed: ${e.stderr || e.message} — Harvey's M3 is verified against vitals ${EXPECTED_VITALS_VERSION}; this install's CLI contract differs`);
+    process.exit(1);
+  }
+  const actual = out.match(/v?(\d+\.\d+\.\d+)/)?.[1];
+  if (actual !== EXPECTED_VITALS_VERSION) {
+    console.error(`✗ vitals version mismatch: expected ${EXPECTED_VITALS_VERSION}, got ${actual ?? (out.trim() || "(no version string)")}`);
+    console.error(`  Harvey's M3 report schema (src/hotspot-scan.ts) is verified against vitals ${EXPECTED_VITALS_VERSION}; re-verify the schema against this version before running M3.`);
+    process.exit(1);
+  }
+  return "ok";
+}
+
+// Resolves how to invoke a version-verified vitals: on PATH, else via a discovered plugin install.
+// Returns undefined when neither is present/runnable, so the caller drops to the reduced tier.
+function resolveVitals(): { bin: string; prefixArgs: string[] } | undefined {
+  if (checkVersion("vitals_cli.py", []) === "ok") return { bin: "vitals_cli.py", prefixArgs: [] };
+  const pluginPath = discoverVitalsCli();
+  if (pluginPath && checkVersion("python3", [pluginPath]) === "ok") {
+    console.log(`✓ Found vitals_cli.py at ${pluginPath}`);
+    return { bin: "python3", prefixArgs: [pluginPath] };
+  }
+  return undefined;
+}
+
+// #807 reduced tier: Harvey computes the churn×complexity ranking itself from git when vitals is not
+// installed. churn = per-file change count over 90 days (git log); complexity = complexityProxy over
+// the current file. Fails loud (exit 1) if the target is not a git checkout — with neither vitals nor
+// git there is no basis for a ranking, and a silent empty table would read as a clean bill of health.
+function buildReducedReport(): VitalsReport {
+  let log: string;
+  try {
+    log = execFileSync("git", ["log", "--since=90 days ago", "--name-only", "--pretty=format:"], { cwd: targetDir, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    console.error(`✗ M3 reduced tier: vitals plugin unavailable AND \`git log\` failed in ${targetDir} (not a git checkout, or git missing): ${e.stderr || e.message}`);
+    console.error(`  M3 cannot produce a hotspot ranking with neither vitals nor git history. Install the vitals plugin, or run against a git checkout.`);
+    process.exit(1);
+  }
+  const churn = new Map<string, number>();
+  for (const line of log.split("\n")) {
+    const f = line.trim();
+    if (f && SOURCE_EXT.test(f)) churn.set(f, (churn.get(f) ?? 0) + 1);
+  }
+  const files: FallbackFile[] = [];
+  for (const [file, changes] of churn) {
+    if (changes < 2) continue; // below the churn gate — skip reading (buildFallbackReport re-gates)
+    let src: string;
+    try {
+      src = readFileSync(resolve(targetDir, file), "utf8");
+    } catch {
+      continue; // renamed/deleted since — no current content to score
+    }
+    files.push({ file_path: file, changes, complexity: complexityProxy(src) });
+  }
+  return buildFallbackReport(files, Math.max(topK, 50));
+}
+
+function loadReport(): { report: VitalsReport; reduced: boolean } {
+  if (reportPath) {
+    return { report: parseReport(readFileSync(resolve(reportPath), "utf8")), reduced: false };
+  }
+  const vitals = resolveVitals();
+  if (!vitals) {
+    return { report: buildReducedReport(), reduced: true };
+  }
+  let raw: string;
+  try {
+    raw = execFileSync(vitals.bin, [...vitals.prefixArgs, "report", "--json", targetDir], { cwd: targetDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (err) {
+    const e = err as { stderr?: string; message?: string };
+    console.error(`✗ vitals report failed: ${e.stderr || e.message}`);
+    process.exit(1);
+  }
+  return { report: parseReport(raw), reduced: false };
+}
+
+const { report, reduced } = loadReport();
+if (reduced) {
+  console.log("⚠ M3 REDUCED TIER (vitals plugin unavailable) — Harvey-computed churn×complexity ranking from git history only.");
+  console.log("  NOT assessed in this tier: file health, co-change coupling, knowledge-risk (truck-factor), AI-provenance. Install the vitals plugin for the full M3 signal.");
+}
 const ranked = rankHotspots(report);
 const top = topKFiles(report, topK);
 const findings = toFactFindings(report);
@@ -192,7 +251,14 @@ if (hotspotsOutPath) {
 }
 
 if (outPath) {
-  const artifact = { target: targetDir, topK: top, hotspots: ranked, findings, crossReferenced };
+  const artifact = {
+    target: targetDir,
+    topK: top,
+    hotspots: ranked,
+    findings,
+    crossReferenced,
+    ...(reduced ? { reduced: true, partialReason: "vitals plugin unavailable — reduced M3 tier: churn×complexity ranking only, no coupling/knowledge-risk/AI-provenance" } : {}),
+  };
   writeFileSync(outPath, `${JSON.stringify(artifact, null, 2)}\n`);
   console.log(`\nM3 artifact → ${outPath} — merge \`findings\` (and \`crossReferenced.findings\`) into the engagement findings.json for report-template/`);
 }
