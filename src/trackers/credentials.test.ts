@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AzureDevOpsTracker } from "./azure-devops.js";
 import { GitHubTracker } from "./github.js";
+import { GitLabTracker } from "./gitlab.js";
 import { TrackerError } from "./http.js";
 import { JiraTracker } from "./jira.js";
+import { LinearTracker } from "./linear.js";
 import type { Tracker } from "./types.js";
 
 // The security-relevant contract for issue #22: a tracker adapter is handed a per-engagement
@@ -30,6 +32,16 @@ const adapters: { name: string; make: (fetchImpl: typeof fetch) => Tracker; toke
     make: (fetchImpl) => new AzureDevOpsTracker({ orgUrl: "https://dev.azure.com/acme", project: "Audit", pat: TOKEN, fetchImpl }),
     tokenSent: (auth) => auth.startsWith("Basic ") && Buffer.from(auth.slice(6), "base64").toString("utf8").includes(TOKEN),
   },
+  {
+    name: "GitLabTracker",
+    make: (fetchImpl) => new GitLabTracker({ token: TOKEN, projectId: "acme/app", fetchImpl }),
+    tokenSent: (auth) => auth === `Bearer ${TOKEN}`,
+  },
+  {
+    name: "LinearTracker",
+    make: (fetchImpl) => new LinearTracker({ apiKey: TOKEN, teamId: "team-1", fetchImpl }),
+    tokenSent: (auth) => auth === TOKEN, // Linear sends the API key verbatim, no Bearer prefix
+  },
 ];
 
 const consoleMethods = ["log", "info", "warn", "error", "debug"] as const;
@@ -46,7 +58,21 @@ describe.each(adapters)("$name credential handling", ({ make, tokenSent }) => {
     let seenAuth = "";
     const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       seenAuth = (init?.headers as Record<string, string>)?.Authorization ?? "";
-      return new Response(JSON.stringify({ number: 1, id: 1, key: "AUD-1", html_url: "u", body: null, _links: { html: { href: "u" } } }));
+      // Superset body: fields for every adapter's createEpic parse path (GitHub/Jira/Azure/GitLab REST +
+      // Linear GraphQL) so createEpic resolves for all of them from one canned response.
+      return new Response(
+        JSON.stringify({
+          number: 1,
+          id: 1,
+          key: "AUD-1",
+          html_url: "u",
+          body: null,
+          iid: 1,
+          web_url: "u",
+          _links: { html: { href: "u" } },
+          data: { issueCreate: { issue: { id: "lin-1", url: "u" } } },
+        }),
+      );
     }) as unknown as typeof fetch;
 
     await make(fetchImpl).createEpic({ title: "t", description: "d" });
@@ -75,8 +101,22 @@ describe.each(adapters)("$name credential handling", ({ make, tokenSent }) => {
     const seenAuth: string[] = [];
     const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       seenAuth.push((init?.headers as Record<string, string>)?.Authorization ?? "");
-      // Lowest-common-denominator body: an empty result set for every adapter's marker search shape.
-      return new Response(JSON.stringify({ items: [], issues: [], workItems: [] }));
+      // Superset body: an empty result set for every adapter's marker search shape, plus the Linear
+      // GraphQL sub-objects its updateStory label-resolution path reads (team labels, label create,
+      // issue update) — one canned response that satisfies findByMarker and updateStory for all five.
+      return new Response(
+        JSON.stringify({
+          items: [],
+          issues: [],
+          workItems: [],
+          data: {
+            issues: { nodes: [] },
+            team: { labels: { nodes: [] } },
+            issueLabelCreate: { issueLabel: { id: "lbl-1" } },
+            issueUpdate: { success: true },
+          },
+        }),
+      );
     }) as unknown as typeof fetch;
 
     const tracker = make(fetchImpl);
