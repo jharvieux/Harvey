@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Finding } from "./findings.js";
-import { aiProvenanceFiles, couplingEdges, crossReferenceHotspots, enrichFindingsWithHotspots, rankHotspots, toFactFindings, topKFiles, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
+import { aiProvenanceFiles, buildFallbackReport, classifyChurn, complexityProxy, couplingEdges, crossReferenceHotspots, enrichFindingsWithHotspots, rankHotspots, toFactFindings, topKFiles, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
 import { summarizeMutationReport, type StrykerReport } from "./mutation-scan.js";
 import { buildCoverageMatrix } from "./scan/calibration.js";
 import { m3Entries } from "./scan/calibration/m3.entries.js";
@@ -171,5 +171,47 @@ describe("M3 cross-reference against other modules' findings (#363)", () => {
     expect(summary.survivingMutants.find((m) => m.file === "core/checkout.ts")?.hotspot).toBe(true);
     expect(summary.survivingMutants.find((m) => m.file === "lib/stable.ts")?.hotspot).toBe(false);
     expect(summary.survivingMutants[0]?.file).toBe("core/checkout.ts"); // hotspot survivor sorts first
+  });
+});
+
+// #807: the reduced Harvey-side tier — the churn×complexity ranking computed WITHOUT vitals, for a
+// cold sandbox / fresh repo. These are the pure transforms; the CLI's git/fs gathering is the thin
+// I/O wrapper.
+describe("M3 reduced tier (#807, vitals-unavailable fallback)", () => {
+  it("classifyChurn mirrors vitals 0.2.0 thresholds (≤2 LOW, ≤8 MED, else HIGH)", () => {
+    expect([1, 2].map(classifyChurn)).toEqual(["LOW", "LOW"]);
+    expect([3, 8].map(classifyChurn)).toEqual(["MED", "MED"]);
+    expect([9, 40].map(classifyChurn)).toEqual(["HIGH", "HIGH"]);
+  });
+
+  it("complexityProxy separates a branchy file from a flat one", () => {
+    const gnarly = "function f(x){ if(x){ for(;;){ while(x){} } } return x && x || 0; }";
+    const flat = "export const x = 1;";
+    expect(complexityProxy(gnarly)).toBeGreaterThan(complexityProxy(flat));
+    expect(complexityProxy(flat)).toBe(1); // base 1, no branches
+  });
+
+  it("ranks by churn×complexity and drops sub-gate files (churn<2 or zero complexity)", () => {
+    const r = buildFallbackReport([
+      { file_path: "hot.ts", changes: 6, complexity: 7 }, // 42
+      { file_path: "warm.ts", changes: 3, complexity: 2 }, // 6
+      { file_path: "rare.ts", changes: 1, complexity: 9 }, // dropped: churn<2
+      { file_path: "trivial.ts", changes: 9, complexity: 0 }, // dropped: no complexity
+    ]);
+    expect(r.hotspots.map((h) => h.file_path)).toEqual(["hot.ts", "warm.ts"]);
+    expect(r.hotspots[0]?.risk_score).toBe(42);
+    expect(r.hotspots[0]?.churn_label).toBe("MED");
+  });
+
+  it("emits NO coupling / knowledge-risk sub-signals — reduced tier invents no facts", () => {
+    const r = buildFallbackReport([{ file_path: "a.ts", changes: 5, complexity: 4 }]);
+    expect(r.coupling).toEqual([]);
+    expect(r.knowledge_risk).toEqual([]);
+    expect(toFactFindings(r)).toEqual([]); // no truck-factor/coupling/AI-prov findings fabricated
+  });
+
+  it("caps the ranking at topN", () => {
+    const files = Array.from({ length: 20 }, (_, i) => ({ file_path: `f${i}.ts`, changes: i + 2, complexity: 2 }));
+    expect(buildFallbackReport(files, 5).hotspots).toHaveLength(5);
   });
 });

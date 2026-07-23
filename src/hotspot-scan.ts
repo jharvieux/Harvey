@@ -104,6 +104,60 @@ export function topKFiles(report: VitalsReport, k: number): string[] {
     .map((r) => r.file_path);
 }
 
+// Reduced-tier fallback (#807) — the churn×complexity ranking Harvey computes ITSELF from git
+// history plus a cheap complexity proxy, for a cold sandbox / fresh client repo where the external
+// `vitals` plugin is not installed. This is the REDUCED M3 tier: a ranked hotspot table ONLY. File
+// health, co-change coupling, knowledge-risk (truck-factor), and AI-provenance are vitals-only
+// sub-signals and are NOT assessed here — so buildFallbackReport emits empty coupling/knowledge_risk
+// (toFactFindings therefore yields nothing, no invented sub-signal facts), and the CLI/orchestrator
+// disclose the result as `partial` with that reason, never a clean `ran` (fail-loud coverage).
+
+// Cheap cyclomatic-ish proxy: 1 + branch/loop/boolean-operator count. Deliberately NOT vitals' AST
+// metric — a stand-in cheap enough to run over every churning file, that still separates gnarly
+// files from flat ones so the churn×complexity product ranks meaningfully.
+export function complexityProxy(source: string): number {
+  const tokens = source.match(/\b(if|for|while|case|catch)\b|&&|\|\|/g);
+  return 1 + (tokens?.length ?? 0);
+}
+
+// vitals health_score.classify_churn thresholds (verified against vitals 0.2.0 source): ≤2 LOW,
+// ≤8 MED, else HIGH — mirrored so the reduced tier's churn_label reads the same as a full report.
+export function classifyChurn(changes: number): string {
+  if (changes <= 2) return "LOW";
+  if (changes <= 8) return "MED";
+  return "HIGH";
+}
+
+export interface FallbackFile {
+  file_path: string;
+  changes: number;
+  complexity: number;
+}
+
+// Shapes reduced-tier inputs into a VitalsReport so the rest of the M3 pipeline (rankHotspots /
+// topKFiles / --out artifact / cross-reference) is unchanged. Gate mirrors vitals: churn ≥ 2 AND
+// nonzero complexity. risk = churn × complexity (the classic churn×complexity hotspot metric); no
+// health/role/centrality weighting exists in this tier.
+export function buildFallbackReport(files: FallbackFile[], topN = 10): VitalsReport {
+  const hotspots: VitalsHotspotRow[] = files
+    .filter((f) => f.changes >= 2 && f.complexity > 0)
+    .map((f) => ({
+      file_path: f.file_path,
+      health: 0,
+      role: "core",
+      centrality: 0,
+      churn_data: { changes: f.changes, lines_added: 0, lines_removed: 0, author_count: 0, last_change: "" },
+      churn_label: classifyChurn(f.changes),
+      complexity_score: f.complexity,
+      coupling_strength: 0,
+      changes: f.changes,
+      risk_score: Math.round(f.changes * f.complexity * 10) / 10,
+    }))
+    .sort((a, b) => b.risk_score - a.risk_score)
+    .slice(0, topN);
+  return { hotspots, coupling: [], knowledge_risk: [] };
+}
+
 export function truckFactorOneFiles(report: VitalsReport): string[] {
   return report.knowledge_risk.filter((r) => r.truck_factor === 1).map((r) => r.file_path);
 }
