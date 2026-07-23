@@ -398,9 +398,9 @@ describe("noTestSuiteFinding / noTestSuiteModuleRecord", () => {
     expect(finding.evidence).toContain("no package.json found");
   });
 
-  it("marks the M8 coverage record partial rather than a silent gap", () => {
+  it("flags the record noSuite:true so the M8 probe can read it as a complete verdict, not a gap (#754)", () => {
     const record = noTestSuiteModuleRecord("no package.json found");
-    expect(record).toMatchObject({ status: "partial" });
+    expect(record).toMatchObject({ status: "partial", noSuite: true });
     expect(record.note).toContain("no package.json found");
   });
 });
