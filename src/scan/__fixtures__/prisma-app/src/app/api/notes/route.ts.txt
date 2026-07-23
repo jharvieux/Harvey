@@ -1,0 +1,11 @@
+import { getServerSession } from "next-auth";
+import { prisma } from "@/lib/prisma";
+
+// Tenant-scoped Prisma query: isolation is enforced here in app code (the where clause), not by a
+// database RLS policy — the whole point of the Prisma/Postgres architecture the #757 gate detects.
+export async function GET() {
+  const session = await getServerSession();
+  const userId = session?.user?.id as string;
+  const notes = await prisma.note.findMany({ where: { userId } });
+  return Response.json(notes);
+}

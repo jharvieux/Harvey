@@ -1,0 +1,25 @@
+// A minimal multi-tenant Prisma/Postgres schema — no Supabase, so tenant isolation is app-layer,
+// not DB-level RLS. Fixture for the #757 ORM-detection + RLS-gating tests.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  notes     Note[]
+  createdAt DateTime @default(now())
+}
+
+model Note {
+  id     String @id @default(cuid())
+  title  String
+  body   String
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+}

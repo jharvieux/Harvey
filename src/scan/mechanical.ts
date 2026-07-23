@@ -19,6 +19,7 @@ import { scanSecretRotation } from "./secret-rotation.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
+import { detectOrm } from "./framework-detect.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
 import { scanJobTenantScope } from "./job-tenant-scope.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
@@ -94,6 +95,34 @@ interface MechanicalScanOptions {
   skipNetworkChecks?: boolean;
 }
 
+// #757 (part of #756): the recognized-architecture record for a Prisma/Postgres target. Same
+// visible-not-assessed disclosure contract as SEC-TH-GH-00/M5-00 — Info/N-A, never a defect — so
+// the DB-level RLS tier's non-applicability is stated in the deliverable rather than left silent.
+// It is NOT a vulnerability and NOT a partial-couldn't-run: on a Prisma app the RLS tier is N/A by
+// architecture, and tenant isolation is assessed app-layer by the pg-idor/bola-owner/
+// pg-response-exposure/service-role-literal passes plus the LLM semantic pass.
+function prismaArchitectureNote(): Finding {
+  return {
+    id: "M1-ARCH-PRISMA",
+    title: "DB-level RLS checks not applicable — Prisma/Postgres architecture",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Multi-tenant isolation",
+    taxonomy: "Architecture — Prisma/Postgres (no DB-level RLS)",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence:
+      "Target detected as a Prisma/Postgres app (schema.prisma / @prisma/client) with no Supabase project. Supabase's Postgres RLS lives in supabase/migrations and is enforced by the database; a Prisma app has none of that surface, so the migration-RLS, PostgREST-exposure, and edge-config detectors have nothing to analyze.",
+    impact:
+      "Not a defect. Tenant isolation in a Prisma app is entirely app-layer — enforced in query code, not by the database — so it is assessed by the app-layer M1 detectors (pg-idor, bola-owner, pg-response-exposure, service-role-literal) and the LLM semantic pass, not by the RLS detectors. This row records that the DB-level RLS tier is N/A by architecture rather than leaving its absence unstated.",
+    fix: "None required. Confirm every query is tenant-scoped in application code (the app-layer M1 detectors cover this).",
+    value: 1,
+    ease: 5,
+    safety: 5,
+    mechanical: true,
+  };
+}
+
 export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Finding[]> {
   const { dir, bundleDir, tenancyOverride, handrolledIndicators, skipNetworkChecks } = opts;
 
@@ -124,16 +153,27 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     findings.push(...checkMissingCsp(scanDir));
     findings.push(...checkHostingConfigHeaders(scanDir));
     findings.push(...checkPublicDirSensitive(scanDir));
-    findings.push(...checkMigrationRlsStatic(scanDir));
-    findings.push(...checkMigrationPolicySemantics(scanDir, tenancyOverride));
-    findings.push(...checkMigrationDefinerAuthz(scanDir));
-    findings.push(...checkMigrationDefinerAnonGrant(scanDir));
-    findings.push(...checkMigrationDynamicSqlInjection(scanDir));
-    findings.push(...checkMigrationRlsInitplanStatic(scanDir));
-    findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
-    // #671 — gate the email-confirmation advisor on whether email auth is actually used (source
-    // heuristic): an OAuth-only app gets a conditional note, not an asserted Medium.
-    findings.push(...checkOpenSignupConfig(scanDir, inferAuthMethodsFromSource(scanDir)));
+
+    // #757 (part of #756): the Supabase-specific migration/RLS/PostgREST/edge-config detectors read
+    // supabase/migrations, supabase/functions, and supabase/config.toml — a Prisma/Postgres app has
+    // none of that DB-level RLS surface (all tenant isolation is app-layer, assessed by the
+    // ORM-agnostic pg-idor/bola-owner/pg-response-exposure/service-role-literal passes below). On a
+    // Prisma app, record that tier N/A by architecture instead of running detectors that can only
+    // ever find nothing — an unstated absence of RLS reads as a clean bill of health (fail loud).
+    if (detectOrm(scanDir) === "prisma") {
+      findings.push(prismaArchitectureNote());
+    } else {
+      findings.push(...checkMigrationRlsStatic(scanDir));
+      findings.push(...checkMigrationPolicySemantics(scanDir, tenancyOverride));
+      findings.push(...checkMigrationDefinerAuthz(scanDir));
+      findings.push(...checkMigrationDefinerAnonGrant(scanDir));
+      findings.push(...checkMigrationDynamicSqlInjection(scanDir));
+      findings.push(...checkMigrationRlsInitplanStatic(scanDir));
+      findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
+      // #671 — gate the email-confirmation advisor on whether email auth is actually used (source
+      // heuristic): an OAuth-only app gets a conditional note, not an asserted Medium.
+      findings.push(...checkOpenSignupConfig(scanDir, inferAuthMethodsFromSource(scanDir)));
+    }
     findings.push(...checkWebExtensionManifest(scanDir));
 
     // Supply chain.
