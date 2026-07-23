@@ -1,0 +1,7 @@
+// Ordinary, correct use of .range() for one UI page — no loop, no offset math. Must not flag.
+export async function fetchPage(supabase: SupabaseClient, page: number, pageSize: number) {
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+  const { data } = await supabase.from("posts").select("*").range(from, to);
+  return data;
+}

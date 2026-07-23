@@ -1,0 +1,6 @@
+{
+  "name": "retry-backoff-negative-no-dep",
+  "dependencies": {
+    "lodash": "^4.17.21"
+  }
+}

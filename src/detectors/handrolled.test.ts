@@ -71,6 +71,10 @@ const CASES: Case[] = [
   { name: "fetch timeout via Promise.race", dir: "fetch-timeout", taxonomy: "M6 — Indicator: fetch timeout via Promise.race", posCount: 1 },
   { name: "storage object URL concat", dir: "storage-url", taxonomy: "M6 — Indicator: storage object URL concat", posCount: 1 },
   { name: "clipboard via execCommand", dir: "clipboard", taxonomy: "M6 — Indicator: clipboard via execCommand", posCount: 1 },
+  // Batch 5 (#814): the two classes #395 deferred, graduated via dep-gating (retry/backoff, its
+  // own suite below) and cross-statement offset-mutation correlation (manual pagination, here —
+  // not dep-gated, since the Supabase `.from(...).range(...)` chain shape IS the gate).
+  { name: "manual pagination offset", dir: "pagination-offset", taxonomy: "M6 — Indicator: manual pagination offset", posCount: 1 },
 ];
 
 for (const c of CASES) {
@@ -207,6 +211,28 @@ describe("Vite env coercion (dep-gated on a schema-validation library, #628)", (
   it("stays silent on bare reads, a MODE string check, and the PROD boolean even with the gate open — only a coercion is the shape", () => {
     const files = loadFixtureDir("vite-env/negative-with-dep");
     expect(depGatePresent(files, ["zod"])).toBe(true);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+});
+
+describe("retry/backoff loop (dep-gated, #814)", () => {
+  const TAX = "M6 — Indicator: retry/backoff loop";
+
+  it("catches a try/catch loop with a growing setTimeout-based delay when a retry library is in the tree", () => {
+    const hits = byTaxonomy("retry-backoff/positive", TAX);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.location).toBe("retry.ts:3");
+  });
+
+  it("stays silent when no retry library is in the tree — the deliberate dep-drop shape (#395)", () => {
+    const files = loadFixtureDir("retry-backoff/negative-no-dep");
+    expect(depGatePresent(files, ["p-retry", "async-retry", "promise-retry", "retry", "cockatiel", "exponential-backoff", "ts-retry-promise"])).toBe(false);
+    expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
+  });
+
+  it("stays silent on a constant-delay retry loop even with the gate open — growth is the backoff signal", () => {
+    const files = loadFixtureDir("retry-backoff/negative-with-dep");
+    expect(depGatePresent(files, ["p-retry"])).toBe(true);
     expect(detectHandrolledFindings(files).filter((f) => f.taxonomy === TAX)).toHaveLength(0);
   });
 });

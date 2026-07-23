@@ -1,0 +1,12 @@
+export async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let delay = 100;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay *= 2;
+    }
+  }
+  throw new Error("unreachable");
+}
