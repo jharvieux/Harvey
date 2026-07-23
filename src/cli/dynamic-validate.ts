@@ -26,6 +26,9 @@ import {
   splitLayoutByProject,
 } from "../dynamic-validate.js";
 import { createLiveStandUp } from "../pentest/live-standup.js";
+import { detectOrm } from "../scan/framework-detect.js";
+import { assessPrismaStandUp, readPrismaLayout, runPrismaDynamicValidation, selectPrismaMigrateCommand } from "../prisma-dynamic.js";
+import { createPrismaLiveStandUp } from "../pentest/prisma-standup.js";
 
 const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
@@ -48,6 +51,55 @@ if (isUrl) {
     process.exit(2);
   }
   cloneAtPin(targetArg, pin, targetDir);
+}
+
+// #759 — route by ORM. A Prisma/Postgres app has no PostgREST/RLS surface, so the Supabase
+// migrations/PostgREST path does not apply: stand up plain Postgres + `prisma migrate` + drive the
+// app's HTTP routes (the only tenancy gate). Supabase (and `unknown`) take the unchanged path below.
+if (detectOrm(targetDir) === "prisma") {
+  const prismaLayout = readPrismaLayout(targetDir);
+  const prismaVerdict = assessPrismaStandUp(prismaLayout);
+  console.log(`Dynamic-validation assessment (Prisma path) — ${targetDir}`);
+  console.log(`  verdict:  ${prismaVerdict.canStandUp ? "GO" : "NO-GO"} (${prismaVerdict.coverage})`);
+  console.log(`  reason:   ${prismaVerdict.reason}`);
+  for (const l of prismaVerdict.limitations) console.log(`  limitation: ${l}`);
+  if (!prismaVerdict.canStandUp) process.exit(1);
+
+  if (!args.includes("--execute")) {
+    console.log("\nassess-only (pass --execute to stand up + probe). Live pipeline needs Docker + the target's prisma.");
+    process.exit(0);
+  }
+  const prismaOut = flag("--out");
+  if (!prismaOut) {
+    console.error("--execute requires --out <artifacts-dir> to write M2.pass.json");
+    process.exit(2);
+  }
+  const migrateCommand = selectPrismaMigrateCommand(prismaLayout);
+  console.log(`  apply: \`prisma ${migrateCommand.join(" ")}\` against a Harvey-owned plain Postgres container`);
+  const { runner, container, port, customAuth, stop } = createPrismaLiveStandUp({
+    targetDir,
+    layout: prismaLayout,
+    migrateCommand,
+    safeScope: { allowDestructive: true, allowNonLocal: false },
+  });
+  console.log(`  isolation: container ${container} on host port ${port} (teardown scoped to this container only)`);
+  console.log(`  app auth: ${customAuth.reason}`);
+  let prismaResult;
+  try {
+    prismaResult = runPrismaDynamicValidation({ targetDir, layout: prismaLayout, artifactsDir: resolve(prismaOut), now: () => new Date().toISOString(), runner });
+  } finally {
+    stop();
+  }
+  console.log(`\n${prismaResult.reason}`);
+  for (const l of prismaResult.limitations) console.log(`  limitation: ${l}`);
+  for (const n of prismaResult.notes) console.log(`  note: ${n}`);
+  console.log(`  findings: ${prismaResult.findings.length}`);
+  if (prismaResult.artifactPath) {
+    console.log(`M2 pass artifact → ${prismaResult.artifactPath} (run-audit --artifacts-dir ${resolve(prismaOut)} now derives M2 ran)`);
+    process.exit(0);
+  }
+  console.error("no M2 artifact written — the target could not be validated dynamically (see reason above)");
+  process.exit(1);
 }
 
 const layout = readRepoLayout(targetDir);

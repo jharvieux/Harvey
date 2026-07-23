@@ -337,7 +337,7 @@ export interface StandUpRunner {
   clientSuite?: (targetDir: string, suite: ClientSecuritySuite) => { ok: boolean; output: string };
 }
 
-interface DynamicValidationResult {
+export interface DynamicValidationResult {
   target: string;
   standUp: boolean;
   coverage: Coverage;
