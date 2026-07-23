@@ -556,11 +556,39 @@ function detectClientSuppliedOwnerId(sources: Map<string, ts.SourceFile>, nextId
   return { findings, subsumedNoAuthActions };
 }
 
+// The action's source text with the INTERIOR of every string/template/regex literal and every
+// comment blanked to spaces (positions preserved) (#845). AUTH_PATTERN/VALIDATION_PATTERN are text
+// heuristics, so an `auth` in `// TODO: add auth` or a `.parse(` in a log string used to defeat
+// them — a false negative — and a keyword in an unrelated string caused a false positive. Blanking
+// literal/comment content first means only real code tokens can match. (Comments are stripped after
+// literal interiors so a `//` inside a string is never mistaken for a comment start.)
+function stripLiteralsAndComments(sf: ts.SourceFile, action: ts.Node): string {
+  const start = action.getStart(sf);
+  const chars = sf.text.slice(start, action.getEnd()).split("");
+  const blank = (from: number, to: number) => {
+    for (let i = from - start; i < to - start; i++) if (chars[i] !== "\n") chars[i] = " ";
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isStringLiteralLike(node) || ts.isRegularExpressionLiteral(node)) {
+      blank(node.getStart(sf), node.getEnd());
+    } else if (ts.isTemplateExpression(node)) {
+      blank(node.head.getStart(sf), node.head.getEnd());
+      for (const span of node.templateSpans) blank(span.literal.getStart(sf), span.literal.getEnd());
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(action);
+  return chars
+    .join("")
+    .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length))
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
+}
+
 function detectServerActionAuthAndValidation(sources: Map<string, ts.SourceFile>, nextId: NextId, subsumedNoAuthActions: ReadonlySet<ts.Node>): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     for (const action of collectServerActions(sf)) {
-      const text = sf.text.slice(action.node.getStart(sf), action.node.getEnd());
+      const text = stripLiteralsAndComments(sf, action.node);
       if (!isDbMutationChain(text)) continue; // scope to mutating actions per the brief
 
       // The client-supplied-owner-id detector already fired on this no-auth action with a

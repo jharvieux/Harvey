@@ -292,6 +292,39 @@ describe("Server Action missing input validation", () => {
     expect(taxonomies(findings)).not.toContain("M9 — Server Action missing input validation");
   });
 
+  // #845: the auth/validation keywords are matched over the action's real code tokens, not the raw
+  // text — a keyword in a comment or string literal no longer defeats the check.
+  it("still flags missing auth when the only `auth`/parse keyword sits in a comment or string", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/actions.ts",
+        text: `"use server";\nexport async function updateBio(input: { bio: string }) {\n  // TODO: add auth check here\n  const label = "user must parse and authenticate";\n  await admin.from("profiles").update({ bio: input.bio });\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).toContain("M1 — Server Action missing authorization check");
+    expect(taxonomies(findings)).toContain("M9 — Server Action missing input validation");
+  });
+
+  it("does not flag missing validation when a real .parse() call is present (comment stripping doesn't blank code)", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/actions.ts",
+        text: `"use server";\nimport { getCurrentUser } from "../lib/auth";\nimport { schema } from "../lib/schema";\nexport async function updateBio(input: unknown) {\n  const user = await getCurrentUser();\n  const data = schema.parse(input);\n  await admin.from("profiles").update({ bio: data.bio }).eq("user_id", user.id);\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain("M9 — Server Action missing input validation");
+  });
+
+  it("does not scope an action as mutating when `.update(` appears only in a string literal", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/actions.ts",
+        text: `"use server";\nexport async function logNote(note: string) {\n  console.log(".update() was requested: " + note);\n}\n`,
+      },
+    ]);
+    expect(findings).toEqual([]);
+  });
+
   it("does not flag read-only 'use server' actions (no mutation call)", () => {
     const findings = detectAppRouterFindings([
       {
