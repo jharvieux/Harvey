@@ -30,7 +30,8 @@ import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
 import { detectTestIntentFindings } from "../detectors/test-intent.js";
 import { detectVitestIntentFindings } from "../detectors/vitest-intent.js";
-import { detectTargetFramework, viteWorkspaces } from "../scan/framework-detect.js";
+import { detectOrm, detectTargetFramework, viteWorkspaces } from "../scan/framework-detect.js";
+import { scanPrismaSchemaPerf } from "../scan/prisma-schema-perf.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
 
 const args = process.argv.slice(2);
@@ -102,6 +103,9 @@ try {
     ...scanAssetWeight(scanDir), // scoped copy = committed files only
     ...buildDirs.flatMap((b) => (isVite ? parseViteBundleStats(b) : parseBundleStats(b))),
     ...statsPaths.flatMap((p) => parseBundleAnalyzerStats(p)),
+    // #761 (part of #756): M7's Prisma-schema equivalent of the Supabase connected-tier
+    // "unindexed foreign keys" advisor — static schema.prisma parse, no live DB needed.
+    ...(detectOrm(scanDir) === "prisma" ? scanPrismaSchemaPerf(scanDir) : []),
   ];
   if (buildDirs.length === 0) {
     console.log(
