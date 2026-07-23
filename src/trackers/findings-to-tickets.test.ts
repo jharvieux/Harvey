@@ -55,6 +55,22 @@ describe("findingToTicket mapping", () => {
     expect(t.body).toContain(t.marker);
   });
 
+  it("#825: embeds a verified suggested diff under the Fix prose on a paid run", () => {
+    const f = finding({ suggestedFix: { diff: "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new", verified: true, verification: "applies cleanly" } });
+    const t = findingToTicket(f, { paid: true });
+    expect(t.body).toContain("**Fix:** enable RLS and add a tenant policy");
+    expect(t.body).toContain("```diff");
+    expect(t.body).toContain("+new");
+    expect(t.body).toContain("_Mechanically verified: applies cleanly_");
+  });
+
+  it("#825: never embeds a diff on the free tier, nor an UNVERIFIED diff on a paid run", () => {
+    const verified = { diff: "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new", verified: true };
+    expect(findingToTicket(finding({ suggestedFix: verified }), { paid: false }).body).not.toContain("```diff");
+    const unverified = { diff: "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new", verified: false };
+    expect(findingToTicket(finding({ suggestedFix: unverified }), { paid: true }).body).not.toContain("```diff");
+  });
+
   it("adds a needs-triage label when confidence is not Confirmed", () => {
     expect(ticketLabels(finding({ confidence: "Review" }))).toContain("harvey:needs-triage");
     expect(ticketLabels(finding({ confidence: "Confirmed" }))).not.toContain("harvey:needs-triage");

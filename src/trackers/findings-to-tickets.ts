@@ -22,6 +22,7 @@
 import { createHash } from "node:crypto";
 import type { Confidence, Finding, Severity } from "../findings.js";
 import { findingIdentity } from "../audit-diff.js";
+import { renderFixSection } from "./fix-diff.js";
 import type { CreatedRef, ItemInput, Tracker } from "./types.js";
 
 export type Grouping = "flat" | "grouped";
@@ -132,12 +133,15 @@ export function ticketLabels(f: Finding): string[] {
   return labels;
 }
 
-function ticketBody(f: Finding, marker: string): string {
+function ticketBody(f: Finding, marker: string, paid: boolean): string {
   const lines: string[] = [`**Severity:** ${f.severity} · **Confidence:** ${f.confidence}`, ""];
   if (f.impact) lines.push(`**Impact:** ${f.impact}`, "");
   lines.push(`**Location:** \`${f.location}\``, "");
   if (f.evidence) lines.push("**Evidence:**", "", f.evidence, "");
   if (f.fix) lines.push("**Fix:** " + f.fix, "");
+  // #825: on a paid engagement, surface the applicable diff under the prose fix — but only if it was
+  // mechanically verified (applies cleanly + effect confirmed). An unverified proposal is never filed.
+  if (paid && f.suggestedFix?.verified && f.suggestedFix.diff.trim()) lines.push(...renderFixSection(f.suggestedFix));
   const meta: string[] = [];
   if (f.taxonomy) meta.push(`taxonomy: ${f.taxonomy}`);
   if (f.category) meta.push(`category: ${f.category}`);
@@ -155,7 +159,7 @@ export function findingToTicket(f: Finding, opts: FileOptions = {}): PlannedTick
   return {
     finding: f,
     title: `[${f.severity}] ${f.title}`,
-    body: ticketBody(f, marker),
+    body: ticketBody(f, marker, opts.paid ?? false),
     labels: ticketLabels(f),
     marker,
     group: opts.grouping === "flat" ? "" : f.category,
