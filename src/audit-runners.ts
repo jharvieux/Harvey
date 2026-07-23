@@ -193,19 +193,17 @@ const m2: ModuleRunner = {
 //
 // #314 — how M3 is invoked for real: the CLI path (hotspot-scan.ts wrapping `vitals_cli.py report
 // --json`, or replaying a capture via `--report`). vitals is an external plugin (run, don't build);
-// PREREQ to make M3 runnable under the orchestrator: `vitals_cli.py` must be on PATH (install the
-// vitals plugin — see the hotspot-scan.ts header). When it is absent the CLI exits non-zero and this
-// records requires-live-run with that reason — never a silent skip. `run-audit` does not thread
-// per-module args, so a pre-captured report is replayed by running hotspot-scan.ts `--report`
-// directly (or via the durable-artifact path, #416); until vitals is on PATH, M3's execution record
-// stays the seeded historical one (audit-execution-log.json), which is why refreshing it needs the
-// prereq, not a probe change.
+// installing it gives the FULL M3 signal. #807: when vitals is entirely unavailable the CLI no longer
+// fails — it drops to a reduced Harvey-side churn×complexity ranking (git + a complexity proxy) and
+// prints an "M3 REDUCED TIER" banner, which this probe records as `partial` with that reason (still
+// carrying the top-K hotspots for cross-module enrichment), never a silent skip. A fresh full-vitals
+// capture pass (#416) still beats the reduced tier. `requires-live-run` now fires only when the CLI
+// exits non-zero: vitals present but its report crashed, or the reduced tier's own floor (no git
+// history) failed. `run-audit` does not thread per-module args, so a pre-captured report is replayed
+// by running hotspot-scan.ts `--report` directly (or via the durable-artifact path, #416).
 //
-// #357 (untestable in CI): vitals is not on PATH in this environment, so every M3 probe here has
-// only ever recorded requires-live-run — the `ran` branch below is UNEXERCISED. Whether a vitals
-// run that analyzed nothing would still read as `ran` is inference from M5/M8/M9's shared
-// exit-code pattern (#350), not measurement. Do not upgrade that to a verified claim without a
-// real vitals run.
+// #808: the CLI asserts the installed vitals reports version 0.2.0 before running, so schema drift
+// fails loud with expected/actual rather than as a downstream array-missing parse error.
 //
 // #312/#420 capture: hotspot-scan prints the ranked table to stdout (the status evidence above) AND,
 // with --out, writes an M3 artifact. That artifact is an OBJECT ({ hotspots, findings, ... }), not a
@@ -223,6 +221,23 @@ const m3: ModuleRunner = {
       const findings = artifactFindings(artifact);
       // #515: surface the top-K hotspot ranking so the assembler can enrich every module's findings.
       const hotspots = Array.isArray(artifact?.topK) ? (artifact!.topK as string[]) : undefined;
+      // #807: the CLI dropped to its reduced Harvey-side tier (vitals not installed) — a churn×
+      // complexity ranking only, no coupling/knowledge-risk/AI-provenance. Keyed off the stdout
+      // banner so it holds even without an artifacts dir. That is a `partial`, never a clean `ran`;
+      // but a fresh full-vitals capture still beats it.
+      if (/M3 REDUCED TIER/.test(output)) {
+        const pass = findFreshPass(ctx, "M3");
+        if (pass.fresh) {
+          const ran = ranFromPass(pass.artifact, "captured vitals report");
+          return pass.artifact.hotspots?.length ? { ...ran, hotspots: pass.artifact.hotspots } : ran;
+        }
+        return {
+          status: "partial",
+          detail: command,
+          reason: "vitals plugin unavailable — reduced M3 tier: churn×complexity ranking only (no coupling/knowledge-risk/AI-provenance). Install vitals for the full signal.",
+          ...(hotspots?.length ? { hotspots } : {}),
+        };
+      }
       return {
         status: "ran",
         detail: command,
