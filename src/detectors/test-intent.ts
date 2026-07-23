@@ -48,7 +48,9 @@ function makeFinding(
     safety: number;
   },
 ): Finding {
-  return { id: nextId(), status: "Open", category: "Test quality", ...input };
+  // Every class here is a heuristic — review is the conservative precision floor, and a finding
+  // reaching a calibration scorer untiered silently mis-scores (#327, same default as perf-code).
+  return { id: nextId(), status: "Open", category: "Test quality", precisionTier: "review", ...input };
 }
 
 // --- test-block and assertion plumbing ---------------------------------------

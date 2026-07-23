@@ -14,6 +14,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { buildCoverageMatrix, CORPUS, mechanicalCorpus, moduleCensus, type MatrixRow } from "../scan/calibration.js";
+import { measureHeuristicPrecision } from "../scan/heuristic-precision.js";
 import type { Finding } from "../findings.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "../scan/dependencies.js";
 import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
@@ -140,6 +141,19 @@ console.log(`M1 negatives cleared: ${matrix.negativesCleared}/${matrix.negatives
 if (matrix.noRuleTotal) console.log(`No-mechanical-rule gaps (by design, excluded from recall): ${matrix.noRuleHeld}/${matrix.noRuleTotal} held — a rule firing on one is a GATE FAIL`);
 if (reviewMisses.length) console.log(`Review-tier recall gaps (non-fatal, tracked): ${reviewMisses.map((r) => r.id).join(", ")}`);
 
+// #823: the M7 code-tier / M8 test-intent heuristics are gated by their own labeled fixture
+// corpus (src/scan/heuristic-precision.ts — pure detectors, no binaries), so the calibration
+// report carries a measured precision number for the two noisiest heuristic modules, not just
+// M1. Per-row detail: `pnpm exec tsx src/cli/validate-precision.ts`.
+console.log("\nHeuristic precision (M7 code tier / M8 test intent — labeled fixture corpus, #823):");
+const heuristic = measureHeuristicPrecision();
+for (const m of heuristic.modules) {
+  console.log(
+    `  ${m.module.padEnd(4)} recall ${m.positivesCaught}/${m.positivesTotal} (${(m.recall * 100).toFixed(1)}%), ` +
+      `negatives cleared ${m.negativesCleared}/${m.negativesTotal}, corpus precision ${(m.precision * 100).toFixed(1)}%`,
+  );
+}
+
 // P-SECRET-GIT-HISTORY (#129): a dedicated pass, not part of the matrix above — TruffleHog's
 // git-history scan needs a clonable repo ROOT, which targets/calibration (a subdirectory of
 // this repo) isn't. Builds its own throwaway git repo at runtime; see git-history-secret-gate.ts.
@@ -147,9 +161,10 @@ console.log("\nGIT-HISTORY SECRET GATE (#129, dedicated throwaway-repo fixture):
 const gitHistoryGate = runGitHistorySecretGate();
 console.log(`  ${gitHistoryGate.detail.replace(/\n/g, "\n  ")}`);
 
-const gatePass = negFps.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0;
+const gatePass = negFps.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok;
 if (!gatePass) {
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives: ${negFps.map((r) => r.id).join(", ")}`);
+  if (!heuristic.ok) console.log(`GATE FAIL — M7/M8 heuristic precision corpus (#823): ${heuristic.rows.filter((r) => !r.pass).map((r) => r.id).join(", ")} — run pnpm exec tsx src/cli/validate-precision.ts`);
   if (highMisses.length) console.log(`GATE FAIL — high-tier positives not caught: ${highMisses.map((r) => r.id).join(", ")}`);
   if (noRuleBroken.length) console.log(`GATE FAIL — a mechanical rule now fires on a by-design no-rule gap (re-tier it): ${noRuleBroken.map((r) => r.id).join(", ")}`);
   if (!gitHistoryGate.pass) console.log("GATE FAIL — git-history secret gate (#129) did not pass, see detail above");
