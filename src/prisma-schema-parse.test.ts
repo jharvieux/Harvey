@@ -102,6 +102,57 @@ describe("parsePrismaSchema (#758) — schema.prisma model/field extraction, CLI
     expect(parsePrismaSchema(schema)).toEqual([]);
   });
 
+  it("captures an enum-typed field as a column by name, but still skips a model-typed relation (#854)", () => {
+    const schema = `
+      enum Gender { MALE FEMALE OTHER }
+      enum Role { ADMIN MEMBER }
+      model User {
+        id     String @id
+        gender Gender
+        roles  Role[]
+        posts  Post[]
+      }
+      model Post {
+        id     String @id
+        userId String
+      }
+    `;
+    const columns = parsePrismaSchema(schema);
+    // enum fields (incl. an enum array) are stored columns → classified by name
+    expect(columns).toContainEqual({ table_name: "User", column_name: "gender", data_type: "gender" });
+    expect(columns).toContainEqual({ table_name: "User", column_name: "roles", data_type: "role" });
+    // a model-typed relation has no column of its own
+    expect(columns.some((c) => c.column_name === "posts")).toBe(false);
+  });
+
+  it("parses composite `type` blocks like models so their embedded fields become columns (#854)", () => {
+    const schema = `
+      type Address {
+        street String
+        city   String
+      }
+      model User {
+        id       String  @id
+        homeAddr Address
+      }
+    `;
+    const columns = parsePrismaSchema(schema);
+    expect(columns).toContainEqual({ table_name: "Address", column_name: "street", data_type: "text" });
+    expect(columns).toContainEqual({ table_name: "Address", column_name: "city", data_type: "text" });
+    // the embedded-object field itself is not a stored scalar column
+    expect(columns.some((c) => c.column_name === "homeAddr")).toBe(false);
+  });
+
+  it("skips a field whose capitalized type is declared nowhere — under-extract, don't guess", () => {
+    const schema = `
+      model User {
+        id    String @id
+        thing Mystery
+      }
+    `;
+    expect(parsePrismaSchema(schema).some((c) => c.column_name === "thing")).toBe(false);
+  });
+
   it("parses multiple models independently, each with its own table name", () => {
     const schema = `
       model Account {
