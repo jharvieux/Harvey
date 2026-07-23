@@ -9,12 +9,13 @@
 // with a single placeholder spec emits M8-00; a harness with one MEANINGFUL spec does not.
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Finding } from "../findings.js";
+import { TS7_TSCONFIG_BYPASS_FILENAME } from "../mutation-scan.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "mutation-scan.ts");
@@ -410,5 +411,81 @@ describe("mutation-scan monorepo root-scoped run attempt (#655, child process)",
     const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
     expect(parsed.finding.id).toBe("M8-04");
     expect(parsed.moduleRecord.note).not.toMatch(/Attempted a root-scoped run/);
+  });
+});
+
+// #773: TypeScript 7's native/Go rewrite broke Stryker's own sandbox tsconfig preprocessor (it
+// calls the classic compiler API, which TS7's restructured package no longer exports) — every
+// Stryker run against a TS7 target crashed with no report written. These fixtures fake the
+// `stryker` binary so the exact incompatibility can be reproduced and the fix's two mechanisms
+// (proactive config patch, reactive crash-signature safety net) exercised end-to-end without a
+// real Stryker/TypeScript-7 install.
+describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)", () => {
+  const REAL_SPEC_TS7 = `import { it, expect } from "vitest";\nimport { add } from "./add";\nit("adds", () => { expect(add(1, 2)).toBe(3); });\n`;
+
+  function writeFakeTypeScript7(repo: string): void {
+    mkdirSync(join(repo, "node_modules", "typescript"), { recursive: true });
+    writeFileSync(join(repo, "node_modules", "typescript", "package.json"), JSON.stringify({ name: "typescript", version: "7.0.2" }));
+  }
+
+  // "succeed-if-bypassed" only writes a report when the config it's handed carries the bypass
+  // (proving the CLI actually applied it, not just that Stryker happened to succeed); "always-
+  // crash-ts7" reproduces the upstream crash unconditionally, for the reactive-safety-net test.
+  function writeFakeStrykerBinary(repo: string, behavior: "succeed-if-bypassed" | "always-crash-ts7"): void {
+    const binDir = join(repo, "node_modules", ".bin");
+    mkdirSync(binDir, { recursive: true });
+    const binPath = join(binDir, "stryker");
+    const crash = `process.stderr.write("TypeError: ts.parseConfigFileTextToJson is not a function\\n    at TSConfigPreprocessor.rewriteTSConfigFile\\n"); process.exit(1);`;
+    const script =
+      behavior === "always-crash-ts7"
+        ? `#!/usr/bin/env node\n${crash}\n`
+        : `#!/usr/bin/env node\nconst fs = require("node:fs");\nconst path = require("node:path");\nconst cfg = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));\nif (cfg.tsconfigFile === ${JSON.stringify(TS7_TSCONFIG_BYPASS_FILENAME)}) {\n  const outDir = path.join(process.cwd(), "reports", "mutation");\n  fs.mkdirSync(outDir, { recursive: true });\n  fs.writeFileSync(path.join(outDir, "mutation.json"), JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }));\n  process.exit(0);\n} else {\n  ${crash}\n}\n`;
+    writeFileSync(binPath, script);
+    chmodSync(binPath, 0o755);
+  }
+
+  it("proactively patches the Stryker config for a detected TS7 target — the run completes instead of crashing", () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC_TS7, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFakeTypeScript7(repo);
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
+    writeFakeStrykerBinary(repo, "succeed-if-bypassed");
+
+    const { status, out } = runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } }; moduleRecord?: unknown };
+    // The fake binary only writes a report when it was HANDED the bypassed config — so a real
+    // summary here proves the patch was applied, not merely that nothing crashed.
+    expect(parsed.summary?.overall.totalMutants).toBe(1);
+    expect(parsed.moduleRecord).toBeUndefined(); // a normal full run, not a degraded verdict
+  });
+
+  it("a TS7 target with a non-JSON Stryker config degrades immediately, naming the incompatibility, without ever invoking Stryker", () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC_TS7 });
+    writeFakeTypeScript7(repo);
+    writeFileSync(join(repo, "stryker.config.mjs"), `export default { testRunner: "vitest" };\n`);
+    // No stryker binary anywhere: if the CLI ever attempted an invocation this would ENOENT-crash
+    // instead of degrading, proving the degrade fires BEFORE any invocation attempt.
+    const { status, out } = runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { moduleRecord?: { status: string; note: string } };
+    expect(parsed.moduleRecord?.status).toBe("partial");
+    expect(parsed.moduleRecord?.note).toMatch(/TypeScript is v7\.0\.2/);
+    expect(parsed.moduleRecord?.note).toMatch(/#773/);
+    expect(parsed.moduleRecord?.note).toMatch(/not JSON/);
+  });
+
+  it("reactive safety net: an undetected TS7 install still degrades precisely when Stryker crashes with the known signature — never a bare hard failure", () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC_TS7 });
+    // Deliberately NO node_modules/typescript here, simulating the proactive check missing an
+    // unusually-hoisted install — Stryker itself still hits the incompatibility and crashes.
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
+    writeFakeStrykerBinary(repo, "always-crash-ts7");
+
+    const { status, out } = runCli(repo, []);
+    expect(status).toBe(0); // not the pre-#773 hard exit-1 "mutation report not found" crash
+    const parsed = JSON.parse(out) as { moduleRecord?: { status: string; note: string } };
+    expect(parsed.moduleRecord?.status).toBe("partial");
+    expect(parsed.moduleRecord?.note).toMatch(/#773/);
+    expect(parsed.moduleRecord?.note).toMatch(/parseConfigFileTextToJson is not a function/);
   });
 });
