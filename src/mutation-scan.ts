@@ -706,6 +706,48 @@ export function scaffoldStrykerConfig(runner: ScaffoldRunner, presentDirs: reado
   };
 }
 
+// #773: TypeScript 7 (the native/Go-rewritten compiler) restructured the "typescript" package's
+// exports — its default entry (`import("typescript")`) now resolves to a version-only module
+// (typescript@7's package.json maps "." to "./lib/version.cjs"), not the classic compiler API
+// namespace. Stryker's OWN sandbox step (@stryker-mutator/core/dist/src/sandbox/ts-config-
+// preprocessor.js) dynamically imports "typescript" and unconditionally calls
+// `ts.parseConfigFileTextToJson(...)` on the target's tsconfig.json whenever Stryker isn't running
+// `inPlace` (Harvey never sets `inPlace` — it would mutate the live checkout, defeating #600's
+// disposable-copy crash-safety guarantee) — regardless of whether that tsconfig's `extends`/
+// `references` even need rewriting for the sandbox copy. `parseConfigFileTextToJson` is undefined
+// on TS7's restructured package, so the call throws before Stryker runs a single mutant.
+//
+// The preprocessor no-ops (skips the call entirely) when Stryker's `tsconfigFile` option resolves
+// to a path it never tracked as a project file — pointing it at a name that provably doesn't exist
+// avoids the crash. The only real cost is an out-of-sandbox tsconfig `extends`/`references` chain
+// not getting rewritten (rare, and irrelevant here: Harvey never enables the optional
+// `@stryker-mutator/typescript-checker` plugin, `tsconfigFile`'s only other consumer).
+export const TS7_TSCONFIG_BYPASS_FILENAME = ".__harvey-ts7-tsconfig-preprocessor-bypass__.json";
+
+export function isIncompatibleTypeScript7(installedVersion: string | undefined): boolean {
+  if (!installedVersion) return false;
+  const major = Number.parseInt(installedVersion, 10);
+  return Number.isFinite(major) && major >= 7;
+}
+
+// Never mutates `config` — callers always write the result to a fresh path (the scaffolded config
+// dir, or a derived copy of a target-owned config), matching the #655 derived-config pattern:
+// a target's own committed Stryker config is never rewritten in place.
+export function withTs7TsconfigBypass(config: Record<string, unknown>): Record<string, unknown> {
+  return { ...config, tsconfigFile: TS7_TSCONFIG_BYPASS_FILENAME };
+}
+
+// Reactive safety net for when the proactive bypass above wasn't applied (a non-JSON target
+// config Harvey can't safely rewrite) or missed the incompatibility (TypeScript resolved from
+// somewhere this tool didn't check, e.g. a differently-hoisted monorepo layout) — Stryker's crash
+// still carries this exact signature, so the CLI can degrade to a precise, named partial verdict
+// instead of falling through to the opaque "mutation report not found" this used to produce.
+const TS7_TSCONFIG_CRASH = /(?:ts\.)?parseConfigFileTextToJson is not a function/;
+
+export function detectTs7TsconfigCrash(output: string): boolean {
+  return TS7_TSCONFIG_CRASH.test(output);
+}
+
 // The explicit degradation ladder (#513): when the full-mutation rung cannot run, the ledger says
 // which rung this was, why it stopped, and what the next rung is — never a silent drop.
 export function mutationNotRunModuleRecord(reason: string): { status: "partial"; note: string } {
