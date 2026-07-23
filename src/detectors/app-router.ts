@@ -1116,6 +1116,133 @@ function detectSpaRootErrorBoundary(files: SourceInput[], nextId: NextId, scope:
   return [];
 }
 
+// --- Unbounded / self-calling route or edge fn [MED] (#843) -----------------
+//
+// The M9 brief's "UNBOUNDED / SELF-CALLING ROUTE OR EDGE FN" surface (docs/scan-extras.txt): an
+// API route / edge function whose handler either loops forever or fetches its own URL → runaway
+// compute, cost, and timeouts. Two precise AST shapes, both scoped to server request handlers
+// (route.ts(x), pages/api, middleware.ts, or any file declaring `runtime = "edge"`):
+//   1. UNBOUNDED LOOP: `while (true)` / `while (1)` / `for (;;)` / `do … while (true)` whose body
+//      contains NO break/return/throw anywhere — a loop that provably never terminates. A break in
+//      a NESTED loop wouldn't terminate the outer one, so counting any break/return/throw as
+//      "bounded" only ever errs toward SILENCE (a false negative), never a false positive.
+//   2. SELF-REFERENTIAL FETCH: `fetch(…)` whose argument subtree reads the incoming request's own
+//      URL (`request.url` / `req.url` / `.nextUrl`) — the handler calling back into itself.
+// Uncapped retry/fan-out (the third brief item) needs loop-bound + call-count reasoning past a
+// precise mechanical rule and stays semantic/paid-tier — the two shapes above cover the
+// mechanically-decidable core so the surface is no longer a silent gap.
+const ROUTE_HANDLER_FILE = /(^|\/)(route\.tsx?|middleware\.ts)$|(^|\/)pages\/api\//;
+
+function declaresEdgeRuntime(sf: ts.SourceFile): boolean {
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt) || !stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    for (const decl of stmt.declarationList.declarations) {
+      if (ts.isIdentifier(decl.name) && decl.name.text === "runtime" && decl.initializer && ts.isStringLiteral(decl.initializer) && decl.initializer.text === "edge") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isRouteOrEdgeHandler(path: string, sf: ts.SourceFile): boolean {
+  return ROUTE_HANDLER_FILE.test(path) || declaresEdgeRuntime(sf);
+}
+
+function isTruthyLiteral(expr: ts.Expression): boolean {
+  return expr.kind === ts.SyntaxKind.TrueKeyword || (ts.isNumericLiteral(expr) && expr.text !== "0");
+}
+
+// An always-true loop header: `while (true)` / `while (1)` / `do … while (true)` / `for (;;)`
+// (or `for (…; ; …)` — an omitted condition). The header is the whole story; the body decides
+// whether it is actually unbounded (bodyHasEscape below).
+function isAlwaysTrueLoop(node: ts.Node): node is ts.WhileStatement | ts.DoStatement | ts.ForStatement {
+  if ((ts.isWhileStatement(node) || ts.isDoStatement(node)) && isTruthyLiteral(node.expression)) return true;
+  return ts.isForStatement(node) && node.condition === undefined;
+}
+
+// Any break/return/throw anywhere in the subtree. A conservative over-count: a break belonging to
+// a nested loop doesn't terminate this one, so treating it as an escape only suppresses findings.
+function bodyHasEscape(body: ts.Node): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isBreakStatement(node) || ts.isReturnStatement(node) || ts.isThrowStatement(node)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return found;
+}
+
+// A fetch(…) whose argument subtree reads the request's own URL — `request.url`, `req.url`, or
+// anything off `.nextUrl`. That is the handler calling back into its own route.
+function isSelfReferentialFetch(node: ts.CallExpression): boolean {
+  if (!ts.isIdentifier(node.expression) || node.expression.text !== "fetch") return false;
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isPropertyAccessExpression(n)) {
+      if (n.name.text === "nextUrl") found = true;
+      else if (n.name.text === "url" && ts.isIdentifier(n.expression) && /^req(uest)?$/.test(n.expression.text)) found = true;
+    }
+    if (!found) ts.forEachChild(n, visit);
+  };
+  for (const arg of node.arguments) visit(arg);
+  return found;
+}
+
+function detectUnboundedRouteOrEdge(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    if (!isRouteOrEdgeHandler(path, sf)) continue;
+
+    const visit = (node: ts.Node) => {
+      if (isAlwaysTrueLoop(node) && !bodyHasEscape(node.statement)) {
+        findings.push(
+          makeFinding(nextId, {
+            title: `Unbounded loop in a route/edge handler`,
+            severity: "Medium",
+            confidence: "Likely",
+            category: "Performance",
+            taxonomy: "M9 — Unbounded/self-calling route or edge fn",
+            location: loc(path, sf, node),
+            evidence: `\`${node.getText(sf).slice(0, 60).replace(/\s+/g, " ")}…\` never terminates — its body has no \`break\`, \`return\`, or \`throw\`. Route/edge handlers run per request under a wall-clock limit.`,
+            impact: "The handler spins until the platform kills it (timeout/OOM), burning compute on every request and never returning a response — a self-inflicted denial of service and a runaway bill.",
+            fix: "Add a terminating condition (a counter/pagination bound, a `break`, or a timeout) so the loop provably ends.",
+            value: 4,
+            ease: 3,
+            safety: 4,
+          }),
+        );
+      }
+      if (ts.isCallExpression(node) && isSelfReferentialFetch(node)) {
+        findings.push(
+          makeFinding(nextId, {
+            title: `Route/edge handler fetches its own request URL`,
+            severity: "Medium",
+            confidence: "Likely",
+            category: "Performance",
+            taxonomy: "M9 — Unbounded/self-calling route or edge fn",
+            location: loc(path, sf, node),
+            evidence: `\`${node.getText(sf).slice(0, 80).replace(/\s+/g, " ")}\` fetches the incoming request's own URL from inside the handler — the route calls back into itself.`,
+            impact: "Each invocation triggers another invocation: an unbounded recursive fan-out that multiplies compute and cost with every hop until the platform's concurrency or timeout limit trips.",
+            fix: "Call the underlying function/data source directly instead of re-fetching this route's own URL; if a redirect/proxy is intended, target a different endpoint.",
+            value: 4,
+            ease: 3,
+            safety: 4,
+          }),
+        );
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return findings;
+}
+
 function runAppRouterPass(files: SourceInput[], nextId: NextId): Finding[] {
   const sources = new Map(files.map((f) => [f.path, parse(f.path, f.text)]));
   const pagesRouterOnly = isPagesRouterOnly(files);
@@ -1132,6 +1259,7 @@ function runAppRouterPass(files: SourceInput[], nextId: NextId): Finding[] {
     ...detectDataFetchingWaterfalls(sources, nextId),
     ...detectAccidentalDynamicRendering(sources, nextId),
     ...detectSsrBrowserApiMisuse(sources, nextId),
+    ...detectUnboundedRouteOrEdge(sources, nextId),
   ];
 }
 

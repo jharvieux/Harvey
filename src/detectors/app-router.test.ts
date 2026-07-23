@@ -423,6 +423,67 @@ describe("SSR-only browser API misuse (#381)", () => {
   });
 });
 
+const UNBOUNDED = "M9 — Unbounded/self-calling route or edge fn";
+
+// #843. The M9 brief's "unbounded / self-calling route or edge fn" surface: a route/edge handler
+// that loops forever or fetches its own URL. Scoped to route.ts/pages-api/middleware/edge-runtime
+// files; the FP boundary is a `while(true)` with a break (bounded) and a fetch to a DIFFERENT URL.
+describe("unbounded / self-calling route or edge fn (#843)", () => {
+  it("flags a `while(true)` loop with no break/return/throw in a route handler", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/api/sync/route.ts", text: `export async function GET() {\n  let n = 0;\n  while (true) {\n    n += 1;\n  }\n}\n` },
+    ]);
+    const hits = findings.filter((f) => f.taxonomy === UNBOUNDED);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ severity: "Medium", category: "Performance" });
+    expect(hits[0]?.title).toContain("Unbounded loop");
+  });
+
+  it("flags a `for(;;)` loop with no escape in an edge-runtime file", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/worker/handler.ts", text: `export const runtime = "edge";\nexport function handler() {\n  for (;;) {\n    doWork();\n  }\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(UNBOUNDED);
+  });
+
+  it("does not flag a `while(true)` loop that breaks (bounded by construction)", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/api/sync/route.ts", text: `export async function GET() {\n  while (true) {\n    const done = await step();\n    if (done) break;\n  }\n  return Response.json({ ok: true });\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(UNBOUNDED);
+  });
+
+  it("flags a route handler that fetches its own request URL", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/api/proxy/route.ts", text: `export async function GET(request: Request) {\n  return fetch(request.url);\n}\n` },
+    ]);
+    const hits = findings.filter((f) => f.taxonomy === UNBOUNDED);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("fetches its own request URL");
+  });
+
+  it("flags a self-fetch through `req.nextUrl`", () => {
+    const findings = detectAppRouterFindings([
+      { path: "middleware.ts", text: `export function middleware(req) {\n  return fetch(new URL("/api/x", req.nextUrl.origin));\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(UNBOUNDED);
+  });
+
+  it("does not flag a fetch to a different, unrelated URL", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/api/proxy/route.ts", text: `export async function GET() {\n  return fetch("https://upstream.example.com/data");\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(UNBOUNDED);
+  });
+
+  it("does not flag an unbounded loop outside a route/edge handler (ordinary module code)", () => {
+    const findings = detectAppRouterFindings([
+      { path: "lib/util.ts", text: `export function loop() {\n  while (true) {\n    tick();\n  }\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(UNBOUNDED);
+  });
+});
+
 describe("id assignment", () => {
   it("assigns sequential, unique M9-NN ids across all checks in a single run", () => {
     const findings = detectAppRouterFindings([
