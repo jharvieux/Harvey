@@ -12,7 +12,7 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
-import type { TargetFramework } from "../scan/framework-detect.js";
+import type { TargetFramework, TargetOrm } from "../scan/framework-detect.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 import {
   AUTH_PATTERN,
@@ -1243,20 +1243,76 @@ function detectUnboundedRouteOrEdge(sources: Map<string, ts.SourceFile>, nextId:
   return findings;
 }
 
-function runAppRouterPass(files: SourceInput[], nextId: NextId): Finding[] {
+// --- Non-Supabase data-layer coverage (#844) --------------------------------
+//
+// The three data-layer checks — server→client leak, unsafe/missing cache config, data-fetching
+// waterfall — key on Supabase call shapes (`.from().select()`, `.insert/.update/.upsert/.delete/
+// .rpc`). On a Prisma/Drizzle/raw-SQL target those shapes never appear, so the checks find nothing
+// AND say nothing — a silent third of M9 gone on the Prisma support Harvey now advertises (#756).
+// When the data layer is a recognized non-Supabase ORM we skip those three checks and emit one
+// explicit "not assessed — ORM/data-layer unsupported" row each, so the absence reads as a
+// disclosed limitation, not a clean bill of health (the coverage-guard principle in CLAUDE.md).
+//
+// `orm` (from detectOrm) resolves Prisma vs Supabase; Drizzle/Kysely aren't modelled there (they
+// report `unknown`), so we additionally sniff their package.json dependency to name the layer.
+// A genuinely unknown/no-DB target draws nothing — the note fires only on a POSITIVELY identified
+// non-Supabase data access, never on a plain app that simply has no queries.
+const DATA_LAYER_CHECKS: { taxonomy: string; check: string }[] = [
+  { taxonomy: "M9 — Server→client data leak", check: "server→client data leak (full DB row passed to a Client Component)" },
+  { taxonomy: "M9 — Unsafe/missing cache config", check: "unsafe/missing cache config on data-fetching routes" },
+  { taxonomy: "M9 — Data-fetching waterfall", check: "data-fetching waterfall (independent sequential queries)" },
+];
+
+function nonSupabaseDataLayer(orm: TargetOrm | undefined, files: SourceInput[]): string | undefined {
+  if (orm === "supabase") return undefined;
+  if (orm === "prisma") return "Prisma";
+  const pkg = files.find((f) => /(^|\/)package\.json$/.test(f.path))?.text;
+  if (pkg) {
+    if (/"drizzle-orm"\s*:/.test(pkg)) return "Drizzle";
+    if (/"kysely"\s*:/.test(pkg)) return "Kysely";
+    if (/"@prisma\/client"\s*:|"prisma"\s*:/.test(pkg)) return "Prisma";
+  }
+  return undefined;
+}
+
+function dataLayerNotAssessed(nextId: NextId, layer: string): Finding[] {
+  return DATA_LAYER_CHECKS.map(({ taxonomy, check }) => ({
+    id: nextId(),
+    title: `M9 not assessed — ${check} (data layer: ${layer})`,
+    severity: "Info" as const,
+    confidence: "N/A" as const,
+    category: "Performance" as const,
+    taxonomy: `${taxonomy} — not assessed`,
+    location: "(whole target)",
+    status: "Open" as const,
+    evidence: `This check recognizes Supabase call shapes (\`.from().select()\`, \`.insert/.update/.upsert/.delete/.rpc\`), but the target's data layer is \`${layer}\`. It was NOT assessed rather than reported clean — a Prisma/Drizzle/raw-SQL query is invisible to the current Supabase-shaped matcher.`,
+    impact: "This M9 data-layer surface is unassessed on this target. Recorded explicitly so its absence reads as 'not assessed here', not 'assessed and clean' — the fail-loud coverage guard.",
+    fix: `None — informational. Manual review still applies; native ${layer} support for this check is tracked follow-up.`,
+    value: 1,
+    ease: 5,
+    safety: 5,
+    precisionTier: "high" as const,
+  }));
+}
+
+function runAppRouterPass(files: SourceInput[], nextId: NextId, orm?: TargetOrm): Finding[] {
   const sources = new Map(files.map((f) => [f.path, parse(f.path, f.text)]));
   const pagesRouterOnly = isPagesRouterOnly(files);
   const aliases = collectPathAliases(files);
+  const otherDataLayer = nonSupabaseDataLayer(orm, files);
 
   // Owner-id runs first: its subsumed-action set feeds the missing-auth dedupe (#465).
   const ownerId = detectClientSuppliedOwnerId(sources, nextId);
+  // The three Supabase-shaped data-layer checks run only on a Supabase/unknown data layer; on a
+  // recognized non-Supabase ORM they are replaced by explicit not-assessed rows (#844).
+  const dataLayer = otherDataLayer
+    ? dataLayerNotAssessed(nextId, otherDataLayer)
+    : [...detectServerClientLeak(sources, nextId, aliases), ...detectUnsafeCacheConfig(sources, nextId), ...detectDataFetchingWaterfalls(sources, nextId)];
   return [
-    ...detectServerClientLeak(sources, nextId, aliases),
+    ...dataLayer,
     ...detectMissingServerOnly(sources, nextId, pagesRouterOnly, aliases),
     ...detectServerActionAuthAndValidation(sources, nextId, ownerId.subsumedNoAuthActions),
     ...ownerId.findings,
-    ...detectUnsafeCacheConfig(sources, nextId),
-    ...detectDataFetchingWaterfalls(sources, nextId),
     ...detectAccidentalDynamicRendering(sources, nextId),
     ...detectSsrBrowserApiMisuse(sources, nextId),
     ...detectUnboundedRouteOrEdge(sources, nextId),
@@ -1284,11 +1340,17 @@ function runAppRouterPass(files: SourceInput[], nextId: NextId): Finding[] {
  * plus the #627 root-error-boundary check on that workspace's files), and the full pass runs over
  * the remaining files — a genuine Next workspace in the same monorepo is unaffected. Empty
  * (single-app targets, tests) → behaves exactly as before.
+ *
+ * `orm` (from src/scan/framework-detect.ts `detectOrm`) gates the three Supabase-shaped data-layer
+ * checks (server→client leak, cache config, waterfall): on a recognized non-Supabase data layer
+ * (Prisma/Drizzle/Kysely) they are replaced by explicit not-assessed rows rather than silently
+ * finding nothing (#844). Omitted/`unknown`/`supabase` → run those checks as before.
  */
 export function detectAppRouterFindings(
   files: SourceInput[],
   framework?: TargetFramework,
   viteWorkspaceDirs: string[] = [],
+  orm?: TargetOrm,
 ): Finding[] {
   let n = 0;
   const nextId: NextId = () => `M9-${String(++n).padStart(2, "0")}`;
@@ -1305,5 +1367,5 @@ export function detectAppRouterFindings(
   );
   const scoped = notes.length ? files.filter((f) => !underVite(f.path)) : files;
 
-  return [...notes, ...spaBoundary, ...runAppRouterPass(scoped, nextId)];
+  return [...notes, ...spaBoundary, ...runAppRouterPass(scoped, nextId, orm)];
 }

@@ -484,6 +484,55 @@ describe("unbounded / self-calling route or edge fn (#843)", () => {
   });
 });
 
+// #844. The three Supabase-shaped data-layer checks silently no-op on Prisma/Drizzle targets. On a
+// recognized non-Supabase data layer they must emit an explicit not-assessed row per check.
+describe("non-Supabase data-layer coverage (#844)", () => {
+  const DATA_LAYER_TAX = [
+    "M9 — Server→client data leak — not assessed",
+    "M9 — Unsafe/missing cache config — not assessed",
+    "M9 — Data-fetching waterfall — not assessed",
+  ];
+
+  it("emits a not-assessed row for each data-layer check on a Prisma target", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("server-client-leak/positive"), "next", [], "prisma");
+    for (const tax of DATA_LAYER_TAX) {
+      const hits = findings.filter((f) => f.taxonomy === tax);
+      expect(hits, tax).toHaveLength(1);
+      expect(hits[0]).toMatchObject({ severity: "Info", confidence: "N/A", precisionTier: "high" });
+      expect(hits[0]?.evidence).toContain("Prisma");
+    }
+    // The Supabase-shaped leak finding is suppressed — it would be a false clean, not a real result.
+    expect(taxonomies(findings)).not.toContain("M9 — Server→client data leak");
+  });
+
+  it("names Drizzle from package.json when detectOrm reports unknown", () => {
+    const findings = detectAppRouterFindings(
+      [
+        { path: "package.json", text: `{"dependencies":{"drizzle-orm":"^0.30.0","next":"14.0.0"}}` },
+        { path: "app/dashboard/page.tsx", text: `export default function Page() { return <div/>; }` },
+      ],
+      "next",
+      [],
+      "unknown",
+    );
+    const hits = findings.filter((f) => f.taxonomy === "M9 — Server→client data leak — not assessed");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence).toContain("Drizzle");
+  });
+
+  it("runs the real Supabase-shaped checks (no not-assessed rows) on a Supabase target", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("server-client-leak/positive"), "next", [], "supabase");
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
+    for (const tax of DATA_LAYER_TAX) expect(taxonomies(findings)).not.toContain(tax);
+  });
+
+  it("does not emit not-assessed rows on an unknown/no-DB target (avoids noise)", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("server-client-leak/positive"), "next", [], "unknown");
+    for (const tax of DATA_LAYER_TAX) expect(taxonomies(findings)).not.toContain(tax);
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
+  });
+});
+
 describe("id assignment", () => {
   it("assigns sequential, unique M9-NN ids across all checks in a single run", () => {
     const findings = detectAppRouterFindings([
