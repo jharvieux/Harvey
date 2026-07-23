@@ -113,6 +113,9 @@ h2 { font-size: clamp(26px, 3.4vw, 36px); font-weight: 700; letter-spacing: -.02
 
 .cols { display: grid; grid-template-columns: 1fr; gap: 20px; }
 @media (min-width: 780px) { .cols { grid-template-columns: repeat(3, 1fr); } }
+.cols-4 { display: grid; grid-template-columns: 1fr; gap: 20px; }
+@media (min-width: 640px) { .cols-4 { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 1100px) { .cols-4 { grid-template-columns: repeat(4, 1fr); } }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 26px; }
 .card h3 { font-size: 18px; font-weight: 680; letter-spacing: -.01em; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
 .card p { margin: 0; color: var(--muted); font-size: 15.5px; line-height: 1.55; }
