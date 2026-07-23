@@ -5,10 +5,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { validateFindings } from "../src/findings.js";
-import { buildDataMap, classifyColumn, classifyMigrationSql, classifyWithFallback, dataMapToFindings } from "./pii-classify.mjs";
+import { buildDataMap, classifyColumn, classifyMigrationSql, classifyPrismaSchema, classifyWithFallback, dataMapToFindings } from "./pii-classify.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(REPO_ROOT, "tools", "pii-classify.mjs");
+const PRISMA_FIXTURE_SCHEMA = join(REPO_ROOT, "src", "scan", "__fixtures__", "prisma-app", "prisma", "schema.prisma");
 
 describe("classifyColumn — true positives across the taxonomy", () => {
   it("matches HIPAA/GDPR contact & identity PII at high confidence", () => {
@@ -387,6 +388,61 @@ describe("classifyMigrationSql — static-schema entry point (#250)", () => {
     const { dataMap } = classifyMigrationSql(sql);
     expect(dataMap.organisations.secret).toBe(true);
     expect(dataMap.contacts.categories).toEqual(["PII"]);
+  });
+});
+
+// #758: a Prisma app declares its schema in schema.prisma, not migration SQL — before this,
+// classifyMigrationSql (the --schema entry point) had nothing to parse a Prisma DSL file with, so
+// a Prisma-only target's M10 tier classified nothing. classifyPrismaSchema is the CLI-independent
+// entry point (bypasses any Prisma-CLI attempt) — the one CI can exercise with no target Prisma
+// install anywhere, proving the fallback schema.prisma parser path directly.
+describe("classifyPrismaSchema — schema.prisma classification, fallback-parser path (#758)", () => {
+  it("classifies PII/PCI columns declared in schema.prisma model fields", () => {
+    const schema = `
+      model Customer {
+        id      String  @id
+        email   String  @unique
+        phone   String?
+        address String?
+        cardNumber String? @map("card_number")
+      }
+    `;
+    const { columns, dataMap } = classifyPrismaSchema(schema);
+    expect(columns.map((c) => c.column_name).sort()).toEqual(["address", "card_number", "email", "id", "phone"]);
+    expect(dataMap.Customer.infotypes.sort()).toEqual(["ADDRESS", "CARD", "EMAIL", "PHONE"]);
+    expect(dataMap.Customer.categories.sort()).toEqual(["PCI", "PII"]);
+  });
+
+  it("classifies the real Prisma fixture's schema.prisma (not empty) — the #758 acceptance case", () => {
+    // src/scan/__fixtures__/prisma-app/prisma/schema.prisma's Customer model: email/phone/address/
+    // payment_method — the same PII/PCI columns a supabase/migrations-based app would classify.
+    const schema = readFileSync(PRISMA_FIXTURE_SCHEMA, "utf8");
+    const { columns, dataMap } = classifyPrismaSchema(schema);
+    expect(columns.length).toBeGreaterThan(0);
+    expect(dataMap.Customer).toBeDefined();
+    expect(dataMap.Customer.infotypes.sort()).toEqual(["ADDRESS", "EMAIL", "PAYMENT_REF", "PHONE"]);
+    expect(dataMap.Customer.categories.sort()).toEqual(["PCI", "PII"]);
+  });
+
+  it("returns no columns for schema text with no model blocks — surfaced as a usage error, not a silent empty scan", () => {
+    const { columns, dataMap } = classifyPrismaSchema('datasource db {\n  provider = "postgresql"\n}\n');
+    expect(columns).toHaveLength(0);
+    expect(dataMap).toEqual({});
+  });
+});
+
+describe("pii-classify --schema CLI — a schema.prisma target (#758)", () => {
+  it("classifies the Prisma fixture end-to-end through the real CLI (no target prisma install — proves the fallback path is actually wired, not just unit-tested)", () => {
+    const outPath = join(dirname(PRISMA_FIXTURE_SCHEMA), "out.json");
+    try {
+      execFileSync("node_modules/.bin/tsx", [CLI, "--schema", PRISMA_FIXTURE_SCHEMA, "--out", outPath], { cwd: REPO_ROOT, encoding: "utf8" });
+      const findings = JSON.parse(readFileSync(outPath, "utf8"));
+      const customer = findings.find((f: { location: string }) => f.location === "Customer");
+      expect(customer).toBeDefined();
+      expect(customer.evidence).toMatch(/email/);
+    } finally {
+      rmSync(outPath, { force: true });
+    }
   });
 });
 
