@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import SiteHeader from "./components/SiteHeader";
+import SiteFooter from "./components/SiteFooter";
 
 type Status = "crit" | "rev" | "pass";
 
@@ -41,7 +43,6 @@ function Check() {
 const capStyle = { color: "var(--faint)", fontSize: "14px", margin: "16px 0 0", fontFamily: "var(--mono)" } as const;
 
 export default function Home() {
-  const [theme, setTheme] = useState<"light" | "dark" | null>(null);
   const [mounted, setMounted] = useState(false);
 
   const [form, setForm] = useState({ email: "", repo: "", context: "" });
@@ -72,37 +73,10 @@ export default function Home() {
   };
 
   useEffect(() => setMounted(true), []);
-  useEffect(() => {
-    if (theme) document.documentElement.setAttribute("data-theme", theme);
-  }, [theme]);
-
-  const toggleTheme = () =>
-    setTheme((prev) => {
-      const cur = prev ?? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-      return cur === "dark" ? "light" : "dark";
-    });
 
   return (
     <>
-      <header className="nav">
-        <div className="wrap nav-in">
-          <a href="#" className="brand">
-            <span className="dot" />
-            harvey<span className="tld">-qa</span>
-          </a>
-          <nav className="nav-links">
-            <a href="#audit">The audit</a>
-            <a href="#pricing">Pricing</a>
-            <a href="#ledger">How we report</a>
-            <button className="theme-toggle" aria-label="Toggle theme" onClick={toggleTheme}>
-              ◐
-            </button>
-            <a href="#scan" className="btn btn-primary">
-              Run the free scan
-            </a>
-          </nav>
-        </div>
-      </header>
+      <SiteHeader />
 
       <main>
         {/* HERO */}
@@ -122,7 +96,7 @@ export default function Home() {
                 <a href="#scan" className="btn btn-primary">
                   Run the free scan →
                 </a>
-                <a href="#sample" className="btn btn-ghost">
+                <a href="/sample-report" className="btn btn-ghost">
                   See a sample report
                 </a>
               </div>
@@ -793,7 +767,7 @@ export default function Home() {
               <a href="#scan" className="btn btn-primary">
                 Run the free scan →
               </a>
-              <a href="#sample" className="btn btn-ghost">
+              <a href="/sample-report" className="btn btn-ghost">
                 See a sample report
               </a>
             </div>
@@ -805,23 +779,7 @@ export default function Home() {
         </section>
       </main>
 
-      <footer>
-        <div className="wrap foot-in">
-          <a href="#" className="brand">
-            <span className="dot" />
-            harvey<span className="tld">-qa</span>
-          </a>
-          <nav className="foot-links">
-            <a href="#audit">The audit</a>
-            <a href="#pricing">Pricing</a>
-            <a href="#sample">Sample report</a>
-            <a href="#">Blog &amp; research</a>
-            <a href="#">Responsible disclosure</a>
-            <a href="#">Data handling</a>
-          </nav>
-          <span className="foot-note">© Harvey · codebase QA for AI-generated apps</span>
-        </div>
-      </footer>
+      <SiteFooter />
     </>
   );
 }

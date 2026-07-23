@@ -1,0 +1,12 @@
+project_id = "vuln-seam-app"
+
+[db]
+port = 54322
+major_version = 15
+
+[api]
+port = 54321
+schemas = ["public"]
+
+[auth]
+enabled = true

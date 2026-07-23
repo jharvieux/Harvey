@@ -51,11 +51,25 @@ Then `npx vercel --prod` (or connect the repo in the Vercel dashboard for auto-d
 
 ```
 app/
-  layout.tsx     Root layout — metadata, Organization/Service/FAQ JSON-LD, favicon
-  page.tsx       The homepage (single-page site; nav links are in-page anchors)
-  globals.css    All styles (hand-authored, theme-aware light/dark, ported from prototype)
-  sitemap.ts     /sitemap.xml
-  robots.ts      /robots.txt
+  layout.tsx            Root layout — metadata, Organization/Service/FAQ JSON-LD, favicon,
+                        Vercel Analytics, Search Console/Bing verification (env-driven), theme script
+  page.tsx              The homepage (long-form landing; in-page anchors for its own sections)
+  globals.css           All styles (hand-authored, theme-aware light/dark)
+  opengraph-image.tsx   Dynamic 1200×630 OG image (next/og)
+  sitemap.ts            /sitemap.xml (all routes)
+  robots.ts             /robots.txt
+  components/
+    SiteHeader.tsx      Shared nav + theme toggle (used by every page)
+    SiteFooter.tsx      Shared footer (links to all real pages)
+  the-audit/            Methodology: the ten modules, coverage ledger, live pen-test
+  pricing/              Standalone pricing (size-band grid, tier matrix, FAQPage JSON-LD)
+  sample-report/        Full sample report — SYNTHETIC demo data (sample-data.ts), never real client data
+  responsible-disclosure/  Trust page — disclosure policy
+  data-handling/        Trust page — repo/DB access, retention, deletion
+  supabase-security-audit/       SEO service page (answer-first + FAQPage JSON-LD)
+  supabase-security-checklist/   Interactive checklist (scanner-vs-live-test column)
+  supabase-security-checker/     Free client-side RLS checker (browser-direct anon-read probe)
+  multi-tenant-security-supabase/  Pillar guide (Article JSON-LD)
 public/
   favicon.svg    🔍 emoji favicon
   llms.txt       AEO: machine-readable description of Harvey for answer engines
@@ -68,16 +82,18 @@ public/
 - `llms.txt` at the root, sitemap, robots, per-page metadata, OpenGraph.
 - Answer-first copy; semantic HTML.
 
-## Known next steps (not yet built)
+## Known next steps (not yet built — operator or follow-up)
 
-- **Free-scan intake form + Resend wiring.** The CTAs currently anchor to the "How it
-  works" section. The launch plan (`../docs/gtm/05-website-plan.md`) calls for a
-  simple form (email + repo URL) that emails the operator via Resend; the backend is
-  manual at launch. This is the top priority before going live.
-- **Separate pages** for Sample Report, Methodology, Blog/Research, Responsible
-  Disclosure, and Data Handling (footer links currently point to `#`).
-- **OG image** (`/opengraph-image`).
-- Swap in real (anonymized) findings once the first engagements exist.
+- **Sample report: swap synthetic → real anonymized data**, and add the email-gated PDF
+  download. The page ships now with clearly-labeled synthetic data for a fictional app.
+- **Search Console + Bing ownership verification.** The meta-tag scaffold is wired to
+  `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION` / `NEXT_PUBLIC_BING_SITE_VERIFICATION`; the
+  operator obtains the tokens and sets them in Vercel. Analytics + OG image are done.
+- **RLS checker — deeper tiers.** The shipped tool is a browser-only anon-read probe.
+  Authenticated cross-tenant / write / RPC probing and lead capture are a follow-up.
+- **Trust pages need operator/legal review** before go-live, and the engagement/liability
+  terms link lands once the LLM+terms work (#11) exists.
+- **Blog/research** section is still to come.
 
 ## Domain / naming
 
