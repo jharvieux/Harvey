@@ -123,5 +123,14 @@ they are not also `internalService`).
 Each route handler was invoked directly with the probe's exact request and the verdict computed with
 the probe's own predicate (`hasNonTrivialBody`, the 2xx checks, the 5× replay). Result: **8 passed, 0
 failed** — the four vulnerable routes → proven, the four controls → unproven. `next build` compiles all
-eight routes as dynamic handlers. The remaining step is a full live `dynamic-validate --execute` run
-(Docker + Supabase CLI) — its automated standing-check wiring is tracked as the #718 remainder.
+eight routes as dynamic handlers.
+
+## Live verification (2026-07-22, Docker + Supabase CLI)
+
+The full live `pnpm dynamic-validate targets/vuln-seam-app --execute` run was executed for real and
+scored **4/4 proven, zero controls flagged** — each seam probe and the NO-RATE-LIMIT loop reached
+`proven` on its **vulnerable** route (`/api/webhooks/stripe`, `/api/internal/users`,
+`/api/ingest/events`, `/api/coupon/redeem`). Full record (versions, verdicts, repros, teardown):
+`docs/design/vuln-seam-app-live-validation.md`; raw artifact: `reports/vuln-seam-app/M2.pass.json`.
+The standing offline regression guard is `src/pentest/vuln-seam-app.test.ts` (runs in `pnpm verify`).
+This closed the live proven-branch step for #717 and #159 and the "run it live" half of #738.
