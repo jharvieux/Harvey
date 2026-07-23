@@ -36,7 +36,7 @@ import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, type SecurityPathFile } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
 import { discoverTargets } from "../pentest/targets.js";
-import { buildInferredKnipConfig, detectTargetFramework } from "../scan/framework-detect.js";
+import { buildDegradedKnipConfig, buildInferredKnipConfig, detectTargetFramework } from "../scan/framework-detect.js";
 import {
   duplicationSummary,
   JSCPD_IGNORE_GLOBS,
@@ -44,6 +44,7 @@ import {
   jscpdUnavailableFinding,
   knipEntryUncertainFinding,
   knipEntryUncertainReason,
+  knipReducedTierFinding,
   knipToFindings,
   knipUnavailableFinding,
   mergeJscpdReports,
@@ -59,6 +60,23 @@ import {
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const jscpdBin = join(repoRoot, "node_modules", ".bin", "jscpd");
 const knipBin = join(repoRoot, "node_modules", ".bin", "knip");
+
+// #810: knip's own installed plugin ids, read from its dist layout. Used to build the reduced
+// (no-target-deps) retry config that disables every plugin so no target config file is loaded.
+// Reading knip's REAL plugin set (not a hardcoded list) matters because knip validates config keys
+// strictly — an unknown key aborts the run. If the layout can't be read (a future knip repackaging),
+// the list is empty and runKnip skips the retry, falling back to the M5-00 gap disclosure — fail
+// loud, never a silent degrade.
+function knipPluginNames(): string[] {
+  try {
+    return readdirSync(join(repoRoot, "node_modules", "knip", "dist", "plugins"), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !e.name.startsWith("_"))
+      .map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+const KNIP_PLUGIN_NAMES = knipPluginNames();
 
 const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
@@ -187,36 +205,18 @@ function scopeKnipConfig(dir: string): Record<string, unknown> | "unmergeable" |
   return undefined;
 }
 
-// #696: a config-less scope's unused-FILE findings are contingent on the entry graph WE inferred,
-// so `entriesInferred` is threaded out to knipToFindings to down-rank them to review tier — a scope
-// that supplied its own config keeps confirmed file findings.
-function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean } {
-  const existing = scopeKnipConfig(dir);
+// One knip invocation against `dir`. `config`, when given, is written as HARVEY_KNIP_CONFIG and
+// forced with `-c`; when undefined, knip runs against the scope's own config untouched. Throws on
+// timeout, a non-zero exit (knip aborts with exit 2 when it can't LOAD a config it needs to resolve
+// — the #810 missing-deps case), or non-JSON stdout.
+function execKnip(dir: string, config: Record<string, unknown> | undefined): KnipReport {
   const plainArgs = ["--reporter", "json", "--no-exit-code"];
   let args = plainArgs;
   let cleanup: (() => void) | undefined;
-  let entriesInferred = false;
-  const writeConfig = (config: Record<string, unknown>) => {
+  if (config) {
     writeFileSync(join(dir, HARVEY_KNIP_CONFIG), JSON.stringify(config));
     args = ["-c", HARVEY_KNIP_CONFIG, ...plainArgs];
     cleanup = () => rmSync(join(dir, HARVEY_KNIP_CONFIG), { force: true });
-  };
-  try {
-    if (existing === undefined) {
-      // No config of its own: knip can't infer non-app entries (tests above all) and floods the
-      // unused-files list. Generate framework-derived + universal entry globs so it doesn't (#696).
-      writeConfig(buildInferredKnipConfig(detectTargetFramework(dir)));
-      entriesInferred = true;
-    } else if (existing !== "unmergeable" && !("ignoreExportsUsedInFile" in existing)) {
-      // The scope HAS its own config: merge only the ignoreExportsUsedInFile default, never override
-      // its entries — they know their app (#695).
-      writeConfig({ ...existing, ignoreExportsUsedInFile: { interface: true, type: true } });
-    }
-  } catch {
-    // a write failure falls back to an unmodified, non-inferred run
-    cleanup = undefined;
-    args = plainArgs;
-    entriesInferred = false;
   }
   try {
     const out = execFileSync(knipBin, args, {
@@ -225,9 +225,53 @@ function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean } 
       timeout: TIMEOUT_MS,
       killSignal: "SIGKILL",
     });
-    return { report: JSON.parse(out.toString("utf8")) as KnipReport, entriesInferred };
+    return JSON.parse(out.toString("utf8")) as KnipReport;
   } finally {
     cleanup?.();
+  }
+}
+
+// #696: a config-less scope's unused-FILE findings are contingent on the entry graph WE inferred,
+// so `entriesInferred` is threaded out to knipToFindings to down-rank them to review tier — a scope
+// that supplied its own config keeps confirmed file findings.
+// #810: `pluginsDisabled`/`reducedReason` mark a scope that only ran after the degraded retry
+// (knip couldn't load the target's config/plugin configs — the missing-node_modules case).
+function runKnip(dir: string): { report: KnipReport; entriesInferred: boolean; pluginsDisabled: boolean; reducedReason?: string } {
+  // First-attempt config: an inferred config for a config-less scope (#696), the
+  // ignoreExportsUsedInFile default merged into a mergeable scope config (#695), or undefined to run
+  // the scope's own config untouched (unmergeable knip.ts/js, or one already setting the default).
+  const existing = scopeKnipConfig(dir);
+  let config: Record<string, unknown> | undefined;
+  let entriesInferred = false;
+  try {
+    if (existing === undefined) {
+      // No config of its own: knip can't infer non-app entries (tests above all) and floods the
+      // unused-files list. Generate framework-derived + universal entry globs so it doesn't (#696).
+      config = buildInferredKnipConfig(detectTargetFramework(dir));
+      entriesInferred = true;
+    } else if (existing !== "unmergeable" && !("ignoreExportsUsedInFile" in existing)) {
+      // The scope HAS its own config: merge only the ignoreExportsUsedInFile default, never override
+      // its entries — they know their app (#695).
+      config = { ...existing, ignoreExportsUsedInFile: { interface: true, type: true } };
+    }
+  } catch {
+    // a config read/detect failure falls back to an unmodified, non-inferred run
+    config = undefined;
+    entriesInferred = false;
+  }
+  try {
+    return { report: execKnip(dir, config), entriesInferred, pluginsDisabled: false };
+  } catch (err) {
+    // #810: knip most often fails here because it tried to LOAD the target's own knip config or a
+    // framework plugin config (vite.config.ts, next.config.ts, ...) whose imports don't resolve —
+    // the "NEEDS the target's node_modules" prereq. Retry ONCE with every knip plugin disabled and
+    // Harvey-inferred entries, so no target config file is loaded at all and dead code is reported
+    // from source alone. A timeout is a different failure (a hang, #505) — don't retry it into a
+    // second full timeout; and with no plugin list we can't build the retry config. Either way, let
+    // the original error propagate to the M5-00 gap disclosure — fail loud, never a silent degrade.
+    if (isTimeout(err) || KNIP_PLUGIN_NAMES.length === 0) throw err;
+    const report = execKnip(dir, buildDegradedKnipConfig(detectTargetFramework(dir), KNIP_PLUGIN_NAMES));
+    return { report, entriesInferred: true, pluginsDisabled: true, reducedReason: gapReason(err) };
   }
 }
 
@@ -314,6 +358,8 @@ const jscpdGaps: ScanGap[] = [];
 const knipReports: KnipReport[] = [];
 const knipGaps: ScanGap[] = [];
 const knipUncertainScopes: ScanGap[] = [];
+// #810: scopes that only produced findings after the degraded (all-plugins-disabled) retry.
+const knipReducedScopes: ScanGap[] = [];
 // #696: files whose scope had Harvey-inferred entries — their unused-FILE findings are review tier.
 const inferredEntryFiles = new Set<string>();
 
@@ -333,12 +379,21 @@ for (const scope of scopes) {
   const label = scopeLabel(scope);
   const workspaceRel = relative(targetDir, scope);
   try {
-    const { report, entriesInferred } = runKnip(scope);
-    // #580: computed BEFORE re-anchoring report.files below — knipEntryUncertainReason's ratio
-    // only cares about the count, and countSourceFiles/hasViteEntryMarkers/isViteResolvable all
-    // operate on the real scope dir, not the merged-report-relative path.
-    const uncertainReason = knipEntryUncertainReason(report, countSourceFiles(scope), hasViteEntryMarkers(scope), isViteResolvable(scope));
-    if (uncertainReason) knipUncertainScopes.push({ scope: label, reason: uncertainReason });
+    const { report, entriesInferred, pluginsDisabled, reducedReason } = runKnip(scope);
+    // #810: a scope that only ran after the degraded retry is disclosed as a reduced-mode partial
+    // (M5-98). Its file findings are already review-tier via entriesInferred below. The #580
+    // entry-uncertain heuristic is skipped for it — its high unused ratio is the EXPECTED cost of a
+    // plugins-disabled run, already explained by M5-98, not a separate mis-resolution signal.
+    if (pluginsDisabled) {
+      knipReducedScopes.push({ scope: label, reason: reducedReason ?? "knip could not load the target's config" });
+      console.error(`⚠ knip could not load ${label}'s config (likely no node_modules) — re-ran with plugins disabled; M5 file findings for it are review-tier (#810, see M5-98)`);
+    } else {
+      // #580: computed BEFORE re-anchoring report.files below — knipEntryUncertainReason's ratio
+      // only cares about the count, and countSourceFiles/hasViteEntryMarkers/isViteResolvable all
+      // operate on the real scope dir, not the merged-report-relative path.
+      const uncertainReason = knipEntryUncertainReason(report, countSourceFiles(scope), hasViteEntryMarkers(scope), isViteResolvable(scope));
+      if (uncertainReason) knipUncertainScopes.push({ scope: label, reason: uncertainReason });
+    }
     report.files = report.files.map((f) => prefixed(workspaceRel, f));
     for (const issue of report.issues) issue.file = prefixed(workspaceRel, issue.file);
     // #696: record the (now target-relative) files whose entries Harvey inferred, so their file
@@ -383,6 +438,9 @@ if (jscpdGaps.length) findings.push(jscpdUnavailableFinding(jscpdGaps.map((g) =>
 // from knipGaps (which is "didn't complete at all") so the two failure shapes stay distinguishable
 // in the report.
 if (knipUncertainScopes.length) findings.push(knipEntryUncertainFinding(knipUncertainScopes.map((g) => `${g.scope}: ${g.reason}`).join("; ")));
+// #810: scopes that produced findings only via the degraded (no-target-deps) retry — a visible
+// reduced-mode partial, distinct from "didn't complete" (M5-00) and "completed but uncertain" (M5-99).
+if (knipReducedScopes.length) findings.push(knipReducedTierFinding(knipReducedScopes.map((g) => `${g.scope}: ${g.reason}`).join("; ")));
 
 const dup = duplicationSummary(jscpdReport);
 console.error(
@@ -393,6 +451,7 @@ if (knipReport) {
   console.error(
     `M5 dead code: ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports` +
       (knipGaps.length ? `, ${knipGaps.length}/${scopes.length} scope(s) incomplete (#505, see M5-00)` : "") +
+      (knipReducedScopes.length ? `, ${knipReducedScopes.length}/${scopes.length} scope(s) ran in reduced no-deps mode (#810, see M5-98)` : "") +
       (knipUncertainScopes.length ? `, ${knipUncertainScopes.length}/${scopes.length} scope(s) flagged as uncertain (#580, see M5-99)` : ""),
   );
 } else {
