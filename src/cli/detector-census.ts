@@ -53,6 +53,7 @@ const OWNERS: Record<string, string> = {
   "src/detectors/asset-weight.ts": "M7",
   "src/detectors/hook-deps.ts": "M7",
   "src/scan/prisma-schema-perf.ts": "M7",
+  "src/scan/prisma-app-perf.ts": "M7",
   "src/detectors/test-intent.ts": "M8",
   "src/detectors/vitest-intent.ts": "M8",
   "src/detectors/app-router.ts": "M9",

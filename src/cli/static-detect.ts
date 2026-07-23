@@ -31,6 +31,7 @@ import { detectSlopFindings } from "../detectors/slop.js";
 import { detectTestIntentFindings } from "../detectors/test-intent.js";
 import { detectVitestIntentFindings } from "../detectors/vitest-intent.js";
 import { detectOrm, detectTargetFramework, viteWorkspaces } from "../scan/framework-detect.js";
+import { scanPrismaAppPerf } from "../scan/prisma-app-perf.js";
 import { scanPrismaSchemaPerf } from "../scan/prisma-schema-perf.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
 
@@ -105,7 +106,9 @@ try {
     ...statsPaths.flatMap((p) => parseBundleAnalyzerStats(p)),
     // #761 (part of #756): M7's Prisma-schema equivalent of the Supabase connected-tier
     // "unindexed foreign keys" advisor — static schema.prisma parse, no live DB needed.
-    ...(detectOrm(scanDir) === "prisma" ? scanPrismaSchemaPerf(scanDir) : []),
+    // #793 (the #761 remainder): the two app-code cross-referencing heuristics — N+1 query
+    // pattern and a `where` filter with no covering index — schema.prisma alone can't see either.
+    ...(detectOrm(scanDir) === "prisma" ? [...scanPrismaSchemaPerf(scanDir), ...scanPrismaAppPerf(scanDir)] : []),
   ];
   if (buildDirs.length === 0) {
     console.log(
