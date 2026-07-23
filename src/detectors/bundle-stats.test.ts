@@ -12,6 +12,7 @@ import { parseBundleAnalyzerStats, parseBundleStats, parseViteBundleStats } from
 
 let webpackDir: string;
 let turboDir: string;
+let turboCrmDir: string;
 let statsPath: string;
 let statsDir: string;
 let viteDir: string;
@@ -42,6 +43,31 @@ beforeAll(() => {
     JSON.stringify({ pages: { "/_app": [] }, rootMainFiles: ["static/chunks/main.js"] }),
   );
   writeFileSync(join(turboDir, "app-path-routes-manifest.json"), JSON.stringify({ "/page": "/", "/api/health/route": "/api/health" }));
+
+  // Turbopack layout WITH client-reference-manifests present (#817): the fallback this closes.
+  // One route over budget (dashboard, 300 KB), one under (about, 5 KB) — same shared chunk
+  // referenced by both, matching the real per-page manifest's "every client chunk the page
+  // needs" contract (shared chunks are double-counted the same way the webpack layout counts
+  // them per-route, since first-load JS is what THAT route pays regardless of sharing).
+  turboCrmDir = mkdtempSync(join(tmpdir(), "harvey-bundle-tp-crm-"));
+  mkdirSync(join(turboCrmDir, "static", "chunks"), { recursive: true });
+  mkdirSync(join(turboCrmDir, "server", "app", "dashboard"), { recursive: true });
+  mkdirSync(join(turboCrmDir, "server", "app", "about"), { recursive: true });
+  writeFileSync(join(turboCrmDir, "static", "chunks", "framework.js"), randomBytes(100 * 1024));
+  writeFileSync(join(turboCrmDir, "static", "chunks", "heavy-route.js"), randomBytes(300 * 1024));
+  writeFileSync(join(turboCrmDir, "static", "chunks", "light-route.js"), randomBytes(5 * 1024));
+  writeFileSync(
+    join(turboCrmDir, "build-manifest.json"),
+    JSON.stringify({ pages: { "/_app": [] }, rootMainFiles: ["static/chunks/framework.js"] }),
+  );
+  writeFileSync(
+    join(turboCrmDir, "server", "app", "dashboard", "page_client-reference-manifest.js"),
+    `globalThis.__RSC_MANIFEST=globalThis.__RSC_MANIFEST||{};globalThis.__RSC_MANIFEST["/dashboard/page"]={"clientModules":{"x":{"id":"static/chunks/framework.js"},"y":{"id":"static/chunks/heavy-route.js"}}}`,
+  );
+  writeFileSync(
+    join(turboCrmDir, "server", "app", "about", "page_client-reference-manifest.js"),
+    `globalThis.__RSC_MANIFEST=globalThis.__RSC_MANIFEST||{};globalThis.__RSC_MANIFEST["/about/page"]={"clientModules":{"x":{"id":"static/chunks/framework.js"},"y":{"id":"static/chunks/light-route.js"}}}`,
+  );
 
   // Synthetic webpack-stats JSON (#179): the shape @next/bundle-analyzer's `generateStatsFile`
   // writes (webpack Stats.toJson()) — no real analyzer run, since installing the dependency
@@ -90,6 +116,7 @@ beforeAll(() => {
 afterAll(() => {
   rmSync(webpackDir, { recursive: true, force: true });
   rmSync(turboDir, { recursive: true, force: true });
+  rmSync(turboCrmDir, { recursive: true, force: true });
   rmSync(statsDir, { recursive: true, force: true });
   rmSync(viteDir, { recursive: true, force: true });
 });
@@ -125,6 +152,18 @@ describe("Turbopack-layout builds (no per-route manifest)", () => {
     const gap = findings.find((f) => f.taxonomy === "M7 — Bundle route attribution unavailable");
     expect(gap).toMatchObject({ severity: "Info", confidence: "N/A", id: "M7B-03" });
     expect(gap?.title).toContain("1 page route"); // /api/health is not a page
+  });
+});
+
+describe("Turbopack-layout builds WITH a client-reference-manifest (#817)", () => {
+  it("attributes per-route first-load JS from the RSC manifest instead of disclosing the gap", () => {
+    const findings = parseBundleStats(turboCrmDir, { routeBudgetBytes: 250 * 1024, sharedBudgetBytes: 999 * 1024 });
+    const gap = findings.find((f) => f.taxonomy === "M7 — Bundle route attribution unavailable");
+    expect(gap).toBeUndefined(); // measured, not disclosed as a gap
+    const route = findings.find((f) => f.taxonomy === "M7 — First-load JS over budget");
+    expect(route).toMatchObject({ id: "M7B-01", confidence: "Confirmed", severity: "Perf", location: "/dashboard" });
+    expect(route?.evidence).toContain("client-reference-manifest");
+    expect(route?.evidence).not.toContain("/about"); // 105 KB, under the 250 KB budget
   });
 });
 

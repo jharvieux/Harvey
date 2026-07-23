@@ -26,7 +26,7 @@
 // directly comparable to the gzip-based M7B-01/02 budgets above.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, relative, sep } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { Finding } from "../findings.js";
 
@@ -81,6 +81,72 @@ function routeLabel(key: string): string {
   return key.replace(/\/(page|route)$/, "") || "/";
 }
 
+// #817: per-route attribution on a Turbopack build, without a manually-supplied bundle-analyzer
+// stats file. Turbopack writes no app-build-manifest.json (see the module header), but Next's
+// App Router — on EITHER bundler — writes a client-reference-manifest per page under
+// `server/app/**` so the request-serving runtime knows which client chunks to preload; that
+// runtime-consuming code is bundler-agnostic, so the manifest's existence and location don't
+// depend on which bundler produced the chunks it lists. UNVERIFIED against a live Turbopack
+// production build (no Next.js install in this repo to test against — package.json is
+// supervised); the parse below deliberately doesn't depend on the manifest's exact object
+// shape (which has drifted across Next versions) — it only regex-extracts quoted
+// `static/chunks/*.js` paths from the file text, the one part of the contract that has to
+// stay stable (it's the real on-disk chunk location). If a future Next version stops writing
+// this file, or moves chunks out of `static/chunks`, this falls back to the M7B-03 disclosure.
+const MANIFEST_SUFFIX = "_client-reference-manifest.js";
+const CHUNK_REF = /"(static\/chunks\/[^"]+\.js)"/g;
+
+function findClientReferenceManifests(buildDir: string): string[] {
+  const appDir = join(buildDir, "server", "app");
+  if (!existsSync(appDir)) return [];
+  return readdirSync(appDir, { recursive: true, encoding: "utf8" })
+    .filter((f) => f.endsWith(MANIFEST_SUFFIX))
+    .map((f) => join(appDir, f));
+}
+
+// `server/app/(admin)/dashboard/page_client-reference-manifest.js` -> "/(admin)/dashboard/page",
+// matching the app-build-manifest.json key shape `routeLabel` already strips "/page" from.
+function routeFromManifestPath(appDir: string, manifestPath: string): string {
+  const rel = relative(appDir, manifestPath).split(sep).join("/");
+  const dir = rel.slice(0, -MANIFEST_SUFFIX.length); // already ends in "/page", e.g. "(admin)/dashboard/page"
+  return routeLabel(`/${dir}`);
+}
+
+function turbopackRouteWeights(buildDir: string, sizeOf: (chunk: string) => number): { route: string; bytes: number }[] {
+  const appDir = join(buildDir, "server", "app");
+  return findClientReferenceManifests(buildDir).map((manifestPath) => {
+    const text = readFileSync(manifestPath, "utf8");
+    const chunks = new Set([...text.matchAll(CHUNK_REF)].map((m) => m[1]!));
+    return { route: routeFromManifestPath(appDir, manifestPath), bytes: [...chunks].reduce((sum, c) => sum + sizeOf(c), 0) };
+  });
+}
+
+function routeBudgetFinding(weights: { route: string; bytes: number }[], routeBudget: number, source: string): Finding | undefined {
+  const over = weights.filter((w) => w.bytes > routeBudget).sort((a, b) => b.bytes - a.bytes);
+  if (!over.length) return undefined;
+  const shown = over.slice(0, INSTANCE_CAP);
+  const worst = shown[0]!;
+  return {
+    id: "M7B-01",
+    status: "Open",
+    category: "Performance",
+    title: `${over.length} route${over.length === 1 ? "" : "s"} over the ${kb(routeBudget)} first-load JS budget (worst: ${kb(worst.bytes)})`,
+    severity: "Perf",
+    confidence: "Confirmed",
+    taxonomy: "M7 — First-load JS over budget",
+    location: worst.route,
+    evidence:
+      `Gzipped first-load JS per route (from ${source}), worst-first: ` +
+      shown.map((w) => `${w.route} (${kb(w.bytes)})`).join(", ") +
+      (over.length > shown.length ? ` … and ${over.length - shown.length} more` : ""),
+    impact: "Every visitor downloads, parses, and executes this JS before the route is interactive — the single largest controllable input to INP/TTI on mid-range devices.",
+    fix: "Split the heaviest routes with `next/dynamic` for below-the-fold/rarely-used components, and check the whole-library / heavy-client-import M7C findings for the likely culprits.",
+    value: 4,
+    ease: 3,
+    safety: 4,
+  };
+}
+
 function baselineFinding(shared: string[], sharedBytes: number, sharedBudget: number): Finding {
   return {
     id: "M7B-02",
@@ -114,14 +180,24 @@ export function parseBundleStats(buildDir: string, options?: BundleStatsOptions)
   delete routes["/_error"];
   delete routes["/_document"];
 
-  // Turbopack layout: no per-route chunk mapping at all. Measure what we can (the shared
-  // baseline from rootMainFiles) and disclose what we can't.
+  // Turbopack layout: no per-route chunk mapping in the manifests read above. Measure the
+  // shared baseline from rootMainFiles, then try the client-reference-manifest fallback
+  // (#817) for per-route attribution before falling back to the M7B-03 disclosure.
   if (Object.keys(routes).length === 0) {
     const shared = pagesManifest?.rootMainFiles ?? [];
     const sharedBytes = shared.reduce((sum, c) => sum + sizeOf(c), 0);
     const findings: Finding[] = [];
     if (sharedBytes > sharedBudget) findings.push(baselineFinding(shared, sharedBytes, sharedBudget));
 
+    const weights = turbopackRouteWeights(buildDir, sizeOf);
+    if (weights.length > 0) {
+      const route = routeBudgetFinding(weights, routeBudget, "the RSC client-reference-manifest, Turbopack build");
+      if (route) findings.push(route);
+      return findings;
+    }
+
+    // No client-reference-manifest found either (e.g. a Pages-Router-only Turbopack build,
+    // or a future Next layout this doesn't recognize) — genuinely unmeasurable; disclose it.
     const appRoutes = readJson<Record<string, string>>(join(buildDir, "app-path-routes-manifest.json"));
     const pageRoutes = Object.keys(appRoutes ?? {}).filter((k) => k.endsWith("/page"));
     if (pageRoutes.length > 0) {
@@ -134,7 +210,7 @@ export function parseBundleStats(buildDir: string, options?: BundleStatsOptions)
         confidence: "N/A",
         taxonomy: "M7 — Bundle route attribution unavailable",
         location: buildDir,
-        evidence: `This .next was produced by a Turbopack build, which emits no app-build-manifest.json — the shared baseline above is measurable (${kb(sharedBytes)}), but per-route first-load JS is not.`,
+        evidence: `This .next was produced by a Turbopack build, which emits no app-build-manifest.json, and no server/app/**/${MANIFEST_SUFFIX} client-reference-manifest was found either — the shared baseline above is measurable (${kb(sharedBytes)}), but per-route first-load JS is not.`,
         impact: "The audit cannot rank routes by shipped JS from this artifact alone — a coverage disclosure, not a defect.",
         fix: "Re-build with @next/bundle-analyzer enabled (or `next build --webpack` where supported) and re-run this pass for per-route numbers.",
         value: 1,
@@ -152,38 +228,14 @@ export function parseBundleStats(buildDir: string, options?: BundleStatsOptions)
   for (const c of pagesManifest?.rootMainFiles ?? []) if (!shared.includes(c)) shared.push(c);
   const sharedBytes = shared.reduce((sum, c) => sum + sizeOf(c), 0);
 
-  const weights = Object.entries(routes)
-    .map(([key, chunks]) => ({
-      route: routeLabel(key),
-      bytes: [...new Set(chunks)].reduce((sum, c) => sum + sizeOf(c), 0),
-    }))
-    .filter((w) => w.bytes > routeBudget)
-    .sort((a, b) => b.bytes - a.bytes);
+  const weights = Object.entries(routes).map(([key, chunks]) => ({
+    route: routeLabel(key),
+    bytes: [...new Set(chunks)].reduce((sum, c) => sum + sizeOf(c), 0),
+  }));
 
   const findings: Finding[] = [];
-  if (weights.length) {
-    const shown = weights.slice(0, INSTANCE_CAP);
-    const worst = shown[0];
-    findings.push({
-      id: "M7B-01",
-      status: "Open",
-      category: "Performance",
-      title: `${weights.length} route${weights.length === 1 ? "" : "s"} over the ${kb(routeBudget)} first-load JS budget (worst: ${worst ? kb(worst.bytes) : ""})`,
-      severity: "Perf",
-      confidence: "Confirmed",
-      taxonomy: "M7 — First-load JS over budget",
-      location: worst?.route ?? "",
-      evidence:
-        `Gzipped first-load JS per route (from ${appManifest ? "app-build-manifest.json" : "build-manifest.json"}), worst-first: ` +
-        shown.map((w) => `${w.route} (${kb(w.bytes)})`).join(", ") +
-        (weights.length > shown.length ? ` … and ${weights.length - shown.length} more` : ""),
-      impact: "Every visitor downloads, parses, and executes this JS before the route is interactive — the single largest controllable input to INP/TTI on mid-range devices.",
-      fix: "Split the heaviest routes with `next/dynamic` for below-the-fold/rarely-used components, and check the whole-library / heavy-client-import M7C findings for the likely culprits.",
-      value: 4,
-      ease: 3,
-      safety: 4,
-    });
-  }
+  const route = routeBudgetFinding(weights, routeBudget, appManifest ? "app-build-manifest.json" : "build-manifest.json");
+  if (route) findings.push(route);
   if (sharedBytes > sharedBudget) findings.push(baselineFinding(shared, sharedBytes, sharedBudget));
   return findings;
 }
