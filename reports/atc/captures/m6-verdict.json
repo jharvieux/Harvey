@@ -1,0 +1,41 @@
+[
+  {
+    "title": "Hand-rolled base64url encoding where Node's native `.toString('base64url')` exists",
+    "severity": "Low",
+    "taxonomy": "M6 — Reinvention (verdict)",
+    "location": "apps/main/src/lib/privacy/customer-hash.ts:27; apps/main/src/app/api/webhooks/gmailpubsub/route.ts:298",
+    "description": "Two sites build base64url by hand: `buf.toString('base64').replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'')`. Node 16+ supports `buf.toString('base64url')` directly — a one-call, correct, standard replacement. customer-hash.ts is security-adjacent (PII pepper hash), so the clearer builtin is preferable. Genuine reinvention with an exact stdlib replacement.",
+    "confidence": "high",
+    "remediation": "Replace the manual replace-chain with `buf.toString('base64url')`.",
+    "source": "M6 verdict (reviewed over real target)"
+  },
+  {
+    "title": "Email-shape validation regex duplicated across ~11 route handlers",
+    "severity": "Low",
+    "taxonomy": "M6 — Reinvention (verdict)",
+    "location": "apps/main/src/app/api/**/route.ts (11 sites, e.g. groups/[id]/invitations/route.ts:100, admin/email-samples/route.ts:261, auth/microsoft-email-prompt/route.ts:80)",
+    "description": "The same lightweight email check `/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/` (with a 254-char guard) is re-implemented in ~11 handlers. Functionally fine, but a consistency/maintainability indicator: one shared validator (or a Zod `.email()` schema, already a dependency) would remove the drift risk. Not a bug.",
+    "confidence": "high",
+    "remediation": "Extract a single `isValidEmail`/Zod email schema and call it from the 11 sites.",
+    "source": "M6 verdict (reviewed over real target)"
+  },
+  {
+    "title": "Manual currency formatting (`$${cents/100 .toFixed()}`) scattered across ~23 sites",
+    "severity": "Info",
+    "taxonomy": "M6 — Reinvention (verdict)",
+    "location": "apps/main/src/app/**/_client.tsx and components (23 sites, e.g. (admin)/admin/resources/_client.tsx:86)",
+    "description": "23 display sites format money by hand from cents. `Intl.NumberFormat('en-US',{style:'currency',currency:'USD'})` is the standard replacement and handles locale/negative/grouping correctly. Caveat verified in-code: several sites have BESPOKE rounding rules (e.g. `<$0.01` sentinel, variable decimal places) Intl does not do out of the box, so a blanket swap is wrong — these are partially-justified. Display-only, no correctness risk. Info tier.",
+    "confidence": "medium",
+    "remediation": "Centralize into a `formatCents(cents, opts)` helper wrapping Intl.NumberFormat, preserving the intentional sentinel/rounding behavior; adopt where no bespoke rule applies.",
+    "source": "M6 verdict (reviewed over real target)"
+  },
+  {
+    "title": "M6 verdict summary: 52 indicators over real ATC code — maintainability/consistency signal, no correctness or security risk",
+    "severity": "Info",
+    "taxonomy": "M6 — Verdict summary",
+    "location": "apps/main, apps/rag (whole-repo detect-static indicator pass)",
+    "description": "First M6 reviewed verdict against a REAL target (clears the never-run-on-real-target gap). 52 hand-rolled indicators across 8 classes were triaged: GENUINE reinventions worth acting on — base64url (2, exact stdlib replacement), duplicated email regex (11, consolidate), scattered currency formatting (23, partial — bespoke rounding limits the swap). NON-ACTIONABLE / suppressed on review — cookie Set-Cookie header strings (8, idiomatic for Next.js route handlers), cookie parsing (3), random-string-id (3, all in test/e2e helpers), class-string merge (1), JSON deep-equal (1). Net: ~36 legitimate maintainability indicators, all Info/Low; the dominant theme is consistency (one email validator, one currency helper), not defects. No hand-rolled crypto/auth/tenancy primitive was found reinvented (the security-critical hand-rolled code — constant-time-equal, hmac-jwt, postgrest-filter escaping — was reviewed by the M1 core-isolation pass and judged sound).",
+    "confidence": "high",
+    "source": "M6 verdict (reviewed over real target — #283)"
+  }
+]

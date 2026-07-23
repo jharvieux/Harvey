@@ -1,0 +1,35 @@
+[
+  {
+    "title": "tenantClient proxy scopes the UPDATE filter but does not sanitize tenant_id in the UPDATE payload (asymmetry with insert/upsert)",
+    "severity": "Medium",
+    "taxonomy": "M1 — Client-supplied security-relevant value trusted server-side / cross-tenant write",
+    "location": "apps/main/src/lib/db/tenant-client.ts:90",
+    "description": "The tenant-scoping Proxy is the app's DB-layer tenant boundary because it wraps the SERVICE-ROLE client (service_role bypasses RLS, so RLS does not backstop these queries). For insert/upsert the proxy OVERRIDES tenant_id in the payload via injectTenantId ({...row, tenant_id} — tenant_id spread last wins), so a client-supplied tenant_id cannot take effect. For update it does NOT: it only appends .eq('tenant_id', ctx.tenant_id) to the WHERE clause and passes the SET payload through untouched. A caller that spreads untrusted input into .update() (e.g. tenantClient(ctx).from('bookings').update({...req.body})) where the body carries tenant_id would move a row OUT of ctx's tenant into an attacker-named tenant: the WHERE still matches only ctx-owned rows, but the SET reassigns tenant_id. Blast radius is a cross-tenant write / data pollution (plant or hand off your own rows into a victim tenant), not a cross-tenant read. The file's docstring claims 'A developer cannot forget the filter' and the insert path deliberately hardens the payload, so the update-payload gap is an inconsistency in the stated security model, not an intended passthrough.",
+    "evidence": "if (prop === \"select\" || prop === \"update\" || prop === \"delete\") {\n  return (...args) => {\n    const result = raw.apply(target, args);\n    return result.eq(\"tenant_id\", tenant_id);   // filters WHERE only\n  };\n}\nif (prop === \"insert\" || prop === \"upsert\") {\n  return (rows, ...rest) => {\n    const scoped = injectTenantId(rows, tenant_id); // OVERRIDES payload tenant_id\n    return raw.apply(target, [scoped, ...rest]);\n  };\n}",
+    "okWhen": "No call site ever includes a caller/client-influenced tenant_id key in a tenantClient(...).update(...) payload (updates only set non-identity columns).",
+    "notOkWhen": "Any handler spreads request/body-derived input into .update() on a tenant-scoped table such that tenant_id can appear in the SET payload — the row is silently reassigned to the supplied tenant.",
+    "confidence": "medium"
+  },
+  {
+    "title": "PLATFORM_READABLE_TABLES passthrough gives an unscoped service-role query builder for tables that hold tenant data (single-layer isolation, no RLS backstop)",
+    "severity": "Low",
+    "taxonomy": "M1 — Single-layer tenant isolation (service-role relies solely on caller-side filtering)",
+    "location": "apps/main/src/lib/db/tenant-client.ts:144",
+    "description": "For any table in PLATFORM_READABLE_TABLES the proxy returns target.from(table) RAW — no tenant_id injection — and the caller must self-scope. Because the underlying client is service_role, RLS does not apply either, so caller-side filtering is the ONLY isolation layer for these tables. Most entries are genuinely tenant-less global catalogs (cruise_lines, personas, tier_definitions, legal_documents) where this is correct. But email_log carries a nullable tenant_id (it holds per-tenant email records, see tenant-scoped-tables.ts:178) and is exposed here as an unscoped passthrough; a caller that reads email_log via tenantClient without its own .eq('tenant_id', ctx.tenant_id) would read across tenants with zero backstop. invitations is documented as isolation-safe (callers verify group ownership via a tenant-scoped groups query first). This is a design-dependent surface, not a confirmed leak within the reviewed files — flagged so the client can confirm every email_log call site self-scopes.",
+    "evidence": "if (PLATFORM_READABLE_TABLES.has(table)) {\n  // Platform-wide table — callers self-scope. The proxy intentionally\n  // does NOT inject a tenant_id filter ...\n  return target.from(table);\n}\n// tenant-scoped-tables.ts:178 — \"email_log\" ... \"tenant_id is nullable\"",
+    "okWhen": "Every tenantClient call site on a PLATFORM_READABLE table that carries tenant data (notably email_log) applies its own tenant_id filter, OR the table has no tenant_id column at all.",
+    "notOkWhen": "A read/write of email_log (or a future tenant-bearing entry added to this set) via tenantClient omits the caller-side tenant_id filter — service-role returns/writes cross-tenant rows with no second layer.",
+    "confidence": "low"
+  },
+  {
+    "title": "tenantClient top-level proxy blocks only rpc/schema; other unscoped service-role surfaces (storage, functions, rest) pass through raw",
+    "severity": "Low",
+    "taxonomy": "M1 — Service-role RLS bypass surface not fully mediated by the tenant proxy",
+    "location": "apps/main/src/lib/db/tenant-client.ts:153",
+    "description": "The top-level Proxy over the service-role client intercepts 'from' (scoping) and throws on UNSCOPED_METHODS = {rpc, schema}. Every other property is returned via Reflect.get unchanged, so tenantClient(ctx).storage / .functions / .rest expose the raw service-role client with no tenant scoping and no RLS. The module docstring frames the proxy as the architectural centerpiece where 'every Supabase query goes through .from()' and 'a developer cannot forget the filter', but that guarantee holds only for .from(); non-PostgREST surfaces silently bypass it. No tenant-bearing use of these surfaces was found in the reviewed core-isolation files, so this is a contract-completeness gap rather than a demonstrated leak.",
+    "evidence": "const UNSCOPED_METHODS = new Set([\"rpc\", \"schema\"]);\n...\nif (typeof prop === \"string\" && UNSCOPED_METHODS.has(prop)) {\n  throw new UnscopedTenantClientMethodError(prop);\n}\nreturn Reflect.get(target, prop, receiver); // storage/functions/rest fall through raw",
+    "okWhen": "No tenant-scoped data is ever accessed through tenantClient's .storage/.functions/.rest surfaces (those go through withPlatformAdminAudit or a purpose-built scoped client).",
+    "notOkWhen": "Tenant-partitioned Storage objects or Edge Functions are reached via tenantClient(ctx).storage/.functions expecting tenant scoping — they run unscoped under service_role.",
+    "confidence": "low"
+  }
+]

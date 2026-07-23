@@ -1,0 +1,13 @@
+[
+  {
+    "title": "RAG citation source_url rendered as <a href> with no scheme validation (user-ingested URL → stored/DOM XSS on click)",
+    "severity": "Medium",
+    "taxonomy": "M1 — SSRF / unsafe-scheme via stored URL field",
+    "location": "apps/main/src/components/chat/MessageSources.tsx:55",
+    "description": "A knowledge-chunk citation's source_url is rendered directly as an anchor href in the customer chat UI. source_url is a USER-ingested field: the RAG submission endpoints persist it verbatim from the request body with zero validation (browser extension: `source_url: body.url ?? null`; web-ui/ios-shortcut/batch identical), and the approve pipeline forwards it unvalidated into the ingested chunk (approve/route.ts:132 `source_url: row.source_url ?? undefined`). No scheme allow-list exists anywhere from ingest to render. A `javascript:` (or `data:`/`file:`) URL therefore reaches `<a href={c.source_url}>`; React renders javascript: hrefs (dev-only warning, still clickable), so a same-tenant user who retrieves the poisoned chunk in chat and clicks the citation executes attacker script in the app origin. This is the scan-extras 'SSRF / unsafe-scheme via stored *_url field' shape (source_url is explicitly a user-persisted-and-rendered field, NOT operator/env config, so it is not fp-rules exempt). Blast radius is intra-tenant (chunks are tenant-scoped) and gated by coordinator approval of the submission + a user click, which is why this is Medium rather than High.",
+    "evidence": "MessageSources.tsx:55  <a href={c.source_url} target=\"_blank\" rel=\"noreferrer noopener\" className=\"underline\">{c.title}</a>\n\nrag/submit/extension/route.ts:45  source_url: body.url ?? null,   // no z.string().url(), no scheme check\nrag/submit/web-ui/route.ts:41  source_url: body.source_url ?? null,\nrag/queue/[id]/approve/route.ts:132  source_url: row.source_url ?? undefined,   // forwarded unvalidated\nformat-block.ts:142  source_url: c.source_url,   // passed straight into the citation DTO",
+    "okWhen": "source_url is validated to an http(s) scheme allow-list at ingest (or at render) before it is persisted/rendered, OR the citation link is stripped/disabled for non-http(s) schemes.",
+    "notOkWhen": "A user-submitted source_url with a javascript:/data:/file: scheme is stored and later rendered as a clickable citation href in another user's chat session.",
+    "confidence": "medium"
+  }
+]
