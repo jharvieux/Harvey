@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildInferredKnipConfig, detectOrm, detectTargetFramework, detectWorkspaceFrameworks, viteWorkspaces } from "./framework-detect.js";
+import { buildDegradedKnipConfig, buildInferredKnipConfig, detectOrm, detectTargetFramework, detectWorkspaceFrameworks, viteWorkspaces } from "./framework-detect.js";
 
 // Each case writes a throwaway target tree (the probe is disk-based — it must see vite.config /
 // index.html that the in-memory detector source set never carries) and asserts the coarse shape.
@@ -164,6 +164,26 @@ describe("buildInferredKnipConfig (#696)", () => {
 
   it("carries the #695 ignoreExportsUsedInFile default", () => {
     expect(buildInferredKnipConfig("next").ignoreExportsUsedInFile).toEqual({ interface: true, type: true });
+  });
+});
+
+describe("buildDegradedKnipConfig (#810)", () => {
+  it("disables every named plugin so knip loads no target config file, while keeping the inferred entries", () => {
+    const config = buildDegradedKnipConfig("vite", ["vite", "vitest", "storybook"]);
+    // no plugin's config file is loaded — the whole point, so a missing-node_modules target's
+    // vite.config/next.config imports never need to resolve.
+    expect(config.vite).toBe(false);
+    expect(config.vitest).toBe(false);
+    expect(config.storybook).toBe(false);
+    // still the inferred entry graph + #695 default, so real entries stand in for what the disabled
+    // plugins would have contributed.
+    expect((config.entry as string[])).toContain("index.html");
+    expect((config.entry as string[])).toContain("**/*.{test,spec}.{ts,tsx,js,jsx}");
+    expect(config.ignoreExportsUsedInFile).toEqual({ interface: true, type: true });
+  });
+
+  it("is identical to buildInferredKnipConfig when no plugins are named (empty list is a no-op)", () => {
+    expect(buildDegradedKnipConfig("next", [])).toEqual(buildInferredKnipConfig("next"));
   });
 });
 

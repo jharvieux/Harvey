@@ -50,6 +50,7 @@ export function scopePacketFiles(allFiles: string[], targetDir: string, hotspots
 
 interface SimplifyPacket {
   brief: string;
+  target: string;
   files: { path: string; source: string; hotspotRank?: number }[];
   hotspotRanked: boolean;
   manifests: { path: string; text: string }[];
@@ -81,7 +82,7 @@ export function buildPacket(
     files.sort((a, b) => (a.hotspotRank ?? Infinity) - (b.hotspotRank ?? Infinity));
   }
   const manifests = manifestPaths.map((p) => ({ path: relative(targetDir, p), text: readFileSync(p, "utf8") }));
-  return { brief: extractM6Brief(briefText), files, hotspotRanked: rankOf.size > 0, manifests };
+  return { brief: extractM6Brief(briefText), target: targetDir, files, hotspotRanked: rankOf.size > 0, manifests };
 }
 
 export function renderPacket(packet: SimplifyPacket): string {
@@ -100,7 +101,14 @@ export function renderPacket(packet: SimplifyPacket): string {
       "tree\" claim as unverifiable and do not assert one.";
   return `# M6 — simplification / reuse review pass
 
-You are the reviewer. Apply the rubric below to the source that follows.
+Target: ${packet.target}
+
+You are ONE OF TWO independent reviewers (docs/design/m6-simplification-eval.md §3.5, #813) —
+M6's paid verdict is never asserted from a single pass. Do not consult, or attempt to infer,
+the other reviewer's output; your two writeups are compared mechanically afterwards
+(\`pnpm exec tsx src/cli/m6-agreement.ts <a.json> <b.json>\`), unanimous flags go to human
+triage, and any split goes to a human adjudicator with both arguments — a split never goes
+straight into a report. Apply the rubric below to the source that follows.
 
 Three standing rules, from docs/design/m6-simplification-eval.md:
 
@@ -113,6 +121,25 @@ Three standing rules, from docs/design/m6-simplification-eval.md:
 3. The "already in the dependency tree" class is only appliable against the Dependency manifest
    section below — it is what's actually installed, not what a framework commonly implies. Don't
    assert dependency-tree membership from memory or convention.
+
+## Verdict format — two-reviewer protocol (#813)
+
+End your writeup with this machine-readable verdict block so independent passes can be
+compared. Every file in this packet must appear exactly once: an unlisted file reads as
+unreviewed and is reported loudly as uncompared — it does not default to "spare".
+
+\`\`\`json
+{
+  "reviewer": "<model/session id unique to you>",
+  "date": "<YYYY-MM-DD>",
+  "target": "${packet.target}",
+  "verdicts": [
+    { "file": "<path exactly as its ### heading below>", "verdict": "flag | spare",
+      "replacement": "<required when verdict is flag>",
+      "confidence": "high | medium | low", "reason": "<one sentence>" }
+  ]
+}
+\`\`\`
 
 ## The rubric
 
