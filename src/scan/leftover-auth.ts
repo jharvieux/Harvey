@@ -3,10 +3,8 @@
 // a grep can't tell a genuinely bypassed guard from `// TODO: auth` in a comment explaining
 // why auth is deliberately deferred, or `isAdmin = true` in a test fixture.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
 import type { Finding } from "../findings.js";
-import { mechanicalFinding } from "./common.js";
+import { mechanicalFinding, walkSourceFiles } from "./common.js";
 
 interface SourceFile {
   path: string; // relative to the scanned project root
@@ -308,24 +306,8 @@ export function classifyLeftoverAuth(file: SourceFile): Finding[] {
   return findings;
 }
 
-const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
-const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
-
-function walk(dir: string, root: string, out: SourceFile[]): void {
-  for (const entry of readdirSync(dir)) {
-    if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    const stat = statSync(full);
-    if (stat.isDirectory()) {
-      walk(full, root, out);
-    } else if (SOURCE_EXT.test(entry)) {
-      out.push({ path: relative(root, full), content: readFileSync(full, "utf8") });
-    }
-  }
-}
-
 export function scanLeftoverAuth(projectDir: string): Finding[] {
-  const files: SourceFile[] = [];
-  walk(projectDir, projectDir, files);
-  return files.flatMap(classifyLeftoverAuth);
+  return walkSourceFiles(projectDir)
+    .map((f): SourceFile => ({ path: f.path, content: f.text }))
+    .flatMap(classifyLeftoverAuth);
 }

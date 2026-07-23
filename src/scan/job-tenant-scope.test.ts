@@ -65,4 +65,61 @@ export async function GET() {
     const insert = positive.replace(`.select("*")`, `.insert({ subject: event.data.subject })`);
     expect(run(insert)).toHaveLength(0);
   });
+
+  it("flags an unscoped service-role delete", () => {
+    const del = positive.replace(`.select("*")`, `.delete()`);
+    const findings = run(del);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.evidence).toContain(".delete()");
+  });
+
+  it("still flags the read when the .eq column is not a tenant/owner column — an arbitrary filter is not a scoping predicate", () => {
+    const statusFiltered = positive.replace(`.select("*")`, `.select("*").eq("status", "pending")`);
+    expect(run(statusFiltered)).toHaveLength(1);
+  });
+
+  it("dedupes two unscoped sites on the SAME table in one file down to a single finding", () => {
+    const twoSitesSameTable = `import { admin } from "../../lib/supabaseAdmin";
+export const importInbound = inngest.createFunction({ id: "import-inbound" }, { event: "gmail/received" }, async ({ event }) => {
+  const { data } = await admin.from("gmail_inbound_messages").select("*");
+  await admin.from("gmail_inbound_messages").delete();
+  return data;
+});
+`;
+    expect(run(twoSitesSameTable)).toHaveLength(1);
+  });
+
+  it("flags each unscoped site separately when they hit DIFFERENT tables", () => {
+    const twoTables = `import { admin } from "../../lib/supabaseAdmin";
+export const importInbound = inngest.createFunction({ id: "import-inbound" }, { event: "gmail/received" }, async ({ event }) => {
+  const { data: a } = await admin.from("gmail_inbound_messages").select("*");
+  const { data: b } = await admin.from("sms_inbound_messages").select("*");
+  return [a, b];
+});
+`;
+    const findings = run(twoTables);
+    expect(findings).toHaveLength(2);
+    expect(findings.map((f) => f.evidence).join(" ")).toContain("gmail_inbound_messages");
+    expect(findings.map((f) => f.evidence).join(" ")).toContain("sms_inbound_messages");
+  });
+
+  it("does not double-count a chain that continues past the scoped verb with a further method call", () => {
+    const chained = positive.replace(`.select("*")`, `.select("*").order("created_at")`);
+    expect(run(chained)).toHaveLength(1);
+  });
+
+  it.each(["src/jobs/reconcile.ts", "src/queues/worker.ts", "src/workers/sync.ts"])(
+    "flags the same unscoped read under the %s background-job path",
+    (path) => {
+      expect(run(positive, path)).toHaveLength(1);
+    },
+  );
+
+  it("stays silent when the d091-allow annotation is a TRAILING comment on the statement", () => {
+    const trailingAnnotated = positive.replace(
+      `const { data } = await admin.from("gmail_inbound_messages").select("*");`,
+      `const { data } = await admin.from("gmail_inbound_messages").select("*"); // ${"d091-allow:service-role-tenant"} — scoped by the job wrapper`,
+    );
+    expect(run(trailingAnnotated)).toHaveLength(0);
+  });
 });

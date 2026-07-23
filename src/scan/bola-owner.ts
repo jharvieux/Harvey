@@ -21,8 +21,6 @@
 // Review tier, never free-count: the AST proves the scoping value's origin, not that
 // authorization is absent from a wrapper it can't see.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { callChainNames, loc, parse, type SourceInput } from "../detectors/common.js";
@@ -37,11 +35,9 @@ import {
   OWNERSHIP_COLUMN,
   rootIdentifier,
 } from "../detectors/owner-id.js";
-import { mechanicalFinding } from "./common.js";
+import { mechanicalFinding, walkSourceFiles } from "./common.js";
 
 const PAGES_API_FILE = /(^|\/)pages\/api\/.+\.(ts|tsx|js|jsx|mjs|cjs)$/;
-const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
-const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
 
 type HandlerFn = ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression;
 
@@ -136,17 +132,6 @@ export function detectBolaOwnerFindings(files: SourceInput[]): Finding[] {
   return files.filter((f) => PAGES_API_FILE.test(f.path)).flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
 }
 
-function walk(dir: string, root: string, out: SourceInput[]): void {
-  for (const entry of readdirSync(dir)) {
-    if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, root, out);
-    else if (SOURCE_EXT.test(entry)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
-  }
-}
-
 export function scanBolaOwner(projectDir: string): Finding[] {
-  const files: SourceInput[] = [];
-  walk(projectDir, projectDir, files);
-  return detectBolaOwnerFindings(files);
+  return detectBolaOwnerFindings(walkSourceFiles(projectDir));
 }
