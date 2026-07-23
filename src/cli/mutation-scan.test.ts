@@ -9,7 +9,7 @@
 // with a single placeholder spec emits M8-00; a harness with one MEANINGFUL spec does not.
 
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -205,6 +205,57 @@ describe("mutation-scan --stub-check crash safety (#600)", () => {
     child.kill("SIGTERM");
     await exited;
     expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
+  });
+});
+
+// #765: the stub-check runner used to build a SHELL string — `execSync(`${testCmd} ${tests.join(" ")}`)`
+// — from covering-test paths walked out of the untrusted target. A filename may legally contain shell
+// metacharacters, so a hostile repo shipping a test file named e.g. `evil;touch <marker>.test.ts`
+// achieved arbitrary command execution on the auditor. The fix runs the suite via execFileSync with an
+// argv array (no shell), each test path a literal argument. This fixture ships exactly that filename and
+// proves the injected `touch` never fires while the real runner still receives the path verbatim.
+describe("mutation-scan --stub-check no shell injection from target test-file paths (#765)", () => {
+  const SUBJECT = `export function add(a: number, b: number): number {\n  return a + b;\n}\n`;
+
+  it("a covering-test path containing shell metacharacters is passed as a literal argv element, never shell-executed", () => {
+    const marker = join(mkdtempSync(join(tmpdir(), "harvey-inject-marker-")), "INJECTED");
+    dirs.push(dirname(marker));
+    const record = join(mkdtempSync(join(tmpdir(), "harvey-inject-record-")), "argv.txt");
+    dirs.push(dirname(record));
+
+    // Records each argv element it receives (proving literal-arg pass-through) and exits 0 so the
+    // stub "survives" — i.e. the real runner definitely ran and its verdict was read.
+    const recorder = join(mkdtempSync(join(tmpdir(), "harvey-inject-recorder-")), "record.mjs");
+    dirs.push(dirname(recorder));
+    writeFileSync(recorder, `import { appendFileSync } from "node:fs";\nfor (const a of process.argv.slice(2)) appendFileSync(process.env.RECORD, a + "\\n");\nprocess.exit(0);\n`);
+
+    const repo = mkdtempSync(join(tmpdir(), "harvey-m8-inject-"));
+    dirs.push(repo);
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "fixture", scripts: { test: "vitest run" }, devDependencies: { vitest: "^3.0.0" } }));
+    mkdirSync(join(repo, "src"), { recursive: true });
+    writeFileSync(join(repo, "src", "add.ts"), SUBJECT);
+    // A covering test (imports ./add) whose FILENAME is a command injection. If the path ever reaches a
+    // shell, `touch <marker>.test.ts` runs; as a literal argv element it is an (unopenable) file path.
+    const evilName = `evil;touch $MARKER.test.ts`;
+    writeFileSync(join(repo, "src", evilName), `import { it, expect } from "vitest";\nimport { add } from "./add";\nit("adds", () => { expect(add(1, 2)).toBe(3); });\n`);
+
+    const outPath = join(repo, "m8-out.json");
+    execFileSync("node_modules/.bin/tsx", [CLI, repo, "--stub-check", "--test-cmd", `node ${recorder}`, "--out", outPath], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, MARKER: marker, RECORD: record },
+    });
+
+    // The injected command must NOT have run.
+    expect(existsSync(`${marker}.test.ts`)).toBe(false);
+    // The real runner ran and read the survival verdict.
+    const parsed = JSON.parse(readFileSync(outPath, "utf8")) as { runs: unknown[]; findings: unknown[] };
+    expect(parsed.runs).toHaveLength(1);
+    expect(parsed.findings).toHaveLength(1);
+    // The metacharacter-laden path arrived as ONE literal argument, not tokenized by a shell.
+    const recorded = readFileSync(record, "utf8").split("\n").filter(Boolean);
+    expect(recorded).toContain(`src/${evilName}`);
   });
 });
 
