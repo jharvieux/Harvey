@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildInferredKnipConfig, detectTargetFramework, detectWorkspaceFrameworks, viteWorkspaces } from "./framework-detect.js";
+import { buildInferredKnipConfig, detectOrm, detectTargetFramework, detectWorkspaceFrameworks, viteWorkspaces } from "./framework-detect.js";
 
 // Each case writes a throwaway target tree (the probe is disk-based — it must see vite.config /
 // index.html that the in-memory detector source set never carries) and asserts the coarse shape.
@@ -82,6 +82,51 @@ describe("detectTargetFramework (#573)", () => {
       "vite.config.js": `export default {};\n`,
     });
     expect(detectTargetFramework(dir)).toBe("vite");
+  });
+});
+
+// #757 (part of #756): ORM/architecture detection — decides whether the Supabase-specific RLS
+// detectors have a surface to analyze. Supabase must win when both signatures are present so a real
+// RLS surface is never suppressed just because Prisma is also a dependency.
+describe("detectOrm (#757)", () => {
+  it("detects Prisma from a prisma/schema.prisma + @prisma/client dep (Next+Prisma, no Supabase)", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "app", dependencies: { next: "14.2.5", "@prisma/client": "^5.18.0" } }),
+      "prisma/schema.prisma": `datasource db {\n  provider = "postgresql"\n  url = env("DATABASE_URL")\n}\nmodel Note { id String @id }\n`,
+    });
+    expect(detectOrm(dir)).toBe("prisma");
+  });
+
+  it("detects Prisma from a root schema.prisma with no dep entry", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "app" }),
+      "schema.prisma": `model User { id String @id }\n`,
+    });
+    expect(detectOrm(dir)).toBe("prisma");
+  });
+
+  it("detects Supabase from a supabase/migrations directory", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "app", dependencies: { next: "14.2.5" } }),
+      "supabase/migrations/0001_init.sql": `create table public.notes (id uuid primary key);`,
+    });
+    expect(detectOrm(dir)).toBe("supabase");
+  });
+
+  it("prefers Supabase when both signatures appear (never suppress a real RLS surface)", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "app", dependencies: { "@supabase/supabase-js": "^2.45.0", "@prisma/client": "^5.18.0" } }),
+      "prisma/schema.prisma": `model Note { id String @id }\n`,
+      "supabase/migrations/0001_init.sql": `create table public.notes (id uuid primary key);`,
+    });
+    expect(detectOrm(dir)).toBe("supabase");
+  });
+
+  it("returns `unknown` for a target with neither ORM's signature", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "lib", dependencies: { lodash: "^4.0.0" } }),
+    });
+    expect(detectOrm(dir)).toBe("unknown");
   });
 });
 

@@ -15,6 +15,14 @@ import { discoverTargets } from "../pentest/targets.js";
 
 export type TargetFramework = "next" | "vite" | "other";
 
+// #757 (part of #756): the target's DB/ORM architecture, orthogonal to the JS framework — an app
+// can be Next+Prisma with no Supabase. Its consumer is the M1 mechanical tier (src/scan/
+// mechanical.ts): the Supabase-specific migration/RLS/PostgREST/edge-config detectors have NO
+// surface to analyze on a Prisma/Postgres app (all tenant isolation is app-layer, where the
+// ORM-agnostic pg-idor/bola-owner/etc. detectors already run), so it records that tier N/A by
+// architecture instead of letting the absence of RLS pass as an implicit gap.
+type TargetOrm = "prisma" | "supabase" | "unknown";
+
 const NEXT_CONFIGS = ["next.config.js", "next.config.mjs", "next.config.cjs", "next.config.ts"];
 const VITE_CONFIGS = ["vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cjs"];
 
@@ -46,6 +54,31 @@ export function detectTargetFramework(dir: string): TargetFramework {
   if (hasViteConfig || hasDep(pkgText, "vite") || (hasIndexHtml && usesImportMetaEnv)) return "vite";
 
   return "other";
+}
+
+const PRISMA_SCHEMA_PATHS = ["schema.prisma", join("prisma", "schema.prisma")];
+
+// #757: which DB/ORM architecture the target uses. Supabase WINS when both signatures appear — a
+// real Supabase RLS surface must never be suppressed because Prisma is also present as a query
+// layer. `unknown` when neither signature is found, so the RLS detectors run unchanged (their own
+// no-migrations-found path already yields nothing on a non-Supabase target — the gate is only about
+// making that N/A explicit for a recognized Prisma architecture, never widening suppression).
+export function detectOrm(dir: string): TargetOrm {
+  const pkgText = loadSources(dir).find((s) => s.path === "package.json")?.text;
+
+  const isSupabase =
+    hasDep(pkgText, "@supabase/supabase-js") ||
+    existsSync(join(dir, "supabase", "config.toml")) ||
+    existsSync(join(dir, "supabase", "migrations"));
+  if (isSupabase) return "supabase";
+
+  const isPrisma =
+    hasDep(pkgText, "@prisma/client") ||
+    hasDep(pkgText, "prisma") ||
+    PRISMA_SCHEMA_PATHS.some((p) => existsSync(join(dir, p)));
+  if (isPrisma) return "prisma";
+
+  return "unknown";
 }
 
 // #696: a third-party scan target usually ships NO knip config, so knip can't infer non-app entry
