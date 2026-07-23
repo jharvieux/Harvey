@@ -92,7 +92,7 @@ if (outPath) {
 } else {
   console.log(packet);
 }
-console.error("M6 is a judgment pass, not a detector — this packet needs a reviewer, and the writeup needs human triage before a client sees it.");
+console.error("M6 is a judgment pass, not a detector — this packet needs TWO independent reviewers (#813): compare their verdict blocks with `pnpm exec tsx src/cli/m6-agreement.ts`, send splits to a human adjudicator, and the writeup still needs human triage before a client sees it.");
 // #351: assembling this packet is NOT an M6 execution. The orchestrator records M6 `partial` (not
 // `ran`) on the strength of this run, so it never clears M6's never-run alarm — only a recorded
 // reviewed verdict does (see src/audit-runners.ts m6, and the #416 durable-artifact path).

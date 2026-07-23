@@ -146,6 +146,22 @@ export function buildInferredKnipConfig(framework: TargetFramework): Record<stri
   };
 }
 
+// #810: the "NEEDS target npm install" prereq — knip aborts when it tries to LOAD the target's own
+// knip config OR any framework plugin config (vite.config.ts, next.config.ts, ...) whose imports
+// don't resolve, which is exactly what a not-yet-installed target's node_modules causes. Every knip
+// plugin is what reads those config files; setting each to `false` stops knip loading ANY of them
+// (MEASURED 2026-07-23: a vite.config importing an uninstalled plugin aborts the whole run even with
+// an explicit `-c` override, but disabling the plugins makes knip skip the config file and report
+// dead code from source alone). Built on top of buildInferredKnipConfig so the inferred entry globs
+// stand in for the entry points those plugins would otherwise have contributed. `pluginNames` is the
+// caller-supplied list of knip's own installed plugin ids (knip validates config keys strictly, so
+// it must be knip's real plugin set, not a guess) — see quality-scan.ts's knipPluginNames.
+export function buildDegradedKnipConfig(framework: TargetFramework, pluginNames: string[]): Record<string, unknown> {
+  const config = buildInferredKnipConfig(framework);
+  for (const name of pluginNames) config[name] = false;
+  return config;
+}
+
 // Monorepo-aware resolution (#597). `detectTargetFramework` inspects a SINGLE dir's own
 // manifest/config, so at a monorepo ROOT — where vite.config/next.config live in `apps/*`, not the
 // root — it returns `other`, and the M9 SSR gate (which only suppresses on `vite`) runs the SSR

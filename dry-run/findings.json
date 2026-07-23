@@ -1346,6 +1346,24 @@
     "precisionTier": "review"
   },
   {
+    "id": "DEP-OSV-GHSA-6g55-p6wh-862q",
+    "title": "postcss@8.4.31: PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "package-lock.json (postcss@8.4.31)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-6g55-p6wh-862q (aliases: CVE-2026-45623) against postcss@8.4.31.",
+    "impact": "PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments",
+    "fix": "Upgrade postcss past the vulnerable range (see GHSA-6g55-p6wh-862q).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review"
+  },
+  {
     "id": "DEP-OSV-GHSA-qx2v-qp2m-jg93",
     "title": "postcss@8.4.31: PostCSS has XSS via Unescaped </style> in its CSS Stringify Output",
     "severity": "Medium",

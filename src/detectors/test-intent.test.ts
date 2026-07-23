@@ -49,6 +49,9 @@ const CASES: Case[] = [
   // The two variants #372's follow-up comment adds.
   { name: "snapshot-only test", dir: "snapshot-only", taxonomy: "M8 — Snapshot-only test", posCount: 2, severity: "Low", confidence: "Review" },
   { name: "call-count-only test", dir: "call-count-only", taxonomy: "M8 — Call-count-only test", posCount: 1, severity: "Low", confidence: "Review" },
+  // #821 — category 3 of the intent brief ("asserts WHAT, not WHY") mechanized structurally:
+  // body consumed + every assertion incidental (success status / nonzero count / existence).
+  { name: "shape-only response assertions", dir: "shape-only", taxonomy: "M8 — Asserts response shape, not business values", posCount: 2, severity: "Medium", confidence: "Review" },
   // #384 — provably false confidence by construction (RLS is enforced by Postgres, which a
   // mocked client never reaches). Distinct from mock-of-subject: the mocked module here is a
   // legitimately-mocked-looking dependency.

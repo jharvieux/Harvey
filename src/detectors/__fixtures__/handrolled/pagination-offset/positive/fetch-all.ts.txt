@@ -1,0 +1,13 @@
+export async function fetchAllPosts(supabase: SupabaseClient) {
+  const pageSize = 1000;
+  let offset = 0;
+  let rows: unknown[] = [];
+  let hasMore = true;
+  while (hasMore) {
+    const { data } = await supabase.from("posts").select("*").range(offset, offset + pageSize - 1);
+    rows = rows.concat(data ?? []);
+    hasMore = (data?.length ?? 0) === pageSize;
+    offset += pageSize;
+  }
+  return rows;
+}

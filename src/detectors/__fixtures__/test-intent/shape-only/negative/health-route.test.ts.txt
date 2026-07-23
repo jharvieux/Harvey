@@ -1,0 +1,9 @@
+import { expect, it } from "vitest";
+import { GET } from "./route";
+
+// A pure status smoke test never touches the body — a legitimate health check, out of scope
+// for the shape-only class (the class is "data was in hand and went unexamined").
+it("health endpoint responds", async () => {
+  const res = await GET(new Request("http://test/api/health"));
+  expect(res.status).toBe(200);
+});

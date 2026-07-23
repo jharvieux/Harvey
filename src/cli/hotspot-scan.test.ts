@@ -1,8 +1,11 @@
-// #624: vitals reads its precomputed store from `./.vitals/store.db` relative to CWD. hotspot-scan
+// #624: vitals resolves its git root and its `.vitals` provenance DB relative to CWD. hotspot-scan
 // passed the target as a positional path but ran vitals in the Harvey worktree's CWD, so vitals
-// found no store and exited "No source files found" — misreported as "plugin unavailable". This
-// drives the real CLI with a fake `vitals_cli.py` on PATH that emits a report ONLY when the store
-// is visible in its CWD; it succeeds only if the CLI runs vitals with cwd set to the target.
+// analyzed the wrong tree — misreported as "plugin unavailable". This drives the real CLI with a
+// fake `vitals_cli.py` on PATH that emits a report ONLY when a marker file is visible in its CWD; it
+// succeeds only if the CLI runs vitals with cwd set to the target. (Real vitals does NOT require a
+// pre-captured `.vitals` store — `report` computes churn×complexity from git — but the CWD-relative
+// marker is a faithful stand-in for proving the CLI runs vitals from the target directory.)
+// The fake also answers the `version` subcommand (#808) so the CLI's version assertion passes.
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -14,9 +17,11 @@ import { afterEach, describe, expect, it } from "vitest";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "hotspot-scan.ts");
 
-// A stand-in for vitals_cli.py: it emits a valid (empty) report only when the target's
-// `.vitals/store.db` is present in the process CWD — exactly vitals's own CWD-relative store lookup.
+// A stand-in for vitals_cli.py: it reports the expected version, then emits a valid (empty) report
+// only when the target's marker file is present in the process CWD — proving the CLI runs vitals
+// with cwd set to the target.
 const FAKE_VITALS = `#!/bin/bash
+if [ "$1" = "version" ]; then echo "Vitals v0.2.0"; exit 0; fi
 if [ -f ".vitals/store.db" ]; then
   echo '{"hotspots":[],"coupling":[],"knowledge_risk":[]}'
   exit 0

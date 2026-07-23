@@ -19,8 +19,10 @@ import {
   rootScopedMutateGlobs,
   rootWorkspaceTestFinding,
   rootWorkspaceTestModuleRecord,
+  resolveJsonReporterPath,
   scaffoldStrykerConfig,
   scopedRunModuleRecord,
+  summarizeLineCoverage,
   summarizeMutationReport,
   survivingMutantFindings,
   toReportRows,
@@ -28,6 +30,7 @@ import {
   verifyMutationScope,
   withTs7TsconfigBypass,
   type AncestorTestSignals,
+  type IstanbulCoverageSummary,
   type StrykerMutant,
   type StrykerReport,
 } from "./mutation-scan.js";
@@ -174,6 +177,53 @@ describe("toReportRows", () => {
     expect(scanRow).toEqual({ module: "src/scan", mutationScore: 50, survivingCount: 2, hotspotSurvivingCount: 1 });
     const findingsRow = rows.find((r) => r.module === "src");
     expect(findingsRow).toEqual({ module: "src", mutationScore: 100, survivingCount: 0, hotspotSurvivingCount: 0 });
+  });
+
+  it("#819: merges per-module line coverage onto the same row when supplied", () => {
+    const summary = summarizeMutationReport(report, ["src/scan/supabase.ts"]);
+    const rows = toReportRows(summary, { "src/scan": 42.5, src: 100 });
+    expect(rows.find((r) => r.module === "src/scan")).toMatchObject({ lineCoverage: 42.5 });
+    expect(rows.find((r) => r.module === "src")).toMatchObject({ lineCoverage: 100 });
+  });
+
+  it("#819: a module absent from the coverage map gets no lineCoverage key — never a silent 0", () => {
+    const summary = summarizeMutationReport(report, ["src/scan/supabase.ts"]);
+    const rows = toReportRows(summary, { "src/scan": 42.5 });
+    const srcRow = rows.find((r) => r.module === "src")!;
+    expect("lineCoverage" in srcRow).toBe(false);
+  });
+});
+
+describe("summarizeLineCoverage (#819)", () => {
+  it("aggregates file-level Istanbul line coverage into the same per-directory module buckets as mutation scoring", () => {
+    const coverage: IstanbulCoverageSummary = {
+      total: { lines: { total: 999, covered: 999, skipped: 0, pct: 100 } },
+      "src/scan/supabase.ts": { lines: { total: 10, covered: 5, skipped: 0, pct: 50 } },
+      "src/scan/secrets.ts": { lines: { total: 10, covered: 10, skipped: 0, pct: 100 } },
+      "src/findings.ts": { lines: { total: 4, covered: 4, skipped: 0, pct: 100 } },
+    };
+    const byModule = summarizeLineCoverage(coverage, "/repo");
+    expect(byModule["src/scan"]).toBe(75); // (5+10)/(10+10)
+    expect(byModule.src).toBe(100);
+    expect(byModule.total).toBeUndefined(); // the Istanbul "total" key is not a module
+  });
+
+  it("un-absolutes file keys relative to targetDir before bucketing", () => {
+    const coverage: IstanbulCoverageSummary = {
+      "/repo/src/findings.ts": { lines: { total: 8, covered: 4, skipped: 0, pct: 50 } },
+    };
+    expect(summarizeLineCoverage(coverage, "/repo")).toEqual({ src: 50 });
+  });
+});
+
+describe("resolveJsonReporterPath (#820)", () => {
+  it("reads a custom jsonReporter.fileName off the resolved config", () => {
+    expect(resolveJsonReporterPath({ jsonReporter: { fileName: "out/custom-report.json" } })).toBe("out/custom-report.json");
+  });
+
+  it("falls back to Stryker's documented default when the config has no jsonReporter entry", () => {
+    expect(resolveJsonReporterPath(undefined)).toBe("reports/mutation/mutation.json");
+    expect(resolveJsonReporterPath({})).toBe("reports/mutation/mutation.json");
   });
 });
 

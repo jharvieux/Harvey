@@ -1,0 +1,17 @@
+const FOOTER_LINKS = [
+  { href: "/about", label: "About", order: 2 },
+  { href: "/privacy", label: "Privacy", order: 3 },
+  { href: "/", label: "Home", order: 1 },
+];
+
+// Sorting a hardcoded const list in JSX re-sorts three items per render — the list never grows
+// with data, so there is no O(n log n) cost to chase (#816 triage FP shape).
+export function Footer() {
+  return (
+    <nav>
+      {[...FOOTER_LINKS].sort((a, b) => a.order - b.order).map((l) => (
+        <a key={l.href} href={l.href}>{l.label}</a>
+      ))}
+    </nav>
+  );
+}

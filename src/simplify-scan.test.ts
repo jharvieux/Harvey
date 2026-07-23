@@ -70,6 +70,34 @@ describe("renderPacket", () => {
   });
 });
 
+describe("renderPacket two-reviewer protocol (#813)", () => {
+  const packet = buildPacket(BRIEF, process.cwd(), [`${process.cwd()}/package.json`]);
+  const out = renderPacket(packet);
+
+  it("tells the reviewer it is one of two independent passes and forbids consulting the other", () => {
+    expect(out).toMatch(/ONE OF TWO independent reviewers/);
+    expect(out).toMatch(/do not consult/i);
+  });
+
+  it("routes splits to a human adjudicator, never straight into a report", () => {
+    expect(out).toMatch(/human adjudicator/);
+    expect(out).toMatch(/never goes\s+straight into a report/);
+  });
+
+  it("carries the machine-readable verdict template, pre-filled with this packet's target", () => {
+    expect(out).toContain("## Verdict format — two-reviewer protocol (#813)");
+    expect(out).toContain('"verdict": "flag | spare"');
+    expect(out).toContain(`"target": "${process.cwd()}"`);
+    // Comparison is mechanical — the packet names the tool that computes agreement.
+    expect(out).toContain("src/cli/m6-agreement.ts");
+  });
+
+  it("requires every packet file to appear in the verdict block — no silent default to spare", () => {
+    expect(out).toMatch(/exactly once/);
+    expect(out).toMatch(/does not default to "spare"/);
+  });
+});
+
 describe("buildPacket dependency manifest (#396)", () => {
   const cwd = process.cwd();
   const sourcePaths = [`${cwd}/package.json`]; // stands in for a source file under review
