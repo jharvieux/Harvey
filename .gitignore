@@ -13,3 +13,6 @@ report-template/out/
 # the answer-key capture lives in src/mutation-scan.test.ts instead)
 reports/mutation/
 stryker-tmp/
+
+# Transient sweep/agent worktrees — nested checkouts of this repo, never committed
+.claude/worktrees/
