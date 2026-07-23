@@ -40,13 +40,18 @@ leading directive is `'use client'`, (b) holds a variable bound to a raw Supabas
 variable whole into the client component — either `<Comp data={row} />` or `<Comp {...row} />`.
 
 **Detection method:** AST. Client-component identity comes from the imported file's leading
-directive; import resolution is relative-path only (`./Foo`, `../lib/Foo`, with `.ts`/`.tsx`/
-`index.ts(x)` resolution) — path aliases (`@/components/Foo`) are not resolved, so a leak through
-an aliased import is a **false negative**. A prop is only flagged when the *whole* query-result
-variable is passed; `<Comp data={row.name} />` (a narrowed projection) is correctly treated as safe.
-**Known false negative:** a leak that goes through an intermediate variable (`const dto = row; <Comp
-data={dto} />`) or through an object literal that spreads a nested field (`<Comp data={{...row.x}}
-/>`) is not tracked — the check only follows the direct query-result binding.
+directive. Import resolution follows both relative specifiers (`./Foo`, `../lib/Foo`, with
+`.ts`/`.tsx`/`index.ts(x)` resolution) **and configured path aliases** — the tsconfig/jsconfig
+`compilerOptions.paths` wildcard entries and the create-next-app `@/*`→root default (#380, via
+`resolveImport`/`collectPathAliases`). A leak through an aliased import (`@/components/Foo`) IS
+followed; only an *unconfigured* or computed/dynamic specifier is invisible to resolution and would
+be a **false negative**. A prop is only flagged when the *whole* query-result variable is passed;
+`<Comp data={row.name} />` (a narrowed projection) is correctly treated as safe. One hop of
+aliasing IS tracked (#847): a leak through an intermediate binding (`const dto = row; <Comp
+data={dto} />`), a spread binding (`const dto = {...row}`), or an inline spread (`<Comp
+data={{...row}} />`) still flags. **Known false negative:** a leak laundered through more than one
+hop, or through an object literal that spreads only a *nested* field (`<Comp data={{...row.x}} />`),
+is not tracked.
 
 ### Missing `server-only` guard — HIGH (`M9 — Missing server-only guard`)
 
@@ -70,9 +75,10 @@ fix. **Known false positive:** the secret-name pattern is still a heuristic — 
 happens to match (`FEATURE_FLAG_API_KEY_ENABLED`) but isn't actually sensitive will still be
 flagged if a real client-import path exists; a human should confirm before reporting. **Known false
 negative:** secrets referenced only through a re-exported constant (`import { SERVICE_ROLE_KEY }
-from "./config"`) rather than `process.env` directly aren't traced back to their source; import
-resolution is relative-path only, so a client-import path that goes through a path alias
-(`@/lib/foo`) is invisible to the graph and won't trigger the check.
+from "./config"`) rather than `process.env` directly aren't traced back to their source. The
+client-import-path graph follows both relative specifiers **and configured path aliases** (the
+tsconfig/jsconfig `paths` wildcards and the `@/*` default, #380), so a client-import path through
+`@/lib/foo` IS seen — only an unconfigured or computed specifier escapes the graph.
 
 ### Server Action missing auth — retagged to M1 (`M1 — Server Action missing authorization check`)
 
@@ -163,10 +169,15 @@ brief's "read high in the tree" is approximated as "read in this route's own mod
 call-graph position. A leaf component that itself calls `cookies()` outside Suspense, one import
 away, is a **false negative** here.
 
-## Calibration target dependency (issue #9)
+## Calibration corpus coverage (issues #9 / #848)
 
-Issue #9 (shared calibration target) hadn't landed in `main` at the time this module was built, so
-the checks above are tested against synthetic fixtures in `src/detectors/__fixtures__/` (one
-positive + one negative example per check, plus extra negative cases for the router-level
-exemptions) rather than a seeded example in a shared target. Wiring a seeded example of each HIGH
-check into the calibration target is follow-up work once #9 lands.
+Each check has a positive + negative example in `src/detectors/__fixtures__/` (plus extra negatives
+for the router-level exemptions), scored by the detector's own suite in
+`src/detectors/app-router.test.ts`. As of **#848** those same committed fixtures are also bound to
+scored answer-key entries in the shared corpus: `src/scan/calibration/m9-checks.entries.ts` (the
+nine non-owner-id checks) and `src/scan/calibration/m9-authz.entries.ts` (the client-supplied-owner-id
+class). The live scoring runs in `src/scan/calibration.test.ts` ("#848 M9 per-check corpus" and
+"#221 authz corpus"), so every M9 check now has a scored corpus row and appears in the per-module
+census (`pnpm exec tsx src/cli/validate-calibration.ts`), not just fixture assertions. Entries carry
+`module: "M9"`; `validate-calibration.ts` scores only the M1 mechanical corpus, so M9 is counted in
+the census and gated by its own suite rather than that gate's headline recall number.

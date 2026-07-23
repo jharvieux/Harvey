@@ -38,6 +38,7 @@ import { m7Entries } from "./calibration/m7.entries.js";
 import { m7InitplanStaticEntries } from "./calibration/m7-initplan-static.entries.js";
 import { m8Entries } from "./calibration/m8.entries.js";
 import { m9AuthzEntries } from "./calibration/m9-authz.entries.js";
+import { m9CheckEntries } from "./calibration/m9-checks.entries.js";
 import { m10Entries } from "./calibration/m10.entries.js";
 import { m4m5Entries } from "./calibration/m4-m5.entries.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
@@ -74,6 +75,7 @@ export const CORPUS: CorpusEntry[] = [
   ...knownPublicCredsEntries,
   ...rlsStaticSemanticsEntries,
   ...m9AuthzEntries,
+  ...m9CheckEntries,
   ...m10Entries,
   ...m4m5Entries,
   ...m8Entries,

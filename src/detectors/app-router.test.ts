@@ -49,6 +49,57 @@ describe("server → client data leak", () => {
     expect(taxonomies(findings)).not.toContain("M9 — Server→client data leak");
   });
 
+  // #847: the common real-world shape maps the row into an intermediate binding first. One hop of
+  // alias/spread tracking must still flag it.
+  const clientView: SourceInput = {
+    path: "app/dashboard/ClientView.tsx",
+    text: `"use client";\nexport function ClientView({ user }: { user: any }) { return <div>{user.name}</div>; }\n`,
+  };
+
+  it("flags a full row passed through an intermediate alias binding (`const dto = row`)", () => {
+    const findings = detectAppRouterFindings([
+      clientView,
+      {
+        path: "app/dashboard/page.tsx",
+        text: `import { ClientView } from "./ClientView";\nexport default async function Page() {\n  const { data: user } = await db.from("users").select("*").single();\n  const dto = user;\n  return <ClientView user={dto} />;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
+  });
+
+  it("flags a full row passed through an inline object spread (`data={{...row}}`)", () => {
+    const findings = detectAppRouterFindings([
+      clientView,
+      {
+        path: "app/dashboard/page.tsx",
+        text: `import { ClientView } from "./ClientView";\nexport default async function Page() {\n  const { data: user } = await db.from("users").select("*").single();\n  return <ClientView user={{...user}} />;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
+  });
+
+  it("flags a full row aliased through a spread binding (`const dto = {...row}`)", () => {
+    const findings = detectAppRouterFindings([
+      clientView,
+      {
+        path: "app/dashboard/page.tsx",
+        text: `import { ClientView } from "./ClientView";\nexport default async function Page() {\n  const { data: user } = await db.from("users").select("*").single();\n  const dto = {...user};\n  return <ClientView user={dto} />;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
+  });
+
+  it("does not flag a narrowed destructure alias (`const { name } = row`)", () => {
+    const findings = detectAppRouterFindings([
+      clientView,
+      {
+        path: "app/dashboard/page.tsx",
+        text: `import { ClientView } from "./ClientView";\nexport default async function Page() {\n  const { data: user } = await db.from("users").select("*").single();\n  const { name } = user;\n  return <ClientView user={name} />;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain("M9 — Server→client data leak");
+  });
+
   // #380: the client component is imported via the create-next-app `@/*` path alias, not a
   // relative specifier. Before the tsconfig `paths` resolution, the leak was invisible.
   it("follows a tsconfig `@/*` path alias to identify the imported Client Component", () => {
@@ -292,6 +343,39 @@ describe("Server Action missing input validation", () => {
     expect(taxonomies(findings)).not.toContain("M9 — Server Action missing input validation");
   });
 
+  // #845: the auth/validation keywords are matched over the action's real code tokens, not the raw
+  // text — a keyword in a comment or string literal no longer defeats the check.
+  it("still flags missing auth when the only `auth`/parse keyword sits in a comment or string", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/actions.ts",
+        text: `"use server";\nexport async function updateBio(input: { bio: string }) {\n  // TODO: add auth check here\n  const label = "user must parse and authenticate";\n  await admin.from("profiles").update({ bio: input.bio });\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).toContain("M1 — Server Action missing authorization check");
+    expect(taxonomies(findings)).toContain("M9 — Server Action missing input validation");
+  });
+
+  it("does not flag missing validation when a real .parse() call is present (comment stripping doesn't blank code)", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/actions.ts",
+        text: `"use server";\nimport { getCurrentUser } from "../lib/auth";\nimport { schema } from "../lib/schema";\nexport async function updateBio(input: unknown) {\n  const user = await getCurrentUser();\n  const data = schema.parse(input);\n  await admin.from("profiles").update({ bio: data.bio }).eq("user_id", user.id);\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain("M9 — Server Action missing input validation");
+  });
+
+  it("does not scope an action as mutating when `.update(` appears only in a string literal", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/actions.ts",
+        text: `"use server";\nexport async function logNote(note: string) {\n  console.log(".update() was requested: " + note);\n}\n`,
+      },
+    ]);
+    expect(findings).toEqual([]);
+  });
+
   it("does not flag read-only 'use server' actions (no mutation call)", () => {
     const findings = detectAppRouterFindings([
       {
@@ -420,6 +504,183 @@ describe("SSR-only browser API misuse (#381)", () => {
       },
     ]);
     expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
+});
+
+const SEGMENT_CFG = "M9 — Unsafe route segment config";
+const SEGMENT_CONFLICT = "M9 — Conflicting route segment config";
+const MISSING_SUSPENSE = "M9 — Missing Suspense boundary";
+
+// #846. Route segment config (dynamic/revalidate/...) is now validated, plus a missing-Suspense
+// check around dynamic reads.
+describe("route segment config & missing Suspense (#846)", () => {
+  it("flags force-static on a route that reads a dynamic API", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/dashboard/page.tsx", text: `import { cookies } from "next/headers";\nexport const dynamic = "force-static";\nexport default function Page() {\n  const t = cookies().get("session");\n  return <div>{t?.value}</div>;\n}\n` },
+    ]);
+    const hits = findings.filter((f) => f.taxonomy === SEGMENT_CFG);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ severity: "High", category: "Security" });
+  });
+
+  it("flags force-static on an auth-gated route", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/account/page.tsx", text: `import { getServerSession } from "next-auth";\nexport const dynamic = "force-static";\nexport default async function Page() {\n  const session = await getServerSession();\n  return <div>{session?.user?.name}</div>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(SEGMENT_CFG);
+  });
+
+  it("does not flag force-static on a plain public/static page", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/about/page.tsx", text: `export const dynamic = "force-static";\nexport default function Page() {\n  return <div>About us</div>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SEGMENT_CFG);
+  });
+
+  it("flags force-dynamic combined with a positive revalidate (dead config)", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/feed/page.tsx", text: `export const dynamic = "force-dynamic";\nexport const revalidate = 3600;\nexport default function Page() {\n  return <div/>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(SEGMENT_CONFLICT);
+  });
+
+  it("flags force-static combined with revalidate = 0 (contradiction)", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/feed/page.tsx", text: `export const dynamic = "force-static";\nexport const revalidate = 0;\nexport default function Page() {\n  return <div/>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(SEGMENT_CONFLICT);
+  });
+
+  it("does not flag a coherent revalidate-only config", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/feed/page.tsx", text: `export const revalidate = 60;\nexport default function Page() {\n  return <div/>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SEGMENT_CONFLICT);
+    expect(taxonomies(findings)).not.toContain(SEGMENT_CFG);
+  });
+
+  it("flags a page that reads a dynamic API and fetches data with no <Suspense> boundary", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/feed/page.tsx", text: `import { cookies } from "next/headers";\nexport default async function Page() {\n  const t = cookies().get("t");\n  const data = await fetch("https://api.example.com/feed");\n  return <div>{t?.value}</div>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(MISSING_SUSPENSE);
+  });
+
+  it("does not flag a missing Suspense boundary when one is present", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/feed/page.tsx", text: `import { Suspense } from "react";\nimport { cookies } from "next/headers";\nexport default async function Page() {\n  const t = cookies().get("t");\n  const data = await fetch("https://api.example.com/feed");\n  return <Suspense fallback={null}><div>{t?.value}</div></Suspense>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(MISSING_SUSPENSE);
+  });
+});
+
+const UNBOUNDED = "M9 — Unbounded/self-calling route or edge fn";
+
+// #843. The M9 brief's "unbounded / self-calling route or edge fn" surface: a route/edge handler
+// that loops forever or fetches its own URL. Scoped to route.ts/pages-api/middleware/edge-runtime
+// files; the FP boundary is a `while(true)` with a break (bounded) and a fetch to a DIFFERENT URL.
+describe("unbounded / self-calling route or edge fn (#843)", () => {
+  it("flags a `while(true)` loop with no break/return/throw in a route handler", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/api/sync/route.ts", text: `export async function GET() {\n  let n = 0;\n  while (true) {\n    n += 1;\n  }\n}\n` },
+    ]);
+    const hits = findings.filter((f) => f.taxonomy === UNBOUNDED);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ severity: "Medium", category: "Performance" });
+    expect(hits[0]?.title).toContain("Unbounded loop");
+  });
+
+  it("flags a `for(;;)` loop with no escape in an edge-runtime file", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/worker/handler.ts", text: `export const runtime = "edge";\nexport function handler() {\n  for (;;) {\n    doWork();\n  }\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(UNBOUNDED);
+  });
+
+  it("does not flag a `while(true)` loop that breaks (bounded by construction)", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/api/sync/route.ts", text: `export async function GET() {\n  while (true) {\n    const done = await step();\n    if (done) break;\n  }\n  return Response.json({ ok: true });\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(UNBOUNDED);
+  });
+
+  it("flags a route handler that fetches its own request URL", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/api/proxy/route.ts", text: `export async function GET(request: Request) {\n  return fetch(request.url);\n}\n` },
+    ]);
+    const hits = findings.filter((f) => f.taxonomy === UNBOUNDED);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("fetches its own request URL");
+  });
+
+  it("flags a self-fetch through `req.nextUrl`", () => {
+    const findings = detectAppRouterFindings([
+      { path: "middleware.ts", text: `export function middleware(req) {\n  return fetch(new URL("/api/x", req.nextUrl.origin));\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(UNBOUNDED);
+  });
+
+  it("does not flag a fetch to a different, unrelated URL", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/api/proxy/route.ts", text: `export async function GET() {\n  return fetch("https://upstream.example.com/data");\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(UNBOUNDED);
+  });
+
+  it("does not flag an unbounded loop outside a route/edge handler (ordinary module code)", () => {
+    const findings = detectAppRouterFindings([
+      { path: "lib/util.ts", text: `export function loop() {\n  while (true) {\n    tick();\n  }\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(UNBOUNDED);
+  });
+});
+
+// #844. The three Supabase-shaped data-layer checks silently no-op on Prisma/Drizzle targets. On a
+// recognized non-Supabase data layer they must emit an explicit not-assessed row per check.
+describe("non-Supabase data-layer coverage (#844)", () => {
+  const DATA_LAYER_TAX = [
+    "M9 — Server→client data leak — not assessed",
+    "M9 — Unsafe/missing cache config — not assessed",
+    "M9 — Data-fetching waterfall — not assessed",
+  ];
+
+  it("emits a not-assessed row for each data-layer check on a Prisma target", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("server-client-leak/positive"), "next", [], "prisma");
+    for (const tax of DATA_LAYER_TAX) {
+      const hits = findings.filter((f) => f.taxonomy === tax);
+      expect(hits, tax).toHaveLength(1);
+      expect(hits[0]).toMatchObject({ severity: "Info", confidence: "N/A", precisionTier: "high" });
+      expect(hits[0]?.evidence).toContain("Prisma");
+    }
+    // The Supabase-shaped leak finding is suppressed — it would be a false clean, not a real result.
+    expect(taxonomies(findings)).not.toContain("M9 — Server→client data leak");
+  });
+
+  it("names Drizzle from package.json when detectOrm reports unknown", () => {
+    const findings = detectAppRouterFindings(
+      [
+        { path: "package.json", text: `{"dependencies":{"drizzle-orm":"^0.30.0","next":"14.0.0"}}` },
+        { path: "app/dashboard/page.tsx", text: `export default function Page() { return <div/>; }` },
+      ],
+      "next",
+      [],
+      "unknown",
+    );
+    const hits = findings.filter((f) => f.taxonomy === "M9 — Server→client data leak — not assessed");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence).toContain("Drizzle");
+  });
+
+  it("runs the real Supabase-shaped checks (no not-assessed rows) on a Supabase target", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("server-client-leak/positive"), "next", [], "supabase");
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
+    for (const tax of DATA_LAYER_TAX) expect(taxonomies(findings)).not.toContain(tax);
+  });
+
+  it("does not emit not-assessed rows on an unknown/no-DB target (avoids noise)", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("server-client-leak/positive"), "next", [], "unknown");
+    for (const tax of DATA_LAYER_TAX) expect(taxonomies(findings)).not.toContain(tax);
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
   });
 });
 

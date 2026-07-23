@@ -12,7 +12,7 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
-import type { TargetFramework } from "../scan/framework-detect.js";
+import type { TargetFramework, TargetOrm } from "../scan/framework-detect.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 import {
   AUTH_PATTERN,
@@ -170,6 +170,27 @@ export function resolveImport(fromPath: string, specifier: string, allPaths: Set
   return resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(specifier, allPaths, aliases);
 }
 
+// An object literal whose ONLY informative content is a spread of a raw-row name — `{...row}`,
+// possibly with extra literal props. Spreading the whole row copies every field, so a binding of
+// this shape is still a full-row leak (the narrowing the DTO fix requires is `{ name: row.name }`,
+// not a spread). Returns the spread source name if the object spreads a tainted row.
+function objectSpreadsRawRow(expr: ts.Expression, rawRowNames: ReadonlySet<string>): boolean {
+  return rowNameOf(expr, rawRowNames) !== undefined;
+}
+
+function rowNameOf(expr: ts.Expression, rawRowNames: ReadonlySet<string>): string | undefined {
+  if (!ts.isObjectLiteralExpression(expr)) return undefined;
+  for (const p of expr.properties) {
+    if (ts.isSpreadAssignment(p) && ts.isIdentifier(p.expression) && rawRowNames.has(p.expression.text)) return p.expression.text;
+  }
+  return undefined;
+}
+
+// Names bound to a raw Supabase query result, PLUS one hop of aliasing (#847): `const dto = row`
+// and `const dto = {...row}` still ship the whole row, so a leak that maps the row into an
+// intermediate before passing it must still flag. `const { name } = row` (a narrowing destructure)
+// is deliberately NOT propagated — it projects, which is the safe shape. The propagation pass runs
+// in source order, so a later alias of an earlier alias is also caught; direct bindings dominate.
 function collectRawRowNames(sf: ts.SourceFile): Set<string> {
   const rawRowNames = new Set<string>();
   const visit = (node: ts.Node) => {
@@ -184,6 +205,8 @@ function collectRawRowNames(sf: ts.SourceFile): Set<string> {
             if (propName === "data" && ts.isIdentifier(el.name)) rawRowNames.add(el.name.text);
           }
         }
+      } else if (ts.isIdentifier(node.name) && ((ts.isIdentifier(init) && rawRowNames.has(init.text)) || objectSpreadsRawRow(init, rawRowNames))) {
+        rawRowNames.add(node.name.text); // one-hop alias: `const dto = row` / `const dto = {...row}`
       }
     }
     ts.forEachChild(node, visit);
@@ -245,15 +268,14 @@ function detectServerClientLeak(sources: Map<string, ts.SourceFile>, nextId: Nex
           for (const attr of node.attributes.properties) {
             if (ts.isJsxSpreadAttribute(attr) && ts.isIdentifier(attr.expression) && rawRowNames.has(attr.expression.text)) {
               flagAttr(attr, tagName, `{...${attr.expression.text}}`);
-            } else if (
-              ts.isJsxAttribute(attr) &&
-              attr.initializer &&
-              ts.isJsxExpression(attr.initializer) &&
-              attr.initializer.expression &&
-              ts.isIdentifier(attr.initializer.expression) &&
-              rawRowNames.has(attr.initializer.expression.text)
-            ) {
-              flagAttr(attr, tagName, `${attr.name.getText(sf)}={${attr.initializer.expression.text}}`);
+            } else if (ts.isJsxAttribute(attr) && attr.initializer && ts.isJsxExpression(attr.initializer) && attr.initializer.expression) {
+              const inner = attr.initializer.expression;
+              if (ts.isIdentifier(inner) && rawRowNames.has(inner.text)) {
+                flagAttr(attr, tagName, `${attr.name.getText(sf)}={${inner.text}}`);
+              } else if (objectSpreadsRawRow(inner, rawRowNames)) {
+                // `data={{...row}}` — an inline object spreading the whole row still ships every field.
+                flagAttr(attr, tagName, `${attr.name.getText(sf)}={{...${rowNameOf(inner, rawRowNames)}}}`);
+              }
             }
           }
         }
@@ -556,11 +578,39 @@ function detectClientSuppliedOwnerId(sources: Map<string, ts.SourceFile>, nextId
   return { findings, subsumedNoAuthActions };
 }
 
+// The action's source text with the INTERIOR of every string/template/regex literal and every
+// comment blanked to spaces (positions preserved) (#845). AUTH_PATTERN/VALIDATION_PATTERN are text
+// heuristics, so an `auth` in `// TODO: add auth` or a `.parse(` in a log string used to defeat
+// them — a false negative — and a keyword in an unrelated string caused a false positive. Blanking
+// literal/comment content first means only real code tokens can match. (Comments are stripped after
+// literal interiors so a `//` inside a string is never mistaken for a comment start.)
+function stripLiteralsAndComments(sf: ts.SourceFile, action: ts.Node): string {
+  const start = action.getStart(sf);
+  const chars = sf.text.slice(start, action.getEnd()).split("");
+  const blank = (from: number, to: number) => {
+    for (let i = from - start; i < to - start; i++) if (chars[i] !== "\n") chars[i] = " ";
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isStringLiteralLike(node) || ts.isRegularExpressionLiteral(node)) {
+      blank(node.getStart(sf), node.getEnd());
+    } else if (ts.isTemplateExpression(node)) {
+      blank(node.head.getStart(sf), node.head.getEnd());
+      for (const span of node.templateSpans) blank(span.literal.getStart(sf), span.literal.getEnd());
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(action);
+  return chars
+    .join("")
+    .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length))
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
+}
+
 function detectServerActionAuthAndValidation(sources: Map<string, ts.SourceFile>, nextId: NextId, subsumedNoAuthActions: ReadonlySet<ts.Node>): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     for (const action of collectServerActions(sf)) {
-      const text = sf.text.slice(action.node.getStart(sf), action.node.getEnd());
+      const text = stripLiteralsAndComments(sf, action.node);
       if (!isDbMutationChain(text)) continue; // scope to mutating actions per the brief
 
       // The client-supplied-owner-id detector already fired on this no-auth action with a
@@ -1116,22 +1166,370 @@ function detectSpaRootErrorBoundary(files: SourceInput[], nextId: NextId, scope:
   return [];
 }
 
-function runAppRouterPass(files: SourceInput[], nextId: NextId): Finding[] {
+// --- Unbounded / self-calling route or edge fn [MED] (#843) -----------------
+//
+// The M9 brief's "UNBOUNDED / SELF-CALLING ROUTE OR EDGE FN" surface (docs/scan-extras.txt): an
+// API route / edge function whose handler either loops forever or fetches its own URL → runaway
+// compute, cost, and timeouts. Two precise AST shapes, both scoped to server request handlers
+// (route.ts(x), pages/api, middleware.ts, or any file declaring `runtime = "edge"`):
+//   1. UNBOUNDED LOOP: `while (true)` / `while (1)` / `for (;;)` / `do … while (true)` whose body
+//      contains NO break/return/throw anywhere — a loop that provably never terminates. A break in
+//      a NESTED loop wouldn't terminate the outer one, so counting any break/return/throw as
+//      "bounded" only ever errs toward SILENCE (a false negative), never a false positive.
+//   2. SELF-REFERENTIAL FETCH: `fetch(…)` whose argument subtree reads the incoming request's own
+//      URL (`request.url` / `req.url` / `.nextUrl`) — the handler calling back into itself.
+// Uncapped retry/fan-out (the third brief item) needs loop-bound + call-count reasoning past a
+// precise mechanical rule and stays semantic/paid-tier — the two shapes above cover the
+// mechanically-decidable core so the surface is no longer a silent gap.
+const ROUTE_HANDLER_FILE = /(^|\/)(route\.tsx?|middleware\.ts)$|(^|\/)pages\/api\//;
+
+function declaresEdgeRuntime(sf: ts.SourceFile): boolean {
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt) || !stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    for (const decl of stmt.declarationList.declarations) {
+      if (ts.isIdentifier(decl.name) && decl.name.text === "runtime" && decl.initializer && ts.isStringLiteral(decl.initializer) && decl.initializer.text === "edge") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isRouteOrEdgeHandler(path: string, sf: ts.SourceFile): boolean {
+  return ROUTE_HANDLER_FILE.test(path) || declaresEdgeRuntime(sf);
+}
+
+function isTruthyLiteral(expr: ts.Expression): boolean {
+  return expr.kind === ts.SyntaxKind.TrueKeyword || (ts.isNumericLiteral(expr) && expr.text !== "0");
+}
+
+// An always-true loop header: `while (true)` / `while (1)` / `do … while (true)` / `for (;;)`
+// (or `for (…; ; …)` — an omitted condition). The header is the whole story; the body decides
+// whether it is actually unbounded (bodyHasEscape below).
+function isAlwaysTrueLoop(node: ts.Node): node is ts.WhileStatement | ts.DoStatement | ts.ForStatement {
+  if ((ts.isWhileStatement(node) || ts.isDoStatement(node)) && isTruthyLiteral(node.expression)) return true;
+  return ts.isForStatement(node) && node.condition === undefined;
+}
+
+// Any break/return/throw anywhere in the subtree. A conservative over-count: a break belonging to
+// a nested loop doesn't terminate this one, so treating it as an escape only suppresses findings.
+function bodyHasEscape(body: ts.Node): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isBreakStatement(node) || ts.isReturnStatement(node) || ts.isThrowStatement(node)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return found;
+}
+
+// A fetch(…) whose argument subtree reads the request's own URL — `request.url`, `req.url`, or
+// anything off `.nextUrl`. That is the handler calling back into its own route.
+function isSelfReferentialFetch(node: ts.CallExpression): boolean {
+  if (!ts.isIdentifier(node.expression) || node.expression.text !== "fetch") return false;
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isPropertyAccessExpression(n)) {
+      if (n.name.text === "nextUrl") found = true;
+      else if (n.name.text === "url" && ts.isIdentifier(n.expression) && /^req(uest)?$/.test(n.expression.text)) found = true;
+    }
+    if (!found) ts.forEachChild(n, visit);
+  };
+  for (const arg of node.arguments) visit(arg);
+  return found;
+}
+
+function detectUnboundedRouteOrEdge(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    if (!isRouteOrEdgeHandler(path, sf)) continue;
+
+    const visit = (node: ts.Node) => {
+      if (isAlwaysTrueLoop(node) && !bodyHasEscape(node.statement)) {
+        findings.push(
+          makeFinding(nextId, {
+            title: `Unbounded loop in a route/edge handler`,
+            severity: "Medium",
+            confidence: "Likely",
+            category: "Performance",
+            taxonomy: "M9 — Unbounded/self-calling route or edge fn",
+            location: loc(path, sf, node),
+            evidence: `\`${node.getText(sf).slice(0, 60).replace(/\s+/g, " ")}…\` never terminates — its body has no \`break\`, \`return\`, or \`throw\`. Route/edge handlers run per request under a wall-clock limit.`,
+            impact: "The handler spins until the platform kills it (timeout/OOM), burning compute on every request and never returning a response — a self-inflicted denial of service and a runaway bill.",
+            fix: "Add a terminating condition (a counter/pagination bound, a `break`, or a timeout) so the loop provably ends.",
+            value: 4,
+            ease: 3,
+            safety: 4,
+          }),
+        );
+      }
+      if (ts.isCallExpression(node) && isSelfReferentialFetch(node)) {
+        findings.push(
+          makeFinding(nextId, {
+            title: `Route/edge handler fetches its own request URL`,
+            severity: "Medium",
+            confidence: "Likely",
+            category: "Performance",
+            taxonomy: "M9 — Unbounded/self-calling route or edge fn",
+            location: loc(path, sf, node),
+            evidence: `\`${node.getText(sf).slice(0, 80).replace(/\s+/g, " ")}\` fetches the incoming request's own URL from inside the handler — the route calls back into itself.`,
+            impact: "Each invocation triggers another invocation: an unbounded recursive fan-out that multiplies compute and cost with every hop until the platform's concurrency or timeout limit trips.",
+            fix: "Call the underlying function/data source directly instead of re-fetching this route's own URL; if a redirect/proxy is intended, target a different endpoint.",
+            value: 4,
+            ease: 3,
+            safety: 4,
+          }),
+        );
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return findings;
+}
+
+// --- Route segment config & missing Suspense [MED] (#846) -------------------
+//
+// Next.js route segment config (`export const dynamic / revalidate / fetchCache / runtime`) governs
+// how a route renders and caches. Two failure modes carry real correctness/security weight:
+//   (a) `dynamic = "force-static"` on a route that reads auth/session or a dynamic API — the
+//       personalized page is frozen into the static cache and served to everyone (stale, and a
+//       cross-user isolation bug), or would build-error on the dynamic read.
+//   (b) contradictory config — `force-dynamic` with a positive `revalidate` (revalidate is dead),
+//       or `force-static` with `revalidate = 0` (force-static caches forever) — a config whose two
+//       halves cancel, so the author's intent is silently not what ships.
+// Separately, a page that reads a dynamic API and fetches data with NO `<Suspense>` boundary
+// forgoes streaming/PPR: the whole route blocks on the dynamic work instead of streaming a static
+// shell first.
+const ROUTE_SEGMENT_FILE = /\/(page|layout|route)\.tsx?$/;
+
+interface SegmentConfig {
+  dynamic?: string;
+  dynamicNode?: ts.Node;
+  revalidate?: number | "false";
+  revalidateNode?: ts.Node;
+}
+
+function collectSegmentConfig(sf: ts.SourceFile): SegmentConfig {
+  const cfg: SegmentConfig = {};
+  for (const stmt of sf.statements) {
+    if (!ts.isVariableStatement(stmt) || !stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    for (const decl of stmt.declarationList.declarations) {
+      if (!ts.isIdentifier(decl.name) || !decl.initializer) continue;
+      if (decl.name.text === "dynamic" && ts.isStringLiteral(decl.initializer)) {
+        cfg.dynamic = decl.initializer.text;
+        cfg.dynamicNode = decl.initializer;
+      } else if (decl.name.text === "revalidate") {
+        if (ts.isNumericLiteral(decl.initializer)) {
+          cfg.revalidate = Number(decl.initializer.text);
+          cfg.revalidateNode = decl.initializer;
+        } else if (decl.initializer.kind === ts.SyntaxKind.FalseKeyword) {
+          cfg.revalidate = "false";
+          cfg.revalidateNode = decl.initializer;
+        }
+      }
+    }
+  }
+  return cfg;
+}
+
+function detectRouteSegmentConfig(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    if (leadingDirective(sf) === "use client") continue;
+    if (!ROUTE_SEGMENT_FILE.test(path)) continue;
+    const cfg = collectSegmentConfig(sf);
+    if (cfg.dynamic === undefined && cfg.revalidate === undefined) continue;
+
+    if (cfg.dynamic === "force-static") {
+      const dyn = readsDynamicApi(sf);
+      const authed = AUTH_PATTERN.test(sf.text);
+      if (dyn || authed) {
+        const why = dyn ? "reads a dynamic API (cookies/headers/searchParams)" : "checks the caller's session/auth";
+        findings.push(
+          makeFinding(nextId, {
+            title: `\`dynamic = "force-static"\` on a route that ${dyn ? "reads dynamic data" : "is auth-gated"}`,
+            severity: "High",
+            confidence: "Review",
+            category: "Security",
+            taxonomy: "M9 — Unsafe route segment config",
+            location: loc(path, sf, cfg.dynamicNode ?? sf),
+            evidence: `This route sets \`export const dynamic = "force-static"\` yet ${why}. Force-static renders once at build and serves the same cached HTML to every request.`,
+            impact: "A personalized/auth-scoped page is frozen into the static cache and served to all users — stale at best, one user's data leaking to others at worst — or the build errors on the dynamic read.",
+            fix: `Remove \`force-static\` (let the route render dynamically), or if the page really is public and static, stop reading the per-request/auth data here.`,
+            value: 5,
+            ease: 4,
+            safety: 4,
+          }),
+        );
+      }
+    }
+
+    const conflict =
+      cfg.dynamic === "force-dynamic" && typeof cfg.revalidate === "number" && cfg.revalidate > 0
+        ? `\`dynamic = "force-dynamic"\` never caches, so \`revalidate = ${cfg.revalidate}\` is dead config`
+        : cfg.dynamic === "force-static" && cfg.revalidate === 0
+          ? `\`dynamic = "force-static"\` caches indefinitely, so \`revalidate = 0\` (always revalidate) is contradictory`
+          : undefined;
+    if (conflict) {
+      findings.push(
+        makeFinding(nextId, {
+          title: `Conflicting route segment config (\`dynamic\` vs \`revalidate\`)`,
+          severity: "Medium",
+          confidence: "Review",
+          category: "Performance",
+          taxonomy: "M9 — Conflicting route segment config",
+          location: loc(path, sf, cfg.revalidateNode ?? cfg.dynamicNode ?? sf),
+          evidence: `${conflict} — the two settings cancel, so this route does not render/cache the way the config reads.`,
+          impact: "The route's actual caching behaviour is not what the config states, so a perf/freshness decision is silently ineffective.",
+          fix: "Keep the setting that expresses the intent and remove the one it overrides.",
+          value: 3,
+          ease: 5,
+          safety: 5,
+        }),
+      );
+    }
+  }
+  return findings;
+}
+
+function fileHasSuspense(sf: ts.SourceFile): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = node.tagName.getText(sf);
+      if (tag === "Suspense" || tag.endsWith(".Suspense")) found = true;
+    }
+    if (!found) ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+function hasAsyncDataFetch(sf: ts.SourceFile): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isAwaitExpression(node) && ts.isCallExpression(node.expression)) {
+      const call = node.expression;
+      if (isDbQueryChain(call) || (ts.isIdentifier(call.expression) && call.expression.text === "fetch")) found = true;
+    }
+    if (!found) ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+function detectMissingSuspenseBoundary(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    if (leadingDirective(sf) === "use client") continue;
+    if (!/\/(page|layout)\.tsx?$/.test(path)) continue;
+    // Only meaningful when a dynamic read AND real async data-fetching coexist with no boundary —
+    // that's the case where a static shell could stream while the dynamic data resolves.
+    if (!readsDynamicApi(sf) || !hasAsyncDataFetch(sf) || fileHasSuspense(sf)) continue;
+
+    findings.push(
+      makeFinding(nextId, {
+        title: `Dynamic read + data fetch with no <Suspense> boundary`,
+        severity: "Low",
+        confidence: "Review",
+        category: "Performance",
+        taxonomy: "M9 — Missing Suspense boundary",
+        location: path,
+        evidence: `${path} reads a dynamic API and awaits data yet renders no \`<Suspense>\` boundary — the whole route blocks on the dynamic work instead of streaming a static shell first.`,
+        impact: "Without a Suspense boundary the route can't partially prerender or stream: the user waits for all server data before seeing anything, and the static parts can't be cached separately.",
+        fix: "Wrap the dynamic-data subtree in a `<Suspense fallback={…}>` boundary so the static shell renders immediately and the dynamic part streams in.",
+        value: 3,
+        ease: 3,
+        safety: 5,
+      }),
+    );
+  }
+  return findings;
+}
+
+// --- Non-Supabase data-layer coverage (#844) --------------------------------
+//
+// The three data-layer checks — server→client leak, unsafe/missing cache config, data-fetching
+// waterfall — key on Supabase call shapes (`.from().select()`, `.insert/.update/.upsert/.delete/
+// .rpc`). On a Prisma/Drizzle/raw-SQL target those shapes never appear, so the checks find nothing
+// AND say nothing — a silent third of M9 gone on the Prisma support Harvey now advertises (#756).
+// When the data layer is a recognized non-Supabase ORM we skip those three checks and emit one
+// explicit "not assessed — ORM/data-layer unsupported" row each, so the absence reads as a
+// disclosed limitation, not a clean bill of health (the coverage-guard principle in CLAUDE.md).
+//
+// `orm` (from detectOrm) resolves Prisma vs Supabase; Drizzle/Kysely aren't modelled there (they
+// report `unknown`), so we additionally sniff their package.json dependency to name the layer.
+// A genuinely unknown/no-DB target draws nothing — the note fires only on a POSITIVELY identified
+// non-Supabase data access, never on a plain app that simply has no queries.
+const DATA_LAYER_CHECKS: { taxonomy: string; check: string }[] = [
+  { taxonomy: "M9 — Server→client data leak", check: "server→client data leak (full DB row passed to a Client Component)" },
+  { taxonomy: "M9 — Unsafe/missing cache config", check: "unsafe/missing cache config on data-fetching routes" },
+  { taxonomy: "M9 — Data-fetching waterfall", check: "data-fetching waterfall (independent sequential queries)" },
+];
+
+function nonSupabaseDataLayer(orm: TargetOrm | undefined, files: SourceInput[]): string | undefined {
+  if (orm === "supabase") return undefined;
+  if (orm === "prisma") return "Prisma";
+  const pkg = files.find((f) => /(^|\/)package\.json$/.test(f.path))?.text;
+  if (pkg) {
+    if (/"drizzle-orm"\s*:/.test(pkg)) return "Drizzle";
+    if (/"kysely"\s*:/.test(pkg)) return "Kysely";
+    if (/"@prisma\/client"\s*:|"prisma"\s*:/.test(pkg)) return "Prisma";
+  }
+  return undefined;
+}
+
+function dataLayerNotAssessed(nextId: NextId, layer: string): Finding[] {
+  return DATA_LAYER_CHECKS.map(({ taxonomy, check }) => ({
+    id: nextId(),
+    title: `M9 not assessed — ${check} (data layer: ${layer})`,
+    severity: "Info" as const,
+    confidence: "N/A" as const,
+    category: "Performance" as const,
+    taxonomy: `${taxonomy} — not assessed`,
+    location: "(whole target)",
+    status: "Open" as const,
+    evidence: `This check recognizes Supabase call shapes (\`.from().select()\`, \`.insert/.update/.upsert/.delete/.rpc\`), but the target's data layer is \`${layer}\`. It was NOT assessed rather than reported clean — a Prisma/Drizzle/raw-SQL query is invisible to the current Supabase-shaped matcher.`,
+    impact: "This M9 data-layer surface is unassessed on this target. Recorded explicitly so its absence reads as 'not assessed here', not 'assessed and clean' — the fail-loud coverage guard.",
+    fix: `None — informational. Manual review still applies; native ${layer} support for this check is tracked follow-up.`,
+    value: 1,
+    ease: 5,
+    safety: 5,
+    precisionTier: "high" as const,
+  }));
+}
+
+function runAppRouterPass(files: SourceInput[], nextId: NextId, orm?: TargetOrm): Finding[] {
   const sources = new Map(files.map((f) => [f.path, parse(f.path, f.text)]));
   const pagesRouterOnly = isPagesRouterOnly(files);
   const aliases = collectPathAliases(files);
+  const otherDataLayer = nonSupabaseDataLayer(orm, files);
 
   // Owner-id runs first: its subsumed-action set feeds the missing-auth dedupe (#465).
   const ownerId = detectClientSuppliedOwnerId(sources, nextId);
+  // The three Supabase-shaped data-layer checks run only on a Supabase/unknown data layer; on a
+  // recognized non-Supabase ORM they are replaced by explicit not-assessed rows (#844).
+  const dataLayer = otherDataLayer
+    ? dataLayerNotAssessed(nextId, otherDataLayer)
+    : [...detectServerClientLeak(sources, nextId, aliases), ...detectUnsafeCacheConfig(sources, nextId), ...detectDataFetchingWaterfalls(sources, nextId)];
   return [
-    ...detectServerClientLeak(sources, nextId, aliases),
+    ...dataLayer,
     ...detectMissingServerOnly(sources, nextId, pagesRouterOnly, aliases),
     ...detectServerActionAuthAndValidation(sources, nextId, ownerId.subsumedNoAuthActions),
     ...ownerId.findings,
-    ...detectUnsafeCacheConfig(sources, nextId),
-    ...detectDataFetchingWaterfalls(sources, nextId),
     ...detectAccidentalDynamicRendering(sources, nextId),
     ...detectSsrBrowserApiMisuse(sources, nextId),
+    ...detectUnboundedRouteOrEdge(sources, nextId),
+    ...detectRouteSegmentConfig(sources, nextId),
+    ...detectMissingSuspenseBoundary(sources, nextId),
   ];
 }
 
@@ -1156,11 +1554,17 @@ function runAppRouterPass(files: SourceInput[], nextId: NextId): Finding[] {
  * plus the #627 root-error-boundary check on that workspace's files), and the full pass runs over
  * the remaining files — a genuine Next workspace in the same monorepo is unaffected. Empty
  * (single-app targets, tests) → behaves exactly as before.
+ *
+ * `orm` (from src/scan/framework-detect.ts `detectOrm`) gates the three Supabase-shaped data-layer
+ * checks (server→client leak, cache config, waterfall): on a recognized non-Supabase data layer
+ * (Prisma/Drizzle/Kysely) they are replaced by explicit not-assessed rows rather than silently
+ * finding nothing (#844). Omitted/`unknown`/`supabase` → run those checks as before.
  */
 export function detectAppRouterFindings(
   files: SourceInput[],
   framework?: TargetFramework,
   viteWorkspaceDirs: string[] = [],
+  orm?: TargetOrm,
 ): Finding[] {
   let n = 0;
   const nextId: NextId = () => `M9-${String(++n).padStart(2, "0")}`;
@@ -1177,5 +1581,5 @@ export function detectAppRouterFindings(
   );
   const scoped = notes.length ? files.filter((f) => !underVite(f.path)) : files;
 
-  return [...notes, ...spaBoundary, ...runAppRouterPass(scoped, nextId)];
+  return [...notes, ...spaBoundary, ...runAppRouterPass(scoped, nextId, orm)];
 }
