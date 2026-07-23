@@ -2,7 +2,21 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-22 (issue-sweep + prior-work commit + operator-pulled round 2 — see the block immediately below. The GTM block and earlier engineering blocks remain historical/current.)_
+_Last updated: 2026-07-23 (flagship-corpus rescan + disclosures + Harvey dogfood + Prisma support — see the block immediately below. Earlier blocks remain historical.)_
+
+## 2026-07-23 — corpus rescan (14 full audits), disclosures, Harvey dogfood, tool-gap fixes, Prisma support
+
+**Flagship corpus: 14 apps FULL-audited** (mechanical + LLM semantic + `dynamic-validate --execute` live stand-up + mutation), findings.json per app in scratch (`scratchpad/corpus/`). Split: 7 real-world apps, 5 deliberately-vulnerable samples, 2 ours (Harvey, AoP). Preliminary signal (hedged, NOT published — gated on #740): of 7 real-world apps, **2 shipped a Critical** (proposit systemic cross-tenant BOLA; launch-mvp unauth account-delete/subscription-cancel); the thesis-confirming standout is supatest's **RLS tautologies that pass Supabase's own advisor but gate nothing**; makerkit/boxyhq are genuinely hardened (honest contrast). **Stack-artifact caveat:** the M2 "no login rate-limit / account enumeration" findings reflect local GoTrue defaults, not the app — stripped from the stat (and fixed in #769).
+
+**Disclosures filed (operator action — I can't send outreach):** #774 launch-mvp (2 Crit/4 High), #775 proposit (5 High/1 Med), #776 devtodollars (1 Med), #777 boxyhq (1 High/2 Med), #778 wallens11 (1 Med; prior Crit REMEDIATED), #779 cipherx (**live service_role key committed in .env → rotate**). subpay (archived) + makerkit (hardened) → no disclosure. 4 samples only-known → no disclosure. Old stale disclosure issues (#168/#214–#219) closed.
+
+**Harvey dogfood → 2 real bugs fixed:** #765 (**High command-injection self-RCE** — M8 stub-check shell-interpolated untrusted target test-paths; now argv-array, regression-tested), #766 (deduped the security-detector walk into `common.ts` + hardened `job-tenant-scope` tests).
+
+**Tool-gap follow-ups (all merged):** #769 (M2 GoTrue-default auth findings → Info+caveat on local standup), #770 (M10 discovers root/nested schema.sql), #771 (M8 no-node_modules still emits M8-00), #772 (M2 seeder infers org/tenant FK-parent for org-model schemas), #773 (M8 mutation handles TypeScript-7 targets).
+
+**Prisma/Postgres support — EPIC #756, core landed:** #757 `detectOrm` + RLS-detector gating; #758 M10 from `schema.prisma`; #759 M2 plain-Postgres + `prisma migrate` + app-route probing (**proven live: boxyhq M2 requires-live-run → real verdict, a Critical on /api/hello**); #760 M1 Prisma tenant-scope/BOLA detector (gate 198/201, 190/190). Verified: `detectOrm(boxyhq)=prisma`, M10 classifies its schema, full re-audit COVERAGE PASS. **Still open:** #761 M7 Prisma perf (deferrable), #787 authenticated cross-tenant app-route probing, #762–#764 docs/website/SEO (GTM — file-only until operator go).
+
+**Gate figure (measured 2026-07-23): 198/201 static positives, 190/190 negatives, GATE PASS.** Never quote — run `validate-calibration`.
 
 ## 2026-07-22 issue-sweep — prior work committed, 8 issues merged + a live-M2 first (net −6)
 
