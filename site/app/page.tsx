@@ -361,7 +361,7 @@ export default function Home() {
               sample of the stack-specific checks:
             </p>
           </div>
-          <div className="wrap cols">
+          <div className="wrap cols-4">
             <div className="card stack">
               <h3>Supabase</h3>
               <ul>
@@ -389,6 +389,25 @@ export default function Home() {
                 <li>Bundle size &amp; build output</li>
               </ul>
             </div>
+            <div className="card stack">
+              <h3>Prisma / Postgres</h3>
+              <ul>
+                <li>Tenant-scope &amp; BOLA detection on Prisma queries</li>
+                <li>No RLS safety net — isolation lives entirely in app code</li>
+                <li>Live cross-tenant pen-test on a seeded Postgres instance</li>
+                <li>PII/PHI/PCI mapped straight from schema.prisma</li>
+              </ul>
+            </div>
+          </div>
+          <div className="wrap narrow">
+            <p style={{ color: "var(--muted)", fontSize: "17px", margin: "22px 0 0" }}>
+              <b style={{ color: "var(--text)" }}>Prisma apps have no RLS to fall back on.</b> There&apos;s no
+              database-level tenant enforcement — the boundary between customers is whatever your query code
+              enforces, or it isn&apos;t enforced at all. Harvey audits exactly that: static detectors that catch a
+              query missing its tenant scope, plus a live pen-test that stands up Postgres, seeds two tenants, and
+              tries to cross between them through your app — detection-gated, and proven end-to-end on a real Prisma
+              codebase.
+            </p>
           </div>
         </section>
 
