@@ -170,6 +170,27 @@ export function resolveImport(fromPath: string, specifier: string, allPaths: Set
   return resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(specifier, allPaths, aliases);
 }
 
+// An object literal whose ONLY informative content is a spread of a raw-row name — `{...row}`,
+// possibly with extra literal props. Spreading the whole row copies every field, so a binding of
+// this shape is still a full-row leak (the narrowing the DTO fix requires is `{ name: row.name }`,
+// not a spread). Returns the spread source name if the object spreads a tainted row.
+function objectSpreadsRawRow(expr: ts.Expression, rawRowNames: ReadonlySet<string>): boolean {
+  return rowNameOf(expr, rawRowNames) !== undefined;
+}
+
+function rowNameOf(expr: ts.Expression, rawRowNames: ReadonlySet<string>): string | undefined {
+  if (!ts.isObjectLiteralExpression(expr)) return undefined;
+  for (const p of expr.properties) {
+    if (ts.isSpreadAssignment(p) && ts.isIdentifier(p.expression) && rawRowNames.has(p.expression.text)) return p.expression.text;
+  }
+  return undefined;
+}
+
+// Names bound to a raw Supabase query result, PLUS one hop of aliasing (#847): `const dto = row`
+// and `const dto = {...row}` still ship the whole row, so a leak that maps the row into an
+// intermediate before passing it must still flag. `const { name } = row` (a narrowing destructure)
+// is deliberately NOT propagated — it projects, which is the safe shape. The propagation pass runs
+// in source order, so a later alias of an earlier alias is also caught; direct bindings dominate.
 function collectRawRowNames(sf: ts.SourceFile): Set<string> {
   const rawRowNames = new Set<string>();
   const visit = (node: ts.Node) => {
@@ -184,6 +205,8 @@ function collectRawRowNames(sf: ts.SourceFile): Set<string> {
             if (propName === "data" && ts.isIdentifier(el.name)) rawRowNames.add(el.name.text);
           }
         }
+      } else if (ts.isIdentifier(node.name) && ((ts.isIdentifier(init) && rawRowNames.has(init.text)) || objectSpreadsRawRow(init, rawRowNames))) {
+        rawRowNames.add(node.name.text); // one-hop alias: `const dto = row` / `const dto = {...row}`
       }
     }
     ts.forEachChild(node, visit);
@@ -245,15 +268,14 @@ function detectServerClientLeak(sources: Map<string, ts.SourceFile>, nextId: Nex
           for (const attr of node.attributes.properties) {
             if (ts.isJsxSpreadAttribute(attr) && ts.isIdentifier(attr.expression) && rawRowNames.has(attr.expression.text)) {
               flagAttr(attr, tagName, `{...${attr.expression.text}}`);
-            } else if (
-              ts.isJsxAttribute(attr) &&
-              attr.initializer &&
-              ts.isJsxExpression(attr.initializer) &&
-              attr.initializer.expression &&
-              ts.isIdentifier(attr.initializer.expression) &&
-              rawRowNames.has(attr.initializer.expression.text)
-            ) {
-              flagAttr(attr, tagName, `${attr.name.getText(sf)}={${attr.initializer.expression.text}}`);
+            } else if (ts.isJsxAttribute(attr) && attr.initializer && ts.isJsxExpression(attr.initializer) && attr.initializer.expression) {
+              const inner = attr.initializer.expression;
+              if (ts.isIdentifier(inner) && rawRowNames.has(inner.text)) {
+                flagAttr(attr, tagName, `${attr.name.getText(sf)}={${inner.text}}`);
+              } else if (objectSpreadsRawRow(inner, rawRowNames)) {
+                // `data={{...row}}` — an inline object spreading the whole row still ships every field.
+                flagAttr(attr, tagName, `${attr.name.getText(sf)}={{...${rowNameOf(inner, rawRowNames)}}}`);
+              }
             }
           }
         }

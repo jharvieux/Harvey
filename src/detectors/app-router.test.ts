@@ -49,6 +49,57 @@ describe("server → client data leak", () => {
     expect(taxonomies(findings)).not.toContain("M9 — Server→client data leak");
   });
 
+  // #847: the common real-world shape maps the row into an intermediate binding first. One hop of
+  // alias/spread tracking must still flag it.
+  const clientView: SourceInput = {
+    path: "app/dashboard/ClientView.tsx",
+    text: `"use client";\nexport function ClientView({ user }: { user: any }) { return <div>{user.name}</div>; }\n`,
+  };
+
+  it("flags a full row passed through an intermediate alias binding (`const dto = row`)", () => {
+    const findings = detectAppRouterFindings([
+      clientView,
+      {
+        path: "app/dashboard/page.tsx",
+        text: `import { ClientView } from "./ClientView";\nexport default async function Page() {\n  const { data: user } = await db.from("users").select("*").single();\n  const dto = user;\n  return <ClientView user={dto} />;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
+  });
+
+  it("flags a full row passed through an inline object spread (`data={{...row}}`)", () => {
+    const findings = detectAppRouterFindings([
+      clientView,
+      {
+        path: "app/dashboard/page.tsx",
+        text: `import { ClientView } from "./ClientView";\nexport default async function Page() {\n  const { data: user } = await db.from("users").select("*").single();\n  return <ClientView user={{...user}} />;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
+  });
+
+  it("flags a full row aliased through a spread binding (`const dto = {...row}`)", () => {
+    const findings = detectAppRouterFindings([
+      clientView,
+      {
+        path: "app/dashboard/page.tsx",
+        text: `import { ClientView } from "./ClientView";\nexport default async function Page() {\n  const { data: user } = await db.from("users").select("*").single();\n  const dto = {...user};\n  return <ClientView user={dto} />;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
+  });
+
+  it("does not flag a narrowed destructure alias (`const { name } = row`)", () => {
+    const findings = detectAppRouterFindings([
+      clientView,
+      {
+        path: "app/dashboard/page.tsx",
+        text: `import { ClientView } from "./ClientView";\nexport default async function Page() {\n  const { data: user } = await db.from("users").select("*").single();\n  const { name } = user;\n  return <ClientView user={name} />;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain("M9 — Server→client data leak");
+  });
+
   // #380: the client component is imported via the create-next-app `@/*` path alias, not a
   // relative specifier. Before the tsconfig `paths` resolution, the leak was invisible.
   it("follows a tsconfig `@/*` path alias to identify the imported Client Component", () => {
