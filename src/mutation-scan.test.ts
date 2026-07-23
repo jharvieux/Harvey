@@ -19,6 +19,7 @@ import {
   rootScopedMutateGlobs,
   rootWorkspaceTestFinding,
   rootWorkspaceTestModuleRecord,
+  resolveJsonReporterPath,
   scaffoldStrykerConfig,
   scopedRunModuleRecord,
   summarizeLineCoverage,
@@ -212,6 +213,17 @@ describe("summarizeLineCoverage (#819)", () => {
       "/repo/src/findings.ts": { lines: { total: 8, covered: 4, skipped: 0, pct: 50 } },
     };
     expect(summarizeLineCoverage(coverage, "/repo")).toEqual({ src: 50 });
+  });
+});
+
+describe("resolveJsonReporterPath (#820)", () => {
+  it("reads a custom jsonReporter.fileName off the resolved config", () => {
+    expect(resolveJsonReporterPath({ jsonReporter: { fileName: "out/custom-report.json" } })).toBe("out/custom-report.json");
+  });
+
+  it("falls back to Stryker's documented default when the config has no jsonReporter entry", () => {
+    expect(resolveJsonReporterPath(undefined)).toBe("reports/mutation/mutation.json");
+    expect(resolveJsonReporterPath({})).toBe("reports/mutation/mutation.json");
   });
 });
 

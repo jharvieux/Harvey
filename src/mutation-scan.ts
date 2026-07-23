@@ -274,6 +274,14 @@ export function summarizeLineCoverage(coverage: IstanbulCoverageSummary, targetD
   return result;
 }
 
+// #820: Stryker's json reporter path is configurable (`jsonReporter.fileName`); #262 only
+// confirmed this wrapper's assumed default against one pinned version (9.6.1), not that every
+// major writes there. Reading the path back out of whichever config actually ran (falling back to
+// that assumed default) means a differing major doesn't need a version pin, just a readable config.
+export function resolveJsonReporterPath(cfg: { jsonReporter?: { fileName?: string } } | undefined): string {
+  return cfg?.jsonReporter?.fileName ?? "reports/mutation/mutation.json";
+}
+
 // #224: a target with no test script, no known test-runner dependency, and no Stryker config
 // can't run Stryker at all — src/cli/mutation-scan.ts used to have nothing to do but error out.
 // That absence is itself a finding (a security-critical codebase with zero automated regression

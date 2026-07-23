@@ -88,6 +88,7 @@ import {
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
   reRootReportToApp,
+  resolveJsonReporterPath,
   rootScopedMutateGlobs,
   rootWorkspaceTestFinding,
   rootWorkspaceTestModuleRecord,
@@ -155,6 +156,65 @@ function warnIfNotPerTest(cfgPath: string): void {
 }
 
 const STRYKER_CONFIG_NAMES = ["stryker.conf.json", "stryker.conf.js", "stryker.conf.mjs", "stryker.conf.cjs", "stryker.config.json", "stryker.config.js", "stryker.config.mjs", "stryker.config.cjs"];
+
+// #820: the json reporter's declared output path, read back from whichever JSON config actually
+// ran (a non-JSON config can't be statically read here, same limitation as warnIfNotPerTest —
+// falls back to Stryker's documented default rather than guessing).
+function reporterFileNameFromConfig(cfgPath: string | undefined): string | undefined {
+  if (!cfgPath || !cfgPath.endsWith(".json")) return undefined;
+  try {
+    return resolveJsonReporterPath(JSON.parse(readFileSync(cfgPath, "utf8")) as { jsonReporter?: { fileName?: string } });
+  } catch {
+    return undefined;
+  }
+}
+
+// #820: fallback for when neither the config-declared nor Stryker's documented default path has a
+// report — a Stryker major version can move where its json reporter writes by default. Walks `cwd`
+// for a file with the expected basename, preferring the most-recently-modified match (a stale
+// report from a prior run must never win over the one this invocation just produced). Excludes
+// node_modules/.git only — unlike the rest of this CLI's walk, "reports" itself must stay in scope
+// since that is exactly where the file usually lives.
+const REPORT_SEARCH_EXCLUDED_DIR = /^(node_modules|\.git)$/;
+
+function findReportByGlob(cwd: string, wantedBasename: string): string | undefined {
+  const matches: { path: string; mtimeMs: number }[] = [];
+  const walk = (dir: string) => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry);
+      const st = statSync(full);
+      if (st.isDirectory()) {
+        if (!REPORT_SEARCH_EXCLUDED_DIR.test(entry)) walk(full);
+      } else if (entry === wantedBasename) {
+        matches.push({ path: full, mtimeMs: st.mtimeMs });
+      }
+    }
+  };
+  walk(cwd);
+  return matches.sort((a, b) => b.mtimeMs - a.mtimeMs)[0]?.path;
+}
+
+// #820: resolves the actual report location for a completed Stryker run — the config-declared (or
+// default) path first, falling back to a glob search of `cwd` when that exact path is absent (a
+// Stryker version writing its json reporter's default somewhere else). Returns the config-declared
+// path unchanged when nothing is found anywhere, so callers' existing "report not found at <path>"
+// messaging still names the path they expected.
+function resolveReportPath(cfgPath: string | undefined, cwd: string): string {
+  const expected = join(cwd, reporterFileNameFromConfig(cfgPath) ?? "reports/mutation/mutation.json");
+  if (existsSync(expected)) return expected;
+  const found = findReportByGlob(cwd, basename(expected));
+  if (found) {
+    console.error(`#820: no report at the configured/default path ${expected} — found one at ${found} instead (Stryker version difference in the default reporter path)`);
+    return found;
+  }
+  return expected;
+}
 
 function readPackageJsonAt(dir: string): PackageJsonForTestDetection | undefined {
   const pkgPath = join(dir, "package.json");
@@ -351,7 +411,7 @@ function attemptRootScopedRun(rootSuite: { root: string; reason: string }, ances
     return { degradeReason: `root-scoped Stryker crashed with the known Stryker/TypeScript-7 tsconfig-preprocessor incompatibility signature (#773: "parseConfigFileTextToJson is not a function") — a tooling gap, not a defect in the target` };
   }
 
-  const rawReportPath = join(rootSuite.root, "reports", "mutation", "mutation.json");
+  const rawReportPath = resolveReportPath(rootCfgPath, rootSuite.root);
   if (!existsSync(rawReportPath)) return { degradeReason: `root-scoped Stryker run produced no report at ${rawReportPath} (see the Stryker output above)` };
 
   const rawReport = JSON.parse(readFileSync(rawReportPath, "utf8")) as StrykerReport;
@@ -728,7 +788,7 @@ if (reportPath) {
       `Stryker crashed with the exact signature of the known Stryker/TypeScript-7 tsconfig-preprocessor incompatibility (#773: "parseConfigFileTextToJson is not a function") — TypeScript 7's native/Go rewrite no longer exports the classic compiler API Stryker's core sandbox preprocessor calls unconditionally; this is a tooling gap, not a defect in the target`,
     );
   }
-  resolvedReportPath = join(targetDir, "reports", "mutation", "mutation.json");
+  resolvedReportPath = resolveReportPath(effectiveConfigPath, targetDir);
 }
 
 if (!existsSync(resolvedReportPath)) {

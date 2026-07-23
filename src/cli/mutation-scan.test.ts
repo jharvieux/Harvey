@@ -414,6 +414,48 @@ describe("mutation-scan monorepo root-scoped run attempt (#655, child process)",
   });
 });
 
+// #820: the json reporter's output path is read back from the Stryker config that actually ran
+// (falling back to a glob search of cwd) instead of an unconditional hardcoded
+// reports/mutation/mutation.json — these fake stryker binaries write their report wherever the
+// test says, standing in for a target-declared jsonReporter path and for a Stryker major version
+// that moved its own documented default.
+describe("mutation-scan report-path auto-discovery (#820, child process)", () => {
+  function writeFakeStrykerReporterBinary(repo: string, reportRelPath: string): void {
+    const binDir = join(repo, "node_modules", ".bin");
+    mkdirSync(binDir, { recursive: true });
+    const script = `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const outPath = path.join(process.cwd(), ${JSON.stringify(reportRelPath)});
+fs.mkdirSync(path.dirname(outPath), { recursive: true });
+fs.writeFileSync(outPath, JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }));
+process.exit(0);
+`;
+    writeFileSync(join(binDir, "stryker"), script);
+    chmodSync(join(binDir, "stryker"), 0o755);
+  }
+
+  it("reads a custom jsonReporter.fileName off the target's own Stryker config, without --report", () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest", jsonReporter: { fileName: "out/custom-mutation-report.json" } }));
+    writeFakeStrykerReporterBinary(repo, "out/custom-mutation-report.json");
+    const { status, out } = runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } } };
+    expect(parsed.summary?.overall.totalMutants).toBe(1);
+  });
+
+  it("falls back to a glob search when the report isn't at the configured/default path (a Stryker version writing elsewhere)", () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" })); // no jsonReporter — the wrapper's documented default applies
+    writeFakeStrykerReporterBinary(repo, "dist/mutation.json"); // NOT reports/mutation/mutation.json
+    const { status, out } = runCli(repo, []);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } } };
+    expect(parsed.summary?.overall.totalMutants).toBe(1);
+  });
+});
+
 // #819: line coverage is auto-pulled from the target's own coverage-capable runner (vitest/jest)
 // so the §3b coverage-vs-mutation-score gap no longer needs a hand-filled column. --report skips
 // invoking Stryker itself (irrelevant to this feature) so these fixtures need no stryker binary.
