@@ -100,11 +100,14 @@ anchors, pending price discovery.)
 
 - **Free scan — $0.** Source-only, no credentials, same-day. Ten modules' worth of
   static findings, yours to keep.
-- **Full audit — from $2,000.** All ten modules over your source, plus the semantic
-  review and a local-stack pen-test. No database access required.
-- **Connected audit — from $5,000.** Adds live RLS verification, database advisors, and
-  live data-classification against a read-only copy of your production database.
-- **Investor-ready summary — add-on.** The diligence-facing report.
+- **Connected audit — from $500.** The complete review: all ten modules over your source
+  with semantic verdicts (triage + named fixes), plus a read-only pass over your live
+  database — live RLS verification, database advisors, drift, and data-classification
+  against a read-only copy of your production database.
+- **Full audit — from $1,000.** Everything in Connected, plus Harvey stands up your stack
+  and runs a live pen-test (and mutation testing) against it. The premium, "everything
+  included" tier. (Priced by codebase size; enterprise/regulated = custom.)
+- **Investor-ready summary — Full-tier add-on.** The diligence-facing report.
 
 ---
 
@@ -121,10 +124,12 @@ each other's data, because that depends on your authorization logic across multi
 files. That's what an audit is for. Run both — they do different jobs.
 
 **How much does a Supabase security audit cost?**
-Harvey's free scan is $0, a full audit starts at $2,000, and a connected audit with a
-live pen-test starts at $5,000. Most boutique "vibe-code" audits run $1,500–$5,000 for
-source review only; a traditional web-app pentest runs $4,000–$12,000. Harvey sits
-between them: deeper than a source-only audit, faster and cheaper than a pentest firm.
+Harvey's free scan is $0, a connected audit (adds a read-only pass over your live
+database) starts at $500, and a full audit — which adds a local-stack pen-test — starts
+at $1,000, priced by codebase size. Most boutique "vibe-code" audits run $1,500–$5,000 for
+source review only; a traditional web-app pentest runs $4,000–$12,000. Harvey starts well
+below both: deeper than a source-only audit, far cheaper than a pentest firm, and it
+scales by the size of your codebase.
 
 **Do you need access to my database?**
 Not for the free scan or the full audit — those run on source (and a local copy of your
