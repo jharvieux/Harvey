@@ -14,7 +14,7 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
 | M2 | Local penetration test (dynamic) | local stack + probe scripts; later the Tier-2 pipeline | **net-new** (#1503 dynamic half) |
 | M3 | Hotspot analysis | **`vitals` plugin** (`/vitals:scan`) | exists — run, don't build |
 | M4 | Duplication | jscpd | exists (`pnpm check:duplication`) |
-| M5 | Slop / dead code | slop-check + D-091 + dead-export detection | exists, wire in |
+| M5 | Slop / dead code | `pnpm quality-scan` (knip dead code) + `pnpm detect-static` (slop AST detectors, `src/detectors/slop.ts`) | exists — both engines wired |
 | M6 | Simplification / reuse / maintainability | `pnpm simplify-scan` (brief + source → review packet) + pre-pr-reviewer doctrine | runner exists (#266); **never yet run against a real target** |
 | M7 | Performance tuning | Supabase perf advisors + profiling + bundle/Web-Vitals tools | **net-new** to assemble |
 | M8 | Test quality & intent | StrykerJS mutation testing + tests-for-intent review | **net-new** |
@@ -113,8 +113,19 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
 ## M5 — Slop / dead code
 - **Finds:** AI-generated cruft and dead weight — narrating comments, single-use helpers, try/catch that just
   re-throws, orphan TODOs, unused exports, unreachable branches, stub-shaped code (params that don't affect output).
-- **Method:** slop-check diff scanner + the D-091 anti-pattern catalog + dead-export detection.
-- **Powered by:** existing slop-check + pre-pr-reviewer doctrine — generalized to a whole-repo pass.
+- **Method:** two engines, and running only one is half the module (#811). (1) **Dead code:**
+  knip over the target — unused exports, unused files, unused dependencies — via
+  `pnpm quality-scan <target>`; if the target's deps aren't installed and knip can't load its
+  config, the run retries with all knip plugins disabled and reports review-tier dead code,
+  disclosed as an M5-98 row (#810) — install the target's deps for confirmed (non-review)
+  file findings. (2) **Slop:** the mechanical AST detector suite `src/detectors/slop.ts` (the D-091
+  classes ported from ATC's slop-check diff scanner, generalized to a whole-repo pass, then
+  fanned out — narrating comments, orphan TODOs, try/catch-rethrow, single-call wrappers,
+  single-use helpers, placeholder stubs, elision/AI-phrasing comments, redundant booleans,
+  else-after-return, redundant JSDoc, unused params/imports, unreachable branches) via
+  `pnpm detect-static <target>`; source-only, no install needed.
+- **Powered by:** `pnpm quality-scan` (knip) + `pnpm detect-static` (`src/detectors/slop.ts`,
+  every class gated by a positive+negative fixture pair in `slop.test.ts`).
 - **Report:** a cleanup list (delete/inline/simplify), grouped, with rough line-count reduction.
 
 ## M6 — Simplification / reuse / maintainability ("don't reinvent the wheel")
