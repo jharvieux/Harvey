@@ -7,21 +7,30 @@
 //   pnpm lighthouse-scan <target-dir> [--route /path]... [--port 3000] [--out findings.lh.json]
 //   pnpm lighthouse-scan --url http://localhost:3000 --route / --route /dashboard --out …
 //
-// Browser resolution (#387, #488, #556), in order:
+// Browser resolution (#387, #488, #556, #818), in order:
 //   1. LIGHTHOUSE_CHROME_PATH — an explicit override, always wins.
-//   2. A system Chrome — chrome-launcher auto-detects one (skip via LIGHTHOUSE_SKIP_SYSTEM_CHROME=1,
-//      an operator/test seam to force steps 3/4 on a machine that does have one).
-//   3. A PROVISIONED Chrome-for-Testing build (#556) — on a machine with no system Chrome,
+//   2. The Playwright chromium this repo already installs for report-template (#818) — tried
+//      FIRST: it needs no system install and no network, so CWV is not gated on either. Skip via
+//      LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM=1 (operator/test seam to force steps 3/4). It is a
+//      Chrome-for-Testing build, just an older pinned one that reproduced Lighthouse's NO_FCP
+//      ("the page did not paint any content") live pre-#818 (#488, re-confirmed #556); the
+//      `--disable-gpu --disable-dev-shm-usage` flags below target that failure mode directly
+//      (a small /dev/shm is a documented cause of a headless-Chrome renderer crash reading as
+//      NO_FCP) but this has NOT been re-proven live since (no network-isolated sandbox with a
+//      browser to test against — see docs/design/m7-chrome-provisioning.md for the last live
+//      proof, which predates this reordering).
+//   3. A system Chrome — chrome-launcher auto-detects one (skip via LIGHTHOUSE_SKIP_SYSTEM_CHROME=1,
+//      an operator/test seam to force step 4 on a machine that does have one).
+//   4. A PROVISIONED Chrome-for-Testing build (#556) — last resort, since it needs network:
 //      `npm install --prefix <cache> @puppeteer/browsers` (runtime, --no-save; never a package.json
 //      dependency) then `browsers install chrome@stable`, cached under
 //      ~/.cache/harvey/chrome-for-testing so repeat runs skip the download. See
 //      docs/design/m7-chrome-provisioning.md.
-//   4. The Playwright chromium this repo already installs for report-template — last resort only:
-//      it is ALSO a Chrome-for-Testing build, but an older pinned one that reproduces Lighthouse's
-//      NO_FCP ("the page did not paint any content") live (#488, re-confirmed #556); provisioning
-//      step 3 exists specifically so this path is rarely reached.
-// A run that still measures nothing (NO_FCP on the last-resort fallback) is surfaced as the
-// fail-loud M7L-00 disclosure, never a silent clean.
+// A run that still measures nothing (NO_FCP on every reachable candidate) is surfaced as the
+// fail-loud M7L-00 disclosure, never a silent clean. Note: a chrome that LAUNCHES but yields
+// NO_FCP does not fall through to the next candidate — only a launch failure (an exception) does;
+// retrying across candidates on a soft NO_FCP result is a known structural gap, unchanged by #818
+// (tracked as a follow-up, not solved here).
 //
 // chrome-launcher spawns Chrome as a raw child_process; a bad path (e.g. a stale
 // LIGHTHOUSE_CHROME_PATH) makes Node emit an unhandled 'error' event on that child process, which
@@ -70,6 +79,20 @@ const targetArg = positionals[0];
 const outPath = flags["--out"];
 const port = flags["--port"] ? Number(flags["--port"]) : 3000;
 if (routes.length === 0) routes.push("/");
+
+// #818 test/operator seam: prints the resolved browser-candidate order (see the header comment)
+// and exits WITHOUT ever launching a browser — the fastest, network-free way to prove the
+// fallback ordering is wired as intended, mirroring the LIGHTHOUSE_SKIP_* seams below.
+if (process.env.LIGHTHOUSE_PRINT_CHROME_ORDER) {
+  const order: string[] = process.env.LIGHTHOUSE_CHROME_PATH ? ["override"] : [];
+  if (!order.length) {
+    if (!process.env.LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM) order.push("bundled-playwright");
+    if (!process.env.LIGHTHOUSE_SKIP_SYSTEM_CHROME) order.push("system");
+    order.push("provisioned");
+  }
+  console.log(order.join(","));
+  process.exit(0);
+}
 
 if (!baseUrl && !targetArg) {
   console.error("usage: pnpm lighthouse-scan <target-dir> [--route /path]... [--port 3000] [--out file]  (or --url <base>)");
@@ -180,26 +203,47 @@ function safeLaunch(opts: LaunchOptions): Promise<LaunchedChrome> {
 
 // Launches Chrome for Lighthouse — see the browser-resolution order in the header comment.
 async function launchChrome(): Promise<LaunchedChrome> {
-  const chromeFlags = ["--headless=new", "--no-sandbox"];
+  // #818: --disable-dev-shm-usage avoids the renderer crashing on the small /dev/shm typical of
+  // sandboxed/containerized hosts (a documented root cause of headless Chrome's "page did not
+  // paint any content" / NO_FCP, independent of which chromePath below produces the crash);
+  // --disable-gpu is the standard headless-on-a-host-with-no-GPU companion flag. Applied to every
+  // candidate, not just the bundled one, since any of them can hit the same failure mode.
+  const chromeFlags = ["--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"];
   const override = process.env.LIGHTHOUSE_CHROME_PATH;
   if (override) return safeLaunch({ chromeFlags, chromePath: override });
 
-  let systemErr: Error = new Error("system Chrome auto-detect skipped (LIGHTHOUSE_SKIP_SYSTEM_CHROME)");
+  let lastErr: Error = new Error("no Chrome candidate was reachable");
+
+  // #818: try the Playwright chromium this repo already vendors FIRST — it needs no system
+  // install and no network, so CWV is not gated on either. Skippable via
+  // LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM=1 (an operator/test seam to force the steps below on a
+  // machine that does have this candidate, mirroring LIGHTHOUSE_SKIP_SYSTEM_CHROME).
+  if (!process.env.LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM) {
+    const bundled = await playwrightChromePath();
+    if (bundled) {
+      try {
+        return await safeLaunch({ chromeFlags, chromePath: bundled });
+      } catch (err) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+      }
+    }
+  }
+
   if (!process.env.LIGHTHOUSE_SKIP_SYSTEM_CHROME) {
     try {
       return await safeLaunch({ chromeFlags });
     } catch (err) {
-      systemErr = err instanceof Error ? err : new Error(String(err));
+      lastErr = err instanceof Error ? err : new Error(String(err));
     }
   }
 
+  // Network-dependent provisioning is the last resort now — every earlier candidate is either
+  // already on disk (bundled) or already installed (system), so this is the only step that can
+  // fail purely because the host has no network access.
   const provisioned = await provisionChrome();
   if (provisioned) return safeLaunch({ chromeFlags, chromePath: provisioned });
 
-  const fallback = await playwrightChromePath();
-  if (!fallback) throw systemErr;
-  console.error(`falling back to Playwright chromium at ${fallback} — it may fail with NO_FCP (#488)`);
-  return safeLaunch({ chromeFlags, chromePath: fallback });
+  throw lastErr;
 }
 
 async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {

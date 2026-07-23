@@ -44,3 +44,32 @@ describe("lighthouse-scan: a bad LIGHTHOUSE_CHROME_PATH degrades to M7L-00 (#556
     expect(findings[0].evidence).toMatch(/ENOENT|not-a-real-chrome-binary/);
   });
 });
+
+// #818: proves the resolved browser-candidate ORDER without ever launching a browser (no
+// system/network dependency in the test itself) via the LIGHTHOUSE_PRINT_CHROME_ORDER dry-run
+// seam — the fastest way to pin the fallback chain the header comment documents.
+describe("lighthouse-scan: browser-candidate resolution order (#818)", () => {
+  function printOrder(env: Record<string, string>): string {
+    return execFileSync("node_modules/.bin/tsx", [CLI], {
+      cwd: REPO_ROOT,
+      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", LIGHTHOUSE_PRINT_CHROME_ORDER: "1", ...env },
+      encoding: "utf8",
+    }).trim();
+  }
+
+  it("tries the bundled Playwright chromium before system Chrome by default", () => {
+    expect(printOrder({})).toBe("bundled-playwright,system,provisioned");
+  });
+
+  it("an explicit LIGHTHOUSE_CHROME_PATH override short-circuits every other candidate", () => {
+    expect(printOrder({ LIGHTHOUSE_CHROME_PATH: "/some/chrome" })).toBe("override");
+  });
+
+  it("LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM skips straight to system Chrome", () => {
+    expect(printOrder({ LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM: "1" })).toBe("system,provisioned");
+  });
+
+  it("both skip flags leave only network-dependent provisioning as a candidate", () => {
+    expect(printOrder({ LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM: "1", LIGHTHOUSE_SKIP_SYSTEM_CHROME: "1" })).toBe("provisioned");
+  });
+});
