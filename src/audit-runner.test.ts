@@ -302,13 +302,23 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m4?.reason).toMatch(/jscpd did not complete/);
   });
 
-  it("M8 — no test suite (moduleRecord partial, exit 0) is NOT recorded ran", () => {
-    // mutation-scan's #224 branch: the correct verdict is serialized and must be read, not discarded.
-    const noSuite = { exec: () => ({ ok: true, output: JSON.stringify({ finding: { id: "M8-00" }, moduleRecord: { status: "partial", note: "No automated test suite found (no scripts.test) — mutation scan could not run." } }) }) };
-    const m8 = status(AUDIT_RUNNERS, noSuite, "M8");
-    expect(m8?.status).not.toBe("ran");
-    expect(m8?.status).toBe("partial");
-    expect(m8?.reason).toMatch(/no automated test suite/i);
+  // #754: "no test suite at all" is a COMPLETE assessment — the M8-00 zero-coverage finding IS the
+  // verdict (CLAUDE.md / #224) — so it must read `ran`, not `partial`. `partial` is reserved for a
+  // suite that EXISTS but the measurement itself fell short (dry-run failure, degraded ladder,
+  // scoped subset — covered below). A `ran` status with no findings captured would silently drop
+  // the M8-00 finding from the deliverable, so this also asserts the finding survives capture.
+  it("M8 — no test suite at all reads ran, with the M8-00 finding captured (#754)", () => {
+    const noSuiteRecord = { status: "partial" as const, noSuite: true, note: "No automated test suite found (no scripts.test) — mutation scan could not run." };
+    const artifact = { finding: { id: "M8-00" }, moduleRecord: noSuiteRecord };
+    const noSuite = ctx({
+      captureDir: "/capture",
+      readArtifact: () => artifact,
+      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : { ok: true, output: cleanOutput(argv) }),
+    });
+    const { recorded, findings } = runAudit(AUDIT_RUNNERS, noSuite);
+    const m8 = recorded.find((r) => r.module === "M8");
+    expect(m8?.status).toBe("ran");
+    expect(findings.map((f) => f.id)).toContain("M8-00");
   });
 
   // #504: the coverage-honesty guard — a scoped mutation run emits its summary AND a partial

@@ -349,8 +349,13 @@ export function noTestSuiteFinding(reason: string): Finding {
   };
 }
 
-export function noTestSuiteModuleRecord(reason: string): { status: "partial"; note: string } {
-  return { status: "partial", note: `No automated test suite found (${reason}) — mutation scan could not run.` };
+// #754: `noSuite: true` distinguishes this verdict from the genuine measurement-gap records below
+// (root-workspace-unreachable #623, dry-run failure #503, degraded ladder #513, scoped subset
+// #504) — a suite that never existed has nothing left to measure, so the M8-00 finding above IS
+// the complete verdict, not a partial one. The M8 probe reads this flag to record `status: "ran"`
+// while every other moduleRecord shape here still reads `partial`.
+export function noTestSuiteModuleRecord(reason: string): { status: "partial"; note: string; noSuite: true } {
+  return { status: "partial", note: `No automated test suite found (${reason}) — mutation scan could not run.`, noSuite: true };
 }
 
 // #623: a per-app invocation on a workspace monorepo whose test config lives at the ROOT (a vitest
