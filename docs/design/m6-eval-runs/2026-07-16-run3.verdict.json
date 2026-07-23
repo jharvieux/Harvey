@@ -1,0 +1,13 @@
+{
+  "reviewer": "run3-fable-fresh-context (2026-07-16, #324)",
+  "date": "2026-07-16",
+  "target": "targets/calibration/simplify",
+  "verdicts": [
+    { "file": "debounce.ts", "verdict": "flag", "replacement": "stdlib/existing-dep debounce (e.g. lodash-es debounce)" },
+    { "file": "group.ts", "verdict": "flag", "replacement": "Object.groupBy / Map.groupBy / lodash-es groupBy" },
+    { "file": "id.ts", "verdict": "flag", "replacement": "crypto.randomUUID()" },
+    { "file": "manager.ts", "verdict": "flag", "replacement": "collapse the single-implementation interface + factory to the concrete class" },
+    { "file": "depdrop.ts", "verdict": "spare", "reason": "// WHY: block records a deliberate heavy-dep tradeoff (quality-extras.txt FALSE POSITIVES: the deliberate dep-drop)" },
+    { "file": "framework-adapter.ts", "verdict": "spare", "reason": "SupportedStorage contract + the createClient({ auth: { storage } }) call site mandate the class shape — code evidence alone, no comment asserting it" }
+  ]
+}

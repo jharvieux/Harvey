@@ -15,7 +15,7 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
 | M3 | Hotspot analysis | **`vitals` plugin** (`/vitals:scan`) | exists — run, don't build |
 | M4 | Duplication | jscpd | exists (`pnpm check:duplication`) |
 | M5 | Slop / dead code | `pnpm quality-scan` (knip dead code) + `pnpm detect-static` (slop AST detectors, `src/detectors/slop.ts`) | exists — both engines wired |
-| M6 | Simplification / reuse / maintainability | `pnpm simplify-scan` (brief + source → review packet) + pre-pr-reviewer doctrine | runner exists (#266); **never yet run against a real target** |
+| M6 | Simplification / reuse / maintainability | `pnpm simplify-scan` (brief + source → review packet) + two-reviewer verdict protocol (#813, `src/cli/m6-agreement.ts`) | runner exists (#266); first real-target verdict recorded 2026-07-18 (#283) |
 | M7 | Performance tuning | Supabase perf advisors + profiling + bundle/Web-Vitals tools | **net-new** to assemble |
 | M8 | Test quality & intent | StrykerJS mutation testing + tests-for-intent review | **net-new** |
 | M9 | Next.js App Router boundary & rendering | `scan-extras.txt` (M9 section) + static review | **net-new** |
@@ -138,14 +138,27 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
   overcomplicated" doctrine. The runner assembles and does not judge — M6's verdict is a reviewer's opinion, so
   the writeup goes through human triage before it reaches a client (`docs/design/m6-simplification-eval.md` §5).
 - **Powered by:** `pnpm simplify-scan` + `quality-extras.txt`.
+- **Verdict protocol — two independent reviewers (#813, 2026-07-23):** the paid M6 verdict is never asserted
+  from a single reviewer pass — measured reviewer variance (two fresh contexts split on the same file under
+  the same rubric, `docs/design/m6-simplification-eval.md` §3.4) made single passes datapoints, not verdicts.
+  Two reviewers each review the *identical* packet in fresh, independent contexts (same-model
+  self-consistency is fine; independence of context is the load-bearing property) and end their writeups
+  with the packet's machine-readable verdict block, one `flag`/`spare` row per packet file.
+  `pnpm exec tsx src/cli/m6-agreement.ts <a.json> <b.json>` computes agreement mechanically — never
+  eyeballed. Unanimous flags go to the human triage below; unanimous spares are spared; a **split goes to a
+  human adjudicator with both reviewers' arguments and never straight into a report**; a file reviewed by
+  only one pass is surfaced loudly as uncompared, never defaulted to spare. The labeled corpus
+  (`targets/calibration/simplify/`, twelve files) and the recorded agreement baseline live in
+  `docs/design/m6-simplification-eval.md` §3.5/§4 and `docs/design/m6-eval-runs/`.
 - **Status (2026-07-15, #266):** M6 has produced **no output in any engagement** since it was defined
   (2026-07-09, #72) — it had no runner until now, and the coverage guard recorded its absence as a routine `na`
   every time. `src/audit-coverage.ts` (`MODULES_NEVER_EXECUTED`) now fails loud on this until M6 runs
   against a real target. `MODULES_NEVER_EXECUTED` is itself **derived**, not hand-kept (#284): it's the
   complement of `audit-execution-log.json`, the record the full-audit runner
-  (`pnpm run-audit <target>`, #229/#310) writes from what actually executed. Until M6
-  runs once, treat the "lower your maintenance cost" pitch below as **unproven by our
-  own tooling** — it is a claim about a module that has never run.
+  (`pnpm run-audit <target>`, #229/#310) writes from what actually executed. **Superseded 2026-07-18
+  (#283):** M6 has now run against a real target (stoimera/Cravab) with a reviewed verdict recorded via the
+  M6 pass artifact + `run-audit --record`, clearing the never-run alarm — see
+  `docs/design/m6-first-real-target-verdict.md`.
 - **Report:** maintainability recommendations — each "reinvented wheel" with the suggested
   library/primitive to replace it, and the over-abstractions to collapse. This is the "lower your ongoing
   maintenance + onboarding cost" pitch, which lands even with clients who don't think they have a security problem.

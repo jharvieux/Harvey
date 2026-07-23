@@ -1,0 +1,15 @@
+Already up to date
+Done in 309ms using pnpm v11.1.3
+M6 two-reviewer agreement — run3-fable-fresh-context (2026-07-16, #324) vs run4-fable-fresh-context (2026-07-16, #325)
+
+agreed 5/6 on the files both reviewed
+  both flag  (candidate findings → human triage): debounce.ts, group.ts, id.ts, manager.ts
+  both spare: depdrop.ts
+
+SPLITS — 1 file(s) need a human adjudicator; a split never goes straight into a report:
+  framework-adapter.ts: SPARE (SupportedStorage contract + the createClient({ auth: { storage } }) call site mandate the class shape — code evidence alone, no comment asserting it)
+  framework-adapter.ts: FLAG (confidence low — argued the file duplicates what @supabase/ssr provides; self-rated its lowest-confidence flag, conceding it could not see whether @supabase/ssr is installed (it is not — the packet carried no dependency manifest pre-#396); scored a miss against the key)
+
+UNCOMPARED — reviewed only by run4-fable-fresh-context (2026-07-16, #325) (missing from the other pass; NOT counted as agreement): reconcile.ts
+
+This is a rubric-agreement figure for this pair of passes — never quote it as M6 precision (docs/design/m6-simplification-eval.md §3).
