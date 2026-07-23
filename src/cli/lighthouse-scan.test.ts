@@ -50,6 +50,14 @@ describe("lighthouse-scan: a bad LIGHTHOUSE_CHROME_PATH degrades to M7L-00 (#556
   });
 });
 
+// #841: launchChrome() falling through on a soft NO_FCP result (not just a hard launch failure) is
+// covered as a hermetic unit test of the extracted retry contract — see
+// src/lighthouse-chrome-candidates.test.ts. A real nested Chrome launch has proven unreliable to
+// even exercise inside a sandboxed child process here (the same class of issue #838 found with
+// jscpd: it hangs making zero requests, rather than failing fast, when launched several process
+// generations under this environment's sandbox) — real-browser behavior stays untested in THIS
+// file per its existing convention (only #556's ENOENT case is a child-process test).
+
 // #818: proves the resolved browser-candidate ORDER without ever launching a browser (no
 // system/network dependency in the test itself) via the LIGHTHOUSE_PRINT_CHROME_ORDER dry-run
 // seam — the fastest way to pin the fallback chain the header comment documents.
