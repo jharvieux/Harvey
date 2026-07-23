@@ -57,6 +57,7 @@ try {
   // M9 assumes a Next.js App Router shape; on a Vite/SPA target it is N/A (see detectAppRouterFindings).
   // M7's client-JS tiers and bundle reader also branch on it (#577).
   const framework = detectTargetFramework(scanDir);
+  const orm = detectOrm(scanDir);
   const isVite = framework === "vite";
   console.log(`target framework: ${framework}${isVite ? " — M9 App Router checks N/A (SPA, no SSR); M7 in Vite mode" : ""}`);
 
@@ -94,7 +95,7 @@ try {
   });
 
   const findings: Finding[] = [
-    ...detectAppRouterFindings(sources, framework, viteWs),
+    ...detectAppRouterFindings(sources, framework, viteWs, orm),
     ...detectPerfCodeFindings(sources, framework),
     ...detectHookDepFindings(sources),
     ...detectSlopFindings(sources),
@@ -108,7 +109,7 @@ try {
     // "unindexed foreign keys" advisor — static schema.prisma parse, no live DB needed.
     // #793 (the #761 remainder): the two app-code cross-referencing heuristics — N+1 query
     // pattern and a `where` filter with no covering index — schema.prisma alone can't see either.
-    ...(detectOrm(scanDir) === "prisma" ? [...scanPrismaSchemaPerf(scanDir), ...scanPrismaAppPerf(scanDir)] : []),
+    ...(orm === "prisma" ? [...scanPrismaSchemaPerf(scanDir), ...scanPrismaAppPerf(scanDir)] : []),
   ];
   if (buildDirs.length === 0) {
     console.log(
