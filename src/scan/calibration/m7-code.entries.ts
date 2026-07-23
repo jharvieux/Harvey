@@ -69,5 +69,13 @@ export const m7CodeEntries: HeuristicEntry[] = [
   { module: M7, id: "M7CODE-N-JSON-CLONE", kind: "negative", cls: "structuredClone usage", taxonomy: "M7 — JSON deep-clone", dir: "perf/json-clone/negative", note: "structuredClone — the fix shape." },
   { module: M7, id: "M7CODE-N-NESTED-LOOP", kind: "negative", cls: "Indexed join / static lists / string scans", taxonomy: "M7 — Nested-loop join", dir: "perf/nested-loop-join/negative", note: "Map-indexed fix, hardcoded + SCREAMING_SNAKE lists, per-item field scans, String.includes (#385 guards)." },
   { module: M7, id: "M7CODE-N-RENDER-ONCE", kind: "negative", cls: "Render-once email/PDF templates", dir: "perf/render-once/negative", note: "Email/PDF templates render exactly once — EVERY M7 class must stay silent here (no taxonomy = any finding is a false fire)." },
+
+  // #816 — the four triage FP shapes that were catalogued but never guarded. Added as corpus
+  // negatives FIRST (measured firing: M7 corpus precision dropped 100% → 84.6%), then guarded
+  // back to silence — the before/after is recorded in the PR for #816.
+  { module: M7, id: "M7CODE-N-AWAIT-STATIC", kind: "negative", cls: "Await loop over a hardcoded static list", taxonomy: "M7 — Await in loop (N+1)", dir: "perf/await-in-loop/negative-static-list", note: "A for-of over a const-literal/inline-literal list is bounded by source code, not data — never N+1 (#816)." },
+  { module: M7, id: "M7CODE-N-SORT-STATIC", kind: "negative", cls: "Sort of a hardcoded static list in JSX", taxonomy: "M7 — Sort in render body", dir: "perf/sort-in-jsx/negative-static-list", note: "Sorting a spread of a const-literal list re-sorts a fixed handful per render — no scaling cost (#816)." },
+  { module: M7, id: "M7CODE-N-SELECT-PK-EQ", kind: "negative", cls: "select('*').eq('id', …) point lookup", taxonomy: "M7 — Unbounded select", dir: "perf/unbounded-select/negative-pk-eq", note: "A primary-key .eq('id', …) filter returns at most one row — bounded like .in('id') and .single() (#816)." },
+  { module: M7, id: "M7CODE-N-CLONE-MODULE", kind: "negative", cls: "Module-scope run-once JSON clone", taxonomy: "M7 — JSON deep-clone", dir: "perf/json-clone/negative-module-scope", note: "A cold-start module-scope clone runs once — same exemption as module-scope readFileSync (#816)." },
   { module: M7, id: "M7CODE-N-COMPILER-FALSE", kind: "negative", cls: "Literal reactCompiler: false", taxonomy: "M7 — React Compiler flag unresolvable", dir: "perf/react-compiler-unresolvable/negative", note: "An explicit literal false is resolvable — no disclosure row." },
 ];

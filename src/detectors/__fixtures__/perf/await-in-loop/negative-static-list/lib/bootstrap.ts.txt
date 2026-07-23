@@ -1,0 +1,17 @@
+import { db } from "./db";
+
+const AUDIT_TABLES = ["orgs", "members", "invoices"];
+
+// A loop over a hardcoded const list is bounded by the source code, not by tenant/user data —
+// three sequential awaits forever, never N+1 (#816 triage FP shape).
+export async function resetAuditTables() {
+  for (const table of AUDIT_TABLES) {
+    await db.truncate(table);
+  }
+}
+
+export async function pingRegions() {
+  for (const region of ["us-east-1", "eu-west-1"]) {
+    await fetch(`https://${region}.example.com/health`);
+  }
+}

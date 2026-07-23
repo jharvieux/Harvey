@@ -141,6 +141,9 @@ describe("sort in render body", () => {
   it("does not flag a useMemo-hoisted sort", () => {
     expect(byTaxonomy("sort-in-jsx/negative", TAX)).toHaveLength(0);
   });
+  it("does not flag sorting a (spread of a) hardcoded const list — a fixed handful never scales (#816)", () => {
+    expect(byTaxonomy("sort-in-jsx/negative-static-list", TAX)).toHaveLength(0);
+  });
 });
 
 describe("state sprawl", () => {
@@ -171,6 +174,9 @@ describe("await in loop (N+1)", () => {
   it("does not flag loop-carried dependencies or chunked-batch loops (i += BATCH_SIZE)", () => {
     expect(byTaxonomy("await-in-loop/negative", TAX)).toHaveLength(0);
   });
+  it("does not flag a loop over a hardcoded/inline-literal list — bounded by source code, not data (#816)", () => {
+    expect(byTaxonomy("await-in-loop/negative-static-list", TAX)).toHaveLength(0);
+  });
 });
 
 describe("unbounded select", () => {
@@ -182,6 +188,10 @@ describe("unbounded select", () => {
   });
   it("does not flag paginated reads, .single() lookups, count-only head:true queries, a bounded `.in('id', [...])` lookup, or an `.insert(...).select()` mutation echo (#230)", () => {
     expect(byTaxonomy("unbounded-select/negative", TAX)).toHaveLength(0);
+  });
+  it("does not flag a `.eq('id', …)` primary-key point lookup — but scoping filters like .eq('conversation_id') still fire (#816)", () => {
+    expect(byTaxonomy("unbounded-select/negative-pk-eq", TAX)).toHaveLength(0);
+    expect(byTaxonomy("unbounded-select/positive", TAX)).toHaveLength(1); // the .eq('conversation_id') list read must keep firing
   });
 });
 
@@ -336,6 +346,9 @@ describe("JSON deep-clone", () => {
   });
   it("does not flag structuredClone", () => {
     expect(byTaxonomy("json-clone/negative", TAX)).toHaveLength(0);
+  });
+  it("does not flag a module-scope run-once clone (cold-start copy, same exemption as sync-io) (#816)", () => {
+    expect(byTaxonomy("json-clone/negative-module-scope", TAX)).toHaveLength(0);
   });
 });
 
