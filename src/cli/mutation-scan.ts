@@ -94,6 +94,7 @@ import {
   SCAFFOLD_SOURCE_DIRS,
   scaffoldStrykerConfig,
   scopedRunModuleRecord,
+  summarizeLineCoverage,
   summarizeMutationReport,
   survivingMutantFindings,
   toReportRows,
@@ -101,6 +102,7 @@ import {
   withTs7TsconfigBypass,
   type AncestorTestSignals,
   type DetectedEnvVar,
+  type IstanbulCoverageSummary,
   type PackageJsonForTestDetection,
   type StrykerReport,
 } from "../mutation-scan.js";
@@ -134,6 +136,10 @@ const incremental = process.argv.includes("--incremental");
 let reportPath = arg("--report");
 const hotspotsPath = arg("--hotspots");
 const outPath = arg("--out");
+// #819: where/whose package.json the line-coverage tool run should invoke — the target itself for
+// an ordinary per-app run, redirected to the workspace root by a successful #655 root-scoped run
+// below (the same case where reportPath/configPath are redirected).
+let coverageCwd = targetDir;
 const install = process.argv.includes("--install");
 
 function warnIfNotPerTest(cfgPath: string): void {
@@ -150,14 +156,18 @@ function warnIfNotPerTest(cfgPath: string): void {
 
 const STRYKER_CONFIG_NAMES = ["stryker.conf.json", "stryker.conf.js", "stryker.conf.mjs", "stryker.conf.cjs", "stryker.config.json", "stryker.config.js", "stryker.config.mjs", "stryker.config.cjs"];
 
-function readTargetPackageJson(): PackageJsonForTestDetection | undefined {
-  const pkgPath = join(targetDir, "package.json");
+function readPackageJsonAt(dir: string): PackageJsonForTestDetection | undefined {
+  const pkgPath = join(dir, "package.json");
   if (!existsSync(pkgPath)) return undefined;
   try {
     return JSON.parse(readFileSync(pkgPath, "utf8")) as PackageJsonForTestDetection;
   } catch {
     return undefined;
   }
+}
+
+function readTargetPackageJson(): PackageJsonForTestDetection | undefined {
+  return readPackageJsonAt(targetDir);
 }
 
 // #773: the version Stryker's dynamic `import("typescript")` would actually resolve — read from
@@ -379,6 +389,7 @@ if (!reportPath) {
         console.error(`✓ ${targetDir}: measured via a root-scoped mutation run at ${rootSuite.root} (#655) — an app-scoped measurement, not the #623 gap disclosure.`);
         reportPath = attempt.reportPath;
         configPath = attempt.refConfigPath;
+        coverageCwd = rootSuite.root; // #819: the runnable suite lives at the root, not this app
       } else {
         const why = attempt ? ` — attempted a root-scoped run but could not complete it (${attempt.degradeReason})` : "";
         console.error(`✗ ${targetDir}: no per-app test suite, but a workspace-ROOT suite exists at ${rootSuite.root} (${rootSuite.reason}) — measurement gap, not 'no test suite' (#623)${why}.`);
@@ -580,6 +591,59 @@ function runStryker(cfgPath: string | undefined, cwd: string = targetDir): { dry
   }
 }
 
+// #819: the headline "coverage-vs-mutation-score gap" needs line coverage, which Stryker's own
+// report never carries — this runs the target's OWN coverage-capable runner (vitest/jest, the same
+// two #513 can scaffold Stryker for) with its json-summary reporter forced on, regardless of
+// whatever reporter the target's own config names, so the output is always the one Istanbul schema
+// summarizeLineCoverage reads. mocha has no built-in coverage (nyc/c8 wrapping is too client-
+// specific to assume) and any undetected runner both degrade to a disclosed reason rather than a
+// silently blank column — the 2026-07-23 amendment on #819.
+interface LineCoverageResult {
+  status: "ran" | "partial";
+  byModule?: Record<string, number>;
+  reason?: string;
+}
+
+function runLineCoverage(pkg: PackageJsonForTestDetection | undefined, cwd: string): LineCoverageResult {
+  const runner = detectTestRunner(pkg);
+  if (!runner) {
+    return { status: "partial", reason: "no recognized test runner (vitest/jest/mocha) detected to invoke a coverage tool for" };
+  }
+  if (runner.runner === "mocha") {
+    return { status: "partial", reason: "mocha has no built-in coverage tool (nyc/c8 wrapping is target-specific and was not auto-detected) — line coverage was not auto-pulled" };
+  }
+
+  const outDir = mkdtempSync(join(tmpdir(), "harvey-line-coverage-"));
+  const localBin = join(cwd, "node_modules", ".bin", runner.runner);
+  const bin = existsSync(localBin) ? localBin : runner.runner;
+  const runArgs =
+    runner.runner === "vitest"
+      ? ["run", "--coverage", "--coverage.reporter=json-summary", `--coverage.reportsDirectory=${outDir}`]
+      : ["--coverage", "--coverageReporters=json-summary", `--coverageDirectory=${outDir}`];
+
+  try {
+    execFileSync(bin, runArgs, { cwd, env: suiteEnv, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
+  } catch {
+    // A suite with failing tests still often writes coverage before exiting non-zero (both vitest
+    // and jest do) — only give up once the summary file itself is confirmed absent, below.
+  }
+
+  const summaryPath = join(outDir, "coverage-summary.json");
+  if (!existsSync(summaryPath)) {
+    const result: LineCoverageResult = { status: "partial", reason: `${runner.runner} --coverage produced no coverage-summary.json (is a coverage provider like @vitest/coverage-v8 installed, and does the suite pass?)` };
+    rmSync(outDir, { recursive: true, force: true });
+    return result;
+  }
+  try {
+    const coverage = JSON.parse(readFileSync(summaryPath, "utf8")) as IstanbulCoverageSummary;
+    return { status: "ran", byModule: summarizeLineCoverage(coverage, targetDir) };
+  } catch (err) {
+    return { status: "partial", reason: `could not parse ${summaryPath}: ${(err as Error).message.slice(0, 200)}` };
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+  }
+}
+
 const defaultConfigPath = STRYKER_CONFIG_NAMES.map((f) => join(targetDir, f)).find(existsSync);
 let effectiveConfigPath = configPath ? resolve(configPath) : defaultConfigPath;
 
@@ -721,14 +785,28 @@ const scope = verifyMutationScope(
 );
 console.error(`M8 mutate scope (#504): ${scope.note}`);
 
+// #819: auto-pull line coverage from the same suite Stryker just ran against, so the §3b
+// "coverage-vs-mutation-score gap" no longer needs a hand-filled column. `coverageCwd`/its
+// package.json follow wherever the runnable suite actually lives — the target for an ordinary
+// run, the workspace root for a successful #655 root-scoped run.
+const lineCoverage = runLineCoverage(readPackageJsonAt(coverageCwd), coverageCwd);
+if (lineCoverage.status === "partial") {
+  console.error(`⚠ M8 line coverage: partial — ${lineCoverage.reason} (#819; the Line-cov column is disclosed as ungenerated, not left blank/omitted)`);
+} else {
+  console.error(`M8 line coverage auto-pulled from ${coverageCwd}'s own coverage tool (#819)`);
+}
+
 // #435: findings from the denial/boundary-concentration mapper — a real Stryker run's survivors
 // contribute report-schema findings the same way the no-test-suite branch's M8-00 already does.
 const findings = survivingMutantFindings(summary);
 const output = {
   summary,
-  reportRows: toReportRows(summary),
+  reportRows: toReportRows(summary, lineCoverage.byModule),
   findings,
   scope,
+  // #819: always present (never a silent blank column) — "ran" alongside the module rows above
+  // when the coverage pull succeeded, "partial" + reason when it could not.
+  lineCoverage: lineCoverage.status === "ran" ? { status: "ran" as const } : { status: "partial" as const, reason: lineCoverage.reason },
   // #504: a scoped run carries the machine-readable partial verdict alongside its summary, so the
   // M8 probe records partial-with-scope instead of banking the subset score as `ran`.
   ...(scope.scoped ? { moduleRecord: scopedRunModuleRecord(scope) } : {}),

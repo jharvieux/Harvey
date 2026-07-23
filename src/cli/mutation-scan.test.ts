@@ -414,6 +414,73 @@ describe("mutation-scan monorepo root-scoped run attempt (#655, child process)",
   });
 });
 
+// #819: line coverage is auto-pulled from the target's own coverage-capable runner (vitest/jest)
+// so the §3b coverage-vs-mutation-score gap no longer needs a hand-filled column. --report skips
+// invoking Stryker itself (irrelevant to this feature) so these fixtures need no stryker binary.
+describe("mutation-scan auto-pulled line coverage (#819, child process)", () => {
+  function minimalReport(repo: string): string {
+    const reportPath = join(repo, "mutation-report.json");
+    writeFileSync(
+      reportPath,
+      JSON.stringify({ schemaVersion: "1", files: { "src/add.ts": { mutants: [{ id: "1", mutatorName: "ConditionalExpression", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } }] } } }),
+    );
+    return reportPath;
+  }
+
+  function writeFakeCoverageBinary(repo: string, runner: "vitest" | "jest", behavior: "succeed" | "produces-nothing"): void {
+    const binDir = join(repo, "node_modules", ".bin");
+    mkdirSync(binDir, { recursive: true });
+    const script =
+      behavior === "succeed"
+        ? `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const dirArg = process.argv.find((a) => a.includes("Directory="));
+const dir = dirArg.split("=")[1];
+fs.mkdirSync(dir, { recursive: true });
+fs.writeFileSync(path.join(dir, "coverage-summary.json"), JSON.stringify({ total: { lines: { total: 10, covered: 8, skipped: 0, pct: 80 } }, "src/add.ts": { lines: { total: 10, covered: 8, skipped: 0, pct: 80 } } }));
+process.exit(0);
+`
+        : `#!/usr/bin/env node\nprocess.exit(1);\n`;
+    writeFileSync(join(binDir, runner), script);
+    chmodSync(join(binDir, runner), 0o755);
+  }
+
+  it("auto-pulls line coverage from a local vitest binary and merges it onto the same module row as mutation score", () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFakeCoverageBinary(repo, "vitest", "succeed");
+    const reportPath = minimalReport(repo);
+    const { status, out } = runCli(repo, ["--report", reportPath]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { lineCoverage: { status: string }; reportRows: { module: string; lineCoverage?: number }[] };
+    expect(parsed.lineCoverage).toEqual({ status: "ran" });
+    expect(parsed.reportRows.find((r) => r.module === "src")?.lineCoverage).toBe(80);
+  });
+
+  it("discloses partial with a reason when the coverage tool produces no summary — never a silent blank column", () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    writeFakeCoverageBinary(repo, "vitest", "produces-nothing");
+    const reportPath = minimalReport(repo);
+    const { status, out } = runCli(repo, ["--report", reportPath]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { lineCoverage: { status: string; reason?: string } };
+    expect(parsed.lineCoverage.status).toBe("partial");
+    expect(parsed.lineCoverage.reason).toMatch(/coverage-summary\.json/);
+  });
+
+  it("discloses partial when no recognized test runner is detected to invoke a coverage tool for", () => {
+    const repo = mkdtempSync(join(tmpdir(), "harvey-m8-cli-"));
+    dirs.push(repo);
+    writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "fixture", scripts: { test: "ava" }, devDependencies: { ava: "^6.0.0" } }));
+    const reportPath = minimalReport(repo);
+    const { status, out } = runCli(repo, ["--report", reportPath]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { lineCoverage: { status: string; reason?: string } };
+    expect(parsed.lineCoverage.status).toBe("partial");
+    expect(parsed.lineCoverage.reason).toMatch(/no recognized test runner/);
+  });
+});
+
 // #773: TypeScript 7's native/Go rewrite broke Stryker's own sandbox tsconfig preprocessor (it
 // calls the classic compiler API, which TS7's restructured package no longer exports) — every
 // Stryker run against a TS7 target crashed with no report written. These fixtures fake the

@@ -9,7 +9,7 @@
 // detected = Killed + Timeout. NoCoverage, Survived, and RuntimeError all count against the
 // score — each is a mutant the suite did not prove itself against.
 
-import { dirname } from "node:path";
+import { dirname, isAbsolute, relative, sep } from "node:path";
 import type { Finding } from "./findings.js";
 
 export type MutantStatus =
@@ -216,6 +216,10 @@ export function coveredScopeLine(summary: MutationSummary): string {
 
 interface ReportRow {
   module: string;
+  // #819: undefined only when line coverage genuinely could not be auto-pulled for this module
+  // (see src/cli/mutation-scan.ts's runLineCoverage) — the CLI always discloses WHY at the
+  // top-level `lineCoverage` verdict rather than letting an undefined column read as "0%".
+  lineCoverage?: number;
   mutationScore: number;
   survivingCount: number;
   hotspotSurvivingCount: number;
@@ -223,18 +227,51 @@ interface ReportRow {
 
 // Formats the per-module rows for the §3b Test-quality table (docs/audit-report-skeleton.md):
 // | Module / file | Line cov | Mutation score | Surviving mutants (critical) | Action |
-// Line coverage isn't in Stryker's mutant-level report, so it's left for the operator to fill in
-// from the client's existing coverage tool — this only emits the mutation-derived columns.
-export function toReportRows(summary: MutationSummary): ReportRow[] {
+// #819: `lineCoverageByModule` (from summarizeLineCoverage, keyed the same way as byModule) is
+// merged in here so the two numbers land on one row; omit it (or a missing module key) when the
+// target's own coverage tool couldn't be run — the CLI's top-level `lineCoverage` verdict carries
+// the reason so the gap is disclosed, never silently read as 0%.
+export function toReportRows(summary: MutationSummary, lineCoverageByModule?: Record<string, number>): ReportRow[] {
   return summary.byModule.map((m) => {
     const forModule = summary.survivingMutants.filter((s) => moduleOf(s.file) === m.module);
     return {
       module: m.module,
+      ...(lineCoverageByModule?.[m.module] !== undefined ? { lineCoverage: lineCoverageByModule[m.module] } : {}),
       mutationScore: m.mutationScore,
       survivingCount: forModule.length,
       hotspotSurvivingCount: forModule.filter((s) => s.hotspot).length,
     };
   });
+}
+
+// #819: the Istanbul `coverage-summary.json` shape (the json-summary reporter, produced by both
+// @vitest/coverage-v8 and Jest's built-in istanbul coverage) — the one machine-readable coverage
+// format both of Harvey's scaffoldable runners can be made to emit, so this reads one schema
+// regardless of which runner produced it.
+export interface IstanbulCoverageSummary {
+  [file: string]: { lines: { total: number; covered: number; skipped: number; pct: number } };
+}
+
+// Aggregates the file-level Istanbul summary into the SAME per-directory "module" buckets
+// toReportRows/byModule already use for mutation score, so line coverage lands on the identical
+// row without a separate join key. `targetDir` un-absolutes any absolute paths the coverage tool
+// wrote (Jest/vitest report keys are usually absolute; report keyed already-relative if the tool
+// ran with a relative rootDir).
+export function summarizeLineCoverage(coverage: IstanbulCoverageSummary, targetDir: string): Record<string, number> {
+  const byModule = new Map<string, { covered: number; total: number }>();
+  for (const [file, data] of Object.entries(coverage)) {
+    if (file === "total") continue;
+    const rel = (isAbsolute(file) ? relative(targetDir, file) : file).split(sep).join("/");
+    const bucket = byModule.get(moduleOf(rel)) ?? { covered: 0, total: 0 };
+    bucket.covered += data.lines.covered;
+    bucket.total += data.lines.total;
+    byModule.set(moduleOf(rel), bucket);
+  }
+  const result: Record<string, number> = {};
+  for (const [mod, { covered, total }] of byModule) {
+    result[mod] = total === 0 ? 0 : Math.round((covered / total) * 1000) / 10;
+  }
+  return result;
 }
 
 // #224: a target with no test script, no known test-runner dependency, and no Stryker config
