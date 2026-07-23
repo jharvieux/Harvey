@@ -327,6 +327,11 @@ footer { padding: 44px 0 60px; }
 .probe .pbody p { color: var(--muted); font-size: 14px; margin: 3px 0 0; }
 .probe .pbody code { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
 .tool-err { color: var(--critical); font-size: 14px; margin: 14px 0 0; }
+.tool-more { border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; margin-bottom: 16px; background: var(--bg); }
+.tool-more > summary { font-family: var(--mono); font-size: 12px; letter-spacing: .03em; color: var(--muted); cursor: pointer; padding: 10px 0; list-style-position: inside; }
+.tool-more[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+.tool-more-hint { color: var(--faint); font-size: 13px; line-height: 1.55; margin: 0 0 14px; }
+.tool-more .field:last-child { margin-bottom: 6px; }
 
 /* ---- policy meta ---- */
 .policy-meta { font-family: var(--mono); font-size: 12.5px; color: var(--faint); margin-top: 10px; }
