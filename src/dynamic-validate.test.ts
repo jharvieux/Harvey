@@ -396,6 +396,25 @@ describe("#574 — standalone root schema.sql discovery + stand-up ability", () 
     expect(v.reason).toMatch(/Probed: supabase\/migrations/);
     expect(v.reason).toMatch(/schema\.sql/);
   });
+
+  // #770: the shallow scan's shape (any *.sql, not "migrations"-named, not a seed file, declaring a
+  // table) already covers these — reused by M10's schema-tier probe (src/audit-runners.ts) — but
+  // neither exact real-world shape had a test naming it until the M10 gap surfaced them.
+  it("discovers a root-level schema file under an unconventional name (launch-mvp shape)", () => {
+    const dir = join(root, "launch-mvp-shape");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "initial_supabase_table_schema.sql"), "create table customers (id uuid primary key, email text);");
+    const { files } = discoverSchemaFiles(dir);
+    expect(files).toEqual([join(dir, "initial_supabase_table_schema.sql")]);
+  });
+
+  it("discovers a conventionally-NAMED schema.sql nested under a non-conventional directory (nocode-rescue shape)", () => {
+    const dir = join(root, "nocode-rescue-shape");
+    mkdirSync(join(dir, "before"), { recursive: true });
+    writeFileSync(join(dir, "before", "schema.sql"), "create table applicants (id uuid primary key, customer_ssn text);");
+    const { files } = discoverSchemaFiles(dir);
+    expect(files).toEqual([join(dir, "before", "schema.sql")]);
+  });
 });
 
 describe("splitLayoutByProject (#610 — one entry per Supabase project)", () => {
