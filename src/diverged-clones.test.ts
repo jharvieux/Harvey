@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { divergedCloneFindings, M4_DIVERGED_TAXONOMY, type SecurityPathFile } from "./diverged-clones.js";
+import {
+  divergedCloneFindings,
+  M4_DIVERGED_TAXONOMY,
+  M4_DIVERGED_WIDE_TAXONOMY,
+  type SecurityPathFile,
+  wholeRepoDivergedCloneFindings,
+} from "./diverged-clones.js";
 
 const fixtureDir = join(import.meta.dirname, "..", "targets", "calibration", "dup", "auth");
 const fixture = (name: string): SecurityPathFile => ({
@@ -116,5 +122,89 @@ export function assembleAuditRow(entries: Entry[], limit: number): string[] {
       { path: "auth/b.ts", source: other },
     ]);
     expect(findings).toEqual([]);
+  });
+});
+
+// #809: the opt-in whole-repo extension. Same divergence math as divergedCloneFindings, but the
+// caller need not pre-screen for security relevance — so the finding shape, severity, and
+// taxonomy are generic (never the "security check" framing), and a volume cap bounds the
+// otherwise-unscoped O(n^2) comparison.
+describe("wholeRepoDivergedCloneFindings (#809)", () => {
+  // A config object builder — deliberately NOT under an auth/guard/security path and with no
+  // tenant-key-scoped supabase query, so touchesSecurityPath/touchesTenantSupabasePath would both
+  // gate it OUT of divergedCloneFindings' admission — proving this pass reaches beyond that scope.
+  const configSource = (fnName: string, maxRows: number): string => `
+export function ${fnName}(rows: string[], format: string): Record<string, unknown> {
+  const config = {
+    rows,
+    format,
+    delimiter: ",",
+    maxRows: ${maxRows},
+  };
+  if (rows.length === 0) {
+    throw new Error("no rows to export");
+  }
+  return config;
+}
+`;
+
+  it("flags a diverged config builder duplicated between two non-security modules", () => {
+    const findings = wholeRepoDivergedCloneFindings([
+      { path: "lib/export/csv.ts", source: configSource("buildExportConfig", 500) },
+      { path: "lib/reports/xlsx.ts", source: configSource("buildExportConfig", 2000) },
+    ]);
+    expect(findings).toHaveLength(1);
+    const f = findings[0]!;
+    expect(f.id).toBe("M4-DIVW-01");
+    expect(f.taxonomy).toBe(M4_DIVERGED_WIDE_TAXONOMY);
+    expect(f.taxonomy).not.toBe(M4_DIVERGED_TAXONOMY);
+    expect(f.severity).toBe("Medium"); // not High — this scope carries no security guarantee
+    expect(f.precisionTier).toBe("review");
+    expect(f.evidence).toContain("500 ↔ 2000");
+    expect(f.title).not.toContain("security"); // generic wording, unlike divergedCloneFindings
+  });
+
+  it("does not flag two structurally unrelated non-security functions of similar size", () => {
+    const unrelated = `
+export function summarizeOrders(orders: { total: number }[]): number {
+  let sum = 0;
+  for (const order of orders) {
+    if (order.total > 0) sum += order.total;
+  }
+  return sum;
+}
+`;
+    const findings = wholeRepoDivergedCloneFindings([
+      { path: "lib/export/csv.ts", source: configSource("buildExportConfig", 500) },
+      { path: "lib/orders/summary.ts", source: unrelated },
+    ]);
+    expect(findings).toEqual([]);
+  });
+
+  it("discloses a truncated volume cap rather than silently dropping the excess", () => {
+    // Three files' worth of functions, capped at 2 — the third file's function never enters
+    // comparison, and that gap must be disclosed (M4-98), not silently absorbed.
+    const findings = wholeRepoDivergedCloneFindings(
+      [
+        { path: "a.ts", source: configSource("buildExportConfig", 500) },
+        { path: "b.ts", source: configSource("buildExportConfig", 2000) },
+        { path: "c.ts", source: configSource("buildExportConfig", 9000) },
+      ],
+      { maxFunctions: 2 },
+    );
+    const capNote = findings.find((f) => f.id === "M4-98");
+    expect(capNote).toBeDefined();
+    expect(capNote?.evidence).toContain("only the first 2");
+  });
+
+  it("does not disclose a volume cap when every function fit under it", () => {
+    const findings = wholeRepoDivergedCloneFindings(
+      [
+        { path: "a.ts", source: configSource("buildExportConfig", 500) },
+        { path: "b.ts", source: configSource("buildExportConfig", 2000) },
+      ],
+      { maxFunctions: 10 },
+    );
+    expect(findings.some((f) => f.id === "M4-98")).toBe(false);
   });
 });
