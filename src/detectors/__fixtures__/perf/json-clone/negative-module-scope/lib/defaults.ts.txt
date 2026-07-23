@@ -1,0 +1,9 @@
+import { baseConfig } from "./base-config";
+
+// A module-scope clone runs once at cold start — the accepted run-once pattern, same exemption
+// as module-scope readFileSync in the sync-io class (#816 triage FP shape).
+export const DEFAULT_SETTINGS = JSON.parse(JSON.stringify(baseConfig));
+
+export function getDefaults() {
+  return DEFAULT_SETTINGS;
+}

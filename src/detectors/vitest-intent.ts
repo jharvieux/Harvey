@@ -61,7 +61,9 @@ function makeFinding(
     safety: number;
   },
 ): Finding {
-  return { id: nextId(), status: "Open", category: "Test quality", ...input };
+  // Heuristic classes — review is the conservative precision floor; an untiered finding
+  // silently mis-scores in a calibration scorer (#327, same default as perf-code/test-intent).
+  return { id: nextId(), status: "Open", category: "Test quality", precisionTier: "review", ...input };
 }
 
 // --- vitest-runner gate ------------------------------------------------------------

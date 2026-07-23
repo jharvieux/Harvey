@@ -427,6 +427,17 @@ function detectIndexAsKey(sources: Map<string, ts.SourceFile>, nextId: NextId, c
 
 // --- A5. Sort in render body (inside JSX) [LOW] -------------------------------
 
+// #816: sorting a hardcoded list (or a spread copy of one) in JSX re-sorts a fixed handful of
+// items per render — the cost never scales with data. Same static-list + SCREAMING_SNAKE
+// exemptions as detectIndexAsKey/detectNestedLoopJoin.
+function isStaticSortReceiver(sf: ts.SourceFile, recv: ts.Expression): boolean {
+  if (ts.isArrayLiteralExpression(recv)) {
+    return recv.elements.every((el) => !ts.isSpreadElement(el) || isStaticSortReceiver(sf, el.expression));
+  }
+  if (ts.isIdentifier(recv)) return /^[A-Z][A-Z0-9_]*$/.test(recv.text) || isStaticListSource(sf, recv);
+  return false;
+}
+
 function detectSortInJsx(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
@@ -439,7 +450,8 @@ function detectSortInJsx(sources: Map<string, ts.SourceFile>, nextId: NextId): F
           if (
             ts.isCallExpression(n) &&
             ts.isPropertyAccessExpression(n.expression) &&
-            (n.expression.name.text === "sort" || n.expression.name.text === "toSorted")
+            (n.expression.name.text === "sort" || n.expression.name.text === "toSorted") &&
+            !isStaticSortReceiver(sf, n.expression.expression) // hardcoded lists never scale (#816)
           ) {
             hit = n;
             return;
@@ -608,7 +620,10 @@ function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId):
       if (ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isForStatement(node)) {
         const streaming = ts.isForOfStatement(node) && node.awaitModifier; // `for await … of` is sequential by design
         const chunked = ts.isForStatement(node) && isBatchChunkLoop(node);
-        if (!streaming && !chunked) {
+        // #816: a loop over a hardcoded/const-literal list is bounded by the source code, not by
+        // tenant/user data — a fixed handful of sequential awaits forever, never N+1.
+        const staticList = ts.isForOfStatement(node) && isStaticListSource(sf, node.expression);
+        if (!streaming && !chunked && !staticList) {
           const loopVars = loopBindingNames(node);
           const assigned = collectAssignedNames(node.statement);
           const awaits = collectAwaits(node.statement);
@@ -659,7 +674,7 @@ function detectUnboundedSelect(sources: Map<string, ts.SourceFile>, nextId: Next
       // Only inspect the outermost call of a chain so one query flags once.
       if (ts.isCallExpression(node) && !(node.parent && ts.isPropertyAccessExpression(node.parent))) {
         const names = callChainNames(node);
-        if (names.includes("from") && names.includes("select") && !names.some((n) => CHAIN_BOUNDS.has(n))) {
+        if (names.includes("from") && names.includes("select") && !names.some((n) => CHAIN_BOUNDS.has(n)) && !hasPkEqFilter(node)) {
           const selectArg = findSelectArg(node);
           if ((selectArg === undefined || selectArg === "*") && !isCountOnlySelect(node)) {
             findings.push(
@@ -685,6 +700,22 @@ function detectUnboundedSelect(sources: Map<string, ts.SourceFile>, nextId: Next
     visit(sf);
   }
   return findings;
+}
+
+// `.eq("id", …)` is a primary-key point lookup — at most one row regardless of table size, the
+// same bounded shape as `.in("id", [...])` and `.single()`. Deliberately ONLY the literal column
+// name "id": `.eq("org_id", …)`/`.eq("user_id", …)` are tenant/user scoping filters whose result
+// still grows with that tenant's data, so they stay flagged (#816).
+function hasPkEqFilter(chainRoot: ts.CallExpression): boolean {
+  let cur: ts.Expression = chainRoot;
+  while (ts.isCallExpression(cur) && ts.isPropertyAccessExpression(cur.expression)) {
+    if (cur.expression.name.text === "eq") {
+      const col = cur.arguments[0];
+      if (col && ts.isStringLiteralLike(col) && col.text === "id") return true;
+    }
+    cur = cur.expression.expression;
+  }
+  return false;
 }
 
 // `select("*", { count: "exact", head: true })` fetches ZERO rows — it's a count query,
@@ -1176,8 +1207,11 @@ function detectSyncIoInHandler(sources: Map<string, ts.SourceFile>, nextId: Next
 function detectJsonDeepClone(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    const visit = (n: ts.Node) => {
+    // Only flag clones inside a function body — a module-scope clone runs once at cold start,
+    // the same accepted run-once pattern detectSyncIoInHandler exempts (#816).
+    const visit = (n: ts.Node, inFunction: boolean) => {
       if (
+        inFunction &&
         ts.isCallExpression(n) &&
         ts.isPropertyAccessExpression(n.expression) &&
         n.expression.name.text === "parse" &&
@@ -1208,9 +1242,10 @@ function detectJsonDeepClone(sources: Map<string, ts.SourceFile>, nextId: NextId
           );
         }
       }
-      ts.forEachChild(n, visit);
+      const enters = ts.isFunctionDeclaration(n) || ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isMethodDeclaration(n);
+      ts.forEachChild(n, (c) => visit(c, inFunction || enters));
     };
-    visit(sf);
+    visit(sf, false);
   }
   return findings;
 }
