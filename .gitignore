@@ -16,3 +16,6 @@ stryker-tmp/
 
 # Transient sweep/agent worktrees — nested checkouts of this repo, never committed
 .claude/worktrees/
+
+# Dry-run timing — non-deterministic per-run timestamps, not committed (#302, #842)
+dry-run/timing.json
