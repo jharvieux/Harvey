@@ -231,6 +231,79 @@ describe("classifyColumn — table-context-only detections (#233)", () => {
   });
 });
 
+describe("classifyColumn — free-text review flag (#850)", () => {
+  it("review-flags a narrative-shaped text column at low confidence — a flag, never an assertion", () => {
+    expect(classifyColumn("case_notes", "text")).toEqual({ infotype: "FREE_TEXT_REVIEW", category: "PII", confidence: "low" });
+    expect(classifyColumn("bio", "text")).toEqual({ infotype: "FREE_TEXT_REVIEW", category: "PII", confidence: "low" });
+    expect(classifyColumn("description", "varchar")).toEqual({ infotype: "FREE_TEXT_REVIEW", category: "PII", confidence: "low" });
+    expect(classifyColumn("comment", "character varying")).toEqual({ infotype: "FREE_TEXT_REVIEW", category: "PII", confidence: "low" });
+  });
+
+  it("is type-gated — a narrative name on a non-text type, or with no type, is not a free-text column", () => {
+    expect(classifyColumn("notes")).toBeNull(); // no type → gate can't fire
+    expect(classifyColumn("notes", "integer")).toBeNull();
+    expect(classifyColumn("content", "jsonb")).toBeNull(); // jsonb 'content' isn't in the json-container vocab
+  });
+
+  it("stays out of the way of higher-signal hits — the dictionary and json-container rules win first", () => {
+    // email_body matches EMAIL before the free-text flag; a jsonb 'profile' is the #377 flag, not free-text.
+    expect(classifyColumn("email_body", "text")).toEqual({ infotype: "EMAIL", category: "PII", confidence: "high" });
+    expect(classifyColumn("profile", "jsonb", "users")).toEqual({ infotype: "OPAQUE_JSON_BLOB", category: "PII", confidence: "low" });
+  });
+
+  it("does not flag a text column outside the narrative vocabulary", () => {
+    expect(classifyColumn("title", "text")).toBeNull();
+    expect(classifyColumn("slug", "text")).toBeNull();
+  });
+});
+
+describe("classifyColumn — #856 blood_type carve-out, new concepts, and over-broad-regex FP guards", () => {
+  it("classifies blood_type as PHI — carved out of the _type descriptor-suffix exclusion", () => {
+    expect(classifyColumn("blood_type")).toEqual({ infotype: "BLOOD_TYPE", category: "PHI", confidence: "high" });
+    expect(classifyColumn("patient_blood_type")).toEqual({ infotype: "BLOOD_TYPE", category: "PHI", confidence: "high" });
+    // the exclusion still kills genuine descriptor columns
+    expect(classifyColumn("record_type")).toBeNull();
+    expect(classifyColumn("email_category")).toBeNull();
+  });
+
+  it("adds salary/compensation, age, maiden name, security Q&A, and orientation concepts", () => {
+    expect(classifyColumn("salary")).toEqual({ infotype: "COMPENSATION", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("compensation").category).toBe("SENSITIVE_PII");
+    expect(classifyColumn("age")).toEqual({ infotype: "AGE", category: "PII", confidence: "low" });
+    expect(classifyColumn("maiden_name")).toEqual({ infotype: "MAIDEN_NAME", category: "SENSITIVE_PII", confidence: "high" });
+    expect(classifyColumn("mothers_maiden_name").infotype).toBe("MAIDEN_NAME");
+    expect(classifyColumn("security_question")).toEqual({ infotype: "SECURITY_QA", category: "SENSITIVE_PII", confidence: "high" });
+    expect(classifyColumn("security_answer").infotype).toBe("SECURITY_QA");
+    expect(classifyColumn("orientation")).toEqual({ infotype: "SPECIAL_CATEGORY", category: "SENSITIVE_PII", confidence: "medium" });
+  });
+
+  it("still classifies the GDPR special categories as tokens", () => {
+    expect(classifyColumn("gender").infotype).toBe("SPECIAL_CATEGORY");
+    expect(classifyColumn("race").infotype).toBe("SPECIAL_CATEGORY");
+    expect(classifyColumn("sexual_orientation").infotype).toBe("SPECIAL_CATEGORY");
+  });
+
+  it("clears the over-broad-regex false positives the word-bounding + exclusions target", () => {
+    // race_id (an FK), race_condition (concurrency), health_score (a metric) — technical suffixes.
+    expect(classifyColumn("race_id")).toBeNull();
+    expect(classifyColumn("race_condition")).toBeNull();
+    expect(classifyColumn("health_score")).toBeNull();
+    // screen/page/device orientation is UI furniture, not sexual orientation.
+    expect(classifyColumn("screen_orientation")).toBeNull();
+    expect(classifyColumn("page_orientation")).toBeNull();
+    // age is token-bounded, so common substrings never fire.
+    expect(classifyColumn("page_count")).toBeNull();
+    expect(classifyColumn("usage")).toBeNull();
+    expect(classifyColumn("language")).toBeNull();
+  });
+
+  it("keeps genuine health/passport data unaffected by the tightened patterns", () => {
+    expect(classifyColumn("mental_health").category).toBe("PHI");
+    expect(classifyColumn("health_conditions").category).toBe("PHI");
+    expect(classifyColumn("passport_number").category).toBe("SENSITIVE_PII");
+  });
+});
+
 describe("buildDataMap — severity weighting", () => {
   it("weights a table by what combination of data it exposes", () => {
     const columns = [
@@ -391,6 +464,74 @@ describe("classifyMigrationSql — static-schema entry point (#250)", () => {
   });
 });
 
+describe("classifyMigrationSql — ALTER TABLE ADD COLUMN (#852) and unrecognized types (#851)", () => {
+  it("classifies a PII column added by a later migration via ALTER TABLE ADD COLUMN", () => {
+    const sql = `
+      create table public.users (
+        id uuid primary key,
+        email text
+      );
+      alter table public.users add column ssn text;
+      alter table users add column if not exists date_of_birth date;
+    `;
+    const { dataMap } = classifyMigrationSql(sql);
+    expect(dataMap.users.infotypes.sort()).toEqual(["DOB", "EMAIL", "US_SSN"]);
+  });
+
+  it("excludes a column dropped by a later migration", () => {
+    const sql = `
+      create table public.users (
+        id uuid primary key,
+        customer_ssn text
+      );
+      alter table public.users drop column customer_ssn;
+    `;
+    const { dataMap } = classifyMigrationSql(sql);
+    expect(dataMap.users).toBeUndefined(); // ssn dropped → nothing classified on the live table
+  });
+
+  it("fails loud on an unrecognized type — surfaces it in unknownType AND classifies it by name", () => {
+    // `gender Gender` (a Postgres enum) and `ssn my_enc_type` (a custom type) are outside SQL_TYPES;
+    // before #851 they vanished before classification. Now they're name-classified and disclosed.
+    const sql = `
+      create table public.people (
+        id uuid primary key,
+        gender gender_enum,
+        ssn my_enc_type,
+        status workflow_state
+      );
+    `;
+    const { dataMap, unknownType } = classifyMigrationSql(sql);
+    expect(unknownType.map((c) => `${c.column_name}:${c.data_type}`).sort()).toEqual([
+      "gender:gender_enum",
+      "ssn:my_enc_type",
+      "status:workflow_state",
+    ]);
+    // gender + ssn classify by name; status matches nothing (correctly no false hit).
+    expect(dataMap.people.infotypes.sort()).toEqual(["SPECIAL_CATEGORY", "US_SSN"]);
+  });
+
+  it("does not read a table-level constraint line as an unknown-type column", () => {
+    const sql = `
+      create table public.t (
+        id uuid primary key,
+        email text,
+        constraint t_pkey primary key (id),
+        foreign key (id) references other (id)
+      );
+    `;
+    const { unknownType } = classifyMigrationSql(sql);
+    expect(unknownType).toHaveLength(0);
+  });
+
+  it("discloses the tier scope in every finding's evidence (#853)", () => {
+    const schema = dataMapToFindings(buildDataMap([{ table_name: "u", column_name: "email", data_type: "text" }]), { tier: "schema" });
+    expect(schema[0]?.evidence).toMatch(/views, materialized views, and generated columns are not parsed/i);
+    const live = dataMapToFindings(buildDataMap([{ table_name: "u", column_name: "email", data_type: "text" }]), { tier: "live" });
+    expect(live[0]?.evidence).toMatch(/public schema only/i);
+  });
+});
+
 // #758: a Prisma app declares its schema in schema.prisma, not migration SQL — before this,
 // classifyMigrationSql (the --schema entry point) had nothing to parse a Prisma DSL file with, so
 // a Prisma-only target's M10 tier classified nothing. classifyPrismaSchema is the CLI-independent
@@ -428,6 +569,39 @@ describe("classifyPrismaSchema — schema.prisma classification, fallback-parser
     const { columns, dataMap } = classifyPrismaSchema('datasource db {\n  provider = "postgresql"\n}\n');
     expect(columns).toHaveLength(0);
     expect(dataMap).toEqual({});
+  });
+
+  it("classifies an enum-typed field by name (#854) — `gender Gender` reaches the special-category rule", () => {
+    const schema = `
+      enum Gender { MALE FEMALE OTHER }
+      model Patient {
+        id     String @id
+        gender Gender
+        bloodType String @map("blood_type")
+      }
+    `;
+    const { dataMap } = classifyPrismaSchema(schema);
+    expect(dataMap.Patient.infotypes.sort()).toEqual(["BLOOD_TYPE", "SPECIAL_CATEGORY"]);
+    // a relation field is still not misread as a column
+  });
+
+  it("parses composite `type` blocks so their embedded PII fields are classified (#854)", () => {
+    const schema = `
+      type Address {
+        street String
+        city   String
+        zip    String
+      }
+      model User {
+        id       String  @id
+        homeAddr Address
+      }
+    `;
+    const { dataMap } = classifyPrismaSchema(schema);
+    expect(dataMap.Address).toBeDefined();
+    expect(dataMap.Address.infotypes).toContain("ADDRESS");
+    // the embedded-object FIELD itself (homeAddr) is not a stored scalar column
+    expect(dataMap.User).toBeUndefined();
   });
 });
 
@@ -513,6 +687,26 @@ describe("dataMapToFindings — report-schema Finding[] emitter (#436)", () => {
     const payments = findings.find((f) => f.location === "payments");
     expect(payments?.reviewFlagOnly).toBe(false);
     expect(payments?.reviewFlagColumns).toEqual([]);
+  });
+});
+
+describe("dataMapToFindings — free-text review flags (#850)", () => {
+  it("keeps a free-text flag distinct from asserted columns — a flag in evidence, never claimed as PII", () => {
+    const map = buildDataMap([
+      { table_name: "tickets", column_name: "email", data_type: "text" },
+      { table_name: "tickets", column_name: "notes", data_type: "text" },
+      { table_name: "articles", column_name: "body", data_type: "text" },
+    ]);
+    const findings = dataMapToFindings(map, { tier: "schema" });
+    const tickets = findings.find((f) => f.location === "tickets");
+    expect(tickets?.title).toMatch(/holds PII data \(EMAIL\)/); // notes (free-text) not asserted in the title
+    expect(tickets?.evidence).toMatch(/Review for unstructured PII\/PHI \(flagged, not asserted/);
+    expect(tickets?.reviewFlagColumns).toEqual(["notes"]);
+    // a table with ONLY a free-text flag asks for review, never claims a holding
+    const articles = findings.find((f) => f.location === "articles");
+    expect(articles?.title).toMatch(/free-text column\(s\) to review/i);
+    expect(articles?.title).not.toMatch(/holds/);
+    expect(articles?.reviewFlagOnly).toBe(true);
   });
 });
 

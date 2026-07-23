@@ -11,17 +11,22 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "lighthouse-scan.ts");
+
+// #839: every test in this file spawns a real tsx child process — 5s (vitest's default) is
+// tight enough to flake under a loaded machine (full-suite `pnpm verify`) even though each test
+// passes reliably in isolation. Raised once here rather than annotating every `it()`.
+vi.setConfig({ testTimeout: 30_000 });
 
 describe("lighthouse-scan: a bad LIGHTHOUSE_CHROME_PATH degrades to M7L-00 (#556)", () => {
   let workDir: string;
   beforeEach(() => (workDir = mkdtempSync(join(tmpdir(), "harvey-lh-"))));
   afterEach(() => rmSync(workDir, { recursive: true, force: true }));
 
-  it("exits 0 and records the fail-loud disclosure instead of an uncaught ENOENT exit", { timeout: 30_000 }, () => {
+  it("exits 0 and records the fail-loud disclosure instead of an uncaught ENOENT exit", () => {
     const outPath = join(workDir, "findings.json");
     // --url skips build/serve entirely, so launchChrome() is reached (and fails) before anything
     // network-dependent runs — the bad chromePath is the only thing under test here.
@@ -44,6 +49,14 @@ describe("lighthouse-scan: a bad LIGHTHOUSE_CHROME_PATH degrades to M7L-00 (#556
     expect(findings[0].evidence).toMatch(/ENOENT|not-a-real-chrome-binary/);
   });
 });
+
+// #841: launchChrome() falling through on a soft NO_FCP result (not just a hard launch failure) is
+// covered as a hermetic unit test of the extracted retry contract — see
+// src/lighthouse-chrome-candidates.test.ts. A real nested Chrome launch has proven unreliable to
+// even exercise inside a sandboxed child process here (the same class of issue #838 found with
+// jscpd: it hangs making zero requests, rather than failing fast, when launched several process
+// generations under this environment's sandbox) — real-browser behavior stays untested in THIS
+// file per its existing convention (only #556's ENOENT case is a child-process test).
 
 // #818: proves the resolved browser-candidate ORDER without ever launching a browser (no
 // system/network dependency in the test itself) via the LIGHTHOUSE_PRINT_CHROME_ORDER dry-run

@@ -18,11 +18,11 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { buildDataMap } from "../../tools/pii-classify.mjs";
+import { classifyMigrationSql } from "../../tools/pii-classify.mjs";
 import { classifyDefinerFunctions, definerFindings, type DefinerFunction } from "../definer-classifier.js";
 import type { Finding } from "../findings.js";
 import { classifyNoPolicyTables, grantFindings, type NoPolicyTable } from "../grant-classifier.js";
-import { parseColumns, parseDefinerFunctions, parseRlsState } from "../migration-sql-parse.js";
+import { parseDefinerFunctions, parseRlsState } from "../migration-sql-parse.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { relativizeScanScope } from "../scan/scan-scope.js";
 
@@ -183,17 +183,19 @@ async function main(): Promise<void> {
 
   // --- M10: PII data map over parsed migration columns ---
   const piiPhase = await timePhase("M10", "PII/PHI/PCI data map (tools/pii-classify.mjs, static migration-SQL feed)", () => {
-    const columns = parseColumns(migrationSql);
-    const dataMap = buildDataMap(columns);
-    return { columns, dataMap };
+    const { columns, dataMap, unknownType } = classifyMigrationSql(migrationSql);
+    return { columns, dataMap, unknownType };
   });
   const dataMap = piiPhase.result.dataMap;
+  const unknownTypeNote = piiPhase.result.unknownType.length
+    ? ` ${piiPhase.result.unknownType.length} column(s) had an unrecognized SQL type, classified by name only (#851).`
+    : "";
   phases.push({
     phase: "M10",
     module: piiPhase.report.module,
     ms: piiPhase.report.ms,
     findingCount: Object.keys(dataMap).length,
-    notes: `${piiPhase.result.columns.length} columns classified across ${Object.keys(dataMap).length} tables with PII/PHI/PCI hits.`,
+    notes: `${piiPhase.result.columns.length} columns classified across ${Object.keys(dataMap).length} tables with PII/PHI/PCI hits.${unknownTypeNote}`,
   });
 
   // findings.json is committed, so it must be diffable across runs and machines (issue #285).

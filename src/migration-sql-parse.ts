@@ -55,6 +55,7 @@ const SQL_TYPES = [
   "serial", "bigserial", "smallserial",
   "inet", "cidr", "citext", "bytea", "geography", "geometry",
 ];
+const SQL_TYPE_SET = new Set(SQL_TYPES);
 
 // #299: Prisma-generated migrations (prisma/migrations/**/migration.sql) double-quote every
 // identifier ("Account", "userId") — Postgres's standard quoting, which makes them case-sensitive
@@ -402,6 +403,77 @@ export function parseDroppedColumns(sql: string): { table_name: string; column_n
     for (const dm of stmt.matchAll(DROP_COLUMN)) out.push({ table_name: table, column_name: identText(dm[1], dm[2]) });
   }
   return out;
+}
+
+// #851/#854: a column-definition line whose TYPE token is NOT one of SQL_TYPES — a Postgres enum, a
+// user-defined/composite type, char/money/xml, or an array of one. `parseColumns` extracts only
+// recognized-type columns, so these used to vanish before classification (silent omission — the
+// answer key never listed them). ANY_COLUMN_LINE captures the column ident (1/2) and its type name
+// (3 = double-quoted, as Prisma-generated SQL writes custom types; 4 = bare) so the M10 classifier
+// can still classify by NAME and DISCLOSE them, rather than drop them.
+const ANY_COLUMN_LINE = new RegExp(`^\\s*${IDENT}\\s+(?:"([^"]+)"|(\\w+))`, "i");
+// Second-word tokens that mean the line is NOT a `name type` column definition (a table-level
+// clause or a modifier-led continuation) — guards the unknown-type branch against emitting a bogus
+// column. The recognized-type branch is immune already: none of these is a SQL_TYPE.
+const NON_TYPE_SECOND_WORD =
+  /^(by|key|null|not|default|references|primary|foreign|unique|check|constraint|using|with|on|as|like|include|generated|collate|deferrable|initially|partition|inherits|tablespace)$/i;
+
+interface ClassifiableColumns {
+  columns: ParsedColumn[]; // recognized SQL type — full type-aware classification applies
+  unknownType: ParsedColumn[]; // unrecognized type — NAME-only classification, surfaced as a gap
+}
+
+function extractColumnLine(line: string, table: string, out: ClassifiableColumns): void {
+  if (CONSTRAINT_LEAD.test(line)) return; // table-level constraint, not a column
+  const cm = COLUMN_LINE.exec(line);
+  if (cm) {
+    out.columns.push({ table_name: table, column_name: identText(cm[1], cm[2]), data_type: cm[3]!.toLowerCase() });
+    return;
+  }
+  const am = ANY_COLUMN_LINE.exec(line);
+  if (!am) return;
+  const rawType = am[3] ?? am[4];
+  if (!rawType || NON_TYPE_SECOND_WORD.test(rawType)) return;
+  out.unknownType.push({ table_name: table, column_name: identText(am[1], am[2]), data_type: rawType.toLowerCase() });
+}
+
+// #852: columns added to an existing table by a later migration via `ALTER TABLE … ADD COLUMN`.
+// `parseColumns` reads only CREATE TABLE bodies, so on a migrations-directory schema a PII column a
+// follow-up migration adds (`ALTER TABLE users ADD COLUMN ssn text`) was invisible to M10. The
+// `COLUMN` keyword is required — an under-extract guard so `ADD CONSTRAINT`/`ADD PRIMARY KEY` never
+// read as a column. Group 1/2 the column ident, 3 a quoted type, 4 a bare one.
+const ADD_COLUMN = new RegExp(`\\badd\\s+column\\s+(?:if\\s+not\\s+exists\\s+)?${IDENT}\\s+(?:"([^"]+)"|(\\w+))`, "gi");
+
+function extractAddedColumns(sql: string, out: ClassifiableColumns): void {
+  for (const am of sql.matchAll(ALTER_TABLE)) {
+    const table = identText(am[3], am[4]);
+    const stmt = statementText(sql, am.index!) ?? sql.slice(am.index!);
+    for (const cm of stmt.matchAll(ADD_COLUMN)) {
+      const rawType = cm[3] ?? cm[4];
+      if (!rawType) continue;
+      const col = { table_name: table, column_name: identText(cm[1], cm[2]), data_type: rawType.toLowerCase() };
+      if (SQL_TYPE_SET.has(rawType.toLowerCase())) out.columns.push(col);
+      else out.unknownType.push(col);
+    }
+  }
+}
+
+// The full set of columns M10 should classify from migration SQL: CREATE TABLE bodies (#250) PLUS
+// `ALTER TABLE … ADD COLUMN` (#852), split by whether the declared type is recognized. A column a
+// later migration DROPs is removed from both sets (it isn't in the live schema). `columns` and
+// `unknownType` together are everything to classify; keeping them separate lets the caller disclose
+// the NAME-only subset (the type-based signals — jsonb-container, boolean-flag — couldn't apply).
+export function parseClassifiableColumns(sql: string): ClassifiableColumns {
+  sql = stripLineComments(sql);
+  const out: ClassifiableColumns = { columns: [], unknownType: [] };
+  for (const m of sql.matchAll(CREATE_TABLE)) {
+    const table = identText(m[3], m[4]);
+    for (const line of m[5]!.split("\n")) extractColumnLine(line, table, out);
+  }
+  extractAddedColumns(sql, out);
+  const dropped = new Set(parseDroppedColumns(sql).map((d) => `${d.table_name}.${d.column_name}`.toLowerCase()));
+  const live = (c: ParsedColumn): boolean => !dropped.has(`${c.table_name}.${c.column_name}`.toLowerCase());
+  return { columns: out.columns.filter(live), unknownType: out.unknownType.filter(live) };
 }
 
 const DEFINER_FUNCTION =

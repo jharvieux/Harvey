@@ -13,12 +13,18 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Finding } from "../findings.js";
 import { TS7_TSCONFIG_BYPASS_FILENAME } from "../mutation-scan.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI = join(REPO_ROOT, "src", "cli", "mutation-scan.ts");
+
+// #839: every test in this file drives the real CLI as a tsx (or, #600's kill test, a raw node)
+// child process — 5s (vitest's default) is tight enough to flake under a loaded machine
+// (full-suite `pnpm verify`) even though each test passes reliably in isolation. Raised once here
+// rather than annotating each of this file's ~20 `it()` calls.
+vi.setConfig({ testTimeout: 30_000 });
 
 const dirs: string[] = [];
 afterEach(() => {
