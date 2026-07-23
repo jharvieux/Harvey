@@ -21,6 +21,19 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
 | M9 | Next.js App Router boundary & rendering | `scan-extras.txt` (M9 section) + static review | **net-new** |
 | M10 | Data classification (PII / PHI / PCI) | schema → PII dictionary (`tools/pii-classify.mjs`) | **prototype built** |
 
+> **Stack coverage.** Every module above is written against the primary target shape (Supabase
+> Postgres + RLS). As of 2026-07-23 (epic #756), a Prisma/Postgres target — no Supabase, no
+> database-level RLS — is a first-class supported shape too, detection-gated so the two never
+> collide: `detectOrm` (`src/scan/framework-detect.ts`, #757) reads the target's own signals
+> (`@prisma/client`/`prisma` dep or a `schema.prisma` file vs. `@supabase/supabase-js` or a
+> `supabase/` project dir), with Supabase winning when both appear so a real RLS surface is never
+> suppressed. The framing that matters: **a Prisma app has no database-level tenant
+> enforcement at all** — there is no RLS to audit — so every bit of tenant isolation lives in
+> application code, which is exactly where M1's ORM-agnostic detectors (and the new Prisma-idiom
+> one) already operate. Each affected module section below (M1, M2, M7, M10) calls out its
+> Prisma-specific behavior. Proven live end-to-end against a real target,
+> [boxyhq/saas-starter-kit](https://github.com/boxyhq/saas-starter-kit).
+
 ---
 
 ## M1 — Multi-tenant security (the differentiator)
@@ -30,6 +43,18 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
 - **Method:** static review (the brief) + outcome-based confirmation for the Critical class.
 - **Powered by:** `scan-extras.txt` + `fp-rules.txt` via `/vuln-scan --extra` / `/triage --fp-rules`.
 - **Report:** §3 Findings, ranked by blast radius. This is the headline.
+- **Prisma/Postgres apps (#757/#760, landed 2026-07-23):** `detectOrm` routes a detected Prisma
+  target to the app-layer tier — the Supabase-specific migration/RLS/PostgREST/edge-config
+  detectors (`supabase-static.ts`, `supabase-config.ts`, `supabase-splinter.ts`,
+  `supabase-advisors.ts`) record their tier **N/A-by-architecture** rather than silently
+  reporting nothing. What fills that gap: the ORM-agnostic detectors that already ran on
+  pg/Express apps (`pg-idor.ts`, `bola-owner.ts`, …), plus a Prisma-idiom detector added for
+  this (`src/scan/prisma-tenant-scope.ts`, #760) that flags the Prisma equivalent of the same
+  BOLA class — `prisma.<model>.update/delete/findFirst/…` filtered by `id` alone, with no
+  tenant/owner column (`organizationId`/`tenantId`/`teamId`/`userId`/a named relation) anywhere
+  in the `where` clause. Review tier (the AST proves the where-clause has no visible tenant
+  scope, not that no ownership check exists in a wrapper it can't see). Measured **zero
+  RLS-detector false positives** against boxyhq, a real Prisma app.
 
 ## M2 — Local penetration test (dynamic)
 - **Finds:** what static review can't *prove* — actually reachable cross-tenant access, IDOR on API routes,
@@ -42,6 +67,25 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
   outcome-based detector (#1503). Tracked separately (see issues).
 - **Report:** dynamic confirmations attached to M1 findings (a proven finding is worth 10× a theoretical one),
   plus any dynamic-only findings.
+- **Prisma/Postgres apps (#759, #787, landed 2026-07-23):** a Prisma app has no PostgREST and no
+  DB-level RLS, so the Supabase cross-tenant PostgREST/RLS matrix **does not apply** — tenant
+  isolation is entirely app-layer and testable only through the app's own HTTP routes.
+  `src/prisma-dynamic.ts` + `src/pentest/prisma-standup.ts` stand up a **plain Postgres**
+  (no Supabase stack), apply the schema (`prisma migrate deploy` when versioned migrations are
+  committed, else `prisma db push`), seed two tenants, boot the app, and drive the existing
+  app-route probe tier — with the PostgREST/RLS matrix recorded explicitly
+  **not-applicable**, never a silent skip. Proven live against
+  [boxyhq/saas-starter-kit](https://github.com/boxyhq/saas-starter-kit): the schema applied, the
+  app booted, and the unauthenticated probe tier reached a real Critical (a missing-auth
+  endpoint). #787 closed the *authenticated* half: it seeds a two-tenant **Team/organization
+  membership join** (`Team`/`TeamMember(teamId, userId, role)`, detected directly from the
+  schema), mints per-tenant sessions, and drives an authenticated cross-tenant BOLA/IDOR probe —
+  tenant A's session against tenant B's team-scoped route. #791 gates the missing-auth sweep on
+  the response **actually exposing data** (not just an unexpected 200), closing a false positive
+  the boxyhq run surfaced on a no-op demo endpoint. **Open:** a dedicated offline
+  fixture-level regression control for the cross-tenant probe itself (#796) — today it's
+  unit-tested directly, not yet driven end-to-end against an in-repo Prisma fixture the way the
+  Supabase seam probes are.
 
 ## M3 — Hotspot analysis
 - **Finds:** the files that are **both** frequently changed **and** complex — where bugs and maintenance cost
@@ -113,6 +157,18 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
 - **Report:** §3b Performance table (finding · layer · impact · fix · effort), ranked by user-facing impact.
 - **Proof point:** this very dimension is demonstrated in the source repo — unindexed FKs → covering indexes,
   and `auth.uid()` → `(select auth.uid())` RLS initplan fixes, both advisor-surfaced and test-DB-verified.
+- **Prisma equivalent (#761, landed 2026-07-23; deferrable):** a Prisma target has no Supabase
+  performance advisor to call, so `src/scan/prisma-schema-perf.ts` statically reviews
+  `schema.prisma` for scalar foreign-key columns with no covering index (no `@id`/`@unique` on
+  the field, no `@@id`/`@@unique`/`@@index` naming it) — the schema-derived equivalent of
+  Supabase's `unindexed_foreign_keys` advisor lint. Postgres does not implicitly index a
+  relation's FK column the way Prisma's MySQL connector does, so an uncovered FK forces a
+  sequential scan on every JOIN through that relation and every cascade UPDATE/DELETE on the
+  parent. Needs no live DB or connected tier — it runs on every Prisma engagement from source
+  alone. Deliberately schema-only: cross-referencing app code for N+1 loop patterns and
+  unindexed filter columns (a field read in a `where` elsewhere in the codebase) is split into
+  #793 (open, deferred for precision — it needs cross-referencing app source against the schema,
+  a materially noisier heuristic than parsing the schema alone).
 
 ## M8 — Test quality & intent
 - **Finds:** tests that **can't fail when the logic changes** — the false-confidence layer. Tautological/snapshot-only
@@ -165,6 +221,18 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
   hits carry a **confidence** label and ambiguous names ("name") default to low/review. Production version adds an
   LLM semantic pass (catches obfuscated fields) + the severity-weighting wiring.
 - **Report:** a data map (table → categories) in context; feeds the severity of every exposure finding.
+- **Prisma support (#758, landed 2026-07-23):** a target whose schema lives in `schema.prisma`
+  (not `supabase/migrations/*.sql`) now classifies too —
+  `pnpm pii-classify --schema <schema.prisma path>` (repo root or `prisma/schema.prisma`, both
+  conventional locations). It first tries the target's own locally-installed Prisma CLI
+  (`prisma migrate diff --from-empty --to-schema-datamodel schema.prisma --script`) to emit the
+  equivalent SQL and reuses the existing migration-SQL column parser unchanged; when no local
+  Prisma CLI is resolvable it falls back to a lightweight `schema.prisma` model/field parser
+  (`src/prisma-schema-parse.ts`) that reads `model` blocks directly — respecting `@map`/`@@map`
+  column/table renames, skipping relation fields (backed by a scalar FK elsewhere, not a column
+  of their own) and enum-typed fields it has no visibility into — into the same
+  `{table_name, column_name, data_type}` shape the SQL path produces, so the identical downstream
+  classifier (`buildDataMap`) runs regardless of which path produced the columns.
 
 ## How the modules compose into one engagement
 1. Threat-model (focus areas) → 2. M10 data classification (the data map — it weights every exposure finding's

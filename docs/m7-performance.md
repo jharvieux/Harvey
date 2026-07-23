@@ -60,6 +60,35 @@ and file I/O, mirroring the `src/quality-scan.ts` / `src/cli/quality-scan.ts` sp
   client project available yet). Confirm against current Supabase docs or a dashboard
   Network-tab capture before the first live engagement run; flag as a risk if the shape drifts.
 
+## 1b. Prisma equivalent — static `schema.prisma` index review (#761, [source] tier)
+
+A Prisma target has no Supabase project to call `perf-scan` against, so it has no connected-tier
+DB advisor. The static equivalent — `src/scan/prisma-schema-perf.ts`'s
+`scanPrismaSchemaPerf(dir)` — reads `schema.prisma` (or `prisma/schema.prisma`) directly and
+reports the schema-derivable slice of the same class §1's `unindexed_foreign_keys` advisor
+catches: a scalar FK column (the `fields: [...]` side of a `@relation`) with no covering index
+anywhere on its model (no `@id`/`@unique` on the field itself, no `@@id`/`@@unique`/`@@index`
+naming it). Postgres does not implicitly index a relation's FK column the way Prisma's MySQL
+connector does — an uncovered FK forces a sequential scan on every JOIN through that relation and
+every cascade UPDATE/DELETE on the parent.
+
+- **Runs from source alone** — no connected tier, no live DB, no access token. Wired into
+  `pnpm detect-static <target-dir>` alongside the M7 code-level detectors (§2a).
+- **Review tier, not high:** `schema.prisma` is the current source of truth (no "a later
+  migration already fixed this" caveat the way cumulative migration files carry), but this still
+  can't see an index created outside the schema (a raw `prisma db execute` migration) or confirm
+  the datasource actually deploys to Postgres (MySQL doesn't have this FK-index gap). A field
+  counts as indexed if it appears **anywhere** in a covering `@id`/`@unique`/`@@id`/`@@unique`/
+  `@@index` — not only as the leading column of a composite key — so this deliberately
+  under-reports a real but lower-value case (non-leading composite position) rather than
+  flagging a column the schema already indexes.
+- **Deliberately schema-only:** app-code N+1 query patterns and a "field read in a `where`
+  elsewhere with no covering index" heuristic both need cross-referencing app source against the
+  schema — a materially noisier signal than parsing the schema alone. Split out as **#793
+  (open)** rather than risk a noisy first cut here.
+- Ids `PRISMA-M7-UNINDEXED-FK-<model>-<field>`, `category: "Performance"`, `precisionTier:
+  "review"`.
+
 ## 2. API/data overlap with M9
 
 Data-fetching waterfalls (independent sequential `await`s in a Server Component),
@@ -290,3 +319,8 @@ review pass says what the right structure would be.
   `docs/design/m7-lighthouse-validation.md`).
 - **`/advisors/performance` endpoint path:** inferred by analogy, not exercised live — verify on
   the first real engagement (§1).
+- **Prisma app-code N+1 / unindexed-filter-column heuristic (#793, open, split from #761):** the
+  schema-only unindexed-FK review (§1b) shipped; the app-code half — an obvious N+1 shape (a
+  Prisma query inside a `.map`/loop) and a `where`-filtered field with no covering index in
+  `schema.prisma` — needs cross-referencing app source against the schema and is deliberately
+  deferred for precision (prefer under-reporting to a noisy first cut).
