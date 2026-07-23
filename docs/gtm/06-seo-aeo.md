@@ -100,6 +100,71 @@ Format for each is chosen to match what demonstrably ranks for that query [obser
     frontend — what now," "RLS disabled — impact."** The 2am-panic long tail; the pages
     AI assistants quote when a founder pastes an error or a Supabase warning email.
 
+## Prisma content lane (added 2026-07-23, part of the Prisma-support epic #756)
+
+Harvey now audits Prisma/Postgres multi-tenant apps, not just Supabase ones (#756):
+`detectOrm` (#757) routes a Prisma app to the app-layer M1 tier and gates the
+Supabase-specific RLS detectors off as not-applicable-by-architecture (rather than a
+false "no RLS" finding or a silent miss); a Prisma tenant-scope/BOLA detector (#760)
+covers the Prisma equivalent of the cross-tenant BOLA class; M2 stands up plain Postgres
++ `prisma migrate` and drives the app-route probe tier, with the PostgREST/RLS matrix
+correctly recorded not-applicable for this architecture rather than skipped over (#759);
+M10 classifies `schema.prisma` directly (#758); M7 has a Prisma unindexed-FK detector
+(#761 — N+1-pattern detection is a further, still-open piece, #793). This is a genuine
+second stack lane, not a Supabase-page reskin — the differentiator below is structural.
+
+**Target queries** *(not yet SEO-verified — no search-volume/SERP pass has run for this
+cluster; the same discipline as the rest of this doc applies before committing content
+spend or claiming a competitive read)*:
+- "prisma security audit"
+- "prisma multi-tenant security"
+- "prisma row-level-security alternative"
+- "prisma tenant isolation"
+- "does prisma have RLS"
+
+**The differentiating thesis (the spine of the whole lane):** Prisma has no RLS
+equivalent — there is no database-enforced tenant boundary. Every isolation guarantee
+lives in application code: the `where: { tenantId }` a developer remembered (or forgot)
+to add to a given query. That fact is simultaneously the risk story ("one unscoped
+`findMany` or `update` and tenant A reads or writes tenant B's rows — nothing in the
+database stops it") and the reason an app-layer audit matters most here: for a Prisma
+app it isn't one input among several, it's the *entire* defense, because there is no
+policy layer underneath to catch what code review misses. The Supabase service page's
+"looks correct, isn't" RLS-policy example has a direct Prisma counterpart: a Prisma
+query missing its tenant-scope predicate compiles, runs, and returns data cleanly — same
+failure shape, one layer higher in the stack.
+
+**Planned content piece — "Prisma Multi-Tenant Security Checklist."** Mirrors the
+Supabase security checklist (content piece #3 above): same interactive-checklist format,
+same "can a scanner catch this, or does it need a live test?" column, rebuilt around
+query-scope discipline instead of RLS-policy review — every Prisma call site touching
+tenant-scoped data, the tenant-scope predicate expected at each, ownership checks before
+writes, and the missing-`where`-clause failure class the M1 Prisma detector targets.
+Targets "prisma multi-tenant security" and "prisma tenant isolation" directly; "does
+prisma have RLS" gets answered in the checklist's answer-first intro (short version: no
+— and here's what has to replace it).
+
+**Planned service-page/landing angle — "Prisma Security Audit."** Same template as the
+Supabase service page (`content/service-page-supabase-security-audit.md`): answer-first
+intro, a scanner-vs-audit comparison table, the ten-module methodology, transparent
+pricing, FAQ shipped with `FAQPage` JSON-LD. Differences from the Supabase page: the
+"vulnerability almost every app has" example becomes a missing tenant-scope `where`
+clause instead of a permissive RLS policy; the methodology section leads with the
+app-layer tenant-scope/BOLA detector and the plain-Postgres dynamic pen-test instead of
+RLS-policy review and the PostgREST cross-tenant matrix; the FAQ answers "does Prisma
+have row-level security" head-on. Targets the direct commercial query "prisma security
+audit" (same shape as the Supabase page's #1 priority) and doubles as the landing page
+"prisma row-level-security alternative" should resolve to.
+
+**Relationship to the existing lane and honesty check:** this doesn't replace or compete
+with the Supabase lane — it's the same playbook (service page + free-scan CTA +
+checklist + FAQ) run on a second stack, added because the audit capability now genuinely
+covers both (#756). Don't overstate the Prisma M2/M7 tiers in copy: M2's cross-tenant
+probing runs at the app-route layer only (no DB-level RLS matrix — there is none to run,
+which is the point), and M7's Prisma coverage today is the unindexed-FK detector, not
+yet N+1 detection (#793, open). This section is the content plan to execute once
+prioritized and search-volume-validated — not a claim that any of these pieces are live.
+
 ## AEO (answer-engine optimization) — verified tactics
 
 Answer engines (ChatGPT, Claude, Perplexity, Google AI overviews) are how this audience
