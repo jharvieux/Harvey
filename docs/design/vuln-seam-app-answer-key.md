@@ -86,6 +86,24 @@ were confirmed by invoking each route handler with the probe's exact request (`8
 - **Negative control — `POST /api/checkout`**. Also high-value, but a per-process token bucket lets
   the first call through and returns `429` for calls 2–5 ⇒ the probe never sees 5/5 ⇒ **unproven**.
 
+### 5. `MISSING-AUTH-SWEEP` precision pair (#792, the #791 FP class)
+
+Not one of the four seam classes above — this pair regression-gates the discovered-route sweep probe
+itself (`replayMissingAuth` / `bodyExposesData`, `src/pentest/verify.ts`) against the exact FP class
+#791 shipped live: a public route with a trivial status/greeting body must stay silent, and it must
+still fire on a genuinely unauth data-exposing route (so the silence proves the gate works rather than
+the probe being broken). Scored independently of the four-seam recall/zero-FP denominator above —
+each route is probed alone (`src/pentest/vuln-seam-app.test.ts`), the way the seam controls are.
+
+- **Negative control — `GET /api/status`** (`app/api/status/route.js`). A public status/version
+  endpoint returning `{status, version}` — every key is in `bodyExposesData`'s `TRIVIAL_BODY_KEYS`
+  set, and the path is deliberately NOT on `PUBLIC_ROUTE_ALLOWLIST`, so the sweep actually probes it
+  and the verdict rests on the body-content gate, not the allowlist. Anon `GET` → `200` + trivial
+  body ⇒ `bodyExposesData` false ⇒ **unproven**.
+- **Positive control — `GET /api/profile`** (`app/api/profile/route.js`). Returns real tenant/user
+  data (`email`, `tenant_id`, `role`) with no caller-identity check. Anon `GET` → `200` + a body
+  carrying non-trivial keys ⇒ `bodyExposesData` true ⇒ **proven**.
+
 ## Scoring
 
 | Probe | Vulnerable route | Expected | Control route | Expected |
