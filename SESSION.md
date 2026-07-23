@@ -2,7 +2,26 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-22 (added the GTM / marketing-site workstream block below — separate from the scanner engineering. The 2026-07-21 issue-sweep block and earlier remain historical/current for the engineering side.)_
+_Last updated: 2026-07-22 (issue-sweep + prior-work commit + operator-pulled round 2 — see the block immediately below. The GTM block and earlier engineering blocks remain historical/current.)_
+
+## 2026-07-22 issue-sweep — prior work committed, 8 issues merged + a live-M2 first (net −6)
+
+Ran `/issue-sweep` over 31 open issues (mostly GTM/business/external-disclosure — not code-executable). Operator approved a code set and, separately, "commit and merge all prior work"; then pulled in a round 2.
+
+- **Prior work committed + merged (PR #734):** the marketing `site/`, `docs/gtm/`, ATC/AoP engagement reports + `report-template/findings.aop.json`, and config. **Caught before committing:** `git add -A` would have staged ~37 transient `.claude/worktrees/agent-*` checkouts — added `.claude/worktrees/` to `.gitignore` instead (that dir must never be committed).
+- **Round 1 merged:** **#712** (M2 loadSeeds scan-scope path fix, verified against a repro test); **#733** (Linear+GitLab tracker adapters → remainder **#736**); **#718** (the deliberately-vulnerable `targets/vuln-seam-app/` fixture, 8/8 offline-verified → remainder #738); **#726** (flagship-research methodology + `corpus-aggregate` harness → remainder **#740**); **#723/#724/#725/#727** (site audit/pricing/sample-report/trust/OG/SEO pages; `next build` green → remainders **#742/#743/#744/#745**).
+- **Round 2 merged (operator pulled in):** **#736** (findings→tickets orchestration: mapping+dedup+dry-run → remainder **#747**; CI knip-failed on 4 unused exports, opus fix agent unexported them); **#745** (deeper client-side RLS-checker probes, SSRF guardrail preserved → remainder **#749**); **the live-M2 run #738+#717+#159** — `dynamic-validate --execute` stood `vuln-seam-app` up on the local Docker/Supabase stack and reached **4/4 seams proven, 0 controls flagged, clean teardown**, guarded by `src/pentest/vuln-seam-app.test.ts` and recorded in `docs/design/vuln-seam-app-live-validation.md`. (PR #751 initially re-carried the already-merged fixture → conflict; opus fix agent rebased it to a proof-only diff.)
+- **Filed #752** — GTM pricing draft (`docs/gtm/content/service-page-supabase-security-audit.md`) still shows old flat $2k/$5k vs the shipped size-banded $500/$1k; operator edit (human-owned IP).
+
+### ⚠️ CLAUDE.md RELAY (operator edit — agents can't touch CLAUDE.md)
+The coverage-guard "Still open" paragraph is now stale: it says the seam probes' *proven* branches + the NO-RATE-LIMIT loop (#159) still need a target shipping insecure surfaces, "tracked as residual #717 with a … fixture to build in #718." **Those are now done live.** Recommended replacement (from PR #751): "…the seam probes' and the NO-RATE-LIMIT loop's *proven* (finding-producing) branches have now been exercised live (#717/#159 satisfied; the #718 fixture is built): a `pnpm dynamic-validate targets/vuln-seam-app --execute` run reached 4/4 proven with zero controls flagged, guarded by the offline `src/pentest/vuln-seam-app.test.ts` and recorded in `docs/design/vuln-seam-app-live-validation.md`." Keep the paragraph's final clause about out-of-orchestrator passes emitting artifacts end-to-end (still true).
+
+### Note to self (memory written)
+The local **Docker + Supabase stack is standing Harvey infrastructure**, not an environment gate — I repeatedly triaged live-M2 issues as "blocked on a live target" when the stack is right here. Operator corrected it. See the [[local-stack-is-standing-capability]] memory.
+
+### Still open — gated on operators/external parties, NOT the stack
+- **Remainders from this sweep:** #740 (research execution: corpus approval + disclosure + publish), #742 (sample-report real client data), #743 (trust-page legal review + #11), #744 (Search Console/Bing domain tokens), #747 (tracker rate-limit + scoped-token auth + full CLI), #749 (RLS-checker write-probe + lead capture), #752 (GTM pricing draft edit).
+- **Non-agent-workable (unchanged):** #2/#632 epics, #4 (Tier-2, blocked on Tier-1), #10–#13 GTM/business, #168/#214–#219 external responsible-disclosures, #728–#731 GTM/brand/partnerships/social.
 
 ## GTM / marketing workstream (2026-07-21/22) — NEW, separate from the M1–M10 scanner work
 
