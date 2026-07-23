@@ -1,5 +1,11 @@
 import type { Metadata } from "next";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
+
+// Ownership-verification tokens are supplied by the operator as env vars at deploy time
+// (Google Search Console + Bing Webmaster Tools). When unset, no verification tags render.
+const googleVerification = process.env.NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION;
+const bingVerification = process.env.NEXT_PUBLIC_BING_SITE_VERIFICATION;
 
 const title = "Harvey — Codebase QA for AI-Generated Apps";
 const description =
@@ -29,6 +35,10 @@ export const metadata: Metadata = {
   },
   twitter: { card: "summary_large_image", title, description },
   icons: { icon: "/favicon.svg" },
+  verification: {
+    ...(googleVerification ? { google: googleVerification } : {}),
+    ...(bingVerification ? { other: { "msvalidate.01": bingVerification } } : {}),
+  },
 };
 
 const jsonLd = {
@@ -113,12 +123,20 @@ const jsonLd = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{var t=localStorage.getItem('harvey-theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}`,
+          }}
+        />
+      </head>
       <body>
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
         <noscript>
           <style>{`.sc-row{opacity:1!important;transform:none!important}`}</style>
         </noscript>
         {children}
+        <Analytics />
       </body>
     </html>
   );
