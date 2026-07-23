@@ -79,7 +79,7 @@ export interface HeuristicRow {
   detail: string;
 }
 
-export function scoreHeuristicEntry(entry: HeuristicEntry): HeuristicRow {
+function scoreHeuristicEntry(entry: HeuristicEntry): HeuristicRow {
   const findings = runDetectors(entry);
   const relevant = entry.taxonomy === undefined ? findings : findings.filter((f) => f.taxonomy === entry.taxonomy);
   const fired = relevant.length;
@@ -95,7 +95,7 @@ export function scoreHeuristicEntry(entry: HeuristicEntry): HeuristicRow {
   return { id: entry.id, module: entry.module, kind: entry.kind, cls: entry.cls, fired, pass, detail };
 }
 
-export interface HeuristicModuleSummary {
+interface HeuristicModuleSummary {
   module: string;
   positivesTotal: number;
   positivesCaught: number;
@@ -105,7 +105,7 @@ export interface HeuristicModuleSummary {
   precision: number; // caught / (caught + negatives fired)
 }
 
-export interface HeuristicMatrix {
+interface HeuristicMatrix {
   rows: HeuristicRow[];
   modules: HeuristicModuleSummary[];
   ok: boolean; // every positive caught AND every negative cleared
