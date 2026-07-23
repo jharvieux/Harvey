@@ -11,7 +11,8 @@
 // convention (§3b.3) for a future Finding-emitting adapter.
 //
 // Fixture parity: every entry below (the original six positives + four negatives, plus the
-// #376/#378/#379/#377 additions) is planted as a column in the fixture migration above (#460).
+// #376/#378/#379/#377 additions and the #850 free-text / #856 dictionary additions) is planted as a
+// column in the fixture migration above (#460).
 //
 // NOT wired into runMechanicalScan (that's gitleaks/semgrep/OSV/leftover-auth — M1's tools; the
 // PII classifier runs on parsed migration SQL via a separate static path, e.g. src/cli/dry-run.ts
@@ -40,6 +41,13 @@ export const m10Entries: CorpusEntry[] = [
   { id: "M10-P-PHOTO", kind: "positive", cls: "HIPAA #17 — full-face photograph / comparable image", module: "M10", location: "avatar_url", expectedTier: "review", note: `avatar_url → PHOTO/PII/medium — review-tier by design; many avatar columns are app furniture, but HIPAA/GDPR context makes silence the wrong default (#378).` },
   { id: "M10-P-NATIONAL-ID", kind: "positive", cls: "SENSITIVE_PII — generic national/government ID", module: "M10", location: "national_id", expectedTier: "review", note: `national_id → NATIONAL_ID/SENSITIVE_PII/medium — the catch-all for non-US government-ID schemes; compound names only, bare id/_id never matches (#379).` },
   { id: "M10-P-JSON-BLOB", kind: "positive", cls: "PII — denormalized-PII JSON container (review flag)", module: "M10", location: "profile", expectedTier: "review", note: `profile (jsonb) on an ordinary table → OPAQUE_JSON_BLOB/PII/low — "review this container's keys for nested PII", flagged not asserted; the report surfaces these as a distinct review list (#377).` },
+  { id: "M10-P-FREE-TEXT", kind: "positive", cls: "PII — free-text column (review flag)", module: "M10", location: "case_notes", expectedTier: "review", note: `case_notes (text) → FREE_TEXT_REVIEW/PII/low — narrative-shaped free-text column whose VALUES a name-only scan can't see; flagged not asserted, the interim visibility flag until a content-classifier lands (#850).` },
+  { id: "M10-P-BLOOD-TYPE", kind: "positive", cls: "PHI — blood type", module: "M10", location: "blood_type", expectedTier: "high", note: `blood_type → BLOOD_TYPE/PHI/high — carved out of DESCRIPTOR_SUFFIX_PATTERN's _type exclusion so genuine health data isn't swallowed with record_type/email_category (#856).` },
+  { id: "M10-P-SALARY", kind: "positive", cls: "SENSITIVE_PII — salary/compensation", module: "M10", location: "salary", expectedTier: "review", note: `salary → COMPENSATION/SENSITIVE_PII/medium — sensitive personal-financial data (#856).` },
+  { id: "M10-P-AGE", kind: "positive", cls: "PII — age (quasi-identifier)", module: "M10", location: "age", expectedTier: "review", note: `age → AGE/PII/low — token-bounded so page/usage/language never fire; a HIPAA quasi-identifier, review-tier (#856).` },
+  { id: "M10-P-MAIDEN", kind: "positive", cls: "SENSITIVE_PII — mother's maiden name", module: "M10", location: "mothers_maiden_name", expectedTier: "high", note: `mothers_maiden_name → MAIDEN_NAME/SENSITIVE_PII/high — knowledge-based-auth secret, matched before the ambiguous NAME? rule (#856).` },
+  { id: "M10-P-SECURITY-QA", kind: "positive", cls: "SENSITIVE_PII — security question/answer", module: "M10", location: "security_question", expectedTier: "high", note: `security_question → SECURITY_QA/SENSITIVE_PII/high — account-recovery knowledge-based-auth secret (#856).` },
+  { id: "M10-P-ORIENTATION", kind: "positive", cls: "SENSITIVE_PII — sexual orientation", module: "M10", location: "orientation", expectedTier: "review", note: `orientation → SPECIAL_CATEGORY/SENSITIVE_PII/medium — GDPR Art. 9 special category; the UI_ORIENTATION exclusion keeps screen/page/device orientation out (#856).` },
 
   // --- NEGATIVES (must NOT be flagged in the free/high count) ---
   { id: "M10-N-EMAIL-CAT", kind: "negative", cls: "descriptor suffix, not the value", module: "M10", location: "email_category", note: `${FIXTURE}.email_category → excluded (DESCRIPTOR_SUFFIX_PATTERN, "categorizes the concept, isn't the value"); classifyColumn returns null.` },
@@ -49,4 +57,7 @@ export const m10Entries: CorpusEntry[] = [
   { id: "M10-N-PINNED-FLAG", kind: "negative", cls: "UI pinned-flag, not a payment-card PIN", module: "M10", location: "is_pinned", note: `is_pinned → null: no bare \`pin\` alternative exists by design (pinned flags, postal PIN codes), only compound card/ATM names match the PIN rule (#376).` },
   { id: "M10-N-HAS-PHOTO", kind: "negative", cls: "boolean photo flag, not an image column", module: "M10", location: "has_photo", note: `has_photo (boolean) → null: BOOLEAN_FLAG_NAME_PATTERN + the boolean-type exclusion keep concept-referencing flags out; only image-bearing compound names (photo_url, avatar_url, …) match PHOTO (#378).` },
   { id: "M10-N-UI-STATE", kind: "negative", cls: "jsonb outside the container vocabulary", module: "M10", location: "ui_state", note: `ui_state (jsonb) → null: the #377 review flag needs a denormalization-container NAME, not just a json type — "any jsonb column" would flood legitimately non-PII settings/state blobs with noise.` },
+  { id: "M10-N-HEALTH-SCORE", kind: "negative", cls: "technical suffix on an ambiguous health term", module: "M10", location: "health_score", note: `health_score → null: word-bounding 'health' still matches the token, so the AMBIGUOUS_TECHNICAL_SUFFIX (_score) exclusion is what clears the metric-shaped lookalike (#856).` },
+  { id: "M10-N-RACE-ID", kind: "negative", cls: "FK-shaped _id, not race/ethnicity", module: "M10", location: "race_id", note: `race_id → null: '_id' is a token boundary so bounding alone can't clear it — the AMBIGUOUS_TECHNICAL_SUFFIX exclusion drops race_id/race_condition (#856).` },
+  { id: "M10-N-SCREEN-ORIENT", kind: "negative", cls: "UI display orientation, not sexual orientation", module: "M10", location: "screen_orientation", note: `screen_orientation → null: the UI_ORIENTATION exclusion keeps screen/page/device/layout orientation out of the special-category flag 'orientation' adds (#856).` },
 ];

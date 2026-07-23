@@ -20,6 +20,27 @@
     "pci": false,
     "secret": false
   },
+  "documents": {
+    "columns": [
+      {
+        "column": "body",
+        "infotype": "FREE_TEXT_REVIEW",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "FREE_TEXT_REVIEW"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
+  },
   "counters": {
     "columns": [
       {
@@ -31,6 +52,27 @@
     ],
     "infotypes": [
       "NAME?"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
+  },
+  "notes": {
+    "columns": [
+      {
+        "column": "body",
+        "infotype": "FREE_TEXT_REVIEW",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "FREE_TEXT_REVIEW"
     ],
     "categories": [
       "PII"
@@ -122,6 +164,48 @@
         "confidence": "low"
       },
       {
+        "column": "case_notes",
+        "infotype": "FREE_TEXT_REVIEW",
+        "category": "PII",
+        "confidence": "low"
+      },
+      {
+        "column": "blood_type",
+        "infotype": "BLOOD_TYPE",
+        "category": "PHI",
+        "confidence": "high"
+      },
+      {
+        "column": "salary",
+        "infotype": "COMPENSATION",
+        "category": "SENSITIVE_PII",
+        "confidence": "medium"
+      },
+      {
+        "column": "age",
+        "infotype": "AGE",
+        "category": "PII",
+        "confidence": "low"
+      },
+      {
+        "column": "mothers_maiden_name",
+        "infotype": "MAIDEN_NAME",
+        "category": "SENSITIVE_PII",
+        "confidence": "high"
+      },
+      {
+        "column": "security_question",
+        "infotype": "SECURITY_QA",
+        "category": "SENSITIVE_PII",
+        "confidence": "high"
+      },
+      {
+        "column": "orientation",
+        "infotype": "SPECIAL_CATEGORY",
+        "category": "SENSITIVE_PII",
+        "confidence": "medium"
+      },
+      {
         "column": "product_name",
         "infotype": "NAME?",
         "category": "PII",
@@ -142,16 +226,24 @@
       "PHOTO",
       "NATIONAL_ID",
       "OPAQUE_JSON_BLOB",
+      "FREE_TEXT_REVIEW",
+      "BLOOD_TYPE",
+      "COMPENSATION",
+      "AGE",
+      "MAIDEN_NAME",
+      "SECURITY_QA",
+      "SPECIAL_CATEGORY",
       "NAME?"
     ],
     "categories": [
       "PII",
       "SENSITIVE_PII",
-      "PCI"
+      "PCI",
+      "PHI"
     ],
-    "severityScore": 58.6,
+    "severityScore": 78,
     "severity": "Critical",
-    "phi": false,
+    "phi": true,
     "pci": true,
     "secret": false
   },
@@ -171,6 +263,27 @@
       "PII"
     ],
     "severityScore": 1,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
+  },
+  "internal_notes": {
+    "columns": [
+      {
+        "column": "body",
+        "infotype": "FREE_TEXT_REVIEW",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "FREE_TEXT_REVIEW"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
     "severity": "Low",
     "phi": false,
     "pci": false,
@@ -288,5 +401,26 @@
     "phi": false,
     "pci": false,
     "secret": true
+  },
+  "tautology_articles": {
+    "columns": [
+      {
+        "column": "body",
+        "infotype": "FREE_TEXT_REVIEW",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "FREE_TEXT_REVIEW"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
   }
 }

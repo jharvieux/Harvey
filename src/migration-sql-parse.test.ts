@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseArrayColumns, parseAuthUserRefs, parseDroppedColumns, parseLiveColumns, parseCheckConstraints, parseCheckInConstraints, parseColumns, parseDefinerFunctions, parseForeignKeys, parseLiveTableNames, parseNotNullColumns, parsePolicies, parseRlsState, parseTableNames, parseUniqueColumns } from "./migration-sql-parse.js";
+import { parseArrayColumns, parseAuthUserRefs, parseClassifiableColumns, parseDroppedColumns, parseLiveColumns, parseCheckConstraints, parseCheckInConstraints, parseColumns, parseDefinerFunctions, parseForeignKeys, parseLiveTableNames, parseNotNullColumns, parsePolicies, parseRlsState, parseTableNames, parseUniqueColumns } from "./migration-sql-parse.js";
 
 // Fixtures are the real calibration-target migrations (targets/calibration/supabase/migrations) —
 // this test asserts the parser extracts exactly what GROUND-TRUTH.md says is there, so a change
@@ -413,5 +413,58 @@ describe("parseLiveColumns (#643 — re-CREATEd table uses its final definition,
     const sql = "create table public.t (\n  id uuid,\n  a text\n);\ncreate table if not exists public.t (\n  id uuid,\n  a text,\n  b text\n);";
     const cols = parseLiveColumns(sql).filter((c) => c.table_name === "t").map((c) => c.column_name);
     expect(cols.sort()).toEqual(["a", "id"]);
+  });
+});
+
+describe("parseClassifiableColumns (#851/#852 — CREATE + ALTER ADD, recognized vs unknown types)", () => {
+  it("includes columns added by ALTER TABLE ADD COLUMN, then drops one removed by a later ALTER", () => {
+    const sql = `
+      create table public.users (
+        id uuid primary key,
+        email text
+      );
+      alter table public.users add column ssn text;
+      alter table users add column if not exists nickname text;
+      alter table public.users drop column nickname;
+    `;
+    const { columns } = parseClassifiableColumns(sql);
+    const names = columns.filter((c) => c.table_name === "users").map((c) => c.column_name).sort();
+    expect(names).toEqual(["email", "id", "ssn"]); // nickname added then dropped → gone
+  });
+
+  it("routes an unrecognized-type column to unknownType (name-classifiable) instead of dropping it silently", () => {
+    const sql = `
+      create table public.people (
+        id uuid primary key,
+        gender gender_enum,
+        balance money
+      );
+      alter table public.people add column status workflow_state;
+    `;
+    const { columns, unknownType } = parseClassifiableColumns(sql);
+    expect(columns.map((c) => c.column_name)).toEqual(["id"]); // only the recognized-type column
+    expect(unknownType.map((c) => `${c.column_name}:${c.data_type}`).sort()).toEqual([
+      "balance:money",
+      "gender:gender_enum",
+      "status:workflow_state",
+    ]);
+  });
+
+  it("reads a Prisma-quoted custom (enum) type in generated SQL as an unknown-type column", () => {
+    const sql = `create table "Patient" (\n  "id" text not null,\n  "gender" "Gender" not null\n);`;
+    const { unknownType } = parseClassifiableColumns(sql);
+    expect(unknownType).toContainEqual({ table_name: "Patient", column_name: "gender", data_type: "gender" });
+  });
+
+  it("never reads a table-level constraint line as an unknown-type column", () => {
+    const sql = `
+      create table public.t (
+        id uuid primary key,
+        email text,
+        constraint t_email_key unique (email),
+        foreign key (id) references other (id)
+      );
+    `;
+    expect(parseClassifiableColumns(sql).unknownType).toHaveLength(0);
   });
 });
