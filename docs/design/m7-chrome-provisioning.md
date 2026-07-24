@@ -27,22 +27,27 @@ download are idempotent — `browsers install` skips re-downloading a revision a
 `--path` — so a warm cache costs one `existsSync` check plus one fast `browsers install` call
 (~1–2s observed) instead of a fresh ~15s provision.
 
-### Why not the Playwright chromium already in the repo?
+### The Playwright chromium already in the repo — now tried FIRST (#818)
 
 It's already there (installed for `report-template`'s PDF rendering) and was the pre-#488 default.
-It is *also* technically a "Chrome-for-Testing" build, just an older pinned revision — and it
-reproduces Lighthouse's `NO_FCP` live (re-confirmed below), so it stays a last-resort fallback only,
-never the provisioning target.
+It is *also* technically a "Chrome-for-Testing" build, just an older pinned revision. The #556-era
+ordering treated it as a last-resort fallback on the belief it reproduced Lighthouse's `NO_FCP`;
+**#818 reversed that and moved it to the FIRST candidate**, because it needs no system install and
+no network, so CWV is not gated on either. #840 verified this live: on a real `next build` + served
+target the bundled Playwright chromium captured a real FCP on the first candidate (`NO_FCP` not
+hit, no fallthrough needed) — the earlier "hangs / NO_FCP" observation is environment-dependent, not
+universal, and the fallthrough chain still degrades to M7L-00 if it does recur.
 
-### Browser resolution order (final)
+### Browser resolution order (final — reordered by #818, verified live #840)
 
 1. `LIGHTHOUSE_CHROME_PATH` — explicit override, always wins.
-2. System Chrome (`chrome-launcher` auto-detect). Skippable via `LIGHTHOUSE_SKIP_SYSTEM_CHROME=1` —
-   the seam used to prove step 3 on a machine that *does* have a system Chrome, without uninstalling
-   it.
-3. **Provisioned Chrome-for-Testing** (new, #556) — `provisionChrome()` above.
-4. Playwright chromium — last resort; a run that still NO_FCPs here degrades to M7L-00 (unchanged
-   from #488), never a silent clean.
+2. **Bundled Playwright chromium** (#818) — vendored in this repo, no system install and no
+   network, so it's tried first. Skippable via `LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM=1` (the seam to
+   force the steps below on a machine that has it, mirroring `LIGHTHOUSE_SKIP_SYSTEM_CHROME`).
+3. System Chrome (`chrome-launcher` auto-detect). Skippable via `LIGHTHOUSE_SKIP_SYSTEM_CHROME=1`.
+4. **Provisioned Chrome-for-Testing** (#556) — `provisionChrome()` above; network-dependent, so it's
+   now the last resort. A run that still NO_FCPs here degrades to M7L-00 (unchanged from #488),
+   never a silent clean.
 
 ### Live proof (2026-07-18)
 

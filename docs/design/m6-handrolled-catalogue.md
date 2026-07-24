@@ -115,7 +115,7 @@ email-shape regex (81).
 | # | Shape | Standard replacement | Verdict | Reason / negative class |
 |---|---|---|---|---|
 | 44 | fetch timeout via `Promise.race([fetch, timer])` | `AbortSignal.timeout(ms)` | **SHIPPED (batch 4, #628)** | `M6 — Indicator: fetch timeout via Promise.race` — a `Promise.race` over an array whose subtree contains both a `fetch()` call and a `setTimeout` reference; `Promise.all`, or a race without both, never flags. The leaked-request claim stays paid triage. |
-| 45 | Hand-rolled retry/backoff loop | `p-retry` etc. | **NO** | Ruled in #395: the benign case is exactly `depdrop.ts` — judgment-bearing. The catalogued decision stands. |
+| 45 | Hand-rolled retry/backoff loop | `p-retry` etc. | **SHIPPED (#814)** | Graduated 2026-07-23 to a mechanical Info-tier detector (`detectRetryBackoffLoop`, `src/detectors/handrolled.ts`). The #395 "benign case is `depdrop.ts`" concern is handled by a dep gate + a dep-aware negative fixture: a retry library already in the tree is the deliberate dep-drop shape and does not fire. |
 | 46 | JSON fetch wrapper (fetch + ok-check + `.json()`) | — | **EXCLUDED** | Every codebase legitimately has one; not a reinvention. |
 | 47 | Polling via `setInterval` + fetch | SWR/React Query `refreshInterval` — dep-gate | **MAYBE** | Boundary settled (#406, probed): `detectClientFetchEffect` does NOT fire on a fetch inside a setInterval callback (callbacks handed to other calls aren't mount-path in `mountDataReads`); it fires on the fetch-immediately-then-poll variant only via the immediate call. Interval polling is outside M7's net. Remaining blockers: the dep-gate, plus suppressing the M6 indicator when M7 already flagged the same effect (the combined shape double-fires otherwise). |
 | 48 | HTTP status→message literal tables | — | **EXCLUDED** | Harmless constants; no meaningful maintenance cost. |
@@ -163,11 +163,11 @@ email-shape regex (81).
 
 | # | Shape | Standard replacement | Verdict | Reason / negative class |
 |---|---|---|---|---|
-| 73 | Pagination reinvention (offset math + client-side `.slice()`) | `.range(from, to)` | **MAYBE (deferred)** | #395's recorded deferral: needs cross-statement correlation between the query chain and the nearby manual offset math. |
+| 73 | Pagination reinvention (offset math + client-side `.slice()`) | `.range(from, to)` | **SHIPPED (#814)** | Graduated 2026-07-23 to a mechanical Info-tier detector (`detectManualPaginationOffset`, `src/detectors/handrolled.ts`) — the cross-statement offset-math ↔ query-chain correlation #395 deferred on is now coded, with positive/negative fixtures. |
 | 74 | Fetch-all then `.data.length` as a count | `count: "exact", head: true` | **BOUNDARY → M7** | Probed (#406): `detectUnboundedSelect` fires on the fetch-all `select('*')` variant, and `isCountOnlySelect` already keeps the `head:true` fix silent — the class is M7's (needless row fetch is a perf harm in every variant); an M6 indicator would be a twin. The residual gap — column-projected `select('id')` + `.length` (probed: silent) — is an M7 net extension, not an M6 class. |
 | 75 | select-then-branch insert/update on the same table | `.upsert()` | **MAYBE** | Cross-statement, like 73. Note the CAS/zero-row-update anti-pattern (D-091 #7) is the *correctness* neighbor — paid triage should read both. |
 | 76 | Storage public-URL concat (literals containing `/storage/v1/object/public/`) | `getPublicUrl()` | **SHIPPED (batch 4, #628)** | `M6 — Indicator: storage object URL concat` — the `/storage/v1/object/public/` path assembled into a URL by interpolation or `+` concat where the path is adjacent to a dynamic segment; a standalone complete-URL literal (no interpolation, or prose merely mentioning the path) never flags. Shipped under the operator precision-gate (#413/#628) despite curated-only frequency evidence: the shape is exact, Supabase-specific, and on-brand for the wedge. |
-| 77 | Hand-rolled realtime reconnection/backoff | supabase-js built-in retry | **NO** | Retry family (see 45). |
+| 77 | Hand-rolled realtime reconnection/backoff | supabase-js built-in retry | **NO** | Retry family. The generic retry/backoff loop (45) graduated via #814, but that detector targets the loop-with-backoff shape; this supabase realtime-reconnection variant is not covered and stays paid-tier. |
 | 78 | Hand-written row interfaces duplicating generated types | `supabase gen types` | **NO** | Whether an interface duplicates the schema is not syntactically decidable from one file. |
 | 79 | App-side `.eq("tenant_id", …)` atop a service-role client | RLS / tenant-scoped client | **BOUNDARY → M1** | Anti-pattern #5 (app-layer scope without DB enforcement) — security posture, not maintainability. |
 | 80 | Hand-rolled auth middleware session refresh | `@supabase/ssr` middleware helper | **NO** | Same family as 55; the corpus's protected negative is this shape. |
@@ -217,16 +217,16 @@ email-shape regex (81).
 
 ## The tally — the honest number the issue asked for
 
-106 patterns catalogued. **Of the 106, 76 do NOT currently graduate to a free mechanical
+106 patterns catalogued. **Of the 106, 74 do NOT currently graduate to a free mechanical
 indicator.** That is the finding, and per the issue's own framing it is a successful outcome, not a
 failed one.
 
 | Verdict | Count | Entries |
 |---|---|---|
-| SHIPPED (batch 1 PR #395; batch 2 #406 item 2; batch 3 #542; batch 4 #628) | 30 | 2, 3, 4, 11, 13, 16, 21, 23, 24, 27, 28, 29, 30, 36, 37, 41, 42, 44, 51, 52, 53, 57, 61, 68, 76, 81, 88, 89, 95, 98 |
+| SHIPPED (batch 1 PR #395; batch 2 #406 item 2; batch 3 #542; batch 4 #628; batch 5 #814) | 32 | 2, 3, 4, 11, 13, 16, 21, 23, 24, 27, 28, 29, 30, 36, 37, 41, 42, 44, 45, 51, 52, 53, 57, 61, 68, 73, 76, 81, 88, 89, 95, 98 |
 | YES — graduation candidates | 0 | (all graduated — batch 4 #628 shipped the last 9 under the operator precision-gate) |
-| MAYBE — deferred, with the specific blocker named | 33 | 5, 6, 12, 15, 18, 19, 22, 31, 32, 34, 35, 39, 40, 43, 47, 58, 59, 65, 66, 67, 69, 72, 73, 75, 82, 83, 90, 92, 96, 99, 100, 101, 102 |
-| NO — stays LLM-tier (paid packet) | 21 | 7, 8, 17, 26, 33, 38, 45, 49, 50, 55, 62, 63, 64, 71, 77, 78, 80, 84, 93, 103, 104 |
+| MAYBE — deferred, with the specific blocker named | 32 | 5, 6, 12, 15, 18, 19, 22, 31, 32, 34, 35, 39, 40, 43, 47, 58, 59, 65, 66, 67, 69, 72, 75, 82, 83, 90, 92, 96, 99, 100, 101, 102 |
+| NO — stays LLM-tier (paid packet) | 20 | 7, 8, 17, 26, 33, 38, 49, 50, 55, 62, 63, 64, 71, 77, 78, 80, 84, 93, 103, 104 |
 | BOUNDARY — another module's class | 9 | 1 (M7), 60 (M7), 70 (M7/ESLint), 74 (M7), 79 (M1), 86 (M1), 87 (M1), 105 (M7), 106 (M4) |
 | EXCLUDED — not a reinvention / tone | 13 | 9, 10, 14, 20, 25, 46, 48, 54, 56, 85, 91, 94, 97 |
 
@@ -244,8 +244,9 @@ SHIPPED (entry 76, curated-only evidence, stayed YES). Batch 4 (#628, 2026-07-19
 the last 9 YES entries — 4, 11, 13, 16, 23, 44, 68, 76, 95 — under the operator precision-gate
 (#413/#628: build any plausible catalogued shape, gate on a paired negative fixture + no
 calibration false-fire, NOT on corpus-frequency; entry 76 shipped despite curated-only evidence).
-Exact arithmetic: 30 SHIPPED + 0 YES = 30 on the graduation track; 33 MAYBE + 21 NO + 9 BOUNDARY
-+ 13 EXCLUDED = 76 not currently graduating. 30 + 76 = 106. Correction, recorded loud: the previous version of this note said
+Exact arithmetic: 32 SHIPPED + 0 YES = 32 on the graduation track (batch 5, #814, graduated 45 and
+73 on 2026-07-23 — moved from NO and MAYBE respectively); 32 MAYBE + 20 NO + 9 BOUNDARY
++ 13 EXCLUDED = 74 not currently graduating. 32 + 74 = 106. Correction, recorded loud: the previous version of this note said
 "5 SHIPPED + 25 YES = 31 … 31 + 76 = 106" — an arithmetic slip; 5 + 25 = 30, and 30 + 76 = 106 was
 always the true sum. The per-verdict row counts were and are correct.)
 
@@ -263,12 +264,12 @@ always the true sum. The per-verdict row counts were and are correct.)
   fixtures and a proven-clean run over `targets/calibration` and the Harvey `src/` dogfood. None of
   this catalogue's verdicts is a precision claim; per #265's constraint, **no precision number of
   any kind is claimed for any tier of M6**, including the shipped classes.
-- The 33 MAYBEs are deferred for three named reasons: cross-statement correlation (73/75),
+- The 32 MAYBEs are deferred for three named reasons: cross-statement correlation (75),
   dep-gates not yet generalized (6/15/40/47/58/59/82), or unknown FP/tone surface on a
   loop/heuristic shape (the rest — including 18/65/67/72/102, whose module boundaries were
   settled in the #406 pass, leaving the FP/shape blocker as the only thing standing). Each is
   re-openable by resolving its named blocker — they are not soft rejections.
-- The 21 NOs are the locked decision working as intended: over-abstraction, premature generality,
+- The 20 NOs are the locked decision working as intended: over-abstraction, premature generality,
   "is this too much?" — asserted judgments, paid-tier, per `spec-72` preamble item 2 as amended by
   the operator ruling.
 - The 13 EXCLUDED entries are recorded precisely so a future sweep doesn't "discover" them: they

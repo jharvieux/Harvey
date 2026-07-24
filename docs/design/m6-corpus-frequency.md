@@ -111,7 +111,7 @@ MAYBE); 9 MAYBE shapes unmeasured, listed below with reasons.** Every YES entry 
 |---|---|---|---|
 | 19 | MAYBE | hand-rolled event emitter | on/off/emit method-set recognition is class-shape AST work; any regex matches nothing or every pub/sub-ish class |
 | 32 | MAYBE | manual ISO-date parsing | the catalogue's own blocker stands for measurement too: the crisp subset needs definition first |
-| 73 | MAYBE | Supabase pagination reinvention | cross-statement by definition (#395's deferral): query chain PLUS nearby offset math |
+| 73 | SHIPPED (#814) | Supabase pagination reinvention | cross-statement by definition (#395's deferral): query chain PLUS nearby offset math — the correlation is now coded (`detectManualPaginationOffset`), graduated on the precision-gate (paired fixtures), not on a corpus signature, so it stays listed here as an unmeasured-but-shipped shape |
 | 74 | MAYBE | fetch-all then .data.length count | the countable token is ubiquitous; the shape is the ABSENCE of count options on a distant query |
 | 75 | MAYBE | select-then-branch upsert | cross-statement correlation (select + branch + two writes) |
 | 82 | MAYBE | phone-number regex | phone regexes too diverse for one stated signature (catalogue's own reason) |

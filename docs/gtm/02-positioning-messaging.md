@@ -83,6 +83,16 @@ demonstrates a cross-tenant read, rather than warning that one "might" exist). T
 pillar also answers the price-anchor problem ($9–48/mo tools): different product,
 different job.
 
+**Evidence this pillar rests on** — the "a scan is not an audit" proof set, re-verified
+against primary sources 2026-07-23 (#732; full citations in
+`10-old-docs-crosscheck.md` §6): GitHub Copilot Code Review caught **zero** critical
+vulnerabilities across 7 benchmark datasets (arXiv:2509.13650); ~**30%** of AI-generated
+code carries security weaknesses spanning 43 distinct CWEs, and LLM remediation resolves
+only ~**55%** of flagged issues *even with guided/enhanced prompting* — a plain "fix"
+command resolves just **19.3%** (ACM TOSEM, DOI 10.1145/3716848); and Supabase's
+`service_role` key bypasses RLS by design (Supabase docs). The AI that wrote the code, and
+the scanner that checks one dimension from the outside, are not the independent read.
+
 ### 3. "The whole codebase, one verdict" — the completeness pillar
 Ten modules, equal weight — tests, performance, maintainability, duplication, dead code,
 data classification, App Router boundaries, hotspots, and security. The deliverable is
