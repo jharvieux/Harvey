@@ -42,10 +42,15 @@ import { remixAdapter } from "./remix-adapter.js";
 import { tanstackAdapter } from "./tanstack-adapter.js";
 
 export type { SourceInput } from "./common.js";
-// `.validator(`/`.inputValidator(` recognises TanStack Start's chain-level input validation (#918),
-// where the schema lives on the `createServerFn().validator(schema)` chain rather than a `.parse()`
-// call in the handler body — a real validation signal in any framework, additive and FP-safe for Next.
-const VALIDATION_PATTERN = /\.safeParse\(|(?<!JSON)\.parse\(|\.(?:input)?validator\(|\bzod\b|valibot|\byup\.|\bajv\b/i;
+// `validator(`/`.validator(`/`.inputValidator(` recognises chain-level input validation: TanStack
+// Start's `createServerFn().validator(schema)` (#918) and the remix-validated-form / `@rvf` /
+// `@carbon/form` idiom `validator(schema).validate(await request.formData())` (#964) — a BARE
+// `validator(` call plus a `.validate(` invocation, neither of which the old dotted-only regex
+// matched, so fully-validated RR7/Remix route actions (e.g. carbon's OAuth token endpoint) false-
+// fired High. `\b(?:input)?validator\(` covers the bare and dotted forms; `.validate(` covers the
+// schema `.validate(...)` call (yup/joi/@rvf). A real validation signal in any framework, additive
+// and FP-safe for Next.
+const VALIDATION_PATTERN = /\.safeParse\(|(?<!JSON)\.parse\(|\b(?:input)?validator\(|\.validate\(|\bzod\b|valibot|\byup\.|\bajv\b/i;
 const MUTATION_PATTERN = /\.(insert|update|upsert|delete|rpc)\s*\(/;
 const SECRET_ENV_PATTERN = /process\.env\.(?!NEXT_PUBLIC_)[A-Z0-9_]*(SERVICE_ROLE|SECRET|PRIVATE_KEY|API_KEY|TOKEN)[A-Z0-9_]*/;
 const DYNAMIC_API_PATTERN = /^(headers|cookies|noStore|unstable_noStore)$/;
@@ -956,6 +961,10 @@ function detectAccidentalDynamicRendering(sources: Map<string, ts.SourceFile>, n
 //   - guarded by `typeof window !== "undefined"` (or any browser global).
 const BROWSER_GLOBALS = new Set(["window", "document", "localStorage", "sessionStorage", "navigator"]);
 const TYPEOF_GUARD = /typeof\s+(window|document|localStorage|sessionStorage|navigator)\b/;
+// Optional-chaining a browser global (`window?.x`, `document?.foo`) is the author's explicit signal
+// that the global may be absent — treated as an SSR guard, same as `typeof` (#964). Matched both on
+// the access itself and on an enclosing `if (window?.x)` condition.
+const OPTIONAL_CHAIN_GUARD = /\b(window|document|localStorage|sessionStorage|navigator)\?\./;
 
 // Names bound anywhere in the file (imports, params, variable/function/class declarations). If a
 // browser-global name is also a local binding, the access is not the DOM global — skip it, so an
@@ -988,34 +997,44 @@ function isFunctionScope(node: ts.Node): boolean {
 
 // Whether the access is on the synchronous SSR render path. The nearest enclosing function tells
 // deferred (effect/handler/callback — browser-only) from render-path code:
-//   0 enclosing functions → module top-level: runs during SSR → on path.
-//   1, and it's a free function / arrow → a component or module-level helper render body → on path.
+//   0 enclosing functions → module top-level: runs during SSR on import → on path.
+//   1, and it's a free function / arrow IN A JSX MODULE (.tsx/.jsx) → a component or module-level
+//     helper render body → on path.
+//   1, but the file is a non-JSX .ts/.js module → a plain util/service function, not a component
+//     render body (a component needs JSX, so it can't live here) → off path. At carbon's scale the
+//     old "any free function is a render body" heuristic false-fired on 59 non-component `.ts`
+//     utilities (#964); only module-top-level code in such a file runs during SSR unconditionally.
 //   1, but it's a CLASS MEMBER (method/accessor/ctor) → not the App Router render path but an
 //     OO/framework lifecycle method (e.g. a Lexical node's client-only `createDOM`) → off path.
 //   ≥2 → nested in a deferred closure (effect callback, event handler) → off path.
-function isOnSsrRenderPath(node: ts.Node): boolean {
+function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile): boolean {
   const fns: ts.Node[] = [];
   for (let cur = node.parent; cur; cur = cur.parent) {
     if (isFunctionScope(cur)) fns.push(cur);
   }
   if (fns.length >= 2) return false;
   const nearest = fns[0];
-  if (nearest && (ts.isMethodDeclaration(nearest) || ts.isConstructorDeclaration(nearest) || ts.isGetAccessorDeclaration(nearest) || ts.isSetAccessorDeclaration(nearest))) {
-    return false;
+  if (nearest) {
+    if (ts.isMethodDeclaration(nearest) || ts.isConstructorDeclaration(nearest) || ts.isGetAccessorDeclaration(nearest) || ts.isSetAccessorDeclaration(nearest)) {
+      return false;
+    }
+    if (!/\.[jt]sx$/.test(sf.fileName)) return false;
   }
   return true;
 }
 
-// True when a `typeof <global>` check gates this node — an enclosing `if`, ternary, or `&&`/`||`
-// whose condition/left operand tests a browser global. The standard SSR-safe guard.
-function isTypeofGuarded(node: ts.Node, sf: ts.SourceFile): boolean {
+// True when a browser-global guard gates this node — an enclosing `if`, ternary, or `&&`/`||` whose
+// condition/left operand tests a browser global via `typeof` or optional chaining (`window?.x`).
+// The two standard SSR-safe guards.
+function isSsrGuarded(node: ts.Node, sf: ts.SourceFile): boolean {
+  const guards = (text: string) => TYPEOF_GUARD.test(text) || OPTIONAL_CHAIN_GUARD.test(text);
   for (let cur = node.parent; cur; cur = cur.parent) {
-    if (ts.isIfStatement(cur) && TYPEOF_GUARD.test(cur.expression.getText(sf))) return true;
-    if (ts.isConditionalExpression(cur) && TYPEOF_GUARD.test(cur.condition.getText(sf))) return true;
+    if (ts.isIfStatement(cur) && guards(cur.expression.getText(sf))) return true;
+    if (ts.isConditionalExpression(cur) && guards(cur.condition.getText(sf))) return true;
     if (
       ts.isBinaryExpression(cur) &&
       (cur.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken || cur.operatorToken.kind === ts.SyntaxKind.BarBarToken) &&
-      TYPEOF_GUARD.test(cur.left.getText(sf))
+      guards(cur.left.getText(sf))
     ) {
       return true;
     }
@@ -1035,7 +1054,10 @@ function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: 
         !declared.has(node.expression.text);
       if (onGlobal) {
         const global = (node.expression as ts.Identifier).text;
-        if (isOnSsrRenderPath(node) && !isTypeofGuarded(node, sf)) {
+        // An optional-chained access (`window?.x`) is itself a guard — the author signalled the
+        // global may be absent, so it never throws a bare ReferenceError shape we flag (#964).
+        const optionalChained = (node as ts.PropertyAccessExpression | ts.ElementAccessExpression).questionDotToken !== undefined;
+        if (!optionalChained && isOnSsrRenderPath(node, sf) && !isSsrGuarded(node, sf)) {
           const atModuleTop = !ts.findAncestor(node.parent, isFunctionScope);
           findings.push(
             makeFinding(nextId, {

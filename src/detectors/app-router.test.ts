@@ -505,6 +505,46 @@ describe("SSR-only browser API misuse (#381)", () => {
     ]);
     expect(taxonomies(findings)).not.toContain(SSR_API);
   });
+
+  // #964: at carbon's scale (RR7 monorepo) the "any free function is a render body" heuristic
+  // false-fired on 59 non-component `.ts` utilities. A component needs JSX, so it can only live in
+  // a `.tsx`/`.jsx` module — a function in a plain `.ts` service file is not a render body.
+  it("does not flag a browser-global read inside a function in a non-component `.ts` util file", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/components/Configurator/utils.ts",
+        text: `export function convertTypescriptToJavaScript(src: string) {\n  if (window?.ts) {\n    return window.ts.transpile(src);\n  }\n  return src;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
+
+  // #964: module-top-level code in a `.ts` file DOES run during SSR on import, so it must stay
+  // flagged — the fix scopes function bodies, it does not blanket-suppress `.ts`.
+  it("still flags a browser-global read at module top level of a `.ts` file", () => {
+    const findings = detectAppRouterFindings([
+      { path: "lib/theme.ts", text: `export const width = window.innerWidth;\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(SSR_API);
+  });
+
+  // #964: optional-chaining a browser global (`window?.x`) is the author's explicit absent-guard —
+  // even in a `.tsx` component render body it must not fire.
+  it("does not flag an optional-chained browser-global read (`window?.x`) in a component body", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/screen.tsx", text: `export default function Screen() {\n  const w = window?.innerWidth ?? 0;\n  return <div>{w}</div>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
+
+  // #964: an inner unguarded read (`window.ts`) is still safe when an enclosing `if (window?.ts)`
+  // optional-chaining guard gates it.
+  it("does not flag a read gated by an enclosing `if (window?.x)` optional-chaining guard", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/widget.tsx", text: `export default function Widget() {\n  if (window?.ts) {\n    return <div>{window.ts.version}</div>;\n  }\n  return null;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
 });
 
 const SEGMENT_CFG = "M9 — Unsafe route segment config";
@@ -944,6 +984,22 @@ describe("Remix / React Router 7 boundary adapter (#917)", () => {
   it("flags an action reading input into a mutation with no validation", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("remix/action-validation/positive"), "remix");
     expect(taxonomies(findings)).toContain("M9 — route action missing input validation");
+  });
+
+  // #964: carbon validates through `@carbon/form`'s `validator(schema).validate(...)` wrapper — a
+  // BARE `validator(` call plus `.validate(`, which the old dotted-only regex missed, false-firing
+  // High on fully-validated route actions (its OAuth token endpoint). Recognise the idiom.
+  it("does not flag a route action validated through the `validator(schema).validate(...)` wrapper", () => {
+    const findings = detectAppRouterFindings(
+      [
+        {
+          path: "app/routes/_oauth+/token.tsx",
+          text: `import { validator } from "@carbon/form";\nimport { oauthTokenValidator } from "./validators";\nexport async function action({ request }: { request: Request }) {\n  const validation = await validator(oauthTokenValidator).validate(await request.formData());\n  await db.from("oauthToken").insert({ token: validation.data.token });\n  return null;\n}\n`,
+        },
+      ],
+      "react-router",
+    );
+    expect(taxonomies(findings)).not.toContain("M9 — route action missing input validation");
   });
 
   it("reuses the framework-agnostic SSR-misuse and waterfall detectors on Remix files", () => {
