@@ -22,6 +22,7 @@ import { basename, join, relative } from "node:path";
 import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
 import type { Finding } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
+import { buildScopeLedger, type ScopeRow } from "./pentest/scope-ledger.js";
 import { buildTwoTenantSeed, type SeedSkip, type TwoTenantSeed } from "./pentest/two-tenant-seed.js";
 
 // The facts about a repo that decide whether — and how fully — we can stand it up for M2.
@@ -328,6 +329,12 @@ export interface StandUpResult {
   // seed can't satisfy). The rest seeded and were probed; these are disclosed (fail-loud) and were
   // NOT probed for cross-tenant isolation. Never a silent narrowing of the surface.
   seedSkips?: SeedSkip[];
+  // #875 — the target checkout's commit, so the scope disclosure names WHICH schema was replayed.
+  // Absent ⇒ the disclosure says the revision was not captured, never that it does not matter.
+  revision?: string;
+  // #876/#877 — surface + identity-class rows the runner observed (which access paths and which API
+  // surfaces this stand-up could exercise, and which it could not). Folded into the scope ledger.
+  scopeRows?: ScopeRow[];
 }
 
 export interface StandUpRunner {
@@ -424,6 +431,20 @@ function probeOneProject(opts: {
   }
 
   const findings = [...pt.findings];
+
+  // #875 — every M2 run that actually probed ships the scope statement WITH its results: what was
+  // stood up, from which schema at which commit, which surfaces/identities were exercised, and that
+  // production configuration was not observed. Without it a clean matrix reads as a clean production.
+  const scope = buildScopeLedger({
+    targetDir,
+    stack: "a Harvey-owned local Supabase stack (`supabase start`)",
+    sources: [...plan.migrationDirs, ...plan.schemaFiles],
+    revision: db.revision ?? null,
+    coverage,
+    rows: db.scopeRows ?? [],
+  });
+  findings.push(scope.finding);
+  limitations.push(...scope.limitations);
 
   // Bonus signal only (#514: the client's suite is never the mechanism). Counted as evidence ONLY
   // if it proved it exercised the DB; a skipped suite is disclosed, never trusted (#508).

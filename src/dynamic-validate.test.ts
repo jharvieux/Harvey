@@ -234,6 +234,10 @@ const runner = (over: Partial<StandUpRunner> = {}): StandUpRunner => ({
   ...over,
 });
 
+// #875 — every probed run now also carries the M2 scope disclosure. The assertions below are about
+// the PROBE findings, so the disclosure is filtered out of them and asserted on its own.
+const probeFindings = (findings: Finding[]): Finding[] => findings.filter((f) => !f.id.startsWith("M2-SCOPE-RECONSTRUCTION"));
+
 describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", () => {
   const dir = mkdtempSync(join(tmpdir(), "harvey-dynval-"));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -249,7 +253,19 @@ describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", ()
     const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
     expect(written.module).toBe("M2");
     expect(written.target).toBe("/repo");
-    expect(written.findings).toHaveLength(1);
+    expect(probeFindings(written.findings)).toHaveLength(1);
+  });
+
+  // #875 — the deliverable must say it probed a RECONSTRUCTION, not the deployed system; an
+  // undisclosed scope reads as a clean bill of health for production.
+  it("carries the scope disclosure into the emitted artifact", () => {
+    const r = run();
+    const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8")) as { findings: Finding[] };
+    const scope = written.findings.find((f) => f.id === "M2-SCOPE-RECONSTRUCTION");
+    expect(scope, "M2 artifact must carry the scope disclosure").toBeDefined();
+    expect(scope!.evidence).toContain("PRODUCTION CONFIGURATION WAS NOT OBSERVED");
+    expect(scope!.evidence).toContain("/repo/supabase/migrations");
+    expect(r.limitations.join("\n")).toMatch(/RECONSTRUCTION/);
   });
 
   it("a no-go target writes NO artifact and says why — never a silent clean ran", () => {
@@ -313,7 +329,7 @@ describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", ()
   it("a skipped client suite is disclosed as a limitation, not counted as evidence", () => {
     const r = run({ clientSuite: suite, runner: runner({ clientSuite: () => ({ ok: true, output: "Tests  2 skipped (2)" }) }) });
     expect(r.limitations.join(" ")).toMatch(/did not exercise the DB/);
-    expect(r.findings).toHaveLength(1); // only Harvey's own finding
+    expect(probeFindings(r.findings)).toHaveLength(1); // only Harvey's own finding
   });
 
   it("a client suite that ran and failed adds an M2 finding (real dynamic evidence)", () => {
@@ -324,7 +340,7 @@ describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", ()
 
   it("a client suite that ran and passed is a bonus note, not a finding", () => {
     const r = run({ clientSuite: suite, runner: runner({ clientSuite: () => ({ ok: true, output: "Tests  4 passed (4)" }) }) });
-    expect(r.findings).toHaveLength(1);
+    expect(probeFindings(r.findings)).toHaveLength(1);
     expect(r.notes.join(" ")).toMatch(/passed against the seeded stack/);
   });
 
@@ -354,7 +370,7 @@ describe("runDynamicValidation (#450 orchestration + #448 emit + #508/#514)", ()
     if (pass.fresh) {
       expect(pass.artifact.pass).toBe("dynamic");
       expect(ranFromPass(pass.artifact, "dynamic pen-test").status).toBe("ran");
-      expect(pass.artifact.findings).toHaveLength(1);
+      expect(probeFindings(pass.artifact.findings ?? [])).toHaveLength(1);
     }
   });
 });
@@ -469,8 +485,8 @@ describe("runMultiProjectDynamicValidation (#610 — stand up + probe EVERY proj
     // one rolled-up artifact carrying BOTH DBs' findings, id-tagged so they don't collide
     const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
     expect(written.target).toBe(repo);
-    expect(written.findings).toHaveLength(2);
-    expect(written.findings.map((f: Finding) => f.id).sort()).toEqual(["M2-IDOR-1-apps-main", "M2-IDOR-1-apps-rag"]);
+    expect(probeFindings(written.findings)).toHaveLength(2);
+    expect(probeFindings(written.findings).map((f: Finding) => f.id).sort()).toEqual(["M2-IDOR-1-apps-main", "M2-IDOR-1-apps-rag"]);
     expect(written.summary).toMatch(/across 2 Supabase project\(s\)/);
     // per-DB rows, both named — never a single blended verdict
     expect(r.limitations.join("\n")).toMatch(/DB "apps\/main": coverage=full/);
@@ -492,7 +508,7 @@ describe("runMultiProjectDynamicValidation (#610 — stand up + probe EVERY proj
     expect(r.coverage).toBe("postgrest-only"); // not rounded up to full — one DB was not probed
     expect(r.artifactPath).not.toBeNull();
     const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
-    expect(written.findings).toHaveLength(1); // only the DB that stood up
+    expect(probeFindings(written.findings)).toHaveLength(1); // only the DB that stood up
   });
 
   it("when NO project stands up, writes no artifact and says so per DB — never a silent clean ran", () => {
@@ -514,7 +530,7 @@ describe("runMultiProjectDynamicValidation (#610 — stand up + probe EVERY proj
       targetDir: single, layout: layout({ migrationDirs: [mig] }), artifactsDir: dir, now,
       makeProject: () => ({ runner: runner(), stop: () => undefined }),
     });
-    expect(r.findings.map((f) => f.id)).toEqual(["M2-IDOR-1"]);
+    expect(probeFindings(r.findings).map((f) => f.id)).toEqual(["M2-IDOR-1"]);
     const written = JSON.parse(readFileSync(r.artifactPath as string, "utf8"));
     expect(written.summary).toMatch(/dynamic validation \(full coverage\)/);
     rmSync(single, { recursive: true, force: true });
