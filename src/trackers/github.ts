@@ -22,7 +22,7 @@
 // the issue body and/or re-PUTs labels via the same endpoints createStory/setLabels already use.
 
 import { trackerFetch, trackerFetchJson } from "./http.js";
-import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "./types.js";
+import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
 export interface GitHubConfig {
   token: string;
@@ -46,7 +46,7 @@ interface GitHubSearchResponse {
   items: GitHubIssue[];
 }
 
-export class GitHubTracker implements Tracker {
+export class GitHubTracker implements Tracker, TicketWriteback {
   readonly #token: string;
   readonly #owner: string;
   readonly #repo: string;
@@ -138,6 +138,26 @@ export class GitHubTracker implements Tracker {
       });
     }
     if (patch.labels !== undefined) await this.setLabels(id, patch.labels);
+  }
+
+  // #883 fix-verification write-back: a comment appends (never touches the body the client may
+  // have edited); state maps directly to GitHub's open/closed. state_reason distinguishes a
+  // verified-resolved close from "not planned".
+  async addComment(id: string, body: string): Promise<void> {
+    await trackerFetch(this.#fetch, this.#repoUrl(`/issues/${id}/comments`), {
+      method: "POST",
+      headers: this.#headers(),
+      body: JSON.stringify({ body }),
+    });
+  }
+
+  async transitionState(id: string, to: TicketState): Promise<void> {
+    const patch = to === "closed" ? { state: "closed", state_reason: "completed" } : { state: "open", state_reason: "reopened" };
+    await trackerFetch(this.#fetch, this.#repoUrl(`/issues/${id}`), {
+      method: "PATCH",
+      headers: this.#headers(),
+      body: JSON.stringify(patch),
+    });
   }
 
   async setEstimate(id: string, estimate: number): Promise<void> {

@@ -110,4 +110,22 @@ describe("GitLabTracker", () => {
     const tracker = new GitLabTracker({ token: "gl-token", projectId: "acme/app", fetchImpl });
     await expect(tracker.createEpic({ title: "x", description: "y" })).rejects.toThrow(/403/);
   });
+
+  // #883 fix-verification write-back
+  it("adds a comment as an issue note, never touching the description", async () => {
+    const { tracker, calls } = harness(() => ({}));
+    await tracker.addComment("10", "verified resolved");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("https://gitlab.com/api/v4/projects/acme%2Fapp/issues/10/notes");
+    expect(calls[0]?.body).toEqual({ body: "verified resolved" });
+  });
+
+  it("closes and reopens via state_event", async () => {
+    const { tracker, calls } = harness(() => ({}));
+    await tracker.transitionState("10", "closed");
+    await tracker.transitionState("10", "reopened");
+    expect(calls[0]?.body).toEqual({ state_event: "close" });
+    expect(calls[1]?.body).toEqual({ state_event: "reopen" });
+    expect(calls.every((c) => c.method === "PUT")).toBe(true);
+  });
 });

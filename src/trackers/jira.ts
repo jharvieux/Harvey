@@ -15,7 +15,7 @@
 // description/labels fields via the same endpoint setLabels/setEstimate use.
 
 import { trackerFetch, trackerFetchJson } from "./http.js";
-import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "./types.js";
+import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
 export interface JiraConfig {
   baseUrl: string; // https://your-domain.atlassian.net
@@ -40,6 +40,10 @@ interface JiraSearchResponse {
   issues: JiraCreatedIssue[];
 }
 
+interface JiraTransitionsResponse {
+  transitions: { id: string; name: string; to: { statusCategory: { key: string } } }[];
+}
+
 interface AdfNode {
   type: string;
   content?: AdfNode[];
@@ -57,7 +61,7 @@ function markdownToAdf(markdown: string): { type: "doc"; version: 1; content: Ad
   return { type: "doc", version: 1, content };
 }
 
-export class JiraTracker implements Tracker {
+export class JiraTracker implements Tracker, TicketWriteback {
   readonly #auth: string;
   readonly #baseUrl: string;
   readonly #projectKey: string;
@@ -136,6 +140,36 @@ export class JiraTracker implements Tracker {
       method: "PUT",
       headers: this.#jsonHeaders(),
       body: JSON.stringify({ fields }),
+    });
+  }
+
+  // #883 fix-verification write-back. Comments are ADF like descriptions. Jira has no universal
+  // "closed" state — workflows are per-project — so transitionState resolves the available
+  // transitions at call time by STATUS CATEGORY (the one Jira concept that is workflow-invariant):
+  // "closed" takes the first transition into the done category; "reopened" prefers the new/to-do
+  // category, falling back to any non-done transition. No candidate ⇒ throw (fail loud — a ticket
+  // that cannot be transitioned must surface as a write-back failure, never a silent skip).
+  async addComment(id: string, body: string): Promise<void> {
+    await trackerFetch(this.#fetch, `${this.#baseUrl}/rest/api/3/issue/${id}/comment`, {
+      method: "POST",
+      headers: this.#jsonHeaders(),
+      body: JSON.stringify({ body: markdownToAdf(body) }),
+    });
+  }
+
+  async transitionState(id: string, to: TicketState): Promise<void> {
+    const url = `${this.#baseUrl}/rest/api/3/issue/${id}/transitions`;
+    const res = await trackerFetchJson<JiraTransitionsResponse>(this.#fetch, url, { method: "GET", headers: this.#jsonHeaders() });
+    const category = (t: JiraTransitionsResponse["transitions"][number]) => t.to.statusCategory.key;
+    const target =
+      to === "closed"
+        ? res.transitions.find((t) => category(t) === "done")
+        : (res.transitions.find((t) => category(t) === "new") ?? res.transitions.find((t) => category(t) !== "done"));
+    if (!target) throw new Error(`Jira issue ${id}: no workflow transition to a ${to === "closed" ? "done" : "reopened"}-category status is available`);
+    await trackerFetch(this.#fetch, url, {
+      method: "POST",
+      headers: this.#jsonHeaders(),
+      body: JSON.stringify({ transition: { id: target.id } }),
     });
   }
 

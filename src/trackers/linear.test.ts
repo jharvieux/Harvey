@@ -108,4 +108,41 @@ describe("LinearTracker", () => {
     const tracker = new LinearTracker({ apiKey: "lin_api_key", teamId: "team-1", fetchImpl });
     await expect(tracker.createEpic({ title: "x", description: "y" })).rejects.toThrow(/401/);
   });
+
+  // #883 fix-verification write-back
+  it("adds a comment via commentCreate", async () => {
+    const { tracker, calls } = harness(() => ({ commentCreate: { comment: { url: "u" } } }));
+    await tracker.addComment("iss-1", "verified resolved");
+    expect(calls[0]?.query).toContain("commentCreate");
+    expect(calls[0]?.variables.input).toEqual({ issueId: "iss-1", body: "verified resolved" });
+  });
+
+  const states = {
+    nodes: [
+      { id: "st-backlog", name: "Backlog", type: "backlog" },
+      { id: "st-todo", name: "Todo", type: "unstarted" },
+      { id: "st-done", name: "Done", type: "completed" },
+    ],
+  };
+
+  it("closes by resolving the team's completed-type state and setting stateId", async () => {
+    const { tracker, calls } = harness((call) =>
+      call.query.includes("states") ? { team: { states } } : { issueUpdate: { success: true } },
+    );
+    await tracker.transitionState("iss-1", "closed");
+    expect((calls[1]?.variables.input as { stateId: string }).stateId).toBe("st-done");
+  });
+
+  it("reopens preferring the unstarted-type state", async () => {
+    const { tracker, calls } = harness((call) =>
+      call.query.includes("states") ? { team: { states } } : { issueUpdate: { success: true } },
+    );
+    await tracker.transitionState("iss-1", "reopened");
+    expect((calls[1]?.variables.input as { stateId: string }).stateId).toBe("st-todo");
+  });
+
+  it("throws — never silently skips — when the team has no state of the wanted type", async () => {
+    const { tracker } = harness(() => ({ team: { states: { nodes: [{ id: "s", name: "Started", type: "started" }] } } }));
+    await expect(tracker.transitionState("iss-1", "closed")).rejects.toThrow(/no completed/);
+  });
 });

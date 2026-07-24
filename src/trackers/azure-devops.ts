@@ -15,7 +15,7 @@
 // PATCHes System.Description / System.Tags via the same JSON-Patch endpoint setLabels/setEstimate use.
 
 import { trackerFetch, trackerFetchJson } from "./http.js";
-import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "./types.js";
+import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
 export interface AzureDevOpsConfig {
   orgUrl: string; // https://dev.azure.com/{org}
@@ -23,6 +23,10 @@ export interface AzureDevOpsConfig {
   pat: string;
   epicWorkItemType?: string; // default "Epic"
   storyWorkItemType?: string; // default "User Story"
+  // #883: System.State values are process-template-dependent, so — like the work-item type names
+  // above — the states transitionState writes are configurable, defaulting to the Agile process.
+  closedStateName?: string; // default "Closed"
+  reopenedStateName?: string; // default "New"
   apiVersion?: string; // default "7.1"
   fetchImpl?: typeof fetch; // injection point for tests
 }
@@ -46,12 +50,14 @@ interface AdoWiqlResult {
   workItems: { id: number }[];
 }
 
-export class AzureDevOpsTracker implements Tracker {
+export class AzureDevOpsTracker implements Tracker, TicketWriteback {
   readonly #auth: string;
   readonly #orgUrl: string;
   readonly #project: string;
   readonly #epicType: string;
   readonly #storyType: string;
+  readonly #closedState: string;
+  readonly #reopenedState: string;
   readonly #apiVersion: string;
   readonly #fetch: typeof fetch;
 
@@ -61,6 +67,8 @@ export class AzureDevOpsTracker implements Tracker {
     this.#project = config.project;
     this.#epicType = config.epicWorkItemType ?? "Epic";
     this.#storyType = config.storyWorkItemType ?? "User Story";
+    this.#closedState = config.closedStateName ?? "Closed";
+    this.#reopenedState = config.reopenedStateName ?? "New";
     this.#apiVersion = config.apiVersion ?? "7.1";
     this.#fetch = config.fetchImpl ?? fetch;
   }
@@ -134,6 +142,19 @@ export class AzureDevOpsTracker implements Tracker {
     if (patch.labels !== undefined) ops.push({ op: "add", path: "/fields/System.Tags", value: patch.labels.join("; ") });
     if (ops.length === 0) return;
     await this.#patchWorkItem(id, ops);
+  }
+
+  // #883 fix-verification write-back. A System.History add is Azure's discussion-comment write —
+  // it appends to the work item's Discussion, never touching System.Description. State writes the
+  // configured process-template state name; a wrong name for the project's process fails the PATCH
+  // loudly (surfaced as a write-back failure), it is never silently absorbed.
+  async addComment(id: string, body: string): Promise<void> {
+    await this.#patchWorkItem(id, [{ op: "add", path: "/fields/System.History", value: body }]);
+  }
+
+  async transitionState(id: string, to: TicketState): Promise<void> {
+    const state = to === "closed" ? this.#closedState : this.#reopenedState;
+    await this.#patchWorkItem(id, [{ op: "add", path: "/fields/System.State", value: state }]);
   }
 
   async setEstimate(id: string, estimate: number): Promise<void> {
