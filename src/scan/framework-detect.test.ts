@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildDegradedKnipConfig, buildInferredKnipConfig, detectOrm, detectTargetFramework, detectWorkspaceFrameworks, viteWorkspaces } from "./framework-detect.js";
+import { buildDegradedKnipConfig, buildInferredKnipConfig, detectOrm, detectTargetFramework, detectWorkspaceFrameworks, rawSqlDriver, viteWorkspaces } from "./framework-detect.js";
 
 // Each case writes a throwaway target tree (the probe is disk-based — it must see vite.config /
 // index.html that the in-memory detector source set never carries) and asserts the coarse shape.
@@ -127,6 +127,21 @@ describe("detectOrm (#757)", () => {
       "package.json": JSON.stringify({ name: "lib", dependencies: { lodash: "^4.0.0" } }),
     });
     expect(detectOrm(dir)).toBe("unknown");
+  });
+});
+
+// #861: the positive raw-SQL signal — a declared driver dependency — that tells a `pg`/postgres.js
+// target apart from a genuinely DB-less app, so the M9 data-layer disclosure can name the driver.
+describe("rawSqlDriver (#861)", () => {
+  it("names the declared driver for each supported raw-SQL client", () => {
+    expect(rawSqlDriver(`{"dependencies":{"pg":"^8.12.0"}}`)).toBe("pg");
+    expect(rawSqlDriver(`{"dependencies":{"postgres":"^3.4.0"}}`)).toBe("postgres");
+    expect(rawSqlDriver(`{"dependencies":{"@neondatabase/serverless":"^0.9.0"}}`)).toBe("@neondatabase/serverless");
+  });
+
+  it("returns undefined for an app that declares no database driver", () => {
+    expect(rawSqlDriver(`{"dependencies":{"next":"14.2.5","react":"^18.0.0"}}`)).toBeUndefined();
+    expect(rawSqlDriver(undefined)).toBeUndefined();
   });
 });
 

@@ -12,7 +12,7 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
-import type { TargetFramework, TargetOrm } from "../scan/framework-detect.js";
+import { rawSqlDriver, type TargetFramework, type TargetOrm } from "../scan/framework-detect.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 import {
   AUTH_PATTERN,
@@ -1468,7 +1468,9 @@ function detectMissingSuspenseBoundary(sources: Map<string, ts.SourceFile>, next
 // `orm` (from detectOrm) resolves Prisma vs Supabase; Drizzle/Kysely aren't modelled there (they
 // report `unknown`), so we additionally sniff their package.json dependency to name the layer.
 // A genuinely unknown/no-DB target draws nothing — the note fires only on a POSITIVELY identified
-// non-Supabase data access, never on a plain app that simply has no queries.
+// non-Supabase data access, never on a plain app that simply has no queries. A raw-SQL target
+// (node-postgres/postgres.js and friends, no ORM at all) is that same positive signal via its
+// declared driver dependency — the #861 remainder of #844.
 const DATA_LAYER_CHECKS: { taxonomy: string; check: string }[] = [
   { taxonomy: "M9 — Server→client data leak", check: "server→client data leak (full DB row passed to a Client Component)" },
   { taxonomy: "M9 — Unsafe/missing cache config", check: "unsafe/missing cache config on data-fetching routes" },
@@ -1480,9 +1482,15 @@ function nonSupabaseDataLayer(orm: TargetOrm | undefined, files: SourceInput[]):
   if (orm === "prisma") return "Prisma";
   const pkg = files.find((f) => /(^|\/)package\.json$/.test(f.path))?.text;
   if (pkg) {
+    // Supabase wins over every other signature, exactly as detectOrm resolves it: a Supabase app
+    // that also ships `pg`/Drizzle must keep its real Supabase-shaped checks, never trade them for
+    // a not-assessed row (this path runs with `orm` undefined for callers that don't detect one).
+    if (/"@supabase\/supabase-js"\s*:/.test(pkg)) return undefined;
     if (/"drizzle-orm"\s*:/.test(pkg)) return "Drizzle";
     if (/"kysely"\s*:/.test(pkg)) return "Kysely";
     if (/"@prisma\/client"\s*:|"prisma"\s*:/.test(pkg)) return "Prisma";
+    const driver = rawSqlDriver(pkg);
+    if (driver) return `raw SQL (${driver})`;
   }
   return undefined;
 }

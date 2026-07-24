@@ -671,6 +671,63 @@ describe("non-Supabase data-layer coverage (#844)", () => {
     expect(hits[0]?.evidence).toContain("Drizzle");
   });
 
+  // #861 (the #844 remainder): a raw-SQL target has no ORM dependency at all, so the checks used to
+  // find nothing AND say nothing. The declared driver dependency is the positive signal.
+  it("names the raw-SQL driver on a `pg` target with no ORM dependency", () => {
+    const findings = detectAppRouterFindings(
+      [
+        { path: "package.json", text: `{"dependencies":{"pg":"^8.11.0","next":"14.0.0"}}` },
+        { path: "app/dashboard/page.tsx", text: `export default function Page() { return <div/>; }` },
+      ],
+      "next",
+      [],
+      "unknown",
+    );
+    for (const tax of DATA_LAYER_TAX) {
+      const hits = findings.filter((f) => f.taxonomy === tax);
+      expect(hits, tax).toHaveLength(1);
+      expect(hits[0]?.evidence).toContain("raw SQL (pg)");
+    }
+  });
+
+  it("names postgres.js as the raw-SQL driver too", () => {
+    const findings = detectAppRouterFindings(
+      [
+        { path: "package.json", text: `{"dependencies":{"postgres":"^3.4.0"}}` },
+        { path: "app/dashboard/page.tsx", text: `export default function Page() { return <div/>; }` },
+      ],
+      "next",
+      [],
+      "unknown",
+    );
+    expect(findings.find((f) => f.taxonomy === DATA_LAYER_TAX[0])?.evidence).toContain("raw SQL (postgres)");
+  });
+
+  it("keeps the real checks on a Supabase app that also ships a raw-SQL driver (#861 precedence)", () => {
+    const findings = detectAppRouterFindings(
+      [
+        { path: "package.json", text: `{"dependencies":{"@supabase/supabase-js":"^2.45.0","pg":"^8.12.0"}}` },
+        ...loadFixtureDir("server-client-leak/positive"),
+      ],
+      "next",
+    );
+    for (const tax of DATA_LAYER_TAX) expect(taxonomies(findings)).not.toContain(tax);
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
+  });
+
+  it("still emits nothing for a DB-less app whose package.json declares no driver (#861 no-false-fire)", () => {
+    const findings = detectAppRouterFindings(
+      [
+        { path: "package.json", text: `{"dependencies":{"next":"14.0.0","react":"^18.0.0"}}` },
+        { path: "app/dashboard/page.tsx", text: `export default function Page() { return <div/>; }` },
+      ],
+      "next",
+      [],
+      "unknown",
+    );
+    for (const tax of DATA_LAYER_TAX) expect(taxonomies(findings)).not.toContain(tax);
+  });
+
   it("runs the real Supabase-shaped checks (no not-assessed rows) on a Supabase target", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("server-client-leak/positive"), "next", [], "supabase");
     expect(taxonomies(findings)).toContain("M9 — Server→client data leak");

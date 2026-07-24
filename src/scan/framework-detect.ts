@@ -63,6 +63,16 @@ const PRISMA_SCHEMA_PATHS = ["schema.prisma", join("prisma", "schema.prisma")];
 // layer. `unknown` when neither signature is found, so the RLS detectors run unchanged (their own
 // no-migrations-found path already yields nothing on a non-Supabase target — the gate is only about
 // making that N/A explicit for a recognized Prisma architecture, never widening suppression).
+// #861: a raw-SQL data layer — a Postgres/MySQL driver used directly, with no ORM. Telling it apart
+// from a genuinely DB-less app needs a POSITIVE signal (#844 deliberately emitted nothing without
+// one, which is why a `pg` target got no M9 data-layer disclosure at all); a declared driver
+// dependency is that signal. Returns the driver name so the disclosure can name it.
+const RAW_SQL_DRIVERS = ["pg", "postgres", "@vercel/postgres", "@neondatabase/serverless", "mysql2"];
+
+export function rawSqlDriver(pkgText: string | undefined): string | undefined {
+  return RAW_SQL_DRIVERS.find((d) => hasDep(pkgText, d));
+}
+
 export function detectOrm(dir: string): TargetOrm {
   const pkgText = loadSources(dir).find((s) => s.path === "package.json")?.text;
 
