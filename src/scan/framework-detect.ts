@@ -40,6 +40,50 @@ export function isViteTooling(framework: TargetFramework | undefined): boolean {
   return framework !== undefined && framework !== "next" && framework !== "other";
 }
 
+// #902: env-var conventions differ per framework, and the env-schema completeness pass (#679)
+// assumed Next's everywhere — `process.env` for the read shape, `NEXT_PUBLIC_`/`VITE_` for the
+// client-exposed prefix. On a Vite/Astro/SvelteKit/Nuxt target that reads the WRONG access shape
+// (client env is `import.meta.env` / `$env/*` / `runtimeConfig`, not `process.env`) and the wrong
+// public prefix, so a client-exposed leak is mis-classified as server-only. This maps each framework
+// to: the prefixes that mark a var client-exposed (bundled to the browser), whether client env is
+// read via `import.meta.env` (the Vite family), and any native access shape this pass does NOT model
+// — where a convention is unmodelled the consumer discloses rather than assuming (fail loud).
+export interface EnvConvention {
+  publicPrefixes: string[];
+  importMetaEnv: boolean;
+  /** A framework-native env access the process.env/import.meta.env diff cannot see — disclose it. */
+  unmodeled?: string;
+}
+
+export function envConvention(framework: TargetFramework): EnvConvention {
+  switch (framework) {
+    case "next":
+      return { publicPrefixes: ["NEXT_PUBLIC_"], importMetaEnv: false };
+    case "vite":
+      return { publicPrefixes: ["VITE_"], importMetaEnv: true };
+    case "astro":
+      // Astro exposes PUBLIC_-prefixed vars to the client via import.meta.env; VITE_ also works.
+      return { publicPrefixes: ["PUBLIC_", "VITE_"], importMetaEnv: true };
+    case "sveltekit":
+      // Client env is the PUBLIC_-prefixed $env/static/public + $env/dynamic/public modules — a named
+      // import, not a process.env/import.meta.env access the read-diff can see.
+      return { publicPrefixes: ["PUBLIC_"], importMetaEnv: true, unmodeled: "SvelteKit $env/static/* and $env/dynamic/* module imports" };
+    case "nuxt":
+      // Nuxt exposes config through runtimeConfig.public (nuxt.config) / useRuntimeConfig(), not an
+      // env-var prefix, so the read-diff sees none of it.
+      return { publicPrefixes: [], importMetaEnv: false, unmodeled: "Nuxt runtimeConfig.public (nuxt.config) / useRuntimeConfig()" };
+    case "remix":
+    case "react-router":
+    case "tanstack-start":
+      // Server-only process.env (which the read-diff DOES handle); client exposure is a hand-rolled
+      // loader → window.ENV re-export of already-read vars, with no framework prefix to key on.
+      return { publicPrefixes: [], importMetaEnv: false };
+    case "other":
+      // Unrecognised: keep the pre-#902 both-prefix + import.meta.env behaviour so coverage isn't lost.
+      return { publicPrefixes: ["NEXT_PUBLIC_", "VITE_"], importMetaEnv: true };
+  }
+}
+
 // #757 (part of #756): the target's DB/ORM architecture, orthogonal to the JS framework — an app
 // can be Next+Prisma with no Supabase. Its consumer is the M1 mechanical tier (src/scan/
 // mechanical.ts): the Supabase-specific migration/RLS/PostgREST/edge-config detectors have NO
