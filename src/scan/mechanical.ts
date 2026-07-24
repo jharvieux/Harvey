@@ -19,10 +19,13 @@ import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
+import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachability.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
-import { detectOrm } from "./framework-detect.js";
+import { detectOrm, ORM_LABELS, type TargetOrm } from "./framework-detect.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
+import { checkInfrastructureScope } from "./infra-scope.js";
 import { scanJobTenantScope } from "./job-tenant-scope.js";
+import { checkUnanalysedLanguages } from "./language-coverage.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { resolveBundleScan, scanSecrets } from "./secrets.js";
@@ -124,6 +127,41 @@ function prismaArchitectureNote(): Finding {
   };
 }
 
+// #869: the M1 sibling of #844/#757. M1's subject is tenant isolation. On Supabase that lives in
+// RLS; on Prisma it lives in the app layer and #760 gives us a detector for the Prisma idiom. On a
+// Drizzle/Kysely/TypeORM/Sequelize/Knex/Mongoose target it ALSO lives in the app layer — and Harvey
+// has no detector for those query builders' shapes, so the scan completed, reported nothing, and
+// the absence read as "no tenant-scope problems found". This row states the limit instead.
+// `orm` is a recognised non-Supabase, non-Prisma layer (the caller gates on that).
+function unsupportedDataLayerNote(orm: Exclude<TargetOrm, "unknown" | "supabase" | "prisma">): Finding {
+  const label = ORM_LABELS[orm];
+  // The app-layer detectors that DO run are shape-specific: Express+`pg` call sites (pg-idor,
+  // pg-response-exposure), Supabase service-role clients (bola-owner, job-tenant-scope), and the
+  // Prisma idiom (prisma-tenant-scope). A raw-SQL target is partly inside that set; a query-builder
+  // target is entirely outside it. Say which, rather than implying uniform coverage.
+  const covered =
+    orm === "raw-sql"
+      ? "The Express+`pg` app-layer detectors (pg-idor, pg-response-exposure) DID run and cover handlers written in that shape; queries issued from any other shape — a different HTTP framework, a hand-rolled query module — are matched by none of them."
+      : `No detector matches ${label} query shapes: the app-layer M1 detectors that ran cover Express+\`pg\` call sites, Supabase service-role clients, and the Prisma idiom (#760) only.`;
+  return {
+    id: `M1-ARCH-${orm.toUpperCase()}`,
+    title: `Tenant-scope checks not assessed — ${label} data layer`,
+    severity: "Info",
+    confidence: "N/A",
+    category: "Multi-tenant isolation",
+    taxonomy: `Architecture — ${label} (no DB-level RLS, no tenant-scope detector)`,
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `Target's data layer detected as ${label} with no Supabase project. There is no DB-level RLS surface to analyse (the migration-RLS, PostgREST-exposure and edge-config detectors read supabase/migrations, supabase/config.toml and supabase/functions, none of which exist here), so tenant isolation is enforced entirely in application query code. ${covered}`,
+    impact: `Mechanical tenant-scope coverage for this target is INCOMPLETE, not clean: a missing tenant predicate in a ${label} query would not be flagged by this tier. Recorded so the absence of M1 tenant-scope findings reads as "not assessed here" rather than "assessed and clean".`,
+    fix: `Review tenant scoping in the ${label} data-access layer by hand (or with the paid LLM semantic pass, which is not ORM-shape-bound): every read and write must filter on the tenant/owner column, not on the primary key alone.`,
+    value: 1,
+    ease: 5,
+    safety: 5,
+    mechanical: true,
+  };
+}
+
 export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Finding[]> {
   const { dir, bundleDir, tenancyOverride, handrolledIndicators, skipNetworkChecks } = opts;
 
@@ -161,8 +199,14 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // ORM-agnostic pg-idor/bola-owner/pg-response-exposure/service-role-literal passes below). On a
     // Prisma app, record that tier N/A by architecture instead of running detectors that can only
     // ever find nothing — an unstated absence of RLS reads as a clean bill of health (fail loud).
-    if (detectOrm(scanDir) === "prisma") {
+    // #869 extends the same routing to every other recognised non-Supabase layer: it has no
+    // supabase/ surface either, and Harvey has no detector for its query shapes, so it gets a
+    // named not-assessed row rather than silence.
+    const orm = detectOrm(scanDir);
+    if (orm === "prisma") {
       findings.push(prismaArchitectureNote());
+    } else if (orm !== "supabase" && orm !== "unknown") {
+      findings.push(unsupportedDataLayerNote(orm));
     } else {
       findings.push(...checkMigrationRlsStatic(scanDir));
       findings.push(...checkMigrationPolicySemantics(scanDir, tenancyOverride));
@@ -176,6 +220,14 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkOpenSignupConfig(scanDir, inferAuthMethodsFromSource(scanDir)));
     }
     findings.push(...checkWebExtensionManifest(scanDir));
+
+    // #871 — source in languages no M1 rule can read (a Python/Go/Ruby service on the same tables
+    // bypasses RLS just as effectively as a broken policy). Disclosure only, by design.
+    findings.push(...checkUnanalysedLanguages(scanDir));
+
+    // #886 — Dockerfiles/Terraform/K8s manifests are out of scope by decision, not by oversight
+    // (docs/design/infrastructure-out-of-scope.md). Say so when the target has them.
+    findings.push(...checkInfrastructureScope(scanDir));
 
     // Supply chain.
     if (pkg) {
@@ -238,7 +290,17 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...detectHandrolledFindings(loadSources(scanDir).filter((f) => !NON_PRODUCT.test(f.path))));
     }
 
-    return findings;
+    // #874 — rank the Dependency CVE rows by whether the package is actually imported here. Runs
+    // LAST so it sees every CVE emitter's output (curated Next.js, curated deps, OSV) in one pass.
+    // Ordering + a per-row justification only: nothing here grades, and nothing sets
+    // exploitabilityVerified (#213/#227 stands).
+    const directDeps = new Set(Object.keys({ ...pkg?.dependencies, ...pkg?.devDependencies }));
+    const ranked = annotateCveReachability(findings, scanDir, directDeps);
+    if (ranked.unranked > 0) {
+      // Fail loud rather than letting unranked rows sink silently to the bottom of a sorted list.
+      ranked.findings.push(unrankedCveDisclosure(ranked.unranked));
+    }
+    return ranked.findings;
   } finally {
     cleanup();
   }

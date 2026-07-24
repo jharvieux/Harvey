@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildDegradedKnipConfig, buildInferredKnipConfig, detectOrm, detectTargetFramework, detectWorkspaceFrameworks, viteWorkspaces } from "./framework-detect.js";
+import { buildDegradedKnipConfig, buildInferredKnipConfig, detectOrm, detectTargetFramework, detectWorkspaceFrameworks, nonNextWorkspaces, rawSqlDriver } from "./framework-detect.js";
 
 // Each case writes a throwaway target tree (the probe is disk-based — it must see vite.config /
 // index.html that the in-memory detector source set never carries) and asserts the coarse shape.
@@ -76,6 +76,36 @@ describe("detectTargetFramework (#573)", () => {
     expect(detectTargetFramework(dir)).toBe("other");
   });
 
+  // #872: these all used to land in `other` (or in `vite`, since they build on it) — the bucket
+  // with no compensating behaviour, where M9's Next-shaped checks ran and nothing was disclosed.
+  it("names each recognised non-Next framework instead of collapsing it into `other`/`vite`", () => {
+    const cases: [Record<string, string>, string][] = [
+      [{ "@remix-run/react": "^2.0.0" }, "remix"],
+      [{ "@react-router/dev": "^7.0.0" }, "react-router"],
+      [{ "@tanstack/react-start": "^1.0.0" }, "tanstack-start"],
+      [{ astro: "^4.0.0" }, "astro"],
+      [{ "@sveltejs/kit": "^2.0.0" }, "sveltekit"],
+      [{ nuxt: "^3.0.0" }, "nuxt"],
+    ];
+    for (const [deps, expected] of cases) {
+      // Each of these ships Vite; the framework must win over the bundler it happens to use.
+      const dir = makeTarget({ "package.json": JSON.stringify({ name: "app", dependencies: { ...deps, vite: "^5.0.0" } }) });
+      expect(detectTargetFramework(dir), expected).toBe(expected);
+    }
+  });
+
+  it("detects a framework from its config file when the deps live in a parent manifest", () => {
+    const dir = makeTarget({ "astro.config.mjs": `export default {};\n`, "package.json": JSON.stringify({ name: "site" }) });
+    expect(detectTargetFramework(dir)).toBe("astro");
+  });
+
+  it("still prefers Next over a recognised framework's signature (never suppress a real Next app)", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "app", dependencies: { next: "14.2.0", astro: "^4.0.0" } }),
+    });
+    expect(detectTargetFramework(dir)).toBe("next");
+  });
+
   it("treats a malformed package.json as no dependency signal (no crash)", () => {
     const dir = makeTarget({
       "package.json": `{ not valid json`,
@@ -127,6 +157,58 @@ describe("detectOrm (#757)", () => {
       "package.json": JSON.stringify({ name: "lib", dependencies: { lodash: "^4.0.0" } }),
     });
     expect(detectOrm(dir)).toBe("unknown");
+  });
+
+  // #869: everything non-Supabase/non-Prisma used to collapse into `unknown`, which M1 read as
+  // "nothing recognised" and reported nothing about. Each recognised layer now names itself so the
+  // scan can disclose that its tenant-scope shapes were not assessed.
+  it("names each recognised-but-unsupported ORM instead of collapsing it into `unknown`", () => {
+    const cases: [string, string][] = [
+      ["drizzle-orm", "drizzle"],
+      ["kysely", "kysely"],
+      ["typeorm", "typeorm"],
+      ["sequelize", "sequelize"],
+      ["knex", "knex"],
+      ["mongoose", "mongoose"],
+    ];
+    for (const [dep, expected] of cases) {
+      const dir = makeTarget({ "package.json": JSON.stringify({ name: "app", dependencies: { [dep]: "^1.0.0" } }) });
+      expect(detectOrm(dir), dep).toBe(expected);
+    }
+  });
+
+  it("names an ORM ahead of the raw driver it sits on (Drizzle over `pg`)", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "app", dependencies: { "drizzle-orm": "^0.30.0", pg: "^8.12.0" } }),
+    });
+    expect(detectOrm(dir)).toBe("drizzle");
+  });
+
+  it("resolves a bare Postgres driver to `raw-sql` (#861)", () => {
+    const dir = makeTarget({ "package.json": JSON.stringify({ name: "app", dependencies: { pg: "^8.12.0" } }) });
+    expect(detectOrm(dir)).toBe("raw-sql");
+  });
+
+  it("keeps Supabase winning over a recognised ORM in the same manifest", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "app", dependencies: { "@supabase/supabase-js": "^2.45.0", "drizzle-orm": "^0.30.0" } }),
+    });
+    expect(detectOrm(dir)).toBe("supabase");
+  });
+});
+
+// #861: the positive raw-SQL signal — a declared driver dependency — that tells a `pg`/postgres.js
+// target apart from a genuinely DB-less app, so the M9 data-layer disclosure can name the driver.
+describe("rawSqlDriver (#861)", () => {
+  it("names the declared driver for each supported raw-SQL client", () => {
+    expect(rawSqlDriver(`{"dependencies":{"pg":"^8.12.0"}}`)).toBe("pg");
+    expect(rawSqlDriver(`{"dependencies":{"postgres":"^3.4.0"}}`)).toBe("postgres");
+    expect(rawSqlDriver(`{"dependencies":{"@neondatabase/serverless":"^0.9.0"}}`)).toBe("@neondatabase/serverless");
+  });
+
+  it("returns undefined for an app that declares no database driver", () => {
+    expect(rawSqlDriver(`{"dependencies":{"next":"14.2.5","react":"^18.0.0"}}`)).toBeUndefined();
+    expect(rawSqlDriver(undefined)).toBeUndefined();
   });
 });
 
@@ -214,8 +296,21 @@ describe("monorepo-aware framework resolution (#597)", () => {
     expect(byRel.get("apps/api")).toBe("next");
   });
 
-  it("lists only the Vite workspaces (workspace-relative, POSIX-separated)", () => {
-    expect(viteWorkspaces(monorepo())).toEqual(["apps/web"]);
+  it("lists only the non-Next workspaces, with their framework (workspace-relative, POSIX-separated)", () => {
+    expect(nonNextWorkspaces(monorepo())).toEqual([{ rel: "apps/web", framework: "vite" }]);
+  });
+
+  // #872: a SvelteKit/Astro/Nuxt workspace used to resolve as `vite` (they all declare it) and was
+  // suppressed on that basis. Now that it has its own value it must STILL be listed here, or M9's
+  // Next-shaped pass would start running over it.
+  it("lists a recognised non-Next SSR workspace too, not just Vite SPAs", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "root", private: true }),
+      "pnpm-workspace.yaml": `packages:\n  - "apps/*"\n`,
+      "apps/site/package.json": JSON.stringify({ name: "site", devDependencies: { "@sveltejs/kit": "^2.0.0", vite: "^5.0.0" } }),
+      "apps/api/package.json": JSON.stringify({ name: "api", dependencies: { next: "14.2.0" } }),
+    });
+    expect(nonNextWorkspaces(dir)).toEqual([{ rel: "apps/site", framework: "sveltekit" }]);
   });
 
   it("returns [] for a single-app repo (root verdict handles it, no workspace prefixes)", () => {
@@ -223,6 +318,6 @@ describe("monorepo-aware framework resolution (#597)", () => {
       "package.json": JSON.stringify({ name: "spa", devDependencies: { vite: "^5.0.0" } }),
       "vite.config.ts": `export default {};\n`,
     });
-    expect(viteWorkspaces(dir)).toEqual([]);
+    expect(nonNextWorkspaces(dir)).toEqual([]);
   });
 });

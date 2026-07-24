@@ -13,6 +13,7 @@ import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
 import type { Coverage, DynamicValidationResult, StandUpResult } from "./dynamic-validate.js";
 import type { Finding } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
+import { buildScopeLedger } from "./pentest/scope-ledger.js";
 
 // The facts about a Prisma repo that decide whether — and how — we stand it up for M2.
 export interface PrismaLayout {
@@ -199,7 +200,26 @@ export function runPrismaDynamicValidation(opts: {
 
   // Evidence = we actually probed the app routes (coverage full), or we produced a finding. A DB that
   // stood up but whose app never booted probed nothing dynamically — recorded honestly, no artifact.
+  // Judged on the PROBE's findings, before the scope disclosure is added: a disclosure is not evidence.
   const producedEvidence = coverage === "full" || findings.length > 0;
+  const notProbedReason = limitations[limitations.length - 1];
+
+  // #875 — same scope disclosure as the Supabase path: the app-route probes ran against a Postgres
+  // container built from the committed Prisma schema, not the deployed database. Only on a run that
+  // produced evidence — a run that probed nothing has no verdict to be mis-read as production-clean.
+  if (producedEvidence) {
+    const scope = buildScopeLedger({
+      targetDir,
+      stack: "a Harvey-owned local Postgres container",
+      sources: [layout.schemaPath, layout.migrationsDir].filter((s): s is string => Boolean(s)),
+      revision: db.revision ?? null,
+      coverage,
+      rows: db.scopeRows ?? [],
+    });
+    findings.push(scope.finding);
+    limitations.push(...scope.limitations);
+  }
+
   let artifactPath: string | null = null;
   if (producedEvidence) {
     const artifact = buildPassArtifact({
@@ -213,7 +233,7 @@ export function runPrismaDynamicValidation(opts: {
     target: targetDir, standUp: true, coverage,
     reason: coverage === "full"
       ? `Prisma dynamic validation ran (app-route probing; RLS matrix not-applicable)`
-      : `Prisma DB stood up but no app-route surface was probed — ${limitations[limitations.length - 1]}`,
+      : `Prisma DB stood up but no app-route surface was probed — ${notProbedReason}`,
     limitations, notes, artifactPath, findings,
   };
 }

@@ -13,7 +13,32 @@ import { join, relative, sep } from "node:path";
 import { loadSources } from "../detectors/load-sources.js";
 import { discoverTargets } from "../pentest/targets.js";
 
-export type TargetFramework = "next" | "vite" | "other";
+// #872: `other` used to swallow every non-Next, non-Vite framework — Remix / React Router 7 /
+// TanStack Start / Astro / SvelteKit / Nuxt — and `other` is the bucket with NO compensating
+// behaviour: M9's Next-shaped checks ran over them and their own boundary/rendering surface went
+// unassessed and unmentioned. Each recognised framework is its own value so the consumer can gate
+// on it and disclose it by name.
+export type TargetFramework = "next" | "vite" | "remix" | "react-router" | "tanstack-start" | "astro" | "sveltekit" | "nuxt" | "other";
+
+export const FRAMEWORK_LABELS: Record<TargetFramework, string> = {
+  next: "Next.js",
+  vite: "Vite",
+  remix: "Remix",
+  "react-router": "React Router 7 (framework mode)",
+  "tanstack-start": "TanStack Start",
+  astro: "Astro",
+  sveltekit: "SvelteKit",
+  nuxt: "Nuxt",
+  other: "unrecognised",
+};
+
+// Every non-Next framework we recognise builds on Vite, so the tiers that branch "Next compiler vs
+// Vite tooling" (M7's client-JS checks, the built-artifact location) key on this rather than on the
+// `vite` value alone — a SvelteKit target resolved as `vite` before #872 and must not silently
+// switch to Next-shaped behaviour now that it has its own value.
+export function isViteTooling(framework: TargetFramework | undefined): boolean {
+  return framework !== undefined && framework !== "next" && framework !== "other";
+}
 
 // #757 (part of #756): the target's DB/ORM architecture, orthogonal to the JS framework — an app
 // can be Next+Prisma with no Supabase. Its consumer is the M1 mechanical tier (src/scan/
@@ -21,7 +46,24 @@ export type TargetFramework = "next" | "vite" | "other";
 // surface to analyze on a Prisma/Postgres app (all tenant isolation is app-layer, where the
 // ORM-agnostic pg-idor/bola-owner/etc. detectors already run), so it records that tier N/A by
 // architecture instead of letting the absence of RLS pass as an implicit gap.
-export type TargetOrm = "prisma" | "supabase" | "unknown";
+// #869: everything that is NOT Supabase or Prisma used to collapse into `unknown`, which reads to
+// the consumer as "nothing recognised, run everything" — so a Drizzle/Kysely/TypeORM target got no
+// tenant-scope detector AND no disclosure. Each recognised-but-unsupported layer is now its own
+// value so M1 can name it in a not-assessed row (src/scan/mechanical.ts) instead of going silent.
+export type TargetOrm = "prisma" | "supabase" | "drizzle" | "kysely" | "typeorm" | "sequelize" | "knex" | "mongoose" | "raw-sql" | "unknown";
+
+// Human label per architecture, used in the disclosure rows.
+export const ORM_LABELS: Record<Exclude<TargetOrm, "unknown">, string> = {
+  supabase: "Supabase",
+  prisma: "Prisma",
+  drizzle: "Drizzle",
+  kysely: "Kysely",
+  typeorm: "TypeORM",
+  sequelize: "Sequelize",
+  knex: "Knex",
+  mongoose: "Mongoose",
+  "raw-sql": "raw SQL",
+};
 
 const NEXT_CONFIGS = ["next.config.js", "next.config.mjs", "next.config.cjs", "next.config.ts"];
 const VITE_CONFIGS = ["vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cjs"];
@@ -41,12 +83,30 @@ function hasDep(pkgText: string | undefined, name: string): boolean {
   return !!(p.dependencies?.[name] ?? p.devDependencies?.[name] ?? p.peerDependencies?.[name]);
 }
 
+// #872: signatures for the SSR frameworks that used to land in `other` (or, when they happened to
+// declare Vite, in `vite`). Checked BEFORE the Vite fallback because they all build on Vite — a
+// SvelteKit app is a SvelteKit app, not a Vite SPA. Dependency signals are the primary evidence;
+// the config file is the fallback for a workspace whose deps live in a parent manifest.
+const FRAMEWORK_SIGNATURES: { framework: TargetFramework; deps: string[]; configs: string[] }[] = [
+  { framework: "remix", deps: ["@remix-run/react", "@remix-run/node", "@remix-run/dev"], configs: ["remix.config.js", "remix.config.ts", "remix.config.mjs"] },
+  { framework: "react-router", deps: ["@react-router/dev", "@react-router/node"], configs: ["react-router.config.ts", "react-router.config.js"] },
+  { framework: "tanstack-start", deps: ["@tanstack/react-start", "@tanstack/start"], configs: [] },
+  { framework: "astro", deps: ["astro"], configs: ["astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.cjs"] },
+  { framework: "sveltekit", deps: ["@sveltejs/kit"], configs: [] },
+  { framework: "nuxt", deps: ["nuxt"], configs: ["nuxt.config.ts", "nuxt.config.js", "nuxt.config.mjs"] },
+];
+
 export function detectTargetFramework(dir: string): TargetFramework {
   const sources = loadSources(dir);
   const pkgText = sources.find((s) => s.path === "package.json")?.text;
 
   const isNext = hasDep(pkgText, "next") || NEXT_CONFIGS.some((f) => existsSync(join(dir, f)));
   if (isNext) return "next";
+
+  const recognised = FRAMEWORK_SIGNATURES.find(
+    (s) => s.deps.some((d) => hasDep(pkgText, d)) || s.configs.some((f) => existsSync(join(dir, f))),
+  );
+  if (recognised) return recognised.framework;
 
   const hasViteConfig = VITE_CONFIGS.some((f) => existsSync(join(dir, f)));
   const usesImportMetaEnv = sources.some((s) => s.text.includes("import.meta.env"));
@@ -58,27 +118,52 @@ export function detectTargetFramework(dir: string): TargetFramework {
 
 const PRISMA_SCHEMA_PATHS = ["schema.prisma", join("prisma", "schema.prisma")];
 
+// #861: a raw-SQL data layer — a Postgres/MySQL driver used directly, with no ORM. Telling it apart
+// from a genuinely DB-less app needs a POSITIVE signal (#844 deliberately emitted nothing without
+// one, which is why a `pg` target got no M9 data-layer disclosure at all); a declared driver
+// dependency is that signal. Returns the driver name so the disclosure can name it.
+const RAW_SQL_DRIVERS = ["pg", "postgres", "@vercel/postgres", "@neondatabase/serverless", "mysql2"];
+
+export function rawSqlDriver(pkgText: string | undefined): string | undefined {
+  return RAW_SQL_DRIVERS.find((d) => hasDep(pkgText, d));
+}
+
+// #869: the query layers Harvey RECOGNISES but has no tenant-scope detector for. Ordered ORM-first
+// so a Drizzle app that also depends on `pg` (the usual shape) is named by its ORM, not its driver.
+const RECOGNISED_ORMS: { dep: string; orm: TargetOrm }[] = [
+  { dep: "@supabase/supabase-js", orm: "supabase" },
+  { dep: "@prisma/client", orm: "prisma" },
+  { dep: "prisma", orm: "prisma" },
+  { dep: "drizzle-orm", orm: "drizzle" },
+  { dep: "kysely", orm: "kysely" },
+  { dep: "typeorm", orm: "typeorm" },
+  { dep: "sequelize", orm: "sequelize" },
+  { dep: "knex", orm: "knex" },
+  { dep: "mongoose", orm: "mongoose" },
+];
+
+// The dependency-only half of detectOrm, for the callers that hold a package.json's TEXT rather
+// than a directory (the M9 pass runs over an in-memory source set). Same precedence as detectOrm.
+export function recogniseDataLayer(pkgText: string | undefined): TargetOrm {
+  return RECOGNISED_ORMS.find((o) => hasDep(pkgText, o.dep))?.orm ?? (rawSqlDriver(pkgText) ? "raw-sql" : "unknown");
+}
+
 // #757: which DB/ORM architecture the target uses. Supabase WINS when both signatures appear — a
 // real Supabase RLS surface must never be suppressed because Prisma is also present as a query
-// layer. `unknown` when neither signature is found, so the RLS detectors run unchanged (their own
-// no-migrations-found path already yields nothing on a non-Supabase target — the gate is only about
-// making that N/A explicit for a recognized Prisma architecture, never widening suppression).
+// layer. `unknown` only when NO data layer is recognised at all, so the RLS detectors run unchanged
+// (their own no-migrations-found path already yields nothing on a non-Supabase target — the gate is
+// only about making N/A explicit for a recognised architecture, never widening suppression).
+// #869 widened the recognised set beyond Prisma: Drizzle/Kysely/TypeORM/Sequelize/Knex/Mongoose and
+// a bare raw-SQL driver each resolve to their own value so M1 can disclose them by name.
 export function detectOrm(dir: string): TargetOrm {
   const pkgText = loadSources(dir).find((s) => s.path === "package.json")?.text;
 
-  const isSupabase =
-    hasDep(pkgText, "@supabase/supabase-js") ||
-    existsSync(join(dir, "supabase", "config.toml")) ||
-    existsSync(join(dir, "supabase", "migrations"));
-  if (isSupabase) return "supabase";
-
-  const isPrisma =
-    hasDep(pkgText, "@prisma/client") ||
-    hasDep(pkgText, "prisma") ||
-    PRISMA_SCHEMA_PATHS.some((p) => existsSync(join(dir, p)));
-  if (isPrisma) return "prisma";
-
-  return "unknown";
+  // On-disk signatures first where they outrank the dependency list: a supabase/ project directory
+  // is a real RLS surface even when the client library isn't declared.
+  if (existsSync(join(dir, "supabase", "config.toml")) || existsSync(join(dir, "supabase", "migrations"))) return "supabase";
+  const byDep = recogniseDataLayer(pkgText);
+  if (byDep !== "unknown") return byDep;
+  return PRISMA_SCHEMA_PATHS.some((p) => existsSync(join(dir, p))) ? "prisma" : "unknown";
 }
 
 // #696: a third-party scan target usually ships NO knip config, so knip can't infer non-app entry
@@ -170,7 +255,7 @@ export function buildDegradedKnipConfig(framework: TargetFramework, pluginNames:
 // engagement entry point). This resolves a framework PER workspace so the M9 gate can suppress the
 // SSR/App-Router family per-app. Workspace enumeration reuses `discoverTargets` (pentest/targets):
 // the same pnpm-workspace.yaml / package.json `workspaces` / glob expansion the M2/M4/M5 passes use.
-interface WorkspaceFramework {
+export interface WorkspaceFramework {
   /** Workspace directory relative to `root`, POSIX-separated ("" for the root itself). */
   rel: string;
   framework: TargetFramework;
@@ -183,12 +268,11 @@ export function detectWorkspaceFrameworks(root: string): WorkspaceFramework[] {
   }));
 }
 
-// Workspace-relative dirs of every non-root Vite workspace under `root`. The M9 gate suppresses the
-// SSR/App-Router family for files under any of these prefixes even when the repo root's OWN verdict
-// is `next`/`other`. A single-app repo enumerates only the root (rel === "") and returns [] — its
-// suppression is the whole-target `detectTargetFramework(root) === "vite"` path, unchanged.
-export function viteWorkspaces(root: string): string[] {
-  return detectWorkspaceFrameworks(root)
-    .filter((w) => w.rel !== "" && w.framework === "vite")
-    .map((w) => w.rel);
+// Every non-root workspace under `root` whose framework M9 cannot analyse — Vite SPAs and (since
+// #872) the recognised non-Next SSR frameworks. The M9 gate suppresses the App-Router family for
+// files under any of these prefixes even when the repo root's OWN verdict is `next`/`other`, and
+// discloses each one by name. A single-app repo enumerates only the root (rel === "") and returns
+// [] — its suppression is the whole-target `detectTargetFramework(root)` path, unchanged.
+export function nonNextWorkspaces(root: string): WorkspaceFramework[] {
+  return detectWorkspaceFrameworks(root).filter((w) => w.rel !== "" && isViteTooling(w.framework));
 }

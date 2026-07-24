@@ -53,6 +53,8 @@ interface MechanicalFindingInput {
   // #455 — CWE/OWASP identifiers, threaded through from the source (e.g. semgrep rule metadata).
   cwe?: Finding["cwe"];
   owasp?: Finding["owasp"];
+  // #874 — the npm package a Dependency CVE finding is about, so the reachability pass can rank it.
+  dependency?: Finding["dependency"];
 }
 
 // "high" precision-tier findings are ground-truth (verified secret, decoded service-role
@@ -76,5 +78,6 @@ export function mechanicalFinding(input: MechanicalFindingInput): Finding {
     precisionTier: input.precisionTier,
     ...(input.cwe ? { cwe: input.cwe } : {}),
     ...(input.owasp ? { owasp: input.owasp } : {}),
+    ...(input.dependency ? { dependency: input.dependency } : {}),
   };
 }

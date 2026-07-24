@@ -30,7 +30,7 @@ import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
 import { detectTestIntentFindings } from "../detectors/test-intent.js";
 import { detectVitestIntentFindings } from "../detectors/vitest-intent.js";
-import { detectOrm, detectTargetFramework, viteWorkspaces } from "../scan/framework-detect.js";
+import { detectOrm, detectTargetFramework, isViteTooling, nonNextWorkspaces } from "../scan/framework-detect.js";
 import { scanPrismaAppPerf } from "../scan/prisma-app-perf.js";
 import { scanPrismaSchemaPerf } from "../scan/prisma-schema-perf.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
@@ -58,15 +58,17 @@ try {
   // M7's client-JS tiers and bundle reader also branch on it (#577).
   const framework = detectTargetFramework(scanDir);
   const orm = detectOrm(scanDir);
-  const isVite = framework === "vite";
-  console.log(`target framework: ${framework}${isVite ? " — M9 App Router checks N/A (SPA, no SSR); M7 in Vite mode" : ""}`);
+  // #872: every recognised non-Next framework builds on Vite and has no App Router surface, so both
+  // the M9 suppression and M7's Vite-mode tiers key on that, not on the `vite` value alone.
+  const isVite = isViteTooling(framework);
+  console.log(`target framework: ${framework}${isVite ? " — M9 App Router checks N/A (not Next); M7 in Vite mode" : ""}`);
 
   // #597: at a monorepo root the root verdict is `other` (vite.config lives in apps/*), so the
   // whole-target Vite short-circuit above never fires. Resolve a framework per workspace so M9
   // suppresses the SSR family for each Vite app's files rather than false-firing on them.
-  const viteWs = isVite ? [] : viteWorkspaces(scanDir);
-  if (viteWs.length) {
-    console.log(`Vite workspaces (M9 App Router checks N/A): ${viteWs.join(", ")}`);
+  const nonNextWs = isVite ? [] : nonNextWorkspaces(scanDir);
+  if (nonNextWs.length) {
+    console.log(`non-Next workspaces (M9 App Router checks N/A): ${nonNextWs.map((w) => `${w.rel} (${w.framework})`).join(", ")}`);
   }
 
   // Bundle tier: explicit --build flags, or auto-detected build dirs. Build artifacts live in the
@@ -95,7 +97,7 @@ try {
   });
 
   const findings: Finding[] = [
-    ...detectAppRouterFindings(sources, framework, viteWs, orm),
+    ...detectAppRouterFindings(sources, framework, nonNextWs, orm),
     ...detectPerfCodeFindings(sources, framework),
     ...detectHookDepFindings(sources),
     ...detectSlopFindings(sources),

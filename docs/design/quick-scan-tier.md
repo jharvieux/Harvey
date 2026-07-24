@@ -55,7 +55,8 @@ The free tier must pass three tests: (a) *not useless* (real, located findings),
 
 - **The fix for every finding** — remediation steps / patches for the mechanical findings (enable RLS on X, move key to server env, bump `next` to the patched version) *and* the deep findings, with optional one-click patch PR.
 - The **DEEP scan**: LLM semantic review (broken-auth logic, IDOR, tenant-isolation bugs, injection reachability) + **dynamic RLS/auth pen test** (actively probes whether policies are bypassable with the anon key — the single highest-value check for this audience given the 170+ real Lovable/Supabase RLS breaches).
-- Re-scan / monitoring / history, PR checks, exportable report (PDF/SARIF).
+- Re-scan diffed against the prior engagement (`run-audit --baseline`, #457), the exportable PDF report (`report-template/render.mjs`), SARIF 2.1.0 export for the client's own code scanning / ASPM (`--sarif-out`, `src/sarif.ts`, #867), and a CycloneDX SBOM for procurement (`--sbom-out`, `src/sbom.ts`, #887).
+- **Not offered, because not built (#866):** monitoring, scan history, and PR checks. They were listed here and in the shipped upsell copy while no code implemented them; the upsell list (`src/quick-scan.ts` `GATED_CAPABILITIES`) now carries only shipped capabilities and a test pins the unbuilt ones out. Restore a line here only in the commit that ships the capability.
 
 The single free sample finding is shown *with* its fix precisely because remediation is otherwise gated — it demonstrates the concrete thing the user is paying for, on their own code.
 
@@ -67,7 +68,7 @@ This audience smells FUD and "beg bounties" (automated scanners that flag trivia
 2. **No fear-language on trivia.** Severity must be earned and contextual — flag exploitability, not theoretical presence.
 3. **Frame explicitly as triage → remediation:** *"The free scan is real and complete for mechanical issues — fixes included. Paid gets you the deep semantic + live pen-test that catches the logic and auth bugs a static scan physically can't."*
 4. **Cite neutral authorities** (CISA/NIST/OWASP, the real CVE-2025-48757 Lovable-RLS class, Escape.tech findings) instead of dramatized breach stats.
-5. **A clean scan says "clean."** Never manufacture findings to justify the upsell — convert clean repos on *monitoring* ("stay clean on every push"), not fear.
+5. **A clean scan says "clean."** Never manufacture findings to justify the upsell — convert clean repos on the *re-scan diff* ("re-scan after your next release and we'll diff it against this run"), not fear. The earlier "stay clean on every push / monitoring" pitch was cut in #866: monitoring is not built, and pitching it is the same defect class as a fabricated finding.
 
 ## 4. Delivery mechanics
 
