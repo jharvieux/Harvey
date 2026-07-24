@@ -5,7 +5,8 @@
 > tests-for-intent read of the high-value tests (auth, tenant isolation, payments, state
 > machines) for the qualitative "would this test catch a real regression" read. The
 > tests-for-intent facet is no longer fully manual: its structurally-dead classes are
-> mechanical detectors (`src/detectors/test-intent.ts`, #372/#384/#386), and the deletion-
+> mechanical detectors (`src/detectors/test-intent.ts`, #372/#384/#386, plus the shape-only
+> "asserts WHAT, not WHY" response-assertion detector, #821), and the deletion-
 > survival litmus test runs executed via `--stub-check` (#373) — the hand review starts from
 > their output instead of a blank page. See
 > `docs/audit-modules.md` M8 for the module catalog entry this generalizes, and
@@ -17,7 +18,7 @@
 |---|---|---|---|
 | Mutation scan | StrykerJS (external CLI, not an npm dep of this repo) | `src/cli/mutation-scan.ts` (`pnpm mutation-scan`) shapes the report | Running Stryker itself (needs the client's own test-runner config); triaging surviving mutants |
 | Deletion-survival check | `src/stub-check.ts` (#373) | `pnpm mutation-scan <t> --stub-check` — stubs each covered exported function, re-runs its covering tests, emits `M8-01-*` per suite that survives; no Stryker install | Triaging which survivals matter; Stryker remains ground truth for partial mutant survival |
-| Tests-for-intent review | `quality-extras.txt` M8 brief + `src/detectors/test-intent.ts` (#372/#384/#386) | `pnpm detect-static <t>` — the structurally-dead classes: mock-of-subject, assertion-free, tautological, snapshot-only, call-count-only, tenant-isolation tests that mock the DB client, happy-path-only coverage on security/money-critical code | Brief-driven read of high-value tests for what the AST can't see (asserts-WHAT-not-WHY, accidental mutant kills) |
+| Tests-for-intent review | `quality-extras.txt` M8 brief + `src/detectors/test-intent.ts` (#372/#384/#386/#821) | `pnpm detect-static <t>` — the structurally-dead classes: mock-of-subject, assertion-free, tautological, snapshot-only, call-count-only, tenant-isolation tests that mock the DB client, happy-path-only coverage on security/money-critical code, and the shape-only response-assertion form of "asserts WHAT, not WHY" (#821) | Brief-driven read of high-value tests for what the AST can't see (the rest of asserts-WHAT-not-WHY beyond the mechanized shape-only form, accidental mutant kills) |
 
 ## 1. Running the mutation scan
 
@@ -84,13 +85,15 @@ Also fires when a harness IS configured but has no meaningful suite (#252): zero
 a single placeholder/smoke spec (no test cases, no assertions, or only constant-literal
 assertions). One meaningful spec still counts as a suite.
 
-**Report path assumption:** Stryker's `json` reporter writes to `reports/mutation/mutation.json`
-relative to the repo root by default — **confirmed against a real run** (#262, 2026-07-15,
-`@stryker-mutator/core@9.6.1`, see "Targets/calibration structure" below). Still **not
-version-pinned**: an engagement on a different Stryker major could write elsewhere — if the
-installed version doesn't match, pass `--report <path>` explicitly (the wrapper skips invoking
-Stryker entirely when `--report` is given, so it also works to just shape a report from a run
-that already happened).
+**Report path (auto-discovered, #820):** the wrapper reads the JSON reporter's output path from the
+Stryker config's `jsonReporter.fileName` (`resolveJsonReporterPath` in `src/mutation-scan.ts`),
+defaulting to `reports/mutation/mutation.json` and falling back to a `cwd` glob search when that
+exact path is absent — so it survives a config or Stryker-version difference that writes the report
+elsewhere, rather than resting on a fixed assumption. The default was **confirmed against a real
+run** (#262, 2026-07-15, `@stryker-mutator/core@9.6.1`, see "Targets/calibration structure" below).
+You can still pass `--report <path>` explicitly to override discovery (the wrapper skips invoking
+Stryker entirely when `--report` is given, so it also works to just shape a report from a run that
+already happened).
 
 ### Pre-Stryker deletion-survival check (#373)
 
@@ -129,8 +132,11 @@ calibration acceptance criterion, done #262).
   scan can use without client-specific config), sorted **worst score first** so the weakest test
   coverage surfaces immediately.
 - **The line-coverage-vs-mutation-score gap** — Stryker's mutant-level report doesn't carry line
-  coverage, so pull that number from the client's own coverage tool (`vitest --coverage`, `jest
-  --coverage`, etc.) per module and put it in the `Line cov` column by hand (see §4 mapping). A
+  coverage, so the wrapper **auto-pulls that number** (#819): it invokes the target's own runner
+  with coverage forced on (`vitest run --coverage --coverage.reporter=json-summary`, or the jest
+  equivalent) and reads the Istanbul `coverage-summary.json` per module for the `Line cov` column;
+  when no runner can be invoked or no summary is produced it discloses a `partial` line-coverage
+  result with the reason rather than a silent blank (see §4 mapping). A
   module at 95% line coverage and 40% mutation score is the single most useful sentence in this
   section of the report — it means the tests execute the code but don't assert its behavior.
 - **`summary.survivingMutants`** — every `Survived`/`NoCoverage` mutant, with `file`, `line`,
@@ -176,10 +182,10 @@ rather than treating every surviving mutant as equally urgent.
 The mutation scan is the mechanical half; this is the qualitative half — apply
 `docs/quality-extras.txt`'s M8 section directly. Start from the mechanical pre-screen: `pnpm
 detect-static <t>` already emits the structurally-dead classes (categories 1, 2, and 6 below,
-category 5's keyword-scoped first layer, plus assertion-free and call-count-only tests —
-`src/detectors/test-intent.ts`, #372/#384/#386), and `--stub-check` (§1) executes the litmus
-test itself. The hand read covers what those can't: categories 3 and 4, and category 5 beyond
-the keyword list. Scope the review to **high-value tests only**:
+category 5's keyword-scoped first layer, the shape-only response-assertion form of category 3
+(#821), plus assertion-free and call-count-only tests — `src/detectors/test-intent.ts`,
+#372/#384/#386/#821), and `--stub-check` (§1) executes the litmus test itself. The hand read
+covers what those can't: the rest of categories 3 and 4, and category 5 beyond the keyword list. Scope the review to **high-value tests only**:
 auth, tenant isolation, payments/money math, state machines. Don't attempt to hand-review the
 whole suite — that's what the mutation scan is for; the manual read exists because a mutant
 surviving *is* proof of a blind spot, but a mutant that *doesn't* survive doesn't prove the test
@@ -194,7 +200,9 @@ Flag it when the answer is no, using the six categories from `quality-extras.txt
 2. **Snapshot-only** — a snapshot is the only assertion; "update snapshots" silently absorbs
    regressions.
 3. **Asserts WHAT, not WHY** — checks a shape/count/string but not the business rule (e.g.
-   "returns 200" without asserting the row is tenant-scoped).
+   "returns 200" without asserting the row is tenant-scoped). The shape-only response-assertion
+   form (parses a response body, asserts only success-status/nonzero-count/existence) is now
+   mechanized in `test-intent.ts` (#821); the hand read covers the rest.
 4. **Would pass if the behavior broke** — the general form of the litmus test.
 5. **Happy-path only** — no failure/denial/edge assertion on a security- or money-critical path.
 6. **Mocks the database/RLS** — a "tenant isolation" test that mocks the DB layer can't observe
@@ -215,7 +223,7 @@ changed" column blank or note "manual read" there) so the report has one list, n
 Map `pnpm mutation-scan`'s `reportRows` (`src/mutation-scan.ts`'s `toReportRows()`) into it:
 
 - **Module / file** ← `reportRows[].module`
-- **Line cov** ← pulled by hand from the client's coverage tool (not in Stryker's report — see §2)
+- **Line cov** ← auto-pulled from the target's coverage tool by the wrapper (#819; not in Stryker's report — see §2), `partial` with a reason when it can't be run
 - **Mutation score** ← `reportRows[].mutationScore`
 - **Surviving mutants (critical)** ← `reportRows[].hotspotSurvivingCount` (the hotspot-flagged
   subset — that's the "critical" column, not the raw `survivingCount`, so the table matches the

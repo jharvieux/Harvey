@@ -30,11 +30,10 @@
 # `pnpm detect-static`, Info-only): JSON-stringify deep-equal; manual query-string parsing;
 # manual cookie parsing; Math.random()-chain string ids; hand-rolled class-string merge (fires
 # only when a merge library is already in the dependency tree — otherwise it's the deliberate
-# dep-drop shape below). Boundary calls, so nothing double-counts: the JSON round-trip deep-clone
-# shape is already caught as `M7 — JSON deep-clone`; hand-rolled crypto is M1's. NOT graduated:
-# retry/backoff (its benign case needs judgment — stays in this paid brief) and Supabase
-# pagination reinvention (needs cross-statement analysis — stays here for now). Everything else
-# below remains LLM-judged.
+# dep-drop shape below); retry/backoff loops and hand-rolled offset pagination (graduated later,
+# #814 — the retry detector is dep-aware, so library-backed retry doesn't fire). Boundary calls,
+# so nothing double-counts: the JSON round-trip deep-clone shape is already caught as
+# `M7 — JSON deep-clone`; hand-rolled crypto is M1's. Everything else below remains LLM-judged.
 
 - HAND-ROLLED PRIMITIVES — a bespoke implementation of something the language/stdlib/framework already
   provides: date math, deep-clone/equal, debounce/throttle, retry/backoff, UUID, query-string parsing,
