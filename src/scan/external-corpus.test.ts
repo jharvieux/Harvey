@@ -375,6 +375,21 @@ describe("M8 manifest shape (#300)", () => {
     expect(rows.find((r) => r.module === "M8")).toMatchObject({ actual: 1 });
     expect(rows.find((r) => r.module === "M8-intent")).toMatchObject({ actual: 1 });
   });
+
+  it("scores the mutation tier's measurement-gap findings as M8, not M8-intent (#940)", () => {
+    // #932's "Root-workspace test suite not reachable per-app" and #503's env-fragile-suite finding
+    // are mutation-tier (mutation-scan/stub-check) findings. Because M8-intent is defined by
+    // exclusion from M8_MUTATION_TAXONOMIES, a mutation-tier taxonomy missing from that set leaks
+    // into M8-intent — which is exactly the documenso drift #940 fixed: its M8 measurement-gap scored
+    // 0 as M8 (baseline 1) and inflated M8-intent to 2 (baseline 1). documenso's M8/M8-intent are
+    // both counted:1, so with the mutation finding correctly attributed the two rows reproduce.
+    const rows = scoreExternalBaseline(target("documenso"), [
+      finding("M8 — Root-workspace test suite not reachable per-app", "Medium"),
+      finding("M8 — Call-count-only test", "Low"),
+    ]);
+    expect(rows.find((r) => r.module === "M8")).toMatchObject({ actual: 1, pass: true });
+    expect(rows.find((r) => r.module === "M8-intent")).toMatchObject({ actual: 1, pass: true });
+  });
 });
 
 // #322 — per-module scan roots. The mechanism must never let two modules' numbers describe
