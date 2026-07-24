@@ -368,6 +368,37 @@ Run 4's second finding (§3.4 — the packet gave reviewers no way to check depe
 claims) is closed separately: since #396 the packet embeds the target's dependency manifest and
 standing rule 3 forbids dep-tree claims from memory.
 
+### 3.6 Run log — two-reviewer pair over the twelve-file corpus (2026-07-23, #830)
+
+The first genuinely-paired two-reviewer run over the expanded twelve-file corpus (§4), closing
+the gap §3.5 flagged as tracked by #830. Unlike the 2026-07-16 baseline — a transcription of two
+historical passes — runs 5 and 6 are two fresh executions: two independent blind Claude Fable 5
+reviewers, each handed the *identical* `pnpm simplify-scan` packet as its sole input in a fresh
+context sharing no state with the other or the orchestrator, each emitting its own machine-readable
+verdict block at pass time (distinct `reviewer` ids `run5-fable-fresh-context` /
+`run6-fable-fresh-context`). Scored after the fact against the §4 key by this finalizer, which did
+not review.
+
+Verdicts: `docs/design/m6-eval-runs/2026-07-23-run{5,6}.verdict.json`. Tool output verbatim:
+`docs/design/m6-eval-runs/2026-07-23-run5-vs-run6.agreement.txt`.
+
+| run | date | reviewer | positives flagged | negatives spared | verdict |
+|---|---|---|---|---|---|
+| 5 | 2026-07-23 | Claude Fable 5 (fresh-context, `simplify-scan` packet sole input) | 7/7 | 5/5 | matches the §4 key on all twelve |
+| 6 | 2026-07-23 | Claude Fable 5 (second, distinct fresh-context, same packet) | 7/7 | 5/5 | matches the §4 key on all twelve |
+
+Both passes flagged all seven positives (`dates.ts`, `debounce.ts`, `deep-equal.ts`, `group.ts`,
+`id.ts`, `manager.ts`, `pipeline.ts`) and spared all five negatives (`csv.ts`, `depdrop.ts`,
+`framework-adapter.ts`, `proration.ts`, `reconcile.ts`). `framework-adapter.ts` — the file runs 3
+and 4 split on — was spared unanimously here on the `SupportedStorage` library contract in the code.
+
+**Pair agreement: 12/12, no splits** (`m6-agreement.ts` output, not eyeballed). Every co-reviewed
+file has a unanimous verdict, so nothing routes to a human adjudicator. **This pair replaces the
+2026-07-16 seven-file transcription (§3.5) as the current recorded agreement baseline** — it is a
+real paired execution over the full twelve-file corpus, not a transcription. As always this is a
+rubric-agreement number for this pair of passes on this packet; never quote it as M6 precision
+(§3, *What this is explicitly NOT*).
+
 ## 4. The labeled corpus
 
 `targets/calibration/simplify/` — twelve files, seven positives + five negatives (expanded
