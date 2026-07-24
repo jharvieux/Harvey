@@ -12,10 +12,9 @@
 // Endpoint: GET https://api.supabase.com/v1/projects/{ref}/advisors/performance. The
 // /advisors/security path is documented (https://supabase.com/docs/guides/database/database-
 // advisors); /performance is the sibling advisor type returning the same { lints: [...] }
-// shape (same family the `get_advisors` MCP tool calls with `type: "performance"`) but wasn't
-// independently exercised against a live project while writing this module — the advisors API
-// is marked experimental by Supabase, so confirm the path/shape against current docs or a
-// dashboard Network-tab capture before the first live engagement run.
+// shape (same family the `get_advisors` MCP tool calls with `type: "performance"`). Verified
+// live against real Supabase projects (#815): parseAdvisorFindings() successfully parsed
+// 220-lint payload, endpoint path confirmed via published OpenAPI spec.
 
 import { writeFileSync } from "node:fs";
 import type { Finding } from "../findings.js";
