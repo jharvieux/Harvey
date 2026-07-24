@@ -86,6 +86,22 @@ describe("parseSemgrepFindings", () => {
     expect(findings[0]?.cwe).toBeUndefined();
     expect(findings[0]?.owasp).toBeUndefined();
   });
+
+  it("#976: normalizes a registry rule's bare-STRING cwe/owasp to an array (a string reached .cwe.map and threw)", () => {
+    const output: SemgrepOutput = {
+      results: [
+        {
+          check_id: "javascript.express.security.injection.tainted-sql-string",
+          path: "app/api/route.ts",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a registry rule can ship cwe/owasp as a bare string, which the JSON type does not force to a list
+          extra: { message: "sqli", severity: "ERROR", metadata: { cwe: "CWE-89: SQL Injection", owasp: "A03:2021 - Injection" } as any },
+        },
+      ],
+    };
+    const findings = parseSemgrepFindings(output);
+    expect(findings[0]?.cwe).toEqual(["CWE-89: SQL Injection"]);
+    expect(findings[0]?.owasp).toEqual(["A03:2021 - Injection"]);
+  });
 });
 
 describe("checkMissingCsp", () => {

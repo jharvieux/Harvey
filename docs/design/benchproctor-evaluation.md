@@ -5,6 +5,13 @@ baseline. Reasoning and every number below come from a run performed 2026-07-24 
 against the pinned release `2026.07.22`; nothing here is carried from the issue, the README, or a
 prior session.
 
+> **Re-scored 2026-07-24 after CWE-enrichment (#976 — verdict UNCHANGED, DON'T-ADOPT).** The #973
+> run predicted CWE-enriching the `harvey-*` rules would "roughly double the fair score." It landed
+> (#975), and the re-run **disproves that prediction**: the fair (cwe-mode) Youden rose only
+> +4.0%→**+5.7%** (JS) / +3.9%→**+5.5%** (TS) — far short of the +10.1% filename ceiling — because
+> the residual gap is **CWE-label granularity, not missing tags**. Full re-score in the addendum at
+> the end of this document; it is the authority. The reproduction section below is still current.
+
 ## What BenchProctor is (mapped from the actual clone, not the marketing page)
 
 `github.com/TheAuditorTool/BenchProctor`, Apache-2.0, release `2026.07.22`. Cloned to scratch
@@ -200,3 +207,91 @@ pnpm exec tsx src/cli/quick-scan.ts --dir js-quicktest/express/testcode \
 python3 js-quicktest/score_sarif.py harvey-js-express.sarif \
   js-quicktest/express/expectedresults-2026.07.22.csv
 ```
+
+---
+
+## Addendum — post-CWE-enrichment re-score (#976, 2026-07-24)
+
+CWE-enrichment landed (#975: all 92 `harvey-*` semgrep rules + the AST detectors carry a CWE, and
+the SARIF emits `external/cwe/cwe-NNN` machine tags). This is the re-run #976 asked for, against the
+**same disclosed slice** (`quicktest`, JS/Express 6,200 + TS/Express 6,200 = 12,400 cases, 62
+categories, 50/50 vuln/safe), same `score_sarif.py`, pinned release `2026.07.22`. Every number below
+is from a run in this session, not recalled.
+
+**Verdict: DON'T-ADOPT stands. Do not wire `validate-benchproctor`.** The enrichment succeeded at
+its *actual* purpose (#455) but the re-score refutes the #973 hope that it would make BenchProctor a
+usable cwe-scored gate.
+
+### The enrichment worked — for #455, not for BenchProctor's score
+
+| Slice | Mode | #973 Youden | **Post-enrichment** | TPR | FPR |
+|---|---|---:|---:|---:|---:|
+| JS/Express, all 62 cats (6,200) | cwe (fair) | +4.0% | **+5.7%** | 10.8% | 5.1% |
+| JS/Express, all 62 cats (6,200) | filename (ceiling) | +10.1% | +10.1% | 25.5% | 15.4% |
+| TS/Express, all 62 cats (6,200) | cwe (fair) | +3.9% | **+5.5%** | 10.6% | 5.1% |
+| TS/Express, all 62 cats (6,200) | filename (ceiling) | +10.1% | +9.9% | 25.1% | 15.1% |
+
+SARIF CWE coverage went from #973's "~12 rules / 16 CWE strings" to **21/28 rules and 1,624/1,673
+results (97%) carrying a CWE tag** — a real, large improvement in the thing #455/SARIF ingestion
+needs. Yet the fair Youden moved only ~+1.7 pts and stayed far below the +10.1% filename ceiling.
+
+### Why the fair score barely moved — measured, not asserted: **CWE granularity, not missing tags**
+
+Per-category cwe-mode J was **identical to #973 in every category except one**: `loginjection`(117)
+flipped 0 → **+4** — the single category whose enrichment CWE (canonical CWE-117) happens to equal
+BenchProctor's expected CWE. Every other category was unchanged.
+
+The residual cwe-vs-filename gap is not absent tags — it is that BenchProctor keys on **child CWEs**
+Harvey deliberately does not tag. In **filename** mode (Harvey fires on the vulnerable file, CWE
+ignored) these in-scope classes fire strongly, but score **0% in cwe mode**:
+
+| Category | BenchProctor CWE | Harvey tags (canonical) | filename TPR | cwe TPR |
+|---|---|---|---:|---:|
+| argument_injection | 88 | 78 (OS command) | 82% | 0% |
+| genericcmdi | 77 | 78 | 76% | 0% |
+| el_injection | 917 | 94/95 (code/eval) | 78% | 0% |
+| basic_xss | 80 | 79 (XSS) | 68% | 0% |
+| corsmisconfig | 942 | (a registry rule w/o 942 fires) | 76% | 0% |
+
+Harvey tagging CWE-78 for `argument_injection`(88) or CWE-79 for `basic_xss`(80) is the **correct**
+canonical mapping for ticket-routing/compliance (#455). Making cwe-mode credit these would mean
+re-tagging Harvey's rules to BenchProctor's exact child CWEs — **gaming the benchmark, not improving
+detection.** The `corsmisconfig` row is sharper still: even though a `harvey-*` CORS rule carries
+CWE-942, a *different* (registry) rule is what fires on those cases, so the tag never helps — a
+scorer keyed on "did the firing rule carry this exact CWE" measures tag-coincidence, not capability.
+
+### Classes Harvey does not fire on at all (0% even in filename mode — enrichment irrelevant)
+
+`ssrf`/`cloud_ssrf_metadata`(918) 0–2%, `xxe`(611) 0%, `nosql`(943) 0%, `crlfinjection`(93) 0%,
+`prototypepollution`(1321) 0%, `csv_injection`(1236) 0%. Harvey has detector *classes* for several of
+these, but its request→sink taint rules don't latch onto the synthetic combinatorial shapes — the
+same finding #973 recorded, unchanged by enrichment.
+
+### The decision, with the two boundaries #976 required named
+
+1. **Scoring boundary: mechanical-only, as run.** The FPR (5.1% cwe / 15.4% filename aggregate, and
+   48–84% on adversarial safe-twin categories like `eval_injection`/`ssti`/`cmdi`/`corsmisconfig`) is
+   **by-design, not a precision claim**: Harvey's mechanical tier flags-for-review, and the paid-LLM
+   triage tier is what discriminates an effective safeguard from a broken one. BenchProctor's
+   adversarial safe twins score the wrong tier — running the LLM triage over 12,400 cases first is
+   neither a gate's job nor affordable, so it was not run (disclosed).
+2. **Slice disclosure:** as above — `quicktest` JS/Express + TS/Express (12,400 cases). NOT run:
+   `koa`/`nestjs`, the `normal`/`enterprise` tiers, the other 9 languages. No silent sampling.
+
+**Cross-check verdict for the generic classes (injection/XSS/SSRF/open-redirect): DON'T adopt as a
+gate.** The one honest external signal is filename-mode: Harvey's mechanical tier *does* fire on the
+generic injection/XSS/command classes at 68–82%, a mild external corroboration of #945's recall
+*direction* for those classes. But that is not a gate — the cwe-strict number is a CWE-granularity
+artifact, and the filename number conflates recall with the by-design safe-twin FPR. Neither would
+sit honestly next to Harvey's own request→sink recall gate (#945, 97.4%). **No `validate-benchproctor`
+was wired.** The reproduction above regenerates every number.
+
+### Bug this re-run surfaced and fixed (#975 regression)
+
+Running `quick-scan --sarif-out` over the corpus threw `cwe.map is not a function`: a semgrep
+*registry* rule declares `metadata.cwe` as a bare string, and #975's new `cweTags` called `.map` on
+it (pre-#975 the tag spread silently mangled a string into characters). Fixed at the root
+(`src/scan/semgrep.ts` `strList` normalizes cwe/owasp to an array) and defensively in `src/sarif.ts`
+(`asArray`), with regression tests in both suites and a dry-run re-generation (SEM-77's string
+cwe/owasp → arrays). This crash affected any `--sarif-out` run over a target with a string-cwe
+registry finding, so the fix ships regardless of the BenchProctor verdict.

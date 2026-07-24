@@ -36,8 +36,10 @@ export interface SemgrepResult {
     message?: string;
     severity?: string; // ERROR | WARNING | INFO
     // cwe/owasp (#455): carried by both the registry p/owasp-top-ten pack and, where added, our
-    // harvey-* custom rules — see each rule's `metadata:` block in ./rules/semgrep/*.yml.
-    metadata?: { confidence?: string; harveySeverity?: string; cwe?: string[]; owasp?: string[] };
+    // harvey-* custom rules — see each rule's `metadata:` block in ./rules/semgrep/*.yml. A registry
+    // rule may declare `cwe`/`owasp` as a bare STRING rather than a list, so the type admits both and
+    // `strList` below normalizes it (a string reached downstream `.cwe.map()` and threw — #975/#976).
+    metadata?: { confidence?: string; harveySeverity?: string; cwe?: string[] | string; owasp?: string[] | string };
   };
 }
 
@@ -49,6 +51,13 @@ const SEVERITY_FROM_SEMGREP: Record<string, Severity> = { ERROR: "High", WARNING
 
 function isAuditRule(checkId: string): boolean {
   return checkId.includes(".audit.") || checkId.endsWith(".audit");
+}
+
+// A semgrep rule's metadata.cwe/owasp is usually a list but some registry rules declare a bare
+// string; normalize to a non-empty string[] (or undefined) so a finding's cwe/owasp is always an array.
+function strList(v: string[] | string | undefined): string[] | undefined {
+  if (Array.isArray(v)) return v.length ? v : undefined;
+  return v ? [v] : undefined;
 }
 
 export function parseSemgrepFindings(output: SemgrepOutput): Finding[] {
@@ -69,8 +78,8 @@ export function parseSemgrepFindings(output: SemgrepOutput): Finding[] {
       fix: "Review the matched code path against the rule's remediation guidance.",
       precisionTier: high ? "high" : "review",
       // #455 — populate only from the rule's own declared metadata, never invented here.
-      cwe: meta?.cwe?.length ? meta.cwe : undefined,
-      owasp: meta?.owasp?.length ? meta.owasp : undefined,
+      cwe: strList(meta?.cwe),
+      owasp: strList(meta?.owasp),
     });
   });
 }

@@ -102,12 +102,18 @@ function ruleIdOf(f: Finding): string {
   return f.taxonomy?.trim() || f.category?.trim() || "harvey/unclassified";
 }
 
+// cwe/owasp on a Finding is typed string[], but findings arrive from many sources (semgrep registry
+// packs, LLM passes, captured artifacts) and one may carry a bare string; coerce so the tag builders
+// never call an array method on a string.
+function asArray(v: string[] | string | undefined): string[] {
+  return Array.isArray(v) ? v : v ? [v] : [];
+}
+
 // #975: the CWE tags in GitHub code scanning's `external/cwe/cwe-NNN` convention, derived from the
 // finding's human-readable "CWE-NNN: …" strings. A consumer that indexes by CWE reads these; the
 // full strings stay in the tag list too for platforms that surface them verbatim.
-function cweTags(cwe: string[] | undefined): string[] {
-  if (!cwe) return [];
-  return cwe.map((c) => c.match(/CWE-(\d+)/)?.[1]).filter((n): n is string => !!n).map((n) => `external/cwe/cwe-${n}`);
+function cweTags(cwe: string[] | string | undefined): string[] {
+  return asArray(cwe).map((c) => c.match(/CWE-(\d+)/)?.[1]).filter((n): n is string => !!n).map((n) => `external/cwe/cwe-${n}`);
 }
 
 interface SarifRule {
@@ -181,7 +187,7 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
           // #975: alongside the human-readable CWE/OWASP strings, emit the machine tag GitHub code
           // scanning and CWE-indexed ASPMs key on — `external/cwe/cwe-89` — so a CWE-tagged finding
           // lands in the right bucket instead of reading as uncategorized.
-          tags: [f.category, ...cweTags(f.cwe), ...(f.cwe ?? []), ...(f.owasp ?? [])].filter(Boolean),
+          tags: [f.category, ...cweTags(f.cwe), ...asArray(f.cwe), ...asArray(f.owasp)].filter(Boolean),
           "security-severity": SECURITY_SEVERITY[f.severity],
           category: f.category,
         },
