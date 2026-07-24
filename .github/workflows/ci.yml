@@ -5,9 +5,58 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  verify:
-    name: verify
+  # Tier router: inspect the change set and decide which heavy jobs are needed.
+  # Prose-doc-only PRs (SESSION.md, docs/**.md) skip both. Workflow-only PRs need
+  # actionlint, not the full JS verify (tsc/eslint/vitest/knip never read workflow
+  # YAML). Everything else — code, config, docs/*.txt briefs, targets/** — runs the
+  # full verify. A push to main runs everything as a post-merge safety net.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "workflows=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD)
+          echo "Changed files:"
+          echo "$files"
+          code=false
+          workflows=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              .github/workflows/*) workflows=true ;;
+              # Inert prose docs skip the build. Exceptions: docs consumed by the
+              # test suite (readFileSync in a *.test.ts) MUST run verify — the
+              # ci-docs-tier test fails loud if a new such doc appears here.
+              docs/audit-modules.md) code=true ;;
+              docs/design/vuln-seam-app-answer-key.md) code=true ;;
+              SESSION.md|docs/*.md) ;;
+              *) code=true ;;
+            esac
+          done <<< "$files"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,3 +67,41 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
+
+  actionlint:
+    name: actionlint
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install actionlint
+        run: |
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+      - run: ./actionlint -color
+
+  # Required status check. Always runs so branch protection's "verify" always gets a
+  # result, and fails only if a heavy job that actually ran failed. Skipped jobs
+  # (the whole point of the tiers) leave this green.
+  verify:
+    name: verify
+    needs: [changes, build, actionlint]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate on required jobs
+        run: |
+          echo "changes=${{ needs.changes.result }} build=${{ needs.build.result }} actionlint=${{ needs.actionlint.result }}"
+          for r in '${{ needs.changes.result }}' '${{ needs.build.result }}' '${{ needs.actionlint.result }}'; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "A required job did not pass."
+              exit 1
+            fi
+          done
+          echo "OK"
