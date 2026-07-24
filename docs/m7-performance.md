@@ -54,11 +54,14 @@ and file I/O, mirroring the `src/quality-scan.ts` / `src/cli/quality-scan.ts` sp
   - Any other rule name Supabase adds later still produces a `Finding` — it falls back to a
     severity derived from the advisor's own `level` (`ERROR`→High, `WARN`→Perf, `INFO`→Low)
     rather than being silently dropped, per the "never leave a known gap untracked" doctrine.
-- **Not yet independently verified:** the `/advisors/performance` Management API path is inferred
-  by analogy with the documented `/advisors/security` path and the `get_advisors` MCP tool's
-  `type` parameter — it wasn't exercised against a live project while writing this module (no
-  client project available yet). Confirm against current Supabase docs or a dashboard
-  Network-tab capture before the first live engagement run; flag as a risk if the shape drifts.
+- **Verified live (#815, 2026-07-23):** the `/v1/projects/{ref}/advisors/performance` Management API
+  path was confirmed against the published Supabase OpenAPI spec (`api.supabase.com/api/v1-json`) —
+  exactly as hardcoded in `src/cli/perf-scan.ts` — and exercised against ATC main: a real
+  `{ lints: [...] }` payload of 220 lints (215 `unused_index`, 5 `unindexed_foreign_keys`) parsed
+  cleanly through `parseAdvisorFindings()`, grouping correctly into `M7-01`/`M7-02` with the curated
+  severities and rolled-up locations. Only the 4-line raw `fetch()` in `fetchPerformanceAdvisors`
+  (which needs a `SUPABASE_ACCESS_TOKEN` PAT) is unexercised end-to-end; it forwards the same JSON
+  body already verified above.
 
 ## 1b. Prisma equivalent — static `schema.prisma` index review (#761, [source] tier)
 
@@ -139,6 +142,16 @@ The one real signal that survived triage — unbounded `select("*")` on a growab
 list — is kept; `.in('id', [...])` lookups and `.insert()`/`.upsert()` echoed through `.select()`
 are now treated as bounded (a specific-row lookup or the mutated rows, not a table scan), not
 flagged.
+
+**Precision guards from the #816 sweep (four catalogued-but-uncoded FP shapes, each added as a
+labeled-corpus negative first then coded):** a `for-of` over a hardcoded/const-literal list is not
+N+1; sorting a (spread of a) static const list in JSX never scales; `select("*").eq("id", …)` is a
+bounded PK point lookup (scoping filters like `.eq("conversation_id", …)` still fire); and a
+module-scope JSON deep-clone is a run-once cold-start copy (the same exemption as sync-IO). Measured
+against the M7 labeled corpus via the #823 precision gate (`pnpm exec tsx
+src/cli/validate-precision.ts`), this took the M7 code tier to recall 22/22, negatives 32/32,
+**corpus precision 100.0%** (one planted instance per class, one lookalike per catalogued FP shape —
+corpus numbers, not field numbers).
 
 Classes (severity / confidence — see the detector for per-check evidence and limitations):
 
@@ -317,8 +330,8 @@ review pass says what the right structure would be.
   performance score into `M7L-*` findings. The build → serve → Chrome → Lighthouse pipeline was
   validated end-to-end against a real target on 2026-07-18 (#488; see
   `docs/design/m7-lighthouse-validation.md`).
-- **`/advisors/performance` endpoint path:** inferred by analogy, not exercised live — verify on
-  the first real engagement (§1).
+- **`/advisors/performance` endpoint path: verified live (#815)** — path confirmed against the
+  Supabase OpenAPI spec and the parser exercised against a real 220-lint payload from ATC main (§1).
 - **Prisma app-code N+1 / unindexed-filter-column heuristic (#793, open, split from #761):** the
   schema-only unindexed-FK review (§1b) shipped; the app-code half — an obvious N+1 shape (a
   Prisma query inside a `.map`/loop) and a `where`-filtered field with no covering index in
