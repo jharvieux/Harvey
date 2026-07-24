@@ -34,7 +34,7 @@
 import { M4_DIVERGED_TAXONOMY } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
 import type { QuickScanReport } from "../quick-scan.js";
-import { classifyMigrationSql } from "../../tools/pii-classify.mjs";
+import { classifyMigrationSql, classifyPrismaSchema } from "../../tools/pii-classify.mjs";
 import { M8_CORPUS_CONFIGS, type M8CorpusConfig } from "./m8-corpus.js";
 
 export interface ModuleBaseline {
@@ -217,7 +217,21 @@ const M8_E2E_ONLY_SUITE: ModuleNotRun = {
 // hit — the lowest score a single low-confidence match produces is 0.3, which scoreToSeverity
 // reads as "Low"). Every target's baseline below is therefore counted === total.
 export function m10FindingsFromSchema(sql: string): Finding[] {
-  const { dataMap } = classifyMigrationSql(sql);
+  return dataMapToM10Findings(classifyMigrationSql(sql).dataMap);
+}
+
+// #894: the Prisma-path targets declare a `schema.prisma` rather than a migrations dir, and
+// classifyMigrationSql cannot read one — it parses CREATE TABLE SQL. #758 shipped the Prisma
+// model/field parser; this is the same Finding adapter over that classifier, so a Prisma target's
+// M10 is scored exactly like a SQL target's rather than recorded not-run for a reason that stopped
+// being true when #758 landed.
+export function m10FindingsFromPrismaSchema(schema: string): Finding[] {
+  return dataMapToM10Findings(classifyPrismaSchema(schema).dataMap);
+}
+
+type M10Table = { infotypes: string[]; severity: string; columns: { column: string }[]; categories: string[] };
+
+function dataMapToM10Findings(dataMap: Record<string, M10Table>): Finding[] {
   return Object.entries(dataMap).map(([table, t], i) => ({
     id: `M10-SCHEMA-${String(i + 1).padStart(2, "0")}`,
     title: `${table}: ${t.infotypes.join(", ")}`,
@@ -227,7 +241,7 @@ export function m10FindingsFromSchema(sql: string): Finding[] {
     taxonomy: "M10 — Data classification",
     location: table,
     status: "Open",
-    evidence: `${t.columns.length} column(s) classified: ${t.columns.map((c: { column: string }) => c.column).join(", ")}.`,
+    evidence: `${t.columns.length} column(s) classified: ${t.columns.map((c) => c.column).join(", ")}.`,
     impact: `${t.categories.join("/")} data on this table — needs the M10 protection review (encrypted at rest? RLS-scoped? reachable by the anon/authenticated key?).`,
     fix: "Confirm this data is encrypted at rest (pgsodium/Vault) or scoped behind RLS before it reaches an exposed schema/view.",
     value: 3,
@@ -393,6 +407,197 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       "M8-intent": { counted: 1, total: 1, note: "#372 test-intent pass, measured 2026-07-17 at the M8/M8-intent split: 1 'Happy-path-only tests on security-critical code' (Medium, apps/e2e/tests/authentication/auth.po.ts). This is the finding the 2026-07-17 drift runs mis-read as evidence that the M8 MUTATION not-run reason was stale — the split exists so the two measurements can never shadow each other again." },
       M9: { counted: 12, total: 12, note: "Re-measured 2026-07-17: 2->12 — the 2 'Accidental dynamic rendering' plus 10 of #381's new 'SSR-only API misuse' class, concentrated in packages/features/auth sign-in/sign-up components (browser-global reads reachable during SSR)." },
       M10: { counted: 1, total: 1, note: "#279: measured 2026-07-15 via m10FindingsFromSchema over the cloned apps/web/supabase/migrations (9 columns parsed, 1 PII-bearing table). accounts: Low (ambiguous NAME? + EMAIL) — the corpus's other near-floor M10 reading." },
+    },
+  },
+  // ── #894: the Prisma app-layer tier (epic #756, shipped 2026-07-23) had NO real-code regression
+  // baseline. The six targets above were all selected in the 2026-07-12 sweep; boxyhq carries a
+  // schema.prisma but its baselines predate detectOrm routing, the Prisma tenant-scope/BOLA
+  // detector (#760), M7's schema.prisma FK-index check (#761) and M10's Prisma classification
+  // (#758). The four below are pinned and measured 2026-07-24 on this machine (clone at pin ->
+  // `npm install --no-audit --no-fund` in the clone, exactly what corpus-drift --install does ->
+  // detect-static + quality-scan + mutation-scan --detect-only + the M10 adapter). Licences are
+  // AGPL-3.0/NOASSERTION: pinned-clone manifest only, never vendored — the Wallens11 rule at the
+  // top of this file.
+  {
+    slug: "ghostfolio",
+    repo: "ghostfolio/ghostfolio",
+    commit: "7bd6ca6d48a2b88d454218dc1497536708e38c57",
+    license: "AGPL-3.0",
+    provenance: "professional",
+    provenanceNote: "#894: org product with a CHANGELOG, versioned releases, an Nx monorepo and a large human contributor history; ships a skills-lock.json (agent tooling) but no AI commit trailers in the pinned tree. Recorded professional on that evidence.",
+    securityVerdict: "NOT ASSESSED — #894 baselines the source-tier QUALITY modules only. No M1 semantic pass, no dynamic tier, and no disclosure has been filed. This field is deliberately not a clean bill of health.",
+    // #758's Prisma classifier, via m10FindingsFromPrismaSchema — this target has no SQL migration
+    // dir a CREATE TABLE parser could read, which is the whole point of pinning it.
+    schemaPath: "prisma/schema.prisma",
+    modules: {
+      M4: { counted: 356, total: 508, note: "#894: MEASURED 2026-07-24 — 356 counted (151 Medium + 193 Low + 12 Medium security-path), 151 Info plus the #365 M4-00 small-clone disclosure for 508 total. The corpus's second-largest duplication surface; an Nx monorepo (apps/api NestJS + apps/client Angular + libs/*) whose per-entity service/DTO scaffolding is the vein." },
+      "M4-diverged": { counted: 0, total: 0, note: "#894: MEASURED zero 2026-07-24 — the near-miss pass admits no diverged family here. A useful FP floor on a large repo: this target's 356 exact clones did NOT drag the diverged pass up with them, so a non-zero appearing later is a new detection or an over-match, not scale." },
+      "M5-knip": { counted: 446, total: 447, note: "#894: MEASURED 2026-07-24 after `npm install` in the clone (2196 packages) — 413 'Unused file' (Low) + 21 'Unused security-relevant file' (Medium) + 11 unused-export files + 1 Info (#580 M5-99 'result may be unreliable for one or more scopes'). CAVEAT recorded with the number, not instead of it: 413 unused FILES on an Nx workspace is the shape knip produces when it cannot see Nx's project graph as the entry surface, so treat this as a DRIFT baseline (it must reproduce), not as a claim that ghostfolio has 413 dead files. The M5-99 uncertainty row is part of the baseline and is what says so in the output." },
+      "M5-slop": { counted: 49, total: 50, note: "#894: MEASURED 2026-07-24 — 28 'Else after return' + 6 'Orphan TODO' + 6 'Placeholder stub' + 4 'Redundant boolean ternary' + 5 single-use helpers; 1 narrating-comment Info." },
+      "M6-indicator": { counted: 5, total: 5, note: "#894: MEASURED 2026-07-24 — 5 hand-rolled-shape indicators. All Info/non-grading (#267); counted === total by construction (see the manifest's M6-indicator note)." },
+      M7: { counted: 78, total: 78, note: "#894: MEASURED 2026-07-24 and the reason this target is pinned — 5 of the 78 are #761's Prisma `schema.prisma` UNINDEXED-FOREIGN-KEY findings (Account.platformId, AccountBalance.userId, Order.accountUserId, Order.symbolProfileId, SymbolProfile.userId), the first real-code regression baseline the Prisma M7 tier has ever had. The rest: 59 whole-library lodash imports, 8 nested-loop joins, 6 await-in-loop N+1." },
+      M8: {
+        reason: "#894: MEASURED 2026-07-24 — mutation-scan --detect-only DETECTS a real suite here (jest via apps/api/jest.config.ts; it even replicates the target-declared TZ=UTC env, #503), so #224's zero-coverage finding correctly does NOT apply and a finding count is the wrong unit. Scoring it needs a provisioned Stryker + runner plugin, which is corpus-m8.yml's job and needs a measured per-target M8_CORPUS_CONFIGS entry (a `mutate` scope narrowed to the files this Nx suite actually covers). Not attempted in #894: choosing that scope means running the target's jest suite to see what it covers, which is beyond a manifest change. Recorded not-run rather than 0 — a 0 would read as 'no surviving mutants' on a suite nobody has mutated.",
+      },
+      "M8-intent": { counted: 0, total: 0, note: "#894: MEASURED zero 2026-07-24 across this target's 31 spec files — no assertion-free/tautological/happy-path-only/mock-the-subject shape fired. A real FP floor for the test-intent pass on a professionally-maintained suite, and the direct contrast with inbox-zero's 305." },
+      M9: { counted: 13, total: 16, note: "#894: MEASURED 2026-07-24 — 13 'SSR-only API misuse' (8 document, 4 window, 1 navigator) plus 3 Info #903 not-assessed rows (server→client data leak, cache config, waterfall — all 'data layer not supported'). This is an Angular client, not an App Router app: the App-Router-only classes measuring zero here is the correct answer and any non-zero in THOSE is a straight regression." },
+      M10: { counted: 9, total: 9, note: "#894: MEASURED 2026-07-24 via m10FindingsFromPrismaSchema over the cloned prisma/schema.prisma (10,200 bytes) — the FIRST corpus target scored through #758's Prisma classifier rather than a CREATE TABLE parser. 9 PII-bearing models. Headline is a wealth-management schema (Access/Account/SymbolProfileOverrides et al) rather than a synthetic users table, which is why #894 called this the M10 pick." },
+    },
+  },
+  {
+    slug: "rallly",
+    repo: "lukevella/rallly",
+    commit: "a680798c542ec9613f68b7a05a639db8419500d9",
+    license: "AGPL-3.0",
+    provenance: "ai-assisted",
+    provenanceNote: "#894: a real maintained product (versioned releases, i18n via Crowdin, CI) that ALSO ships a CLAUDE.md and a .claude/skills tree of tracked symlinks — the capable-dev-with-AI population, same tier as proposit.",
+    securityVerdict: "NOT ASSESSED — source-tier quality baselines only (#894). No M1 semantic pass, no dynamic tier, no disclosure filed.",
+    // The Prisma `prismaSchemaFolder` layout: schema.prisma is 9 lines of datasource/generator and
+    // the models live in prisma/models/*.prisma, so the schema.prisma path classifies ZERO columns
+    // (measured). The SQL migrations are the schema input that actually carries this target's data.
+    schemaPath: "packages/database/prisma/migrations",
+    modules: {
+      M4: { counted: 160, total: 186, note: "#894: MEASURED 2026-07-24 — 160 counted (83 Medium + 65 Low + 6 Medium/6 Low security-path), 25 Info plus the #365 M4-00 disclosure (11 small clones) for 186. Measured identically before and after `npm install`, so the install step is inert for M4 here as it is for the rest of the corpus." },
+      "M4-diverged": { counted: 2, total: 2, note: "#894: MEASURED 2026-07-24 — 2 High review-tier families, one of them a 5-function family. Small relative to the 160 exact clones, the same ratio the older targets show." },
+      "M5-knip": { counted: 67, total: 68, note: "#894: MEASURED 2026-07-24 WITH `npm install` in the clone (67; the same run without deps read 69, recorded here so the delta is on the record). 17 unused files + 47 unused-export files + 1 Medium security-relevant. STILL A PARTIAL and the baseline says so: 4 of 16 scopes (apps/landing, apps/web, packages/database, packages/ui) ran in #810's reduced no-dependencies mode and are disclosed as the M5-98 Info row, because this is a pnpm workspace and `npm install` — what corpus-drift --install runs — resolves only the 219 ROOT packages, leaving every workspace without node_modules. Re-verify if the drift job ever gains a pnpm install path." },
+      "M5-slop": { counted: 123, total: 177, note: "#894: MEASURED 2026-07-24 — 20 single-use helpers + 9 else-after-return + 1 single-call wrapper counted alongside the rest; 49 'Decorative emoji in a log call' + 4 narrating comments are the Info tail. The decorative-emoji vein is this target's signature and the thing to watch for precision drift." },
+      "M6-indicator": { counted: 24, total: 24, note: "#894: MEASURED 2026-07-24 — 24 hand-rolled-shape indicators, the corpus's highest reading after inbox-zero's 51. All Info/non-grading (#267); counted === total by construction." },
+      M7: { counted: 17, total: 20, note: "#894: MEASURED 2026-07-24 — 9 await-in-loop N+1, 4 raw <img>, 1 nested-loop join, 1 whole-library lodash import, 1 sort-in-JSX, 1 oversized-committed-images roll-up (7 images, 9.3 MB); 3 hook-dep Info. NOTE for the Prisma tier: #761's unindexed-FK check contributes ZERO here — this target's schema.prisma carries no models (see schemaPath above), so the FK check has nothing to read. ghostfolio/documenso/inbox-zero are where that detector is baselined." },
+      M8: {
+        reason: "#894: MEASURED 2026-07-24 — a real suite IS detected (so #224's zero-coverage finding does not apply and a finding count is the wrong unit), but it cannot be mutation-scored through corpus-m8.yml's provisioning path: this is a pnpm workspace and `npm install` at the root installs only the 219 root packages, leaving apps/web (where the suite lives) with no node_modules at all — verified in the clone, apps/web/node_modules does not exist after the install the job runs. Scoring it needs a pnpm-aware install step the M8 job does not have. Recorded not-run with that reason rather than 0.",
+      },
+      "M8-intent": { counted: 8, total: 8, note: "#894: MEASURED 2026-07-24 — 4 'Call-count-only test' (Low), 2 'Asserts response shape, not business values' (Medium), 2 '`vi.hoisted` factory references non-hoisted binding' (Medium)." },
+      M9: { counted: 14, total: 17, note: "#894: MEASURED 2026-07-24 — 13 SSR-only API misuse (11 window, 1 document, 1 navigator) + 1 'cookies() read in a page' (Medium, accidental dynamic rendering); 3 Info #903 not-assessed rows. A real App Router target, unlike ghostfolio/carbon." },
+      M10: { counted: 22, total: 22, note: "#894: MEASURED 2026-07-24 via m10FindingsFromSchema over the cloned packages/database/prisma/migrations (137 SQL migrations). 22 PII-bearing tables, headline `accounts` Critical and `Account`/`license_validations` High. Deliberately NOT scored off schema.prisma: this target uses Prisma's prismaSchemaFolder split, so its schema.prisma declares no models and classifies zero columns — measured, not assumed." },
+    },
+  },
+  {
+    slug: "inbox-zero",
+    repo: "elie222/inbox-zero",
+    commit: "2b78f2b38576b7e69c77e5acf76676ff75fac75a",
+    license: "none in-tree at this pin (GitHub reports NOASSERTION — all rights reserved by default)",
+    provenance: "ai-assisted",
+    provenanceNote: "#894: a real product with a large contributor history and CI, shipping CLAUDE.md + AGENTS.md + a skills/ tree — capable-dev-with-AI, not vibe-coded.",
+    securityVerdict: "NOT ASSESSED — source-tier quality baselines only (#894). No M1 semantic pass, no dynamic tier, no disclosure filed.",
+    schemaPath: "apps/web/prisma/schema.prisma",
+    modules: {
+      M4: { counted: 341, total: 537, note: "#894: MEASURED 2026-07-24 — 341 counted (72 Medium + 266 Low + 3 Medium security-path), 195 Info plus the #365 M4-00 disclosure (45 small clones) for 537." },
+      "M4-diverged": { counted: 1, total: 1, note: "#894: MEASURED 2026-07-24 — 1 High review-tier diverged security-path family." },
+      "M5-knip": { counted: 197, total: 198, note: "#894: MEASURED 2026-07-24 after `npm install` (108 root packages — a pnpm workspace, so the workspaces stay uninstalled; the M5-98 reduced-tier Info row is part of this baseline). 24 unused files + 2 Medium security-relevant unused-export files + the unused-export tail." },
+      "M5-slop": { counted: 1420, total: 1439, note: "#894: MEASURED 2026-07-24 — the corpus's HIGHEST M5-slop reading by an order of magnitude, on the corpus's deepest test surface. This is the target to watch for slop-class precision drift: a large fraction of the count is the single-use-helper class (#391), the same class that moved boxyhq 12->76 and saas-lite 23->79 when it landed." },
+      "M6-indicator": { counted: 51, total: 51, note: "#894: MEASURED 2026-07-24 — 51 hand-rolled-shape indicators, the corpus's highest. All Info/non-grading (#267); counted === total by construction." },
+      M7: { counted: 89, total: 106, note: "#894: MEASURED 2026-07-24 — 66 await-in-loop N+1 (the dominant vein), 22 nested-loop joins, 1 client fetch in useEffect, 1 state-sprawl component, 1 oversized-committed-images roll-up; 17 hook-dep Info. #761's unindexed-FK check contributes zero at this pin — recorded so a later non-zero is read as a schema change, not a detector regression." },
+      M8: {
+        reason: "#894: MEASURED 2026-07-24 — a real suite IS detected (586 test files; #224's zero-coverage finding correctly does not fire), but it is not mutation-scoreable through corpus-m8.yml as that job is built: pnpm workspace, `npm install` resolves 108 root packages only, so apps/web's vitest suite has no node_modules to run against. Same blocker as rallly and carbon, measured on this clone rather than assumed. #894 named this target the M8 pick precisely because 586 specs is the deepest public mutation surface available — realising that needs a pnpm-aware install in the M8 job first, which is the remainder work, not a reason to score 0.",
+      },
+      "M8-intent": { counted: 305, total: 305, note: "#894: MEASURED 2026-07-24 and the reason this target is pinned — 305 test-intent findings, 100x the corpus's previous maximum (saas-lite's 1). 161 'Call-count-only test', 121 '`vi.hoisted` factory references non-hoisted binding', 10 'Unrestored vi.spyOn leaks across tests', 6 'Test mocks the module it is testing', 2 assertion-free, 2 snapshot-only, 2 happy-path-only on money-critical files (payments.ts, refunds.ts). Every one of these classes now has a real-code drift baseline for the first time; the vi.hoisted class in particular had none." },
+      M9: { counted: 52, total: 52, note: "#894: MEASURED 2026-07-24 — the corpus's largest App Router boundary surface: 18 'searchParams read directly in the route component' (Medium), 19 SSR-only API misuse, 7 forced-dynamic cookies()/headers() reads, 2 'Server-exclusive module missing server-only guard' (High) and 5 'Server Action has no input schema validation' (High). The Server-Action-validation class had no real-code baseline before this." },
+      M10: { counted: 35, total: 35, note: "#894: MEASURED 2026-07-24 via m10FindingsFromPrismaSchema over apps/web/prisma/schema.prisma. 35 PII-bearing models; Account/Session/User are High (AUTH_TOKEN + credentials)." },
+    },
+  },
+  {
+    slug: "documenso",
+    repo: "documenso/documenso",
+    commit: "c02dfaba1a89f346db785879d39d35a04ec3450b",
+    license: "AGPL-3.0",
+    provenance: "professional",
+    provenanceNote: "#894: org product, large contributor history, commitlint/husky/biome governance, versioned releases. Ships AGENTS.md and gitignores CLAUDE.md — agent tooling used, no AI authorship fingerprints in the pinned source.",
+    securityVerdict: "NOT ASSESSED — source-tier quality baselines only (#894). No M1 semantic pass, no dynamic tier, no disclosure filed.",
+    schemaPath: "packages/prisma/schema.prisma",
+    modules: {
+      // #894: M4 on this target is ENVIRONMENT-DEPENDENT and therefore has no trustworthy number to
+      // record. Three runs of the SAME pinned tree, 2026-07-24:
+      //   - ubuntu-latest, corpus-drift --install (the scorer's own environment): 0 counted
+      //   - macOS, cloned under a deep scratch path:                              0 counted
+      //   - macOS, cloned into corpus-drift's own mkdtemp:                      835 counted / 1,256
+      // jscpd writes no report at all in the first two, and runJscpd maps a missing report to a
+      // SYNTHETIC zero-duplication report (#505's "<2 comparable files" branch, written before #544
+      // moved jscpd back to whole-repo). So a run that analysed NOTHING is indistinguishable from a
+      // clone-free repo, and quality-scan prints `0% (0/0 lines)` — a clean bill of health on a
+      // 3,395-file tree. Recorded not-run with the reason rather than baselined at 0 (which would
+      // assert cleanliness) or at 835 (which the scorer's own environment does not reproduce).
+      // In an environment where jscpd DOES run, revalidateNotRunReasons fires a loud "this reason
+      // has outlived its truth" row — which is the correct signal, not a nuisance. Filed as #931.
+      M4: {
+        reason: "#894/#931: MEASURED 2026-07-24 as ENVIRONMENT-DEPENDENT, not as a number. The same pinned tree scores 0 counted on ubuntu-latest under `corpus-drift --install` (the scheduled scorer's own environment) and 0 on macOS under a deep scratch path, but 835 counted / 1,256 total on macOS in corpus-drift's mkdtemp. In the zero cases jscpd writes no report file at all, and runJscpd turns a missing report into a synthetic zero-duplication report (#505's '<2 comparable files' branch, written before #544 moved jscpd back to whole-repo) — so quality-scan prints `M4 duplication: 0% (0/0 lines) — 0 clone cluster(s)`, a clean bill of health from a run that analysed nothing. Corroboration that the zero is an invocation failure and not a property of the repo: the diverged-clone pass, which walks the tree itself instead of shelling out to jscpd, produces its 2 findings in EVERY run. Recorded not-run rather than baselined at 0 (which would assert cleanliness Harvey did not earn) or at 835 (which the scorer's own environment does not reproduce). Re-measure and replace this reason once #931 lands.",
+      },
+      "M4-diverged": { counted: 2, total: 2, note: "#894: MEASURED 2026-07-24 — 2 High review-tier diverged security-path clone findings, reproduced in all three runs including both in which jscpd's exact-clone pass returned nothing. That invariance is what showed the M4 zero to be an invocation failure rather than a property of the repo (#931)." },
+      "M5-knip": { counted: 1360, total: 1362, note: "#894: MEASURED 2026-07-24 after `npm install` (2127 packages). 1,311 unused files + unused-export files, with 1/16 scopes in #810 reduced mode (M5-98 Info) and 8/16 flagged uncertain (#580 M5-99 Info) — both disclosure rows are part of the baseline. ±1 ACROSS ENVIRONMENTS, recorded rather than absorbed into a tolerance nobody would see: 1360 on ubuntu-latest under `corpus-drift --install` AND on macOS under a scratch path, 1359 on macOS in corpus-drift's mkdtemp. The split tracks the M4 environment split exactly (see this target's M4 reason and #931), so re-measure this alongside it. 1360 is recorded because it is what the scheduled scorer's own environment produces. CAVEAT recorded with the number: 1,311 unused FILES on a turbo monorepo whose entry surface knip cannot fully resolve (8 uncertain scopes says so in the output) is a DRIFT baseline, not a claim that documenso has 1,311 dead files." },
+      "M5-slop": { counted: 262, total: 267, note: "#894: MEASURED 2026-07-24." },
+      "M6-indicator": { counted: 21, total: 21, note: "#894: MEASURED 2026-07-24 — 21 hand-rolled-shape indicators. All Info/non-grading (#267); counted === total by construction." },
+      M7: { counted: 127, total: 258, note: "#894: MEASURED 2026-07-24 — 127 counted with the corpus's largest Info tail (131 hook-dependency style notes), plus a 16-image/19.1 MB oversized-asset roll-up. The Info tail is itself worth pinning: #230 demoted that class rather than dropping it, and this is the target where the demotion carries the most weight." },
+      M8: { counted: 1, total: 1, note: "#894: MEASURED 2026-07-24 — mutation-scan emits exactly one finding, #224's M8-00 zero-coverage finding ('No automated test suite', High). RECORDED WITH ITS KNOWN DEFECT, not as ground truth: this target ships 128 tracked *.spec.ts/*.test.ts files and packages/lib declares `\"test\": \"vitest run\"`, but the ROOT package.json has no `test` script and no test-runner dependency, which is all detectNoTestSuite looks at — so the finding is a FALSE zero-coverage claim on a repo that does have tests. Baselined at 1 because that is what the scanner does today and the drift check must notice when it changes; the fix is tracked in the follow-up issue filed with #894, and this note is what stops the 1 from being read as evidence about documenso." },
+      "M8-intent": { counted: 1, total: 1, note: "#894: MEASURED 2026-07-24 — 1 'Call-count-only test' (Low). Note the tension this key exists to keep visible (the saas-lite lesson): a test-intent finding fires here while the mutation tier claims there is no suite at all — the split means neither reading can shadow the other." },
+      M9: { counted: 0, total: 1, note: "#894: MEASURED 2026-07-24 — a single Info row, #903's 'M9 N/A — non-SSR SPA'. documenso moved to React Router/Remix, so the App Router boundary module is correctly not-applicable and says so in the output rather than reporting a silent zero. Any counted M9 finding appearing here is a framework-detection regression." },
+      M10: { counted: 21, total: 21, note: "#894: MEASURED 2026-07-24 via m10FindingsFromPrismaSchema over packages/prisma/schema.prisma (38,062 bytes). 21 PII-bearing models; User is High, TeamProfile/Passkey Low." },
+    },
+  },
+  // ── #897: the corpus had never seen a LARGE Supabase schema — every Supabase target above is a
+  // starter kit with single- to low-double-digit migration counts, so M10's classification, M4's
+  // duplication pass and M7's code tier had only ever been measured at small scale. carbon is 859
+  // migrations / 4,110 TS files / 36 workspaces, an order of magnitude past anything else pinned.
+  // The measurement (wall-clock per module, what degrades, what becomes unusable) is written up in
+  // docs/design/carbon-scale-measurement.md; these are the baselines that completed.
+  {
+    slug: "carbon",
+    repo: "crbnos/carbon",
+    commit: "92e19c04417e7023a38264315d7846449fd5c4a1",
+    license: "none in-tree at this pin (GitHub reports NOASSERTION — all rights reserved by default)",
+    provenance: "ai-assisted",
+    provenanceNote: "#897: a real commercial ERP/MES/QMS with Rust crates, patches/, a versioned release history and BACKWARD_COMPATIBILITY.md, that also ships CLAUDE.md + AGENTS.md + a .claude/skills tree. Capable-dev-with-AI.",
+    securityVerdict: "NOT ASSESSED — #897 is a SCALE measurement, not an audit. The free-tier quick-scan does grade this target F (0/100) on 14 Critical secret findings, and every one inspected is a placeholder credential in self-hosting docs or an example docker-compose; that cry-wolf result is the product finding, recorded in docs/design/carbon-scale-measurement.md and in the follow-up issue, NOT a security verdict on carbon. No disclosure filed and none warranted from this pass.",
+    schemaPath: "packages/database/supabase/migrations",
+    modules: {
+      M4: { counted: 3251, total: 4526, note: "#897: MEASURED 2026-07-24 — the corpus's largest M4 surface by 9x. jscpd completed whole-repo inside quality-scan's 39.4s: no timeout, no hang, no quadratic blow-up at 4,110 TS files. The finding VOLUME is the product finding (see the scale doc), not a scanner failure." },
+      "M4-diverged": { counted: 0, total: 0, note: "#897: MEASURED zero 2026-07-24. The strongest FP-floor reading in the corpus: 3,251 exact clones and not one diverged security-path family, so the near-miss pass is not simply tracking repo size." },
+      "M5-knip": { counted: 2773, total: 2775, note: "#897: MEASURED 2026-07-24 WITHOUT the target's deps — and that is reproducible in CI, not a local shortcut: `npm install` FAILS on this target with EUNSUPPORTEDPROTOCOL (`catalog:`, a pnpm-catalog dependency), which is exactly what corpus-drift's installTargetDeps swallows. So knip runs in #810's reduced no-dependencies mode across the 36 workspaces and the M5-98 Info row is part of this baseline. A DRIFT baseline, not a dead-code claim." },
+      "M5-slop": { counted: 1125, total: 1263, note: "#897: MEASURED 2026-07-24." },
+      "M6-indicator": { counted: 48, total: 48, note: "#897: MEASURED 2026-07-24 — 48 hand-rolled-shape indicators across an ERP (MIME-type tables, currency/date formatting, base64url, cookie parsing, random-string ids). All Info/non-grading (#267); counted === total by construction." },
+      M7: { counted: 673, total: 841, note: "#897: MEASURED 2026-07-24 — the corpus's largest M7 surface. detect-static completed the whole tree in 19.8s." },
+      M8: {
+        reason: "#897: MEASURED 2026-07-24 — a real suite IS detected (so #224's zero-coverage finding does not apply), but it is not mutation-scoreable through corpus-m8.yml: `npm install` fails outright on this target (EUNSUPPORTEDPROTOCOL: `catalog:`), so no runner and no Stryker can be provisioned by the job as it exists. Same class of blocker as rallly/inbox-zero, one step worse — there the install succeeds but resolves only the root packages. Recorded not-run with the reason rather than 0.",
+      },
+      "M8-intent": { counted: 3, total: 3, note: "#897: MEASURED 2026-07-24 — 1 'Call-count-only test' (Low) and 2 'Happy-path-only tests on security/money-critical code' (Medium: no-legacy-rls.ts, build-payment-journal.ts). A striking ratio: 77 test files across 4,110 source files produce almost no test-intent signal, because there is barely any test surface to inspect." },
+      M9: { counted: 0, total: 1, note: "#897: MEASURED 2026-07-24 — a single Info row, #903's 'M9 not assessed — React Router 7 (framework mode) (framework not supported)'. The App Router module correctly declares itself not-applicable on the largest target in the corpus INSTEAD of returning a silent zero, which is the #903 guard doing its job on real code." },
+      M10: { counted: 154, total: 154, note: "#897: MEASURED 2026-07-24 over 859 Supabase migrations — 4,954,187 bytes of SQL classified in 0.1s, 154 PII-bearing tables. The headline scale result: no timeout and no quadratic degradation, the classifier is linear in schema size. The headline QUALITY result is the opposite way round and is recorded in the scale doc — on an ERP carrying employee, supplier and customer records the highest severity produced anywhere in 154 tables is Medium, so the severity model does not separate a real HR/supplier schema from a starter kit's users table." },
+    },
+  },
+  // ── #895: the only Supabase-native PAIRED ground truth that exists — broken and fixed variants of
+  // the same lab, side by side. `docs/test-targets.md` recorded "No DVWA-style intentionally-
+  // vulnerable Supabase repo exists (confirmed)" on 2026-06-27; that was true then and false by
+  // 2026-03 (the repo's own last update), and it sat unchallenged for a month. This entry is the
+  // durable fix.
+  //
+  // THE LABELLING WAS VERIFIED BEFORE IT WAS TRUSTED (#895's step 1), by diffing the migrations AND
+  // by standing the lab up live in both states with `pnpm dynamic-validate --execute`. Result and
+  // method: docs/design/supabase-security-labs-paired-validation.md. Two things came out of it that
+  // no static baseline would have shown: M2 discriminates the pair correctly (3 cross-tenant Highs
+  // on `families` that vanish when the fix migration is applied, none introduced), and the lab's own
+  // "fixed" variant STILL leaks `public.profiles` to anon — an unlabelled bug in the target's own
+  // ground truth.
+  //
+  // Licence NONE (all rights reserved by default), same constraint as Wallens11: pinned-clone
+  // manifest only, never vendored into targets/ and never distilled into a *.entries.ts.
+  {
+    slug: "supabase-security-labs",
+    repo: "elamilutinovic-vibePep/supabase-security-labs",
+    commit: "c8ac29b9c19c1064212bd296c3712909924f9b22",
+    license: "none (no LICENSE file — all rights reserved)",
+    provenance: "ai-generated",
+    provenanceNote: "#895: an unstarred single-author teaching-lab repo that is mostly prose docs plus small SQL/Deno artefacts, with the uniform structure and narration of generated material. Recorded ai-generated on that evidence; the important point is that its LABELLING was verified independently rather than trusted (see the paired-validation doc), which is what #895 asked for.",
+    securityVerdict: "N/A by construction — this target's vulnerabilities are DELIBERATE and documented by its own author. Nothing here is a disclosure candidate. What is recorded instead is the PAIRED result: Harvey's M2 tier proves the planted cross-tenant `families` leak live and clears it on the fixed variant, while the M1 static mechanical tier produces byte-identical output on both. Detail: docs/design/supabase-security-labs-paired-validation.md.",
+    schemaPath: "rls-broken-lab/supabase/migrations",
+    modules: {
+      M4: { counted: 1, total: 5, note: "#895: MEASURED 2026-07-24 — 1 counted (Low) + 3 Info + the #365 M4-00 disclosure. A near-floor reading: this repo is prose docs plus a handful of small SQL and Deno files, so the source-tier quality modules are all at or near zero here BY CONSTRUCTION. Their value in the corpus is as an FP floor, not as a duplication signal; the target earns its place on the M1/M2 paired result, not on these numbers." },
+      "M4-diverged": { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24 — FP floor." },
+      "M5-knip": { counted: 0, total: 1, note: "#895: MEASURED 2026-07-24 — zero counted, with the #505 M5-00 'did not complete for every workspace' Info disclosure present. That disclosure IS the baseline's honesty: there is no package.json here for knip to resolve entries from, and the run says so instead of reporting a clean zero." },
+      "M5-slop": { counted: 0, total: 4, note: "#895: MEASURED 2026-07-24 — zero counted, 4 'Decorative emoji in a comment' Info. FP floor." },
+      "M6-indicator": { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24. All Info/non-grading (#267); counted === total by construction." },
+      M7: { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24 — FP floor. Any M7 finding appearing on a repo of SQL and two 40-line Deno functions is almost certainly a new over-match." },
+      M8: { counted: 1, total: 1, note: "#895: MEASURED 2026-07-24 — #224's M8-00 zero-coverage finding (High), which IS the measurement: zero test files, no test script. Correct here, unlike the same finding on documenso." },
+      "M8-intent": { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24 — no test files to inspect, so the M8-00 above is this target's whole M8 story." },
+      M9: { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24 — no Next.js app here at all." },
+      M10: { counted: 2, total: 2, note: "#895: MEASURED 2026-07-24 over rls-broken-lab/supabase/migrations — profiles and posts, both Low. Chosen as the schemaPath over the other two labs' migration dirs because it is the one whose broken/fixed pair is the point of the target." },
     },
   },
 ];
