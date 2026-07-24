@@ -3,9 +3,19 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateFindings } from "../src/findings.js";
-import { buildDataMap, classifyColumn, classifyMigrationSql, classifyPrismaSchema, classifyWithFallback, dataMapToFindings } from "./pii-classify.mjs";
+import {
+  buildDataMap,
+  classifyColumn,
+  classifyMigrationSql,
+  classifyPrismaSchema,
+  classifyWithFallback,
+  createAnthropicSemanticClassifier,
+  dataMapToFindings,
+  DEFAULT_SEMANTIC_MODEL,
+  resolveSemanticClassifier,
+} from "./pii-classify.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(REPO_ROOT, "tools", "pii-classify.mjs");
@@ -725,14 +735,175 @@ describe("classifyWithFallback — LLM semantic-pass hook", () => {
       { table_name: "users", column_name: "email", data_type: "text" },
       { table_name: "users", column_name: "contact_handle", data_type: "text" },
     ];
-    const semanticClassifier = async (unresolved: { table_name: string; column_name: string }[]) => {
-      expect(unresolved).toEqual([{ table_name: "users", column_name: "contact_handle" }]);
+    const semanticClassifier = async (unresolved: { table_name: string; column_name: string; data_type?: string }[]) => {
+      // the hook receives the declared type too (#855) — the LLM reasons over name+type+context
+      expect(unresolved).toEqual([{ table_name: "users", column_name: "contact_handle", data_type: "text" }]);
       return new Map([["users.contact_handle", { infotype: "USERNAME_HANDLE", category: "PII", confidence: "low" }]]);
     };
     const map = await classifyWithFallback(columns, semanticClassifier);
     expect(map.users.infotypes.sort()).toEqual(["EMAIL", "USERNAME_HANDLE"]);
     const handleHit = map.users.columns.find((c) => c.column === "contact_handle");
     expect(handleHit?.source).toBe("semantic");
+  });
+
+  it("never overrides a dictionary hit with a semantic verdict — name-based results are the base layer", async () => {
+    const columns = [
+      { table_name: "users", column_name: "email", data_type: "text" },
+      { table_name: "users", column_name: "contact_handle", data_type: "text" },
+    ];
+    // A hostile/wrong classifier that tries to reclassify the dictionary-resolved email column.
+    const semanticClassifier = async () =>
+      new Map([
+        ["users.email", { infotype: "WRONG", category: "SECRET" as const, confidence: "medium" as const }],
+        ["users.contact_handle", { infotype: "USERNAME_HANDLE", category: "PII" as const, confidence: "low" as const }],
+      ]);
+    const map = await classifyWithFallback(columns, semanticClassifier);
+    const emailHit = map.users.columns.find((c) => c.column === "email");
+    expect(emailHit).toEqual({ column: "email", infotype: "EMAIL", category: "PII", confidence: "high" }); // no source: "semantic"
+    expect(map.users.infotypes.sort()).toEqual(["EMAIL", "USERNAME_HANDLE"]);
+  });
+
+  it("does not invoke the semantic classifier at all when the dictionary resolves everything", async () => {
+    const semanticClassifier = vi.fn(async () => new Map());
+    const map = await classifyWithFallback([{ table_name: "users", column_name: "email", data_type: "text" }], semanticClassifier);
+    expect(semanticClassifier).not.toHaveBeenCalled();
+    expect(map.users.infotypes).toEqual(["EMAIL"]);
+  });
+
+  it("produces the identical data map to buildDataMap when semantic is off — the default free tier is unchanged", async () => {
+    const columns = [
+      { table_name: "users", column_name: "email", data_type: "text" },
+      { table_name: "users", column_name: "contact_handle", data_type: "text" },
+      { table_name: "payments", column_name: "cvv", data_type: "text" },
+    ];
+    expect(await classifyWithFallback(columns)).toEqual(buildDataMap(columns));
+  });
+});
+
+describe("resolveSemanticClassifier — the #855 double gate (opt-in flag AND API key)", () => {
+  const env = { ANTHROPIC_API_KEY: "sk-ant-test" };
+
+  it("returns null without the --semantic flag, even when a key is present — semantic is opt-in only", () => {
+    expect(resolveSemanticClassifier({ argv: ["node", "pii-classify.mjs", "--schema", "x"], env })).toBeNull();
+  });
+
+  it("returns null (with a loud stderr disclosure) when --semantic is passed without ANTHROPIC_API_KEY", () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(resolveSemanticClassifier({ argv: ["node", "pii-classify.mjs", "--semantic"], env: {} })).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("ANTHROPIC_API_KEY is not set"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("returns a classifier defaulting to claude-sonnet-5 when both gates pass", () => {
+    const classifier = resolveSemanticClassifier({ argv: ["node", "pii-classify.mjs", "--semantic"], env });
+    expect(classifier).not.toBeNull();
+    expect(classifier?.model).toBe("claude-sonnet-5");
+    expect(DEFAULT_SEMANTIC_MODEL).toBe("claude-sonnet-5");
+  });
+
+  it("honors --semantic-model over the PII_SEMANTIC_MODEL env override", () => {
+    const flagged = resolveSemanticClassifier({
+      argv: ["node", "pii-classify.mjs", "--semantic", "--semantic-model", "claude-opus-4-8"],
+      env: { ...env, PII_SEMANTIC_MODEL: "claude-haiku-4-5" },
+    });
+    expect(flagged?.model).toBe("claude-opus-4-8");
+    const fromEnv = resolveSemanticClassifier({
+      argv: ["node", "pii-classify.mjs", "--semantic"],
+      env: { ...env, PII_SEMANTIC_MODEL: "claude-haiku-4-5" },
+    });
+    expect(fromEnv?.model).toBe("claude-haiku-4-5");
+  });
+});
+
+describe("createAnthropicSemanticClassifier — fetch-based Messages API caller (#855, network fully mocked)", () => {
+  const unresolved = [
+    { table_name: "users", column_name: "contact_handle", data_type: "text" },
+    { table_name: "users", column_name: "kv_blob", data_type: "jsonb" },
+  ];
+  const allColumns = [
+    { table_name: "users", column_name: "email" },
+    { table_name: "users", column_name: "contact_handle" },
+    { table_name: "users", column_name: "kv_blob" },
+  ];
+  const apiResponse = (entries: unknown) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(entries) }] }),
+  });
+
+  it("requires an apiKey — never constructible without one", () => {
+    expect(() => createAnthropicSemanticClassifier({} as never)).toThrow(/apiKey/);
+  });
+
+  it("sends only names/types/table context (never values) to /v1/messages and maps the verdicts back", async () => {
+    const fetchImpl = vi.fn(async () =>
+      apiResponse([
+        { table: "users", column: "contact_handle", infotype: "USERNAME_HANDLE", category: "PII", confidence: "low" },
+      ]),
+    );
+    const classifier = createAnthropicSemanticClassifier({ apiKey: "sk-ant-test", allColumns, fetchImpl: fetchImpl as never });
+    const hits = await classifier(unresolved);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, { headers: Record<string, string>; body: string }];
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+    expect(init.headers["x-api-key"]).toBe("sk-ant-test");
+    expect(init.headers["anthropic-version"]).toBe("2023-06-01");
+    const body = JSON.parse(init.body);
+    expect(body.model).toBe("claude-sonnet-5");
+    // the batch carries the unresolved names, declared types, and sibling-column context…
+    expect(JSON.parse(body.messages[0].content)).toEqual([
+      { table: "users", column: "contact_handle", sql_type: "text", sibling_columns: ["email", "kv_blob"] },
+      { table: "users", column: "kv_blob", sql_type: "jsonb", sibling_columns: ["email", "contact_handle"] },
+    ]);
+    expect(hits.get("users.contact_handle")).toEqual({ infotype: "USERNAME_HANDLE", category: "PII", confidence: "low" });
+    expect(hits.has("users.kv_blob")).toBe(false); // omitted by the model → no verdict, stays unclassified
+  });
+
+  it("clamps a semantic 'high' to medium and drops malformed verdicts — a guess never reaches the asserted tier", async () => {
+    const fetchImpl = vi.fn(async () =>
+      apiResponse([
+        { table: "users", column: "contact_handle", infotype: "EMAIL", category: "PII", confidence: "high" },
+        { table: "users", column: "kv_blob", infotype: "whatever", category: "NOT_A_CATEGORY", confidence: "low" },
+        { table: "users", column: "kv_blob", infotype: "lower_case_bad", category: "PII", confidence: "low" },
+      ]),
+    );
+    const classifier = createAnthropicSemanticClassifier({ apiKey: "sk-ant-test", fetchImpl: fetchImpl as never });
+    const hits = await classifier(unresolved);
+    expect(hits.get("users.contact_handle")).toEqual({ infotype: "EMAIL", category: "PII", confidence: "medium" });
+    expect(hits.has("users.kv_blob")).toBe(false);
+  });
+
+  it("fails loud on an API error or a non-JSON response — an opted-in pass never silently degrades", async () => {
+    const errorFetch = vi.fn(async () => ({ ok: false, status: 401, text: async () => "authentication_error" }));
+    const classifier = createAnthropicSemanticClassifier({ apiKey: "sk-ant-bad", fetchImpl: errorFetch as never });
+    await expect(classifier(unresolved)).rejects.toThrow(/401/);
+
+    const proseFetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ stop_reason: "end_turn", content: [{ type: "text", text: "I could not classify these." }] }),
+    }));
+    const proseClassifier = createAnthropicSemanticClassifier({ apiKey: "sk-ant-test", fetchImpl: proseFetch as never });
+    await expect(proseClassifier(unresolved)).rejects.toThrow(/no JSON array/);
+  });
+
+  it("plugs into classifyWithFallback end-to-end with the fetch mock — verdicts merge on top of the name-based base layer", async () => {
+    const fetchImpl = vi.fn(async () =>
+      apiResponse([{ table: "users", column: "contact_handle", infotype: "USERNAME_HANDLE", category: "PII", confidence: "low" }]),
+    );
+    const columns = [
+      { table_name: "users", column_name: "email", data_type: "text" },
+      { table_name: "users", column_name: "contact_handle", data_type: "text" },
+    ];
+    const classifier = createAnthropicSemanticClassifier({ apiKey: "sk-ant-test", allColumns: columns, fetchImpl: fetchImpl as never });
+    const map = await classifyWithFallback(columns, classifier);
+    expect(map.users.infotypes.sort()).toEqual(["EMAIL", "USERNAME_HANDLE"]);
+    expect(map.users.columns.find((c) => c.column === "email")?.source).toBeUndefined();
+    expect(map.users.columns.find((c) => c.column === "contact_handle")?.source).toBe("semantic");
   });
 });
 
