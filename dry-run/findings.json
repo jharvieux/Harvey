@@ -821,7 +821,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "braces",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "braces is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-848j-6mx2-7j84",
@@ -839,7 +845,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "elliptic",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "elliptic is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-29mw-wpgm-hmr9",
@@ -857,7 +869,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "lodash",
+    "reachability": {
+      "status": "declared-not-imported",
+      "rank": 2,
+      "justification": "lodash is declared in the manifest but no scanned source file imports it. It may still be reached through another dependency, a build step, or dynamic loading — this de-prioritizes the row, it does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-35jh-r3h4-6jhm",
@@ -875,7 +893,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "lodash",
+    "reachability": {
+      "status": "declared-not-imported",
+      "rank": 2,
+      "justification": "lodash is declared in the manifest but no scanned source file imports it. It may still be reached through another dependency, a build step, or dynamic loading — this de-prioritizes the row, it does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-f23m-r3pf-42rh",
@@ -893,7 +917,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "lodash",
+    "reachability": {
+      "status": "declared-not-imported",
+      "rank": 2,
+      "justification": "lodash is declared in the manifest but no scanned source file imports it. It may still be reached through another dependency, a build step, or dynamic loading — this de-prioritizes the row, it does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-jf85-cpcp-j695",
@@ -911,7 +941,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "lodash",
+    "reachability": {
+      "status": "declared-not-imported",
+      "rank": 2,
+      "justification": "lodash is declared in the manifest but no scanned source file imports it. It may still be reached through another dependency, a build step, or dynamic loading — this de-prioritizes the row, it does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-p6mc-m468-83gw",
@@ -929,7 +965,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "lodash",
+    "reachability": {
+      "status": "declared-not-imported",
+      "rank": 2,
+      "justification": "lodash is declared in the manifest but no scanned source file imports it. It may still be reached through another dependency, a build step, or dynamic loading — this de-prioritizes the row, it does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-r5fr-rjxr-66jc",
@@ -947,7 +989,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "lodash",
+    "reachability": {
+      "status": "declared-not-imported",
+      "rank": 2,
+      "justification": "lodash is declared in the manifest but no scanned source file imports it. It may still be reached through another dependency, a build step, or dynamic loading — this de-prioritizes the row, it does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-xxjr-mmjv-4gpg",
@@ -965,7 +1013,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "lodash",
+    "reachability": {
+      "status": "declared-not-imported",
+      "rank": 2,
+      "justification": "lodash is declared in the manifest but no scanned source file imports it. It may still be reached through another dependency, a build step, or dynamic loading — this de-prioritizes the row, it does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-952p-6rrq-rcjv",
@@ -983,7 +1037,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "micromatch",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "micromatch is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-36qx-fr4f-26g5",
@@ -1001,7 +1061,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-3g8h-86w9-wvmq",
@@ -1019,7 +1103,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-3x4c-7xq6-9pq8",
@@ -1037,7 +1145,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-4633-3j49-mh5q",
@@ -1055,7 +1187,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-4c39-4ccg-62r3",
@@ -1073,7 +1229,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-68g3-v927-f742",
@@ -1091,7 +1271,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-89xv-2m56-2m9x",
@@ -1109,7 +1313,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-8h8q-6873-q5fj",
@@ -1127,7 +1355,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-955p-x3mx-jcvp",
@@ -1145,7 +1397,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-9g9p-9gw9-jx7f",
@@ -1163,7 +1439,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-ffhc-5mcf-pf4q",
@@ -1181,7 +1481,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-ggv3-7p47-pfv8",
@@ -1199,7 +1523,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-gx5p-jg67-6x7h",
@@ -1217,7 +1565,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-h25m-26qc-wcjf",
@@ -1235,7 +1607,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-h64f-5h5j-jqjh",
@@ -1253,7 +1649,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-m99w-x7hq-7vfj",
@@ -1271,7 +1691,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-p9j2-gv94-2wf4",
@@ -1289,7 +1733,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-q4gf-8mx6-v5v3",
@@ -1307,7 +1775,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-vfv6-92ff-j949",
@@ -1325,7 +1817,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-wfc6-r584-vfw7",
@@ -1343,7 +1859,31 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-6g55-p6wh-862q",
@@ -1361,7 +1901,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "postcss",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "postcss is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-qx2v-qp2m-jg93",
@@ -1379,7 +1925,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "postcss",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "postcss is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
   },
   {
     "id": "DEP-OSV-GHSA-5c6j-r48x-rmvq",
@@ -1397,7 +1949,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "dependency": "serialize-javascript",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "serialize-javascript is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
   },
   {
     "id": "DEP-CVE-2025-29927",
@@ -1415,7 +1973,31 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "DEP-CVE-2026-44578",
@@ -1433,7 +2015,31 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "dependency": "next",
+    "reachability": {
+      "status": "imported",
+      "rank": 0,
+      "files": [
+        "app/actions-auth.ts",
+        "app/actions.ts",
+        "app/admin/page-safe.tsx",
+        "app/api/ar-cors-reflected/route.ts",
+        "app/api/ar-cors-reflected-safe/route.ts",
+        "components/AnchorLink.jsx",
+        "components/ImgAttr.jsx",
+        "components/NavLink.jsx",
+        "components/Widget.jsx",
+        "lib/reset-link.js",
+        "middleware.ts",
+        "next.config.js",
+        "pages/api/preview/enable-safe.js",
+        "pages/api/preview/enable.js",
+        "pages/post.js",
+        "pages/search-results.js"
+      ],
+      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+    }
   },
   {
     "id": "SEM-1",

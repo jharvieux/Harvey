@@ -41,6 +41,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/webext-manifest.ts": "M1",
   "src/scan/secrets.ts": "M1",
   "src/scan/dependencies.ts": "M1",
+  "src/scan/dep-reachability.ts": "M1", // #874 — CVE reachability ordering + its not-assessed disclosure
   "src/scan/supply-chain.ts": "M1",
   "src/scan/git-history-secret-gate.ts": "M1",
   "src/pentest": "M2",

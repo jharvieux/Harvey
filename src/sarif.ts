@@ -61,7 +61,7 @@ const SECURITY_SEVERITY: Record<Severity, string> = {
   Watch: "0.0",
 };
 
-export interface SarifLocation {
+interface SarifLocation {
   uri: string;
   startLine?: number;
   startColumn?: number;
@@ -119,9 +119,9 @@ interface SarifNotification {
   properties?: Record<string, unknown>;
 }
 
-export type CoverageInput = { coverage: CoverageRow[] } | { coverageAbsent: string };
+type CoverageInput = { coverage: CoverageRow[] } | { coverageAbsent: string };
 
-export interface SarifOptions {
+interface SarifOptions {
   toolVersion?: string;
   // Absolute-path prefix stripped from artifact URIs so they are repo-relative, which is what
   // GitHub code scanning needs to attach an alert to a file.
@@ -210,6 +210,9 @@ export function toSarif(findings: Finding[], coverage: CoverageInput, opts: Sari
         ...(f.precisionTier ? { precisionTier: f.precisionTier } : {}),
         ...(f.baselineStatus ? { baselineStatus: f.baselineStatus } : {}),
         ...(f.exploitabilityVerified ? { exploitabilityVerified: true } : {}),
+        // #874: reachability ordering travels with the export, so an ASPM ingesting Harvey's CVEs
+        // can sort them the way the report does instead of receiving a flat list.
+        ...(f.reachability ? { reachability: f.reachability.status, reachabilityJustification: f.reachability.justification } : {}),
       },
     };
   });

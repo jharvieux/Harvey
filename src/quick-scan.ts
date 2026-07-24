@@ -16,8 +16,9 @@
 //      explicit risk disclosure naming what was NOT assessed. Source-tier RLS/authz signals ride
 //      alongside as non-grading INDICATORS (#220) — the honest teaser, never a verdict.
 
-import type { Finding, Severity } from "./findings.js";
+import type { DependencyReachability, Finding, Severity } from "./findings.js";
 import { SEVERITIES } from "./findings.js";
+import { byReachabilityThenSeverity } from "./scan/dep-reachability.js";
 
 export type Grade = "A" | "B" | "C" | "D" | "F";
 
@@ -32,6 +33,9 @@ export interface DiagnosisFinding {
   location: string;
   risk: string; // plain-English "why it matters" — the Finding's impact line
   fix?: string;
+  // #874: for a dependency-CVE row, why it sits where it does in the list. Never gated — the
+  // ordering is worthless to a reader who cannot see what it is based on.
+  reachability?: DependencyReachability;
 }
 
 // One M6 "looks hand-rolled" indicator class, rolled up for presentation (#267 Phase 2).
@@ -251,6 +255,7 @@ function toDiagnosis(f: Finding, includeFix: boolean): DiagnosisFinding {
     risk: f.impact,
   };
   if (includeFix) d.fix = f.fix;
+  if (f.reachability) d.reachability = f.reachability;
   return d;
 }
 
@@ -261,7 +266,9 @@ export function buildQuickScanReport(findings: Finding[], opts: { unlocked?: boo
   const unlocked = opts.unlocked ?? false;
   const free = selectFreeFindings(findings);
   const graded = free.filter((f) => !isNonGrading(f));
-  const informational = free.filter(isNonGrading);
+  // #874: the CVE list ships ordered — most-reachable first, severity as the tiebreak — so the row
+  // a reader should look at first is first. The grade is untouched: these are still non-grading.
+  const informational = free.filter(isNonGrading).sort(byReachabilityThenSeverity((f) => severityRank(f.severity)));
   const indicators = selectIndicators(findings);
   const handrolled = rollupHandrolled(findings);
   const handrolledCount = handrolled.reduce((sum, c) => sum + c.total, 0);

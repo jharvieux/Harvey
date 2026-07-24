@@ -30,12 +30,29 @@ export const SUB_STATUSES = ["sub-step-blocked"] as const;
 // prior run). Set by src/audit-diff.ts, never hand-typed. Absent ⇒ no baseline was supplied.
 export const BASELINE_STATUSES = ["new", "persistent", "resolved"] as const;
 
+// #874: how reachable a known-vulnerable dependency is IN THIS CODEBASE, at import granularity.
+// Orders the CVE list and justifies each row; deliberately NOT an exploitability claim (see
+// src/scan/dep-reachability.ts). "not-assessed" exists so an unmeasured row is never presented as
+// the least urgent one.
+export const REACHABILITY_STATUSES = ["imported", "declared-not-imported", "transitive-only", "not-assessed"] as const;
+
 export type Severity = (typeof SEVERITIES)[number];
 export type Confidence = (typeof CONFIDENCES)[number];
 export type PrecisionTier = (typeof PRECISION_TIERS)[number];
 export type CoverageStatus = (typeof COVERAGE_STATUSES)[number];
 export type SubStatus = (typeof SUB_STATUSES)[number];
 export type BaselineStatus = (typeof BASELINE_STATUSES)[number];
+export type ReachabilityStatus = (typeof REACHABILITY_STATUSES)[number];
+
+export interface DependencyReachability {
+  status: ReachabilityStatus;
+  rank: number; // sort key, lower = look at this first
+  files?: string[]; // the importing files, when status is "imported"
+  // Shown to the client verbatim. States the limit of the signal as well as the signal — a
+  // "not imported" row that did not say "this de-prioritizes, it does not clear" would be read
+  // as a clearance we have not earned.
+  justification: string;
+}
 
 export interface CoverageRow {
   module: string; // "M1".."M10"
@@ -106,6 +123,11 @@ export interface Finding {
   // verified finding in a non-grading category isn't silently un-graded (#260). Unset/false is the
   // safe default — set it explicitly, per finding, only when exploitability was actually confirmed.
   exploitabilityVerified?: boolean;
+  // #874: the npm package a "Dependency CVE" finding is about, set by the emitters so the
+  // reachability pass can rank the row without re-parsing the location string. Reachability is an
+  // ORDERING signal — it never sets exploitabilityVerified and never moves the grade.
+  dependency?: string;
+  reachability?: DependencyReachability;
   // Engagement baseline diff (#457), set by src/audit-diff.ts when a --baseline is supplied.
   // baselineStatus classifies this finding against the prior audit; lowConfidenceMatch names the
   // prior finding's id this MIGHT be the same as (same taxonomy + location basename, exact key

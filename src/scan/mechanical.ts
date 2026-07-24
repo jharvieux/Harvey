@@ -19,6 +19,7 @@ import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
+import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachability.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { detectOrm } from "./framework-detect.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
@@ -238,7 +239,17 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...detectHandrolledFindings(loadSources(scanDir).filter((f) => !NON_PRODUCT.test(f.path))));
     }
 
-    return findings;
+    // #874 — rank the Dependency CVE rows by whether the package is actually imported here. Runs
+    // LAST so it sees every CVE emitter's output (curated Next.js, curated deps, OSV) in one pass.
+    // Ordering + a per-row justification only: nothing here grades, and nothing sets
+    // exploitabilityVerified (#213/#227 stands).
+    const directDeps = new Set(Object.keys({ ...pkg?.dependencies, ...pkg?.devDependencies }));
+    const ranked = annotateCveReachability(findings, scanDir, directDeps);
+    if (ranked.unranked > 0) {
+      // Fail loud rather than letting unranked rows sink silently to the bottom of a sorted list.
+      ranked.findings.push(unrankedCveDisclosure(ranked.unranked));
+    }
+    return ranked.findings;
   } finally {
     cleanup();
   }
