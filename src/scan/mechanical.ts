@@ -26,6 +26,7 @@ import { checkHostingConfigHeaders } from "./hosting-headers.js";
 import { checkInfrastructureScope } from "./infra-scope.js";
 import { scanJobTenantScope } from "./job-tenant-scope.js";
 import { checkUnanalysedLanguages } from "./language-coverage.js";
+import { checkUnassessedSfcFiles } from "./sfc-coverage.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { resolveBundleScan, scanSecrets } from "./secrets.js";
@@ -224,6 +225,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #871 — source in languages no M1 rule can read (a Python/Go/Ruby service on the same tables
     // bypasses RLS just as effectively as a broken policy). Disclosure only, by design.
     findings.push(...checkUnanalysedLanguages(scanDir));
+
+    // #919 — .svelte/.vue/.astro single-file components: invisible to every static/AST pass
+    // (M5/M6/M7/M9 + the M1 AST detectors) AND, until now, uncounted. Same disclosure doctrine as
+    // #871 immediately above. Disclosure only, by design.
+    findings.push(...checkUnassessedSfcFiles(scanDir));
 
     // #886 — Dockerfiles/Terraform/K8s manifests are out of scope by decision, not by oversight
     // (docs/design/infrastructure-out-of-scope.md). Say so when the target has them.
