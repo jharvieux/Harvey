@@ -16,6 +16,7 @@ import { b17RaceUnscopedEntries } from "./calibration/b17-race-unscoped.entries.
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { m9AuthzEntries } from "./calibration/m9-authz.entries.js";
 import { m9CheckEntries } from "./calibration/m9-checks.entries.js";
+import { m9PortEntries } from "./calibration/m9-ports.entries.js";
 import type { TargetFramework } from "./framework-detect.js";
 import type { SourceInput } from "../detectors/app-router.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
@@ -944,6 +945,72 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
       const m = buildCoverageMatrix(findings, m9CheckEntries.filter((e) => e.location === `m9-corpus/${check}/positive`));
       expect(m.positivesCaughtHigh, check).toBe(0);
     }
+  });
+});
+
+describe("#917/#918 M9 port corpus (live detectAppRouterFindings over the Remix/TanStack fixtures)", () => {
+  // The boundary-model ports (#916) graded: each ported check's fixture (src/detectors/__fixtures__/
+  // {remix,tanstack}/<check>/{positive,negative}) is loaded, path-prefixed to the entry's
+  // `m9-<fw>-corpus/<check>/<kind>` location, run through detectAppRouterFindings with the framework
+  // flag, and scored with the SAME scoreEntry the rest of the corpus uses.
+  const FIXTURES_ROOT = fileURLToPath(new URL("../detectors/__fixtures__/", import.meta.url));
+  function loadPrefixed(dir: string, prefix: string): SourceInput[] {
+    const root = join(FIXTURES_ROOT, dir);
+    const files: SourceInput[] = [];
+    const walk = (d: string) => {
+      for (const e of readdirSync(d)) {
+        const full = join(d, e);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (e.endsWith(".txt")) files.push({ path: `${prefix}/${relative(root, full).replace(/\.txt$/, "").split(sep).join("/")}`, text: readFileSync(full, "utf8") });
+      }
+    };
+    walk(root);
+    return files;
+  }
+
+  const PORTS: { fw: string; dir: string; framework: TargetFramework }[] = [
+    { fw: "remix", dir: "remix", framework: "remix" },
+  ];
+  const CHECKS = ["leak", "action-authz", "action-validation"];
+
+  it("catches each ported check's planted positive at review tier and clears its negative", () => {
+    // Every port × check must have exactly one pos + one neg entry backing it.
+    expect(m9PortEntries.filter((e) => e.kind === "positive")).toHaveLength(PORTS.length * CHECKS.length);
+    expect(m9PortEntries.filter((e) => e.kind === "negative")).toHaveLength(PORTS.length * CHECKS.length);
+
+    for (const { fw, dir, framework } of PORTS) {
+      for (const check of CHECKS) {
+        const posLoc = `m9-${fw}-corpus/${check}/positive`;
+        const negLoc = `m9-${fw}-corpus/${check}/negative`;
+        const posEntry = m9PortEntries.find((e) => e.location === posLoc);
+        const negEntry = m9PortEntries.find((e) => e.location === negLoc);
+        expect(posEntry, `${fw}/${check} positive entry`).toBeDefined();
+        expect(negEntry, `${fw}/${check} negative entry`).toBeDefined();
+
+        const posFindings = detectAppRouterFindings(loadPrefixed(`${dir}/${check}/positive`, posLoc), framework);
+        const posRow = scoreEntry(posEntry!, posFindings);
+        expect(posRow.pass, `${posEntry!.id}: ${posRow.detail}`).toBe(true);
+        expect(posRow.caughtTier, posEntry!.id).toBe("review");
+
+        const negFindings = detectAppRouterFindings(loadPrefixed(`${dir}/${check}/negative`, negLoc), framework);
+        const negRow = scoreEntry(negEntry!, negFindings);
+        expect(negRow.pass, `${negEntry!.id}: ${negRow.detail}`).toBe(true);
+        expect(negRow.highFlagged, `${negEntry!.id} must not be a free-count FP`).toBe(false);
+      }
+    }
+  });
+
+  it("discloses every non-ported check as a not-assessed row naming it (partial coverage stated)", () => {
+    // A Remix target routes to the adapter; the checks it does NOT implement each draw a
+    // not-assessed row, so partial coverage is never silently upgraded to full (#872 discipline).
+    const findings = detectAppRouterFindings(loadPrefixed("remix/leak/positive", "m9-remix-corpus/leak/positive"), "remix");
+    const notAssessed = findings.filter((f) => f.taxonomy.includes("not assessed") && f.confidence === "N/A");
+    expect(notAssessed.length).toBeGreaterThan(0);
+    // client-owner-id, server-only, route-segment/cache/dynamic-rendering config, Suspense, and the
+    // route.ts handler convention have no Remix analogue and must each be named.
+    expect(notAssessed.some((f) => f.taxonomy.includes("cache config"))).toBe(true);
+    expect(notAssessed.some((f) => f.taxonomy.includes("Suspense"))).toBe(true);
+    expect(notAssessed.every((f) => f.taxonomy.includes("Remix"))).toBe(true);
   });
 });
 

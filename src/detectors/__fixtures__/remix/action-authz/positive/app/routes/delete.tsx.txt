@@ -1,0 +1,10 @@
+import { z } from "zod";
+import { supabase } from "~/lib/db";
+
+const Schema = z.object({ id: z.string() });
+
+export async function action({ request }: { request: Request }) {
+  const { id } = Schema.parse(Object.fromEntries(await request.formData()));
+  await supabase.from("accounts").delete().eq("id", id);
+  return null;
+}

@@ -912,3 +912,50 @@ describe("recognised-but-unsupported framework gate (#872)", () => {
     expect(taxonomies(findings)).not.toContain(UNSUPPORTED_FW_NOTE);
   });
 });
+
+const LEAK = "M9 — Server→client data leak";
+const WATERFALL = "M9 — Data-fetching waterfall";
+
+// #917 — Remix / React Router 7 adapter on the boundary model.
+describe("Remix / React Router 7 boundary adapter (#917)", () => {
+  for (const framework of ["remix", "react-router"] as const) {
+    it(`flags a full DB row returned from a loader (${framework})`, () => {
+      const findings = detectAppRouterFindings(loadFixtureDir("remix/leak/positive"), framework);
+      const leaks = findings.filter((f) => f.taxonomy === LEAK);
+      expect(leaks).toHaveLength(1);
+      expect(leaks[0]?.title).toContain("Remix loader");
+      expect(leaks[0]?.location).toBe("app/routes/dashboard.tsx:7");
+      expect(leaks[0]?.precisionTier).toBe("review");
+    });
+
+    it(`stays silent when the loader returns a narrowed projection (${framework})`, () => {
+      const findings = detectAppRouterFindings(loadFixtureDir("remix/leak/negative"), framework);
+      expect(taxonomies(findings)).not.toContain(LEAK);
+    });
+  }
+
+  it("flags an action mutating with no auth check, with the framework-true noun", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("remix/action-authz/positive"), "remix");
+    const hits = findings.filter((f) => f.taxonomy === "M1 — route action missing authorization check");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("route action");
+  });
+
+  it("flags an action reading input into a mutation with no validation", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("remix/action-validation/positive"), "remix");
+    expect(taxonomies(findings)).toContain("M9 — route action missing input validation");
+  });
+
+  it("reuses the framework-agnostic SSR-misuse and waterfall detectors on Remix files", () => {
+    expect(taxonomies(detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"), "remix"))).toContain(SSR_API);
+    expect(taxonomies(detectAppRouterFindings(loadFixtureDir("waterfall/positive"), "remix"))).toContain(WATERFALL);
+  });
+
+  it("discloses every non-ported check as a not-assessed row naming the framework", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("remix/leak/positive"), "remix");
+    const na = findings.filter((f) => f.confidence === "N/A" && f.taxonomy.includes("not assessed"));
+    expect(na.some((f) => f.taxonomy.includes("cache config"))).toBe(true);
+    expect(na.some((f) => f.taxonomy.includes("route segment"))).toBe(true);
+    expect(na.every((f) => f.taxonomy.includes("Remix"))).toBe(true);
+  });
+});
