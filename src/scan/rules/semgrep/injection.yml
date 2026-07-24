@@ -160,6 +160,47 @@ rules:
               - pattern: $C.textSearch($X, ...)
           - focus-metavariable: $X
 
+  # #985: NoSQL (Mongo/Mongoose) injection — request input reaches a Mongo query OPERATOR
+  # ($where/$regex/$ne/$gt/…) as its value. The explicit-operator shape (findOne({ name: { $regex:
+  # data } })) is a query-logic injection: the attacker controls a regex/$where predicate or a
+  # comparison operator. harvey-postgrest-filter-injection is Supabase/PostgREST-specific; this is
+  # the generic Mongo detector detectOrm already resolves Mongoose for (#869). Review — a static
+  # rule can't prove the value wasn't cast/escaped, and blast radius is the queried collection.
+  - id: harvey-nosql-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-943: Improper Neutralization of Special Elements in Data Query Logic"]
+      owasp: ["A03:2021 - Injection"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request input flows into a MongoDB query operator ($where/$regex/$ne/$gt) — NoSQL injection.
+      An attacker can craft an operator object to bypass the filter or run a $where JS predicate.
+      Cast/validate the value to its expected primitive type before building the query.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: req.cookies
+      - pattern: req.headers
+      - pattern: $REQ.nextUrl.searchParams
+      - pattern: cookies()
+      - pattern: headers()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: "{ ..., $where: $X, ... }"
+              - pattern: "{ ..., $regex: $X, ... }"
+              - pattern: "{ ..., $ne: $X, ... }"
+              - pattern: "{ ..., $gt: $X, ... }"
+              - pattern: "{ ..., $gte: $X, ... }"
+              - pattern: "{ ..., $lt: $X, ... }"
+              - pattern: "{ ..., $lte: $X, ... }"
+          - focus-metavariable: $X
+
   # Prototype pollution: request body recursively merged into an object (lodash merge / defaultsDeep
   # / a custom recursive merge). Object.assign (shallow, N-PROTO-SAFE) is not matched.
   - id: harvey-prototype-pollution
@@ -240,6 +281,45 @@ rules:
       - pattern-either:
           - pattern: "{ ..., noent: true, ... }"
           - pattern: "{ ..., resolveEntities: true, ... }"
+
+  # #985: XXE via an XML parser fed request-tainted input. harvey-xxe (above) keys on the unsafe
+  # parser OPTION (noent/resolveEntities true); this taint variant catches the parse CALL itself
+  # taking untrusted XML through an XXE-capable parser (libxmljs / DOMParser), where entity
+  # resolution may be enabled by config the static rule can't see. Review — exploitability depends
+  # on the parser's entity settings, so it is surfaced for triage rather than free-counted.
+  - id: harvey-xxe-parse
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-611: Improper Restriction of XML External Entity Reference"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request-controlled input is parsed as XML through an XXE-capable parser (libxmljs/DOMParser).
+      If external-entity resolution is enabled, this is XXE (file read / SSRF via DOCTYPE entities).
+      Disable entity resolution (e.g. libxmljs { noent: false }) and validate the input.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: req.cookies
+      - pattern: req.headers
+      - pattern: $REQ.nextUrl.searchParams
+      - pattern: cookies()
+      - pattern: headers()
+      - pattern: await $REQ.json()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: libxmljs.parseXml($X, ...)
+              - pattern: libxmljs.parseXmlString($X, ...)
+              - pattern: $L.parseXml($X, ...)
+              - pattern: $L.parseXmlString($X, ...)
+              - pattern: new DOMParser().parseFromString($X, ...)
+          - focus-metavariable: $X
 
   # Path traversal: request input joined into a filesystem path reaching fs. path.basename
   # (N-PATH-BASENAME) strips directory components and is registered as a sanitizer.

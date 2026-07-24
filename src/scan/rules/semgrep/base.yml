@@ -292,7 +292,14 @@ rules:
       - pattern: cookies()
       - pattern: headers()
       - pattern: new URL($REQ.url).searchParams
-      - pattern: $SP.get(...)
+      # #985: the searchParams.get(...) source must exclude the http-client .get() sinks added
+      # below (http/https/axios), or `https.get("const-url")` self-matches source+sink and FPs on a
+      # constant URL. Keep searchParams/useSearchParams .get(...) as a source; drop http/https/axios.
+      - patterns:
+          - pattern: $SP.get(...)
+          - metavariable-regex:
+              metavariable: $SP
+              regex: ^(?!(https?|axios)$).*$
       - pattern: await $REQ.json()
     pattern-sinks:
       - patterns:
