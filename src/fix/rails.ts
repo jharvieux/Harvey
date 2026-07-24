@@ -94,3 +94,84 @@ export function checkBlastRadius(blast: BlastRadius, allowlist: string[], cap: D
   if (!capCheck.ok && capCheck.violation) violations.push(capCheck.violation);
   return violations.length === 0 ? { ok: true } : { ok: false, violation: violations.join("; ") };
 }
+
+// Turning a unified diff into the file lists + line count the checks above consume. This is the one
+// diff parser in the fix subsystem — both the executing path (execute.ts) and the ticket path
+// (trackers/fix-diff.ts) rail-check through it, so a denylisted or oversized diff is refused the same
+// way whether it is heading for a worktree or a client ticket body.
+export interface DiffFacts {
+  files: string[]; // paths the diff modifies or deletes
+  createdFiles: string[]; // paths the diff adds
+  changedLines: number; // added + removed body lines
+}
+
+function stripPrefix(raw: string): string | undefined {
+  const path = raw.split("\t")[0]?.trim() ?? "";
+  if (path === "" || path === "/dev/null") return undefined;
+  return path.replace(/^[ab]\//, "");
+}
+
+// Hunk headers carry exact old/new line counts, so the body is consumed by count rather than by
+// looking for the next `---`. Content matters: removing a SQL comment produces a body line that
+// reads `--- foo`, and a header-sniffing parser would take it for a new file header.
+function parseHunkCounts(line: string): { oldLines: number; newLines: number } | undefined {
+  const m = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line);
+  if (!m) return undefined;
+  return { oldLines: m[1] === undefined ? 1 : Number(m[1]), newLines: m[2] === undefined ? 1 : Number(m[2]) };
+}
+
+export function parseDiffFacts(diff: string): DiffFacts {
+  const files = new Set<string>();
+  const createdFiles = new Set<string>();
+  let changedLines = 0;
+  let oldPath: string | undefined;
+  let oldIsDevNull = false;
+  let remainingOld = 0;
+  let remainingNew = 0;
+
+  for (const line of diff.split("\n")) {
+    if (remainingOld > 0 || remainingNew > 0) {
+      if (line.startsWith("\\")) continue; // "\ No newline at end of file"
+      if (line.startsWith("+")) {
+        remainingNew--;
+        changedLines++;
+      } else if (line.startsWith("-")) {
+        remainingOld--;
+        changedLines++;
+      } else {
+        remainingOld--;
+        remainingNew--;
+      }
+      continue;
+    }
+    const hunk = parseHunkCounts(line);
+    if (hunk) {
+      remainingOld = hunk.oldLines;
+      remainingNew = hunk.newLines;
+      continue;
+    }
+    if (line.startsWith("--- ")) {
+      oldPath = stripPrefix(line.slice(4));
+      oldIsDevNull = oldPath === undefined;
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      const path = stripPrefix(line.slice(4)) ?? oldPath;
+      if (path !== undefined) (oldIsDevNull ? createdFiles : files).add(path);
+    }
+  }
+  return { files: [...files], createdFiles: [...createdFiles], changedLines };
+}
+
+// behaviorPreserving is not knowable from a diff, so it is stated conservatively; the rail checks
+// read only the path lists and the line count.
+export function blastRadiusOf(facts: DiffFacts): BlastRadius {
+  return {
+    files: facts.files,
+    createdFiles: facts.createdFiles,
+    symbols: [],
+    callers: [],
+    behaviorPreserving: false,
+    estimatedChangedLines: facts.changedLines,
+  };
+}

@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { SuggestedFix } from "../findings.js";
+import type { Finding, SuggestedFix } from "../findings.js";
+import { findingToTicket } from "./findings-to-tickets.js";
 import { renderFixSection, verifySuggestedFix } from "./fix-diff.js";
 
 // A real git repo under tmp so the verification runs against actual `git apply` + a real effect
@@ -22,6 +23,7 @@ beforeEach(() => {
   git(["config", "user.email", "t@t.co"]);
   git(["config", "user.name", "t"]);
   writeFileSync(join(dir, "calc.js"), "module.exports.add = (a, b) => a - b;\n"); // the surviving mutant
+  writeFileSync(join(dir, ".env"), "SECRET=1\n"); // a denylisted file that a diff could still apply against
   git(["add", "."]);
   git(["commit", "-m", "seed"]);
 });
@@ -72,6 +74,35 @@ describe("verifySuggestedFix", () => {
     const res = verifySuggestedFix(CORRECT_DIFF, { targetDir: dir });
     expect(res.verified).toBe(true);
     expect(res.detail).toContain("applies cleanly");
+  });
+
+  // #928: the path/size rails run before git — a diff that WOULD apply cleanly is still refused when
+  // it touches a denylisted path or blows the diff cap, so it can never be marked verified.
+  it("refuses a diff touching a denylisted path even though it applies cleanly", () => {
+    const envDiff = ["--- a/.env", "+++ b/.env", "@@ -1 +1 @@", "-SECRET=1", "+SECRET=2", ""].join("\n");
+    const res = verifySuggestedFix(envDiff, { targetDir: dir });
+    expect(res.verified).toBe(false);
+    expect(res.detail).toContain("denylisted");
+  });
+
+  it("refuses a diff that exceeds the engagement diff cap", () => {
+    const bigDiff = ["--- a/calc.js", "+++ b/calc.js", "@@ -1 +1,5 @@", "-module.exports.add = (a, b) => a - b;", "+module.exports.add = (a, b) => a + b;", "+// 1", "+// 2", "+// 3", "+// 4", ""].join("\n");
+    const res = verifySuggestedFix(bigDiff, { targetDir: dir, diffCap: { maxLines: 2, maxFiles: 10 } });
+    expect(res.verified).toBe(false);
+    expect(res.detail).toContain("diff cap");
+  });
+
+  it("a denylisted diff cannot reach a ticket body — its verified flag stays false", () => {
+    const envDiff = ["--- a/.env", "+++ b/.env", "@@ -1 +1 @@", "-SECRET=1", "+SECRET=2", ""].join("\n");
+    const { verified } = verifySuggestedFix(envDiff, { targetDir: dir });
+    const f: Finding = {
+      id: "F-env", title: "leaked secret", severity: "High", confidence: "Confirmed",
+      category: "Secrets", taxonomy: "secret_committed", location: ".env:1", status: "open",
+      evidence: "SECRET committed", impact: "credential exposure", fix: "rotate the secret",
+      value: 5, ease: 3, safety: 3,
+      suggestedFix: { diff: envDiff, verified, verification: "n/a" },
+    };
+    expect(findingToTicket(f, { paid: true }).body).not.toContain("```diff");
   });
 });
 
