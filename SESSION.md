@@ -2,7 +2,34 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-24 (evening) — #975→#976→#977 benchmark thread: **3 PRs merged (#979/#980/#981), 3 issues closed**; then an operator-driven detection sweep filed **9 improvement issues (#983–#991)** — biggest measured lever: adding `req.cookies`/`req.headers` taint sources doubles sqli recall (30%→60%). See the block immediately below. Earlier blocks remain historical._
+_Last updated: 2026-07-24 (evening 2) — issue-sweep EXECUTED the #983–#991 detection batch + M2/fix-pipeline/free-tier/calibration/docs work: **11 PRs merged, 29 issues closed, net −21**. Survived a GitHub major outage mid-sweep. See the block immediately below. Earlier blocks remain historical._
+
+## 2026-07-24 (evening 2) — issue-sweep: detection batch + fix-pipeline + M2/free-tier → 11 PRs merged, 29 closed, net −21
+
+Ran `/issue-sweep` over 58 triageable issues (6 dropped `deferred`/`needs-human-fix`; 21 GTM/disclosure/epic set aside as operator-routed). Operator approved 9 batches ("include 925, 914, 929 and go") then pulled in 3 more mid-sweep (#926, #883, #957). Concurrency held at 3 executors.
+
+- **11 PRs merged (all `verify` green, squash+delete):**
+  - **#995** m2bugs — #966 (MASS-ASSIGNMENT fail-loud when no read-back oracle), #967 (BFLA-ADMIN discovers non-`/admin/` role-gated routes).
+  - **#998** fixpipeline — #922/#923/#924/#925/#929: the fix-implementation pipeline (FixPlan producer + escalation ladder, location-scoped detector re-run + `computeGreen` fail-loud gate, verification harness, wrapper-enforced git/gh **draft-PR-only-on-green** transport, `fix-dry-run`/`fix-execute` scripts).
+  - **#999** scanbugs — #950 (quick-scan degrades+discloses instead of ENOENT crash), #948 (jscpd empty-file-list ROOT-CAUSED: cwd/gitignore path-relativity; documenso baseline 835/1256).
+  - **#1000** freetier — #934 (doc/example-context credential reclassification → Low/non-grading; **split** remainder **#996**), #935 (>10-per-shape findings rollup, disclosed caps, 8k-scale test).
+  - **#1002** docs — #914 (free-tier-scope.md M1 row: Prisma/ORM routing + `M1-ARCH-<LAYER>` disclosures).
+  - **#1004** m2probes — #954 (restore/tenant-teardown residue) done; **splits**: #952→**#997**, #956→**#1001**, #951→**#1003**.
+  - **#1005** m1inject — #983/#984/#985/#986/#987/#990 (cookie/header taint sources, SSRF/XXE/NoSQL sinks, CWE-78/88 split, transformation-sanitizers, source-shape robustness, CWE specificity).
+  - **#1007** m1authz — #988 (weak-hash/cipher/`res.cookie`/CRLF split-shapes), #991 (client-authz allowlist-grant + multi-hop).
+  - **#1006** calibration — #911 (tenant-scope FP gated off for prisma-rls/ZenStack wrappers), #960 (real-source-recall corpus — measured **0/3**, every gap documented in `docs/design/source-detector-recall.md`).
+  - **#1010** fixpipeline2 — #926 (batching/merge-order/handoff + report Fix-delivery tables), #957 (§8 acceptance harness, verified-partial → **split #1009**).
+  - **#1008** fixverify — #883 (findings→tickets→re-audit gate; won't mark a finding closed until the detector stops firing; shipped **packaging-neutral**).
+- **Calibration gate END-OF-SWEEP (measured, run it — never quote):** ~215/218 static positives, 205/205 negatives, precision 100%. The #984 cookie/header-source lever landed as designed.
+- **⚠ GitHub MAJOR outage ~19:34–19:59Z** killed PR-creation (GraphQL+REST) mid-sweep; `git push`/reads fine, so branches were safe and PRs opened on recovery. **A body cross-contamination slipped in** — #998's PR body picked up freetier's `Closes #934/#935` during the agents' own retry loops; the **pre-merge close-set check caught it** and it was corrected to #922–929 before merge. (Lesson: the executor "don't build a PR-retry loop, report branch-pushed" instruction was added mid-sweep for exactly this.)
+- **Split remainders OPEN (5):** #996 (flip carbon `mustNotScoreF`), #997 (service-account/guest identity probes), #1001 (FK-graph seeding for intermediate children), #1003 (Realtime probe Phoenix wire-shape live proof), #1009 (fully-autonomous §8 LLM-implementer + semgrep/M1 detector-after).
+- **Follow-ups filed (3):** #1011 (fold M9 server-client-leak/client-side-authz into a source-recall tier), #1012 (fix-verify semgrep resolver so harvey-* findings become verifiable), #1013 (GTM packaging, `needs-human-fix`).
+- **Operator decision recorded:** #883 packaging = **1 rescan/re-audit included in the base audit, additional rescans charged** → tracked in **#1013** for the pricing/engagement-terms copy (supervised site/docs = operator turf).
+- **Dropped (with rationale):** m1authz weak-hash fully-generic-name split stays semantic-tier — catching it would flag bare cache-key MD5, which `docs/fp-rules.txt` forbids (a deliberate boundary, not a gap).
+
+### ⚠️ CLAUDE.md RELAYS OWED (agents can't edit CLAUDE.md — operator to apply)
+1. **M2 probe-families line is stale.** It says "…soft-delete data-residue (#907), and a first-class Realtime NOT-ASSESSED disclosure (#906, not a guessed probe)". Now: data-residue also covers **restore + tenant-teardown** (#954); a **control-gated Realtime RUNTIME probe** exists (#951, opt-in `HARVEY_PROBE_REALTIME`, wire-shape pending live proof #1003); and the door list omits **Supabase Storage** (#956) and the **share-link identity class** (#952). Full recommended replacement wording is in the **PR #1004 body**.
+2. **"Measure, don't recall" baseline parenthetical** (199/202 static positives, negatives 191/191) is stale — measured this sweep ~215/218 positives, 205/205 negatives. The line already self-disclaims "run `validate-calibration`; never quote this number," so nothing is strictly false — an **optional** refresh.
 
 ## 2026-07-24 (evening) — #975/#976/#977 benchmark thread executed end-to-end → 3 PRs merged
 
