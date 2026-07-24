@@ -39,7 +39,12 @@ export interface SemgrepResult {
     // harvey-* custom rules — see each rule's `metadata:` block in ./rules/semgrep/*.yml. A registry
     // rule may declare `cwe`/`owasp` as a bare STRING rather than a list, so the type admits both and
     // `strList` below normalizes it (a string reached downstream `.cwe.map()` and threw — #975/#976).
-    metadata?: { confidence?: string; harveySeverity?: string; cwe?: string[] | string; owasp?: string[] | string };
+    // harveyTaxonomy (#996): a rule's canonical taxonomy override — how a rule that stays exact
+    // about the FACT (ERROR + HIGH → free report) declares itself non-grading: the string is keyed
+    // in NON_GRADING_TAXONOMIES (src/quick-scan.ts), the same routing the doc-context credential
+    // reclassification (#934) uses. Also stable across environments, unlike the path-prefixed
+    // check_id the taxonomy otherwise carries.
+    metadata?: { confidence?: string; harveySeverity?: string; harveyTaxonomy?: string; cwe?: string[] | string; owasp?: string[] | string };
   };
 }
 
@@ -48,6 +53,26 @@ export interface SemgrepOutput {
 }
 
 const SEVERITY_FROM_SEMGREP: Record<string, Severity> = { ERROR: "High", WARNING: "Medium", INFO: "Low" };
+
+// #996: canonical taxonomies for the two demoted-to-informational rules. Each is declared as
+// metadata.harveyTaxonomy on its rule (base.yml harvey-permissive-cors-bare, xss.yml
+// harvey-postmessage-wildcard) — semgrep.test.ts pins the YAML strings to these constants —
+// and keyed in NON_GRADING_TAXONOMIES (src/quick-scan.ts): reported in full, never graded.
+export const CORS_BARE_WILDCARD_TAXONOMY = "Permissive CORS — wildcard without credentials (confirm intent)";
+export const POSTMESSAGE_WILDCARD_TAXONOMY = "postMessage to any origin — a leak only if the data is sensitive (confirm)";
+
+// #996 (operator decision, mirroring the Dependency-CVE mechanism): findings in GitHub Actions
+// workflow files are real and fully reported — never "not assessed" — but they grade CI/CD
+// pipeline hygiene, not the application's code, and their exploitability hinges on repository/
+// trigger settings the scan cannot see (who can open PRs, which events fire the workflow). They
+// land in their own category, keyed in NON_GRADING_CATEGORIES (src/quick-scan.ts), rendered as a
+// distinct section of the free report. CI config is deliberately NOT part of the #903
+// infrastructure not-assessed disclosure: Harvey DID assess these files and found things.
+export const CI_PIPELINE_CATEGORY = "CI/CD pipeline hygiene";
+const CI_WORKFLOW_PATH = /(^|\/)\.github\/workflows\//;
+const CI_PIPELINE_IMPACT_SUFFIX =
+  " Reported in full as CI/CD pipeline hygiene, outside the app-hygiene grade: exploitability " +
+  "depends on repository and workflow-trigger settings this scan cannot see.";
 
 function isAuditRule(checkId: string): boolean {
   return checkId.includes(".audit.") || checkId.endsWith(".audit");
@@ -66,15 +91,19 @@ export function parseSemgrepFindings(output: SemgrepOutput): Finding[] {
     const severity = (meta?.harveySeverity as Severity | undefined) ?? SEVERITY_FROM_SEMGREP[r.extra?.severity ?? "WARNING"] ?? "Medium";
     const high = r.extra?.severity === "ERROR" && meta?.confidence === "HIGH" && !isAuditRule(r.check_id);
     const message = r.extra?.message?.trim().split("\n")[0] ?? "Semgrep match";
+    // #996: a workflow-file finding is a fact about the CI pipeline, not the app — its own
+    // fully-reported non-grading category, with the routing reason stated on the finding.
+    const ciWorkflow = CI_WORKFLOW_PATH.test(r.path);
+    const impact = r.extra?.message ?? "See the rule's message for the specific risk.";
     return mechanicalFinding({
       id: `SEM-${i + 1}`,
       title: `${r.check_id}: ${message}`,
       severity,
-      category: "Next.js/web footgun",
-      taxonomy: r.check_id,
+      category: ciWorkflow ? CI_PIPELINE_CATEGORY : "Next.js/web footgun",
+      taxonomy: meta?.harveyTaxonomy ?? r.check_id,
       location: `${r.path}${r.start?.line ? `:${r.start.line}` : ""}`,
       evidence: r.extra?.message ?? `Semgrep rule ${r.check_id} matched.`,
-      impact: r.extra?.message ?? "See the rule's message for the specific risk.",
+      impact: ciWorkflow ? impact + CI_PIPELINE_IMPACT_SUFFIX : impact,
       fix: "Review the matched code path against the rule's remediation guidance.",
       precisionTier: high ? "high" : "review",
       // #455 — populate only from the rule's own declared metadata, never invented here.
