@@ -970,6 +970,7 @@ describe("#917/#918 M9 port corpus (live detectAppRouterFindings over the Remix/
 
   const PORTS: { fw: string; dir: string; framework: TargetFramework }[] = [
     { fw: "remix", dir: "remix", framework: "remix" },
+    { fw: "tanstack", dir: "tanstack", framework: "tanstack-start" },
   ];
   const CHECKS = ["leak", "action-authz", "action-validation"];
 

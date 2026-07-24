@@ -959,3 +959,41 @@ describe("Remix / React Router 7 boundary adapter (#917)", () => {
     expect(na.every((f) => f.taxonomy.includes("Remix"))).toBe(true);
   });
 });
+
+// #918 — TanStack Start adapter (createServerFn shape).
+describe("TanStack Start boundary adapter (#918)", () => {
+  it("flags a full DB row returned from a createServerFn handler", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("tanstack/leak/positive"), "tanstack-start");
+    const leaks = findings.filter((f) => f.taxonomy === LEAK);
+    expect(leaks).toHaveLength(1);
+    expect(leaks[0]?.title).toContain("TanStack server function");
+    expect(leaks[0]?.evidence).toContain("getUser");
+  });
+
+  it("stays silent on a narrowed createServerFn return", () => {
+    expect(taxonomies(detectAppRouterFindings(loadFixtureDir("tanstack/leak/negative"), "tanstack-start"))).not.toContain(LEAK);
+  });
+
+  it("flags a server function mutating with no auth check", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("tanstack/action-authz/positive"), "tanstack-start");
+    const hits = findings.filter((f) => f.taxonomy === "M1 — server function missing authorization check");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("server function");
+  });
+
+  it("counts a chain-level `.validator()` as input validation (no false missing-validation)", () => {
+    // action-authz/positive has `.validator(z.object(...))` — validation must NOT fire, only authz.
+    const findings = detectAppRouterFindings(loadFixtureDir("tanstack/action-authz/positive"), "tanstack-start");
+    expect(taxonomies(findings)).not.toContain("M9 — server function missing input validation");
+  });
+
+  it("flags a server function with no validator and no body validation", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("tanstack/action-validation/positive"), "tanstack-start");
+    expect(taxonomies(findings)).toContain("M9 — server function missing input validation");
+  });
+
+  it("clears the validator-guarded negative", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("tanstack/action-validation/negative"), "tanstack-start");
+    expect(taxonomies(findings)).not.toContain("M9 — server function missing input validation");
+  });
+});

@@ -74,4 +74,4 @@ function frameworkEntries(fw: "remix" | "tanstack", label: string): CorpusEntry[
   return out;
 }
 
-export const m9PortEntries: CorpusEntry[] = [...frameworkEntries("remix", "Remix / RR7")];
+export const m9PortEntries: CorpusEntry[] = [...frameworkEntries("remix", "Remix / RR7"), ...frameworkEntries("tanstack", "TanStack Start")];
