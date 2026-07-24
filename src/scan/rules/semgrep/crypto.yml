@@ -75,15 +75,52 @@ rules:
       security-sensitive. Use bcrypt/argon2 for passwords, HMAC-SHA256+ for signatures/integrity.
     patterns:
       - pattern-either:
-          - pattern: crypto.createHash("md5").update($ARG)
-          - pattern: crypto.createHash("sha1").update($ARG)
-      - metavariable-regex:
-          metavariable: $ARG
-          regex: (?i).*(password|pwd|passwd|secret|token|signature|signing).*
+          # Fluent chain: createHash("md5").update(namedSecret)
+          - patterns:
+              - pattern-either:
+                  - pattern: crypto.createHash("md5").update($ARG)
+                  - pattern: crypto.createHash("sha1").update($ARG)
+              - metavariable-regex:
+                  metavariable: $ARG
+                  regex: (?i).*(password|pwd|passwd|secret|token|signature|signing).*
+          # Split statement (#988): const h = createHash("md5"); … h.update(namedSecret) — the
+          # security context is the named .update() argument, which keeps the cache-key/ETag use
+          # (hashing JSON.stringify(params), N-WEAK-HASH-CACHE) silent per docs/fp-rules.txt.
+          - patterns:
+              - pattern-either:
+                  - pattern: |
+                      $H = crypto.createHash("md5")
+                      ...
+                      $H.update($ARG)
+                  - pattern: |
+                      $H = crypto.createHash("sha1")
+                      ...
+                      $H.update($ARG)
+              - metavariable-regex:
+                  metavariable: $ARG
+                  regex: (?i).*(password|pwd|passwd|secret|token|signature|signing).*
+          # Split statement where the DIGEST variable, not the update arg, carries the security
+          # name (const passwordHash = createHash("md5"); passwordHash.update(input)).
+          - patterns:
+              - pattern-either:
+                  - pattern: |
+                      $H = crypto.createHash("md5")
+                      ...
+                      $H.update(...)
+                  - pattern: |
+                      $H = crypto.createHash("sha1")
+                      ...
+                      $H.update(...)
+              - metavariable-regex:
+                  metavariable: $H
+                  regex: (?i).*(password|pwd|passwd|secret|token|signature|signing).*
 
-  # Named-weak cipher: DES/3DES/RC4 (broken by brute force / bias attacks) or AES in ECB mode
-  # (identical plaintext blocks encrypt identically — leaks structure). The algorithm literal is
-  # an unambiguous, ~100%-precision signal.
+  # Named-weak cipher: DES/3DES/DES-X/RC2/RC4/Blowfish (broken by brute force / bias / Sweet32) or
+  # ANY cipher in ECB mode (identical plaintext blocks encrypt identically — leaks structure). The
+  # algorithm literal is an unambiguous, ~100%-precision signal — matched by a regex on the string
+  # so the split-statement / less-common-mode shapes (des-ede3-ecb, rc2-cbc, bf-cbc, …) are covered
+  # whether or not `.update()` is chained on the same expression (#988). A strong algo (aes-*-gcm/
+  # cbc/ctr, chacha20) does not match — the regex is anchored to the broken families + any *-ecb.
   - id: harvey-weak-cipher
     languages: [javascript, typescript]
     severity: ERROR
@@ -94,30 +131,16 @@ rules:
       category: security
       harveySeverity: High
     message: >
-      A cryptographically weak or broken cipher (DES/3DES/RC4, or AES in ECB mode) is used for
-      encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use
-      AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.
+      A cryptographically weak or broken cipher (DES/3DES/RC2/RC4/Blowfish, or any cipher in ECB
+      mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure.
+      Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.
     patterns:
       - pattern-either:
-          - pattern: crypto.createCipheriv("des", ...)
-          - pattern: crypto.createCipheriv("des-cbc", ...)
-          - pattern: crypto.createCipheriv("des-ecb", ...)
-          - pattern: crypto.createCipheriv("des-ede3", ...)
-          - pattern: crypto.createCipheriv("des-ede3-cbc", ...)
-          - pattern: crypto.createCipheriv("rc4", ...)
-          - pattern: crypto.createCipheriv("rc4-40", ...)
-          - pattern: crypto.createCipheriv("aes-128-ecb", ...)
-          - pattern: crypto.createCipheriv("aes-192-ecb", ...)
-          - pattern: crypto.createCipheriv("aes-256-ecb", ...)
-          - pattern: crypto.createDecipheriv("des", ...)
-          - pattern: crypto.createDecipheriv("des-cbc", ...)
-          - pattern: crypto.createDecipheriv("des-ecb", ...)
-          - pattern: crypto.createDecipheriv("des-ede3", ...)
-          - pattern: crypto.createDecipheriv("des-ede3-cbc", ...)
-          - pattern: crypto.createDecipheriv("rc4", ...)
-          - pattern: crypto.createDecipheriv("aes-128-ecb", ...)
-          - pattern: crypto.createDecipheriv("aes-192-ecb", ...)
-          - pattern: crypto.createDecipheriv("aes-256-ecb", ...)
+          - pattern: crypto.createCipheriv($ALGO, ...)
+          - pattern: crypto.createDecipheriv($ALGO, ...)
+      - metavariable-regex:
+          metavariable: $ALGO
+          regex: (?i)^["'](des.*|desx.*|des3.*|rc2.*|rc4.*|bf.*|blowfish.*|cast5?.*|.*-ecb)["']$
 
   # Hardcoded/static IV: the third createCipheriv/createDecipheriv argument is a literal string
   # wrapped in Buffer.from (not freshly random per call). Review — a static rule can't confirm the

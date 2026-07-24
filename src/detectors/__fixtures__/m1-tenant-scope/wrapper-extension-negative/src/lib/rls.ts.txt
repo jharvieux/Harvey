@@ -1,0 +1,17 @@
+// #911: the second recognized wrapper signal — a home-grown Prisma client extension using the
+// same `$extends(...).$allOperations` idiom prisma-rls ships (see extension-scoping-negative),
+// vendored in-tree rather than imported from the package. It rewrites every operation's `where`
+// from the current tenant context before the query runs.
+import { prisma } from "./client";
+import { getCurrentTenantId } from "./tenant-context";
+
+export const db = prisma.$extends({
+  name: "tenant-scope",
+  query: {
+    $allModels: {
+      async $allOperations({ args, query }) {
+        return query({ ...args, where: { ...args.where, tenantId: getCurrentTenantId() } });
+      },
+    },
+  },
+});

@@ -1,0 +1,13 @@
+// #911: the false-positive class #896 could not measure — an APPLICATION built on a
+// tenant-scoping wrapper library, not the library itself. `getEnhancedPrisma` returns a ZenStack
+// `enhance()`-wrapped client whose access-policy layer injects the tenant/ownership predicate into
+// every operation at runtime; the by-id `findUnique` below is safe BECAUSE of that wrapper, but the
+// AST at this call site is identical to the genuinely-unscoped case. The declared
+// `@zenstackhq/runtime` dependency in package.json is the signal that must silence this file.
+import { getEnhancedPrisma } from "@/lib/db";
+
+export async function GET(request: Request, { params }: { params: { id: string } }) {
+  const db = getEnhancedPrisma(request);
+  const post = await db.post.findUnique({ where: { id: params.id } });
+  return Response.json(post);
+}

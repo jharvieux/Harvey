@@ -232,6 +232,30 @@ rules:
           metavariable: $V
           regex: (?s)^[^;]*$
 
+  # Express-style res.cookie(name, value[, options]) with the security attributes missing (#988).
+  # BenchProctor and real Express code use the framework method, not a raw Set-Cookie string — the
+  # rule above scores 0% on it. Fires on the 2-arg form (no options at all) and on any options
+  # object that does not set httpOnly AND secure AND sameSite. The fully-hardened form is excluded.
+  - id: harvey-cookie-insecure-express
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe: ["CWE-614: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      An Express cookie is set with res.cookie() missing one or more of HttpOnly/Secure/SameSite.
+      Without HttpOnly it is readable by injected script (XSS → session theft); without Secure it
+      can ride plain HTTP; without SameSite it rides cross-site requests. Set all three.
+    patterns:
+      - pattern-either:
+          - pattern: $RES.cookie($NAME, $VAL)
+          - pattern: $RES.cookie($NAME, $VAL, $OPTS)
+      - pattern-not: |
+          $RES.cookie($NAME, $VAL, { ..., httpOnly: true, ..., secure: true, ..., sameSite: $SS, ... })
+
   # A caught error's .stack or .message is echoed straight into the JSON response — leaks stack
   # traces / internal paths / library versions to the client. Review — some apps intentionally
   # surface .message in dev, and this is common enough to need triage rather than an auto-Critical.
@@ -417,7 +441,11 @@ rules:
       - pattern: $REQ.query.$K
       - pattern: $REQ.query
       - pattern: $REQ.body.$K
+      - pattern: $REQ.body
+      - pattern: $REQ.params.$K
+      - pattern: $REQ.params
       - pattern: $REQ.headers[$H]
+      - pattern: $REQ.headers.$H
     pattern-sanitizers:
       - pattern: $S.replace(...)
     pattern-sinks:

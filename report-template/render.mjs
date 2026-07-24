@@ -15,6 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
+import { capActionPlan, rollupFindings } from "./rollup.mjs";
 
 const SEV = {
   Critical: { c: "#b3261e", o: 0 },
@@ -122,6 +123,32 @@ function findingCard(f) {
     ${f.okWhen || f.notOkWhen ? `<div class="crit"><div class="cu">When this is OK vs. not — confirm against your design:</div>
       ${f.okWhen ? `<div><span class="ok">✓ OK when</span> ${esc(f.okWhen)}</div>` : ""}
       ${f.notOkWhen ? `<div><span class="notok">✗ Not OK when</span> ${esc(f.notOkWhen)}</div>` : ""}</div>` : ""}
+  </div>`;
+}
+
+// #935: a rolled-up shape — same taxonomy + severity, more findings than the rollup threshold
+// (rollup.mjs). The top members render as full cards; the remainder is disclosed BY COUNT, with
+// every withheld location present in a collapsed <details> (the PDF prints its summary line, the
+// HTML expands to the full list) and in the machine-readable findings.json/SARIF. The count line
+// is the no-silent-cap contract: what is not individually rendered is stated, never absorbed.
+function groupCard(g) {
+  const sc = SEV[g.severity]?.c ?? "#64748b";
+  const withheldLocs = g.withheld
+    .map((f) => `<div><span class="fid">${esc(f.id)}</span> <code>${esc(f.location)}</code></div>`)
+    .join("");
+  return `<div class="group">
+    <div class="group-head">
+      <span class="badge" style="background:${sc}">${esc(g.severity)}</span>
+      <span class="group-title">${esc(g.taxonomy)}</span>
+      <span class="group-count">${g.count} findings of this shape — top ${g.representatives.length} shown in full</span>
+    </div>
+    ${g.representatives.map(findingCard).join("")}
+    <div class="group-rest">
+      <b>${g.withheld.length} more ${esc(g.severity)} finding(s) of this shape are not individually rendered.</b>
+      Every one is in the machine-readable findings.json (and the SARIF export when produced) with its
+      full evidence and fix; locations below.
+      <details><summary>All ${g.withheld.length} withheld locations</summary>${withheldLocs}</details>
+    </div>
   </div>`;
 }
 
@@ -287,6 +314,56 @@ function reviewFlagSection(items) {
     <table class="cov"><tr><th>Table</th><th>Column(s) to review</th><th>Also holds asserted PII?</th></tr>${rows}</table>`;
 }
 
+// Fix delivery section (#926, design §1.5). Renders the client-handoff artifact
+// (src/fix/handoff.ts assembleHandoff → fix-handoff.json, folded into findings.<client>.json as
+// data.fixHandoff): two tables — the PRs/fixes being delivered with their verification status and
+// recommended merge order, and the "why not automated" downgrades — plus the merge-order advisory.
+// Optional: renders only when a fixHandoff is present, so existing engagements are unaffected. A
+// downgraded/blocked fix is a ROW WITH A REASON, never omitted (silent omission reads as "handled").
+const FIX_STATUS = {
+  "pr-opened": { label: "PR opened (draft)", c: "#15803d", bg: "#f0fdf4", bd: "#bbf7d0" },
+  "verified-inert": { label: "Verified — pending transport", c: "#2563eb", bg: "#eff6ff", bd: "#bfdbfe" },
+  "awaiting-implementer": { label: "Awaiting implementer", c: "#b88600", bg: "#fffbeb", bd: "#fde68a" },
+  manual: { label: "Manual (operator)", c: "#b88600", bg: "#fffbeb", bd: "#fde68a" },
+  "recommend-only": { label: "Recommend only", c: "#7c3aed", bg: "#f5f3ff", bd: "#ddd6fe" },
+  "rails-blocked": { label: "Blocked by rails", c: "#b3261e", bg: "#fef2f2", bd: "#fecaca" },
+  "verify-failed": { label: "Verification failed", c: "#b3261e", bg: "#fef2f2", bd: "#fecaca" },
+  aborted: { label: "Aborted", c: "#b3261e", bg: "#fef2f2", bd: "#fecaca" },
+  "not-approved": { label: "Not approved", c: "#64748b", bg: "#f8fafc", bd: "#e5e7eb" },
+};
+const DELIVERABLE_FIX = new Set(["pr-opened", "verified-inert", "awaiting-implementer"]);
+function fixBadge(status) {
+  const s = FIX_STATUS[status] ?? FIX_STATUS["not-approved"];
+  return `<span class="cov-badge" style="color:${s.c};background:${s.bg};border:1px solid ${s.bd}">${s.label}</span>`;
+}
+function fixSection(h) {
+  const rows = h.rows ?? [];
+  if (!rows.length) return "";
+  const delivered = rows.filter((r) => DELIVERABLE_FIX.has(r.status)).sort((a, b) => (a.mergeRank ?? 99) - (b.mergeRank ?? 99));
+  const downgraded = rows.filter((r) => !DELIVERABLE_FIX.has(r.status));
+  const prCell = (r) => (r.prUrl ? `<a href="${esc(r.prUrl)}">${esc(r.prUrl)}</a>` : "—");
+  const deliveredTable = delivered.length
+    ? `<table class="cov"><tr><th>Merge #</th><th>Finding</th><th>Status</th><th>PR</th><th>Verification</th></tr>${delivered
+        .map((r) => `<tr><td class="b">${r.mergeRank ?? "—"}</td><td class="b">${esc(r.findingId)}</td><td>${fixBadge(r.status)}</td><td>${prCell(r)}</td><td>${esc(r.verification ?? "—")}</td></tr>`)
+        .join("")}</table>`
+    : `<div class="kv">No automated fixes delivered this engagement.</div>`;
+  const notesBlock = h.mergeOrder?.notes?.length
+    ? `<div class="kv" style="margin-top:8px"><b>Merge order</b> ${h.mergeOrder.notes.map((n) => esc(n)).join("<br>")}</div>`
+    : "";
+  const downgradeTable = downgraded.length
+    ? `<h2>Recommended fixes (why not automated)</h2>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Approved findings that did NOT become an automated PR — downgraded, blocked, or awaiting review. Each is listed with its reason; none is silently dropped.</div>
+      <table class="cov"><tr><th>Finding</th><th>Status</th><th>Reason</th></tr>${downgraded
+        .map((r) => `<tr><td class="b">${esc(r.findingId)}</td><td>${fixBadge(r.status)}</td><td>${esc(r.reason ?? "—")}</td></tr>`)
+        .join("")}</table>`
+    : "";
+  return `<h2>Fix delivery</h2>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Fixes prepared for <b>${esc(h.client)}</b> at <code>${esc(h.baselineCommit)}</code>. Every PR stays a draft until the operator flips it; <b>the client merges — Harvey never merges</b>. Follow the merge order where two PRs touch the same file.</div>
+    ${deliveredTable}
+    ${notesBlock}
+    ${downgradeTable}`;
+}
+
 function buildHtml(data) {
   const all = data.findings.map((x) => ({ ...x, _bftb: bftb(x) }));
   const f = all.filter((x) => x.confidence !== "N/A" && !x.reviewFlagOnly); // live findings
@@ -300,11 +377,17 @@ function buildHtml(data) {
   // hotspot Info, but within a band the hotspot one comes first (it sits in the churny, complex,
   // most-coupled code). onHotspot is a secondary key after severity, ahead of the BFTB tiebreak.
   const hot = (x) => (x.onHotspot ? 1 : 0);
-  const action = [...f]
+  const actionAll = [...f]
     .filter((x) => (x._bftb > 75 || ["Critical", "High"].includes(x.severity)) && !/^Completed/.test(x.status))
     .sort((a, b) => (sevRank(b) - sevRank(a)) || (hot(b) - hot(a)) || (b._bftb - a._bftb));
+  // #935: the action plan caps with a DISCLOSED remainder — at carbon-scale volume an unbounded
+  // Critical/High table stops being a plan, but a silently truncated one is worse.
+  const { shown: action, withheldCount: actionWithheld } = capActionPlan(actionAll);
   // Findings lead with the most critical (severity desc), then hotspot, then BFTB as the tiebreak.
   const sorted = [...f].sort((a, b) => (sevRank(b) - sevRank(a)) || (hot(b) - hot(a)) || (b._bftb - a._bftb));
+  // #935: same-shape volume rolls up for presentation; every finding stays in the data.
+  const findingItems = rollupFindings(sorted);
+  const rolledUp = findingItems.filter((x) => x.kind === "group");
 
   const legend = Object.entries(counts).sort((a, b) => SEV[a[0]].o - SEV[b[0]].o)
     .map(([s, n]) => `<span class="leg"><i style="background:${SEV[s].c}"></i>${s} ${n}</span>`).join("");
@@ -355,6 +438,15 @@ function buildHtml(data) {
   .crit{background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 10px;margin:7px 0 2px;font-size:11px}
   .crit .cu{color:#92400e;font-weight:700;margin-bottom:4px}
   .crit .ok{color:#15803d;font-weight:700}.crit .notok{color:#b3261e;font-weight:700}
+  .group{border:1px solid var(--line);border-left:4px solid #64748b;border-radius:8px;padding:10px 12px;margin:14px 0}
+  .group-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:4px}
+  .group-title{font-weight:800;font-size:13px}
+  .group-count{font-size:11px;color:var(--muted)}
+  .group .finding{margin:10px 0}
+  .group-rest{background:#f8fafc;border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:11px;color:#334155}
+  .group-rest details{margin-top:6px}
+  .group-rest summary{cursor:pointer;font-weight:700}
+  .group-rest code{background:#f1f5f9;border-radius:4px;padding:1px 5px}
   .cov-badge{border-radius:5px;padding:1px 8px;font-size:10px;font-weight:700;letter-spacing:.3px;white-space:nowrap}
   table.cov td:first-child{white-space:nowrap;font-weight:800}
   .tq{display:flex;gap:16px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-top:6px}
@@ -400,6 +492,7 @@ function buildHtml(data) {
     <table class="action"><tr><th>#</th><th>Action</th><th>Why</th><th>BFTB</th><th>Owner</th></tr>
     ${action.length ? action.map((x, i) => `<tr><td>${i + 1}</td><td class="b">${esc(x.fix)}</td><td>${esc(x.title)} — ${esc(x.severity)}</td><td class="b" style="color:${bftbColor(x._bftb)}">${x._bftb}</td><td>${x.category === "Security" ? "Operator" : "Eng"}</td></tr>`).join("")
       : '<tr><td colspan="5">No critical/high security findings and nothing above BFTB 75.</td></tr>'}
+    ${actionWithheld ? `<tr><td colspan="5"><b>+ ${actionWithheld} more qualifying action(s) beyond this table's ${action.length}-row cap</b> — every one appears in the Findings section and in the machine-readable findings.json (#935: a capped table always states what it capped).</td></tr>` : ""}
     </table>
     ${["Critical", "High"].every((s) => sevCount(s) === 0) ? '<div style="margin-top:8px;font-size:11.5px;color:#15803d;font-weight:700">✓ No critical or high security issues found.</div>' : ""}
   </div>
@@ -412,7 +505,9 @@ function buildHtml(data) {
     ${data.coverage?.length ? limitationsSection(data.coverage) : ""}
     ${data.testQuality ? testQualitySection(data.testQuality) : ""}
     <h2>Findings</h2>
-    ${sorted.map(findingCard).join("")}
+    ${rolledUp.length ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px">High-volume shapes are rolled up (#935): ${rolledUp.length} shape(s) totalling ${rolledUp.reduce((s, g) => s + g.count, 0)} findings render as grouped blocks — top instances in full, the rest disclosed by count with every location listed. Nothing is omitted from the underlying findings.json.</div>` : ""}
+    ${findingItems.map((item) => (item.kind === "group" ? groupCard(item) : findingCard(item.finding))).join("")}
+    ${data.fixHandoff ? fixSection(data.fixHandoff) : ""}
     ${data.baseline?.resolved?.length ? resolvedSection(data.baseline.resolved) : ""}
     ${reviewFlagged.length ? reviewFlagSection(reviewFlagged) : ""}
     ${na.length ? `<h2>Checked &amp; ruled out (not applicable)</h2>

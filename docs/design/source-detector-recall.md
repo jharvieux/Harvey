@@ -101,6 +101,51 @@ The 39-positive answer key is a real, defensible spread across the injection, XS
 and access-control (IDOR/BOLA/mass-assignment/CORS/client-trust) request→sink classes — not thin. But
 it is scored on the **planted** `targets/calibration` fixtures, not on real-world app code. The
 complementary real-code tier (the pinned external corpus in `external-corpus.ts`) is a *quality-module
-drift* baseline with finding counts, not a scored source-recall answer key. Extending source-detector
-recall scoring onto real request→sink vulnerabilities (and folding in the two adjacent detectors noted
-above) is tracked as the corpus-growth remainder of #945.
+drift* baseline with finding counts, not a scored source-recall answer key.
+
+## The real-code tier (#960, the corpus-growth remainder)
+
+`src/scan/real-source-recall.ts` + `validate-source-recall.ts --real` extend recall scoring onto REAL,
+already-disclosed vulnerabilities in three of the six repos `external-corpus.ts` already pins by commit
+(cloned on demand, same "manifest, not vendored fixtures" doctrine that file documents — several of the
+six ship no LICENSE, so their source is never copied into this repo, only scanned from a throwaway
+clone). Each entry is one of THIS repo's own filed responsible-disclosure issues, not a guess:
+
+| Target | Disclosure | Class | Caught? |
+|---|---|---|---|
+| proposit (`JakeLeoDev/proposit`) | #214 High | invitation-accept `.insert()` trusts a client-supplied `userId` | **NO** |
+| saas-lite (`makerkit/nextjs-saas-starter-kit-lite`) | #219 Low | open redirect, source and sink in different monorepo packages | **NO** |
+| subscription-payments (`vercel/nextjs-subscription-payments`) | #215 Medium | checkout re-derives trial length from a client-supplied price object | **NO** |
+
+**MEASURED 2026-07-24: 0/3 (0.0%)** — `pnpm exec tsx src/cli/validate-source-recall.ts --real` (needs
+network + the mechanical binaries). This is a genuinely low, honestly-reported number, and each gap has
+a named, distinct cause (never blended into one "hard" bucket):
+
+- proposit's BOLA is an `.insert()` whose tainted value arrives as a **Server Action function
+  parameter**, not a `.eq()`-filtered read — outside `bola-owner.ts`'s current pattern. (The file also
+  draws `harvey-csrf-missing` + `harvey-server-action-noauth`, both absence-of-control classes already
+  OUT of the source-tier answer key — a location-only match would have misreported this as "caught"; the
+  entry's `match: ["bola", "mass-assign"]` keyword gate is what keeps that honest.)
+- saas-lite's open redirect crosses a **monorepo package boundary** (the tainted read and the `redirect()`
+  sink are two different `packages/`/`apps/` in the same Turborepo) — beyond same-file/same-function
+  taint scope.
+- subscription-payments' trial-length trust needs "should this field be re-read server-side?" **business
+  context** no AST pattern can distinguish from the benign re-derivation this same code shape usually is
+  — already named as an open gap by the planted corpus's own `m9-authz.entries.ts` header.
+
+**On folding in `server-client-leak`/`client-side-authz` (verified, not assumed):** both detectors live
+under M9's boundary-model pass (`src/detectors/app-router.ts`/`boundary-model.ts`) and their calibration
+entries (`m9-checks.entries.ts`) already carry `module: "M9"` — they are scored by M9's OWN `detect-static`
+suite, never by `runMechanicalScan` (the semgrep+AST pipeline this gate and `validate-calibration.ts`
+share). `assertSourceTierResolvable()` only resolves ids inside `mechanicalCorpus(CORPUS)` (entries with
+NO `module` tag), so adding these two ids to `SOURCE_TIER_IDS` would throw immediately, not silently
+under-count. Folding them in is not a config change: it needs the M9 AST pass's output scored alongside
+`runMechanicalScan`'s, a genuinely different wiring than this file's "IN = request→sink taint" definition
+was built around. Left as a named follow-up rather than rushed into this gate.
+
+Like the planted-fixture gate, a recall gap here is **the measurement, not a gate failure** — `--real`
+always exits 0 and reports; it does not fail a build. Distinct from every other number on this page:
+never blend 0/3 into 38/39, or either into the M1 mixed ~198/201. The real value of this tier is turning
+"real code is presumably harder than what we planted" from an assumption into three itemized, re-testable,
+named limitations — a punch list for cross-file taint and function-parameter-sourced BOLA, not just a
+lower percentage.
