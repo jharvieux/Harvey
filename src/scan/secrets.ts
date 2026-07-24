@@ -179,27 +179,33 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
     });
 }
 
-function runJson<T>(bin: string, args: string[]): T[] {
+// #950: mirrors the osv-scanner pattern (#512, src/scan/dependencies.ts) — a missing/crashing
+// trufflehog binary must degrade to a disclosed coverage gap, never an uncaught ENOENT that
+// hard-exits the whole quick-scan CLI. `failure` set ⇒ the caller substitutes the tool's
+// unavailable-finding instead of treating an empty result as "zero secrets found".
+function runJson<T>(bin: string, args: string[]): { results: T[]; failure?: string } {
   let out: string;
   try {
     out = execFileSync(bin, args, { encoding: "utf8", maxBuffer: 1024 * 1024 * 64 });
   } catch (err) {
-    const e = err as { stdout?: string; code?: number };
+    const e = err as { stdout?: string; code?: string; message?: string };
     // trufflehog/gitleaks exit non-zero when findings exist — stdout still has the report.
     if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
-    else throw err;
+    else return { results: [], failure: e.code === "ENOENT" ? `${bin} not found on PATH` : (e.message ?? `${bin} failed with no output`) };
   }
-  if (!out.trim()) return [];
+  if (!out.trim()) return { results: [] };
   // trufflehog emits newline-delimited JSON; gitleaks emits a single JSON array.
   const trimmed = out.trim();
-  if (trimmed.startsWith("[")) return JSON.parse(trimmed) as T[];
-  return trimmed
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as T);
+  if (trimmed.startsWith("[")) return { results: JSON.parse(trimmed) as T[] };
+  return {
+    results: trimmed
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as T),
+  };
 }
 
-function runTruffleHogFilesystem(dir: string): TruffleHogResult[] {
+function runTruffleHogFilesystem(dir: string): { results: TruffleHogResult[]; failure?: string } {
   return runJson<TruffleHogResult>("trufflehog", ["filesystem", "--only-verified", "--json", dir]);
 }
 
@@ -223,8 +229,51 @@ export function isGitRepoRoot(dir: string): boolean {
   }
 }
 
-function runTruffleHogGitHistory(repoDir: string): TruffleHogResult[] {
+function runTruffleHogGitHistory(repoDir: string): { results: TruffleHogResult[]; failure?: string } {
   return runJson<TruffleHogResult>("trufflehog", ["git", "--only-verified", "--json", `file://${repoDir}`]);
+}
+
+// Same disclosure contract as DEP-OSV-00/SEC-TH-GH-00: a visible not-assessed row, never a silent
+// skip. Covers all three TruffleHog passes (source/git-history/bundle) — if the binary itself is
+// missing, none of them can run, so one disclosure names the tool rather than three near-duplicate
+// per-pass rows.
+export function truffleHogUnavailableFinding(reason: string): Finding {
+  return {
+    id: "SEC-TH-00",
+    title: "Secret scan (TruffleHog) did not run",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Secret exposure",
+    taxonomy: "Committed credential — coverage not assessed",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `TruffleHog failed to run: ${reason}`,
+    impact: "Verified-secret coverage for this engagement (source tree, git history, and built bundle) is incomplete — a disclosed coverage gap, not a finding of zero secrets.",
+    fix: "Install TruffleHog on the scanning machine (see this file's header) and re-run the scan.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
+}
+
+// Same contract, for gitleaks (source + bundle passes).
+export function gitleaksUnavailableFinding(reason: string): Finding {
+  return {
+    id: "SEC-GL-00",
+    title: "Secret scan (gitleaks) did not run",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Secret exposure",
+    taxonomy: "Committed credential — coverage not assessed",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `gitleaks failed to run: ${reason}`,
+    impact: "Pattern-match secret coverage for this engagement (source tree and built bundle) is incomplete — a disclosed coverage gap, not a finding of zero secrets.",
+    fix: "Install gitleaks on the scanning machine (see this file's header) and re-run the scan.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
 }
 
 // #528: previously the isGitRepoRoot guard (added for #55) just returned [] with no disclosure,
@@ -298,8 +347,9 @@ function bundleScanUnavailableFinding(reason: string): Finding {
 }
 
 // gitleaks writes its report to a file (no stdout JSON mode), so scan into a scratch dir
-// and read the report back.
-function runGitleaks(dir: string): GitleaksResult[] {
+// and read the report back. #950: a missing/crashing gitleaks binary degrades to a disclosed
+// coverage gap (failure set) rather than an uncaught ENOENT, mirroring runJson above.
+function runGitleaks(dir: string): { results: GitleaksResult[]; failure?: string } {
   const scratch = mkdtempSync(join(tmpdir(), "harvey-gitleaks-"));
   const reportPath = join(scratch, "report.json");
   try {
@@ -316,7 +366,10 @@ function runGitleaks(dir: string): GitleaksResult[] {
       { encoding: "utf8", maxBuffer: 1024 * 1024 * 64 },
     );
     const data = JSON.parse(readFileSync(reportPath, "utf8")) as GitleaksResult[] | null;
-    return data ?? [];
+    return { results: data ?? [] };
+  } catch (err) {
+    const e = err as { code?: string; message?: string };
+    return { results: [], failure: e.code === "ENOENT" ? "gitleaks not found on PATH" : (e.message ?? "gitleaks failed with no output") };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -330,23 +383,48 @@ function runGitleaks(dir: string): GitleaksResult[] {
 // tracked-files-only copy as sourceDir (issue #101) — that copy has no `.git`, so the
 // git-history pass needs the real, clonable original directory instead (historyDir).
 export function scanSecrets(sourceDir: string, historyDir: string, bundleDir?: string): Finding[] {
+  const findings: Finding[] = [];
+  // #950: once a pass reports the binary itself is unavailable, every later pass with the same
+  // tool would fail identically — skip the redundant invocation and emit ONE disclosure for the
+  // tool below, instead of one near-duplicate row per pass.
+  let truffleHogFailure: string | undefined;
+  let gitleaksFailure: string | undefined;
+
+  const fsScan = runTruffleHogFilesystem(sourceDir);
+  if (fsScan.failure) truffleHogFailure = fsScan.failure;
+  else findings.push(...parseTruffleHogFindings(fsScan.results, "source"));
+
   // Reason deliberately omits historyDir itself: on a real engagement the path is just the
   // target root (no signal beyond what location "(repo-wide)" already says), and on the
   // deterministic dry-run harness (src/cli/dry-run.ts) historyDir is a freshly minted scratch
   // path — embedding it would make the committed findings.json non-reproducible across runs.
-  const gitHistoryFindings = isGitRepoRoot(historyDir)
-    ? parseTruffleHogFindings(runTruffleHogGitHistory(historyDir), "git-history")
-    : [gitHistorySecretsUnavailableFinding("target directory is not a git repository root (an archive export or a subdirectory of a repo, not a full checkout)")];
-  const findings: Finding[] = [
-    ...parseTruffleHogFindings(runTruffleHogFilesystem(sourceDir), "source"),
-    ...gitHistoryFindings,
-    ...parseGitleaksFindings(runGitleaks(sourceDir), "source"),
-  ];
-  if (bundleDir) {
-    findings.push(
-      ...parseTruffleHogFindings(runTruffleHogFilesystem(bundleDir), "bundle"),
-      ...parseGitleaksFindings(runGitleaks(bundleDir), "bundle"),
-    );
+  if (!isGitRepoRoot(historyDir)) {
+    findings.push(gitHistorySecretsUnavailableFinding("target directory is not a git repository root (an archive export or a subdirectory of a repo, not a full checkout)"));
+  } else if (!truffleHogFailure) {
+    const ghScan = runTruffleHogGitHistory(historyDir);
+    if (ghScan.failure) truffleHogFailure = ghScan.failure;
+    else findings.push(...parseTruffleHogFindings(ghScan.results, "git-history"));
   }
+
+  const glScan = runGitleaks(sourceDir);
+  if (glScan.failure) gitleaksFailure = glScan.failure;
+  else findings.push(...parseGitleaksFindings(glScan.results, "source"));
+
+  if (bundleDir) {
+    if (!truffleHogFailure) {
+      const bundleTh = runTruffleHogFilesystem(bundleDir);
+      if (bundleTh.failure) truffleHogFailure = bundleTh.failure;
+      else findings.push(...parseTruffleHogFindings(bundleTh.results, "bundle"));
+    }
+    if (!gitleaksFailure) {
+      const bundleGl = runGitleaks(bundleDir);
+      if (bundleGl.failure) gitleaksFailure = bundleGl.failure;
+      else findings.push(...parseGitleaksFindings(bundleGl.results, "bundle"));
+    }
+  }
+
+  if (truffleHogFailure) findings.push(truffleHogUnavailableFinding(truffleHogFailure));
+  if (gitleaksFailure) findings.push(gitleaksUnavailableFinding(gitleaksFailure));
+
   return findings;
 }

@@ -2,8 +2,39 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { gitHistorySecretsUnavailableFinding, isGitRepoRoot, parseGitleaksFindings, parseTruffleHogFindings, resolveBundleScan, type GitleaksResult, type TruffleHogResult } from "./secrets.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// #950: trufflehog/gitleaks absent from PATH must degrade to a disclosed coverage gap, not an
+// uncaught ENOENT crash (mirrors the osv-scanner pattern, #512). Only those two binary names are
+// faked here — every other execFileSync call (notably "git", used both by isGitRepoRoot and by
+// this file's own test setup below) passes through to the real implementation untouched.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: vi.fn((bin: string, args: string[], opts?: unknown) => {
+      if (bin === "trufflehog" || bin === "gitleaks") {
+        const err = new Error(`spawnSync ${bin} ENOENT`) as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      return actual.execFileSync(bin, args, opts as never);
+    }),
+  };
+});
+
+import {
+  gitHistorySecretsUnavailableFinding,
+  gitleaksUnavailableFinding,
+  isGitRepoRoot,
+  parseGitleaksFindings,
+  parseTruffleHogFindings,
+  resolveBundleScan,
+  scanSecrets,
+  truffleHogUnavailableFinding,
+  type GitleaksResult,
+  type TruffleHogResult,
+} from "./secrets.js";
 
 describe("parseTruffleHogFindings", () => {
   it("drops unverified hits — only a live-verified secret is ~100% precision", () => {
@@ -259,5 +290,53 @@ describe("resolveBundleScan (#588)", () => {
     const dir = mkTarget("build/out");
     expect(resolveBundleScan(dir, join(dir, "build", "out")).bundleDir).toBe(join(dir, "build", "out"));
     expect(resolveBundleScan(dir, join(dir, "nope")).disclosure?.id).toBe("SEC-BUNDLE-00");
+  });
+});
+
+// #950: previously scanSecrets threw the raw ENOENT from runJson/runGitleaks, which propagated
+// uncaught to quick-scan's main().catch() and hard-exited the CLI instead of degrading like
+// osv-scanner already does (#512). Both binaries are faked absent (see the module mock above),
+// so this exercises the real scanSecrets control flow end-to-end, not just the pure disclosure
+// finding shape.
+describe("scanSecrets degrades when trufflehog/gitleaks are absent from PATH (#950)", () => {
+  let dir: string;
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("does not throw, and discloses one coverage-gap finding per missing tool", () => {
+    dir = mkdtempSync(join(tmpdir(), "harvey-secrets-missing-bin-"));
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+
+    const findings = scanSecrets(dir, dir);
+
+    const th = findings.find((f) => f.id === "SEC-TH-00");
+    expect(th).toBeDefined();
+    expect(th?.evidence).toContain("trufflehog not found on PATH");
+
+    const gl = findings.find((f) => f.id === "SEC-GL-00");
+    expect(gl).toBeDefined();
+    expect(gl?.evidence).toContain("gitleaks not found on PATH");
+
+    // Exactly one disclosure per tool, not one per pass (filesystem + git-history for
+    // TruffleHog) — the redundant second invocation is skipped once the first fails.
+    expect(findings.filter((f) => f.id === "SEC-TH-00")).toHaveLength(1);
+    expect(findings.filter((f) => f.id === "SEC-GL-00")).toHaveLength(1);
+  });
+});
+
+describe("truffleHogUnavailableFinding / gitleaksUnavailableFinding (#950)", () => {
+  it("truffleHogUnavailableFinding discloses the coverage gap without claiming zero secrets", () => {
+    const finding = truffleHogUnavailableFinding("trufflehog not found on PATH");
+    expect(finding.id).toBe("SEC-TH-00");
+    expect(finding.severity).toBe("Info");
+    expect(finding.confidence).toBe("N/A");
+    expect(finding.impact).toContain("not a finding of zero secrets");
+  });
+
+  it("gitleaksUnavailableFinding discloses the coverage gap without claiming zero secrets", () => {
+    const finding = gitleaksUnavailableFinding("gitleaks not found on PATH");
+    expect(finding.id).toBe("SEC-GL-00");
+    expect(finding.severity).toBe("Info");
+    expect(finding.confidence).toBe("N/A");
+    expect(finding.impact).toContain("not a finding of zero secrets");
   });
 });
