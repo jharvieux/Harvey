@@ -94,6 +94,35 @@ describe("runMechanicalScan Prisma/Supabase architecture gating (#757)", () => {
     expect(findings.some((f) => f.id === "M1-ARCH-PRISMA")).toBe(false);
   });
 
+  // #869 (the M1 sibling of #844): a Drizzle target has no RLS surface AND no tenant-scope detector.
+  // The scan must say so by name — silence here reads as "no tenant-scope problems found".
+  it("discloses a Drizzle data layer by name instead of reporting nothing", async () => {
+    const d = tmp();
+    writeFileSync(join(d, "package.json"), JSON.stringify({ name: "drizzle-app", dependencies: { "drizzle-orm": "^0.30.0", pg: "^8.12.0" } }));
+    const findings = await runMechanicalScan({ dir: d, skipNetworkChecks: true });
+    const note = findings.find((f) => f.id === "M1-ARCH-DRIZZLE");
+    expect(note).toBeDefined();
+    expect(note).toMatchObject({ severity: "Info", confidence: "N/A", category: "Multi-tenant isolation" });
+    expect(note?.evidence).toContain("Drizzle");
+    expect(note?.impact).toContain("INCOMPLETE");
+    expect(findings.some((f) => f.id === "M1-ARCH-PRISMA")).toBe(false);
+  });
+
+  it("discloses a raw-SQL data layer and says which app-layer detectors did cover it", async () => {
+    const d = tmp();
+    writeFileSync(join(d, "package.json"), JSON.stringify({ name: "pg-app", dependencies: { pg: "^8.12.0" } }));
+    const findings = await runMechanicalScan({ dir: d, skipNetworkChecks: true });
+    const note = findings.find((f) => f.id === "M1-ARCH-RAW-SQL");
+    expect(note?.evidence).toContain("pg-idor");
+  });
+
+  it("emits no architecture note for a target with no recognised data layer at all", async () => {
+    const d = tmp();
+    writeFileSync(join(d, "package.json"), JSON.stringify({ name: "lib", dependencies: { lodash: "^4.17.21" } }));
+    const findings = await runMechanicalScan({ dir: d, skipNetworkChecks: true });
+    expect(findings.some((f) => f.id.startsWith("M1-ARCH-"))).toBe(false);
+  });
+
   it("keeps the Supabase RLS detectors active when BOTH Prisma and Supabase signatures are present", async () => {
     const d = writeSupabaseTarget();
     // Add Prisma signatures on top of the Supabase surface — Supabase must win so the real RLS
