@@ -23,7 +23,7 @@ export type HandoffStatus =
 // Statuses that will become a PR — the ones the merge order sequences.
 const DELIVERABLE: ReadonlySet<HandoffStatus> = new Set(["pr-opened", "verified-inert", "awaiting-implementer"]);
 
-export interface HandoffRow {
+interface HandoffRow {
   findingId: string;
   status: HandoffStatus;
   severity?: Severity;
@@ -33,7 +33,7 @@ export interface HandoffRow {
   mergeRank?: number; // 1-based position in the merge order, deliverable rows only
 }
 
-export interface FixHandoff {
+interface FixHandoff {
   client: string;
   baselineCommit: string;
   rows: HandoffRow[];
@@ -53,7 +53,7 @@ export interface FixOutcomeSummary {
   reason?: string;
 }
 
-export interface HandoffInputs {
+interface HandoffInputs {
   client: string;
   baselineCommit: string;
   outcomes: FixOutcomeSummary[]; // every approved finding, each already resolved to a status

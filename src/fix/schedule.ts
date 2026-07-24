@@ -19,7 +19,7 @@ export interface ScheduleNode {
   files: string[];
 }
 
-export interface ScheduledComponent {
+interface ScheduledComponent {
   findingIds: string[]; // serialized order WITHIN the component (severity desc, BFTB desc)
   topSeverity: Severity; // highest severity contained — orders components against each other
 }
@@ -92,7 +92,7 @@ export function emitMergeOrder(components: ScheduledComponent[], nodes: Schedule
 // diffed against every already-pushed fix branch. Any overlap is returned so the caller re-queues the
 // later fix to run serially after the earlier PR's disposition — batch-time overlap catches most, this
 // catches the rest (a fix that grew a new file mid-implementation).
-export interface PushedBranch {
+interface PushedBranch {
   findingId: string;
   changedFiles: string[];
 }
@@ -106,7 +106,7 @@ export function detectLateConflict(changedFiles: string[], pushed: PushedBranch[
 
 // §4 concurrency caps: default 4 implement/verify slots overlap freely, but at most 2 full client-check
 // runs at once so timings stay honest. These are ENFORCED here (a semaphore), not documented.
-export interface ConcurrencyCaps {
+interface ConcurrencyCaps {
   maxSlots: number; // concurrent implement/verify slots
   maxClientChecks: number; // concurrent full client-check runs (the scarce resource)
 }
@@ -135,8 +135,8 @@ class Semaphore {
 
 // The client-check gate a worker must wrap its full-check phase in, so implement/verify overlaps up to
 // maxSlots while client checks stay under maxClientChecks.
-export type ClientCheckGate = <R>(fn: () => Promise<R>) => Promise<R>;
-export type ComponentWorker<T> = (component: ScheduledComponent, clientCheck: ClientCheckGate) => Promise<T>;
+type ClientCheckGate = <R>(fn: () => Promise<R>) => Promise<R>;
+type ComponentWorker<T> = (component: ScheduledComponent, clientCheck: ClientCheckGate) => Promise<T>;
 
 export async function runScheduled<T>(
   components: ScheduledComponent[],

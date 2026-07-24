@@ -59,15 +59,40 @@ source, materialized into a standalone repo:
 
 This is the rails + transport proof on a target we own. It is NOT the full §8 acceptance.
 
-## Remainder (split of #927)
+## Update (2026-07-24, #957) — the FULL §2 gate now runs autonomously for a resolvable-detector class
 
-Tracked in **#957**. To close out §8 autonomously:
+Two of the three blockers above are cleared:
 
-- #922 implementer producing a `suggestedFix.diff` per planted §8 class.
-- #924 detector-after re-run so clause 1's "detector-after clean" is checked, not just apply-clean.
-- Confirm/plant §8 fix-calibration ground truth for classes 1 (zero-row-update `error: null`),
-  2 (unchecked Supabase mutation) and 5 (`void`-prefixed async) — the scan corpus plants classes 3
-  and 4 cleanly; 1/2/5 are not clearly enumerated as fix-pipeline before/after fixtures.
-- A harness that materializes `targets/calibration` into a standalone repo for the run.
-- Clause 2: out-of-scope planted bugs (RLS-off, `USING (true)`, service-role query building) →
-  recommend-only downgrade with the right reason, exercised through intake/screening.
+- **Blocker 2 (detector-after re-run) is gone.** #924 landed `rerunDetector` (`src/fix/detector-rerun.ts`).
+  The acceptance now runs the FULL §2 contract, not just apply-clean.
+- **Blocker 3 (corpus materialization) is gone.** `src/fix/materialize-calibration.ts` materializes the
+  planted files into a standalone throwaway git repo `executeFixDiff` will accept, and captures the
+  mechanical fix as a git-apply patch. `src/fix/acceptance.ts` `runFixAcceptance()` orchestrates
+  execute (apply-clean + §3 rails) **and** `rerunDetector` (detector-after) into a single `green` verdict.
+
+Measured (`src/fix/calibration-acceptance.test.ts`, 9 tests, offline, no external binary):
+
+- The M5 "Unused parameter" planting (`app/api/ar-cors-reflected-safe/route.ts:8`) — the one §8 in-scope
+  class whose detector `rerunDetector` resolves — reaches **GREEN**: the mechanical fix applies clean,
+  zero rail events, and detector-after is clean. The gate genuinely discriminates: it FIRES on the
+  unfixed source, and a no-op edit that leaves the param unused applies clean but is **not** green
+  (detector-after still fires). This is the "detector-after gate actually re-runs" proof.
+- The semgrep class-4 (open redirect) fix applies clean and clears the rails, but its detector-after is
+  **`notRun`** — `rerunDetector` has no semgrep/M1 resolver — so it can never fake an autonomous green.
+  Disclosed, not hidden.
+- Clause 2: an RLS-off finding (out-of-scope category) is screened **recommend-only** via `intake`.
+
+## Remainder (split of #957 → #1009)
+
+Still not autonomous, and genuinely out of reach for a mechanical assembly:
+
+- **Autonomous implementer diffs.** The fix diffs are still hand-authored in the acceptance (the
+  mechanical before/after strings). #922 landed `producePlan` (no diff); the actual diff-*generating*
+  implementer is an LLM/operator pass, not deterministic code — so "every planted class yields a green
+  result the pipeline produced itself" is not met.
+- **Semgrep/M1 detector-after resolver.** `rerunDetector` resolves only the M5/M6/M7/M9 AST engines. The
+  §8 in-scope classes 1–4 are semgrep/M1 (open redirect, verbose error, SQLi, unchecked mutation); their
+  detector-after cannot be scored green until a semgrep re-run resolver is added.
+- **Plant classes 1/2/5 as before/after fix fixtures.** The scan corpus plants classes 3/4 cleanly; 1
+  (zero-row-update `error: null`), 2 (unchecked Supabase mutation), 5 (`void`-prefixed async) are not
+  enumerated as fix-pipeline before/after fixtures with a known mechanical fix.

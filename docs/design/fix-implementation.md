@@ -369,6 +369,16 @@ Deliberate limit of this slice: `runScheduled` is the concurrency ENGINE and `de
 
 Remaining after this slice: **#957** (the full autonomous §8 calibration run).
 
+**Update (2026-07-24, #957 — the §8 acceptance gate runs the FULL §2 contract autonomously for a resolvable-detector class):**
+
+| File | What it provides | Design ref | Issue |
+|---|---|---|---|
+| `src/fix/materialize-calibration.ts` | Materializes `targets/calibration` into a STANDALONE throwaway git repo (acceptance-doc blocker 3: `executeFixDiff` refuses the in-place corpus via `assertNotHarveyItself`) and captures a single-file mechanical fix as a git-apply patch. | §8 | #957 |
+| `src/fix/acceptance.ts` | `runFixAcceptance()` — composes `executeFixDiff` (apply-clean + §3 rails) AND `rerunDetector` (#924 detector-after, §2.3) into one `green` verdict. Green iff the diff verifies AND the detector no longer fires — the §8 clause-1 gate, not merely apply-clean. | §8, §2.3 | #957 |
+| `src/fix/calibration-acceptance.test.ts` | The M5 "Unused parameter" planting reaches GREEN autonomously (fix applies clean, zero rail events, detector-after clean); the gate discriminates (fires on the unfixed source; a no-op edit is NOT green); the semgrep class-4 detector-after is disclosed `notRun` (never a false green); clause 2 (out-of-scope RLS-off → recommend-only) holds. | §8 | #957 |
+
+**#957 is a verified-PARTIAL, split → #1009.** Blockers 2 (detector-after re-run) and 3 (corpus materialization) are CLOSED. Still not fully autonomous, and genuinely out of reach for a mechanical assembly: (a) the fix diffs are still hand-authored — the diff-**generating** LLM implementer is #922's other half, not deterministic code; (b) `rerunDetector` has no semgrep/M1 resolver, so the §8 in-scope classes 1–4 report `notRun` (correct fail-loud) rather than green; (c) classes 1/2/5 aren't planted as before/after fix fixtures. All three are #1009, cross-linked from `docs/design/fix-calibration-acceptance.md`.
+
 **Still not built, still deliberate:**
 
 - **Model tiering** is config surface only: `escalation.ts` decides which tier each attempt runs at and records the trail in `tiersUsed`, but there is no multi-provider router in `src/` that maps those tiers to real models — see `docs/design/model-routing.md` for the target `bulk`/`standard`/`flagship` mapping. The implementer that actually drafts a diff at a tier is the operator/LLM pass, not code here.
