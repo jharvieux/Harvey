@@ -1,0 +1,7 @@
+import { createServerFn } from "@tanstack/react-start";
+import { supabase } from "~/lib/db";
+
+export const getUser = createServerFn({ method: "GET" }).handler(async ({ data }: { data: { id: string } }) => {
+  const { data: user } = await supabase.from("users").select("name").eq("id", data.id).single();
+  return { name: user.name };
+});

@@ -1,6 +1,12 @@
 # Fix Implementation System — Design
 
 Status: draft v1 · Owner: operator · Issue: #23 · Scope: Phase 1 (operator-run) with Phase 2 hooks noted
+
+> **Operator ruling, 2026-07-23 (#885): the execution path IS being built, not shelved.** The question
+> that blocked #885 — "decide and record whether the execution path is being built or shelved" — is
+> answered: built, narrowest-slice-first, inert diffs before any PR ever touches client code. The
+> remainder is tracked issue-by-issue in §9 below; nothing in this design is deferred without an
+> issue number next to it. Do not re-litigate this decision — extend §9's ledger instead.
 Inputs: a validated `FindingsDocument` (`src/findings.ts`), a client-approved fix list, a local checkout of the client repo, client-granted GitHub access.
 
 Harvey's scan produces findings; this system turns approved findings into reviewed, reversible PRs in the client's repo. Design center: **the PR is the unit of delivery, the operator is the last gate, and nothing merges without the client.** Everything below is built so a solo auditor can run it on a laptop against one engagement at a time, fanning implementation out to parallel subagents.
@@ -300,9 +306,44 @@ Landed as of this PR — the **decision core** of the pipeline, fully unit-teste
 | `src/fix/pipeline.ts` | `intake()` (screen the client-approved subset), `batch()` (file-overlap conflict components), `checkPlanRails()` | §1.1, §1.3 |
 | `src/cli/fix-dry-run.ts` | `pnpm exec tsx src/cli/fix-dry-run.ts <findings.json> <manifest.json>` — side-effect-free intake report (rail 3.1(5)) | §3.1 |
 
-**Deliberately not yet built** (all needs the live client-repo transport, which is validated against the calibration target #9):
+### 9.1 The first executing slice (#885, 2026-07-23)
 
-- The **live execution layer**: `git worktree` orchestration, the wrapped git/`gh` client (push-ref rail enforced at the wrapper, `gh pr create --draft`), and the implement→verify→PR loop that ties the modules together against a real checkout. The pure decision core above is transport-agnostic and ready for it.
-- The **MVP acceptance run** (≥3 finding classes → reviewable PRs) is **deferred pending issue #9** (the deliberately-broken calibration target), which does not exist in the repo yet. Once #9 lands, validate: each in-scope planted class (§8 classes 1–5) yields a green draft PR with a clean detector-after; each out-of-scope planted bug yields a correct recommend-only downgrade; zero rail events fire on the clean path.
-- The **`fix:dry-run` / `fix:run` package.json scripts**: intentionally not added — `package.json` is a supervised dependency-manifest path for automated sweeps. The dry-run CLI runs today via `pnpm exec tsx`; wiring the scripts is a one-line human edit.
-- **Model tiering** is config surface only (`EscalationTier` + `screenFinding`/`assignTier` decide the tier per §5). No multi-provider router is built — none exists in `src/` yet; see `docs/design/model-routing.md` for the target `bulk`/`standard`/`flagship` mapping.
+| File | What it provides | Design ref |
+|---|---|---|
+| `src/fix/execute.ts` | `executeFixDiff()` — rail-checks an implementer-produced unified diff against its REAL file set + line count, then proves it applies against a **detached, disposable worktree** cut at the pinned baseline in `os.tmpdir()`. Disposes the worktree in a `finally`. Refuses Harvey's own repository (`git rev-parse --git-common-dir` comparison, so a Harvey worktree is caught too). | §1.4, §3.1, §4 |
+| `src/cli/fix-execute.ts` | `pnpm exec tsx src/cli/fix-execute.ts <findings.json> <manifest.json> --target <checkout> [--out <dir>]` — screens via `intake()`, executes each `auto` finding's `suggestedFix.diff`, writes inert `<id>.diff` + `fix-execution.json`, exits non-zero on any rail block or verification failure. | §1.4, §3.1 |
+
+Deliberate limits of this slice, so nobody reads more capability into it than it has:
+
+- **Inert diffs only.** The client's working tree is never written; no branch is created (the worktree is detached), nothing is pushed, no PR is opened. There is no `gh` call in `src/fix/`.
+- **Apply-clean, not §2-green.** It routes through the existing `verifySuggestedFix()` (`src/trackers/fix-diff.ts`): the diff applies, and an optional `effectCommand` holds. The §2 contract — the client's own checks plus a detector that stops firing — is **not** satisfied by this slice, and `outcome: "diff-verified"` deliberately does not say "green".
+- **Rails run before git.** A denylisted path, an out-of-allowlist path, or an over-cap diff is refused before a worktree exists, and its `.diff` is not written to the artifacts dir.
+- **A rail-blocked or unverified fix is never presented as applied.** The CLI exits non-zero and labels each row with its outcome.
+
+### 9.2 Remaining work — every piece has an issue (#929 is the ledger)
+
+Ruling of record (2026-07-23, #885): **this is being built.** Remaining pieces, each with file paths and acceptance criteria in its issue:
+
+| Issue | Piece | Design ref |
+|---|---|---|
+| #922 | Implementer: `FixPlan` producer, diff generation, escalation ladder (`FixPlan` has no producer today) | §1.2, §1.4, §5 |
+| #923 | Verification harness: client-command discovery against a real checkout, workflow parse, baseline run, `VerificationEvidence` assembly | §2.1, §2.2, §2.4 |
+| #924 | Detector re-run — `detectorId` has no producer or consumer, so `computeGreen()` can never return true today | §2.3 |
+| #925 | Branch + push + draft-PR transport at a **wrapped** git/`gh` client (`checkPushRef`/`isProtectedBranch` are pure functions no wrapper enforces) | §1.4, §3.1, §6, §7 |
+| #926 | Batching (`batch()` has no caller), parallel worktrees, concurrency caps, merge order, client handoff | §1.3, §1.5, §4 |
+| #927 | The §8 calibration acceptance gate | §8 |
+| #928 | `verifySuggestedFix()` has no path rails — adjacent hole found while surveying | §3.1 |
+
+Sequencing: #922 → #924 → #923 → #927 → #925 → #926. **#925 is not first** — it is the repo's first privileged, network-writing path, and a PR opened on a fix whose verification cannot yet compute green is the exact failure #885 was filed about.
+
+**Correction (2026-07-23):** this section previously recorded the MVP acceptance run as *"deferred pending issue #9 (the deliberately-broken calibration target), which does not exist in the repo yet."* Measured in a clean worktree: **`targets/calibration/` exists.** The recorded blocker had decayed; the run is unblocked and simply unperformed (#927).
+
+**Update (2026-07-24):**
+
+- **#928 done.** `verifySuggestedFix()` now clears the §3 path/size rails before it touches git, delegating to the one rail implementation (`src/fix/rails.ts` `isDenied`/`checkDiffCap`) and the one shared diff parser (moved to `rails.ts`). A diff touching a denylisted path or over the diff cap returns `verified: false`, so it can never be marked verified nor reach a ticket body (`renderFixSection` is gated on `verified`).
+- **#927 partially landed → remainder #957.** `src/fix/calibration-acceptance.test.ts` runs the checkable-today portion offline against the real planted calibration source: the §3 rails + inert-diff verify transport reaches `diff-verified` with zero rail events on a class-4 fix, and denylisted/over-cap diffs are `rails-blocked`. The **full autonomous** §8 run is blocked on the implementer (#922, no diffs), the detector-after re-run (#924), and the fact that `executeFixDiff` refuses `targets/calibration` in place (it lives inside Harvey's own git — the corpus must be materialized into a standalone repo first). Measured record: `docs/design/fix-calibration-acceptance.md`.
+
+**Still not built, still deliberate:**
+
+- The **`fix-dry-run` / `fix-execute` package.json scripts**: `package.json` is a supervised dependency-manifest path for automated sweeps. Both CLIs run today via `pnpm exec tsx`; wiring the scripts is a one-line human edit (noted as an operator action in #929).
+- **Model tiering** is config surface only (`EscalationTier` + `screenFinding`/`assignTier` decide a *starting* tier per §5; nothing escalates from it — #922). No multi-provider router exists in `src/`; see `docs/design/model-routing.md` for the target `bulk`/`standard`/`flagship` mapping.

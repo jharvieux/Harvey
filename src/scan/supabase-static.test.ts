@@ -329,6 +329,39 @@ describe("checkMigrationPolicySemantics", () => {
     root = mkdtempSync(join(tmpdir(), "harvey-policy-"));
     expect(checkMigrationPolicySemantics(root)).toEqual([]);
   });
+
+  // #937 — a broken policy a later migration DROPs and replaces must not be reported against the
+  // final schema. Before this, migrations were read cumulatively, so a fixed schema produced output
+  // byte-identical to the broken one it replaced.
+  describe("drop/replace lifecycle (#937)", () => {
+    const leak = "create policy documents_read on public.memberships for select using (true);";
+
+    it("flags a leaky USING(true) policy while it is still live (the broken variant)", () => {
+      const dir = writeMigrations({ "0001.sql": schema, "0002.sql": leak });
+      expect(reviews(dir)).toHaveLength(1);
+    });
+
+    it("does NOT flag the leak once a later migration DROPs and replaces it (the fixed variant)", () => {
+      const dir = writeMigrations({
+        "0001.sql": schema,
+        "0002.sql": leak,
+        "0003_fix.sql": [
+          "drop policy documents_read on public.memberships;",
+          "create policy documents_read on public.memberships for select using (tenant_id = current_tenant());",
+        ].join("\n"),
+      });
+      expect(reviews(dir)).toEqual([]);
+    });
+
+    it("does NOT flag the leak when a later migration simply DROPs it", () => {
+      const dir = writeMigrations({
+        "0001.sql": schema,
+        "0002.sql": leak,
+        "0003_drop.sql": "drop policy documents_read on public.memberships;",
+      });
+      expect(reviews(dir)).toEqual([]);
+    });
+  });
 });
 
 // #258 — the tenant-key inference is a fixed 6-name list. An app using another convention reviews
@@ -751,5 +784,16 @@ describe("checkMigrationRlsInitplanStatic (#374)", () => {
   it("returns nothing when the target has no migrations at all", () => {
     root = mkdtempSync(join(tmpdir(), "harvey-initplan-"));
     expect(checkMigrationRlsInitplanStatic(root)).toEqual([]);
+  });
+
+  it("clears a bare-call policy that a LATER migration rewrote with the (select …) wrapper (#937)", () => {
+    const dir = writeMigrations({
+      "0001_rls.sql": "create policy orders_select_own on public.orders for select using (created_by = auth.uid());",
+      "0002_fix.sql": [
+        "drop policy orders_select_own on public.orders;",
+        "create policy orders_select_own on public.orders for select using (created_by = (select auth.uid()));",
+      ].join("\n"),
+    });
+    expect(checkMigrationRlsInitplanStatic(dir)).toEqual([]);
   });
 });

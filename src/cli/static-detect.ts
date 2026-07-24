@@ -34,6 +34,7 @@ import { detectOrm, detectTargetFramework, isViteTooling, nonNextWorkspaces } fr
 import { scanPrismaAppPerf } from "../scan/prisma-app-perf.js";
 import { scanPrismaSchemaPerf } from "../scan/prisma-schema-perf.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
+import { checkUnassessedSfcFiles } from "../scan/sfc-coverage.js";
 
 const args = process.argv.slice(2);
 const targetArg = args.find((a) => !a.startsWith("--"));
@@ -112,6 +113,10 @@ try {
     // #793 (the #761 remainder): the two app-code cross-referencing heuristics — N+1 query
     // pattern and a `where` filter with no covering index — schema.prisma alone can't see either.
     ...(orm === "prisma" ? [...scanPrismaSchemaPerf(scanDir), ...scanPrismaAppPerf(scanDir)] : []),
+    // #919 — .svelte/.vue/.astro source is invisible to every detector call above (all load
+    // sources via loadSources, .ts/.tsx/.jsx/.mjs only); disclose it rather than let a SvelteKit/
+    // Nuxt/Astro target's M5/M6/M7/M9 rows read as a clean scan of a codebase barely read.
+    ...checkUnassessedSfcFiles(scanDir),
   ];
   if (buildDirs.length === 0) {
     console.log(

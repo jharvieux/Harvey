@@ -94,9 +94,10 @@ describe("runMechanicalScan Prisma/Supabase architecture gating (#757)", () => {
     expect(findings.some((f) => f.id === "M1-ARCH-PRISMA")).toBe(false);
   });
 
-  // #869 (the M1 sibling of #844): a Drizzle target has no RLS surface AND no tenant-scope detector.
-  // The scan must say so by name — silence here reads as "no tenant-scope problems found".
-  it("discloses a Drizzle data layer by name instead of reporting nothing", async () => {
+  // #869/#901: a Drizzle target has no RLS surface. #901 ships a builder-chain tenant-scope detector,
+  // so the note now records PARTIAL coverage (builder chain assessed; relational-query API / raw SQL
+  // not) instead of "wholly unassessed" — still fail-loud, no longer "assessed and clean".
+  it("discloses a Drizzle data layer with partial-coverage wording (builder chain now assessed)", async () => {
     const d = tmp();
     writeFileSync(join(d, "package.json"), JSON.stringify({ name: "drizzle-app", dependencies: { "drizzle-orm": "^0.30.0", pg: "^8.12.0" } }));
     const findings = await runMechanicalScan({ dir: d, skipNetworkChecks: true });
@@ -104,8 +105,30 @@ describe("runMechanicalScan Prisma/Supabase architecture gating (#757)", () => {
     expect(note).toBeDefined();
     expect(note).toMatchObject({ severity: "Info", confidence: "N/A", category: "Multi-tenant isolation" });
     expect(note?.evidence).toContain("Drizzle");
-    expect(note?.impact).toContain("INCOMPLETE");
+    expect(note?.evidence).toContain("drizzle-tenant-scope");
+    expect(note?.impact).toContain("PARTIAL");
+    expect(note?.impact).toContain("relational-query API");
     expect(findings.some((f) => f.id === "M1-ARCH-PRISMA")).toBe(false);
+  });
+
+  // #901: the detector itself — a Drizzle builder-chain read filtered by primary key alone gets a
+  // REAL tenant-scope finding, not just the not-assessed row.
+  it("flags a Drizzle query filtered by id alone and clears one scoped to the tenant column", async () => {
+    const d = tmp();
+    writeFileSync(join(d, "package.json"), JSON.stringify({ name: "drizzle-app", dependencies: { "drizzle-orm": "^0.30.0", pg: "^8.12.0" } }));
+    writeFileSync(
+      join(d, "unsafe.ts"),
+      `import { eq } from "drizzle-orm";\nimport { db } from "./db";\nimport { tasks } from "./schema";\nexport const get = (id: string) => db.select().from(tasks).where(eq(tasks.id, id));\n`,
+    );
+    writeFileSync(
+      join(d, "safe.ts"),
+      `import { and, eq } from "drizzle-orm";\nimport { db } from "./db";\nimport { tasks } from "./schema";\nexport const get = (id: string, org: string) => db.select().from(tasks).where(and(eq(tasks.id, id), eq(tasks.organizationId, org)));\n`,
+    );
+    const findings = await runMechanicalScan({ dir: d, skipNetworkChecks: true });
+    const scope = findings.filter((f) => f.taxonomy.includes("Drizzle query filtered by primary key"));
+    expect(scope).toHaveLength(1);
+    expect(scope[0]?.location).toContain("unsafe.ts");
+    expect(scope[0]?.precisionTier).toBe("review");
   });
 
   it("discloses a raw-SQL data layer and says which app-layer detectors did cover it", async () => {

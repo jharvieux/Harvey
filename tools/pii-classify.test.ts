@@ -21,6 +21,35 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(REPO_ROOT, "tools", "pii-classify.mjs");
 const PRISMA_FIXTURE_SCHEMA = join(REPO_ROOT, "src", "scan", "__fixtures__", "prisma-app", "prisma", "schema.prisma");
 
+describe("classifyColumn — camelCase/PascalCase columns classify as their snake_case equivalents (#936)", () => {
+  // carbon and half the Supabase corpus use camelCase/quoted-identifier column names; the
+  // dictionary anchors on snake_case boundaries, so these all classified NONE before #936.
+  it("classifies multi-word camelCase names the boundary-anchored rules used to miss", () => {
+    expect(classifyColumn("firstName")).toEqual({ infotype: "NAME", category: "PII", confidence: "medium" });
+    expect(classifyColumn("emailAddress")).toEqual({ infotype: "EMAIL", category: "PII", confidence: "high" });
+    expect(classifyColumn("mobilePhone")).toEqual({ infotype: "PHONE", category: "PII", confidence: "high" });
+    expect(classifyColumn("dateOfBirth")).toEqual({ infotype: "DOB", category: "PII", confidence: "high" });
+    expect(classifyColumn("addressLine1")).toEqual({ infotype: "ADDRESS", category: "PII", confidence: "medium" });
+    expect(classifyColumn("taxId")).toEqual({ infotype: "TAX_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("nationalId")).toEqual({ infotype: "NATIONAL_ID", category: "SENSITIVE_PII", confidence: "medium" });
+    expect(classifyColumn("socialSecurityNumber")).toEqual({ infotype: "US_SSN", category: "SENSITIVE_PII", confidence: "high" });
+  });
+
+  it("handles PascalCase and acronym boundaries (APIKey → api_key)", () => {
+    expect(classifyColumn("APIKey").category).toBe("SECRET");
+    expect(classifyColumn("CustomerSSN").category).toBe("SENSITIVE_PII");
+  });
+
+  it("keeps the FP exclusions firing on camelCase, not just snake_case", () => {
+    expect(classifyColumn("screenOrientation")).toBeNull();
+    expect(classifyColumn("isPinned", "boolean")).toBeNull();
+    expect(classifyColumn("raceId")).toBeNull();
+    expect(classifyColumn("emailCategory")).toBeNull();
+    // an entity display name on an org/tenant table is still not personal PII
+    expect(classifyColumn("companyName", "text", "organizations")).toBeNull();
+  });
+});
+
 describe("classifyColumn — true positives across the taxonomy", () => {
   it("matches HIPAA/GDPR contact & identity PII at high confidence", () => {
     expect(classifyColumn("email")).toEqual({ infotype: "EMAIL", category: "PII", confidence: "high" });
