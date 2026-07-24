@@ -41,6 +41,12 @@ rules:
       # #984: App Router next/headers request sources (cookies()/headers()).
       - pattern: cookies()
       - pattern: headers()
+    pattern-sanitizers:
+      # #986: numeric coercion (the (a1) transformation-sanitizer subset) — a value cast to a number
+      # cannot carry SQL metacharacters, so it is safe to interpolate into the raw-SQL string.
+      - pattern: parseInt(...)
+      - pattern: parseFloat(...)
+      - pattern: Number(...)
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -785,6 +791,14 @@ rules:
       # #984: App Router next/headers request sources (cookies()/headers()).
       - pattern: cookies()
       - pattern: headers()
+    pattern-sanitizers:
+      # #986: an HTML escaper / sanitizer on the interpolated value is a real transformation that
+      # neutralizes the XSS — a value run through it is no longer a finding (the (a1) subset).
+      - pattern: DOMPurify.sanitize(...)
+      - pattern: sanitizeHtml(...)
+      - pattern: sanitize(...)
+      - pattern: escapeHtml(...)
+      - pattern: escape(...)
     pattern-sinks:
       - patterns:
           - pattern: $RES.send(`...`)

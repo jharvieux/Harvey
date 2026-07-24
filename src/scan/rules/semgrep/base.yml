@@ -48,6 +48,13 @@ rules:
       # #984: App Router next/headers request sources (cookies()/headers()).
       - pattern: cookies()
       - pattern: headers()
+    pattern-sanitizers:
+      # #986: numeric coercion is a real transformation sanitizer (the (a1) subset) — a value cast to
+      # a number cannot carry SQL metacharacters, so the interpolation is safe. Deterministically
+      # clears the FP without an LLM pass; parameterized binds are already safe by sink shape.
+      - pattern: parseInt(...)
+      - pattern: parseFloat(...)
+      - pattern: Number(...)
     pattern-sinks:
       - patterns:
           - pattern-either:
