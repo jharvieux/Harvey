@@ -116,4 +116,41 @@ describe("JiraTracker", () => {
     await tracker.updateStory("AUD-2", {});
     expect(calls).toHaveLength(0);
   });
+
+  // #883 fix-verification write-back
+  it("adds a comment as ADF via the issue comment endpoint", async () => {
+    const { tracker, calls } = harness(() => ({}));
+    await tracker.addComment("AUD-2", "verified resolved");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("https://acme.atlassian.net/rest/api/3/issue/AUD-2/comment");
+    const body = jsonBody(calls[0]) as { body: { type: string; content: { content: { text: string }[] }[] } };
+    expect(body.body.type).toBe("doc");
+    expect(body.body.content[0]?.content[0]?.text).toBe("verified resolved");
+  });
+
+  const transitions = {
+    transitions: [
+      { id: "11", name: "To Do", to: { statusCategory: { key: "new" } } },
+      { id: "21", name: "In Progress", to: { statusCategory: { key: "indeterminate" } } },
+      { id: "31", name: "Done", to: { statusCategory: { key: "done" } } },
+    ],
+  };
+
+  it("closes by resolving the done-category transition at call time and POSTing it", async () => {
+    const { tracker, calls } = harness((call) => (call.method === "GET" ? transitions : {}));
+    await tracker.transitionState("AUD-2", "closed");
+    expect(calls[0]?.method).toBe("GET");
+    expect(jsonBody(calls[1])).toEqual({ transition: { id: "31" } });
+  });
+
+  it("reopens preferring the new-category transition", async () => {
+    const { tracker, calls } = harness((call) => (call.method === "GET" ? transitions : {}));
+    await tracker.transitionState("AUD-2", "reopened");
+    expect(jsonBody(calls[1])).toEqual({ transition: { id: "11" } });
+  });
+
+  it("throws — never silently skips — when no transition reaches the wanted category", async () => {
+    const { tracker } = harness((call) => (call.method === "GET" ? { transitions: [transitions.transitions[1]] } : {}));
+    await expect(tracker.transitionState("AUD-2", "closed")).rejects.toThrow(/no workflow transition/);
+  });
 });

@@ -33,6 +33,25 @@ export interface UpdateStoryPatch {
   labels?: string[];
 }
 
+// Fix-verification write-back (#883): the narrow surface the gate needs to close the loop on a
+// ticket findings-to-tickets filed — find it by its stable marker, note the verification outcome,
+// and move its state. Kept separate from Tracker so the filing surface's existing implementations
+// and test fakes don't grow methods they never call; the five real adapters implement both.
+export type TicketState = "closed" | "reopened";
+
+export interface TicketWriteback {
+  findByMarker(marker: string): Promise<CreatedRef | null>;
+  // Append a comment/discussion entry — the non-clobbering write path (updateStory replaces the
+  // body, which would destroy client edits; a verification note must never do that).
+  addComment(id: string, body: string): Promise<void>;
+  // Move the ticket to a done-type state ("closed") or back to an open/todo-type state
+  // ("reopened"). Adapters whose tracker has no universal state names (Jira transitions, Linear
+  // workflow states, Azure process templates) resolve the concrete state at call time and THROW
+  // when none is available — a ticket that cannot be transitioned is a loud failure, never a
+  // silently-skipped close.
+  transitionState(id: string, to: TicketState): Promise<void>;
+}
+
 export interface Tracker {
   createEpic(input: ItemInput): Promise<CreatedRef>;
   createStory(input: ItemInput, epicId: string): Promise<CreatedRef>;

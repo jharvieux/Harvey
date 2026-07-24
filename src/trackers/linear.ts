@@ -21,7 +21,7 @@
 // Linear workspace before relying on it for idempotency recovery.
 
 import { trackerFetchJson } from "./http.js";
-import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "./types.js";
+import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
 export interface LinearConfig {
   apiKey: string;
@@ -40,7 +40,7 @@ interface IssueRef {
   url: string;
 }
 
-export class LinearTracker implements Tracker {
+export class LinearTracker implements Tracker, TicketWriteback {
   readonly #apiKey: string;
   readonly #teamId: string;
   readonly #url: string;
@@ -114,6 +114,31 @@ export class LinearTracker implements Tracker {
       { input: { issueId: id, body: briefMarkdown } },
     );
     return { url: data.commentCreate.comment.url };
+  }
+
+  // #883 fix-verification write-back. Comments are native (same mutation attachBrief uses). Linear
+  // issue states are per-team workflow-state ENTITIES, so transitionState resolves the team's
+  // states at call time by their workflow-invariant `type`: "closed" takes the first completed-type
+  // state; "reopened" prefers unstarted, falling back to backlog. No candidate ⇒ throw (fail loud).
+  async addComment(id: string, body: string): Promise<void> {
+    await this.#graphql(
+      `mutation($input: CommentCreateInput!) { commentCreate(input: $input) { comment { url } } }`,
+      { input: { issueId: id, body } },
+    );
+  }
+
+  async transitionState(id: string, to: TicketState): Promise<void> {
+    const data = await this.#graphql<{ team: { states: { nodes: { id: string; name: string; type: string }[] } } }>(
+      `query($teamId: String!) { team(id: $teamId) { states(first: 100) { nodes { id name type } } } }`,
+      { teamId: this.#teamId },
+    );
+    const nodes = data.team.states.nodes;
+    const state =
+      to === "closed"
+        ? nodes.find((s) => s.type === "completed")
+        : (nodes.find((s) => s.type === "unstarted") ?? nodes.find((s) => s.type === "backlog"));
+    if (!state) throw new Error(`Linear team ${this.#teamId}: no ${to === "closed" ? "completed" : "unstarted/backlog"}-type workflow state is available`);
+    await this.#updateIssue(id, { stateId: state.id });
   }
 
   #updateIssue(id: string, input: Record<string, unknown>): Promise<{ issueUpdate: { success: boolean } }> {

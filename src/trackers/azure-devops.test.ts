@@ -121,4 +121,21 @@ describe("AzureDevOpsTracker", () => {
     await tracker.updateStory("6", {});
     expect(calls).toHaveLength(0);
   });
+
+  // #883 fix-verification write-back
+  it("adds a comment as a System.History discussion entry, never touching System.Description", async () => {
+    const { tracker, calls } = harness(() => workItem(6));
+    await tracker.addComment("6", "verified resolved");
+    const ops = JSON.parse(calls[0]?.bodyText ?? "[]") as { path: string; value: unknown }[];
+    expect(ops).toEqual([{ op: "add", path: "/fields/System.History", value: "verified resolved" }]);
+  });
+
+  it("writes the configured process-template states on close and reopen (Agile defaults)", async () => {
+    const { tracker, calls } = harness(() => workItem(6));
+    await tracker.transitionState("6", "closed");
+    await tracker.transitionState("6", "reopened");
+    const stateOf = (i: number) => (JSON.parse(calls[i]?.bodyText ?? "[]") as { value: string }[])[0]?.value;
+    expect(stateOf(0)).toBe("Closed");
+    expect(stateOf(1)).toBe("New");
+  });
 });

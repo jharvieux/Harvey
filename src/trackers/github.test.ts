@@ -122,4 +122,22 @@ describe("GitHubTracker", () => {
     await tracker3.updateStory("11", { body: "new body", labels: ["security"] });
     expect(calls3.map((c) => c.method)).toEqual(["PATCH", "PUT"]);
   });
+
+  // #883 fix-verification write-back
+  it("adds a comment via the issue comments endpoint, never touching the issue body", async () => {
+    const { tracker, calls } = harness(() => ({}));
+    await tracker.addComment("10", "verified resolved");
+    expect(calls[0]?.method).toBe("POST");
+    expect(calls[0]?.url).toBe("https://api.github.com/repos/acme/app/issues/10/comments");
+    expect(calls[0]?.body).toEqual({ body: "verified resolved" });
+  });
+
+  it("closes as completed and reopens via issue state PATCHes", async () => {
+    const { tracker, calls } = harness(() => ({}));
+    await tracker.transitionState("10", "closed");
+    await tracker.transitionState("10", "reopened");
+    expect(calls[0]?.body).toEqual({ state: "closed", state_reason: "completed" });
+    expect(calls[1]?.body).toEqual({ state: "open", state_reason: "reopened" });
+    expect(calls.every((c) => c.method === "PATCH" && c.url.endsWith("/issues/10"))).toBe(true);
+  });
 });

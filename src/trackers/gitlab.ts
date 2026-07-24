@@ -19,7 +19,7 @@
 // description and/or labels via the same issue endpoint setLabels uses.
 
 import { trackerFetch, trackerFetchJson } from "./http.js";
-import type { AttachedRef, CreatedRef, ItemInput, Tracker, UpdateStoryPatch } from "./types.js";
+import type { AttachedRef, CreatedRef, ItemInput, TicketState, TicketWriteback, Tracker, UpdateStoryPatch } from "./types.js";
 
 export interface GitLabConfig {
   token: string;
@@ -38,7 +38,7 @@ interface GitLabUpload {
   full_path: string; // instance-absolute path to the uploaded file, e.g. /-/project/1/uploads/<hash>/brief.md
 }
 
-export class GitLabTracker implements Tracker {
+export class GitLabTracker implements Tracker, TicketWriteback {
   readonly #token: string;
   readonly #projectId: string;
   readonly #base: string;
@@ -120,6 +120,24 @@ export class GitLabTracker implements Tracker {
       method: "PUT",
       headers: this.#headers(),
       body: JSON.stringify(fields),
+    });
+  }
+
+  // #883 fix-verification write-back: a note appends to the discussion (never the description);
+  // state moves via GitLab's state_event on the issue itself.
+  async addComment(id: string, body: string): Promise<void> {
+    await trackerFetch(this.#fetch, this.#issuesUrl(`/${id}/notes`), {
+      method: "POST",
+      headers: this.#headers(),
+      body: JSON.stringify({ body }),
+    });
+  }
+
+  async transitionState(id: string, to: TicketState): Promise<void> {
+    await trackerFetch(this.#fetch, this.#issuesUrl(`/${id}`), {
+      method: "PUT",
+      headers: this.#headers(),
+      body: JSON.stringify({ state_event: to === "closed" ? "close" : "reopen" }),
     });
   }
 
