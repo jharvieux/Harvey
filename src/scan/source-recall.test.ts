@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { CORPUS, mechanicalCorpus } from "./calibration.js";
-import { SOURCE_TIER_IDS, assertSourceTierResolvable, scoreSourceRecall, sourceTierCorpus } from "./source-recall.js";
+import {
+  M9_SOURCE_TIER_IDS,
+  SOURCE_TIER_IDS,
+  assertM9SourceTierResolvable,
+  assertSourceTierResolvable,
+  m9SourceTierCorpus,
+  scoreM9SourceRecall,
+  scoreSourceRecall,
+  sourceTierCorpus,
+} from "./source-recall.js";
 import type { Finding } from "../findings.js";
 
 // The live 38/39 recall number is measured by the CLI against real semgrep output
@@ -66,5 +75,43 @@ describe("source-recall scoring (#945)", () => {
     expect(row("N-PARAM-QUERY").pass).toBe(false); // high-tier hit on a benign lookalike -> FP
     expect(m.positivesTotal).toBe(39);
     expect(m.positivesCaught).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// #1011 — server-client-leak + client-side-authz folded into their OWN "M9 source-code (non-taint)"
+// tier, kept separate from SOURCE_TIER_IDS's taint-only definition above (so assertSourceTierResolvable
+// and the 39/31 planted split it pins are untouched by this addition).
+describe("M9 source-code (non-taint) tier (#1011)", () => {
+  it("resolves against the whole corpus, spanning a module-tagged and a module-less entry", () => {
+    expect(() => assertM9SourceTierResolvable()).not.toThrow();
+  });
+
+  it("selects exactly the listed ids: server-client-leak (M9-tagged) + client-side-authz (mechanical)", () => {
+    const subset = m9SourceTierCorpus();
+    expect(subset).toHaveLength(M9_SOURCE_TIER_IDS.length);
+    const ids = new Set(subset.map((e) => e.id));
+    expect(ids).toEqual(new Set(M9_SOURCE_TIER_IDS));
+    // server-client-leak is module-tagged M9 (scored by the M9 AST pass, outside runMechanicalScan)
+    expect(subset.find((e) => e.id === "M9C-LEAK-POS")?.module).toBe("M9");
+    // client-side-authz carries NO module tag (already inside mechanicalCorpus/runMechanicalScan)
+    expect(subset.find((e) => e.id === "P-CLIENT-AUTHZ-STORAGE")?.module).toBeUndefined();
+  });
+
+  it("stays out of SOURCE_TIER_IDS (never blended into the taint-only tier)", () => {
+    for (const id of M9_SOURCE_TIER_IDS) expect(SOURCE_TIER_IDS).not.toContain(id);
+  });
+
+  it("scores a caught server-client-leak positive and a caught client-side-authz positive", () => {
+    const findings: Finding[] = [
+      finding({ location: "m9-corpus/leak/positive/page.tsx", title: "Server→client data leak", precisionTier: "review" }),
+      finding({ location: "src/components/AdminGateStorage.tsx", title: "client-side-authz gate", precisionTier: "review" }),
+    ];
+    const m = scoreM9SourceRecall(findings);
+    const row = (id: string) => m.rows.find((r) => r.id === id)!;
+    expect(row("M9C-LEAK-POS").pass).toBe(true);
+    expect(row("P-CLIENT-AUTHZ-STORAGE").pass).toBe(true);
+    expect(row("M9C-LEAK-NEG").pass).toBe(true); // no finding relevant to it -> cleared
+    expect(m.positivesTotal).toBe(3);
+    expect(m.negativesTotal).toBe(2);
   });
 });
