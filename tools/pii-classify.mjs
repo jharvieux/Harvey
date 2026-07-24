@@ -12,6 +12,12 @@
 //   pnpm pii-classify --schema before/schema.sql init.sql    # multiple targets (#770), concatenated
 //   pnpm pii-classify --schema prisma/schema.prisma          # Prisma DSL, not SQL (#758)
 //
+// PAID opt-in semantic layer (#855): add `--semantic` AND set ANTHROPIC_API_KEY to run an LLM
+// pass over the columns the name dictionary could not resolve (names/types/table context only —
+// never values). Absent either the flag or the key, behavior is exactly the name-based-only path
+// above with zero network calls. Model: `--semantic-model <id>` / PII_SEMANTIC_MODEL env,
+// default claude-sonnet-5.
+//
 // The --schema path parses `CREATE TABLE` columns straight out of migration SQL (one or more
 // targets, each a directory of *.sql files or a single .sql file) via src/migration-sql-parse.ts's
 // parseColumns — the same under-extract-rather-than-mis-extract parser the M1 detect-deeper
@@ -216,8 +222,9 @@ const JSON_CONTAINER_NAME_PATTERN =
 // hides in real apps, and name-only matching is structurally blind to their VALUES. A text-typed
 // column with a narrative-shaped name gets a LOW-confidence FREE_TEXT_REVIEW flag — "review this
 // column's contents for unstructured PII/PHI", a flag, never an assertion (mirrors #377's json
-// container flag). This is the interim NAME-based visibility flag so the blind spot appears in the
-// output; the full fix is a content-reading semantic classifier (deferred, #855). Type-gated (only
+// container flag). This is the NAME-based visibility flag so the blind spot appears in the output;
+// #855's opt-in semantic pass reasons over names/types/table context but still never reads VALUES,
+// so a content-reading (value-sampling) tier remains deliberately out of scope. Type-gated (only
 // free-text-shaped types) and vocabulary-scoped so it doesn't flag every string column — still
 // FP-prone (an email `body`, a product `description`), which is exactly why it's low-confidence
 // review, not a classification. Checked LAST, so any higher-signal dictionary/type hit wins first.
@@ -334,14 +341,15 @@ export function buildDataMap(columns, resolve = (col) => classifyColumn(col.colu
 }
 
 /**
- * Stretch goal (issue #17): optional semantic fallback for names the dictionary can't resolve
- * deterministically — obfuscated/custom fields like `contact_handle`, `dob_estimate`. Not
- * implemented here: a real implementation would batch the *names only* (never values) of
- * unresolved columns to an LLM and expect the same ClassifyResult shape back, always at
- * confidence "low" (a semantic guess goes to review, never an assertion). Left as a documented
- * hook rather than a real call so this module doesn't pick up a new model-provider dependency;
- * see the PR body for the follow-up.
- * @typedef {(columns: {table_name: string, column_name: string}[]) => Promise<Map<string, ClassifyResult|null>>} SemanticClassifier
+ * Semantic fallback (issue #17 stretch goal, wired by #855) for names the dictionary can't
+ * resolve deterministically — obfuscated/custom fields like `contact_handle`, `dob_estimate`.
+ * Batches the *names/types only* (never values) of unresolved columns to the injected
+ * classifier and expects the same ClassifyResult shape back. The name-based dictionary is
+ * ALWAYS the base layer: a dictionary hit is never overridden by a semantic verdict, and a
+ * semantic verdict only fills columns the dictionary left null. The default paid/opt-in
+ * implementation is createAnthropicSemanticClassifier (below); tests inject fakes so no
+ * network call ever runs under `pnpm verify`.
+ * @typedef {(columns: {table_name: string, column_name: string, data_type?: string}[]) => Promise<Map<string, ClassifyResult|null>>} SemanticClassifier
  * @param {{table_name: string, column_name: string, data_type?: string}[]} columns
  * @param {SemanticClassifier} [semanticClassifier]
  */
@@ -349,7 +357,7 @@ export async function classifyWithFallback(columns, semanticClassifier) {
   if (!semanticClassifier) return buildDataMap(columns);
   const unresolved = columns
     .filter((col) => !classifyColumn(col.column_name, col.data_type, col.table_name))
-    .map((col) => ({ table_name: col.table_name, column_name: col.column_name }));
+    .map((col) => ({ table_name: col.table_name, column_name: col.column_name, data_type: col.data_type }));
   if (unresolved.length === 0) return buildDataMap(columns);
 
   const semanticHits = await semanticClassifier(unresolved);
@@ -359,6 +367,132 @@ export async function classifyWithFallback(columns, semanticClassifier) {
     const semanticHit = semanticHits.get(`${col.table_name}.${col.column_name}`);
     return semanticHit ? { ...semanticHit, source: "semantic" } : null;
   });
+}
+
+// --- #855: the real semantic classifier — PAID, OPT-IN ONLY -------------------------------
+//
+// Gated twice: the CLI only builds it when BOTH `--semantic` is passed AND ANTHROPIC_API_KEY is
+// set (resolveSemanticClassifier). Absent either, no classifier exists and classifyWithFallback
+// takes the name-based-only path — byte-identical to pre-#855 behavior, zero network calls.
+// Privacy posture matches the rest of this module ("detect, don't ask"): only column NAMES,
+// declared TYPES, table names, and sibling column names are sent — never data values. A semantic
+// verdict is a review-tier guess, never an assertion: confidence is clamped to low/medium ("high"
+// stays reserved for deterministic dictionary matches), and dataMapToFindings tags each
+// semantic-sourced column so the report shows which classifications came from the LLM pass.
+
+export const DEFAULT_SEMANTIC_MODEL = "claude-sonnet-5";
+const ANTHROPIC_VERSION = "2023-06-01";
+const SEMANTIC_BATCH_SIZE = 100;
+const SEMANTIC_MAX_SIBLINGS = 30;
+const SEMANTIC_CATEGORIES = new Set(["PII", "SENSITIVE_PII", "PHI", "PCI", "SECRET"]);
+const SEMANTIC_INFOTYPE_SHAPE = /^[A-Z0-9_?]{2,64}$/;
+
+const SEMANTIC_SYSTEM_PROMPT = `You are a data-classification reviewer inside a database-schema audit (PII/PHI/PCI/stored-secret detection). You receive a JSON array of columns a deterministic name-dictionary could NOT classify. For each column, decide — from its name, declared SQL type, table name, and sibling column names ONLY (no data values are available) — whether it likely stores personal data (PII), sensitive personal data (SENSITIVE_PII), health data (PHI), payment-card data (PCI), or a stored credential/secret (SECRET). Pay particular attention to obfuscated or nonstandard names (contact_handle, dob_estimate), generically-named columns whose table context implies regulated data, and free-text/json/unknown-typed columns whose name+context suggests they hold such data.
+
+Respond with ONLY a JSON array — no prose, no markdown fences. Include one entry per input column that likely holds regulated data and OMIT columns that do not:
+[{"table": "<table_name>", "column": "<column_name>", "infotype": "<UPPER_SNAKE label, e.g. EMAIL, DOB, HEALTH>", "category": "PII|SENSITIVE_PII|PHI|PCI|SECRET", "confidence": "low|medium"}]
+
+Be conservative — this audit treats a semantic verdict as a review flag, never an assertion. When in doubt, omit the column or use "low".`;
+
+// Strict-shape parse of the model's JSON verdicts. Anything malformed at the envelope level
+// throws (an opted-in pass that produced garbage must fail loud, not silently classify nothing);
+// individual entries outside the allowed shape are dropped — a bad verdict never enters the map.
+function parseSemanticVerdicts(text) {
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start < 0 || end <= start) throw new Error(`semantic classifier: model response contained no JSON array: ${text.slice(0, 200)}`);
+  const entries = JSON.parse(text.slice(start, end + 1));
+  if (!Array.isArray(entries)) throw new Error("semantic classifier: model response was not a JSON array");
+  const hits = new Map();
+  for (const e of entries) {
+    if (!e || typeof e.table !== "string" || typeof e.column !== "string") continue;
+    if (!SEMANTIC_CATEGORIES.has(e.category)) continue;
+    if (typeof e.infotype !== "string" || !SEMANTIC_INFOTYPE_SHAPE.test(e.infotype)) continue;
+    // "high" is reserved for deterministic dictionary matches — a semantic guess caps at medium,
+    // and anything other than an explicit medium/high coerces to low (the conservative floor).
+    const confidence = e.confidence === "medium" || e.confidence === "high" ? "medium" : "low";
+    hits.set(`${e.table}.${e.column}`, { infotype: e.infotype, category: e.category, confidence });
+  }
+  return hits;
+}
+
+/**
+ * Builds a SemanticClassifier that calls the Anthropic Messages API via built-in fetch (no SDK —
+ * deliberately dependency-free, see #855). `allColumns` supplies sibling-column context; `fetchImpl`
+ * is injectable so tests never touch the network. Throws on any API/parse failure — an opted-in
+ * semantic pass that can't run is an error, never a silent downgrade to name-based-only.
+ * @param {{apiKey: string, model?: string, allColumns?: {table_name: string, column_name: string}[], fetchImpl?: typeof fetch, baseUrl?: string}} opts
+ * @returns {SemanticClassifier & {model: string}}
+ */
+export function createAnthropicSemanticClassifier({
+  apiKey,
+  model = DEFAULT_SEMANTIC_MODEL,
+  allColumns = [],
+  fetchImpl = globalThis.fetch,
+  baseUrl = "https://api.anthropic.com",
+} = {}) {
+  if (!apiKey) throw new Error("createAnthropicSemanticClassifier requires an apiKey — the semantic pass never runs without one (#855)");
+  const siblingsByTable = new Map();
+  for (const col of allColumns) {
+    if (!siblingsByTable.has(col.table_name)) siblingsByTable.set(col.table_name, []);
+    siblingsByTable.get(col.table_name).push(col.column_name);
+  }
+
+  const classifier = async (unresolved) => {
+    const hits = new Map();
+    for (let i = 0; i < unresolved.length; i += SEMANTIC_BATCH_SIZE) {
+      const items = unresolved.slice(i, i + SEMANTIC_BATCH_SIZE).map((col) => ({
+        table: col.table_name,
+        column: col.column_name,
+        sql_type: col.data_type ?? null,
+        sibling_columns: (siblingsByTable.get(col.table_name) ?? [])
+          .filter((c) => c !== col.column_name)
+          .slice(0, SEMANTIC_MAX_SIBLINGS),
+      }));
+      const res = await fetchImpl(`${baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "x-api-key": apiKey, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json" },
+        body: JSON.stringify({
+          model,
+          max_tokens: 8192,
+          system: SEMANTIC_SYSTEM_PROMPT,
+          messages: [{ role: "user", content: JSON.stringify(items) }],
+        }),
+      });
+      if (!res.ok) throw new Error(`semantic classifier: Anthropic API ${res.status} — ${await res.text()}`);
+      const msg = await res.json();
+      if (msg.stop_reason === "refusal") throw new Error("semantic classifier: the model refused the classification request");
+      const text = (msg.content ?? [])
+        .filter((b) => b.type === "text")
+        .map((b) => b.text)
+        .join("");
+      for (const [key, hit] of parseSemanticVerdicts(text)) hits.set(key, hit);
+    }
+    return hits;
+  };
+  classifier.model = model;
+  return classifier;
+}
+
+/**
+ * The CLI's double gate (#855): returns the fetch-based classifier ONLY when the run explicitly
+ * opted in with `--semantic` AND ANTHROPIC_API_KEY is set. Anything less returns null and the
+ * caller takes exactly today's name-based-only path — no network call is possible. Opting in
+ * without a key is disclosed on stderr (fail loud) but still downgrades per the product decision
+ * that the free tier must never require a key. Model: `--semantic-model <id>`, else
+ * PII_SEMANTIC_MODEL, else claude-sonnet-5.
+ * @param {{argv?: string[], env?: Record<string, string|undefined>, allColumns?: {table_name: string, column_name: string}[]}} opts
+ */
+export function resolveSemanticClassifier({ argv = process.argv, env = process.env, allColumns = [] } = {}) {
+  if (!argv.includes("--semantic")) return null;
+  const apiKey = env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.error("⚠ --semantic requested but ANTHROPIC_API_KEY is not set — semantic pass skipped; name-based classification only (#855).");
+    return null;
+  }
+  const i = argv.indexOf("--semantic-model");
+  const flagModel = i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : undefined;
+  return createAnthropicSemanticClassifier({ apiKey, model: flagModel ?? env.PII_SEMANTIC_MODEL ?? DEFAULT_SEMANTIC_MODEL, allColumns });
 }
 
 // #436: the data-map → report-schema Finding[] mapper, shared by the schema and live paths, so
@@ -416,7 +550,7 @@ export function dataMapToFindings(dataMap, { tier }) {
       evidence: [
         `${source}; name/type classification only — no values were read.`,
         asserted.length
-          ? `Classified columns: ${asserted.map((c) => `${c.column} → ${c.infotype} (${c.category}, ${c.confidence})`).join("; ")}.`
+          ? `Classified columns: ${asserted.map((c) => `${c.column} → ${c.infotype} (${c.category}, ${c.confidence}${c.source === "semantic" ? ", semantic" : ""})`).join("; ")}.`
           : "",
         jsonFlags.length
           ? `Review for nested PII (flagged, not asserted — #377): ${jsonFlags.map((c) => c.column).join(", ")} — denormalization-container json column(s); inspect their keys.`
@@ -580,8 +714,7 @@ const SCOPE_NOTE = {
   schema: "Scope: CREATE TABLE + ALTER TABLE ADD COLUMN columns only — views, materialized views, and generated columns are not parsed on the static tier (#853).",
 };
 
-function report(cols, { tier = "schema", unknownType = [] } = {}) {
-  const dataMap = buildDataMap(cols);
+function report(cols, dataMap, { tier = "schema", unknownType = [], semanticModel = null } = {}) {
   const tables = Object.keys(dataMap);
   // #377/#850: review-flag hits ("look inside this column") are not asserted PII — they get their
   // own lists below and stay out of the asserted headline count.
@@ -608,6 +741,15 @@ function report(cols, { tier = "schema", unknownType = [] } = {}) {
     console.log(`\nReview for unstructured PII/PHI — ${freeTextRefs.length} free-text column(s), flagged not asserted (#850):`);
     for (const f of freeTextRefs) console.log(`  ${f} — narrative-shaped free-text column; a name-only scan can't see its values, inspect for names/SSNs/health details`);
   }
+  // #855: when the opt-in semantic pass ran, say so — including a zero-hit run, so a reader can
+  // tell "LLM reviewed the unresolved names and classified nothing" apart from "never ran".
+  if (semanticModel) {
+    const semanticRefs = tables.flatMap((t) =>
+      dataMap[t].columns.filter((c) => c.source === "semantic").map((c) => `${t}.${c.column} → ${c.infotype} (${c.category}, ${c.confidence})`),
+    );
+    console.log(`\nSemantic pass (${semanticModel}) reviewed the dictionary-unresolved column names/types — no data values were sent (#855). ${semanticRefs.length} column(s) classified semantically (review-tier, never asserted):`);
+    for (const ref of semanticRefs) console.log(`  ${ref}`);
+  }
   // #851: fail loud — columns whose SQL type isn't recognized were classified by NAME only, so the
   // type-based signals that couldn't apply are visible rather than the columns silently vanishing.
   if (unknownType.length) {
@@ -618,13 +760,22 @@ function report(cols, { tier = "schema", unknownType = [] } = {}) {
   return dataMap;
 }
 
+// #855: the shared classify → report → emit tail for both CLI tiers. The semantic pass slots in
+// here (behind resolveSemanticClassifier's double gate) so live and schema runs get it identically.
+async function classifyReportAndEmit(cols, { tier, unknownType = [] }) {
+  const semantic = resolveSemanticClassifier({ allColumns: cols });
+  const dataMap = await classifyWithFallback(cols, semantic ?? undefined);
+  report(cols, dataMap, { tier, unknownType, semanticModel: semantic?.model ?? null });
+  writeFindingsOut(dataMap, tier);
+}
+
 async function inventory() {
   const { default: postgres } = await import("postgres");
   const sql = postgres(process.env.SUPABASE_DB_URL, { max: 1, idle_timeout: 5 });
   const cols =
     await sql`SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, ordinal_position`;
   await sql.end();
-  writeFindingsOut(report(cols, { tier: "live" }), "live");
+  await classifyReportAndEmit(cols, { tier: "live" });
 }
 
 /**
@@ -730,7 +881,7 @@ function columnsForTarget(target) {
   return parseClassifiableColumns(readSchemaSql(target));
 }
 
-function classifyFromSchema() {
+async function classifyFromSchema() {
   const targets = schemaTargets();
   const missing = targets.filter((t) => !existsSync(t));
   if (targets.length === 0 || missing.length) {
@@ -746,7 +897,7 @@ function classifyFromSchema() {
     console.error(`No columns found via ${targets.join(", ")} — check the path(s) (expects supabase/migrations/*.sql shape, a standalone schema.sql with CREATE TABLE, or a schema.prisma with model declarations).`);
     process.exit(1);
   }
-  writeFindingsOut(report(all, { tier: "schema", unknownType }), "schema");
+  await classifyReportAndEmit(all, { tier: "schema", unknownType });
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
