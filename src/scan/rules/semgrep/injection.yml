@@ -146,8 +146,10 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: Critical
-      # #455: standard, unambiguous CWE/OWASP mapping.
-      cwe: ["CWE-94: Improper Control of Generation of Code ('Code Injection')"]
+      # #990: the pattern matches eval()/new Function() specifically — the eval-injection sub-class
+      # of code injection — so CWE-95 (Eval Injection) is the honest, more-specific CWE, not the
+      # generic parent CWE-94. Both sit under OWASP A03.
+      cwe: ["CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"]
       owasp: ["A03:2021 - Injection"]
     message: >
       Request input reaches eval()/new Function() — arbitrary code execution. Parse the input as
@@ -439,7 +441,11 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
-      cwe: ["CWE-94: Improper Control of Generation of Code ('Code Injection')"]
+      # #990: the pattern matches an ejs/handlebars/pug template SINK compiling request-controlled
+      # template SOURCE — server-side template injection — so CWE-917 (Expression Language / template
+      # injection) is more specific than the generic code-injection parent CWE-94, and (unlike the
+      # newer CWE-1336) is in OWASP's official A03 mapped-CWE list so the owasp field stays honest.
+      cwe: ["CWE-917: Improper Neutralization of Special Elements used in an Expression Language Statement ('Expression Language Injection')"]
       owasp: ["A03:2021 - Injection"]
       confidence: MEDIUM
       category: security
