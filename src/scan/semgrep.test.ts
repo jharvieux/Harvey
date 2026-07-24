@@ -1,8 +1,26 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, type SemgrepOutput } from "./semgrep.js";
+import { describe, expect, it, vi } from "vitest";
+import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, runSemgrep, semgrepUnavailableFinding, type SemgrepOutput } from "./semgrep.js";
+
+// #950: semgrep absent from PATH must degrade to a disclosed coverage gap, not an uncaught
+// ENOENT crash (mirrors the osv-scanner pattern, #512). Only "semgrep" is faked here — every
+// other execFileSync call (there are none elsewhere in this file) would pass through untouched.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: vi.fn((bin: string, args: string[], opts?: unknown) => {
+      if (bin === "semgrep") {
+        const err = new Error("spawnSync semgrep ENOENT") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      return actual.execFileSync(bin, args, opts as never);
+    }),
+  };
+});
 
 describe("parseSemgrepFindings", () => {
   it("tags ERROR+HIGH-confidence non-audit rules as high precision", () => {
@@ -184,5 +202,26 @@ describe("checkPublicDirSensitive", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// #950: previously runSemgrep threw the raw ENOENT, which propagated uncaught to quick-scan's
+// main().catch() and hard-exited the CLI instead of degrading like every other mechanical tool.
+describe("runSemgrep degrades on a missing binary (#950)", () => {
+  it("returns a failure reason instead of throwing when semgrep is absent from PATH", () => {
+    const { result, failure } = runSemgrep("/some/target");
+    expect(failure).toBe("semgrep not found on PATH");
+    expect(result).toEqual({});
+  });
+});
+
+describe("semgrepUnavailableFinding (#950)", () => {
+  it("discloses the coverage gap without claiming zero footguns found", () => {
+    const finding = semgrepUnavailableFinding("semgrep not found on PATH");
+    expect(finding.id).toBe("SEM-00");
+    expect(finding.severity).toBe("Info");
+    expect(finding.confidence).toBe("N/A");
+    expect(finding.evidence).toContain("semgrep not found on PATH");
+    expect(finding.impact).toContain("not a finding of zero footguns");
   });
 });
