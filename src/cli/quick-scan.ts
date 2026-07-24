@@ -125,13 +125,16 @@ function render(r: QuickScanReport): string {
 
   if (r.informational.length > 0) {
     lines.push("  ── Informational — not graded ─────────────");
-    lines.push("  Outdated dependencies matching a published CVE range. A version match is not");
-    lines.push("  proof of exploitability, so these don't move your grade — the deep scan triages");
-    lines.push("  each one against how you actually deploy.");
+    lines.push("  Facts we verified but won't grade you on: dependency versions matching a");
+    lines.push("  published CVE range (a version match is not proof of exploitability) and");
+    lines.push("  credential-shaped strings in docs/example deployment files (near-certainly");
+    lines.push("  placeholders, stated per finding). The deep scan triages each one.");
     // #874: the list is ordered by whether your code actually imports the package. Say so, or the
     // ordering looks arbitrary — and say what it is NOT, or "not imported" reads as "safe".
-    lines.push("  Ordered by reachability: packages your code imports first, then ones it doesn't.");
+    lines.push("  CVE rows are ordered by reachability: packages your code imports first.");
     lines.push("");
+    // Deliberately labeled [Info] rather than each row's underlying severity: an ungraded row
+    // printed "[Critical]" would talk over the section's own "not graded" framing (#213).
     for (const f of r.informational) {
       lines.push(`    [Info] ${f.title}`);
       lines.push(`      ${f.location}`);
