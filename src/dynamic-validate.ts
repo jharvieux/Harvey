@@ -335,6 +335,9 @@ export interface StandUpResult {
   // #876/#877 — surface + identity-class rows the runner observed (which access paths and which API
   // surfaces this stand-up could exercise, and which it could not). Folded into the scope ledger.
   scopeRows?: ScopeRow[];
+  // #907 — scoped tables with a soft-delete column the data-residue probe received; when present the
+  // scope ledger's DATA_RESIDUE_ROW flips from "not probed" to "probed" for the soft-delete class.
+  softDeleteTables?: string[];
 }
 
 export interface StandUpRunner {
@@ -442,6 +445,7 @@ function probeOneProject(opts: {
     revision: db.revision ?? null,
     coverage,
     rows: db.scopeRows ?? [],
+    softDeleteProbed: db.softDeleteTables,
   });
   findings.push(scope.finding);
   limitations.push(...scope.limitations);

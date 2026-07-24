@@ -17,9 +17,9 @@ measured against a published key, transcribed from the per-finding tables of the
 | slug | repo | key | positives | negatives |
 |------|------|-----|-----------|-----------|
 | `nocode-rescue` | `yagaMI-Reverse/nocode-rescue` (`before/`) | `docs/design/nocode-rescue-recall-measurement.md` | 8 | 0 |
-| `superredhat` | `SuperRedHat/secure-code-review-demo` (`vulnerable` branch) | `docs/design/superredhat-recall-measurement.md` | 12 | 0 |
-| `supatest` | `yoanbernabeu/SupatestVibeDemo` | `docs/design/supatest-recall-measurement.md` | 9 | 0 |
-| `cipherx` | `thecipherxpro/cipherx-vulnerability-lab` | `docs/design/cipherx-recall-measurement.md` | 20 | 1 |
+| `superredhat` | `SuperRedHat/secure-code-review-demo` (`vulnerable` branch) | `docs/design/superredhat-recall-measurement.md` | 12 | 1 |
+| `supatest` | `yoanbernabeu/SupatestVibeDemo` | `docs/design/supatest-recall-measurement.md` | 9 | 1 |
+| `cipherx` | `thecipherxpro/cipherx-vulnerability-lab` | `docs/design/cipherx-recall-measurement.md` | 20 | 2 |
 
 Counts are the corpus as committed — print the current key with
 `pnpm exec tsx src/cli/validate-semantic.ts --corpus` rather than quoting this table.
@@ -27,11 +27,16 @@ Counts are the corpus as committed — print the current key with
 Each entry carries a **location anchor** and **mechanism keywords**, so a right-file/wrong-mechanism
 finding (the "partial" those docs record for the mechanical tier) does not score as a catch.
 
-The one negative is cipherx **CX-21**: an endpoint the target *advertises* as an "outdated
-dependencies" bug that actually returns a hard-coded mock CVE list over current dependencies.
-Reporting it means the pass believed the repo's marketing over its code. **One negative across four
-targets means semantic PRECISION is effectively ungated** — the tool says so in its own output
-rather than letting the silence read as a clean bill of health.
+The negatives are recorded semantic FP traps — reporting one means the pass believed appearance over
+code, so the gate FAILS. cipherx **CX-21** is an endpoint the target *advertises* as an "outdated
+dependencies" bug that actually returns a hard-coded mock CVE list over current dependencies. #912
+added three more (one per re-scored target): superredhat **F-N1** (the `notes`/`import` routes reported
+as *unauthenticated* — false: both call `getUser()` and 401, the measured #562 false-premise trap),
+supatest **F-N1** and cipherx **CX-22** (the browser Supabase *anon/publishable* key reported as an
+exposed secret — public by design; cipherx also commits a real `service_role` key, so this is the
+`role`-claim distinction fp-rules.txt turns on). **Four negatives across the scored targets** means
+semantic PRECISION is now gated — the "essentially ungated" caveat the tool used to print no longer
+fires.
 
 ## Running it
 
@@ -75,7 +80,10 @@ pnpm exec tsx src/cli/validate-semantic.ts --artifacts-dir artifacts
 
 It is deliberately **not** wired into `pnpm verify`: like `validate:calibration` (which needs the
 mechanical binaries), it needs an input `pnpm verify` cannot manufacture. The scoring logic is unit
-tested in `src/scan/semantic-corpus.test.ts`, which does run in verify.
+tested in `src/scan/semantic-corpus.test.ts`, and the three re-scored passes' actual findings are
+carried in `docs/design/semantic-corpus-passes/*.triage.json` and re-scored in
+`src/scan/semantic-corpus-passes.test.ts` — both run in verify, so a corpus edit that drops a
+planted-flaw match or weakens a precision negative fails there without needing a live pass.
 
 ## Live validation — 2026-07-23
 
@@ -87,6 +95,25 @@ generous-match caveat firing on 2 findings that each satisfied two entries. The 
 printed as `NOT SCORED` with their reasons and stayed out of the ratio, which is the behaviour that
 matters most here.
 
-Standing gap, recorded rather than left implicit: **three of the four targets have never been scored
-by this gate.** The recorded baselines for superredhat / supatest / cipherx remain claims about
-2026-07-18 until a pass is run and scored against each.
+## Live re-score — 2026-07-24 (#912)
+
+The other three targets were cloned (`superredhat` at the `vulnerable` branch, `supatest` and
+`cipherx` at `main`), a semantic pass was run over each target's shipped source + migrations guided by
+`docs/scan-extras.txt` and triaged against `docs/fp-rules.txt`, and the passes were recorded and
+scored. Every planted flaw was re-confirmed present in the current source (cipherx's later
+`*_fix_*`/`*_legacy_compat_*` migrations resolve an RLS recursion error only — the weak policies
+remain), and the gate scored:
+
+- **superredhat 12/12 (100%)**, negatives cleared 1/1 — GATE PASS
+- **supatest 9/9 (100%)**, negatives cleared 1/1, generous-match caveat on 2 findings — GATE PASS
+- **cipherx 20/20 (100%)** (CX-21 correctly not reported), negatives cleared 2/2, caveat on 2 — GATE PASS
+
+Aggregate over the three: **41/41 planted findings caught, 4/4 recorded non-vulnerabilities cleared,
+GATE PASS.** The 2026-07-18 baselines (12/9/20) **held** — they were confirmed, not merely carried —
+so each target's `recordedOn` is refreshed to 2026-07-24. The exact triage findings scored are
+committed at `docs/design/semantic-corpus-passes/*.triage.json`; `nocode-rescue` was already scored
+2026-07-23 (above) and was not re-run here, so a run scoping `--artifacts-dir` to only the three prints
+it `NOT SCORED`, which is honest.
+
+Standing gap now closed: all four corpus targets have been scored by this gate at least once. What
+remains is routine re-scoring (each pass artifact is stale after 30 days by design).

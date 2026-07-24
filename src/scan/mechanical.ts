@@ -15,6 +15,7 @@ import { scanBolaOwner } from "./bola-owner.js";
 import { scanCounterRace } from "./counter-race.js";
 import { scanPgIdor } from "./pg-idor.js";
 import { scanPrismaTenantScope } from "./prisma-tenant-scope.js";
+import { scanDrizzleTenantScope } from "./drizzle-tenant-scope.js";
 import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
@@ -128,13 +129,41 @@ function prismaArchitectureNote(): Finding {
   };
 }
 
+// #901: the M1 sibling of prismaArchitectureNote for Drizzle. #869 first disclosed Drizzle as
+// wholly unassessed; #901 ships scanDrizzleTenantScope, so the builder-chain read/write shape
+// (db.select()/update()/delete()...where(eq(t.id, …))) IS now covered. This row records the PARTIAL
+// coverage: the query-builder idiom is analysed, the relational-query API (db.query.*.findFirst) and
+// any raw-SQL escape hatch are not, so mechanical coverage is still incomplete (fail loud).
+function drizzleArchitectureNote(): Finding {
+  return {
+    id: "M1-ARCH-DRIZZLE",
+    title: "DB-level RLS checks not applicable — Drizzle/Postgres architecture; tenant-scope partially assessed",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Multi-tenant isolation",
+    taxonomy: "Architecture — Drizzle (no DB-level RLS; builder-chain tenant-scope detector runs)",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence:
+      "Target's data layer detected as Drizzle with no Supabase project — there is no DB-level RLS surface (the migration-RLS, PostgREST-exposure and edge-config detectors read supabase/migrations, supabase/config.toml and supabase/functions, none of which exist here). The Drizzle tenant-scope detector (#901, drizzle-tenant-scope) DID run: it flags a db.select()/update()/delete() chain whose .where(...) filters by the primary key alone (eq(table.id, …)) with no tenant/owner column.",
+    impact:
+      "Mechanical tenant-scope coverage for this target is PARTIAL, not clean: the Drizzle query-builder chain is analysed, but the relational-query API (db.query.<table>.findFirst/findMany) and any raw-SQL escape hatch are NOT — a missing tenant predicate in those shapes would not be flagged. Coverage is therefore INCOMPLETE; recorded so the absence of further findings reads as \"partially assessed\" rather than \"assessed and clean\".",
+    fix: "Review tenant scoping in the relational-query API and any raw-SQL access by hand (or with the paid LLM semantic pass, which is not ORM-shape-bound): every read and write must filter on the tenant/owner column, not on the primary key alone.",
+    value: 1,
+    ease: 5,
+    safety: 5,
+    mechanical: true,
+  };
+}
+
 // #869: the M1 sibling of #844/#757. M1's subject is tenant isolation. On Supabase that lives in
-// RLS; on Prisma it lives in the app layer and #760 gives us a detector for the Prisma idiom. On a
-// Drizzle/Kysely/TypeORM/Sequelize/Knex/Mongoose target it ALSO lives in the app layer — and Harvey
-// has no detector for those query builders' shapes, so the scan completed, reported nothing, and
-// the absence read as "no tenant-scope problems found". This row states the limit instead.
-// `orm` is a recognised non-Supabase, non-Prisma layer (the caller gates on that).
-function unsupportedDataLayerNote(orm: Exclude<TargetOrm, "unknown" | "supabase" | "prisma">): Finding {
+// RLS; on Prisma it lives in the app layer and #760 gives us a detector for the Prisma idiom; on
+// Drizzle #901 gives us one for the builder-chain idiom (see drizzleArchitectureNote). On a
+// Kysely/TypeORM/Sequelize/Knex/Mongoose target it ALSO lives in the app layer — and Harvey has no
+// detector for those query builders' shapes, so the scan completed, reported nothing, and the
+// absence read as "no tenant-scope problems found". This row states the limit instead. `orm` is a
+// recognised non-Supabase, non-Prisma, non-Drizzle layer (the caller gates on that).
+function unsupportedDataLayerNote(orm: Exclude<TargetOrm, "unknown" | "supabase" | "prisma" | "drizzle">): Finding {
   const label = ORM_LABELS[orm];
   // The app-layer detectors that DO run are shape-specific: Express+`pg` call sites (pg-idor,
   // pg-response-exposure), Supabase service-role clients (bola-owner, job-tenant-scope), and the
@@ -143,7 +172,7 @@ function unsupportedDataLayerNote(orm: Exclude<TargetOrm, "unknown" | "supabase"
   const covered =
     orm === "raw-sql"
       ? "The Express+`pg` app-layer detectors (pg-idor, pg-response-exposure) DID run and cover handlers written in that shape; queries issued from any other shape — a different HTTP framework, a hand-rolled query module — are matched by none of them."
-      : `No detector matches ${label} query shapes: the app-layer M1 detectors that ran cover Express+\`pg\` call sites, Supabase service-role clients, and the Prisma idiom (#760) only.`;
+      : `No detector matches ${label} query shapes: the app-layer M1 detectors that ran cover Express+\`pg\` call sites, Supabase service-role clients, the Prisma idiom (#760), and the Drizzle builder chain (#901) only.`;
   return {
     id: `M1-ARCH-${orm.toUpperCase()}`,
     title: `Tenant-scope checks not assessed — ${label} data layer`,
@@ -206,6 +235,8 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     const orm = detectOrm(scanDir);
     if (orm === "prisma") {
       findings.push(prismaArchitectureNote());
+    } else if (orm === "drizzle") {
+      findings.push(drizzleArchitectureNote());
     } else if (orm !== "supabase" && orm !== "unknown") {
       findings.push(unsupportedDataLayerNote(orm));
     } else {
@@ -275,6 +306,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // write filtered by primary key alone, with no tenant/owner column. ORM-agnostic app-layer
     // class — a Prisma app has no RLS, so the where clause is the only isolation gate.
     findings.push(...scanPrismaTenantScope(scanDir));
+
+    // #901 — Drizzle-idiom cross-tenant BOLA: a `db.select()/update()/delete()...where(eq(t.id, …))`
+    // read/write filtered by primary key alone, with no tenant/owner column. Same app-layer class as
+    // #760 for a different query builder — a Drizzle app has no RLS, so the where is the only gate.
+    findings.push(...scanDrizzleTenantScope(scanDir));
 
     // #664 — service_role key hardcoded as a JWT literal (same-file or cross-file const) and
     // passed to createClient. Real base64 decode + role/iss claim check, incl. plain .js.

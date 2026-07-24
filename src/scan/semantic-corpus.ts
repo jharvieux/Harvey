@@ -80,7 +80,7 @@ const superRedHat: SemanticTarget = {
   repo: "SuperRedHat/secure-code-review-demo",
   ref: "vulnerable",
   source: "docs/design/superredhat-recall-measurement.md",
-  recordedOn: "2026-07-18",
+  recordedOn: "2026-07-24",
   recordedCaught: 12,
   entries: [
     { id: "F-01", kind: "positive", cls: "hardcoded Supabase service-role key", locations: ["lib/supabaseAdmin.ts"], match: ["service_role", "service-role", "credential"], note: "" },
@@ -95,6 +95,14 @@ const superRedHat: SemanticTarget = {
     { id: "F-10", kind: "positive", cls: "wildcard CORS on the authenticated API", locations: ["lib/cors.ts"], match: ["cors"], note: "" },
     { id: "F-11", kind: "positive", cls: "no CSRF protection / no rate limiting", locations: ["app/api/notes", "app/api/import/route.ts"], match: ["csrf", "rate limit", "rate-limit"], note: "No static detector exists at all — semantic and the M2 CSRF probe are the only tiers that reach it." },
     { id: "F-12", kind: "positive", cls: "vulnerable ejs dependency + SSTI render endpoint", locations: ["package.json", "app/api/render/route.ts"], match: ["ejs", "ssti", "template injection"], note: "" },
+    {
+      id: "F-N1",
+      kind: "negative",
+      cls: "the notes / import routes reported as UNAUTHENTICATED — false: both call getUser() and 401 first",
+      locations: ["app/api/notes/route.ts", "app/api/import/route.ts"],
+      match: ["unauthenticated", "no auth-check", "missing auth", "no authentication"],
+      note: "NOT a finding. app/api/notes/route.ts (POST) and app/api/import/route.ts both call getUser(req) and return 401 when it is null — they are authenticated. The measurement recorded harvey-route-noauth firing here on a FALSE 'no auth' premise (#562); a semantic pass that repeats it (reports these routes as unauthenticated) is believing a filename/heuristic over the code. The real bugs on these files are F-07 (mass assignment) and F-11 (CSRF/rate-limit), which name their own mechanisms.",
+    },
   ],
 };
 
@@ -103,7 +111,7 @@ const supatest: SemanticTarget = {
   repo: "yoanbernabeu/SupatestVibeDemo",
   ref: "main",
   source: "docs/design/supatest-recall-measurement.md",
-  recordedOn: "2026-07-18",
+  recordedOn: "2026-07-24",
   recordedCaught: 9,
   entries: [
     { id: "F1", kind: "positive", cls: "UPDATE articles guarded by an always-true tautology", locations: ["supabase/migrations"], match: ["update", "tautology"], note: "Engineered to pass the Supabase linter; the mechanical CLAUSE_TRUE check only matches literal `true`." },
@@ -115,6 +123,14 @@ const supatest: SemanticTarget = {
     { id: "F7", kind: "positive", cls: "weak password policy (no HIBP, no complexity)", locations: ["src/components/Auth.tsx"], match: ["password"], note: "Config-to-verify: the setting lives in project Auth config, so the semantic pass flags it for confirmation." },
     { id: "F8", kind: "positive", cls: "open self-service signup with auto-confirm", locations: ["src/components/Auth.tsx"], match: ["signup", "sign-up", "auto-confirm", "autoconfirm"], note: "Config-to-verify, as F7." },
     { id: "F9", kind: "positive", cls: "profiles policies expose every email and allow any edit/delete", locations: ["supabase/migrations"], match: ["profiles"], note: "" },
+    {
+      id: "F-N1",
+      kind: "negative",
+      cls: "the Supabase anon/publishable key in the browser client reported as an exposed secret — public by design",
+      locations: ["src/lib/supabase.ts"],
+      match: ["anon key", "publishable", "exposed secret", "hardcoded supabase key"],
+      note: "NOT a finding. src/lib/supabase.ts hands the VITE_SUPABASE_ANON_KEY to createClient in browser code — the anon key is public by design (its access is exactly what RLS allows), and the file even documents this. A semantic pass that reports it as an exposed/committed secret is the fp-rules.txt anon-key false positive; security here rests on RLS, which is where the real flaws (F1-F9) live.",
+    },
   ],
 };
 
@@ -123,7 +139,7 @@ const cipherx: SemanticTarget = {
   repo: "thecipherxpro/cipherx-vulnerability-lab",
   ref: "main",
   source: "docs/design/cipherx-recall-measurement.md",
-  recordedOn: "2026-07-18",
+  recordedOn: "2026-07-24",
   recordedCaught: 20,
   entries: [
     { id: "CX-01", kind: "positive", cls: "weak/default seeded account credentials", locations: ["scripts/seed-auth-users.ts"], match: ["password", "credential"], note: "" },
@@ -153,6 +169,14 @@ const cipherx: SemanticTarget = {
       locations: ["src/app/api/dependencies/route.ts"],
       match: ["dependency", "cve", "outdated", "vulnerable component"],
       note: "NOT a real vulnerability — the endpoint returns static JSON and the real package.json deps are current. The target advertises it as a planted bug, so it is the corpus's one recorded semantic FP TRAP: reporting it means the pass believed the repo's own marketing over its code. fp-rules.txt (mock data is not a dependency finding) is what keeps it out.",
+    },
+    {
+      id: "CX-22",
+      kind: "negative",
+      cls: "the Supabase anon/publishable key in the browser client reported as a committed secret — public by design",
+      locations: ["src/lib/supabase/client.ts"],
+      match: ["anon key", "publishable", "exposed secret", "hardcoded credential"],
+      note: "NOT a finding. src/lib/supabase/client.ts passes NEXT_PUBLIC_SUPABASE_ANON_KEY (decoded role:anon) to createBrowserClient — public by design. This target ALSO commits a real service_role key in .env (CX-02), so the pass must distinguish the two by the decoded role claim (fp-rules.txt); flagging the anon key as a committed credential is failing exactly that distinction.",
     },
   ],
 };

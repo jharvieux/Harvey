@@ -25,7 +25,11 @@ import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
 import { mechanicalFinding, walkSourceFiles } from "./common.js";
 
-const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
+// Shared with the Drizzle idiom of this same cross-tenant BOLA class (#901,
+// src/scan/drizzle-tenant-scope.ts): the source-extension gate, the tenant/owner column vocabulary,
+// and the non-shipping-path filter are the same question asked of a different query shape, so the
+// two detectors stay in lockstep by importing these rather than drifting apart.
+export const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 
 // The read/write verbs whose filter, if unscoped, selects WHOSE row comes back or is mutated.
 // `create`/`createMany` name the tenant in the payload; `findMany`/`count` are the list-all class.
@@ -51,7 +55,7 @@ const CLIENT_NAME = /^(prisma|prismaclient|db|tx|client)$/i;
 // `tenantId`, `teamId`, `userId`) and Prisma also scopes through named RELATIONS (`where: { id,
 // organization: { members: { some: { userId } } } }`), so this admits camelCase, `Id`/`_id`
 // suffixes, and bare relation names, and adds `team`/`company` which the SaaS idiom uses.
-const TENANT_SCOPE_COLUMN =
+export const TENANT_SCOPE_COLUMN =
   /^(user|owner|tenant|account|org|organisation|organization|customer|workspace|member|profile|team|company|createdby|created_by|author)(id|_id)?$/i;
 
 function propertyKeyName(prop: ts.ObjectLiteralElementLike): string | undefined {
@@ -155,8 +159,8 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 // `tests/playground/**`. Kept local to this detector rather than widening NON_PRODUCT, because that
 // constant also feeds M6/M7/M9, whose external-corpus baselines are measured against its current
 // meaning — widening it there is a re-measurement, not a precision fix.
-const NON_SHIPPING_PATH = /(^|\/)(tests?|__tests__|__mocks__|__fixtures__|spec|specs|e2e|fixtures?|examples?|playground|docs?|samples?|benchmarks?)\//i;
-const NON_SHIPPING_FILE = /\.(test|spec)([.-]|$)|\.stories\./i;
+export const NON_SHIPPING_PATH = /(^|\/)(tests?|__tests__|__mocks__|__fixtures__|spec|specs|e2e|fixtures?|examples?|playground|docs?|samples?|benchmarks?)\//i;
+export const NON_SHIPPING_FILE = /\.(test|spec)([.-]|$)|\.stories\./i;
 
 export function detectPrismaTenantScopeFindings(files: SourceInput[]): Finding[] {
   return files

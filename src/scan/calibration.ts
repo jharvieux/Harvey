@@ -32,6 +32,7 @@ import { b16StorageSecdefEntries } from "./calibration/b16-storage-secdef.entrie
 import { b17RaceUnscopedEntries } from "./calibration/b17-race-unscoped.entries.js";
 import { b18JobTenantScopeEntries } from "./calibration/b18-job-tenant-scope.entries.js";
 import { b19PrismaTenantScopeEntries } from "./calibration/b19-prisma-tenant-scope.entries.js";
+import { b20DrizzleTenantScopeEntries } from "./calibration/b20-drizzle-tenant-scope.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { rlsStaticSemanticsEntries } from "./calibration/rls-static-semantics.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
@@ -74,6 +75,7 @@ export const CORPUS: CorpusEntry[] = [
   ...b17RaceUnscopedEntries,
   ...b18JobTenantScopeEntries,
   ...b19PrismaTenantScopeEntries,
+  ...b20DrizzleTenantScopeEntries,
   ...knownPublicCredsEntries,
   ...rlsStaticSemanticsEntries,
   ...m9AuthzEntries,
@@ -207,7 +209,7 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
   return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail };
 }
 
-interface CoverageMatrix {
+export interface CoverageMatrix {
   rows: MatrixRow[];
   positivesTotal: number; // static positives that MUST be caught (excludes connected AND none tiers)
   positivesCaught: number;
