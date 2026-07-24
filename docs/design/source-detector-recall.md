@@ -75,10 +75,11 @@ this rationale so the in/out call on each class is reviewable in one place. The 
     `draftMode`, middleware-matcher gaps, client-render-only authz.
   - The SCA/dependency tier; secrets-in-files; TLS/security-header hardening; crypto-primitive choice;
     `next.config` flags; and the DB-layer RLS/Supabase-config/schema classes.
-  - Two adjacent **source-code** detectors are deliberately OUT because they are not request→sink
-    injection/access-control flows: `server-client-leak` (excessive data exposure — a DB row spread
-    into a Client Component) and `client-side-authz` (an authz decision made in the wrong tier). They
-    are candidates for the corpus-growth remainder, not this number.
+  - Two adjacent **source-code** detectors are deliberately OUT of THIS taint-only answer key because
+    they are not request→sink injection/access-control flows: `server-client-leak` (excessive data
+    exposure — a DB row spread into a Client Component) and `client-side-authz` (an authz decision made
+    in the wrong tier). They are not left unscored, though — see "The M9 source-code (non-taint) tier"
+    below, which folds both into their own tier (#1011).
 
 ### Fail-loud maintenance
 
@@ -133,19 +134,41 @@ a named, distinct cause (never blended into one "hard" bucket):
   context** no AST pattern can distinguish from the benign re-derivation this same code shape usually is
   — already named as an open gap by the planted corpus's own `m9-authz.entries.ts` header.
 
-**On folding in `server-client-leak`/`client-side-authz` (verified, not assumed):** both detectors live
-under M9's boundary-model pass (`src/detectors/app-router.ts`/`boundary-model.ts`) and their calibration
-entries (`m9-checks.entries.ts`) already carry `module: "M9"` — they are scored by M9's OWN `detect-static`
-suite, never by `runMechanicalScan` (the semgrep+AST pipeline this gate and `validate-calibration.ts`
-share). `assertSourceTierResolvable()` only resolves ids inside `mechanicalCorpus(CORPUS)` (entries with
-NO `module` tag), so adding these two ids to `SOURCE_TIER_IDS` would throw immediately, not silently
-under-count. Folding them in is not a config change: it needs the M9 AST pass's output scored alongside
-`runMechanicalScan`'s, a genuinely different wiring than this file's "IN = request→sink taint" definition
-was built around. Left as a named follow-up rather than rushed into this gate.
-
 Like the planted-fixture gate, a recall gap here is **the measurement, not a gate failure** — `--real`
 always exits 0 and reports; it does not fail a build. Distinct from every other number on this page:
 never blend 0/3 into 38/39, or either into the M1 mixed ~198/201. The real value of this tier is turning
 "real code is presumably harder than what we planted" from an assumption into three itemized, re-testable,
 named limitations — a punch list for cross-file taint and function-parameter-sourced BOLA, not just a
 lower percentage.
+
+## The M9 source-code (non-taint) tier (#1011)
+
+`server-client-leak` and `client-side-authz` (named as OUT above) are now scored too — not left as an
+unscored "candidate for the corpus-growth remainder" as an earlier revision of this doc had it. That
+earlier revision also claimed *both* detectors live under M9's boundary-model pass and both carry
+`module: "M9"` in the calibration corpus — **wrong on re-verification** (a stale reason that had decayed;
+see `CLAUDE.md`'s "a recorded reason is a claim about the world" doctrine). Only `server-client-leak` is
+module-tagged M9 (`M9C-LEAK-POS`/`-NEG` in `m9-checks.entries.ts`, scored by the M9 AST pass —
+`detectAppRouterFindings` — against its own committed `src/detectors/__fixtures__/server-client-leak/`
+fixtures, never against `targets/calibration` or `runMechanicalScan`). `client-side-authz` is actually a
+**mechanical** `leftover-auth.ts` grep: its corpus entries (`P-CLIENT-AUTHZ-STORAGE`,
+`P-CLIENT-AUTHZ-USER`, `N-CLIENT-AUTHZ-SERVER-CHECK` in `b14-applogic.entries.ts`) carry **no** `module`
+tag, so they were already inside `mechanicalCorpus()` and already caught by the same
+`runMechanicalScan(targets/calibration)` call this gate makes — nothing new needed to run it.
+
+Both stay OUT of `SOURCE_TIER_IDS` itself: neither is a request→sink taint flow (the definition that
+answer key exists to score), so blending them in would corrupt that clean number even though
+`client-side-authz` happens to share its execution pipeline. Instead, `src/scan/source-recall.ts` adds a
+second, parallel answer key — `M9_SOURCE_TIER_IDS` (5 entries: the 2 `server-client-leak` +
+3 `client-side-authz`) — resolved against the **whole** corpus (not `mechanicalCorpus()`, since it spans
+a module-tagged and a module-less entry, via `assertM9SourceTierResolvable()`), scored via
+`scoreM9SourceRecall()`, and reported by `validate-source-recall.ts` as its own
+**"M9 SOURCE-CODE (non-taint) recall"** section: distinct rows, distinct positives/negatives, distinct
+pass/fail gate, never blended into the 38/39 headline number or the real-code 0/3. `validate-source-recall.ts`
+runs `detectAppRouterFindings` itself over the `server-client-leak` fixtures (the same load-and-prefix
+approach `calibration.test.ts`'s `#848` block uses) and merges those findings with the mechanical scan's
+before scoring, since the two detectors' findings come from two different passes.
+
+**Measured 2026-07-24: 3/3 positives caught, 2/2 negatives cleared (100%/100%)** —
+`pnpm exec tsx src/cli/validate-source-recall.ts`. A perfect score here reflects a 5-entry answer key,
+not a claim of broad coverage — this tier is exactly as thin as the two detectors' own corpora.
