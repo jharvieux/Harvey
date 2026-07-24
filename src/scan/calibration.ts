@@ -209,7 +209,7 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
   return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail };
 }
 
-interface CoverageMatrix {
+export interface CoverageMatrix {
   rows: MatrixRow[];
   positivesTotal: number; // static positives that MUST be caught (excludes connected AND none tiers)
   positivesCaught: number;
