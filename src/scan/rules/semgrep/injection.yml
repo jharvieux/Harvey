@@ -52,8 +52,12 @@ rules:
               - pattern: $C.rpc("query", $ARG)
           - focus-metavariable: $ARG
 
-  # OS command injection: request input reaches child_process exec/execSync, which spawn a shell
-  # and interpret the whole string. execFile/spawn with an argv array (N-CMD-SAFE) is not matched.
+  # OS command injection (CWE-78): request input reaches child_process exec/execSync, which spawn a
+  # SHELL and interpret the whole string — arbitrary command execution. This is the shell-STRING
+  # sink. The argv-ARRAY shape (execFile/spawn with an argument array, no shell) is a different
+  # weakness — argument injection into the target program's flag parsing — split out below as
+  # harvey-argument-injection (CWE-88), #983. A benign execFile with a non-request arg (N-CMD-SAFE)
+  # is taint-gated out of both.
   - id: harvey-command-injection
     languages: [javascript, typescript]
     mode: taint
@@ -88,6 +92,49 @@ rules:
               - pattern: child_process.exec($CMD, ...)
               - pattern: child_process.execSync($CMD, ...)
           - focus-metavariable: $CMD
+
+  # #983: argument injection (CWE-88) — request input reaches an argv-ARRAY element of execFile/
+  # spawn with NO shell. The shell is not involved, so this is NOT CWE-78 OS command injection: the
+  # injection is into the TARGET PROGRAM's own option parsing (execFile("git", ["clone", input]) —
+  # a value like `--upload-pack=…` is read by git as a flag). Distinct CWE and remediation from the
+  # shell-string sink above. Review — exploitability depends on whether the invoked program treats
+  # the value as an option; the fix is to validate/allowlist the argument (and pass `--` first).
+  - id: harvey-argument-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-88: Improper Neutralization of Argument Delimiters in a Command ('Argument Injection')"]
+      owasp: ["A03:2021 - Injection"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request input is passed as an argv-array element to execFile/spawn (no shell) — argument
+      injection (CWE-88). Even without a shell, a leading -/--flag value is interpreted as an option
+      by the invoked program. Validate the value against an allowlist and pass `--` before
+      positional arguments.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: req.cookies
+      - pattern: req.headers
+      - pattern: $REQ.nextUrl.searchParams
+      - pattern: cookies()
+      - pattern: headers()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: execFile($CMD, $ARGS, ...)
+              - pattern: execFileSync($CMD, $ARGS, ...)
+              - pattern: spawn($CMD, $ARGS, ...)
+              - pattern: spawnSync($CMD, $ARGS, ...)
+              - pattern: child_process.execFile($CMD, $ARGS, ...)
+              - pattern: child_process.execFileSync($CMD, $ARGS, ...)
+              - pattern: child_process.spawn($CMD, $ARGS, ...)
+              - pattern: child_process.spawnSync($CMD, $ARGS, ...)
+          - focus-metavariable: $ARGS
 
   # Code injection: request input reaches eval / new Function. JSON.parse (N-EVAL-JSON) is a data
   # parser, not code evaluation, and is not matched.
