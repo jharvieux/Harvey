@@ -1,0 +1,46 @@
+// Distilled from s1owjke/prisma-rls @ 339344231acc84f268e18142e6d146687ca611ce (MIT License,
+// Copyright (c) 2024 Dan L) — src/extension.ts. Reduced to the SHAPE that matters for M1
+// precision: tenant scoping enforced centrally by a Prisma client extension that intercepts
+// $allOperations and rewrites every query's `where` from a permissions config, rather than by a
+// tenant column written at each call site. This is an idiom Harvey's tenant-scope detector was not
+// written against, and it must stay silent on it.
+
+import { Prisma } from "@prisma/client/extension";
+
+interface Permissions {
+  read: Record<string, unknown> | boolean;
+  update: Record<string, unknown> | boolean;
+}
+
+function resolveWhere(permission: Permissions["read"], where: Record<string, unknown> | undefined) {
+  if (permission === true) return where;
+  if (permission === false) return { AND: [where ?? {}, { id: { in: [] } }] };
+  return { AND: [where ?? {}, permission] };
+}
+
+export const createRlsExtension = (permissionsConfig: Record<string, Permissions>) =>
+  Prisma.defineExtension((client) =>
+    client.$extends({
+      name: "rls",
+      query: {
+        $allModels: {
+          async $allOperations({ model, operation, args, query }) {
+            const permissions = permissionsConfig[model];
+            switch (operation) {
+              case "findUnique":
+              case "findUniqueOrThrow":
+              case "findFirst":
+                return query({ ...args, where: resolveWhere(permissions.read, args.where) });
+              case "update":
+              case "updateMany":
+              case "delete":
+              case "deleteMany":
+                return query({ ...args, where: resolveWhere(permissions.update, args.where) });
+              default:
+                return query(args);
+            }
+          },
+        },
+      },
+    }),
+  );

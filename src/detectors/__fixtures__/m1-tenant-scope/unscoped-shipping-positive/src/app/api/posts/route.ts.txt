@@ -1,0 +1,16 @@
+// The class itself, in shipping code: an authenticated route handler that reads and mutates by
+// primary key with no tenant predicate anywhere in the where clause. Present so the non-shipping
+// exclusions above are measured as a precision fix and not as a detector that went dark.
+
+import { prisma } from "@/lib/db";
+
+export async function GET(request: Request, { params }: { params: { id: string } }) {
+  const post = await prisma.post.findUnique({ where: { id: params.id } });
+  return Response.json(post);
+}
+
+export async function PATCH(request: Request, { params }: { params: { id: string } }) {
+  const body = await request.json();
+  const post = await prisma.post.update({ where: { id: params.id }, data: { title: body.title } });
+  return Response.json(post);
+}
