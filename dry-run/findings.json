@@ -3817,15 +3817,15 @@
   },
   {
     "id": "SEM-69",
-    "title": "src.scan.rules.semgrep.harvey-weak-cipher: A cryptographically weak or broken cipher (DES/3DES/RC4, or AES in ECB mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.",
+    "title": "src.scan.rules.semgrep.harvey-weak-cipher: A cryptographically weak or broken cipher (DES/3DES/RC2/RC4/Blowfish, or any cipher in ECB mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.",
     "severity": "High",
     "confidence": "Confirmed",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-weak-cipher",
-    "location": "lib/crypto.js:8",
+    "location": "lib/crypto-ecb.js:8",
     "status": "Open",
-    "evidence": "A cryptographically weak or broken cipher (DES/3DES/RC4, or AES in ECB mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.\n",
-    "impact": "A cryptographically weak or broken cipher (DES/3DES/RC4, or AES in ECB mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.\n",
+    "evidence": "A cryptographically weak or broken cipher (DES/3DES/RC2/RC4/Blowfish, or any cipher in ECB mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.\n",
+    "impact": "A cryptographically weak or broken cipher (DES/3DES/RC2/RC4/Blowfish, or any cipher in ECB mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 4,
     "ease": 3,
@@ -3841,6 +3841,30 @@
   },
   {
     "id": "SEM-70",
+    "title": "src.scan.rules.semgrep.harvey-weak-cipher: A cryptographically weak or broken cipher (DES/3DES/RC2/RC4/Blowfish, or any cipher in ECB mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-weak-cipher",
+    "location": "lib/crypto.js:8",
+    "status": "Open",
+    "evidence": "A cryptographically weak or broken cipher (DES/3DES/RC2/RC4/Blowfish, or any cipher in ECB mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.\n",
+    "impact": "A cryptographically weak or broken cipher (DES/3DES/RC2/RC4/Blowfish, or any cipher in ECB mode) is used for encryption. DES/RC4 fall to brute force; ECB mode leaks plaintext structure. Use AES-256-GCM (or another authenticated mode) with a freshly-random IV per encryption.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
+  },
+  {
+    "id": "SEM-71",
     "title": "src.scan.rules.semgrep.harvey-node-env-not-prod: NODE_ENV is force-assigned to a non-production value in application code, overriding whatever the deploy environment actually set — this can ship dev-mode behavior (verbose errors, disabled optimizations) to production.",
     "severity": "Low",
     "confidence": "Review",
@@ -3861,7 +3885,7 @@
     ]
   },
   {
-    "id": "SEM-71",
+    "id": "SEM-72",
     "title": "src.scan.rules.semgrep.harvey-permissive-cors: Access-Control-Allow-Origin is wildcarded. If credentials are also allowed on this response, this defeats CORS's same-origin protection for authenticated requests.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -3885,7 +3909,7 @@
     ]
   },
   {
-    "id": "SEM-72",
+    "id": "SEM-73",
     "title": "src.scan.rules.semgrep.harvey-permissive-cors: Access-Control-Allow-Origin is wildcarded. If credentials are also allowed on this response, this defeats CORS's same-origin protection for authenticated requests.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -3909,7 +3933,7 @@
     ]
   },
   {
-    "id": "SEM-73",
+    "id": "SEM-74",
     "title": "src.scan.rules.semgrep.harvey-pg-mass-assignment: The whole request body is passed directly as a repo write function's payload — mass assignment. A caller can set any column the write path exposes (role/is_admin/price) by adding it to the JSON body. Destructure and pass an explicit list of allowed fields instead.",
     "severity": "Medium",
     "confidence": "Review",
@@ -3933,7 +3957,7 @@
     ]
   },
   {
-    "id": "SEM-74",
+    "id": "SEM-75",
     "title": "src.scan.rules.semgrep.harvey-client-trusted-role: A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.",
     "severity": "High",
     "confidence": "Review",
@@ -3957,7 +3981,7 @@
     ]
   },
   {
-    "id": "SEM-75",
+    "id": "SEM-76",
     "title": "javascript.node-crypto.security.gcm-no-tag-length.gcm-no-tag-length: The call to 'createDecipheriv' with the Galois Counter Mode (GCM) mode of operation is missing an expected authentication tag length. If the expected authentication tag length is not specified or otherwise checked, the application might be tricked into verifying a shorter-than-expected authentication tag. This can be abused by an attacker to spoof ciphertexts or recover the implicit authentication key of GCM, allowing arbitrary forgeries.",
     "severity": "High",
     "confidence": "Review",
@@ -3982,7 +4006,7 @@
     ]
   },
   {
-    "id": "SEM-76",
+    "id": "SEM-77",
     "title": "src.scan.rules.semgrep.harvey-gcm-no-authtaglength: AES-GCM createDecipheriv() is called with no authTagLength option, so the authentication-tag length is not pinned and a truncated tag can be accepted. Pass { authTagLength: 16 }.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4006,7 +4030,7 @@
     ]
   },
   {
-    "id": "SEM-77",
+    "id": "SEM-78",
     "title": "problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification: Checks for setting the environment variable NODE_TLS_REJECT_UNAUTHORIZED to 0, which disables TLS verification. This should only be used for debugging purposes. Setting the option rejectUnauthorized to false bypasses verification against the list of trusted CAs, which also leads to insecure transport. These options lead to vulnerability to MTM attacks, and should not be used.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4030,7 +4054,7 @@
     ]
   },
   {
-    "id": "SEM-78",
+    "id": "SEM-79",
     "title": "src.scan.rules.semgrep.harvey-tls-verify-disabled: TLS certificate verification is explicitly disabled (rejectUnauthorized: false, or NODE_TLS_REJECT_UNAUTHORIZED=0). Any man-in-the-middle can present an arbitrary certificate and this client will trust it silently — fix the underlying certificate problem instead.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -4054,7 +4078,7 @@
     ]
   },
   {
-    "id": "SEM-79",
+    "id": "SEM-80",
     "title": "src.scan.rules.semgrep.harvey-jwt-ignore-exp: jwt.verify() is called with { ignoreExpiration: true } — expired tokens are accepted, so a revoked/stale session token is honoured forever. Remove the option (expiry is enforced by default).",
     "severity": "High",
     "confidence": "Confirmed",
@@ -4078,7 +4102,7 @@
     ]
   },
   {
-    "id": "SEM-80",
+    "id": "SEM-81",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -4102,7 +4126,7 @@
     ]
   },
   {
-    "id": "SEM-81",
+    "id": "SEM-82",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -4126,7 +4150,7 @@
     ]
   },
   {
-    "id": "SEM-82",
+    "id": "SEM-83",
     "title": "src.scan.rules.semgrep.harvey-node-secret-fallback: A secret-named environment variable falls back to a hardcoded non-empty string literal (process.env.X || \"…\"). The literal ships in the bundle and git history, and a missing env var silently uses this known value instead of failing closed. Throw when the variable is absent; never embed a fallback secret.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4150,7 +4174,7 @@
     ]
   },
   {
-    "id": "SEM-83",
+    "id": "SEM-84",
     "title": "src.scan.rules.semgrep.harvey-jwt-sign-noexpiry: jwt.sign() is called with no `expiresIn` — the token never expires, so a leaked or stolen token is valid forever and cannot be revoked by time. Pass { expiresIn: '<duration>' } (and verify with a matching maxAge), unless this token is intentionally long-lived with its own revocation path.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4174,7 +4198,7 @@
     ]
   },
   {
-    "id": "SEM-84",
+    "id": "SEM-85",
     "title": "src.scan.rules.semgrep.harvey-jwt-verify-noalg: jwt.verify() is called with no `algorithms` allowlist. With an asymmetric key this enables the RS256/HS256 algorithm-confusion bypass. Always pass { algorithms: ['<your-alg>'] }.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -4198,7 +4222,7 @@
     ]
   },
   {
-    "id": "SEM-85",
+    "id": "SEM-86",
     "title": "src.scan.rules.semgrep.harvey-jwt-none-alg: jwt.verify() allows the \"none\" algorithm — an attacker can present an unsigned token with an arbitrary payload and it will verify successfully. Remove \"none\" from the algorithms allowlist (allowlist only the specific algorithm your signing key uses, e.g. RS256).",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -4222,7 +4246,7 @@
     ]
   },
   {
-    "id": "SEM-86",
+    "id": "SEM-87",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -4246,7 +4270,7 @@
     ]
   },
   {
-    "id": "SEM-87",
+    "id": "SEM-88",
     "title": "src.scan.rules.semgrep.harvey-prototype-pollution: Request body flows into a recursive merge — prototype pollution (a __proto__/constructor key mutates Object.prototype). Validate keys, or merge only an explicit allowlist of fields.",
     "severity": "High",
     "confidence": "Review",
@@ -4267,7 +4291,7 @@
     ]
   },
   {
-    "id": "SEM-88",
+    "id": "SEM-89",
     "title": "src.scan.rules.semgrep.harvey-redos: Regex with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length / use RE2.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4288,7 +4312,7 @@
     ]
   },
   {
-    "id": "SEM-89",
+    "id": "SEM-90",
     "title": "src.scan.rules.semgrep.harvey-pg-ssl-disabled: A pg Pool connects to a Supabase pooler host with ssl: false — the connection to the pooler crosses the public internet unencrypted. Set ssl: { rejectUnauthorized: true } (or remove the ssl:false override) so the pooler connection is TLS-verified.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -4312,7 +4336,7 @@
     ]
   },
   {
-    "id": "SEM-90",
+    "id": "SEM-91",
     "title": "javascript.lang.security.detect-pseudorandombytes.detect-pseudoRandomBytes: Detected usage of crypto.pseudoRandomBytes, which does not produce secure random numbers.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4337,7 +4361,7 @@
     ]
   },
   {
-    "id": "SEM-91",
+    "id": "SEM-92",
     "title": "src.scan.rules.semgrep.harvey-crypto-pseudorandombytes: crypto.pseudoRandomBytes() is not cryptographically secure (it does not use the CSPRNG) and its output is predictable. Use crypto.randomBytes() for any security-sensitive value.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -4361,7 +4385,31 @@
     ]
   },
   {
-    "id": "SEM-92",
+    "id": "SEM-93",
+    "title": "src.scan.rules.semgrep.harvey-weak-hash-security: MD5/SHA-1 hashes a password/token/secret/signature value directly — both are cryptographically broken (collision + rainbow-table attacks) and unsafe for anything security-sensitive. Use bcrypt/argon2 for passwords, HMAC-SHA256+ for signatures/integrity.",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-weak-hash-security",
+    "location": "lib/pw-split.js:8",
+    "status": "Open",
+    "evidence": "MD5/SHA-1 hashes a password/token/secret/signature value directly — both are cryptographically broken (collision + rainbow-table attacks) and unsafe for anything security-sensitive. Use bcrypt/argon2 for passwords, HMAC-SHA256+ for signatures/integrity.\n",
+    "impact": "MD5/SHA-1 hashes a password/token/secret/signature value directly — both are cryptographically broken (collision + rainbow-table attacks) and unsafe for anything security-sensitive. Use bcrypt/argon2 for passwords, HMAC-SHA256+ for signatures/integrity.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
+  },
+  {
+    "id": "SEM-94",
     "title": "src.scan.rules.semgrep.harvey-weak-hash-security: MD5/SHA-1 hashes a password/token/secret/signature value directly — both are cryptographically broken (collision + rainbow-table attacks) and unsafe for anything security-sensitive. Use bcrypt/argon2 for passwords, HMAC-SHA256+ for signatures/integrity.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -4385,7 +4433,7 @@
     ]
   },
   {
-    "id": "SEM-93",
+    "id": "SEM-95",
     "title": "src.scan.rules.semgrep.harvey-fail-open: On a backing-store error, this check fails OPEN (returns allowed/true) instead of failing closed. If the store is unreachable, every caller is treated as authorized/under-limit — an outage becomes an auth or rate-limit bypass. Return a deny/false default on error.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4409,7 +4457,7 @@
     ]
   },
   {
-    "id": "SEM-94",
+    "id": "SEM-96",
     "title": "src.scan.rules.semgrep.harvey-template-autoescape-off: A template is compiled with HTML autoescaping disabled (noEscape / escape:false) — every interpolation renders raw, so any user data through it is an XSS sink. Leave autoescaping on and mark only known-safe values as raw.",
     "severity": "High",
     "confidence": "Review",
@@ -4433,7 +4481,7 @@
     ]
   },
   {
-    "id": "SEM-95",
+    "id": "SEM-97",
     "title": "generic.secrets.security.detected-aws-secret-access-key.detected-aws-secret-access-key: AWS Secret Access Key detected",
     "severity": "High",
     "confidence": "Review",
@@ -4458,55 +4506,55 @@
     ]
   },
   {
-    "id": "SEM-96",
-    "title": "src.scan.rules.semgrep.harvey-incomplete-sanitize: A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.",
-    "severity": "Medium",
-    "confidence": "Review",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-incomplete-sanitize",
-    "location": "lib/sanitize-bad.js:5",
-    "status": "Open",
-    "evidence": "A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.\n",
-    "impact": "A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 3,
-    "ease": 4,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "review",
-    "cwe": [
-      "CWE-116: Improper Encoding or Escaping of Output"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
-    "id": "SEM-97",
-    "title": "src.scan.rules.semgrep.harvey-incomplete-sanitize: A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.",
-    "severity": "Medium",
-    "confidence": "Review",
-    "category": "Next.js/web footgun",
-    "taxonomy": "src.scan.rules.semgrep.harvey-incomplete-sanitize",
-    "location": "lib/sanitize-bad.js:5",
-    "status": "Open",
-    "evidence": "A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.\n",
-    "impact": "A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.\n",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
-    "value": 3,
-    "ease": 4,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "review",
-    "cwe": [
-      "CWE-116: Improper Encoding or Escaping of Output"
-    ],
-    "owasp": [
-      "A03:2021 - Injection"
-    ]
-  },
-  {
     "id": "SEM-98",
+    "title": "src.scan.rules.semgrep.harvey-incomplete-sanitize: A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-incomplete-sanitize",
+    "location": "lib/sanitize-bad.js:5",
+    "status": "Open",
+    "evidence": "A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.\n",
+    "impact": "A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-116: Improper Encoding or Escaping of Output"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
+  },
+  {
+    "id": "SEM-99",
+    "title": "src.scan.rules.semgrep.harvey-incomplete-sanitize: A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-incomplete-sanitize",
+    "location": "lib/sanitize-bad.js:5",
+    "status": "Open",
+    "evidence": "A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.\n",
+    "impact": "A .replace() with a plain string needle replaces only the FIRST match, so this \"sanitizer\" leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-116: Improper Encoding or Escaping of Output"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
+  },
+  {
+    "id": "SEM-100",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -4530,7 +4578,7 @@
     ]
   },
   {
-    "id": "SEM-99",
+    "id": "SEM-101",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -4554,7 +4602,7 @@
     ]
   },
   {
-    "id": "SEM-100",
+    "id": "SEM-102",
     "title": "src.scan.rules.semgrep.harvey-csp-unsafe-inline: Content-Security-Policy's script-src allows 'unsafe-inline' or 'unsafe-eval', which defeats CSP's main XSS mitigation (inline/eval'd script executes regardless of the policy). Use nonces/hashes for inline scripts instead.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4575,7 +4623,7 @@
     ]
   },
   {
-    "id": "SEM-101",
+    "id": "SEM-103",
     "title": "src.scan.rules.semgrep.harvey-hmac-hardcoded-key: crypto.createHmac() is keyed with a hardcoded string literal — anyone with source/bundle access can forge valid signatures. Load the HMAC key from the environment / a secret manager.",
     "severity": "High",
     "confidence": "Review",
@@ -4599,7 +4647,7 @@
     ]
   },
   {
-    "id": "SEM-102",
+    "id": "SEM-104",
     "title": "src.scan.rules.semgrep.harvey-signed-url-ttl: createSignedUrl is called with an excessive expiry (> 7 days). A long-lived signed URL is effectively a public link that outlives access revocation and leaks via logs/Referer/history. Use a short TTL (seconds to minutes) sized to the actual use.",
     "severity": "Medium",
     "confidence": "Confirmed",
@@ -4623,7 +4671,7 @@
     ]
   },
   {
-    "id": "SEM-103",
+    "id": "SEM-105",
     "title": "src.scan.rules.semgrep.harvey-static-iv: The IV passed to createCipheriv/createDecipheriv is a hardcoded literal, not freshly random per encryption. Reusing an IV with the same key breaks CBC/CTR/GCM's security guarantees (CBC leaks identical plaintext blocks; CTR/GCM can be fully broken). Generate it with crypto.randomBytes() for every call.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4647,7 +4695,7 @@
     ]
   },
   {
-    "id": "SEM-104",
+    "id": "SEM-106",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -4671,7 +4719,7 @@
     ]
   },
   {
-    "id": "SEM-105",
+    "id": "SEM-107",
     "title": "src.scan.rules.semgrep.harvey-insecure-random-token: Math.random() is not cryptographically secure (its internal state is predictable/seedable) and this function's name signals a security-sensitive value (token/secret/session/otp). Use crypto.randomBytes()/crypto.randomUUID() for anything security-relevant.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4695,7 +4743,7 @@
     ]
   },
   {
-    "id": "SEM-106",
+    "id": "SEM-108",
     "title": "src.scan.rules.semgrep.harvey-zip-slip: An archive entry name is joined into a write path with no containment check — zip-slip (a ../ entry writes outside the extraction dir). Resolve and verify the path stays under it.",
     "severity": "High",
     "confidence": "Review",
@@ -4719,7 +4767,7 @@
     ]
   },
   {
-    "id": "SEM-107",
+    "id": "SEM-109",
     "title": "src.scan.rules.semgrep.harvey-secret-in-url-param: A secret is passed as a URL query parameter (api_key/access_token/token/secret). Secrets in URLs leak into logs, proxies, browser history, and Referer headers. Send it in an Authorization header instead.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4743,7 +4791,7 @@
     ]
   },
   {
-    "id": "SEM-108",
+    "id": "SEM-110",
     "title": "src.scan.rules.semgrep.harvey-token-in-webstorage: An auth/session token is written to Web Storage (localStorage/sessionStorage), which is readable by any injected script — an XSS can steal the session. Keep session tokens in an HttpOnly cookie instead.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4767,7 +4815,7 @@
     ]
   },
   {
-    "id": "SEM-109",
+    "id": "SEM-111",
     "title": "src.scan.rules.semgrep.harvey-insecure-ws-url: A WebSocket is opened over the plaintext ws:// scheme — traffic (including any auth token) is unencrypted and tamperable by an on-path attacker. Use wss:// (TLS).",
     "severity": "High",
     "confidence": "Confirmed",
@@ -4791,7 +4839,7 @@
     ]
   },
   {
-    "id": "SEM-110",
+    "id": "SEM-112",
     "title": "src.scan.rules.semgrep.harvey-jwt-decode-noverify: jwt.decode() reads the token's claims WITHOUT verifying the signature. If the result feeds an authorization decision, anyone can forge a token with an arbitrary claim (no key needed). Use jwt.verify() (with an explicit algorithms allowlist) for anything security-relevant.",
     "severity": "High",
     "confidence": "Review",
@@ -4815,7 +4863,7 @@
     ]
   },
   {
-    "id": "SEM-111",
+    "id": "SEM-113",
     "title": "src.scan.rules.semgrep.harvey-cors-reflected-origin: Access-Control-Allow-Origin reflects the request's Origin header verbatim (no allowlist), combined with Access-Control-Allow-Credentials: true. This defeats CORS's same-origin protection for authenticated requests from any origin. Validate Origin against an allowlist before echoing it back.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -4839,7 +4887,7 @@
     ]
   },
   {
-    "id": "SEM-112",
+    "id": "SEM-114",
     "title": "src.scan.rules.semgrep.harvey-nextconfig-env-secret: A secret-named key is exposed through next.config `env` — its value is inlined into the client bundle and shipped to every browser. Never put service-role/secret/token values in `env`; keep them server-only (unprefixed process.env, read in server code).",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -4863,7 +4911,7 @@
     ]
   },
   {
-    "id": "SEM-113",
+    "id": "SEM-115",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -4887,7 +4935,7 @@
     ]
   },
   {
-    "id": "SEM-114",
+    "id": "SEM-116",
     "title": "src.scan.rules.semgrep.harvey-missing-frame-options: This next.config.js headers() route does not set X-Frame-Options (or a frame-ancestors CSP directive) — the page can be framed by any site and used for clickjacking.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4911,7 +4959,7 @@
     ]
   },
   {
-    "id": "SEM-115",
+    "id": "SEM-117",
     "title": "src.scan.rules.semgrep.harvey-missing-hsts: This next.config.js headers() route does not set Strict-Transport-Security. Without HSTS a user's first request (or any downgraded request) can be intercepted over plain HTTP.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4935,7 +4983,7 @@
     ]
   },
   {
-    "id": "SEM-116",
+    "id": "SEM-118",
     "title": "src.scan.rules.semgrep.harvey-missing-nosniff: This next.config.js headers() route does not set X-Content-Type-Options: nosniff — a browser may MIME-sniff the response into an executable content type.",
     "severity": "Low",
     "confidence": "Review",
@@ -4956,7 +5004,7 @@
     ]
   },
   {
-    "id": "SEM-117",
+    "id": "SEM-119",
     "title": "typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml: Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -4982,7 +5030,7 @@
     ]
   },
   {
-    "id": "SEM-118",
+    "id": "SEM-120",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5006,7 +5054,7 @@
     ]
   },
   {
-    "id": "SEM-119",
+    "id": "SEM-121",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5030,7 +5078,7 @@
     ]
   },
   {
-    "id": "SEM-120",
+    "id": "SEM-122",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5054,7 +5102,7 @@
     ]
   },
   {
-    "id": "SEM-121",
+    "id": "SEM-123",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5078,7 +5126,7 @@
     ]
   },
   {
-    "id": "SEM-122",
+    "id": "SEM-124",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5102,7 +5150,7 @@
     ]
   },
   {
-    "id": "SEM-123",
+    "id": "SEM-125",
     "title": "javascript.lang.security.audit.code-string-concat.code-string-concat: Found data from an Express or Next web request flowing to `eval`. If this data is user-controllable this can lead to execution of arbitrary system commands in the context of your application process. Avoid `eval` whenever possible.",
     "severity": "High",
     "confidence": "Review",
@@ -5127,7 +5175,7 @@
     ]
   },
   {
-    "id": "SEM-124",
+    "id": "SEM-126",
     "title": "src.scan.rules.semgrep.harvey-code-injection-eval: Request input reaches eval()/new Function() — arbitrary code execution. Parse the input as data (e.g. JSON.parse) or dispatch against an allowlist; never evaluate untrusted strings.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -5151,7 +5199,7 @@
     ]
   },
   {
-    "id": "SEM-125",
+    "id": "SEM-127",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -5175,7 +5223,7 @@
     ]
   },
   {
-    "id": "SEM-126",
+    "id": "SEM-128",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -5199,7 +5247,7 @@
     ]
   },
   {
-    "id": "SEM-127",
+    "id": "SEM-129",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5223,7 +5271,7 @@
     ]
   },
   {
-    "id": "SEM-128",
+    "id": "SEM-130",
     "title": "src.scan.rules.semgrep.harvey-command-injection: Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn with an argument array and no shell, and validate the input against an allowlist.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -5247,7 +5295,31 @@
     ]
   },
   {
-    "id": "SEM-129",
+    "id": "SEM-131",
+    "title": "src.scan.rules.semgrep.harvey-cookie-insecure-express: An Express cookie is set with res.cookie() missing one or more of HttpOnly/Secure/SameSite. Without HttpOnly it is readable by injected script (XSS → session theft); without Secure it can ride plain HTTP; without SameSite it rides cross-site requests. Set all three.",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-cookie-insecure-express",
+    "location": "pages/api/cookie-express.js:7",
+    "status": "Open",
+    "evidence": "An Express cookie is set with res.cookie() missing one or more of HttpOnly/Secure/SameSite. Without HttpOnly it is readable by injected script (XSS → session theft); without Secure it can ride plain HTTP; without SameSite it rides cross-site requests. Set all three.\n",
+    "impact": "An Express cookie is set with res.cookie() missing one or more of HttpOnly/Secure/SameSite. Without HttpOnly it is readable by injected script (XSS → session theft); without Secure it can ride plain HTTP; without SameSite it rides cross-site requests. Set all three.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-614: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute"
+    ],
+    "owasp": [
+      "A05:2021 - Security Misconfiguration"
+    ]
+  },
+  {
+    "id": "SEM-132",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5271,7 +5343,7 @@
     ]
   },
   {
-    "id": "SEM-130",
+    "id": "SEM-133",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5295,7 +5367,7 @@
     ]
   },
   {
-    "id": "SEM-131",
+    "id": "SEM-134",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5319,7 +5391,31 @@
     ]
   },
   {
-    "id": "SEM-132",
+    "id": "SEM-135",
+    "title": "src.scan.rules.semgrep.harvey-crlf-header-injection: A request-controlled value is written into a response header (res.setHeader) with no CR/LF stripping — an attacker can inject additional headers or split the response (CRLF injection). Strip CR/LF (or reject the value) before setting the header.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-crlf-header-injection",
+    "location": "pages/api/crlf-multihop.js:9",
+    "status": "Open",
+    "evidence": "A request-controlled value is written into a response header (res.setHeader) with no CR/LF stripping — an attacker can inject additional headers or split the response (CRLF injection). Strip CR/LF (or reject the value) before setting the header.\n",
+    "impact": "A request-controlled value is written into a response header (res.setHeader) with no CR/LF stripping — an attacker can inject additional headers or split the response (CRLF injection). Strip CR/LF (or reject the value) before setting the header.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
+  },
+  {
+    "id": "SEM-136",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -5343,7 +5439,7 @@
     ]
   },
   {
-    "id": "SEM-133",
+    "id": "SEM-137",
     "title": "src.scan.rules.semgrep.harvey-cron-no-secret: A cron/background handler uses the service-role client (supabaseAdmin) with no CRON_SECRET caller check — any anonymous request can trigger the privileged job. Compare a shared secret (e.g. an Authorization bearer CRON_SECRET) before doing any work.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5367,7 +5463,7 @@
     ]
   },
   {
-    "id": "SEM-134",
+    "id": "SEM-138",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -5391,7 +5487,7 @@
     ]
   },
   {
-    "id": "SEM-135",
+    "id": "SEM-139",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -5415,7 +5511,7 @@
     ]
   },
   {
-    "id": "SEM-136",
+    "id": "SEM-140",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5439,7 +5535,7 @@
     ]
   },
   {
-    "id": "SEM-137",
+    "id": "SEM-141",
     "title": "src.scan.rules.semgrep.harvey-permissive-cors: Access-Control-Allow-Origin is wildcarded. If credentials are also allowed on this response, this defeats CORS's same-origin protection for authenticated requests.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -5463,7 +5559,7 @@
     ]
   },
   {
-    "id": "SEM-138",
+    "id": "SEM-142",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5487,7 +5583,7 @@
     ]
   },
   {
-    "id": "SEM-139",
+    "id": "SEM-143",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5511,7 +5607,7 @@
     ]
   },
   {
-    "id": "SEM-140",
+    "id": "SEM-144",
     "title": "src.scan.rules.semgrep.harvey-dynamic-dispatch: A method is dispatched by a request-controlled key (obj[req...]()) with no allowlist — the caller can invoke any property on the object. Check the key against an explicit allowlist before dispatch.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5535,7 +5631,7 @@
     ]
   },
   {
-    "id": "SEM-141",
+    "id": "SEM-145",
     "title": "src.scan.rules.semgrep.harvey-crlf-header-injection: A request-controlled value is written into a response header (res.setHeader) with no CR/LF stripping — an attacker can inject additional headers or split the response (CRLF injection). Strip CR/LF (or reject the value) before setting the header.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5559,7 +5655,7 @@
     ]
   },
   {
-    "id": "SEM-142",
+    "id": "SEM-146",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5583,7 +5679,7 @@
     ]
   },
   {
-    "id": "SEM-143",
+    "id": "SEM-147",
     "title": "src.scan.rules.semgrep.harvey-path-traversal: Request input is joined into a filesystem path and read/written — path traversal (../ escapes the intended directory). Sanitize with path.basename and confine to a base dir.",
     "severity": "High",
     "confidence": "Review",
@@ -5607,7 +5703,7 @@
     ]
   },
   {
-    "id": "SEM-144",
+    "id": "SEM-148",
     "title": "src.scan.rules.semgrep.harvey-postgrest-filter-injection: Request input is interpolated into a PostgREST string filter (.or/.filter/.textSearch). An attacker can inject extra filter clauses. Pass discrete column/operator/value arguments.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5631,7 +5727,7 @@
     ]
   },
   {
-    "id": "SEM-145",
+    "id": "SEM-149",
     "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.",
     "severity": "High",
     "confidence": "Review",
@@ -5655,7 +5751,7 @@
     ]
   },
   {
-    "id": "SEM-146",
+    "id": "SEM-150",
     "title": "javascript.express.security.injection.raw-html-format.raw-html-format: User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5681,7 +5777,7 @@
     ]
   },
   {
-    "id": "SEM-147",
+    "id": "SEM-151",
     "title": "src.scan.rules.semgrep.harvey-unsafe-deserialization: Request input is deserialized with an unsafe unserialize() (node-serialize executes embedded function bodies) — remote code execution. Use JSON.parse and validate the shape.",
     "severity": "High",
     "confidence": "Review",
@@ -5705,7 +5801,7 @@
     ]
   },
   {
-    "id": "SEM-148",
+    "id": "SEM-152",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -5729,7 +5825,7 @@
     ]
   },
   {
-    "id": "SEM-149",
+    "id": "SEM-153",
     "title": "src.scan.rules.semgrep.harvey-isr-revalidate-nosecret: An on-demand ISR revalidation endpoint calls res.revalidate() on a request-controlled path with no shared-secret check — anyone can force cache purges/rebuilds (DoS). Require a secret token (compared against a server-side value) before revalidating.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5753,7 +5849,7 @@
     ]
   },
   {
-    "id": "SEM-150",
+    "id": "SEM-154",
     "title": "src.scan.rules.semgrep.harvey-idor-param: A request-controlled id (req.query/req.params or the App Router { params } arg) is the only predicate on this query — no owner/tenant scoping (e.g. .eq('user_id', session.user.id)) in the same chain. Any caller who can guess/enumerate another record's id can read or write it (IDOR/BOLA, OWASP API1).",
     "severity": "Medium",
     "confidence": "Review",
@@ -5777,7 +5873,7 @@
     ]
   },
   {
-    "id": "SEM-151",
+    "id": "SEM-155",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5801,7 +5897,7 @@
     ]
   },
   {
-    "id": "SEM-152",
+    "id": "SEM-156",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5825,7 +5921,7 @@
     ]
   },
   {
-    "id": "SEM-153",
+    "id": "SEM-157",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5849,7 +5945,7 @@
     ]
   },
   {
-    "id": "SEM-154",
+    "id": "SEM-158",
     "title": "src.scan.rules.semgrep.harvey-db-error-disclosure: The raw database error object is echoed directly into the JSON response — this leaks constraint/column names and query internals. Log it server-side and return a generic error to the client.",
     "severity": "Low",
     "confidence": "Review",
@@ -5873,7 +5969,7 @@
     ]
   },
   {
-    "id": "SEM-155",
+    "id": "SEM-159",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5897,7 +5993,7 @@
     ]
   },
   {
-    "id": "SEM-156",
+    "id": "SEM-160",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5921,7 +6017,7 @@
     ]
   },
   {
-    "id": "SEM-157",
+    "id": "SEM-161",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -5945,7 +6041,7 @@
     ]
   },
   {
-    "id": "SEM-158",
+    "id": "SEM-162",
     "title": "javascript.express.security.require-request.require-request: If an attacker controls the x in require(x) then they can cause code to load that was not intended to run on the server.",
     "severity": "High",
     "confidence": "Review",
@@ -5970,7 +6066,7 @@
     ]
   },
   {
-    "id": "SEM-159",
+    "id": "SEM-163",
     "title": "src.scan.rules.semgrep.harvey-dynamic-require: require() is called with request-controlled input — an attacker chooses which module is loaded and executed. Map the input through an explicit allowlist to a fixed module path.",
     "severity": "High",
     "confidence": "Review",
@@ -5994,7 +6090,7 @@
     ]
   },
   {
-    "id": "SEM-160",
+    "id": "SEM-164",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -6018,7 +6114,7 @@
     ]
   },
   {
-    "id": "SEM-161",
+    "id": "SEM-165",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6042,7 +6138,7 @@
     ]
   },
   {
-    "id": "SEM-162",
+    "id": "SEM-166",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6066,7 +6162,7 @@
     ]
   },
   {
-    "id": "SEM-163",
+    "id": "SEM-167",
     "title": "src.scan.rules.semgrep.harvey-mass-assignment: The entire request body is spread into an insert/update payload with no field allowlist — mass assignment. A caller can set any column the table exposes (e.g. a role/is_admin/price field never meant to be client-writable) by adding it to the JSON body. Destructure and pass an explicit list of allowed fields instead of spreading req.body.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6090,7 +6186,7 @@
     ]
   },
   {
-    "id": "SEM-164",
+    "id": "SEM-168",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6114,7 +6210,7 @@
     ]
   },
   {
-    "id": "SEM-165",
+    "id": "SEM-169",
     "title": "src.scan.rules.semgrep.harvey-open-redirect: Redirect target derives from a request-controlled value with no host allowlist — a classic open-redirect primitive for phishing (and SSRF-shaped if fetched server-side).",
     "severity": "Medium",
     "confidence": "Review",
@@ -6138,7 +6234,7 @@
     ]
   },
   {
-    "id": "SEM-166",
+    "id": "SEM-170",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6162,7 +6258,7 @@
     ]
   },
   {
-    "id": "SEM-167",
+    "id": "SEM-171",
     "title": "src.scan.rules.semgrep.harvey-plaintext-password: A request-controlled value is written directly to a `password` column with no hashing step (bcrypt/argon2) in between — passwords land in the DB in plaintext. Hash with bcrypt/argon2 before persisting; never store or compare raw passwords.",
     "severity": "High",
     "confidence": "Review",
@@ -6186,7 +6282,7 @@
     ]
   },
   {
-    "id": "SEM-168",
+    "id": "SEM-172",
     "title": "src.scan.rules.semgrep.harvey-db-error-disclosure: The raw database error object is echoed directly into the JSON response — this leaks constraint/column names and query internals. Log it server-side and return a generic error to the client.",
     "severity": "Low",
     "confidence": "Review",
@@ -6210,7 +6306,7 @@
     ]
   },
   {
-    "id": "SEM-169",
+    "id": "SEM-173",
     "title": "javascript.express.security.audit.res-render-injection.res-render-injection: User controllable data `req` enters `res.render(...)` this can lead to the loading of other HTML/templating pages that they may not be authorized to render. An attacker may attempt to use directory traversal techniques e.g. `../folder/index` to access other HTML pages on the file system. Where possible, do not allow users to define what should be  loaded in res.render or use an allow list for the existing application.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6235,7 +6331,7 @@
     ]
   },
   {
-    "id": "SEM-170",
+    "id": "SEM-174",
     "title": "src.scan.rules.semgrep.harvey-template-injection: Request input is compiled/rendered as a server-side template (ejs/handlebars/pug) — SSTI, which escalates to RCE on most engines. Treat user input as data, never as template source.",
     "severity": "High",
     "confidence": "Review",
@@ -6259,7 +6355,7 @@
     ]
   },
   {
-    "id": "SEM-171",
+    "id": "SEM-175",
     "title": "src.scan.rules.semgrep.harvey-sql-injection-rpc: Request input reaches a raw-SQL-executor RPC (exec_sql/execute/run_sql). The value is run as SQL text, not a bound parameter — SQL injection. Use a parameterized RPC or bind arguments.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -6283,7 +6379,7 @@
     ]
   },
   {
-    "id": "SEM-172",
+    "id": "SEM-176",
     "title": "src.scan.rules.semgrep.harvey-select-star-pii: A select(\"*\") result is returned directly in an API response — every column, including any PII/sensitive fields, is serialized to the client. Project an explicit column list with only the fields the response needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6307,7 +6403,7 @@
     ]
   },
   {
-    "id": "SEM-173",
+    "id": "SEM-177",
     "title": "src.scan.rules.semgrep.harvey-sql-injection-template: Untrusted request input is interpolated into a raw SQL string reaching .query(). Use parameterized queries ($1 placeholders with a params array), never string interpolation.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -6331,7 +6427,7 @@
     ]
   },
   {
-    "id": "SEM-174",
+    "id": "SEM-178",
     "title": "src.scan.rules.semgrep.harvey-crlf-header-injection: A request-controlled value is written into a response header (res.setHeader) with no CR/LF stripping — an attacker can inject additional headers or split the response (CRLF injection). Strip CR/LF (or reject the value) before setting the header.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6355,7 +6451,7 @@
     ]
   },
   {
-    "id": "SEM-175",
+    "id": "SEM-179",
     "title": "src.scan.rules.semgrep.harvey-cookie-insecure: Set-Cookie is written with no Secure/HttpOnly/SameSite attributes. A session cookie without HttpOnly is readable by any injected script (XSS → session theft); without Secure it can be sent over plain HTTP; without SameSite it rides cross-site requests.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -6379,7 +6475,7 @@
     ]
   },
   {
-    "id": "SEM-176",
+    "id": "SEM-180",
     "title": "src.scan.rules.semgrep.harvey-crlf-header-injection: A request-controlled value is written into a response header (res.setHeader) with no CR/LF stripping — an attacker can inject additional headers or split the response (CRLF injection). Strip CR/LF (or reject the value) before setting the header.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6403,7 +6499,7 @@
     ]
   },
   {
-    "id": "SEM-177",
+    "id": "SEM-181",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6427,7 +6523,7 @@
     ]
   },
   {
-    "id": "SEM-178",
+    "id": "SEM-182",
     "title": "src.scan.rules.semgrep.harvey-spawn-shell-true: spawn/execFile is called with { shell: true }, which runs the command through a shell and re-parses the arguments — reintroducing command injection the argv array was preventing. Drop shell: true and pass the binary + argv array directly.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -6451,7 +6547,7 @@
     ]
   },
   {
-    "id": "SEM-179",
+    "id": "SEM-183",
     "title": "src.scan.rules.semgrep.harvey-log-injection: Request input is written to a log line unsanitized — log forging/injection via CR/LF. Strip newlines (or log structured fields) before writing user input to the log.",
     "severity": "Low",
     "confidence": "Review",
@@ -6475,7 +6571,7 @@
     ]
   },
   {
-    "id": "SEM-180",
+    "id": "SEM-184",
     "title": "src.scan.rules.semgrep.harvey-verbose-error: A caught error's .stack or .message is echoed directly into the JSON response — this leaks stack traces, file paths, and library versions to the client. Log the detail server-side and return a generic error to the client.",
     "severity": "Low",
     "confidence": "Review",
@@ -6499,7 +6595,7 @@
     ]
   },
   {
-    "id": "SEM-181",
+    "id": "SEM-185",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -6523,7 +6619,7 @@
     ]
   },
   {
-    "id": "SEM-182",
+    "id": "SEM-186",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -6547,7 +6643,7 @@
     ]
   },
   {
-    "id": "SEM-183",
+    "id": "SEM-187",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6571,7 +6667,7 @@
     ]
   },
   {
-    "id": "SEM-184",
+    "id": "SEM-188",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -6595,7 +6691,7 @@
     ]
   },
   {
-    "id": "SEM-185",
+    "id": "SEM-189",
     "title": "src.scan.rules.semgrep.harvey-route-noauth: This route handler mutates data (insert/update/delete) with no auth-check call anywhere in the function (no session read, no supabase.auth.getUser()). If the route is reachable without a session, this is an unauthenticated write — confirm a guard exists elsewhere (e.g. middleware) or add one here.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6619,7 +6715,7 @@
     ]
   },
   {
-    "id": "SEM-186",
+    "id": "SEM-190",
     "title": "src.scan.rules.semgrep.harvey-xxe: An XML parser is configured to resolve external entities (noent/resolveEntities true) — XXE (file read / SSRF via DOCTYPE entities). Disable entity resolution when parsing untrusted XML.",
     "severity": "High",
     "confidence": "Review",
@@ -6643,7 +6739,7 @@
     ]
   },
   {
-    "id": "SEM-187",
+    "id": "SEM-191",
     "title": "src.scan.rules.semgrep.harvey-dangerously-set-inner-html-prop: A prop/parameter/identifier value reaches dangerouslySetInnerHTML with no sanitizer. If any of the data on this path is user-controlled (a bio, a comment, markdown, an AI-generated string), this is stored/reflected XSS. Sanitize with DOMPurify.sanitize before it reaches __html, or render the value as text.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6667,7 +6763,7 @@
     ]
   },
   {
-    "id": "SEM-188",
+    "id": "SEM-192",
     "title": "src.scan.rules.semgrep.harvey-dangerously-set-inner-html-stored: A database-read value (Supabase select result) reaches dangerouslySetInnerHTML unsanitized — stored XSS (the payload was persisted by an earlier write, e.g. a comment body). Sanitize before rendering, or sanitize at write time.",
     "severity": "High",
     "confidence": "Review",
@@ -6691,7 +6787,7 @@
     ]
   },
   {
-    "id": "SEM-189",
+    "id": "SEM-193",
     "title": "typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml: Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6717,7 +6813,7 @@
     ]
   },
   {
-    "id": "SEM-190",
+    "id": "SEM-194",
     "title": "src.scan.rules.semgrep.harvey-dangerously-set-inner-html: A request-controlled value reaches dangerouslySetInnerHTML unsanitized — reflected/stored XSS. Sanitize (e.g. DOMPurify.sanitize) before it reaches __html, or render as text.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -6741,7 +6837,7 @@
     ]
   },
   {
-    "id": "SEM-191",
+    "id": "SEM-195",
     "title": "src.scan.rules.semgrep.harvey-dangerously-set-inner-html-prop: A prop/parameter/identifier value reaches dangerouslySetInnerHTML with no sanitizer. If any of the data on this path is user-controlled (a bio, a comment, markdown, an AI-generated string), this is stored/reflected XSS. Sanitize with DOMPurify.sanitize before it reaches __html, or render the value as text.",
     "severity": "Medium",
     "confidence": "Review",
@@ -6765,7 +6861,7 @@
     ]
   },
   {
-    "id": "SEM-192",
+    "id": "SEM-196",
     "title": "src.scan.rules.semgrep.harvey-public-bucket: This code creates a Supabase Storage bucket with public: true. A public bucket skips storage RLS for reads — every object in it is readable by anyone who knows or can guess the URL, regardless of policies. If it holds private/user data (documents, uploads, PII), this is a broken object-authorization exposure. Set the bucket private and serve via signed URLs, or confirm it only holds intentionally-public assets.",
     "severity": "High",
     "confidence": "Review",
@@ -6789,7 +6885,7 @@
     ]
   },
   {
-    "id": "SEM-193",
+    "id": "SEM-197",
     "title": "generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account: Google (GCM) Service account detected",
     "severity": "High",
     "confidence": "Review",
@@ -6814,7 +6910,7 @@
     ]
   },
   {
-    "id": "SEM-194",
+    "id": "SEM-198",
     "title": "generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account: Google (GCM) Service account detected",
     "severity": "High",
     "confidence": "Review",
@@ -6839,7 +6935,7 @@
     ]
   },
   {
-    "id": "SEM-195",
+    "id": "SEM-199",
     "title": "src.scan.rules.semgrep.harvey-dangerously-allow-browser: An LLM client is constructed with dangerouslyAllowBrowser: true — this runs in the browser and exposes the API key to every visitor (the key is inlined into the bundle). Call the LLM from a server-side route/function and keep the key server-only; never ship it to the client.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -6863,7 +6959,7 @@
     ]
   },
   {
-    "id": "SEM-196",
+    "id": "SEM-200",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -6887,7 +6983,7 @@
     ]
   },
   {
-    "id": "SEM-197",
+    "id": "SEM-201",
     "title": "src.scan.rules.semgrep.harvey-vite-service-role-in-client: A Supabase service-role key is read from import.meta.env.VITE_* — Vite inlines every VITE_-prefixed variable into the browser bundle, so this ships full RLS-bypass credentials to every visitor. Never expose a service-role key with the VITE_ prefix; move service-role work to a server-side function and keep only the anon/publishable key in the client.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -6911,7 +7007,7 @@
     ]
   },
   {
-    "id": "SEM-198",
+    "id": "SEM-202",
     "title": "src.scan.rules.semgrep.harvey-edgefn-secret-fallback: A secret read from Deno.env falls back to a hardcoded secret-shaped string literal — the literal ships in the deployed function bundle and its git history. Fail closed (throw) when the env var is absent; never embed a fallback secret.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -6935,7 +7031,7 @@
     ]
   },
   {
-    "id": "SEM-199",
+    "id": "SEM-203",
     "title": "generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash: bcrypt hash detected",
     "severity": "High",
     "confidence": "Review",

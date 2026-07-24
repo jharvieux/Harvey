@@ -418,7 +418,9 @@ existing `lib/cache.js` fixture as its negative.
 |---|---|---|---|
 | P-JWT-NONE-ALG | `lib/jwt.js:8` | Semgrep `harvey-jwt-none-alg` (literal `"none"` in the `jwt.verify` `algorithms` allowlist) | high |
 | P-WEAK-HASH-SEC | `lib/pw.js:9` | Semgrep `harvey-weak-hash-security` (`crypto.createHash('md5').update($ARG)`, `$ARG` name-gated to password/pwd/secret/token/signature) | high |
-| P-WEAK-CIPHER | `lib/crypto.js:8` | Semgrep `harvey-weak-cipher` (`createCipheriv('des-ede3-cbc', …)` — algorithm-literal allowlist: DES/3DES/RC4/ECB) | high |
+| P-WEAK-HASH-SPLIT | `lib/pw-split.js:8` | Semgrep `harvey-weak-hash-security` split-statement form (`const digest = createHash('md5'); digest.update(password)`) — name-gated on the `.update()` arg (#988) | high |
+| P-WEAK-CIPHER | `lib/crypto.js:8` | Semgrep `harvey-weak-cipher` (`createCipheriv('des-ede3-cbc', …)` — algorithm-literal regex: DES/3DES/RC2/RC4/Blowfish/*-ECB) | high |
+| P-WEAK-CIPHER-ECB | `lib/crypto-ecb.js:8` | Semgrep `harvey-weak-cipher` on `createCipheriv('des-ede3-ecb', …)` — an ECB-mode algorithm outside the old explicit allowlist (#988) | high |
 | P-TLS-VERIFY-DISABLED | `lib/http.js:6` | Semgrep `harvey-tls-verify-disabled` (`{ rejectUnauthorized: false }` / `NODE_TLS_REJECT_UNAUTHORIZED=0`) | high |
 | P-JWT-DECODE-NOVERIFY | `middleware.ts:10` | Semgrep `harvey-jwt-decode-noverify` (`jwt.decode()` used to feed an authz decision — heuristic: flags every call) | review |
 | P-STATIC-IV-SALT | `lib/static-iv.js:8` | Semgrep `harvey-static-iv` (`createCipheriv($ALGO, $KEY, Buffer.from($IV, …))` with `$IV` a string literal) | review |
@@ -434,6 +436,7 @@ existing `lib/cache.js` fixture as its negative.
 | N-SHA256-INTEGRITY | `lib/hash.js` | `crypto.createHash('sha256')` on a file buffer for an integrity checksum; `harvey-weak-hash-security` only matches md5/sha1. |
 | N-TLS-VERIFY-ON | `lib/http-safe.js` | `new https.Agent()` with no override — `rejectUnauthorized` defaults to `true`. (Named `http-safe.js`, not the spec's `lib/http.js`, to avoid a location collision with `P-TLS-VERIFY-DISABLED`'s fixture already in `lib/http.js`.) |
 | N-WEAK-HASH-CACHE `[reused from base corpus]` | `lib/cache.js` | MD5 as an ETag/cache-tag fingerprint (`.update(JSON.stringify(params))`) — `harvey-weak-hash-security`'s name-gate on the immediate hash input requires password/pwd/secret/token/signature; `params` doesn't match — cleared. |
+| N-WEAK-HASH-CACHE-SPLIT | `lib/cache-split.js` | Same cache-key MD5 in SPLIT-statement form (`const h = createHash('md5'); h.update(JSON.stringify(params))`) — the split broadening (#988) is gated on a security-named `.update()` arg OR hash var; neither `h` nor `params` matches — cleared. |
 
 ### B6 live result (2026-07-09, static binaries: semgrep 1.164.0, gitleaks 8.30.1, trufflehog 3.95.8, osv-scanner 2.3.8, no Docker)
 
@@ -532,6 +535,7 @@ three files `checkMissingCsp` scans.
 |---|---|---|---|
 | P-CORS-REFLECT-ORIGIN | `middleware.ts:5` | Semgrep `harvey-cors-reflected-origin` (two-statement pattern: `Access-Control-Allow-Origin` set to `req.headers.get('origin')` verbatim, `Access-Control-Allow-Credentials: true` in the same function) | high |
 | P-COOKIE-INSECURE | `pages/api/session.js:6` | Semgrep `harvey-cookie-insecure` (`Set-Cookie` value with zero semicolons — no attributes) | high |
+| P-COOKIE-EXPRESS-INSECURE | `pages/api/cookie-express.js:7` | Semgrep `harvey-cookie-insecure-express` (`res.cookie(name, val, { maxAge })` — options omit HttpOnly/Secure/SameSite) (#988) | high |
 | P-CSP-UNSAFE-INLINE | `lib/security-headers.js:9` | Semgrep `harvey-csp-unsafe-inline` (CSP header object; `metavariable-regex` requires `script-src`+`unsafe-inline`/`unsafe-eval`) | review |
 | P-NO-HSTS | `next.config.js:13` | Semgrep `harvey-missing-hsts` (`{source, headers}` route object missing a `Strict-Transport-Security` element) | review |
 | P-NO-FRAME-OPTIONS | `next.config.js:13` | Semgrep `harvey-missing-frame-options` (same route object, missing `X-Frame-Options`) | review |
@@ -547,6 +551,7 @@ three files `checkMissingCsp` scans.
 |---|---|---|
 | N-CORS-ALLOWLIST | `lib/cors-allowlist.js` | `Access-Control-Allow-Origin` is only ever set to a validated `origin` variable checked against an explicit allowlist, never directly to `req.headers.get("origin")` — `harvey-cors-reflected-origin`'s pattern requires that literal expression as the value. |
 | N-COOKIE-SECURE | `pages/api/session-secure.js` | `Set-Cookie` value carries `HttpOnly; Secure; SameSite=Strict` (three semicolons) — `harvey-cookie-insecure` requires zero. |
+| N-COOKIE-EXPRESS-SECURE | `pages/api/cookie-express-safe.js` | `res.cookie(name, val, { httpOnly: true, secure: true, sameSite: 'strict', … })` — `harvey-cookie-insecure-express`'s `pattern-not` excludes the fully-hardened form — cleared (#988). |
 | N-CSP-PRESENT | `lib/security-headers.js` | `script-src 'self'` only, no `unsafe-inline`/`unsafe-eval` — `harvey-csp-unsafe-inline`'s `metavariable-regex` doesn't match. |
 | N-HEADERS-VERCEL | `next.config.js` | a second `headers()` route sets HSTS + X-Frame-Options + nosniff together (modeled here rather than `vercel.json` so it's in the same Semgrep-scanned surface as the positives, avoiding a JSON-vs-JS language gap) — none of the three missing-header rules match it. |
 | N-CSRF-ORIGIN-CHECKED | `app/actions.ts` | `updateAccountName()` checks `headers().get("origin")` against an allowlisted `APP_ORIGIN` before mutating — `harvey-csrf-missing`'s `pattern-not-inside` excludes it. |
@@ -901,6 +906,7 @@ B9's `P-SIGNED-URL-TOKEN-SRC` (a committed signed-URL token) — different file,
 | P-MISSING-SRI | `components/CdnScript.jsx:6` | Semgrep `harvey-missing-sri` (external CDN `<script>` with no `integrity`) | review |
 | P-ISR-REVALIDATE-NOSECRET | `pages/api/isr-rebuild.js:8` | Semgrep `harvey-isr-revalidate-nosecret` (`res.revalidate` on a request path, no secret gate) | review |
 | P-CRLF-HEADER-INJ | `pages/api/download.js:7` | Semgrep `harvey-crlf-header-injection` (taint `req.query` → `res.setHeader` value) | review |
+| P-CRLF-MULTIHOP | `pages/api/crlf-multihop.js:9` | Semgrep `harvey-crlf-header-injection` via a multi-hop `req.headers.referer` (dotted) source → `res.setHeader` — a source shape the old rule missed (#988) | review |
 | P-POSTMESSAGE-NO-ORIGIN | `components/MessageListener.jsx:9` | Semgrep `harvey-postmessage-no-origin` (`message` listener callback with no `.origin` check) | review |
 
 ### B12 negatives — benign lookalikes (must NOT be flagged in the free count)
