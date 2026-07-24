@@ -40,6 +40,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/env-schema.ts": "M1",
   "src/scan/webext-manifest.ts": "M1",
   "src/scan/language-coverage.ts": "M1",
+  "src/scan/sfc-coverage.ts": "M1", // #919 — cross-cutting coverage disclosure (M5/M6/M7/M9 + M1 AST), filed under M1 same as the language-coverage.ts precedent it mirrors
   "src/scan/infra-scope.ts": "M1",
   "src/scan/secrets.ts": "M1",
   "src/scan/dependencies.ts": "M1",
@@ -60,6 +61,9 @@ const OWNERS: Record<string, string> = {
   "src/detectors/test-intent.ts": "M8",
   "src/detectors/vitest-intent.ts": "M8",
   "src/detectors/app-router.ts": "M9",
+  "src/detectors/boundary-model.ts": "M9", // #916 — framework-agnostic boundary model + not-assessed rows
+  "src/detectors/remix-adapter.ts": "M9", // #917 — Remix / React Router 7 adapter
+  "src/detectors/tanstack-adapter.ts": "M9", // #918 — TanStack Start adapter
 };
 
 function walk(dir: string, out: string[] = []): string[] {

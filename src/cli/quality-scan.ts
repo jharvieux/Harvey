@@ -40,6 +40,7 @@ import { buildDegradedKnipConfig, buildInferredKnipConfig, detectTargetFramework
 import {
   duplicationSummary,
   JSCPD_IGNORE_GLOBS,
+  jscpdAnalysedNothingReason,
   jscpdToFindings,
   jscpdUnavailableFinding,
   knipEntryUncertainFinding,
@@ -159,7 +160,18 @@ function runJscpd(dir: string): JscpdReport {
     // #505: per-workspace scopes surface a case a whole-repo run rarely hit — a workspace with
     // fewer than 2 comparable source files. jscpd exits 0 but writes NO report file at all (there
     // was nothing to compare), which is a clean zero-duplicates scan, not a coverage gap.
-    if (!existsSync(reportPath)) return { statistics: { total: { percentage: 0, duplicatedLines: 0, lines: 0 } }, duplicates: [] };
+    // #931: that same missing-report shape is indistinguishable from "jscpd analysed nothing" —
+    // countSourceFiles walks the same skip rules (node_modules/dist/generated/vendor/… +
+    // database.types.ts/types_db.ts) JSCPD_IGNORE_GLOBS encode, so it's a reasonable proxy for
+    // whether this scope actually had anything to compare, independent of jscpd's own file
+    // discovery. jscpdAnalysedNothingReason throws that distinction; a thrown reason here is
+    // caught by the existing per-call try/catch (below, in the CLI body) and folded into the M4-99
+    // gap disclosure — partial with a reason, never a silent clean 0%.
+    if (!existsSync(reportPath)) {
+      const reason = jscpdAnalysedNothingReason(countSourceFiles(dir));
+      if (!reason) return { statistics: { total: { percentage: 0, duplicatedLines: 0, lines: 0 } }, duplicates: [] };
+      throw new Error(reason);
+    }
     const report = JSON.parse(readFileSync(reportPath, "utf8")) as JscpdReport;
     // jscpd's json reporter emits paths relative to --output by default even
     // with --absolute in some versions' clone entries; normalize to relative-

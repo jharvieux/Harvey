@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseArrayColumns, parseAuthUserRefs, parseClassifiableColumns, parseDroppedColumns, parseLiveColumns, parseCheckConstraints, parseCheckInConstraints, parseColumns, parseDefinerFunctions, parseForeignKeys, parseLiveTableNames, parseNotNullColumns, parsePolicies, parseRlsState, parseTableNames, parseUniqueColumns } from "./migration-sql-parse.js";
+import { parseArrayColumns, parseAuthUserRefs, parseClassifiableColumns, parseDroppedColumns, parseLiveColumns, parseCheckConstraints, parseCheckInConstraints, parseColumns, parseDefinerFunctions, parseForeignKeys, parseLivePolicies, parseLiveTableNames, parseNotNullColumns, parsePolicies, parseRlsState, parseTableNames, parseUniqueColumns } from "./migration-sql-parse.js";
 
 // Fixtures are the real calibration-target migrations (targets/calibration/supabase/migrations) —
 // this test asserts the parser extracts exactly what GROUND-TRUTH.md says is there, so a change
@@ -329,6 +329,65 @@ describe("parsePolicies", () => {
     expect(policies).toEqual([]);
     expect(unparsed).toHaveLength(1);
     expect(unparsed[0]).toMatchObject({ table: "t", name: "broken" });
+  });
+});
+
+describe("parseLivePolicies (#937 — drop/replace tracked, only the final live policy survives)", () => {
+  const leak = "create policy p on public.docs for select using (true);";
+  const scoped = "create policy p on public.docs for select using (tenant_id = current_tenant_id());";
+
+  it("returns a policy that is never dropped, with its file:line", () => {
+    const live = parseLivePolicies([{ file: "0001.sql", sql: `\n${leak}` }]);
+    expect(live.policies).toHaveLength(1);
+    expect(live.policies[0]).toMatchObject({ table: "docs", name: "p", qual: "true", file: "0001.sql", line: 2 });
+  });
+
+  it("drops a policy removed by a LATER migration", () => {
+    const live = parseLivePolicies([
+      { file: "0001.sql", sql: leak },
+      { file: "0002.sql", sql: "drop policy p on public.docs;" },
+    ]);
+    expect(live.policies).toEqual([]);
+  });
+
+  it("keeps the FINAL definition when a later migration drops then re-creates the same name", () => {
+    const live = parseLivePolicies([
+      { file: "0001.sql", sql: leak },
+      { file: "0002.sql", sql: `drop policy p on public.docs;\n${scoped}` },
+    ]);
+    expect(live.policies).toHaveLength(1);
+    expect(live.policies[0]).toMatchObject({ name: "p", qual: "tenant_id = current_tenant_id()", file: "0002.sql" });
+  });
+
+  it("respects within-file order: drop-then-recreate in ONE migration resolves to the recreate", () => {
+    const live = parseLivePolicies([{ file: "0001.sql", sql: `${leak}\ndrop policy p on public.docs;\n${scoped}` }]);
+    expect(live.policies).toHaveLength(1);
+    expect(live.policies[0]!.qual).toBe("tenant_id = current_tenant_id()");
+  });
+
+  it("honours `drop policy if exists` and a quoted policy name", () => {
+    const live = parseLivePolicies([
+      { file: "0001.sql", sql: `create policy "read all" on public.docs for select using (true);` },
+      { file: "0002.sql", sql: `drop policy if exists "read all" on public.docs;` },
+    ]);
+    expect(live.policies).toEqual([]);
+  });
+
+  it("applies the lifecycle to an UNPARSED policy too — a dropped unreadable policy is not carried", () => {
+    const live = parseLivePolicies([
+      { file: "0001.sql", sql: "create policy broken on public.docs for select using (tenant_id = x" },
+      { file: "0002.sql", sql: "drop policy broken on public.docs;" },
+    ]);
+    expect(live.policies).toEqual([]);
+    expect(live.unparsed).toEqual([]);
+  });
+
+  it("keeps two DISTINCT policies on the same table independent of each other", () => {
+    const live = parseLivePolicies([
+      { file: "0001.sql", sql: "create policy a on public.docs for select using (true);\ncreate policy b on public.docs for insert with check (true);" },
+      { file: "0002.sql", sql: "drop policy a on public.docs;" },
+    ]);
+    expect(live.policies.map((p) => p.name)).toEqual(["b"]);
   });
 });
 

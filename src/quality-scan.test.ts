@@ -8,6 +8,7 @@ import { divergedCloneFindings, wholeRepoDivergedCloneFindings } from "./diverge
 import {
   duplicationSummary,
   JSCPD_IGNORE_GLOBS,
+  jscpdAnalysedNothingReason,
   jscpdToFindings,
   jscpdUnavailableFinding,
   knipEntryUncertainFinding,
@@ -596,6 +597,26 @@ describe("knipEntryUncertainReason (#580)", () => {
     const report: KnipReport = { files: ["a.ts", "b.ts", "c.ts"], issues: [] };
     const reason = knipEntryUncertainReason(report, 3, false, true);
     expect(reason).toBeUndefined();
+  });
+});
+
+// #931: jscpd writing no report is ambiguous between #505's genuine "<2 comparable files" clean
+// zero and jscpd analysing nothing on a real target (measured on documenso/documenso: the same
+// commit/flags scored 0 findings at one absolute clone path and 1,256 at another). This is the
+// pre-fix regression: a bare `< 2 ? clean zero : clean zero` would report the same silent zero for
+// both, exactly the "an unstated limitation reads as a clean bill of health" failure CLAUDE.md
+// forbids.
+describe("jscpdAnalysedNothingReason (#931)", () => {
+  it("does not fire when the scope genuinely has fewer than 2 comparable source files", () => {
+    expect(jscpdAnalysedNothingReason(0)).toBeUndefined();
+    expect(jscpdAnalysedNothingReason(1)).toBeUndefined();
+  });
+
+  it("discloses a coverage gap when jscpd wrote no report despite >=2 comparable source files", () => {
+    const reason = jscpdAnalysedNothingReason(3395);
+    expect(reason).toBeDefined();
+    expect(reason).toContain("3395");
+    expect(reason).toContain("analysed nothing");
   });
 });
 
