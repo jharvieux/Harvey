@@ -51,9 +51,14 @@ function trackedFiles(dir: string): string[] {
   return out.split("\0").filter(Boolean);
 }
 
+// A tracked entry can be a SYMLINK, including one pointing at a directory (git mode 120000 —
+// zenstack's packages/ide/vscode/res is one). Plain cpSync follows it, sees a directory and throws
+// "Recursive option not enabled", which killed the whole scan on the first such repo. Copy the link
+// VERBATIM instead of what it points at: an in-repo relative link still resolves inside the scratch
+// copy, and a link out of the repo is left dangling rather than pulling an out-of-scope tree in.
 function copyFile(src: string, dest: string): void {
   mkdirSync(dirname(dest), { recursive: true });
-  cpSync(src, dest);
+  cpSync(src, dest, { recursive: true, verbatimSymlinks: true });
 }
 
 function copyTracked(dir: string, dest: string): void {

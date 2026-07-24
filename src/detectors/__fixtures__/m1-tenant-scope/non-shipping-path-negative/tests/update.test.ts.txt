@@ -1,0 +1,24 @@
+// The shape of the 1031 false positives measured on 2026-07-23 across s1owjke/prisma-rls,
+// zenstackhq/zenstack and Errorname/prisma-multi-tenant: an ORM/policy test suite is wall-to-wall
+// by-id reads and writes, because that is how a test sets up and asserts a case. Modelled on
+// prisma-rls's tests/update.test.ts and zenstack's tests/e2e/orm/client-api/update.test.ts (both
+// MIT). docs/fp-rules.txt rules test/fixture/seed/dev-script code out of scope; this dir is the
+// regression guard that keeps it out.
+
+import { expect, test } from "vitest";
+import { prisma } from "./setup";
+
+test("update applies the policy filter", async () => {
+  const post = await prisma.post.update({ where: { id: 1 }, data: { title: "updated" } });
+  expect(post.title).toBe("updated");
+});
+
+test("delete removes the row", async () => {
+  await prisma.post.delete({ where: { id: 2 } });
+  const found = await prisma.post.findUnique({ where: { id: 2 } });
+  expect(found).toBeNull();
+});
+
+test("updateMany over a fixed id set", async () => {
+  await prisma.post.updateMany({ where: { id: { in: [3, 4] } }, data: { published: true } });
+});

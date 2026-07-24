@@ -51,7 +51,10 @@ export interface CorpusEntry {
 // on/off, Next vs Vite) that a single shared scan cannot express.
 export interface HeuristicEntry {
   id: string;
-  module: "M7" | "M8";
+  // #896 added "M1": the tenant-scope/BOLA detector's precision corpus, whose negatives are
+  // distilled from third-party libraries whose PURPOSE is correct tenant isolation — code written
+  // in idioms we did not anticipate, which is the case planted-clean fixtures cannot test.
+  module: "M1" | "M7" | "M8";
   kind: CorpusKind;
   cls: string;
   // Fixture dir relative to src/detectors/__fixtures__/ (e.g. "perf/sort-in-jsx/positive").

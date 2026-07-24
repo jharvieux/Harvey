@@ -1,0 +1,28 @@
+// Distilled from zenstackhq/zenstack @ ef0db7fe129b0c3817266207bdb923235e79e6b5 (MIT License,
+// Copyright (c) 2025 ZenStack) — packages/plugins/policy/src/policy-handler.ts. Reduced to the
+// SHAPE that matters for M1 precision: an access-control layer that compiles a policy into a
+// filter and CONJOINS it into every read/mutate query's where clause, including a by-id update
+// (`idConditions` AND the policy filter). The call sites downstream then legitimately filter by id
+// alone. Harvey's tenant-scope detector must stay silent on the layer itself.
+
+type Node = { kind: string; args?: unknown[] };
+
+const trueNode = (): Node => ({ kind: "true" });
+const conjunction = (nodes: Node[]): Node => ({ kind: "and", args: nodes });
+
+export class PolicyHandler {
+  constructor(private readonly policyFilterFor: (model: string, op: "read" | "update") => Node) {}
+
+  // Read path: model-level policy filter merged into whatever the caller asked for.
+  transformSelect(model: string, where: Node | undefined) {
+    const policyFilter = this.policyFilterFor(model, "read");
+    return { where: conjunction([where ?? trueNode(), policyFilter]) };
+  }
+
+  // Mutation path: the row's identity AND the policy filter — the mutation cannot escape the
+  // policy even though the caller only supplied an id.
+  transformUpdate(model: string, idConditions: Node, where: Node | undefined) {
+    const policyFilter = this.policyFilterFor(model, "update");
+    return { where: conjunction([idConditions, where ?? trueNode(), policyFilter]) };
+  }
+}

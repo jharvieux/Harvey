@@ -15,19 +15,28 @@
 
 | Module | Source-only coverage |
 |---|---|
-| **M1 Multi-tenant security** (lead) | RLS policies in migration SQL (disabled / missing / `USING(true)` / user-metadata / wrong-column & weak-WITH-CHECK semantic review); SECURITY DEFINER functions with unguarded privileged writes; `service_role` usage on client-reachable paths; missing admin-auth guards, permission-matrix gaps, error/PII egress, unvalidated redirect URLs, missing webhook-replay protection, in-memory rate limits. |
+| **M1 Multi-tenant security** | RLS policies in migration SQL (disabled / missing / `USING(true)` / user-metadata / wrong-column & weak-WITH-CHECK semantic review); SECURITY DEFINER functions with unguarded privileged writes; `service_role` usage on client-reachable paths; missing admin-auth guards, permission-matrix gaps, error/PII egress, unvalidated redirect URLs, missing webhook-replay protection, in-memory rate limits. |
 | **M3 Hotspots** | Churn × complexity, coupling, knowledge-risk, AI-provenance (needs git history). |
 | **M4 Duplication** | jscpd. |
 | **M5 Slop / dead code** | knip + slop detection. |
-| **M6 Simplification / reuse** | **Indicators only, non-grading:** mechanically-recognisable hand-rolled shapes listed as "this looks hand-rolled; may be worth investigating" — never naming a replacement (that judgment is paid). Same form as the M1 source-tier RLS/authz indicators. Operator ruling 2026-07-15; detectors tracked in #267 (not yet built — the free M6 tier does not ship until they are). |
+| **M6 Simplification / reuse** | **Indicators only, non-grading:** mechanically-recognisable hand-rolled shapes listed as "this looks hand-rolled; may be worth investigating" — never naming a replacement (that judgment is paid). Same form as the M1 source-tier RLS/authz indicators. Operator ruling 2026-07-15; the detectors shipped in #267 and this section renders in the free report today. Run `pnpm detector-census` for the current M6 count — don't quote a stored one. |
 | **M7 Performance** | Code-level: render patterns, hook dependencies, oversized assets. Bundle-size pass **if** a build artifact is provided. |
+| **M8 Test quality** | Static test-intent detectors: assertion-free, tautological, mock-of-the-subject, snapshot-only, call-count-only, tenant-isolation tests that mock the DB client, happy-path-only coverage on security-critical code. No tests at all is itself a finding, never a skip. Running the suite (mutation testing) is paid. |
 | **M9 App-router / cache correctness** | Static. |
 | **M10 PII/PHI/PCI** | Detection: classify sensitive columns from the schema in migrations — "here's every sensitive column and where it lives." |
+
+## What source-only structurally cannot see (the mechanical ceiling)
+
+Most of our custom semgrep rules are syntactic patterns; a minority use taint mode, and the OSS engine does not follow a tainted value out of the function it was read in. Measured in this repo 2026-07-23: request input reaching `exec()` inside the same function is caught; the identical flow is missed the moment it passes through a helper — whether that helper is in the same file or another one. (Re-derive the split by counting `mode: taint` in `src/scan/rules/semgrep/*.yml`; `pnpm detector-census` gives the per-module detector counts. Don't quote a stored number.)
+
+That is the ceiling, and it is where real authorization bypasses live: middleware admits the route, the handler trusts the caller, the repository issues an unscoped query. No single function contains the bug. Mechanical misses of that class are **not fixable rule gaps** — they route by design to the paid semantic (LLM) pass, which reads across files, and to the dynamic pen-test, which proves the bypass from the outside. Where a free report is silent on cross-file authorization, it is silent because it could not look — not because it looked and found nothing.
 
 ## Explicitly reserved for paid
 
 - **Connected (read-only DB):** live confirmation vs production — Supabase security/performance advisors, migration-vs-prod drift, default privileges, pg_cron, realtime exposure, exposed schemas, the M7 DB advisor, the M10 protection-adequacy judgment. *"Is prod actually in this state."*
 - **Dynamic (pen-test, M2):** proving a cross-tenant read returns another tenant's rows, no-rate-limit, service-seam bypass. Needs a running/staging instance. *"We proved it's exploitable."*
+- **Cross-file authorization (the semantic pass):** the dataflow the mechanical tier structurally cannot follow — see the ceiling section above. *"We read the route end to end, not one function at a time."*
+- **M8 mutation testing:** the free tier reads tests statically; the paid pass runs the suite against mutated code to find the tests that cannot fail. Needs a runnable suite, so it is not source-only.
 - **M6 verdicts:** the free tier says a shape *looks* hand-rolled; the paid pass triages each candidate and names the concrete replacement (and clears the ones that were deliberate — a `// WHY:` comment recording a considered tradeoff is an answer, not a defect). *"Here's what to replace it with, and what to leave alone."*
 
 ## Report framing (protects the brand, creates the upsell)
