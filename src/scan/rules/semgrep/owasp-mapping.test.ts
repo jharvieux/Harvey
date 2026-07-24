@@ -31,10 +31,13 @@ const OFFICIAL_CWE_TO_OWASP_2021: Record<string, string> = {
   "CWE-347": "A02:2021 - Cryptographic Failures",
   // A03 — Injection
   "CWE-78": "A03:2021 - Injection",
+  "CWE-88": "A03:2021 - Injection",
   "CWE-79": "A03:2021 - Injection",
   "CWE-89": "A03:2021 - Injection",
   "CWE-94": "A03:2021 - Injection",
+  "CWE-95": "A03:2021 - Injection",
   "CWE-113": "A03:2021 - Injection",
+  "CWE-917": "A03:2021 - Injection",
   "CWE-116": "A03:2021 - Injection",
   "CWE-470": "A03:2021 - Injection",
   "CWE-943": "A03:2021 - Injection",

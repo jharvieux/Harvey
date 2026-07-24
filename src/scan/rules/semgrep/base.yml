@@ -40,7 +40,26 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms propagate through semgrep's taint dataflow
+      # once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
+    pattern-sanitizers:
+      # #986: numeric coercion is a real transformation sanitizer (the (a1) subset) — a value cast to
+      # a number cannot carry SQL metacharacters, so the interpolation is safe. Deterministically
+      # clears the FP without an LLM pass; parameterized binds are already safe by sink shape.
+      - pattern: parseInt(...)
+      - pattern: parseFloat(...)
+      - pattern: Number(...)
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -73,7 +92,19 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms propagate through semgrep's taint dataflow
+      # once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
       - pattern: $SP.get(...)
     pattern-sinks:
       - patterns:
@@ -269,14 +300,44 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms propagate through semgrep's taint dataflow
+      # once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
       - pattern: new URL($REQ.url).searchParams
-      - pattern: $SP.get(...)
+      # #985: the searchParams.get(...) source must exclude the http-client .get() sinks added
+      # below (http/https/axios), or `https.get("const-url")` self-matches source+sink and FPs on a
+      # constant URL. Keep searchParams/useSearchParams .get(...) as a source; drop http/https/axios.
+      - patterns:
+          - pattern: $SP.get(...)
+          - metavariable-regex:
+              metavariable: $SP
+              regex: ^(?!(https?|axios)$).*$
       - pattern: await $REQ.json()
     pattern-sinks:
       - patterns:
           - pattern-either:
               - pattern: fetch($URL, ...)
+              # #985: the node http/https modules and the axios/request HTTP clients are equally
+              # SSRF-capable sinks — a request-controlled URL fetched through any of them is the same
+              # bug as fetch(). (harvey-ssrf-fetch previously only matched fetch().)
+              - pattern: http.get($URL, ...)
+              - pattern: https.get($URL, ...)
+              - pattern: http.request($URL, ...)
+              - pattern: https.request($URL, ...)
+              - pattern: axios($URL, ...)
+              - pattern: axios.get($URL, ...)
+              - pattern: axios.post($URL, ...)
+              - pattern: request($URL, ...)
               - patterns:
                   - pattern: $FN($URL, ...)
                   - metavariable-regex:
