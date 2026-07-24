@@ -42,6 +42,18 @@ function rowIds(rows: unknown[]): Set<string> {
   return ids;
 }
 
+// Coarse, count-only summary for the opt-in lead — never table names, the project URL, or the key.
+function coarseSummary(r: Result): string {
+  const parts: string[] = [];
+  const pub = r.probes.filter((p) => p.status === "warn").length;
+  parts.push(`${pub} table${pub === 1 ? "" : "s"} publicly readable of ${r.tables} total`);
+  const cross = r.crossTenant.probes.filter((p) => p.status === "warn").length;
+  if (cross > 0) parts.push(`${cross} cross-tenant read${cross === 1 ? "" : "s"}`);
+  if (r.storage?.status === "warn") parts.push("storage buckets anon-listable");
+  if (r.rpc.length) parts.push(`${r.rpc.length} RPC${r.rpc.length === 1 ? "" : "s"} exposed to anon`);
+  return parts.join("; ");
+}
+
 async function signIn(base: string, anon: string, email: string, password: string): Promise<string> {
   const res = await fetch(`${base}/auth/v1/token?grant_type=password`, {
     method: "POST",
@@ -74,6 +86,35 @@ export default function Checker() {
   const [status, setStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [err, setErr] = useState("");
   const [result, setResult] = useState<Result | null>(null);
+  const [leadEmail, setLeadEmail] = useState("");
+  const [leadStatus, setLeadStatus] = useState<"idle" | "submitting" | "ok" | "error">("idle");
+  const [leadErr, setLeadErr] = useState("");
+
+  async function submitLead(e: React.FormEvent) {
+    e.preventDefault();
+    if (!result) return;
+    setLeadStatus("submitting");
+    setLeadErr("");
+    try {
+      const res = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Only the email + a coarse, count-only summary are sent. The project URL and anon
+        // key are never included — they stay in the browser, keeping the tool's core promise.
+        body: JSON.stringify({ kind: "checker-lead", email: leadEmail, summary: coarseSummary(result) }),
+      });
+      if (res.ok) {
+        setLeadStatus("ok");
+      } else {
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        setLeadErr(d.error || "Something went wrong. Please try again or email us directly.");
+        setLeadStatus("error");
+      }
+    } catch {
+      setLeadErr("Network error. Please try again or email us directly.");
+      setLeadStatus("error");
+    }
+  }
 
   async function run(e: React.FormEvent) {
     e.preventDefault();
@@ -414,6 +455,54 @@ export default function Checker() {
                   API advertises, using rows that happen to exist. It can&apos;t test writes, every RPC&apos;s internals,
                   whether a <code>service_role</code> key leaks to the client, or whether your app-layer routes check
                   ownership. A real audit stands up a seeded copy of your stack and proves each path.
+                </div>
+
+                {/* Opt-in lead capture (#749). Everything above ran in-browser and sent Harvey nothing;
+                    this step is different and says so. It transmits only the typed email + a coarse,
+                    count-only summary — never the project URL or anon key. */}
+                <div
+                  className="tool"
+                  style={{ marginTop: 22, borderTop: "3px solid var(--accent, #6366f1)", background: "transparent" }}
+                >
+                  <span className="eyebrow" style={{ color: "var(--accent, #6366f1)" }}>
+                    Optional — this step sends data to Harvey
+                  </span>
+                  <h3 style={{ marginTop: 10 }}>Want us to take a closer look?</h3>
+                  <p className="sub">
+                    Everything above ran <b>in your browser</b> — your URL, key, and logins were never sent to Harvey.
+                    This box is the one exception, and only if you choose it: leave your email and we&apos;ll send{" "}
+                    <b>just your address and a short count-only summary</b> (no project URL, no key, no table names) so we
+                    can follow up with a deeper read.
+                  </p>
+                  {leadStatus === "ok" ? (
+                    <p className="sub" style={{ color: "var(--accent, #6366f1)", fontWeight: 600 }}>
+                      Thanks — we&apos;ve got it and we&apos;ll be in touch. Nothing but your email and that summary was
+                      sent.
+                    </p>
+                  ) : (
+                    <form onSubmit={submitLead}>
+                      <div className="field">
+                        <label htmlFor="lead-email">Your email</label>
+                        <input
+                          id="lead-email"
+                          type="email"
+                          required
+                          value={leadEmail}
+                          onChange={(e) => setLeadEmail(e.target.value)}
+                          placeholder="you@yourstartup.com"
+                          autoComplete="email"
+                        />
+                      </div>
+                      <p className="sub" style={{ fontSize: 14 }}>
+                        We&apos;ll send exactly this summary: <code>{coarseSummary(result)}</code>. That&apos;s the whole
+                        payload alongside your email.
+                      </p>
+                      {leadStatus === "error" && <p className="tool-err">{leadErr}</p>}
+                      <button type="submit" className="btn btn-primary" disabled={leadStatus === "submitting"}>
+                        {leadStatus === "submitting" ? "Sending…" : "Send my email to Harvey →"}
+                      </button>
+                    </form>
+                  )}
                 </div>
               </div>
             )}
