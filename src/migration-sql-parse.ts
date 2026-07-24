@@ -639,15 +639,15 @@ export function parsePolicies(sql: string): ParsedPolicySet {
 // Ordering is position-aware within a file too, so the common `drop policy X; create policy X (fixed)`
 // pair in one migration resolves to the fixed create, not to an empty result. Unparsed creates go
 // through the same lifecycle — an unreadable policy a later migration drops is not reported either.
-export interface LivePolicy extends ParsedPolicy {
+interface LivePolicy extends ParsedPolicy {
   file: string;
   line: number;
 }
-export interface LiveUnparsedPolicy extends UnparsedPolicy {
+interface LiveUnparsedPolicy extends UnparsedPolicy {
   file: string;
   line: number;
 }
-export interface LivePolicySet {
+interface LivePolicySet {
   policies: LivePolicy[];
   unparsed: LiveUnparsedPolicy[];
 }
