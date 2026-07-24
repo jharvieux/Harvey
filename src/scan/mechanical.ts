@@ -23,6 +23,7 @@ import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, 
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./framework-detect.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
 import { scanJobTenantScope } from "./job-tenant-scope.js";
+import { checkUnanalysedLanguages } from "./language-coverage.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { resolveBundleScan, scanSecrets } from "./secrets.js";
@@ -217,6 +218,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkOpenSignupConfig(scanDir, inferAuthMethodsFromSource(scanDir)));
     }
     findings.push(...checkWebExtensionManifest(scanDir));
+
+    // #871 — source in languages no M1 rule can read (a Python/Go/Ruby service on the same tables
+    // bypasses RLS just as effectively as a broken policy). Disclosure only, by design.
+    findings.push(...checkUnanalysedLanguages(scanDir));
 
     // Supply chain.
     if (pkg) {
