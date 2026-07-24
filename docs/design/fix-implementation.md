@@ -338,6 +338,11 @@ Sequencing: #922 → #924 → #923 → #927 → #925 → #926. **#925 is not fir
 
 **Correction (2026-07-23):** this section previously recorded the MVP acceptance run as *"deferred pending issue #9 (the deliberately-broken calibration target), which does not exist in the repo yet."* Measured in a clean worktree: **`targets/calibration/` exists.** The recorded blocker had decayed; the run is unblocked and simply unperformed (#927).
 
+**Update (2026-07-24):**
+
+- **#928 done.** `verifySuggestedFix()` now clears the §3 path/size rails before it touches git, delegating to the one rail implementation (`src/fix/rails.ts` `isDenied`/`checkDiffCap`) and the one shared diff parser (moved to `rails.ts`). A diff touching a denylisted path or over the diff cap returns `verified: false`, so it can never be marked verified nor reach a ticket body (`renderFixSection` is gated on `verified`).
+- **#927 partially landed → remainder #957.** `src/fix/calibration-acceptance.test.ts` runs the checkable-today portion offline against the real planted calibration source: the §3 rails + inert-diff verify transport reaches `diff-verified` with zero rail events on a class-4 fix, and denylisted/over-cap diffs are `rails-blocked`. The **full autonomous** §8 run is blocked on the implementer (#922, no diffs), the detector-after re-run (#924), and the fact that `executeFixDiff` refuses `targets/calibration` in place (it lives inside Harvey's own git — the corpus must be materialized into a standalone repo first). Measured record: `docs/design/fix-calibration-acceptance.md`.
+
 **Still not built, still deliberate:**
 
 - The **`fix-dry-run` / `fix-execute` package.json scripts**: `package.json` is a supervised dependency-manifest path for automated sweeps. Both CLIs run today via `pnpm exec tsx`; wiring the scripts is a one-line human edit (noted as an operator action in #929).
