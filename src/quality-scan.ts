@@ -264,6 +264,18 @@ export function jscpdUnavailableFinding(reason: string): Finding {
   };
 }
 
+// #931: jscpd writing NO report is genuinely ambiguous — it's #505's clean "fewer than 2 comparable
+// source files" shape, OR jscpd analysed nothing despite files being present (MEASURED on
+// documenso/documenso, 3,395 files: the same commit/flags produced 0 findings at one absolute
+// clone path and 1,256 at another). `comparableFileCount` is the scope's own source-file count,
+// computed independently of jscpd's own file discovery — this doesn't explain the report's
+// absence, it only decides whether that absence is disclosable as a coverage gap or safe to treat
+// as a real zero-duplication result.
+export function jscpdAnalysedNothingReason(comparableFileCount: number): string | undefined {
+  if (comparableFileCount < 2) return undefined;
+  return `jscpd wrote no report despite ${comparableFileCount} comparable source file(s) present under this scope — it analysed nothing`;
+}
+
 // #580: a knip run that completes without throwing can still have silently mis-resolved entry
 // points — knip auto-detects the Vite plugin from the target's installed deps, and if that
 // activation fails (vite not in deps, or declared but not actually installed) knip falls back to
