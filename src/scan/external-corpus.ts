@@ -556,6 +556,44 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
       M10: { counted: 154, total: 154, note: "#897: MEASURED 2026-07-24 over 859 Supabase migrations — 4,954,187 bytes of SQL classified in 0.1s, 154 PII-bearing tables. The headline scale result: no timeout and no quadratic degradation, the classifier is linear in schema size. The headline QUALITY result is the opposite way round and is recorded in the scale doc — on an ERP carrying employee, supplier and customer records the highest severity produced anywhere in 154 tables is Medium, so the severity model does not separate a real HR/supplier schema from a starter kit's users table." },
     },
   },
+  // ── #895: the only Supabase-native PAIRED ground truth that exists — broken and fixed variants of
+  // the same lab, side by side. `docs/test-targets.md` recorded "No DVWA-style intentionally-
+  // vulnerable Supabase repo exists (confirmed)" on 2026-06-27; that was true then and false by
+  // 2026-03 (the repo's own last update), and it sat unchallenged for a month. This entry is the
+  // durable fix.
+  //
+  // THE LABELLING WAS VERIFIED BEFORE IT WAS TRUSTED (#895's step 1), by diffing the migrations AND
+  // by standing the lab up live in both states with `pnpm dynamic-validate --execute`. Result and
+  // method: docs/design/supabase-security-labs-paired-validation.md. Two things came out of it that
+  // no static baseline would have shown: M2 discriminates the pair correctly (3 cross-tenant Highs
+  // on `families` that vanish when the fix migration is applied, none introduced), and the lab's own
+  // "fixed" variant STILL leaks `public.profiles` to anon — an unlabelled bug in the target's own
+  // ground truth.
+  //
+  // Licence NONE (all rights reserved by default), same constraint as Wallens11: pinned-clone
+  // manifest only, never vendored into targets/ and never distilled into a *.entries.ts.
+  {
+    slug: "supabase-security-labs",
+    repo: "elamilutinovic-vibePep/supabase-security-labs",
+    commit: "c8ac29b9c19c1064212bd296c3712909924f9b22",
+    license: "none (no LICENSE file — all rights reserved)",
+    provenance: "ai-generated",
+    provenanceNote: "#895: an unstarred single-author teaching-lab repo that is mostly prose docs plus small SQL/Deno artefacts, with the uniform structure and narration of generated material. Recorded ai-generated on that evidence; the important point is that its LABELLING was verified independently rather than trusted (see the paired-validation doc), which is what #895 asked for.",
+    securityVerdict: "N/A by construction — this target's vulnerabilities are DELIBERATE and documented by its own author. Nothing here is a disclosure candidate. What is recorded instead is the PAIRED result: Harvey's M2 tier proves the planted cross-tenant `families` leak live and clears it on the fixed variant, while the M1 static mechanical tier produces byte-identical output on both. Detail: docs/design/supabase-security-labs-paired-validation.md.",
+    schemaPath: "rls-broken-lab/supabase/migrations",
+    modules: {
+      M4: { counted: 1, total: 5, note: "#895: MEASURED 2026-07-24 — 1 counted (Low) + 3 Info + the #365 M4-00 disclosure. A near-floor reading: this repo is prose docs plus a handful of small SQL and Deno files, so the source-tier quality modules are all at or near zero here BY CONSTRUCTION. Their value in the corpus is as an FP floor, not as a duplication signal; the target earns its place on the M1/M2 paired result, not on these numbers." },
+      "M4-diverged": { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24 — FP floor." },
+      "M5-knip": { counted: 0, total: 1, note: "#895: MEASURED 2026-07-24 — zero counted, with the #505 M5-00 'did not complete for every workspace' Info disclosure present. That disclosure IS the baseline's honesty: there is no package.json here for knip to resolve entries from, and the run says so instead of reporting a clean zero." },
+      "M5-slop": { counted: 0, total: 4, note: "#895: MEASURED 2026-07-24 — zero counted, 4 'Decorative emoji in a comment' Info. FP floor." },
+      "M6-indicator": { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24. All Info/non-grading (#267); counted === total by construction." },
+      M7: { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24 — FP floor. Any M7 finding appearing on a repo of SQL and two 40-line Deno functions is almost certainly a new over-match." },
+      M8: { counted: 1, total: 1, note: "#895: MEASURED 2026-07-24 — #224's M8-00 zero-coverage finding (High), which IS the measurement: zero test files, no test script. Correct here, unlike the same finding on documenso." },
+      "M8-intent": { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24 — no test files to inspect, so the M8-00 above is this target's whole M8 story." },
+      M9: { counted: 0, total: 0, note: "#895: MEASURED zero 2026-07-24 — no Next.js app here at all." },
+      M10: { counted: 2, total: 2, note: "#895: MEASURED 2026-07-24 over rls-broken-lab/supabase/migrations — profiles and posts, both Low. Chosen as the schemaPath over the other two labs' migration dirs because it is the one whose broken/fixed pair is the point of the target." },
+    },
+  },
 ];
 
 // #227's free-tier calibration invariant, as data. The product promise in one line: the free tier

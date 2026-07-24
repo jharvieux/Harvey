@@ -93,6 +93,16 @@ exercise `detectOrm` routing, the Prisma tenant-scope/BOLA detector (#760), M7 F
   > **This corrects the 2026-06-27 entry that read "No DVWA-style intentionally-vulnerable Supabase repo
   > exists (confirmed)."** That was true when written. It is no longer true. (CLAUDE.md: a recorded reason is
   > a claim about the world, and claims decay.)
+  >
+  > **PINNED and VERIFIED 2026-07-24 (#895)** — labelling diffed and then reproduced live in both states
+  > with `pnpm dynamic-validate --execute`. Full record: `docs/design/supabase-security-labs-paired-validation.md`.
+  > Headline: **M2 discriminates the pair correctly** (3 cross-tenant `families` Highs on the broken
+  > variant, gone on the fixed one, none introduced) while the **M1 static tier produces byte-identical
+  > output on both** — the planted `USING (true)` class is disclosed-not-detected, and the static reviewer
+  > does not track `drop policy`, so the fix is invisible to it. The lab's own "fixed" variant still leaks
+  > `public.profiles` to `anon`, an unlabelled bug in the target's ground truth. The fixed variant cannot
+  > yet serve as an M1 precision NEGATIVE (it is not distinguishable at that tier, and the licence forbids
+  > distilling it into a `*.entries.ts`).
 - **`juice-shop/juice-shop`** (MIT) — `data/static/challenges.yml` plus `data/static/codefixes/` with
   `*_correct.ts` and numbered incorrect variants per challenge: a labelled vulnerable/fixed TypeScript
   snippet corpus. Express/Angular, so it scores generic detectors only, not M1's Supabase-specific tier.
