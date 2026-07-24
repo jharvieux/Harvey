@@ -1,0 +1,1000 @@
+{
+  "graded": false,
+  "warning": "UNGRADED breadth sweep (#899, mechanical half). Counts are unverified claims, not scored capability. Triage/grading is #900.",
+  "generatedAt": "2026-07-24T04:57:43.039Z",
+  "targetsScanned": 15,
+  "targetsDropped": 0,
+  "rows": [
+    {
+      "slug": "priceai",
+      "repo": "dimthink/PriceAI",
+      "commit": "7ba8b01b705ff09d4dcd081927efb91e5f7703f3",
+      "status": "scanned",
+      "files": 795,
+      "tsFiles": 360,
+      "wallclockSec": 43.7,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 32.7,
+          "status": "ok",
+          "findingCount": 207
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 6.4,
+          "status": "ok",
+          "findingCount": 2232
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 4.1,
+          "status": "ok",
+          "findingCount": 396
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.5,
+          "status": "ok",
+          "findingCount": 1
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 37,
+          "detail": "146 .sql file(s)"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 2089,
+        "M4": 342,
+        "M1": 183,
+        "M9": 111,
+        "M7": 62,
+        "M6": 48,
+        "M10": 37,
+        "M8": 1
+      },
+      "findingsBySeverity": {
+        "High": 73,
+        "Info": 149,
+        "Medium": 153,
+        "Low": 2439,
+        "Perf": 58,
+        "Critical": 1
+      },
+      "totalFindings": 2873
+    },
+    {
+      "slug": "git-city",
+      "repo": "srizzon/git-city",
+      "commit": "bb4d9102af6126970bbce1fb3e20d818df4a535f",
+      "status": "scanned",
+      "files": 915,
+      "tsFiles": 647,
+      "wallclockSec": 49.3,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 39,
+          "status": "ok",
+          "findingCount": 566
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 4.4,
+          "status": "ok",
+          "findingCount": 682
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 5.4,
+          "status": "ok",
+          "findingCount": 539
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.5,
+          "status": "ok",
+          "findingCount": 1
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 33,
+          "detail": "116 .sql file(s)"
+        }
+      ],
+      "findingsByModule": {
+        "M1": 509,
+        "M4": 453,
+        "M5": 390,
+        "M7": 195,
+        "M9": 126,
+        "M6": 114,
+        "M10": 33,
+        "M8": 1
+      },
+      "findingsBySeverity": {
+        "High": 177,
+        "Info": 383,
+        "Medium": 334,
+        "Low": 740,
+        "Critical": 4,
+        "Perf": 183
+      },
+      "totalFindings": 1821
+    },
+    {
+      "slug": "liam",
+      "repo": "liam-hq/liam",
+      "commit": "92156eac5ef497fffe5a64bad94d6856985273df",
+      "status": "scanned",
+      "files": 2175,
+      "tsFiles": 1470,
+      "wallclockSec": 38.7,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 22.7,
+          "status": "ok",
+          "findingCount": 340
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 2.8,
+          "status": "ok",
+          "findingCount": 705
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 12.7,
+          "status": "ok",
+          "findingCount": 330
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.5,
+          "status": "error",
+          "findingCount": 0,
+          "detail": "Node.js v24.15.0"
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 14,
+          "detail": "101 .sql file(s)"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 551,
+        "M1": 336,
+        "M4": 257,
+        "M8": 132,
+        "M7": 38,
+        "M9": 33,
+        "M6": 28,
+        "M10": 14
+      },
+      "findingsBySeverity": {
+        "Critical": 2,
+        "Info": 126,
+        "Medium": 352,
+        "High": 31,
+        "Low": 850,
+        "Perf": 28
+      },
+      "totalFindings": 1389
+    },
+    {
+      "slug": "grida",
+      "repo": "gridaco/grida",
+      "commit": "643873382bb0855fa909494a2d887e03450de9d7",
+      "status": "scanned",
+      "files": 5327,
+      "tsFiles": 3496,
+      "wallclockSec": 187.2,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 129.8,
+          "status": "ok",
+          "findingCount": 657
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 13.2,
+          "status": "ok",
+          "findingCount": 2062
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 43.5,
+          "status": "ok",
+          "findingCount": 1291
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.6,
+          "status": "empty",
+          "findingCount": 0
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 50,
+          "detail": "100 .sql file(s)"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 1969,
+        "M4": 870,
+        "M1": 600,
+        "M7": 230,
+        "M9": 138,
+        "M6": 130,
+        "M8": 73,
+        "M10": 50
+      },
+      "findingsBySeverity": {
+        "High": 117,
+        "Critical": 3,
+        "Info": 596,
+        "Medium": 568,
+        "Low": 2657,
+        "Perf": 119
+      },
+      "totalFindings": 4060
+    },
+    {
+      "slug": "wacrm",
+      "repo": "ArnasDon/wacrm",
+      "commit": "3180f06da6eaa73d84b09b99ea30b01e78db62f5",
+      "status": "scanned",
+      "files": 442,
+      "tsFiles": 359,
+      "wallclockSec": 30,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 23.7,
+          "status": "ok",
+          "findingCount": 153
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 2.5,
+          "status": "ok",
+          "findingCount": 291
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 3.3,
+          "status": "ok",
+          "findingCount": 99
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.5,
+          "status": "empty",
+          "findingCount": 0
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 22,
+          "detail": "36 .sql file(s)"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 160,
+        "M1": 138,
+        "M7": 110,
+        "M4": 60,
+        "M6": 30,
+        "M9": 24,
+        "M10": 22,
+        "M8": 21
+      },
+      "findingsBySeverity": {
+        "Critical": 1,
+        "High": 31,
+        "Info": 85,
+        "Medium": 88,
+        "Low": 244,
+        "Perf": 116
+      },
+      "totalFindings": 565
+    },
+    {
+      "slug": "atomic-crm",
+      "repo": "marmelab/atomic-crm",
+      "commit": "dce557e2741eab9e24453b9f59e64eb2ea92da6b",
+      "status": "scanned",
+      "files": 737,
+      "tsFiles": 410,
+      "wallclockSec": 50.1,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 44.6,
+          "status": "ok",
+          "findingCount": 101
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 1.8,
+          "status": "ok",
+          "findingCount": 152
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 3.1,
+          "status": "ok",
+          "findingCount": 232
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.5,
+          "status": "empty",
+          "findingCount": 0
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 5,
+          "detail": "31 .sql file(s)"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 252,
+        "M1": 94,
+        "M4": 92,
+        "M7": 31,
+        "M6": 14,
+        "M10": 5,
+        "M9": 1,
+        "M8": 1
+      },
+      "findingsBySeverity": {
+        "High": 14,
+        "Critical": 3,
+        "Info": 56,
+        "Medium": 86,
+        "Low": 301,
+        "Perf": 30
+      },
+      "totalFindings": 490
+    },
+    {
+      "slug": "onlook",
+      "repo": "onlook-dev/onlook",
+      "commit": "423e2e924366419e418ee049093872d535eea41a",
+      "status": "scanned",
+      "files": 1695,
+      "tsFiles": 1290,
+      "wallclockSec": 64,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 40.9,
+          "status": "ok",
+          "findingCount": 160
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 3.8,
+          "status": "ok",
+          "findingCount": 626
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 18.8,
+          "status": "ok",
+          "findingCount": 995
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.5,
+          "status": "empty",
+          "findingCount": 0
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 10,
+          "detail": "20 .sql file(s)"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 1142,
+        "M4": 229,
+        "M7": 146,
+        "M1": 145,
+        "M9": 89,
+        "M6": 30,
+        "M10": 10
+      },
+      "findingsBySeverity": {
+        "High": 28,
+        "Info": 199,
+        "Medium": 107,
+        "Low": 1367,
+        "Critical": 2,
+        "Perf": 88
+      },
+      "totalFindings": 1791
+    },
+    {
+      "slug": "supabase-cms-kit",
+      "repo": "paperclip-cms/supabase-cms-kit",
+      "commit": "469ca2a81c5f7afc4f54101676a815131611b617",
+      "status": "scanned",
+      "files": 144,
+      "tsFiles": 111,
+      "wallclockSec": 27.1,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 24.2,
+          "status": "ok",
+          "findingCount": 96
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 1.1,
+          "status": "ok",
+          "findingCount": 33
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 1.3,
+          "status": "ok",
+          "findingCount": 35
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.5,
+          "status": "ok",
+          "findingCount": 1
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 2,
+          "detail": "13 .sql file(s)"
+        }
+      ],
+      "findingsByModule": {
+        "M1": 89,
+        "M5": 27,
+        "M6": 18,
+        "M4": 17,
+        "M7": 8,
+        "M9": 5,
+        "M10": 2,
+        "M8": 1
+      },
+      "findingsBySeverity": {
+        "High": 12,
+        "Info": 35,
+        "Medium": 76,
+        "Low": 34,
+        "Perf": 10
+      },
+      "totalFindings": 167
+    },
+    {
+      "slug": "open-scouts",
+      "repo": "firecrawl/open-scouts",
+      "commit": "0d9b714c219aa1400c9d13c12af838a89da5d60f",
+      "status": "scanned",
+      "files": 1116,
+      "tsFiles": 546,
+      "wallclockSec": 47.8,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 42.3,
+          "status": "ok",
+          "findingCount": 105
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 2.3,
+          "status": "ok",
+          "findingCount": 189
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 2.6,
+          "status": "ok",
+          "findingCount": 486
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.5,
+          "status": "ok",
+          "findingCount": 1
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 4,
+          "detail": "9 .sql file(s)"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 389,
+        "M4": 203,
+        "M1": 83,
+        "M6": 50,
+        "M7": 40,
+        "M9": 15,
+        "M10": 4,
+        "M8": 1
+      },
+      "findingsBySeverity": {
+        "High": 17,
+        "Critical": 1,
+        "Info": 171,
+        "Medium": 78,
+        "Low": 496,
+        "Perf": 22
+      },
+      "totalFindings": 785
+    },
+    {
+      "slug": "elatoai",
+      "repo": "akdeb/ElatoAI",
+      "commit": "5a5e2166d97fb35edd8943a3f770893752c62115",
+      "status": "scanned",
+      "files": 391,
+      "tsFiles": 177,
+      "wallclockSec": 16.3,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 12.4,
+          "status": "ok",
+          "findingCount": 25
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 1.6,
+          "status": "ok",
+          "findingCount": 138
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 1.8,
+          "status": "ok",
+          "findingCount": 18
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.5,
+          "status": "ok",
+          "findingCount": 1
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 6,
+          "detail": "5 .sql file(s)"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 111,
+        "M1": 25,
+        "M7": 21,
+        "M4": 17,
+        "M10": 6,
+        "M9": 5,
+        "M6": 2,
+        "M8": 1
+      },
+      "findingsBySeverity": {
+        "High": 9,
+        "Info": 23,
+        "Medium": 19,
+        "Low": 125,
+        "Critical": 1,
+        "Perf": 11
+      },
+      "totalFindings": 188
+    },
+    {
+      "slug": "hikari",
+      "repo": "antoineross/Hikari",
+      "commit": "c1f16f54ecc0b804567728f922999ad463af39e6",
+      "status": "scanned",
+      "files": 338,
+      "tsFiles": 164,
+      "wallclockSec": 37.6,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 34.2,
+          "status": "ok",
+          "findingCount": 119
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 1.3,
+          "status": "ok",
+          "findingCount": 90
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 1.5,
+          "status": "ok",
+          "findingCount": 114
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.5,
+          "status": "ok",
+          "findingCount": 1
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 6,
+          "detail": "4 .sql file(s)"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 157,
+        "M1": 114,
+        "M4": 28,
+        "M6": 10,
+        "M7": 9,
+        "M10": 6,
+        "M9": 5,
+        "M8": 1
+      },
+      "findingsBySeverity": {
+        "High": 9,
+        "Info": 25,
+        "Medium": 101,
+        "Critical": 1,
+        "Low": 181,
+        "Perf": 13
+      },
+      "totalFindings": 330
+    },
+    {
+      "slug": "dub",
+      "repo": "dubinc/dub",
+      "commit": "f90e5041d2f95f470e5551c38e2a516bf94b7803",
+      "status": "scanned",
+      "files": 4290,
+      "tsFiles": 4078,
+      "wallclockSec": 64.8,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 38.4,
+          "status": "ok",
+          "findingCount": 1674
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 9.5,
+          "status": "ok",
+          "findingCount": 1218
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 16.3,
+          "status": "ok",
+          "findingCount": 1710
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.6,
+          "status": "error",
+          "findingCount": 0,
+          "detail": "Node.js v24.15.0"
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 40,
+          "detail": "37 schema.prisma"
+        }
+      ],
+      "findingsByModule": {
+        "M4": 1678,
+        "M1": 1625,
+        "M5": 653,
+        "M7": 467,
+        "M6": 116,
+        "M9": 62,
+        "M10": 40,
+        "M8": 1
+      },
+      "findingsBySeverity": {
+        "High": 904,
+        "Info": 975,
+        "Medium": 656,
+        "Low": 1815,
+        "Critical": 3,
+        "Perf": 289
+      },
+      "totalFindings": 4642
+    },
+    {
+      "slug": "hexclave",
+      "repo": "hexclave/hexclave",
+      "commit": "eed88f5dd58aa95455c42509c7d79f3f5f7a0569",
+      "status": "scanned",
+      "files": 3048,
+      "tsFiles": 2193,
+      "wallclockSec": 93,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 65.5,
+          "status": "ok",
+          "findingCount": 971
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 9.5,
+          "status": "ok",
+          "findingCount": 2819
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 17.4,
+          "status": "ok",
+          "findingCount": 589
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.6,
+          "status": "empty",
+          "findingCount": 0
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 40,
+          "detail": "196 .sql file(s) + 1 schema.prisma"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 2127,
+        "M8": 814,
+        "M1": 811,
+        "M6": 320,
+        "M9": 157,
+        "M7": 138,
+        "M10": 40,
+        "M4": 12
+      },
+      "findingsBySeverity": {
+        "High": 149,
+        "Critical": 17,
+        "Info": 395,
+        "Medium": 633,
+        "Low": 3147,
+        "Perf": 78
+      },
+      "totalFindings": 4419
+    },
+    {
+      "slug": "cal-diy",
+      "repo": "calcom/cal.diy",
+      "commit": "3894f37e14eae5082770f35ff1fde72110c0e6b6",
+      "status": "scanned",
+      "files": 7693,
+      "tsFiles": 5025,
+      "wallclockSec": 147.5,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 78.8,
+          "status": "ok",
+          "findingCount": 2077
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 11.4,
+          "status": "ok",
+          "findingCount": 1867
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 56.5,
+          "status": "ok",
+          "findingCount": 4697
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.6,
+          "status": "error",
+          "findingCount": 0,
+          "detail": "Node.js v24.15.0"
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0.1,
+          "status": "ok",
+          "findingCount": 90,
+          "detail": "601 .sql file(s) + 2 schema.prisma"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 4377,
+        "M1": 1951,
+        "M4": 1506,
+        "M6": 252,
+        "M7": 222,
+        "M8": 210,
+        "M9": 123,
+        "M10": 90
+      },
+      "findingsBySeverity": {
+        "High": 829,
+        "Critical": 7,
+        "Info": 964,
+        "Medium": 1174,
+        "Low": 5596,
+        "Perf": 161
+      },
+      "totalFindings": 8731
+    },
+    {
+      "slug": "amplication",
+      "repo": "amplication/amplication",
+      "commit": "7656495d27f0dceff89657590c3f14149e45c7a6",
+      "status": "scanned",
+      "files": 4370,
+      "tsFiles": 3291,
+      "wallclockSec": 146.6,
+      "scanners": [
+        {
+          "name": "quick-scan",
+          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
+          "seconds": 132,
+          "status": "ok",
+          "findingCount": 714
+        },
+        {
+          "name": "detect-static",
+          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
+          "seconds": 5.4,
+          "status": "ok",
+          "findingCount": 758
+        },
+        {
+          "name": "quality-scan",
+          "modules": "M4, M5-knip",
+          "seconds": 8.5,
+          "status": "ok",
+          "findingCount": 2997
+        },
+        {
+          "name": "mutation-scan",
+          "modules": "M8 (suite-absent only)",
+          "seconds": 0.6,
+          "status": "empty",
+          "findingCount": 0
+        },
+        {
+          "name": "pii-classify",
+          "modules": "M10 (schema)",
+          "seconds": 0,
+          "status": "ok",
+          "findingCount": 65,
+          "detail": "160 .sql file(s) + 4 schema.prisma"
+        }
+      ],
+      "findingsByModule": {
+        "M5": 2481,
+        "M4": 968,
+        "M1": 707,
+        "M7": 250,
+        "M10": 65,
+        "M8": 47,
+        "M6": 14,
+        "M9": 2
+      },
+      "findingsBySeverity": {
+        "Critical": 2,
+        "High": 170,
+        "Info": 288,
+        "Medium": 684,
+        "Low": 3186,
+        "Perf": 204
+      },
+      "totalFindings": 4534
+    }
+  ]
+}
