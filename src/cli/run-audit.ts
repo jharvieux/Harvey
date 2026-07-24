@@ -3,7 +3,7 @@
 //
 //   pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm]
 //       [--out coverage.json] [--findings-out engagement.json] [--sarif-out findings.sarif]
-//       [--meta meta.json]
+//       [--sbom-out sbom.json] [--meta meta.json]
 //       [--artifacts-dir dir] [--supabase <project-ref>]... [--allow-target-install]
 //       [--schema <path>]... | [--schema <app-name>=<path>]...
 //
@@ -63,6 +63,10 @@
 // toolExecutionNotifications so a module that did not run cannot vanish into "no results" — see
 // the decision recorded at the top of src/sarif.ts.
 //
+// --sbom-out (#887): a CycloneDX 1.5 SBOM of the target's dependencies, for the buyer's
+// procurement/questionnaire process. It is an inventory, not an assessment — its completeness is
+// stated in the document itself and printed here when the tree could not be fully resolved.
+//
 // --baseline (#457): a prior engagement findings.json for the SAME client. When given (with
 // --findings-out), each current finding is classified resolved/persistent/new by stable finding
 // identity (src/audit-diff.ts) and the deliverable leads with a progress view. Omit it and behaviour
@@ -81,7 +85,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { assembleEngagementDocument, coverageLedger } from "../audit-report.js";
 import { buildExecutionPlan, formatExecutionPlan } from "../audit-plan.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
@@ -93,6 +97,7 @@ import { discoverSchemaFiles } from "../dynamic-validate.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { isGitRepoRoot } from "../scan/secrets.js";
 import { toSarif } from "../sarif.js";
+import { buildSbom } from "../sbom.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
@@ -115,6 +120,7 @@ const outPath = flagValue("--out");
 const findingsOut = flagValue("--findings-out");
 const metaPath = flagValue("--meta");
 const sarifOut = flagValue("--sarif-out");
+const sbomOut = flagValue("--sbom-out");
 const artifactsDir = flagValue("--artifacts-dir");
 // #506: --supabase is repeatable — one project ref per Supabase project on a monorepo. M7's advisor
 // tier fans out over all of them. supabaseRef keeps the single-ref field for back-compat.
@@ -150,7 +156,7 @@ supabaseRefsArg.forEach((ref, i) => {
 });
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--sarif-out findings.sarif] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--schema <path> | --schema <app-name>=<path>] [--allow-target-install] [--baseline prior-findings.json]");
+  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--sarif-out findings.sarif] [--sbom-out sbom.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--schema <path> | --schema <app-name>=<path>] [--allow-target-install] [--baseline prior-findings.json]");
   process.exit(2);
 }
 
@@ -295,6 +301,15 @@ if (sarifOut) {
   writeFileSync(sarifOut, `${JSON.stringify(sarif, null, 2)}\n`);
   const gaps = ledger.filter((r) => r.status !== "ran").length;
   console.log(`\nSARIF 2.1.0 (${exportFindings.length} result(s), ${gaps} coverage notification(s)) → ${sarifOut}`);
+}
+
+// #887: the CycloneDX inventory. Separate from the findings entirely — an SBOM asserts what is
+// installed, not what is wrong with it.
+if (sbomOut) {
+  const { bom, warning } = buildSbom(targetDir, { targetName: basename(targetDir) });
+  writeFileSync(sbomOut, `${JSON.stringify(bom, null, 2)}\n`);
+  console.log(`\nCycloneDX SBOM (${(bom as { components: unknown[] }).components.length} component(s)) → ${sbomOut}`);
+  if (warning) console.error(`⚠ SBOM is not a complete inventory: ${warning}`);
 }
 
 // #284: the never-run ledger is the complement of this log, so a module that genuinely ran here

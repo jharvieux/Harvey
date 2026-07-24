@@ -89,12 +89,14 @@ const SEVERITY_PENALTY: Record<Severity, number> = {
 // roadmap entry. Each line below is backed by shipped code: remediation text rides on every
 // Finding.fix; the deep scan is the LLM pass + src/pentest; the re-scan diff is
 // `run-audit --baseline` (src/audit-diff.ts); the PDF is report-template/render.mjs; SARIF is
-// src/sarif.ts behind `--sarif-out` (#867). Adding a line for something unbuilt is a defect.
+// src/sarif.ts behind `--sarif-out` (#867); the CycloneDX SBOM is src/sbom.ts behind `--sbom-out`
+// (#887). Adding a line for something unbuilt is a defect.
 const GATED_CAPABILITIES = [
   "The fix / remediation steps for every finding above",
   "The DEEP scan: LLM semantic review + live RLS/auth pen test",
   "A re-scan diffed against this one — what you resolved, what's still open, what's new",
   "The written report as a PDF, plus SARIF for your own code-scanning / ASPM tooling",
+  "A CycloneDX SBOM of your dependency tree, for procurement and security questionnaires",
 ];
 
 // Categories that are high-precision about the FACT but not about EXPLOITABILITY, so they are

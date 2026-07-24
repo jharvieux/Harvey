@@ -55,7 +55,7 @@ The free tier must pass three tests: (a) *not useless* (real, located findings),
 
 - **The fix for every finding** — remediation steps / patches for the mechanical findings (enable RLS on X, move key to server env, bump `next` to the patched version) *and* the deep findings, with optional one-click patch PR.
 - The **DEEP scan**: LLM semantic review (broken-auth logic, IDOR, tenant-isolation bugs, injection reachability) + **dynamic RLS/auth pen test** (actively probes whether policies are bypassable with the anon key — the single highest-value check for this audience given the 170+ real Lovable/Supabase RLS breaches).
-- Re-scan diffed against the prior engagement (`run-audit --baseline`, #457), the exportable PDF report (`report-template/render.mjs`), and SARIF 2.1.0 export for the client's own code scanning / ASPM (`--sarif-out`, `src/sarif.ts`, #867).
+- Re-scan diffed against the prior engagement (`run-audit --baseline`, #457), the exportable PDF report (`report-template/render.mjs`), SARIF 2.1.0 export for the client's own code scanning / ASPM (`--sarif-out`, `src/sarif.ts`, #867), and a CycloneDX SBOM for procurement (`--sbom-out`, `src/sbom.ts`, #887).
 - **Not offered, because not built (#866):** monitoring, scan history, and PR checks. They were listed here and in the shipped upsell copy while no code implemented them; the upsell list (`src/quick-scan.ts` `GATED_CAPABILITIES`) now carries only shipped capabilities and a test pins the unbuilt ones out. Restore a line here only in the commit that ships the capability.
 
 The single free sample finding is shown *with* its fix precisely because remediation is otherwise gated — it demonstrates the concrete thing the user is paying for, on their own code.

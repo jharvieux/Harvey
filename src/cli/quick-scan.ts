@@ -6,7 +6,12 @@
 //
 //   pnpm quick-scan --dir <path> [--bundle <path>] [--tenant-key <column>]
 //                    [--tenant-mode per-tenant|per-user] [--json] [--out <file>]
-//                    [--findings-out <file>] [--sarif-out <file>]
+//                    [--findings-out <file>] [--sarif-out <file>] [--sbom-out <file>]
+//
+// --sbom-out (#887): a CycloneDX 1.5 SBOM of the target's dependencies — the procurement artifact
+// buyers ask for contractually. Built from the target's lockfile (src/sbom.ts); when the tree
+// cannot be resolved the document says so in its own compositions/properties AND the CLI prints
+// the reason, so an incomplete inventory is never handed over looking complete.
 //
 // --sarif-out (#867): the raw mechanical Finding[] as SARIF 2.1.0, for GitHub code scanning or an
 // ASPM the client already runs. quick-scan has NO coverage ledger to export — it is one tier of one
@@ -28,7 +33,9 @@
 // convention instead of only inferring it from a fixed candidate-column list.
 
 import { writeFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { runMechanicalScan } from "../scan/mechanical.js";
+import { buildSbom } from "../sbom.js";
 import { buildQuickScanReport, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
 import { toSarif } from "../sarif.js";
 
@@ -197,6 +204,14 @@ async function main(): Promise<void> {
     const sarif = toSarif(rawFindings, { coverageAbsent: QUICK_SCAN_SARIF_SCOPE }, { baseUri: dir });
     writeFileSync(sarifOut, `${JSON.stringify(sarif, null, 2)}\n`);
     console.error(`SARIF 2.1.0 (${rawFindings.length} result(s)) → ${sarifOut}`);
+  }
+
+  const sbomOut = arg("--sbom-out");
+  if (sbomOut) {
+    const { bom, warning } = buildSbom(dir, { targetName: basename(resolve(dir)) });
+    writeFileSync(sbomOut, `${JSON.stringify(bom, null, 2)}\n`);
+    console.error(`CycloneDX SBOM (${(bom as { components: unknown[] }).components.length} component(s)) → ${sbomOut}`);
+    if (warning) console.error(`⚠ SBOM is not a complete inventory: ${warning}`);
   }
 
   const out = arg("--out");
