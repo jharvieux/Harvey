@@ -118,13 +118,6 @@ export function detectTargetFramework(dir: string): TargetFramework {
 
 const PRISMA_SCHEMA_PATHS = ["schema.prisma", join("prisma", "schema.prisma")];
 
-// #757: which DB/ORM architecture the target uses. Supabase WINS when both signatures appear — a
-// real Supabase RLS surface must never be suppressed because Prisma is also present as a query
-// layer. `unknown` only when NO data layer is recognised at all, so the RLS detectors run unchanged
-// (their own no-migrations-found path already yields nothing on a non-Supabase target — the gate is
-// only about making N/A explicit for a recognised architecture, never widening suppression).
-// #869 widened the recognised set beyond Prisma: Drizzle/Kysely/TypeORM/Sequelize/Knex/Mongoose and
-// a bare raw-SQL driver each resolve to their own value so M1 can disclose them by name.
 // #861: a raw-SQL data layer — a Postgres/MySQL driver used directly, with no ORM. Telling it apart
 // from a genuinely DB-less app needs a POSITIVE signal (#844 deliberately emitted nothing without
 // one, which is why a `pg` target got no M9 data-layer disclosure at all); a declared driver
@@ -155,6 +148,13 @@ export function recogniseDataLayer(pkgText: string | undefined): TargetOrm {
   return RECOGNISED_ORMS.find((o) => hasDep(pkgText, o.dep))?.orm ?? (rawSqlDriver(pkgText) ? "raw-sql" : "unknown");
 }
 
+// #757: which DB/ORM architecture the target uses. Supabase WINS when both signatures appear — a
+// real Supabase RLS surface must never be suppressed because Prisma is also present as a query
+// layer. `unknown` only when NO data layer is recognised at all, so the RLS detectors run unchanged
+// (their own no-migrations-found path already yields nothing on a non-Supabase target — the gate is
+// only about making N/A explicit for a recognised architecture, never widening suppression).
+// #869 widened the recognised set beyond Prisma: Drizzle/Kysely/TypeORM/Sequelize/Knex/Mongoose and
+// a bare raw-SQL driver each resolve to their own value so M1 can disclose them by name.
 export function detectOrm(dir: string): TargetOrm {
   const pkgText = loadSources(dir).find((s) => s.path === "package.json")?.text;
 
