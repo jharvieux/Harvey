@@ -128,6 +128,43 @@ describe("detectOrm (#757)", () => {
     });
     expect(detectOrm(dir)).toBe("unknown");
   });
+
+  // #869: everything non-Supabase/non-Prisma used to collapse into `unknown`, which M1 read as
+  // "nothing recognised" and reported nothing about. Each recognised layer now names itself so the
+  // scan can disclose that its tenant-scope shapes were not assessed.
+  it("names each recognised-but-unsupported ORM instead of collapsing it into `unknown`", () => {
+    const cases: [string, string][] = [
+      ["drizzle-orm", "drizzle"],
+      ["kysely", "kysely"],
+      ["typeorm", "typeorm"],
+      ["sequelize", "sequelize"],
+      ["knex", "knex"],
+      ["mongoose", "mongoose"],
+    ];
+    for (const [dep, expected] of cases) {
+      const dir = makeTarget({ "package.json": JSON.stringify({ name: "app", dependencies: { [dep]: "^1.0.0" } }) });
+      expect(detectOrm(dir), dep).toBe(expected);
+    }
+  });
+
+  it("names an ORM ahead of the raw driver it sits on (Drizzle over `pg`)", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "app", dependencies: { "drizzle-orm": "^0.30.0", pg: "^8.12.0" } }),
+    });
+    expect(detectOrm(dir)).toBe("drizzle");
+  });
+
+  it("resolves a bare Postgres driver to `raw-sql` (#861)", () => {
+    const dir = makeTarget({ "package.json": JSON.stringify({ name: "app", dependencies: { pg: "^8.12.0" } }) });
+    expect(detectOrm(dir)).toBe("raw-sql");
+  });
+
+  it("keeps Supabase winning over a recognised ORM in the same manifest", () => {
+    const dir = makeTarget({
+      "package.json": JSON.stringify({ name: "app", dependencies: { "@supabase/supabase-js": "^2.45.0", "drizzle-orm": "^0.30.0" } }),
+    });
+    expect(detectOrm(dir)).toBe("supabase");
+  });
 });
 
 // #861: the positive raw-SQL signal — a declared driver dependency — that tells a `pg`/postgres.js

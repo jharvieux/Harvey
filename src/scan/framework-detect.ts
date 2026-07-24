@@ -21,7 +21,24 @@ export type TargetFramework = "next" | "vite" | "other";
 // surface to analyze on a Prisma/Postgres app (all tenant isolation is app-layer, where the
 // ORM-agnostic pg-idor/bola-owner/etc. detectors already run), so it records that tier N/A by
 // architecture instead of letting the absence of RLS pass as an implicit gap.
-export type TargetOrm = "prisma" | "supabase" | "unknown";
+// #869: everything that is NOT Supabase or Prisma used to collapse into `unknown`, which reads to
+// the consumer as "nothing recognised, run everything" — so a Drizzle/Kysely/TypeORM target got no
+// tenant-scope detector AND no disclosure. Each recognised-but-unsupported layer is now its own
+// value so M1 can name it in a not-assessed row (src/scan/mechanical.ts) instead of going silent.
+export type TargetOrm = "prisma" | "supabase" | "drizzle" | "kysely" | "typeorm" | "sequelize" | "knex" | "mongoose" | "raw-sql" | "unknown";
+
+// Human label per architecture, used in the disclosure rows.
+export const ORM_LABELS: Record<Exclude<TargetOrm, "unknown">, string> = {
+  supabase: "Supabase",
+  prisma: "Prisma",
+  drizzle: "Drizzle",
+  kysely: "Kysely",
+  typeorm: "TypeORM",
+  sequelize: "Sequelize",
+  knex: "Knex",
+  mongoose: "Mongoose",
+  "raw-sql": "raw SQL",
+};
 
 const NEXT_CONFIGS = ["next.config.js", "next.config.mjs", "next.config.cjs", "next.config.ts"];
 const VITE_CONFIGS = ["vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cjs"];
@@ -60,9 +77,11 @@ const PRISMA_SCHEMA_PATHS = ["schema.prisma", join("prisma", "schema.prisma")];
 
 // #757: which DB/ORM architecture the target uses. Supabase WINS when both signatures appear — a
 // real Supabase RLS surface must never be suppressed because Prisma is also present as a query
-// layer. `unknown` when neither signature is found, so the RLS detectors run unchanged (their own
-// no-migrations-found path already yields nothing on a non-Supabase target — the gate is only about
-// making that N/A explicit for a recognized Prisma architecture, never widening suppression).
+// layer. `unknown` only when NO data layer is recognised at all, so the RLS detectors run unchanged
+// (their own no-migrations-found path already yields nothing on a non-Supabase target — the gate is
+// only about making N/A explicit for a recognised architecture, never widening suppression).
+// #869 widened the recognised set beyond Prisma: Drizzle/Kysely/TypeORM/Sequelize/Knex/Mongoose and
+// a bare raw-SQL driver each resolve to their own value so M1 can disclose them by name.
 // #861: a raw-SQL data layer — a Postgres/MySQL driver used directly, with no ORM. Telling it apart
 // from a genuinely DB-less app needs a POSITIVE signal (#844 deliberately emitted nothing without
 // one, which is why a `pg` target got no M9 data-layer disclosure at all); a declared driver
@@ -73,22 +92,35 @@ export function rawSqlDriver(pkgText: string | undefined): string | undefined {
   return RAW_SQL_DRIVERS.find((d) => hasDep(pkgText, d));
 }
 
+// #869: the query layers Harvey RECOGNISES but has no tenant-scope detector for. Ordered ORM-first
+// so a Drizzle app that also depends on `pg` (the usual shape) is named by its ORM, not its driver.
+const RECOGNISED_ORMS: { dep: string; orm: TargetOrm }[] = [
+  { dep: "@supabase/supabase-js", orm: "supabase" },
+  { dep: "@prisma/client", orm: "prisma" },
+  { dep: "prisma", orm: "prisma" },
+  { dep: "drizzle-orm", orm: "drizzle" },
+  { dep: "kysely", orm: "kysely" },
+  { dep: "typeorm", orm: "typeorm" },
+  { dep: "sequelize", orm: "sequelize" },
+  { dep: "knex", orm: "knex" },
+  { dep: "mongoose", orm: "mongoose" },
+];
+
+// The dependency-only half of detectOrm, for the callers that hold a package.json's TEXT rather
+// than a directory (the M9 pass runs over an in-memory source set). Same precedence as detectOrm.
+export function recogniseDataLayer(pkgText: string | undefined): TargetOrm {
+  return RECOGNISED_ORMS.find((o) => hasDep(pkgText, o.dep))?.orm ?? (rawSqlDriver(pkgText) ? "raw-sql" : "unknown");
+}
+
 export function detectOrm(dir: string): TargetOrm {
   const pkgText = loadSources(dir).find((s) => s.path === "package.json")?.text;
 
-  const isSupabase =
-    hasDep(pkgText, "@supabase/supabase-js") ||
-    existsSync(join(dir, "supabase", "config.toml")) ||
-    existsSync(join(dir, "supabase", "migrations"));
-  if (isSupabase) return "supabase";
-
-  const isPrisma =
-    hasDep(pkgText, "@prisma/client") ||
-    hasDep(pkgText, "prisma") ||
-    PRISMA_SCHEMA_PATHS.some((p) => existsSync(join(dir, p)));
-  if (isPrisma) return "prisma";
-
-  return "unknown";
+  // On-disk signatures first where they outrank the dependency list: a supabase/ project directory
+  // is a real RLS surface even when the client library isn't declared.
+  if (existsSync(join(dir, "supabase", "config.toml")) || existsSync(join(dir, "supabase", "migrations"))) return "supabase";
+  const byDep = recogniseDataLayer(pkgText);
+  if (byDep !== "unknown") return byDep;
+  return PRISMA_SCHEMA_PATHS.some((p) => existsSync(join(dir, p))) ? "prisma" : "unknown";
 }
 
 // #696: a third-party scan target usually ships NO knip config, so knip can't infer non-app entry
