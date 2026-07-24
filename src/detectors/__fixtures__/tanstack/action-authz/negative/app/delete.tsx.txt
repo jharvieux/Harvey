@@ -1,0 +1,12 @@
+import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
+import { supabase } from "~/lib/db";
+import { getCurrentUser } from "~/lib/auth";
+
+export const deleteAccount = createServerFn({ method: "POST" })
+  .validator(z.object({ id: z.string() }))
+  .handler(async ({ data }: { data: { id: string } }) => {
+    const user = await getCurrentUser();
+    await supabase.from("accounts").delete().eq("id", data.id).eq("user_id", user.id);
+    return null;
+  });

@@ -1,0 +1,9 @@
+import { createServerFn } from "@tanstack/react-start";
+import { supabase } from "~/lib/db";
+import { getCurrentUser } from "~/lib/auth";
+
+export const updateBio = createServerFn({ method: "POST" }).handler(async ({ data }: { data: { bio: string } }) => {
+  const user = await getCurrentUser();
+  await supabase.from("profiles").update({ bio: data.bio }).eq("user_id", user.id);
+  return null;
+});

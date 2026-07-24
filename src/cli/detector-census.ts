@@ -60,6 +60,9 @@ const OWNERS: Record<string, string> = {
   "src/detectors/test-intent.ts": "M8",
   "src/detectors/vitest-intent.ts": "M8",
   "src/detectors/app-router.ts": "M9",
+  "src/detectors/boundary-model.ts": "M9", // #916 — framework-agnostic boundary model + not-assessed rows
+  "src/detectors/remix-adapter.ts": "M9", // #917 — Remix / React Router 7 adapter
+  "src/detectors/tanstack-adapter.ts": "M9", // #918 — TanStack Start adapter
 };
 
 function walk(dir: string, out: string[] = []): string[] {
