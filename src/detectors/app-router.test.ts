@@ -874,18 +874,18 @@ describe("SPA root error-boundary absence (#627)", () => {
   });
 });
 
-// #872: a recognised non-Next framework (Remix / React Router 7 / TanStack Start / Astro /
-// SvelteKit / Nuxt) has no App Router surface, so running the Next-shaped pass over it produces
-// false-premise findings — and saying nothing lets the absence read as "analysed and clean".
+// #872: a recognised non-Next framework (Astro / SvelteKit / Nuxt) has no adapter yet, so the
+// Next-shaped pass is suppressed and disclosed as not-assessed rather than run over a false premise.
+// Remix / React Router 7 / TanStack Start now route to their own adapters (#916/#917/#918) below.
 const UNSUPPORTED_FW_NOTE = "M9 — Not assessed (framework unsupported)";
 
 describe("recognised-but-unsupported framework gate (#872)", () => {
-  it("suppresses the whole pass and names the framework on a Remix target", () => {
+  it("analyses a Remix target on its adapter — the SSR check runs (framework-agnostic detector)", () => {
+    // Remix routes to the boundary-model adapter now: the framework-agnostic SSR-misuse detector
+    // fires, and there is no blanket unsupported-framework note.
     const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"), "remix");
-    expect(taxonomies(findings)).not.toContain(SSR_API);
-    const note = findings.find((f) => f.taxonomy === UNSUPPORTED_FW_NOTE);
-    expect(note).toMatchObject({ severity: "Info", confidence: "N/A", location: "(whole target)" });
-    expect(note?.evidence).toContain("Remix");
+    expect(taxonomies(findings)).toContain(SSR_API);
+    expect(taxonomies(findings)).not.toContain(UNSUPPORTED_FW_NOTE);
   });
 
   it("does not claim the SPA root-error-boundary check ran on a non-SPA framework", () => {
