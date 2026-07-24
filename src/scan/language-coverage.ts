@@ -39,7 +39,7 @@ interface LanguageHits {
   example: string;
 }
 
-export function countUnanalysedLanguages(dir: string): Map<string, LanguageHits> {
+function countUnanalysedLanguages(dir: string): Map<string, LanguageHits> {
   const byLanguage = new Map<string, LanguageHits>();
   const walk = (current: string): void => {
     for (const entry of readdirSync(current)) {

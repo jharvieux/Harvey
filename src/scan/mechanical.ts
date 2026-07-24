@@ -22,6 +22,7 @@ import { scanEnvSchema } from "./env-schema.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./framework-detect.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
+import { checkInfrastructureScope } from "./infra-scope.js";
 import { scanJobTenantScope } from "./job-tenant-scope.js";
 import { checkUnanalysedLanguages } from "./language-coverage.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
@@ -222,6 +223,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #871 — source in languages no M1 rule can read (a Python/Go/Ruby service on the same tables
     // bypasses RLS just as effectively as a broken policy). Disclosure only, by design.
     findings.push(...checkUnanalysedLanguages(scanDir));
+
+    // #886 — Dockerfiles/Terraform/K8s manifests are out of scope by decision, not by oversight
+    // (docs/design/infrastructure-out-of-scope.md). Say so when the target has them.
+    findings.push(...checkInfrastructureScope(scanDir));
 
     // Supply chain.
     if (pkg) {
