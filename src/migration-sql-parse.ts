@@ -498,6 +498,9 @@ export function parseDefinerFunctions(sql: string): ParsedDefinerFunction[] {
 
 const ENABLE_RLS = /alter table\s+(?:(\w+)\.)?(\w+)\s+enable row level security/gi;
 const CREATE_POLICY = /create policy\s+(?:"([^"]+)"|(\w+))\s+on\s+(?:(\w+)\.)?(\w+)/gi;
+// `drop policy [if exists] <name> on [schema.]<table>` — the statement a later migration uses to
+// remove (or, paired with a fresh CREATE POLICY of the same name, replace) an earlier policy (#937).
+const DROP_POLICY = /drop\s+policy\s+(?:if\s+exists\s+)?(?:"([^"]+)"|(\w+))\s+on\s+(?:(\w+)\.)?(\w+)/gi;
 
 // A policy parsed out of migration SQL, shaped to feed rls-policy-review.ts's reviewPolicy()
 // unchanged — that reviewer takes a policy struct and doesn't care whether the clauses came from
@@ -623,6 +626,76 @@ export function parsePolicies(sql: string): ParsedPolicySet {
   }
 
   return { policies, unparsed };
+}
+
+// The policies LIVE at the end of migration history, with `drop policy` / re-create tracked in
+// statement order (#937). parsePolicies reads a single file's text cumulatively: a broken policy
+// dropped or replaced by a LATER migration is still returned, so a correctly-fixed schema looks
+// byte-identical to the still-broken one it replaced. This reduces the whole set — each `create
+// policy` defines (or redefines) a policy identity `schema.table.name`, each `drop policy` removes
+// it, and the LAST event per identity in file-then-position order wins. Callers that judge the
+// final schema (the static RLS review, the initplan lint) must use this, not per-file parsePolicies.
+//
+// Ordering is position-aware within a file too, so the common `drop policy X; create policy X (fixed)`
+// pair in one migration resolves to the fixed create, not to an empty result. Unparsed creates go
+// through the same lifecycle — an unreadable policy a later migration drops is not reported either.
+interface LivePolicy extends ParsedPolicy {
+  file: string;
+  line: number;
+}
+interface LiveUnparsedPolicy extends UnparsedPolicy {
+  file: string;
+  line: number;
+}
+interface LivePolicySet {
+  policies: LivePolicy[];
+  unparsed: LiveUnparsedPolicy[];
+}
+
+export function parseLivePolicies(migrations: { file: string; sql: string }[]): LivePolicySet {
+  const key = (schema: string, table: string, name: string): string => `${schema}.${table}.${name}`.toLowerCase();
+  interface CreateRec { schema: string; table: string; name: string; file: string; line: number; parsed?: ParsedPolicy; unparsed?: UnparsedPolicy }
+  interface Event { seq: number; k: string; op: "create" | "drop"; rec?: CreateRec }
+  const events: Event[] = [];
+  let seq = 0;
+
+  for (const { file, sql } of migrations) {
+    const clean = stripLineComments(sql);
+    const { policies, unparsed } = parsePolicies(sql);
+    // Index this file's creates by identity. Within a file the LAST create of an identity is the
+    // one that survives (an earlier one is dropped+recreated, or is an illegal duplicate), and it
+    // is exactly the clause set that must be live — so last-in-source (= map insertion order) wins.
+    const parsedByKey = new Map<string, ParsedPolicy>(policies.map((p) => [key(p.schema, p.table, p.name), p]));
+    const unparsedByKey = new Map<string, UnparsedPolicy>(unparsed.map((u) => [key(u.schema, u.table, u.name), u]));
+
+    const local: { pos: number; op: "create" | "drop"; schema: string; table: string; name: string }[] = [];
+    for (const m of clean.matchAll(CREATE_POLICY)) local.push({ pos: m.index!, op: "create", name: (m[1] ?? m[2])!, schema: m[3] ?? "public", table: m[4]! });
+    for (const m of clean.matchAll(DROP_POLICY)) local.push({ pos: m.index!, op: "drop", name: (m[1] ?? m[2])!, schema: m[3] ?? "public", table: m[4]! });
+    local.sort((a, b) => a.pos - b.pos);
+
+    for (const e of local) {
+      const k = key(e.schema, e.table, e.name);
+      if (e.op === "drop") {
+        events.push({ seq: seq++, k, op: "drop" });
+        continue;
+      }
+      const line = clean.slice(0, e.pos).split("\n").length;
+      events.push({ seq: seq++, k, op: "create", rec: { schema: e.schema, table: e.table, name: e.name, file, line, parsed: parsedByKey.get(k), unparsed: unparsedByKey.get(k) } });
+    }
+  }
+
+  const live = new Map<string, CreateRec>();
+  for (const e of events) {
+    if (e.op === "drop") live.delete(e.k);
+    else live.set(e.k, e.rec!);
+  }
+
+  const out: LivePolicySet = { policies: [], unparsed: [] };
+  for (const rec of live.values()) {
+    if (rec.parsed) out.policies.push({ ...rec.parsed, file: rec.file, line: rec.line });
+    else if (rec.unparsed) out.unparsed.push({ ...rec.unparsed, file: rec.file, line: rec.line });
+  }
+  return out;
 }
 
 // Combines every `create table` across the migration set with the RLS enable/policy
