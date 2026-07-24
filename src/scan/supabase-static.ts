@@ -21,7 +21,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { definerReviewFindings } from "../definer-review.js";
 import type { Finding } from "../findings.js";
-import { parseDefinerFunctions, parsePolicies } from "../migration-sql-parse.js";
+import { parseDefinerFunctions, parseLivePolicies } from "../migration-sql-parse.js";
 import { isUsingTrueGated, policyReviewFindings, type LivePolicy, type TenancyModel } from "../rls-policy-review.js";
 import { reviewFinding } from "../review-tier.js";
 import { mechanicalFinding } from "./common.js";
@@ -319,35 +319,35 @@ export function checkMigrationPolicySemantics(dir: string, tenancyOverride?: Ten
   const sites = new Map<string, string>(); // schema.table.name -> file:line
   const findings: Finding[] = [];
 
-  for (const { file, sql } of migrations) {
-    const { policies: parsed, unparsed } = parsePolicies(sql);
-    for (const p of parsed) {
-      const forTable = byTable.get(p.table) ?? [];
-      forTable.push(p);
-      byTable.set(p.table, forTable);
-      const at = sql.toLowerCase().indexOf(`policy ${p.name.toLowerCase()}`);
-      sites.set(`${p.schema}.${p.table}.${p.name}`, `${file}:${at >= 0 ? sql.slice(0, at).split("\n").length : 1}`);
-    }
-    // Fail loud: a policy we couldn't read is reported as unread. Dropping it would make a failed
-    // parse indistinguishable from a clean policy, which is how a scanner lies by omission.
-    for (const u of unparsed) {
-      findings.push(
-        reviewFinding({
-          id: `SB-RLS-POLICY-UNPARSED-${u.table}-${u.name}`,
-          title: `RLS policy ${u.schema}.${u.table}.${u.name} could not be read from migration SQL`,
-          severity: "Medium",
-          category: "Multi-tenant security",
-          taxonomy: "M1 — Multi-tenant security",
-          location: file,
-          evidence: `${u.reason}. The static reviewer could not evaluate this policy, so its absence from the results above means "not assessed", NOT "clean".`,
-          question: "Does this policy restrict every row it exposes or accepts to the caller's own tenant?",
-          impact: "An unreviewed policy is an unknown: it may be the one that lets another tenant read or write these rows.",
-          fix: "Review this policy by hand, or run the connected-tier scan, which reads the live policy from the database instead of parsing SQL.",
-          okWhen: "Manual review confirms the policy constrains rows to the caller's own tenant.",
-          notOkWhen: "The policy keys on a non-tenant column or under-constrains writes.",
-        }),
-      );
-    }
+  // #937 — review the policies LIVE at the end of history, not every `create policy` ever written.
+  // parseLivePolicies drops a policy a later migration DROPs and keeps the final definition of a
+  // re-created one, so a correctly-fixed schema no longer reports the broken policy it replaced.
+  const { policies: live, unparsed } = parseLivePolicies(migrations);
+  for (const p of live) {
+    const forTable = byTable.get(p.table) ?? [];
+    forTable.push(p);
+    byTable.set(p.table, forTable);
+    sites.set(`${p.schema}.${p.table}.${p.name}`, `${p.file}:${p.line}`);
+  }
+  // Fail loud: a policy we couldn't read is reported as unread. Dropping it would make a failed
+  // parse indistinguishable from a clean policy, which is how a scanner lies by omission.
+  for (const u of unparsed) {
+    findings.push(
+      reviewFinding({
+        id: `SB-RLS-POLICY-UNPARSED-${u.table}-${u.name}`,
+        title: `RLS policy ${u.schema}.${u.table}.${u.name} could not be read from migration SQL`,
+        severity: "Medium",
+        category: "Multi-tenant security",
+        taxonomy: "M1 — Multi-tenant security",
+        location: u.file,
+        evidence: `${u.reason}. The static reviewer could not evaluate this policy, so its absence from the results above means "not assessed", NOT "clean".`,
+        question: "Does this policy restrict every row it exposes or accepts to the caller's own tenant?",
+        impact: "An unreviewed policy is an unknown: it may be the one that lets another tenant read or write these rows.",
+        fix: "Review this policy by hand, or run the connected-tier scan, which reads the live policy from the database instead of parsing SQL.",
+        okWhen: "Manual review confirms the policy constrains rows to the caller's own tenant.",
+        notOkWhen: "The policy keys on a non-tenant column or under-constrains writes.",
+      }),
+    );
   }
 
   // Re-locate each review finding from `schema.table.policy` to its migration file:line — at
@@ -579,11 +579,10 @@ export function checkMigrationDefinerAnonGrant(dir: string): Finding[] {
 // once-per-query initplan. The clause text is already extracted by parsePolicies for the semantic
 // review above — this check reads the same feed for the perf shape.
 //
-// Review tier, not free-count, for two reasons: (1) migrations are cumulative and this check
-// doesn't track `drop policy` / re-creates, so a policy rewritten in a later migration could
-// still be reported from its original file — the live advisor is the ground truth the connected
-// tier confirms against; (2) the free count is the security grade, and a perf lint must never
-// inflate it.
+// Review tier, not free-count: the free count is the security grade, and a perf lint must never
+// inflate it. (Before #937 this note also cited cumulative reads that couldn't see a later `drop
+// policy` / re-create; that gap is now closed — parseLivePolicies lints only the final live
+// policy — but the live advisor remains the ground truth the connected tier confirms against.)
 const AUTH_FN_CALL = /\bauth\.(uid|role|jwt|email)\s*\(\s*\)/gi;
 
 // Whether the auth.* call at `index` in `clause` is already hoisted: walk outward to the nearest
@@ -606,33 +605,32 @@ function isSelectWrapped(clause: string, index: number): boolean {
 
 export function checkMigrationRlsInitplanStatic(dir: string): Finding[] {
   const findings: Finding[] = [];
-  for (const { file, sql } of readMigrations(dir)) {
-    for (const p of parsePolicies(sql).policies) {
-      const bare: string[] = [];
-      for (const [clauseName, clause] of [["USING", p.qual], ["WITH CHECK", p.withCheck]] as const) {
-        if (!clause) continue;
-        for (const m of clause.matchAll(AUTH_FN_CALL)) {
-          if (!isSelectWrapped(clause, m.index)) bare.push(`${m[0].replace(/\s+/g, "")} in ${clauseName}`);
-        }
+  // #937 — lint only the policies live at the end of history; a bare-call policy a later migration
+  // rewrote (wrapping the call in `(select …)`) is no longer reported from its superseded original.
+  for (const p of parseLivePolicies(readMigrations(dir)).policies) {
+    const bare: string[] = [];
+    for (const [clauseName, clause] of [["USING", p.qual], ["WITH CHECK", p.withCheck]] as const) {
+      if (!clause) continue;
+      for (const m of clause.matchAll(AUTH_FN_CALL)) {
+        if (!isSelectWrapped(clause, m.index)) bare.push(`${m[0].replace(/\s+/g, "")} in ${clauseName}`);
       }
-      if (bare.length === 0) continue;
-      const at = sql.toLowerCase().indexOf(`policy ${p.name.toLowerCase()}`);
-      findings.push(
-        mechanicalFinding({
-          id: `SB-RLS-INITPLAN-${p.table}-${p.name}`,
-          title: `RLS policy ${p.name} re-evaluates auth.* per row`,
-          severity: "Perf",
-          category: "Performance",
-          taxonomy: "auth_rls_initplan (static)",
-          location: `${file}:${at >= 0 ? sql.slice(0, at).split("\n").length : 1} (${p.schema}.${p.table}.${p.name})`,
-          evidence: `Policy ${p.name} on ${p.schema}.${p.table} calls ${bare.join(", ")} without a (select …) wrapper, so Postgres re-evaluates it once per candidate row instead of once per query — Supabase's auth_rls_initplan advisor lint, read here from migration SQL.`,
-          impact: "Every query the policy guards pays the auth function call per row scanned — linear slowdown that grows with table size and is invisible until the table does.",
-          fix: `Wrap the call in a subquery — e.g. auth.uid() → (select auth.uid()) — to hoist it to a once-per-query initplan. Verify the rewritten policy is behavior-identical before shipping. Confirm against the live advisor (pnpm perf-scan) in case a later migration already rewrote this policy.`,
-          precisionTier: "review",
-          bftb: { value: 4, ease: 4, safety: 4 },
-        }),
-      );
     }
+    if (bare.length === 0) continue;
+    findings.push(
+      mechanicalFinding({
+        id: `SB-RLS-INITPLAN-${p.table}-${p.name}`,
+        title: `RLS policy ${p.name} re-evaluates auth.* per row`,
+        severity: "Perf",
+        category: "Performance",
+        taxonomy: "auth_rls_initplan (static)",
+        location: `${p.file}:${p.line} (${p.schema}.${p.table}.${p.name})`,
+        evidence: `Policy ${p.name} on ${p.schema}.${p.table} calls ${bare.join(", ")} without a (select …) wrapper, so Postgres re-evaluates it once per candidate row instead of once per query — Supabase's auth_rls_initplan advisor lint, read here from migration SQL.`,
+        impact: "Every query the policy guards pays the auth function call per row scanned — linear slowdown that grows with table size and is invisible until the table does.",
+        fix: `Wrap the call in a subquery — e.g. auth.uid() → (select auth.uid()) — to hoist it to a once-per-query initplan. Verify the rewritten policy is behavior-identical before shipping. Confirm against the live advisor (pnpm perf-scan).`,
+        precisionTier: "review",
+        bftb: { value: 4, ease: 4, safety: 4 },
+      }),
+    );
   }
   return findings;
 }
