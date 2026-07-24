@@ -11,6 +11,7 @@
 //   - src/cli/validate-calibration.ts — LIVE run (`pnpm validate:calibration`) that scans the
 //     real targets/calibration with the installed binaries.
 
+import { detectionMetrics, type DetectionMetrics } from "./detection-metrics.js";
 import type { Finding, PrecisionTier } from "../findings.js";
 import { baseEntries } from "./calibration/base.entries.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
@@ -214,6 +215,11 @@ interface CoverageMatrix {
   connectedNa: number;
   noRuleTotal: number; // positives with no mechanical rule by design ("none" tier)
   noRuleHeld: number; // ...of those, the intended gap still holds (nothing of the class fired)
+  // #881: the same two counts in the OWASP-Benchmark vocabulary. Scored on the basis this gate
+  // already enforces — a positive is a TP when some rule caught it, a negative is an FP when a
+  // FREE-COUNT (high-tier) finding lands on it — so the metrics and the pass/fail verdict can
+  // never disagree. This is the M1 MECHANICAL corpus's number and nothing else's (#341).
+  metrics: DetectionMetrics;
   ok: boolean; // every static positive caught, every negative cleared, every no-rule gap still held
 }
 
@@ -275,6 +281,12 @@ export function buildCoverageMatrix(findings: Finding[], corpus: CorpusEntry[] =
     connectedNa: rows.filter((r) => r.expectedTier === "connected").length,
     noRuleTotal: noRule.length,
     noRuleHeld,
+    metrics: detectionMetrics({
+      tp: positivesCaught,
+      fn: staticPos.length - positivesCaught,
+      fp: staticNeg.length - negativesCleared,
+      tn: negativesCleared,
+    }),
     ok: positivesCaught === staticPos.length && negativesCleared === staticNeg.length && noRuleHeld === noRule.length,
   };
 }

@@ -26,6 +26,7 @@ import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectTestIntentFindings } from "../detectors/test-intent.js";
 import { detectVitestIntentFindings } from "../detectors/vitest-intent.js";
 import type { Finding } from "../findings.js";
+import { detectionMetrics, type DetectionMetrics } from "./detection-metrics.js";
 import { m7CodeEntries } from "./calibration/m7-code.entries.js";
 import { m8IntentEntries } from "./calibration/m8-intent.entries.js";
 import type { HeuristicEntry } from "./calibration/types.js";
@@ -103,6 +104,10 @@ interface HeuristicModuleSummary {
   negativesCleared: number;
   recall: number; // caught / total positives
   precision: number; // caught / (caught + negatives fired)
+  // #881: the full OWASP-Benchmark metric set, PER MODULE. The point of computing it here as well
+  // as for M1 is that M1's number must never be readable as the suite's: a per-module F1/Youden
+  // next to it is what makes the difference between the modules legible instead of averaged.
+  metrics: DetectionMetrics;
 }
 
 interface HeuristicMatrix {
@@ -129,6 +134,12 @@ export function measureHeuristicPrecision(corpus: HeuristicEntry[] = HEURISTIC_C
       negativesCleared: neg.length - negativesFired,
       recall: pos.length === 0 ? 0 : positivesCaught / pos.length,
       precision: precisionDenom === 0 ? 0 : positivesCaught / precisionDenom,
+      metrics: detectionMetrics({
+        tp: positivesCaught,
+        fn: pos.length - positivesCaught,
+        fp: negativesFired,
+        tn: neg.length - negativesFired,
+      }),
     });
   }
   return { rows, modules, ok: rows.every((r) => r.pass) };

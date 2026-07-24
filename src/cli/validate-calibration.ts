@@ -14,6 +14,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { buildCoverageMatrix, CORPUS, mechanicalCorpus, moduleCensus, type MatrixRow } from "../scan/calibration.js";
+import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision } from "../scan/heuristic-precision.js";
 import type { Finding } from "../findings.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "../scan/dependencies.js";
@@ -131,6 +132,12 @@ for (const c of census) {
   console.log(`  ${c.module.padEnd(4)} positives=${String(c.positivesStatic).padEnd(3)}${connected.padEnd(14)} negatives=${String(c.negatives).padEnd(3)}  ${where}${parity}`);
 }
 console.log(`  parity minimum: ${MIN_POSITIVES_PER_MODULE} positives/module (#427) — ${parityThin.length ? `THIN: ${parityThin.map((c) => c.module).join(", ")}` : "all modules meet it"}`);
+// #881: fixture counts are not performance. Name the modules that actually have a scored
+// precision/recall metric, so the M1 metric block below cannot be read as a suite-wide figure.
+const METRIC_GATED_MODULES = ["M1", "M7", "M8"];
+console.log(
+  `  scored detection metrics exist for ${METRIC_GATED_MODULES.join("/")} only (printed below); every other module above has FIXTURE COUNTS, which say what the answer key covers and nothing about what fires.`,
+);
 
 console.log(
   `\nM1 mechanical corpus — positives caught: ${matrix.positivesCaught}/${matrix.positivesTotal} static ` +
@@ -138,6 +145,20 @@ console.log(
     `This is M1 recall, NOT suite recall — see the census above.`,
 );
 console.log(`M1 negatives cleared: ${matrix.negativesCleared}/${matrix.negativesTotal} static`);
+
+// #881: the same two counts in the metric set a prospect's security lead already reads (the OWASP
+// Benchmark scoring model — precision/recall/F1 plus Youden's Index, TPR − FPR). Printed under an
+// M1-only heading and immediately followed by what it is NOT, because a single blended Youden
+// number would hide this gate's construction skew exactly as the raw count does (#341/#427).
+console.log(`\nM1 mechanical corpus — detection metrics (OWASP Benchmark scoring model, #881):`);
+console.log(`  ${formatMetrics(matrix.metrics)}`);
+console.log(
+  "  Basis: a planted positive is a TP when a rule caught it; a benign negative is an FP when a FREE-COUNT (high-tier)\n" +
+    "  finding lands on it — the same test this gate passes/fails on, so the metrics can never disagree with the verdict.\n" +
+    "  NOT a suite number and NOT a field number: it scores the M1 MECHANICAL corpus only (M7/M8 have their own metrics\n" +
+    "  below; the other seven modules have fixture counts above and no metric anywhere), and precision over a corpus is a\n" +
+    "  property of the positive:negative ratio WE chose, not of how often each shape occurs in a real repo.",
+);
 if (matrix.noRuleTotal) console.log(`No-mechanical-rule gaps (by design, excluded from recall): ${matrix.noRuleHeld}/${matrix.noRuleTotal} held — a rule firing on one is a GATE FAIL`);
 if (reviewMisses.length) console.log(`Review-tier recall gaps (non-fatal, tracked): ${reviewMisses.map((r) => r.id).join(", ")}`);
 
@@ -148,10 +169,7 @@ if (reviewMisses.length) console.log(`Review-tier recall gaps (non-fatal, tracke
 console.log("\nHeuristic precision (M7 code tier / M8 test intent — labeled fixture corpus, #823):");
 const heuristic = measureHeuristicPrecision();
 for (const m of heuristic.modules) {
-  console.log(
-    `  ${m.module.padEnd(4)} recall ${m.positivesCaught}/${m.positivesTotal} (${(m.recall * 100).toFixed(1)}%), ` +
-      `negatives cleared ${m.negativesCleared}/${m.negativesTotal}, corpus precision ${(m.precision * 100).toFixed(1)}%`,
-  );
+  console.log(`  ${m.module.padEnd(4)} ${formatMetrics(m.metrics)}`);
 }
 
 // P-SECRET-GIT-HISTORY (#129): a dedicated pass, not part of the matrix above — TruffleHog's

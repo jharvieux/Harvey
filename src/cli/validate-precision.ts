@@ -8,6 +8,7 @@
 //
 // Exit code: 1 if any planted positive is missed or any benign negative fires.
 
+import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision, type HeuristicRow } from "../scan/heuristic-precision.js";
 
 const matrix = measureHeuristicPrecision();
@@ -30,6 +31,9 @@ for (const m of matrix.modules) {
     `${m.module}: recall ${m.positivesCaught}/${m.positivesTotal} (${pct(m.recall)}), ` +
       `negatives cleared ${m.negativesCleared}/${m.negativesTotal}, corpus precision ${pct(m.precision)}`,
   );
+  // #881: the same counts in the OWASP Benchmark vocabulary, per module — never summed across
+  // modules, because an M7+M8 blend would say nothing about either.
+  console.log(`${m.module}: ${formatMetrics(m.metrics)}`);
 }
 
 console.log(
