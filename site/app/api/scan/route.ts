@@ -38,7 +38,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Too many requests — please wait a minute and try again." }, { status: 429 });
   }
 
-  let payload: { email?: string; repo?: string; context?: string };
+  let payload: { kind?: string; email?: string; repo?: string; context?: string; summary?: string };
   try {
     payload = await req.json();
   } catch {
@@ -57,6 +57,50 @@ export async function POST(req: Request) {
   if (!apiKey || !notifyTo) {
     console.error("scan intake not configured: RESEND_API_KEY and/or SCAN_NOTIFY_TO missing");
     return NextResponse.json({ error: "Scan intake isn't set up yet — please email us directly." }, { status: 503 });
+  }
+
+  // RLS-checker lead (#749): opt-in follow-up from the free browser checker. No repo — the user
+  // shares only their email and a coarse, count-only summary; the project URL and anon key never
+  // leave their browser. (The write-attempt probe is deferred to #888.)
+  if (payload.kind === "checker-lead") {
+    const summary = String(payload.summary ?? "").trim().slice(0, 500);
+    const leadNotify = await sendEmail(
+      apiKey,
+      {
+        from,
+        to: [notifyTo],
+        reply_to: email,
+        subject: `New RLS-checker lead — ${email}`,
+        html:
+          `<h2>New RLS-checker lead</h2>` +
+          `<p><b>Email:</b> ${esc(email)}</p>` +
+          `<p><b>Checker summary (coarse, user-shared):</b> ${summary ? esc(summary) : "(none provided)"}</p>` +
+          `<p>The checker never sends the project URL or anon key — follow up to offer a closer look.</p>`,
+      },
+      `checker-lead/${email}`,
+    );
+    if (!leadNotify.ok) {
+      console.error("resend checker-lead notify failed", leadNotify.status, await leadNotify.text().catch(() => ""));
+      return NextResponse.json({ error: "Something went wrong — please email us directly." }, { status: 502 });
+    }
+    try {
+      await sendEmail(
+        apiKey,
+        {
+          from,
+          to: [email],
+          subject: "Harvey — your RLS check, a closer look",
+          html:
+            `<p>Thanks for running the free RLS checker. We've got your note and we'll follow up with a closer look.</p>` +
+            `<p>Just so it's clear: we only received what you typed — your Supabase URL and anon key stayed in your browser and were never sent to us.</p>` +
+            `<p>— Harvey · harvey-qa.com</p>`,
+        },
+        `checker-lead-confirm/${email}`,
+      );
+    } catch (err) {
+      console.error("resend checker-lead confirmation failed (non-fatal)", err);
+    }
+    return NextResponse.json({ ok: true });
   }
 
   const repo = String(payload.repo ?? "").trim();
