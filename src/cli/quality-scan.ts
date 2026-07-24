@@ -151,10 +151,35 @@ function runJscpd(dir: string): JscpdReport {
     // non-zero on us — we want the raw report, not jscpd's own pass/fail gate.
     // JSCPD_IGNORE_GLOBS excludes generated/vendored/demo paths (M4-N-GENERATED, issue #72;
     // extended per #232) that aren't hand-maintained duplication.
+    //
+    // #948 (root-caused by instrumenting jscpd 4.2.5 + @jscpd/finder/fast-glob directly against a
+    // real clone of documenso, the #931 repro): TWO cwd/path-relativity bugs compounded into the
+    // "empty file list at some absolute paths" symptom.
+    //  1. jscpd resolves its `.jscpd.json` auto-discovery AND (separately, via its own
+    //     src/init/ignore.ts — a second, less-anchored .gitignore reader than the one
+    //     @jscpd/finder uses for the scanned dir itself) a `.gitignore` at `process.cwd()` of the
+    //     CHILD PROCESS — not the `dir` argument. Without an explicit `cwd`, the child inherits
+    //     whatever cwd the calling Node process has (typically Harvey's own repo root), so it can
+    //     pick up the WRONG repo's config/gitignore entirely. Fixed by `cwd: dir` below.
+    //  2. Independent of (1): when the scanned PATH ITSELF is an absolute string, fast-glob (inside
+    //     @jscpd/finder's getFilesToDetect) matches every gitignore-derived ignore glob against the
+    //     FULL ABSOLUTE PATH, not path-relative-to-the-scan-root. A gitignore entry with no slash
+    //     (e.g. documenso's own "tmp") is — CORRECTLY, per git's own semantics for a bare name —
+    //     converted to an ANY-DEPTH "**/tmp/**" glob. Once matched against the full absolute path,
+    //     that glob also matches any ANCESTOR directory literally named "tmp" — which is exactly
+    //     what a scratch clone under `/tmp` (Linux's `os.tmpdir()`; macOS's is `/var/folders/.../T`,
+    //     which is why this reproduced on ubuntu-latest but not on the one measured macOS run under
+    //     a shallow scratch path, #931) sits inside — silently excluding the ENTIRE scanned tree.
+    //     MEASURED: `getFilesToDetect({ path: [absoluteDir], gitignore: true, absolute: true })`
+    //     against a real documenso clone under a `tmp`-prefixed scratch path returns 0 files;
+    //     the identical call with `path: ["."]` (cwd already pinned to the scan root) returns 2334.
+    //     Fixed by scanning "." instead of the absolute `dir` (cwd: dir anchors it) — fast-glob then
+    //     matches everything relative-to-scan-root, so an ignore glob can only match WITHIN the
+    //     scanned tree, never an ancestor directory of wherever that tree happens to be checked out.
     execFileSync(
       jscpdBin,
-      [dir, "--reporters", "json", "--output", outDir, "--threshold", "100", "--absolute", "--silent", "--noTips", "--ignore", JSCPD_IGNORE_GLOBS.join(",")],
-      { stdio: ["ignore", "ignore", "pipe"], timeout: TIMEOUT_MS, killSignal: "SIGKILL" },
+      [".", "--reporters", "json", "--output", outDir, "--threshold", "100", "--silent", "--noTips", "--ignore", JSCPD_IGNORE_GLOBS.join(",")],
+      { cwd: dir, stdio: ["ignore", "ignore", "pipe"], timeout: TIMEOUT_MS, killSignal: "SIGKILL" },
     );
     const reportPath = join(outDir, "jscpd-report.json");
     // #505: per-workspace scopes surface a case a whole-repo run rarely hit — a workspace with
@@ -173,12 +198,13 @@ function runJscpd(dir: string): JscpdReport {
       throw new Error(reason);
     }
     const report = JSON.parse(readFileSync(reportPath, "utf8")) as JscpdReport;
-    // jscpd's json reporter emits paths relative to --output by default even
-    // with --absolute in some versions' clone entries; normalize to relative-
-    // to-scope so the report doesn't leak local filesystem layout.
+    // jscpd (now scanning "." from cwd: dir, #948) reports paths relative to the scan root already
+    // in most cases, but normalize defensively: resolve against `dir` explicitly (not the ambient
+    // process.cwd(), which need not equal `dir` — the exact class of bug this fix removes) so the
+    // report never leaks local filesystem layout regardless of which form jscpd emits.
     for (const dup of report.duplicates) {
-      dup.firstFile.name = relative(dir, resolve(dup.firstFile.name));
-      dup.secondFile.name = relative(dir, resolve(dup.secondFile.name));
+      dup.firstFile.name = relative(dir, resolve(dir, dup.firstFile.name));
+      dup.secondFile.name = relative(dir, resolve(dir, dup.secondFile.name));
     }
     return report;
   } finally {

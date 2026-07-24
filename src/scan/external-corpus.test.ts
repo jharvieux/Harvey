@@ -456,14 +456,29 @@ describe("revalidateNotRunReasons (#321)", () => {
     expect(revalidateNotRunReasons(target("subscription-payments"), [m8Finding("M8-07")])).toEqual([]);
   });
 
-  it("stays quiet when M4 emits only its #505/#931 M4-99 did-not-complete disclosure (documenso shape)", () => {
-    // documenso records M4 not-run because jscpd writes no report on ubuntu; quality-scan then emits
-    // the M4-99 'whole-repo scan incomplete' gap disclosure. That sentinel is the tool saying it
-    // STILL couldn't complete — it must not read as M4 having run and decay the not-run reason.
-    const documenso = EXTERNAL_CORPUS.find((x) => x.slug === "documenso")!;
-    expect(isNotRun(documenso.modules.M4!)).toBe(true);
+  it("stays quiet when M4 emits only its #505/#931 M4-99 did-not-complete disclosure", () => {
+    // #948 fixed the cwd/path-relativity bug that made documenso — this test's original real-world
+    // example — record M4 not-run (it now has a real 835/1256 baseline instead, see external-corpus.ts).
+    // The mechanism this test guards is general, not specific to that one target: an M4-99-only
+    // production is the tool saying it STILL couldn't complete, and must not read as M4 having run
+    // and decay the not-run reason. A synthetic not-run target keeps that guard alive independent of
+    // any one corpus baseline's measured state.
+    const notRunM4: ExternalTarget = {
+      slug: "synthetic-m4-not-run",
+      repo: "example/example",
+      commit: "0000000000000000000000000000000000000",
+      license: "MIT",
+      provenance: "professional",
+      provenanceNote: "synthetic fixture for this test only",
+      securityVerdict: "n/a",
+      modules: {
+        M4: { reason: "jscpd could not complete on this scope (synthetic fixture)" },
+        M8: { reason: "not exercised by this fixture" },
+      },
+    };
+    expect(isNotRun(notRunM4.modules.M4!)).toBe(true);
     const m499: Finding = { ...finding("M4 — Duplication", "Info"), id: "M4-99" };
-    expect(revalidateNotRunReasons(documenso, [m499]).filter((r) => r.module === "M4")).toEqual([]);
+    expect(revalidateNotRunReasons(notRunM4, [m499]).filter((r) => r.module === "M4")).toEqual([]);
   });
 
   it("does not read a test-intent finding as evidence against an M8 MUTATION not-run reason", () => {
