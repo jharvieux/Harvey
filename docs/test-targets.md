@@ -35,9 +35,15 @@ stand the local stack up. Edge-function count is extra M1 service-role surface.
 | `firecrawl/open-scouts` | AI web-monitoring platform | NONE | 9 | 2 | 0 | 546 |
 | `akdeb/ElatoAI` | ESP32 realtime voice AI | NOASSERTION | 4 | 0 | 0 | 177 |
 
-- **`crbnos/carbon` is the largest public Supabase RLS/policy surface found.** 859 migrations and 39 edge
-  functions is an order of magnitude past anything in the current external corpus, and an ERP's
-  employee/supplier/customer tables are real M10 PII. Unlicensed → scan locally, do not vendor, do not publish.
+- **`crbnos/carbon` is the largest public Supabase RLS/policy surface found — and is now PINNED in the
+  external corpus** (#897, baselined 2026-07-24, `pnpm corpus-drift --target carbon --install` green).
+  859 migrations and 39 edge functions is an order of magnitude past anything else in the corpus, and an
+  ERP's employee/supplier/customer tables are real M10 PII. Unlicensed → scan locally, do not vendor, do
+  not publish. **Scale result: nothing timed out and nothing degraded quadratically** — M10 classified
+  4.95 MB of DDL into 154 tables in 0.1 s; the whole free tier ran in 76 s. What DID fail is written up
+  in `docs/design/carbon-scale-measurement.md`: 8,027 counted findings from one target, a cry-wolf
+  free-tier **F (0/100)** driven entirely by placeholder credentials in self-hosting docs, and an M10
+  severity model that tops out at Medium on an HR/supplier schema.
 - **`marmelab/atomic-crm` is the best next `dynamic-validate --execute` target.** 23 migrations + 6 edge
   functions is enough to be a real M2 test, 834 files is small enough to audit end-to-end in one pass, and
   MIT means a writeup is publishable after disclosure. `ArnasDon/wacrm` is the same shape one size up.
@@ -59,10 +65,19 @@ exercise `detectOrm` routing, the Prisma tenant-scope/BOLA detector (#760), M7 F
 | `lukevella/rallly` | Scheduling / polls | AGPL-3.0 | 51 | 137 | 1,921 |
 | `ghostfolio/ghostfolio` | Wealth-management software | AGPL-3.0 | 31 | 112 | 2,021 |
 
+- **Four of these are now PINNED in the external corpus** (#894, baselined 2026-07-24, each green under
+  `pnpm corpus-drift --target <slug> --install`): `ghostfolio`, `rallly`, `inbox-zero`, `documenso`.
+  Before that the Prisma app-layer tier had no real-code regression baseline at all.
 - **`ghostfolio` is the M10 pick** — account balances, holdings and transactions in the schema is the
-  PII/PCI classification path with real stakes, not a synthetic `users` table.
+  PII/PCI classification path with real stakes, not a synthetic `users` table. **Measured:** 9 PII-bearing
+  models via #758's Prisma classifier, plus the first real-code baseline for #761's unindexed-FK check
+  (5 findings).
 - **`inbox-zero` is the M8 pick** — 586 test files is the deepest public mutation-testing surface on the
-  Prisma side; the current corpus's largest real suite is boxyhq's 8.
+  Prisma side; the current corpus's largest real suite is boxyhq's 8. **Measured:** 305 M8-intent
+  findings (100× the corpus's previous maximum) and 52 M9 findings, the largest App Router boundary
+  surface pinned. The *mutation* tier is still not scoreable on it — `npm install` on a pnpm workspace
+  resolves only root packages, so `corpus-m8.yml` has no runner to drive; recorded not-run with that
+  reason.
 - `calcom/cal.com` **was renamed to `calcom/cal.diy`** — fix the URL anywhere it is still stored.
 
 ## Bucket C — Calibration and ground truth

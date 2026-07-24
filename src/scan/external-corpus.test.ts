@@ -69,9 +69,16 @@ describe("external corpus manifest", () => {
     // step the CLAUDE.md M5 row calls for (2 scored -> 4); #322's per-module scan root gave
     // mvp-boilerplate a scoped measurement over nextjs/ (4 -> 5); and #544 gave saas-lite — the last
     // holdout — a measured baseline once #519 made knip run PER WORKSPACE (the whole-repo run used
-    // to die loading apps/web's eslint config). All 6 now carry a real M5-knip baseline.
+    // to die loading apps/web's eslint config). All 6 carried a real M5-knip baseline from then on,
+    // and #894/#897's five new targets each got one measured the same way — including the three
+    // pnpm-workspace targets, where knip falls back to #810's reduced no-dependencies tier and
+    // discloses it as M5-98 rather than failing. Enumerated, not counted: a target silently
+    // dropping to not-run is exactly what this asserts against.
     const scored = EXTERNAL_CORPUS.filter((t) => !isNotRun(t.modules["M5-knip"]!)).map((t) => t.slug);
-    expect(scored.sort()).toEqual(["boxyhq", "multi-tenant-starter", "mvp-boilerplate", "proposit", "saas-lite", "subscription-payments"]);
+    expect(scored.sort()).toEqual([
+      "boxyhq", "carbon", "documenso", "ghostfolio", "inbox-zero", "multi-tenant-starter",
+      "mvp-boilerplate", "proposit", "rallly", "saas-lite", "subscription-payments",
+    ]);
   });
 
   it("#251: neither remaining M5-knip gap blames a missing `npm install` — the install step exists now", () => {
