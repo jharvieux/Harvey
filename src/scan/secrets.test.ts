@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { gitHistorySecretsUnavailableFinding, isGitRepoRoot, parseGitleaksFindings, parseTruffleHogFindings, resolveBundleScan, type GitleaksResult, type TruffleHogResult } from "./secrets.js";
+import { DOC_CONTEXT_CREDENTIAL_TAXONOMY, gitHistorySecretsUnavailableFinding, isDocExamplePath, isGitRepoRoot, parseGitleaksFindings, parseTruffleHogFindings, resolveBundleScan, type GitleaksResult, type TruffleHogResult } from "./secrets.js";
 
 describe("parseTruffleHogFindings", () => {
   it("drops unverified hits — only a live-verified secret is ~100% precision", () => {
@@ -154,6 +154,79 @@ describe("parseGitleaksFindings", () => {
     ];
     const findings = parseGitleaksFindings(results, "source");
     expect(findings).toHaveLength(0);
+  });
+});
+
+// #934: the carbon shape — placeholder/default credentials in documentation and example-deployment
+// paths reclassified to Low + the doc-context taxonomy (routed non-grading by quick-scan), never
+// dropped and never a graded Critical. The four paths below are carbon's own four hit surfaces.
+describe("doc/example-context credential reclassification (#934)", () => {
+  const carbonStylePaths = [
+    "packages/dev/docker/docker-compose.dev.yml", // *.dev.yml compose
+    "contrib/deploying/simple-docker-caddy/docker-compose.prod.yml", // contrib/** (even a .prod.yml)
+    "docs/content/docs/platform/self-hosting/docker-caddy.mdx", // docs/** + .mdx
+    ".claude/skills/agent-browser/references/proxy-support.md", // vendored reference doc (.md)
+  ];
+
+  it("reclassifies a high-precision rule hit in every carbon-style doc/example path: Low, doc-context taxonomy, stated reason", () => {
+    for (const file of carbonStylePaths) {
+      const results: GitleaksResult[] = [
+        { RuleID: "supabase-default-jwt-secret", File: file, StartLine: 5, Match: "your-super-secret-jwt-token-with-at-least-32-characters-long" },
+      ];
+      const f = parseGitleaksFindings(results, "source")[0];
+      expect(f?.severity, file).toBe("Low");
+      expect(f?.taxonomy, file).toBe(DOC_CONTEXT_CREDENTIAL_TAXONOMY);
+      expect(f?.evidence, file).toContain("Reclassified from Critical");
+      // Still a fact-precise match — it stays visible in the free report, not review-buried.
+      expect(f?.precisionTier, file).toBe("high");
+    }
+  });
+
+  it("leaves the same rule at Critical in application source — the rule keys on path context, not the rule id", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "supabase-default-jwt-secret", File: "supabase/docker-compose.yml", StartLine: 5, Match: "your-super-secret-jwt-token-with-at-least-32-characters-long" },
+      { RuleID: "harvey-db-uri-credentials", File: "apps/erp/app/lib/db.server.ts", StartLine: 3, Match: "postgres://app:realpassword@db.internal" },
+    ];
+    const findings = parseGitleaksFindings(results, "source");
+    for (const f of findings) {
+      expect(f.severity).toBe("Critical");
+      expect(f.taxonomy).toBe("Committed credential");
+    }
+  });
+
+  it("does not touch review-tier rules — they are already outside the free grade", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "generic-api-key", File: "docs/setup.md", StartLine: 2, Match: "apikey=abc123" },
+    ];
+    const f = parseGitleaksFindings(results, "source")[0];
+    expect(f?.precisionTier).toBe("review");
+    expect(f?.taxonomy).toBe("Possible committed credential");
+  });
+
+  it("a TruffleHog live-VERIFIED secret in docs still grades Critical — verification outranks the path prior", () => {
+    const results: TruffleHogResult[] = [
+      { DetectorName: "Stripe", Verified: true, SourceMetadata: { Data: { Filesystem: { file: "docs/setup.md", line: 12 } } } },
+    ];
+    const f = parseTruffleHogFindings(results, "source")[0];
+    expect(f?.severity).toBe("Critical");
+    expect(f?.taxonomy).toBe("Committed credential");
+  });
+});
+
+describe("isDocExamplePath (#934)", () => {
+  it.each([
+    ["docs/self-hosting/setup.md", true],
+    ["README.mdx", true],
+    ["contrib/deploying/bin/secrets-entrypoint.sh", true],
+    ["examples/full-stack/compose.yml", true],
+    ["packages/dev/docker/docker-compose.dev.yml", true],
+    ["config/docker-compose.example.yml", true],
+    ["apps/erp/app/lib/db.server.ts", false],
+    ["docker-compose.yml", false], // a repo-root compose is the deployed shape, not an example
+    ["supabase/config.toml", false],
+    ["src/documents/render.ts", false], // "documents" is not the docs/ segment
+  ])("%s -> %s", (path, expected) => {
+    expect(isDocExamplePath(path)).toBe(expected);
   });
 });
 

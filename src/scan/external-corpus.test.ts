@@ -28,6 +28,7 @@ import {
   type MutationBaseline,
 } from "./external-corpus.js";
 import { buildQuickScanReport } from "../quick-scan.js";
+import { DOC_CONTEXT_CREDENTIAL_TAXONOMY } from "./secrets.js";
 import type { Finding, Severity } from "../findings.js";
 
 function finding(taxonomy: string, severity: Severity = "Perf"): Finding {
@@ -496,10 +497,10 @@ const rlsIndicator = (severity: Severity): Finding => ({
 });
 
 describe("free-tier calibration invariant (#261)", () => {
-  it("covers exactly #227's four named repos, each pinned in the corpus", () => {
-    // The invariant is defined against these four by name; a target quietly dropped from the list
-    // is the check silently shrinking.
-    expect(FREE_TIER_EXPECTATIONS.map((e) => e.slug).sort()).toEqual(["multi-tenant-starter", "mvp-boilerplate", "proposit", "saas-lite"]);
+  it("covers exactly #227's four named repos plus #934's scale case, each pinned in the corpus", () => {
+    // The invariant is defined against these targets by name; a target quietly dropped from the
+    // list is the check silently shrinking.
+    expect(FREE_TIER_EXPECTATIONS.map((e) => e.slug).sort()).toEqual(["carbon", "multi-tenant-starter", "mvp-boilerplate", "proposit", "saas-lite"]);
     for (const e of FREE_TIER_EXPECTATIONS) {
       expect(EXTERNAL_CORPUS.some((t) => t.slug === e.slug), e.slug).toBe(true);
     }
@@ -549,6 +550,46 @@ describe("free-tier calibration invariant (#261)", () => {
     }
     const report = buildQuickScanReport([rlsIndicator("Critical")]);
     expect(report.grade).toBe("A");
+  });
+});
+
+// #934 — the scale additions to the scorer: the doc-context credential invariant (two-sided) and
+// the explicit not-asserted indicator-posture row.
+describe("free-tier doc-context credential invariant (#934)", () => {
+  const docCred = (id: string): Finding => ({
+    ...finding(id, "Low"),
+    category: "Secret exposure",
+    taxonomy: DOC_CONTEXT_CREDENTIAL_TAXONOMY,
+    precisionTier: "high",
+  });
+
+  it("passes when doc-context creds are reported informational and none is graded", () => {
+    const rows = scoreFreeTierExpectation(expectation("carbon"), buildQuickScanReport([docCred("GL-1"), docCred("GL-2")]));
+    const r = rows.find((x) => x.check.startsWith("doc/example"))!;
+    expect(r.pass).toBe(true);
+    expect(r.detail).toContain("2 doc-context credential(s)");
+  });
+
+  it("FAILS when a doc-context cred reaches the graded set — the reclassification regressed", () => {
+    // Simulate a regression: same taxonomy but marked exploitability-verified, which grades it.
+    const regressed = { ...docCred("GL-1"), exploitabilityVerified: true };
+    const rows = scoreFreeTierExpectation(expectation("carbon"), buildQuickScanReport([regressed]));
+    expect(rows.find((x) => x.check.startsWith("doc/example"))).toMatchObject({ pass: false });
+  });
+
+  it("FAILS when zero doc-context creds are reported on a pinned tree known to contain them", () => {
+    // A lost finding is a recall regression, not a cleaner repo — the tree is frozen at the pin.
+    const rows = scoreFreeTierExpectation(expectation("carbon"), buildQuickScanReport([]));
+    const r = rows.find((x) => x.check.startsWith("doc/example"))!;
+    expect(r.pass).toBe(false);
+    expect(r.detail).toContain("GONE DARK");
+  });
+
+  it("emits an explicit not-asserted indicator-posture row instead of silently scoring one fewer check", () => {
+    const rows = scoreFreeTierExpectation(expectation("carbon"), buildQuickScanReport([docCred("GL-1")]));
+    const r = rows.find((x) => x.check === "indicator posture")!;
+    expect(r.pass).toBe(true);
+    expect(r.detail).toContain("not asserted");
   });
 });
 

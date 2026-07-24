@@ -47,6 +47,29 @@ const HIGH_PRECISION_GITLEAKS_RULES = new Set([
 // user-facing finding on their own. See parseGitleaksFindings below.
 const CORRELATION_MARKER_RULES = new Set(["supabase-demo-key-marker", "harvey-test-idp-marker"]);
 
+// #934: documentation / example-deployment context. A gitleaks format match proves a string LOOKS
+// like a credential, not that it is live — and in these paths the prior inverts: a credential-shaped
+// string in docs, contrib/, an example file, or a *.dev.yml compose file is overwhelmingly a
+// placeholder/default the project ships on purpose (measured on crbnos/carbon: all 14 Criticals the
+// free tier graded F (0/100) on were exactly this — self-hosting docs, contrib/ deployment examples,
+// dev docker-composes). The DECIDED product rule: such a hit is reported at Low, in full, with this
+// reason stated — reclassified and routed to the free report's non-grading informational section
+// (src/quick-scan.ts keys on the taxonomy below), NEVER dropped and never a graded Critical. A
+// committed default password does get deployed, so it stays visible; it is just not the same finding
+// as a live key in application source. TruffleHog VERIFIED hits are deliberately exempt — live
+// verification against the provider outranks any path prior, so a real key pasted into docs still
+// grades Critical.
+const DOC_EXAMPLE_SEGMENT_RE = /(^|\/)(docs?|documentation|examples?|samples?|contrib)(\/|$)/i;
+const DOC_EXAMPLE_FILE_RE = /(\.mdx?$)|(\.dev\.ya?ml$)|((example|sample)[^/]*$)/i;
+
+export function isDocExamplePath(file: string): boolean {
+  return DOC_EXAMPLE_SEGMENT_RE.test(file) || DOC_EXAMPLE_FILE_RE.test(file);
+}
+
+// The taxonomy quick-scan's non-grading routing keys on — the finding-level marker that this is a
+// fact-precise format match whose exploitability prior is "placeholder until proven otherwise".
+export const DOC_CONTEXT_CREDENTIAL_TAXONOMY = "Committed credential — docs/example context";
+
 // DECISION (#308): findings render into a client-facing HTML/PDF report, so evidence must NOT
 // reproduce a matched credential verbatim — on a real engagement that string is a LIVE secret.
 // Default is to REDACT the matched value to a short identifying prefix + its length, e.g.
@@ -161,19 +184,30 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
     .map((r, i) => {
       const testIdpPrivateKey = r.RuleID === "private-key" && CI_WORKFLOW_PATH.test(r.File) && testIdpFiles.has(r.File);
       const high = HIGH_PRECISION_GITLEAKS_RULES.has(r.RuleID) && !testIdpPrivateKey;
+      // #934: doc/example context only reclassifies a hit that would otherwise be a graded
+      // Critical — review-tier matches are already out of the free grade and keep their tier.
+      const docContext = high && isDocExamplePath(r.File);
       const evidence = `gitleaks rule "${r.RuleID}" matched: ${gitleaksEvidenceMatch(r)}.`;
       return mechanicalFinding({
         id: `SEC-GL-${scope}-${i + 1}`,
         title: `${r.Description ?? r.RuleID} (${r.RuleID})`,
-        severity: high ? "Critical" : "High",
+        severity: docContext ? "Low" : high ? "Critical" : "High",
         category: "Secret exposure",
-        taxonomy: high ? "Committed credential" : "Possible committed credential",
+        taxonomy: docContext ? DOC_CONTEXT_CREDENTIAL_TAXONOMY : high ? "Committed credential" : "Possible committed credential",
         location: `[${scope}] ${r.File}${r.StartLine ? `:${r.StartLine}` : ""}${r.Commit ? ` (commit ${r.Commit.slice(0, 12)})` : ""}`,
         evidence: testIdpPrivateKey
           ? `${evidence} Down-ranked from Critical: this file also carries a test/example SAML IdP marker (ENTITY_ID / *.example.com) in a CI workflow — treat as a test fixture, confirm before escalating.`
-          : evidence,
-        impact: high ? (HIGH_PRECISION_IMPACT[r.RuleID] ?? DEFAULT_HIGH_IMPACT) : "Pattern match on a potential secret; confirm before treating as a live credential.",
-        fix: "Rotate the credential if live, remove from source/history, and add to .gitignore.",
+          : docContext
+            ? `${evidence} Reclassified from Critical (#934): the file sits in documentation/example-deployment content (docs, contrib, an example/sample file, or a *.dev.yml compose), where a credential-format match is overwhelmingly a shipped placeholder/default, not an application secret.`
+            : evidence,
+        impact: docContext
+          ? "A default/placeholder-shaped credential in docs or an example deployment file. Not graded as a live secret — but a committed default does get deployed by whoever copies this file, so confirm it is a placeholder and that your own deployment rotated it."
+          : high
+            ? (HIGH_PRECISION_IMPACT[r.RuleID] ?? DEFAULT_HIGH_IMPACT)
+            : "Pattern match on a potential secret; confirm before treating as a live credential.",
+        fix: docContext
+          ? "If this is a real credential, rotate it and remove it; if it is the intended placeholder, keep an obviously-fake value and a rotate-me instruction next to it."
+          : "Rotate the credential if live, remove from source/history, and add to .gitignore.",
         precisionTier: high ? "high" : "review",
       });
     });

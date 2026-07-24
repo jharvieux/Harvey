@@ -19,6 +19,7 @@
 import type { DependencyReachability, Finding, Severity } from "./findings.js";
 import { SEVERITIES } from "./findings.js";
 import { byReachabilityThenSeverity } from "./scan/dep-reachability.js";
+import { DOC_CONTEXT_CREDENTIAL_TAXONOMY } from "./scan/secrets.js";
 
 export type Grade = "A" | "B" | "C" | "D" | "F";
 
@@ -116,7 +117,16 @@ const GATED_CAPABILITIES = [
 // verdict — surfaced in full, never auto-failing the grade.
 const NON_GRADING_CATEGORIES = new Set(["Dependency CVE", "License compliance"]);
 
-const isNonGrading = (f: Finding): boolean => NON_GRADING_CATEGORIES.has(f.category) && !f.exploitabilityVerified;
+// #934: the finding-level version of the same fact-vs-exploitability split, keyed on taxonomy
+// because the category ("Secret exposure") still carries real graded Criticals. A credential-FORMAT
+// match in docs/example-deployment content (src/scan/secrets.ts isDocExamplePath) is exact about the
+// string and near-certainly a shipped placeholder — grading it produced carbon's false F (0/100),
+// 14 "Criticals" that were all self-hosting docs and example docker-composes. Reported in full,
+// never graded; a TruffleHog live-VERIFIED secret never carries this taxonomy and grades as before.
+const NON_GRADING_TAXONOMIES = new Set([DOC_CONTEXT_CREDENTIAL_TAXONOMY]);
+
+const isNonGrading = (f: Finding): boolean =>
+  (NON_GRADING_CATEGORIES.has(f.category) || NON_GRADING_TAXONOMIES.has(f.taxonomy)) && !f.exploitabilityVerified;
 
 // The free tier draws ONLY from the ~100%-precision tier (#25's precisionTier tag).
 // Everything else is heuristic and must not enter the free count/grade.
