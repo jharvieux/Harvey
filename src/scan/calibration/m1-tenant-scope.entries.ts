@@ -81,4 +81,26 @@ export const m1TenantScopeEntries: HeuristicEntry[] = [
     dir: "m1-tenant-scope/non-shipping-path-negative",
     note: "The measured 1031-false-positive class, as a regression guard. Covers both halves: a `.test.ts` suite (which the shared NON_PRODUCT matcher would also have caught) and a `docs/examples/**.js` service (which it would NOT — the reason this detector carries its own broader non-shipping gate).",
   },
+
+  // --- #911: an APPLICATION built on one of the #896 libraries, not the library itself — the class
+  // #896 recorded as unmeasured because no such application was scanned. MEASURED 2026-07-24: before
+  // the wrapper gate, both fixtures below fired 1 finding each (the false positive the issue
+  // describes); after the gate, both are silent while M1TS-P-UNSCOPED-ROUTE above (no wrapper
+  // signal) still fires — the precision fix does not blind the detector generally.
+  {
+    module: M1,
+    id: "M1TS-N-WRAPPER-DEPENDENCY",
+    kind: "negative",
+    cls: "By-id query in an app depending on a tenant-scoping wrapper package (ZenStack runtime)",
+    dir: "m1-tenant-scope/wrapper-dependency-negative",
+    note: "package.json declares @zenstackhq/runtime; the route calls a ZenStack enhance()-wrapped client by id alone, safe only because the wrapper injects the tenant predicate at runtime — invisible to the AST at the call site.",
+  },
+  {
+    module: M1,
+    id: "M1TS-N-WRAPPER-EXTENSION",
+    kind: "negative",
+    cls: "By-id query behind an in-tree $extends/$allOperations wrapper (prisma-rls idiom, vendored not imported)",
+    dir: "m1-tenant-scope/wrapper-extension-negative",
+    note: "No package dependency — the tenant-scoping extension is written in-tree using the same $extends(...).$allOperations idiom prisma-rls ships. A route calling the wrapped client by id alone is safe the same way; the gate must catch the vendored shape too, not only the named package.",
+  },
 ];
