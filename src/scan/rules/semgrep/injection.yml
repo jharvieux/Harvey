@@ -33,7 +33,25 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
+    pattern-sanitizers:
+      # #986: numeric coercion (the (a1) transformation-sanitizer subset) — a value cast to a number
+      # cannot carry SQL metacharacters, so it is safe to interpolate into the raw-SQL string.
+      - pattern: parseInt(...)
+      - pattern: parseFloat(...)
+      - pattern: Number(...)
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -45,8 +63,12 @@ rules:
               - pattern: $C.rpc("query", $ARG)
           - focus-metavariable: $ARG
 
-  # OS command injection: request input reaches child_process exec/execSync, which spawn a shell
-  # and interpret the whole string. execFile/spawn with an argv array (N-CMD-SAFE) is not matched.
+  # OS command injection (CWE-78): request input reaches child_process exec/execSync, which spawn a
+  # SHELL and interpret the whole string — arbitrary command execution. This is the shell-STRING
+  # sink. The argv-ARRAY shape (execFile/spawn with an argument array, no shell) is a different
+  # weakness — argument injection into the target program's flag parsing — split out below as
+  # harvey-argument-injection (CWE-88), #983. A benign execFile with a non-request arg (N-CMD-SAFE)
+  # is taint-gated out of both.
   - id: harvey-command-injection
     languages: [javascript, typescript]
     mode: taint
@@ -65,7 +87,19 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -74,6 +108,54 @@ rules:
               - pattern: child_process.exec($CMD, ...)
               - pattern: child_process.execSync($CMD, ...)
           - focus-metavariable: $CMD
+
+  # #983: argument injection (CWE-88) — request input reaches an argv-ARRAY element of execFile/
+  # spawn with NO shell. The shell is not involved, so this is NOT CWE-78 OS command injection: the
+  # injection is into the TARGET PROGRAM's own option parsing (execFile("git", ["clone", input]) —
+  # a value like `--upload-pack=…` is read by git as a flag). Distinct CWE and remediation from the
+  # shell-string sink above. Review — exploitability depends on whether the invoked program treats
+  # the value as an option; the fix is to validate/allowlist the argument (and pass `--` first).
+  - id: harvey-argument-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-88: Improper Neutralization of Argument Delimiters in a Command ('Argument Injection')"]
+      owasp: ["A03:2021 - Injection"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request input is passed as an argv-array element to execFile/spawn (no shell) — argument
+      injection (CWE-88). Even without a shell, a leading -/--flag value is interpreted as an option
+      by the invoked program. Validate the value against an allowlist and pass `--` before
+      positional arguments.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: $REQ.nextUrl.searchParams
+      - pattern: cookies()
+      - pattern: headers()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: execFile($CMD, $ARGS, ...)
+              - pattern: execFileSync($CMD, $ARGS, ...)
+              - pattern: spawn($CMD, $ARGS, ...)
+              - pattern: spawnSync($CMD, $ARGS, ...)
+              - pattern: child_process.execFile($CMD, $ARGS, ...)
+              - pattern: child_process.execFileSync($CMD, $ARGS, ...)
+              - pattern: child_process.spawn($CMD, $ARGS, ...)
+              - pattern: child_process.spawnSync($CMD, $ARGS, ...)
+          - focus-metavariable: $ARGS
 
   # Code injection: request input reaches eval / new Function. JSON.parse (N-EVAL-JSON) is a data
   # parser, not code evaluation, and is not matched.
@@ -85,8 +167,10 @@ rules:
       confidence: HIGH
       category: security
       harveySeverity: Critical
-      # #455: standard, unambiguous CWE/OWASP mapping.
-      cwe: ["CWE-94: Improper Control of Generation of Code ('Code Injection')"]
+      # #990: the pattern matches eval()/new Function() specifically — the eval-injection sub-class
+      # of code injection — so CWE-95 (Eval Injection) is the honest, more-specific CWE, not the
+      # generic parent CWE-94. Both sit under OWASP A03.
+      cwe: ["CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"]
       owasp: ["A03:2021 - Injection"]
     message: >
       Request input reaches eval()/new Function() — arbitrary code execution. Parse the input as
@@ -95,7 +179,19 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -123,13 +219,71 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern-either:
               - pattern: $C.or($X, ...)
               - pattern: $C.filter($X, ...)
               - pattern: $C.textSearch($X, ...)
+          - focus-metavariable: $X
+
+  # #985: NoSQL (Mongo/Mongoose) injection — request input reaches a Mongo query OPERATOR
+  # ($where/$regex/$ne/$gt/…) as its value. The explicit-operator shape (findOne({ name: { $regex:
+  # data } })) is a query-logic injection: the attacker controls a regex/$where predicate or a
+  # comparison operator. harvey-postgrest-filter-injection is Supabase/PostgREST-specific; this is
+  # the generic Mongo detector detectOrm already resolves Mongoose for (#869). Review — a static
+  # rule can't prove the value wasn't cast/escaped, and blast radius is the queried collection.
+  - id: harvey-nosql-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-943: Improper Neutralization of Special Elements in Data Query Logic"]
+      owasp: ["A03:2021 - Injection"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request input flows into a MongoDB query operator ($where/$regex/$ne/$gt) — NoSQL injection.
+      An attacker can craft an operator object to bypass the filter or run a $where JS predicate.
+      Cast/validate the value to its expected primitive type before building the query.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: $REQ.nextUrl.searchParams
+      - pattern: cookies()
+      - pattern: headers()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: "{ ..., $where: $X, ... }"
+              - pattern: "{ ..., $regex: $X, ... }"
+              - pattern: "{ ..., $ne: $X, ... }"
+              - pattern: "{ ..., $gt: $X, ... }"
+              - pattern: "{ ..., $gte: $X, ... }"
+              - pattern: "{ ..., $lt: $X, ... }"
+              - pattern: "{ ..., $lte: $X, ... }"
           - focus-metavariable: $X
 
   # Prototype pollution: request body recursively merged into an object (lodash merge / defaultsDeep
@@ -150,6 +304,14 @@ rules:
     pattern-sources:
       - pattern: req.body
       - pattern: req.query
+      # #984: cookies/headers are attacker-controllable request sources.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -179,6 +341,14 @@ rules:
     pattern-sources:
       - pattern: req.body
       - pattern: req.query
+      # #984: cookies/headers are attacker-controllable request sources.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -207,6 +377,50 @@ rules:
           - pattern: "{ ..., noent: true, ... }"
           - pattern: "{ ..., resolveEntities: true, ... }"
 
+  # #985: XXE via an XML parser fed request-tainted input. harvey-xxe (above) keys on the unsafe
+  # parser OPTION (noent/resolveEntities true); this taint variant catches the parse CALL itself
+  # taking untrusted XML through an XXE-capable parser (libxmljs / DOMParser), where entity
+  # resolution may be enabled by config the static rule can't see. Review — exploitability depends
+  # on the parser's entity settings, so it is surfaced for triage rather than free-counted.
+  - id: harvey-xxe-parse
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-611: Improper Restriction of XML External Entity Reference"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      Request-controlled input is parsed as XML through an XXE-capable parser (libxmljs/DOMParser).
+      If external-entity resolution is enabled, this is XXE (file read / SSRF via DOCTYPE entities).
+      Disable entity resolution (e.g. libxmljs { noent: false }) and validate the input.
+    pattern-sources:
+      - pattern: req.query
+      - pattern: req.body
+      - pattern: req.params
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: $REQ.nextUrl.searchParams
+      - pattern: cookies()
+      - pattern: headers()
+      - pattern: await $REQ.json()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: libxmljs.parseXml($X, ...)
+              - pattern: libxmljs.parseXmlString($X, ...)
+              - pattern: $L.parseXml($X, ...)
+              - pattern: $L.parseXmlString($X, ...)
+              - pattern: new DOMParser().parseFromString($X, ...)
+          - focus-metavariable: $X
+
   # Path traversal: request input joined into a filesystem path reaching fs. path.basename
   # (N-PATH-BASENAME) strips directory components and is registered as a sanitizer.
   - id: harvey-path-traversal
@@ -228,7 +442,19 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sanitizers:
       - pattern: path.basename(...)
     pattern-sinks:
@@ -271,7 +497,11 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
-      cwe: ["CWE-94: Improper Control of Generation of Code ('Code Injection')"]
+      # #990: the pattern matches an ejs/handlebars/pug template SINK compiling request-controlled
+      # template SOURCE — server-side template injection — so CWE-917 (Expression Language / template
+      # injection) is more specific than the generic code-injection parent CWE-94, and (unlike the
+      # newer CWE-1336) is in OWASP's official A03 mapped-CWE list so the owasp field stays honest.
+      cwe: ["CWE-917: Improper Neutralization of Special Elements used in an Expression Language Statement ('Expression Language Injection')"]
       owasp: ["A03:2021 - Injection"]
       confidence: MEDIUM
       category: security
@@ -283,7 +513,19 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
       # App Router route handler body: `const { template } = await req.json()` (#570)
       - pattern: await $REQ.json()
     pattern-sinks:
@@ -338,7 +580,19 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -500,7 +754,19 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern: require($X)
@@ -527,7 +793,19 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern: $OBJ[$IDX](...)
@@ -575,7 +853,27 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
+      # taint dataflow once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
+    pattern-sanitizers:
+      # #986: an HTML escaper / sanitizer on the interpolated value is a real transformation that
+      # neutralizes the XSS — a value run through it is no longer a finding (the (a1) subset).
+      - pattern: DOMPurify.sanitize(...)
+      - pattern: sanitizeHtml(...)
+      - pattern: sanitize(...)
+      - pattern: escapeHtml(...)
+      - pattern: escape(...)
     pattern-sinks:
       - patterns:
           - pattern: $RES.send(`...`)
