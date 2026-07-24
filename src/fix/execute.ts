@@ -17,14 +17,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, join } from "node:path";
 import { verifySuggestedFix } from "../trackers/fix-diff.js";
-import { checkBlastRadius, type DiffCap } from "./rails.js";
-import type { BlastRadius } from "./plan.js";
-
-interface DiffFacts {
-  files: string[]; // paths the diff modifies or deletes
-  createdFiles: string[]; // paths the diff adds
-  changedLines: number; // added + removed body lines
-}
+import { blastRadiusOf, checkBlastRadius, parseDiffFacts, type DiffCap } from "./rails.js";
 
 // "diff-verified" is the only success, and it still means an INERT diff on disk — never an applied
 // fix. Everything else names why not, so a caller cannot mistake silence for success.
@@ -71,77 +64,6 @@ function assertNotHarveyItself(targetDir: string): void {
   if (gitCommonDir(targetDir) === self) {
     throw new Error(`refusing to execute a fix against Harvey's own repository (${targetDir})`);
   }
-}
-
-function stripPrefix(raw: string): string | undefined {
-  const path = raw.split("\t")[0]?.trim() ?? "";
-  if (path === "" || path === "/dev/null") return undefined;
-  return path.replace(/^[ab]\//, "");
-}
-
-// Hunk headers carry exact old/new line counts, so the body is consumed by count rather than by
-// looking for the next `---`. Content matters: removing a SQL comment produces a body line that
-// reads `--- foo`, and a header-sniffing parser would take it for a new file header.
-function parseHunkCounts(line: string): { oldLines: number; newLines: number } | undefined {
-  const m = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line);
-  if (!m) return undefined;
-  return { oldLines: m[1] === undefined ? 1 : Number(m[1]), newLines: m[2] === undefined ? 1 : Number(m[2]) };
-}
-
-export function parseDiffFacts(diff: string): DiffFacts {
-  const files = new Set<string>();
-  const createdFiles = new Set<string>();
-  let changedLines = 0;
-  let oldPath: string | undefined;
-  let oldIsDevNull = false;
-  let remainingOld = 0;
-  let remainingNew = 0;
-
-  for (const line of diff.split("\n")) {
-    if (remainingOld > 0 || remainingNew > 0) {
-      if (line.startsWith("\\")) continue; // "\ No newline at end of file"
-      if (line.startsWith("+")) {
-        remainingNew--;
-        changedLines++;
-      } else if (line.startsWith("-")) {
-        remainingOld--;
-        changedLines++;
-      } else {
-        remainingOld--;
-        remainingNew--;
-      }
-      continue;
-    }
-    const hunk = parseHunkCounts(line);
-    if (hunk) {
-      remainingOld = hunk.oldLines;
-      remainingNew = hunk.newLines;
-      continue;
-    }
-    if (line.startsWith("--- ")) {
-      oldPath = stripPrefix(line.slice(4));
-      oldIsDevNull = oldPath === undefined;
-      continue;
-    }
-    if (line.startsWith("+++ ")) {
-      const path = stripPrefix(line.slice(4)) ?? oldPath;
-      if (path !== undefined) (oldIsDevNull ? createdFiles : files).add(path);
-    }
-  }
-  return { files: [...files], createdFiles: [...createdFiles], changedLines };
-}
-
-// behaviorPreserving is not knowable from a diff, so it is stated conservatively; the rail checks
-// read only the path lists and the line count.
-function blastRadiusOf(facts: DiffFacts): BlastRadius {
-  return {
-    files: facts.files,
-    createdFiles: facts.createdFiles,
-    symbols: [],
-    callers: [],
-    behaviorPreserving: false,
-    estimatedChangedLines: facts.changedLines,
-  };
 }
 
 export function executeFixDiff(findingId: string, diff: string, opts: ExecuteOptions): FixExecution {
