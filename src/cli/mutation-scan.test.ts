@@ -9,7 +9,7 @@
 // with a single placeholder spec emits M8-00; a harness with one MEANINGFUL spec does not.
 
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -602,5 +602,35 @@ describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)",
     expect(parsed.moduleRecord?.status).toBe("partial");
     expect(parsed.moduleRecord?.note).toMatch(/#773/);
     expect(parsed.moduleRecord?.note).toMatch(/parseConfigFileTextToJson is not a function/);
+  });
+});
+
+// #944: walkRelPaths (shared by collectTestFiles/collectEnvSourceFiles, the census every rung of
+// this CLI runs before Stryker) used `statSync`, which FOLLOWS symlinks and throws ENOENT on a
+// dangling one — crashing the whole M8 suite-absent/test census. Real repos ship these routinely:
+// the #899 breadth sweep crashed on 3/16 wild targets over exactly this (liam-hq/liam's gitignored
+// .env symlink, dub's EE LICENSE.md symlink, cal.diy's same class). A dangling symlink has nothing
+// to read, so the correct behavior is to skip it and keep walking, not crash.
+describe("mutation-scan tree walk survives a dangling symlink (#944, child process)", () => {
+  it("--detect-only does not crash on a committed dangling symlink, and still finds the real test file", () => {
+    const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC });
+    // A dangling symlink: the link exists, its target does not — exactly a gitignored .env symlink
+    // in a fresh checkout, or an EE-only file symlink outside this build's scope.
+    symlinkSync(join(repo, "does-not-exist.env"), join(repo, ".env"));
+    const { status, out } = runCli(repo, ["--detect-only"]);
+    expect(status).toBe(0); // pre-#944 this was a child-process crash (non-zero exit, no output)
+    expect(JSON.parse(out)).toEqual([]); // meaningful suite present — same as the no-symlink case
+  });
+
+  it("still walks a RESOLVABLE symlinked directory (regression guard on the fix itself) — the ONLY test file lives behind the link", () => {
+    const repo = fixtureRepo({}); // no direct test files at all
+    mkdirSync(join(repo, "real-dir"), { recursive: true });
+    writeFileSync(join(repo, "real-dir", "extra.test.ts"), REAL_SPEC);
+    symlinkSync("real-dir", join(repo, "linked-dir"));
+    const { status, out } = runCli(repo, ["--detect-only"]);
+    expect(status).toBe(0);
+    // If the symlinked dir weren't walked, this repo would have ZERO test files and emit M8-00
+    // (#252) instead of the meaningful-suite empty-array shape.
+    expect(JSON.parse(out)).toEqual([]);
   });
 });

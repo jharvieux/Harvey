@@ -251,13 +251,24 @@ const WALK_EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out|r
 
 // One tree walk shared by every census below (test files, env sources, source paths) — they only
 // differ in which relative paths they keep.
+//
+// #944: `statSync` FOLLOWS symlinks and throws ENOENT on a dangling one (committed routinely —
+// liam-hq/liam's gitignored .env symlink, dub's EE LICENSE.md symlink, both real repos the #899
+// breadth sweep crashed on). `readdirSync(..., { withFileTypes: true })`'s Dirent classifies the
+// entry ITSELF, not its resolved target, so `isSymbolicLink()` is safe to call on a dangling link;
+// `existsSync` (which also follows the link but swallows ENOENT into `false`) is what actually
+// tells dangling from resolvable. A dangling link is skipped outright — there is nothing to read.
+// A resolvable symlink keeps the pre-#944 behavior (recurse if it resolves to a directory, else
+// treat as a file) via one more `statSync`, now only reached once existence is confirmed.
 function walkRelPaths(root: string): string[] {
   const paths: string[] = [];
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        if (!WALK_EXCLUDED_DIR.test(entry)) walk(full);
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isSymbolicLink() && !existsSync(full)) continue;
+      const isDir = entry.isDirectory() || (entry.isSymbolicLink() && statSync(full).isDirectory());
+      if (isDir) {
+        if (!WALK_EXCLUDED_DIR.test(entry.name)) walk(full);
       } else {
         paths.push(relative(root, full).split(sep).join("/"));
       }
