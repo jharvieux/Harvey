@@ -29,10 +29,11 @@
 //         unguarded draftMode, middleware-matcher gaps, client-render-only authz); the SCA/dependency
 //         tier; secrets-in-files; TLS/security-header hardening; crypto-primitive choice; next.config
 //         flags; and the DB-layer RLS/Supabase-config/schema classes. Two adjacent SOURCE-code
-//         detectors are deliberately OUT because they are not request→sink injection/access-control
-//         flows: server-client-leak (excessive data exposure — a DB row spread into a Client
-//         Component) and client-side-authz (an authz decision made in the wrong tier). They are
-//         candidates for the corpus-growth remainder, not this number.
+//         detectors are deliberately OUT of THIS taint-only answer key because they are not
+//         request→sink injection/access-control flows: server-client-leak (excessive data exposure —
+//         a DB row spread into a Client Component) and client-side-authz (an authz decision made in
+//         the wrong tier). They are NOT unscored, though — #1011 folds both into their own
+//         M9_SOURCE_TIER_IDS tier below, reported distinctly rather than blended into this number.
 //
 // MAINTENANCE: the answer key is an explicit ID list, kept next to this rationale so the in/out call
 // on each class is reviewable in one place. When you add a request→sink taint fixture to any
@@ -127,4 +128,53 @@ export function sourceTierCorpus(corpus: CorpusEntry[] = CORPUS): CorpusEntry[] 
 // scoring model over a NARROWER answer key, not a second implementation.
 export function scoreSourceRecall(findings: Finding[], corpus: CorpusEntry[] = CORPUS): CoverageMatrix {
   return buildCoverageMatrix(findings, sourceTierCorpus(corpus));
+}
+
+// #1011 — the M9 SOURCE-CODE (non-taint) tier: server-client-leak and client-side-authz. Both read
+// the app's own code (not a config/dependency/secret fact) so they are genuinely "source detectors",
+// but neither is a request→sink TAINT flow — server-client-leak flags an over-broad DATA SHAPE handed
+// to a Client Component, client-side-authz flags an authz DECISION made in the wrong tier — so they
+// stay out of SOURCE_TIER_IDS's taint-only definition above and get their OWN tier instead, reported
+// distinctly (never blended into the 38/39 headline number).
+//
+// VERIFIED (not assumed, #1011 corrects a stale claim in docs/design/source-detector-recall.md): the
+// two detectors do NOT share one scoring pipeline. client-side-authz is a leftover-auth.ts mechanical
+// grep — its corpus entries (P-CLIENT-AUTHZ-STORAGE/-USER, N-CLIENT-AUTHZ-SERVER-CHECK in
+// b14-applogic.entries.ts) carry NO `module` tag, so they are already inside mechanicalCorpus() and
+// already caught by runMechanicalScan(targets/calibration) — the SAME findings scoreSourceRecall's
+// caller already has. server-client-leak is the M9 AST pass (detectAppRouterFindings) and IS
+// module-tagged M9 in m9-checks.entries.ts, scored only against its own committed
+// src/detectors/__fixtures__/server-client-leak/ fixtures, never against targets/calibration — the
+// caller must run that pass separately and pass its findings in alongside the mechanical ones.
+export const M9_SOURCE_TIER_IDS: readonly string[] = [
+  "M9C-LEAK-POS", "M9C-LEAK-NEG", // server-client-leak (M9 AST pass, __fixtures__-scored)
+  "P-CLIENT-AUTHZ-STORAGE", "P-CLIENT-AUTHZ-USER", "N-CLIENT-AUTHZ-SERVER-CHECK", // client-side-authz (mechanical)
+];
+
+// Fail loud, same discipline as assertSourceTierResolvable — but this tier deliberately spans BOTH a
+// module-tagged (M9) and a module-less (mechanical) entry, so it resolves against the WHOLE corpus,
+// not mechanicalCorpus().
+export function assertM9SourceTierResolvable(corpus: CorpusEntry[] = CORPUS): void {
+  const byId = new Map<string, CorpusEntry>();
+  for (const e of corpus) byId.set(e.id, e);
+  const missing = M9_SOURCE_TIER_IDS.filter((id) => !byId.has(id));
+  if (missing.length) {
+    throw new Error(
+      `M9 source-tier answer key references ${missing.length} id(s) not in the corpus: ${missing.join(", ")}. ` +
+        `Fix M9_SOURCE_TIER_IDS in src/scan/source-recall.ts.`,
+    );
+  }
+}
+
+export function m9SourceTierCorpus(corpus: CorpusEntry[] = CORPUS): CorpusEntry[] {
+  assertM9SourceTierResolvable(corpus);
+  const ids = new Set(M9_SOURCE_TIER_IDS);
+  return corpus.filter((e) => ids.has(e.id));
+}
+
+// Scores the M9 non-taint source tier. The caller supplies findings from BOTH pipelines (mechanical +
+// the M9 AST pass over its own fixtures) — relevantFindings() only matches a finding to the entry
+// whose location it carries, so combining the two sets can't cross-contaminate scoring.
+export function scoreM9SourceRecall(findings: Finding[], corpus: CorpusEntry[] = CORPUS): CoverageMatrix {
+  return buildCoverageMatrix(findings, m9SourceTierCorpus(corpus));
 }

@@ -22,17 +22,23 @@
 // SAME runMechanicalScan, and scores it against that repo's own entries. Like the planted gate, a
 // recall gap here is the measurement, never a failure — --real always exits 0; it reports, it does
 // not gate. Needs network (git clone) in addition to the mechanical binaries.
+//
+// #1011: also runs a SEPARATE "M9 source-code (non-taint) tier" — server-client-leak (the M9 AST
+// pass over its own committed __fixtures__) + client-side-authz (a leftover-auth mechanical grep,
+// already inside the same runMechanicalScan output) — printed and gated as its own section, never
+// blended into the request→sink SOURCE-DETECTOR RECALL number above.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
-import { scoreSourceRecall, sourceTierCorpus } from "../scan/source-recall.js";
+import { M9_SOURCE_TIER_IDS, scoreM9SourceRecall, scoreSourceRecall, sourceTierCorpus } from "../scan/source-recall.js";
 import { REAL_SOURCE_RECALL_TARGETS, mergeRealSourceRecall, scoreRealSourceRecallTarget } from "../scan/real-source-recall.js";
 import { recallPct } from "../scan/secbench.js";
+import { detectAppRouterFindings, type SourceInput } from "../detectors/app-router.js";
 import type { CoverageMatrix, MatrixRow } from "../scan/calibration.js";
 
 function arg(flag: string): string | undefined {
@@ -79,8 +85,32 @@ const corpus = sourceTierCorpus(); // throws loud if the answer key drifted
 const findings = await runMechanicalScan({ dir });
 const matrix = scoreSourceRecall(findings);
 
+// #1011 — M9 SOURCE-CODE (non-taint) tier: server-client-leak (M9 AST pass, scored against its own
+// committed __fixtures__, never targets/calibration) + client-side-authz (leftover-auth mechanical
+// grep, already inside `findings` above). Reported as its OWN section, never blended into `matrix` —
+// see M9_SOURCE_TIER_IDS's header in src/scan/source-recall.ts.
+const leakFixturesRoot = join(repoRoot, "src", "detectors", "__fixtures__", "server-client-leak");
+function loadLeakFixtures(kind: "positive" | "negative"): SourceInput[] {
+  const root = join(leakFixturesRoot, kind);
+  const files: SourceInput[] = [];
+  const walk = (d: string) => {
+    for (const e of readdirSync(d)) {
+      const full = join(d, e);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (e.endsWith(".txt")) {
+        const suffix = relative(root, full).replace(/\.txt$/, "").split(sep).join("/");
+        files.push({ path: `m9-corpus/leak/${kind}/${suffix}`, text: readFileSync(full, "utf8") });
+      }
+    }
+  };
+  walk(root);
+  return files;
+}
+const leakFindings = [...detectAppRouterFindings(loadLeakFixtures("positive")), ...detectAppRouterFindings(loadLeakFixtures("negative"))];
+const m9Matrix = scoreM9SourceRecall([...findings, ...leakFindings]);
+
 if (process.argv.includes("--json")) {
-  console.log(JSON.stringify(matrix, null, 2));
+  console.log(JSON.stringify({ sourceTier: matrix, m9SourceTier: m9Matrix }, null, 2));
   process.exit(0);
 }
 
@@ -118,10 +148,24 @@ if (reviewMisses.length) {
   console.log(`\nRecall gaps (the measurement — reported, non-fatal): ${reviewMisses.map((r) => r.id).join(", ")}`);
 }
 
-const gatePass = negFps.length === 0 && highMisses.length === 0;
+console.log(`\nM9 SOURCE-CODE (non-taint) recall — server-client-leak + client-side-authz, #1011:`);
+for (const r of m9Matrix.rows) console.log(line(r));
+console.log(
+  `  ${m9Matrix.positivesCaught}/${m9Matrix.positivesTotal} positives caught at any tier ` +
+    `(${recallPct(m9Matrix.positivesCaught, m9Matrix.positivesTotal)}); negatives cleared: ${m9Matrix.negativesCleared}/${m9Matrix.negativesTotal}.` +
+    `\n  DISTINCT, NOT BLENDED into the ${matrix.positivesTotal}-fixture SOURCE-DETECTOR RECALL number above — ` +
+    `neither detector is a request→sink taint flow (${M9_SOURCE_TIER_IDS.length} answer-key entries).`,
+);
+
+const m9NegFps = m9Matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged);
+const m9HighMisses = m9Matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "high" && !r.highFlagged);
+
+const gatePass = negFps.length === 0 && highMisses.length === 0 && m9NegFps.length === 0 && m9HighMisses.length === 0;
 if (!gatePass) {
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives on source-tier negatives: ${negFps.map((r) => r.id).join(", ")}`);
   if (highMisses.length) console.log(`GATE FAIL — high-tier source positives no longer caught at high: ${highMisses.map((r) => r.id).join(", ")}`);
+  if (m9NegFps.length) console.log(`GATE FAIL — free-count false positives on M9 source-tier negatives: ${m9NegFps.map((r) => r.id).join(", ")}`);
+  if (m9HighMisses.length) console.log(`GATE FAIL — high-tier M9 source positives no longer caught at high: ${m9HighMisses.map((r) => r.id).join(", ")}`);
   process.exit(1);
 }
 console.log("\nGATE PASS — no free-count false positives; every high-tier source rule fired on its positive.");
