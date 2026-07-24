@@ -904,6 +904,22 @@
     ]
   },
   {
+    "id": "SEC-BUNDLE-00",
+    "title": "Built-bundle secret scan did not run",
+    "severity": "Info",
+    "confidence": "N/A",
+    "category": "Secret exposure",
+    "taxonomy": "Client-inlined secret — coverage not assessed",
+    "location": "(bundle)",
+    "status": "Open",
+    "evidence": "Built-bundle secret pass did not run: no built bundle found (.next/static or dist/) — run a production build so client-inlined secrets can be scanned.",
+    "impact": "Client-inlined secrets (VITE_*/NEXT_PUBLIC_*/REACT_APP_* baked into the shipped JS) are not covered — a disclosed coverage gap, not a finding of zero secrets in the bundle.",
+    "fix": "Produce a production build (`next build` -> .next/static, or `vite build` -> dist/) and re-run the scan, or pass --bundle <dir> at the built assets.",
+    "value": 1,
+    "ease": 3,
+    "safety": 5
+  },
+  {
     "id": "DEP-OSV-GHSA-grv7-fg5c-xmjg",
     "title": "braces@2.3.2: Uncontrolled resource consumption in braces",
     "severity": "Medium",
@@ -2019,30 +2035,6 @@
     "evidence": "OSV-Scanner matched GHSA-qx2v-qp2m-jg93 (aliases: CVE-2026-41305) against postcss@8.4.31.",
     "impact": "PostCSS has XSS via Unescaped </style> in its CSS Stringify Output",
     "fix": "Upgrade postcss past the vulnerable range (see GHSA-qx2v-qp2m-jg93).",
-    "value": 3,
-    "ease": 4,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "review",
-    "dependency": "postcss",
-    "reachability": {
-      "status": "transitive-only",
-      "rank": 3,
-      "justification": "postcss is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
-    }
-  },
-  {
-    "id": "DEP-OSV-GHSA-r28c-9q8g-f849",
-    "title": "postcss@8.4.31: PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure",
-    "severity": "Medium",
-    "confidence": "Review",
-    "category": "Dependency CVE",
-    "taxonomy": "Known-vulnerable dependency",
-    "location": "package-lock.json (postcss@8.4.31)",
-    "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-r28c-9q8g-f849 against postcss@8.4.31.",
-    "impact": "PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure",
-    "fix": "Upgrade postcss past the vulnerable range (see GHSA-r28c-9q8g-f849).",
     "value": 3,
     "ease": 4,
     "safety": 4,
