@@ -34,6 +34,7 @@
 import { M4_DIVERGED_TAXONOMY } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
 import type { QuickScanReport } from "../quick-scan.js";
+import { DOC_CONTEXT_CREDENTIAL_TAXONOMY } from "./secrets.js";
 import { classifyMigrationSql, classifyPrismaSchema } from "../../tools/pii-classify.mjs";
 import { M8_CORPUS_CONFIGS, type M8CorpusConfig } from "./m8-corpus.js";
 
@@ -505,27 +506,30 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     securityVerdict: "NOT ASSESSED — source-tier quality baselines only (#894). No M1 semantic pass, no dynamic tier, no disclosure filed.",
     schemaPath: "packages/prisma/schema.prisma",
     modules: {
-      // #894/#931: M4 on this target is ENVIRONMENT-DEPENDENT and therefore has no trustworthy
-      // number to record. Three runs of the SAME pinned tree, 2026-07-24:
-      //   - ubuntu-latest, corpus-drift --install (the scorer's own environment): jscpd wrote no report
-      //   - macOS, cloned under a deep scratch path:                              jscpd wrote no report
-      //   - macOS, cloned into corpus-drift's own mkdtemp:                      835 counted / 1,256
-      // #931 FIXED the silent-zero half of this (RE-MEASURED 2026-07-24, deep-scratch-path repro):
-      // runJscpd now counts comparable source files when jscpd writes no report, and — since this
-      // target has 1,938 of them — throws instead of returning a synthetic zero-duplication report,
-      // so quality-scan now prints `M4 duplication: 0% (0/0 lines) … whole-repo scan incomplete
-      // (#544, see M4-99)` rather than a silent clean bill of health. What #931 did NOT fix (its own
-      // ask #2, still open): WHY jscpd writes no report at all at some absolute clone paths and 1,256
-      // findings at another, same commit/flags/machine — that root cause is unexplained, so this
-      // stays recorded not-run rather than baselined at 0 (asserts cleanliness not earned) or 835
-      // (the scorer's own environment does not reproduce it). Corroboration the zero was always an
-      // invocation failure, not a property of the repo: the diverged-clone pass (its own tree walk,
-      // not jscpd) produces its 2 findings in EVERY run, unaffected by which path jscpd took.
-      M4: {
-        reason: "#894/#931: MEASURED 2026-07-24 as ENVIRONMENT-DEPENDENT, not as a number. The same pinned tree makes jscpd write no report at all on ubuntu-latest under `corpus-drift --install` (the scheduled scorer's own environment) and on macOS under a deep scratch path, but scores 835 counted / 1,256 total on macOS in corpus-drift's mkdtemp. #931 fixed the SILENT half of this (re-measured 2026-07-24 against the deep-scratch-path repro): a missing jscpd report is no longer assumed to mean 'clean zero' — runJscpd now counts this scope's 1,938 comparable source files and, finding well over its 2-file floor, throws instead, so quality-scan now prints the M4-99 'whole-repo scan incomplete' gap disclosure instead of a silent `0% (0/0 lines)`. Still open (#931's own ask #2): WHY jscpd writes no report at some absolute clone paths and a real report at others, same commit/flags/machine — undiagnosed, so this stays recorded not-run rather than baselined at 0 (cleanliness not earned) or 835 (the scheduled scorer's own environment does not reproduce it). Corroboration the zero was always an invocation failure: the diverged-clone pass (its own tree walk, not jscpd) produces its 2 findings in EVERY run regardless of which path jscpd took.",
-      },
+      // #948 (root-caused #931's own ask #2, RE-MEASURED 2026-07-24 against a fresh clone of the
+      // SAME pinned commit): the "empty file list at some absolute paths" was TWO compounding
+      // cwd/path-relativity bugs in how quality-scan invoked jscpd (src/cli/quality-scan.ts),
+      // never a property of documenso or an unfixable environment split.
+      //   1. jscpd resolves its `.jscpd.json` AND a separate, less-anchored `.gitignore` read
+      //      (its own src/init/ignore.ts) from `process.cwd()` of the CHILD PROCESS, not the
+      //      scanned dir — so without an explicit `cwd`, it could pick up an unrelated repo's
+      //      config entirely (fixed: `cwd: dir`).
+      //   2. Independent of (1): scanning an ABSOLUTE path makes fast-glob (inside
+      //      @jscpd/finder) match gitignore-derived ignore globs against the FULL absolute
+      //      path. documenso's own `.gitignore` has a bare `tmp` entry — correctly, per git
+      //      semantics for a no-slash name, converted to an any-depth "**/tmp/**" glob — which
+      //      then also matches any ANCESTOR directory literally named "tmp". A scratch clone
+      //      under Linux's `os.tmpdir()` (`/tmp`) sits inside exactly such a directory, so the
+      //      WHOLE tree got silently excluded; macOS's `os.tmpdir()` (`/var/folders/.../T`) does
+      //      not contain a "tmp" segment, which is exactly the ubuntu-vs-macOS split #931
+      //      measured (fixed: scan "." instead of the absolute dir, now that cwd anchors it).
+      // MEASURED 2026-07-24 against the pinned commit re-cloned into a `/private/tmp`-prefixed
+      // scratch path (the collision case) with the fix applied: 835 counted / 1,256 total — an
+      // EXACT match to the one lucky non-colliding macOS run #931 recorded, confirming that
+      // number was always the correct one and the zero was purely an invocation defect.
+      M4: { counted: 835, total: 1256, note: "#948: MEASURED 2026-07-24 (re-clone of the pinned commit, deliberately under a tmp-collision scratch path) after fixing quality-scan's jscpd invocation (cwd: dir + scan \".\" instead of an absolute path, src/cli/quality-scan.ts) — 835 counted / 1,256 total, reproducing #931's one working macOS measurement exactly. No longer environment-dependent." },
       "M4-diverged": { counted: 2, total: 2, note: "#894: MEASURED 2026-07-24 — 2 High review-tier diverged security-path clone findings, reproduced in all three runs including both in which jscpd's exact-clone pass returned nothing. That invariance is what showed the M4 zero to be an invocation failure rather than a property of the repo (#931)." },
-      "M5-knip": { counted: 1360, total: 1362, note: "#894: MEASURED 2026-07-24 after `npm install` (2127 packages). 1,311 unused files + unused-export files, with 1/16 scopes in #810 reduced mode (M5-98 Info) and 8/16 flagged uncertain (#580 M5-99 Info) — both disclosure rows are part of the baseline. ±1 ACROSS ENVIRONMENTS, recorded rather than absorbed into a tolerance nobody would see: 1360 on ubuntu-latest under `corpus-drift --install` AND on macOS under a scratch path, 1359 on macOS in corpus-drift's mkdtemp. The split tracks the M4 environment split exactly (see this target's M4 reason and #931), so re-measure this alongside it. 1360 is recorded because it is what the scheduled scorer's own environment produces. CAVEAT recorded with the number: 1,311 unused FILES on a turbo monorepo whose entry surface knip cannot fully resolve (8 uncertain scopes says so in the output) is a DRIFT baseline, not a claim that documenso has 1,311 dead files." },
+      "M5-knip": { counted: 1360, total: 1362, note: "#894: MEASURED 2026-07-24 after `npm install` (2127 packages). 1,311 unused files + unused-export files, with 1/16 scopes in #810 reduced mode (M5-98 Info) and 8/16 flagged uncertain (#580 M5-99 Info) — both disclosure rows are part of the baseline. ±1 ACROSS ENVIRONMENTS, recorded rather than absorbed into a tolerance nobody would see: 1360 on ubuntu-latest under `corpus-drift --install` AND on macOS under a scratch path, 1359 on macOS in corpus-drift's mkdtemp. This was recorded alongside the M4 environment split observed the same day, but #948 root-caused THAT split to a jscpd-specific cwd/path-relativity bug (fixed) — knip is a separate tool with its own config resolution, so this ±1 is not shown to share that cause; re-measure it independently before assuming #948 also explains it. 1360 is recorded because it is what the scheduled scorer's own environment produces. CAVEAT recorded with the number: 1,311 unused FILES on a turbo monorepo whose entry surface knip cannot fully resolve (8 uncertain scopes says so in the output) is a DRIFT baseline, not a claim that documenso has 1,311 dead files." },
       "M5-slop": { counted: 262, total: 267, note: "#894: MEASURED 2026-07-24." },
       "M6-indicator": { counted: 21, total: 21, note: "#894: MEASURED 2026-07-24 — 21 hand-rolled-shape indicators. All Info/non-grading (#267); counted === total by construction." },
       M7: { counted: 127, total: 258, note: "#894: MEASURED 2026-07-24 — 127 counted with the corpus's largest Info tail (131 hook-dependency style notes), plus a 16-image/19.1 MB oversized-asset roll-up. The Info tail is itself worth pinning: #230 demoted that class rather than dropping it, and this is the target where the demotion carries the most weight." },
@@ -548,7 +552,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     license: "none in-tree at this pin (GitHub reports NOASSERTION — all rights reserved by default)",
     provenance: "ai-assisted",
     provenanceNote: "#897: a real commercial ERP/MES/QMS with Rust crates, patches/, a versioned release history and BACKWARD_COMPATIBILITY.md, that also ships CLAUDE.md + AGENTS.md + a .claude/skills tree. Capable-dev-with-AI.",
-    securityVerdict: "NOT ASSESSED — #897 is a SCALE measurement, not an audit. The free-tier quick-scan does grade this target F (0/100) on 14 Critical secret findings, and every one inspected is a placeholder credential in self-hosting docs or an example docker-compose; that cry-wolf result is the product finding, recorded in docs/design/carbon-scale-measurement.md and in the follow-up issue, NOT a security verdict on carbon. No disclosure filed and none warranted from this pass.",
+    securityVerdict: "NOT ASSESSED — #897 is a SCALE measurement, not an audit. The free-tier quick-scan originally graded this target F (0/100) on 14 Critical secret findings, every one a placeholder credential in self-hosting docs or an example docker-compose; #934 reclassified that class (re-measured 2026-07-24: all 14 now Low/informational with the reason stated, 0 graded — see FREE_TIER_EXPECTATIONS below). The grade remains F (0/100) on 11 graded Highs pending their own precision decisions (#996). NOT a security verdict on carbon; no disclosure filed and none warranted from this pass.",
     schemaPath: "packages/database/supabase/migrations",
     modules: {
       M4: { counted: 3251, total: 4526, note: "#897: MEASURED 2026-07-24 — the corpus's largest M4 surface by 9x. jscpd completed whole-repo inside quality-scan's 39.4s: no timeout, no hang, no quadratic blow-up at 4,110 TS files. The finding VOLUME is the product finding (see the scale doc), not a scanner failure." },
@@ -622,7 +626,16 @@ export interface FreeTierExpectation {
   mustNotScoreF: boolean;
   // true  -> at least one non-Info tenant-isolation indicator (the app IS known-vulnerable)
   // false -> no such indicator (a decent repo must not be accused)
-  mustRaiseLoudIndicator: boolean;
+  // #934: OPTIONAL — undefined means the target's tenancy posture is NOT ASSESSED (carbon: no M1
+  // semantic pass, no dynamic tier), so neither direction can honestly be asserted. An undefined
+  // posture still emits an explicit "not asserted" row rather than silently scoring one fewer
+  // check — an absent row never shows up in a tally (the coverage-guard rule, applied here).
+  mustRaiseLoudIndicator?: boolean;
+  // #934: the scale invariant carbon broke — placeholder/default credentials in docs/example
+  // deployment paths must be REPORTED (in the non-grading informational section) and must NOT
+  // appear in the graded set. Two-sided on purpose: "not graded" alone would also pass if the
+  // detector stopped firing entirely, which would be a recall regression wearing a pass.
+  mustNotGradeDocContextCreds?: boolean;
   why: string;
 }
 
@@ -651,6 +664,27 @@ export const FREE_TIER_EXPECTATIONS: FreeTierExpectation[] = [
     mustRaiseLoudIndicator: true,
     why: "The other don't-stay-quiet case: world-readable invitation tokens (#214 Critical). Measured: 1 High RLS indicator on organisation_invitations — the very table the Critical is about.",
   },
+  // #934: the first LARGE repo in this gate — the invariant had only ever been scored against
+  // starter kits, and carbon is the target that broke it at scale (F (0/100), every Critical a
+  // placeholder credential in self-hosting docs / example docker-composes).
+  {
+    slug: "carbon",
+    // DELIBERATELY false for now, with the measured reason on record (2026-07-24, post-#934 fix):
+    // the 14 placeholder-cred Criticals are reclassified (the check below pins that), but the
+    // graded set still carries 11 Highs + 1 Low → F (0/100). Those 11 need their own decisions
+    // before mustNotScoreF can be truthfully asserted: 7 harvey-permissive-cors bare-wildcard hits
+    // that are all intended-public endpoints (OAuth .well-known discovery metadata — RFC 8414
+    // REQUIRES public readability — an MCP endpoint, a public file route, the documented Supabase
+    // edge-function corsHeaders idiom), 3 registry GHA workflow findings (curl|sh, run-shell
+    // injection — real CI hygiene), 1 postMessage-wildcard. Flipping this to true is tracked in
+    // #996 (the #934 remainder) — asserting it today would add a knowingly-failing weekly gate.
+    mustNotScoreF: false,
+    // No M1 semantic pass and no dynamic tier has ever run against carbon (securityVerdict: NOT
+    // ASSESSED), so the indicator posture is unasserted — scoreFreeTierExpectation emits an
+    // explicit "not asserted" row for it.
+    mustNotGradeDocContextCreds: true,
+    why: "#934's scale case: a professionally-maintained ERP whose self-hosting docs/contrib/dev-compose surface drew 14 'Critical' placeholder credentials and an F (0/100). The weekly assertion is the reclassification invariant — those hits stay REPORTED (informational) and stay OUT of the graded set — scored against a real 4k-file repo, not only starter kits.",
+  },
 ];
 
 interface FreeTierRow {
@@ -676,17 +710,48 @@ export function scoreFreeTierExpectation(expectation: FreeTierExpectation, repor
     });
   }
 
-  const raised = loud.length > 0;
-  rows.push({
-    slug: expectation.slug,
-    check: expectation.mustRaiseLoudIndicator ? "must raise a loud tenant-isolation indicator" : "must not accuse a sound repo of a tenancy hole",
-    pass: raised === expectation.mustRaiseLoudIndicator,
-    detail: raised === expectation.mustRaiseLoudIndicator
-      ? `${loud.length} non-Info indicator(s)`
-      : expectation.mustRaiseLoudIndicator
-        ? `STAYED QUIET: 0 non-Info indicators on a known-vulnerable repo (${report.indicators.length} Info-only) — the deep-scan Critical has no free-tier signal`
-        : `CRIED WOLF: ${loud.length} non-Info indicator(s) (${loud.map((i) => i.title).join("; ")}) on a repo #227 calls sound`,
-  });
+  // #934: an unasserted indicator posture (tenancy NOT ASSESSED for this target) is an explicit
+  // passing row, never a silently-absent check.
+  if (expectation.mustRaiseLoudIndicator === undefined) {
+    rows.push({
+      slug: expectation.slug,
+      check: "indicator posture",
+      pass: true,
+      detail: `not asserted — this target's tenancy posture is NOT ASSESSED (no M1 semantic/dynamic pass), so neither "must raise" nor "must not accuse" can honestly be scored; ${loud.length} non-Info indicator(s) observed`,
+    });
+  } else {
+    const raised = loud.length > 0;
+    rows.push({
+      slug: expectation.slug,
+      check: expectation.mustRaiseLoudIndicator ? "must raise a loud tenant-isolation indicator" : "must not accuse a sound repo of a tenancy hole",
+      pass: raised === expectation.mustRaiseLoudIndicator,
+      detail: raised === expectation.mustRaiseLoudIndicator
+        ? `${loud.length} non-Info indicator(s)`
+        : expectation.mustRaiseLoudIndicator
+          ? `STAYED QUIET: 0 non-Info indicators on a known-vulnerable repo (${report.indicators.length} Info-only) — the deep-scan Critical has no free-tier signal`
+          : `CRIED WOLF: ${loud.length} non-Info indicator(s) (${loud.map((i) => i.title).join("; ")}) on a repo #227 calls sound`,
+    });
+  }
+
+  // #934: the doc-context credential invariant, two-sided (see FreeTierExpectation). Graded rows
+  // must carry none; the informational section must still carry them — the pinned carbon tree HAS
+  // placeholder creds in its docs/contrib/dev-compose surface, so zero reported means the detector
+  // regressed, not that the repo cleaned up (the tree is frozen at the pin).
+  if (expectation.mustNotGradeDocContextCreds) {
+    const graded = report.findings.filter((f) => f.taxonomy === DOC_CONTEXT_CREDENTIAL_TAXONOMY);
+    const reported = report.informational.filter((f) => f.taxonomy === DOC_CONTEXT_CREDENTIAL_TAXONOMY);
+    const pass = graded.length === 0 && reported.length > 0;
+    rows.push({
+      slug: expectation.slug,
+      check: "doc/example placeholder creds reported but never graded",
+      pass,
+      detail: pass
+        ? `${reported.length} doc-context credential(s) in the informational section, 0 in the graded set`
+        : graded.length > 0
+          ? `CRIED WOLF: ${graded.length} doc-context credential(s) reached the graded set — #934's reclassification regressed`
+          : "GONE DARK: 0 doc-context credentials reported on a pinned tree known to contain them — the detector (not the repo) changed; a lost finding is a recall regression, not a pass",
+    });
+  }
 
   return rows;
 }

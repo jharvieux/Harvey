@@ -13,18 +13,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const checkSlopsquat = vi.fn(async () => []);
 const checkLicenseCompliance = vi.fn(async () => []);
+const scanSecrets = vi.fn(() => []);
+// #950: default mock matches runSemgrep's real { result, failure? } return shape — a bare ""
+// (the pre-#950 shape this mock used to return) would make `semgrep.failure` silently undefined
+// on a string rather than proving the wiring, since parseSemgrepFindings below is ALSO mocked to
+// ignore its argument. Kept a well-formed no-failure result so the two describe blocks lower down
+// (which override this per-test to exercise the failure branch) have an honest baseline to diff.
+const runSemgrep = vi.fn(() => ({ result: {} }) as { result: object; failure?: string });
 
 vi.mock("./supply-chain.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./supply-chain.js")>();
   return { ...actual, checkSlopsquat, checkLicenseCompliance };
 });
-vi.mock("./secrets.js", () => ({ scanSecrets: vi.fn(() => []), resolveBundleScan: vi.fn(() => ({})) }));
-vi.mock("./semgrep.js", () => ({
-  runSemgrep: vi.fn(() => ""),
-  parseSemgrepFindings: vi.fn(() => []),
-  checkMissingCsp: vi.fn(() => []),
-  checkPublicDirSensitive: vi.fn(() => []),
-}));
+vi.mock("./secrets.js", () => ({ scanSecrets, resolveBundleScan: vi.fn(() => ({})) }));
+// Only runSemgrep is faked (it's the one that shells out to the real binary); parseSemgrepFindings/
+// checkMissingCsp/checkPublicDirSensitive/semgrepUnavailableFinding stay real so the #950 failure-
+// wiring test below exercises mechanical.ts's actual branch, not a second layer of mocking.
+vi.mock("./semgrep.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./semgrep.js")>();
+  return { ...actual, runSemgrep };
+});
 
 const { runMechanicalScan } = await import("./mechanical.js");
 
@@ -156,5 +164,29 @@ describe("runMechanicalScan Prisma/Supabase architecture gating (#757)", () => {
     const findings = await runMechanicalScan({ dir: d, skipNetworkChecks: true });
     expect(findings.some((f) => f.id === "SB-RLS-STATIC-audit_logs")).toBe(true);
     expect(findings.some((f) => f.id === "M1-ARCH-PRISMA")).toBe(false);
+  });
+});
+
+// #950: a missing semgrep binary previously threw an uncaught ENOENT out of runMechanicalScan
+// (propagating to quick-scan's main().catch() and hard-exiting the CLI), instead of degrading
+// like osv-scanner already does (#512). This proves runMechanicalScan's own wiring — it must
+// read runSemgrep's `failure` and substitute the SEM-00 disclosure instead of feeding a failed
+// result into parseSemgrepFindings — using the REAL parseSemgrepFindings/semgrepUnavailableFinding
+// (only runSemgrep itself is faked, see the mock above).
+describe("runMechanicalScan degrades when semgrep is unavailable (#950)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "harvey-mechanical-semgrep-"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fixture" }));
+    runSemgrep.mockReturnValueOnce({ result: {}, failure: "semgrep not found on PATH" });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("does not throw, and substitutes the SEM-00 disclosure for the failed pass", async () => {
+    const findings = await runMechanicalScan({ dir, skipNetworkChecks: true });
+    const disclosure = findings.find((f) => f.id === "SEM-00");
+    expect(disclosure).toBeDefined();
+    expect(disclosure?.severity).toBe("Info");
+    expect(disclosure?.evidence).toContain("semgrep not found on PATH");
   });
 });

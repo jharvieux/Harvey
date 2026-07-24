@@ -82,6 +82,9 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Sensitive value logged to console": ["532", "A09"],
   // Hard-coded / mishandled credentials.
   "Committed credential": ["798", "A07"],
+  // #934: still a hard-coded credential FACT (same CWE) — the doc/example-context taxonomy only
+  // changes the exploitability prior and the grading route, not the weakness class.
+  "Committed credential — docs/example context": ["798", "A07"],
   "Supabase service_role key hardcoded as a JWT literal (service-role-literal)": ["798", "A07"],
   "pg_cron job embeds a secret-shaped literal": ["798", "A07"],
   "Edge function secret handling": ["798", "A07"],
