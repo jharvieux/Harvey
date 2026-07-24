@@ -57,7 +57,10 @@ export const BREADTH_SWEEP: BreadthTarget[] = [
   { slug: "hikari", repo: "antoineross/Hikari", commit: "c1f16f54ecc0b804567728f922999ad463af39e6", defaultBranch: "main", license: "MIT", bucket: "supabase", what: "Next.js 14 + Stripe + Supabase SaaS starter" },
 
   // Bucket B — Prisma / Postgres
-  { slug: "documenso", repo: "documenso/documenso", commit: "c02dfaba1a89f346db785879d39d35a04ec3450b", defaultBranch: "main", license: "AGPL-3.0", bucket: "prisma", what: "DocuSign alternative" },
+  // documenso removed 2026-07-24 (#899 fix-CI): PR #939/#894 baselined it into the GRADED
+  // corpus (src/scan/external-corpus.ts) after this manifest was written — a target is graded
+  // XOR ungraded, never both, and the graded baseline is strictly better coverage than an
+  // ungraded scan. See breadth-sweep.test.ts's XOR invariant.
   { slug: "dub", repo: "dubinc/dub", commit: "f90e5041d2f95f470e5551c38e2a516bf94b7803", defaultBranch: "main", license: "NOASSERTION", bucket: "prisma", what: "Link-attribution platform" },
   { slug: "hexclave", repo: "hexclave/hexclave", commit: "eed88f5dd58aa95455c42509c7d79f3f5f7a0569", defaultBranch: "dev", license: "NOASSERTION", bucket: "prisma", what: "User-infrastructure platform" },
   { slug: "cal-diy", repo: "calcom/cal.diy", commit: "3894f37e14eae5082770f35ff1fde72110c0e6b6", defaultBranch: "main", license: "MIT", bucket: "prisma", what: "Scheduling infrastructure" },

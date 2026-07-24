@@ -2,7 +2,7 @@
   "graded": false,
   "warning": "UNGRADED breadth sweep (#899, mechanical half). Counts are unverified claims, not scored capability. Triage/grading is #900.",
   "generatedAt": "2026-07-24T04:57:43.039Z",
-  "targetsScanned": 16,
+  "targetsScanned": 15,
   "targetsDropped": 0,
   "rows": [
     {
@@ -729,72 +729,6 @@
         "Perf": 13
       },
       "totalFindings": 330
-    },
-    {
-      "slug": "documenso",
-      "repo": "documenso/documenso",
-      "commit": "c02dfaba1a89f346db785879d39d35a04ec3450b",
-      "status": "scanned",
-      "files": 2822,
-      "tsFiles": 2061,
-      "wallclockSec": 82.6,
-      "scanners": [
-        {
-          "name": "quick-scan",
-          "modules": "M1 mechanical (semgrep, secrets, deps, static RLS)",
-          "seconds": 69.4,
-          "status": "ok",
-          "findingCount": 581
-        },
-        {
-          "name": "detect-static",
-          "modules": "M1-static, M5-slop, M6-indicator, M7-code, M8-intent, M9",
-          "seconds": 6,
-          "status": "ok",
-          "findingCount": 548
-        },
-        {
-          "name": "quality-scan",
-          "modules": "M4, M5-knip",
-          "seconds": 6.5,
-          "status": "ok",
-          "findingCount": 1845
-        },
-        {
-          "name": "mutation-scan",
-          "modules": "M8 (suite-absent only)",
-          "seconds": 0.6,
-          "status": "ok",
-          "findingCount": 1
-        },
-        {
-          "name": "pii-classify",
-          "modules": "M10 (schema)",
-          "seconds": 0,
-          "status": "ok",
-          "findingCount": 47,
-          "detail": "163 .sql file(s) + 1 schema.prisma"
-        }
-      ],
-      "findingsByModule": {
-        "M5": 2110,
-        "M1": 560,
-        "M7": 258,
-        "M10": 47,
-        "M6": 42,
-        "M8": 2,
-        "M4": 2,
-        "M9": 1
-      },
-      "findingsBySeverity": {
-        "Critical": 43,
-        "High": 376,
-        "Info": 188,
-        "Medium": 212,
-        "Low": 2084,
-        "Perf": 119
-      },
-      "totalFindings": 3022
     },
     {
       "slug": "dub",
