@@ -104,22 +104,58 @@ Two separate causes, both real:
    against"* rather than a finding, because `family_id`/`owner_user_id` are not in the recognised
    tenant-key list. This is the fail-loud design working (silence would be worse), but it means the
    headline planted bug is not caught at this tier.
-2. **Migrations are read cumulatively with no `drop policy` tracking** (already documented at
-   `src/scan/supabase-static.ts:583`). The fixed variant's text still *contains* the broken policies, so
-   the static reviewer sees them there too. This is the more dangerous half: had the `USING (true)`
-   check been a finding rather than a disclosure, the fixed variant would have been a **false
-   positive**, and the paired target would have caught that.
+2. **Migrations are read cumulatively with no `drop policy` tracking** (was documented in the
+   `checkMigrationRlsInitplanStatic` header of `src/scan/supabase-static.ts`). The fixed variant's text
+   still *contains* the broken policies, so the static reviewer sees them there too. This is the more
+   dangerous half: had the `USING (true)` check been a finding rather than a disclosure, the fixed
+   variant would have been a **false positive**, and the paired target would have caught that.
+   **This cause is now CLOSED by #937 — see "Consequence for the M1 negative corpus" below.**
 
-### Consequence for `validate-precision.ts`
+### Consequence for the M1 negative corpus — RESOLVED by #937/#938 (2026-07-24)
 
-#895 proposed feeding the fixed variant in as M1 negatives. **That is not yet possible, for two reasons,
-and both are recorded rather than worked around:**
+#895 proposed feeding the fixed variant in as an M1 negative. When this doc was first written that was
+blocked on two things; both are now resolved, and the resolution is recorded here rather than in the
+target's SQL.
 
-- The licence forbids distilling this source into a `*.entries.ts`, which is the only shape
-  `validate-precision`'s corpus takes.
-- More fundamentally, the fixed variant is **not currently distinguishable from the broken one at the
-  static tier**, so as an M1 negative it would assert nothing. It becomes a usable negative the moment
-  `drop policy` tracking lands — and at that point it is exactly the right regression test for it.
+**Cause 2 (drop-policy tracking) is closed by #937.** `parseLivePolicies` (`src/migration-sql-parse.ts`)
+now reduces the migration set to the policies LIVE at the end of history — a `create policy` defines or
+redefines an identity, a `drop policy` removes it, last event wins in file-then-position order — and
+both `checkMigrationPolicySemantics` and `checkMigrationRlsInitplanStatic` judge that final state. The
+byte-identical broken/fixed result above was **re-measured on 2026-07-24** on an original drop-and-replace
+shape: before #937, broken and fixed produced identical semantic-review AND identical initplan output;
+after #937 the fixed variant is clean and only the broken one is flagged. So a correctly-fixed client
+schema is no longer reported for the bug it already fixed.
+
+**The licence decision (cause 1) stands, and dictates the shape of the negative.** supabase-security-labs
+is licence NONE; the corpus invariant in `src/scan/external-corpus.ts` already forbids vendoring it into
+`targets/` or distilling it into a `*.entries.ts`. So the M1 negative is **an original re-expression of
+the drop-and-replace SHAPE authored from scratch, not a copy** — `public.audit_events` with a
+`using (true)` SELECT policy created in `20260724000001_rls_drop_policy_broken.sql` and dropped/replaced
+by a tenant-scoped policy in `20260724000002_rls_drop_policy_fixed.sql`. It is wired in as the
+`N-RLS-DROP-POLICY-FIXED` negative in `src/scan/calibration/rls-static-semantics.entries.ts`.
+
+**Gate placement — a correction to #895's ask.** #895/#938 named `src/cli/validate-precision.ts`. That
+gate's M1 side runs the **Prisma** tenant-scope detector over `src/detectors/__fixtures__/` dirs; a
+Supabase-migrations RLS shape is not scored by it at all, so wiring the negative there would be a *false
+green* (it would pass by never being looked at). The reviewer this negative actually exercises
+(`checkMigrationPolicySemantics` / `checkMigrationRlsInitplanStatic`) runs inside `runMechanicalScan`,
+which is scored by **`src/cli/validate-calibration.ts`** — so the negative lives in that M1 mechanical
+corpus, where `pnpm exec tsx src/cli/validate-calibration.ts` scores it clean.
+
+**What the corpus negative pins vs. what the unit tests pin.** `validate-calibration` only *fails* a
+negative on a FREE-COUNT (high-tier) finding, and the static RLS review is review-tier — so the corpus
+entry is the **forward-looking** guard: the day `USING(true)` on a tenant table graduates from a review
+disclosure to a high-tier finding (the obvious next detector, and the exact scenario that made cause 2
+dangerous), a resurrected dropped policy would fire and fail the gate. The **behavioral** regression —
+that the dropped policy is not reported *even at review tier* — is pinned by the `drop/replace lifecycle
+(#937)` block in `src/scan/supabase-static.test.ts` and the `parseLivePolicies (#937 …)` block in
+`src/migration-sql-parse.test.ts`, both in `pnpm verify`.
+
+**Still not covered (carried forward, not dropped):** the two planted bugs #895 could not seed live
+(`posts_select_leaky`, `family_members_select_all` — the generic seeder cannot satisfy
+`posts_family_id_fkey` / `family_members_family_id_fkey`) and the storage bugs (public bucket, missing
+`storage.objects` policies, which have no M2 probe) remain unexercised at the M2 tier. #937/#938 close
+the M1-static half of the paired target; the M2-seeding half is unchanged and stays an open follow-up.
 
 ## What is now pinned
 
