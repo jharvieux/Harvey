@@ -70,6 +70,15 @@ reason to drop the target, per #897's own instruction.
 
 ### 2. The free tier cries wolf at scale — grade **F (0/100)** on placeholder credentials
 
+> **Update 2026-07-24 (#934):** the placeholder-credential class is reclassified — gitleaks
+> high-precision hits in doc/example-deployment paths (`docs/**`, `contrib/**`, `*.md`/`*.mdx`,
+> example/sample files, `*.dev.yml` composes) now report at Low in the non-grading informational
+> section with the reason stated; TruffleHog live-VERIFIED secrets are exempt. Re-measured on this
+> pin: all 14 former Criticals report informational, 0 graded. carbon is now in
+> `FREE_TIER_EXPECTATIONS` (weekly-scored `mustNotGradeDocContextCreds` invariant). The grade
+> remains F (0/100) on 11 graded Highs; their precision/severity decisions and the
+> `mustNotScoreF: true` flip are tracked in #996.
+
 `quick-scan` graded carbon **F (0/100)** on 26 verified hygiene issues: 14 Critical, 11 High, 1 Low.
 Every one of the 14 Criticals inspected is a **placeholder credential in documentation or an example
 deployment file** — `contrib/deploying/simple-docker-caddy/docker-compose.prod.yml`,
