@@ -456,6 +456,16 @@ describe("revalidateNotRunReasons (#321)", () => {
     expect(revalidateNotRunReasons(target("subscription-payments"), [m8Finding("M8-07")])).toEqual([]);
   });
 
+  it("stays quiet when M4 emits only its #505/#931 M4-99 did-not-complete disclosure (documenso shape)", () => {
+    // documenso records M4 not-run because jscpd writes no report on ubuntu; quality-scan then emits
+    // the M4-99 'whole-repo scan incomplete' gap disclosure. That sentinel is the tool saying it
+    // STILL couldn't complete — it must not read as M4 having run and decay the not-run reason.
+    const documenso = EXTERNAL_CORPUS.find((x) => x.slug === "documenso")!;
+    expect(isNotRun(documenso.modules.M4!)).toBe(true);
+    const m499: Finding = { ...finding("M4 — Duplication", "Info"), id: "M4-99" };
+    expect(revalidateNotRunReasons(documenso, [m499]).filter((r) => r.module === "M4")).toEqual([]);
+  });
+
   it("does not read a test-intent finding as evidence against an M8 MUTATION not-run reason", () => {
     // The 2026-07-17 false alarm: saas-lite's M8 mutation tier is not-run (E2E-only suite), and
     // detect-static's #372 test-intent pass produced a real "M8 —" finding — a different
