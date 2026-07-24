@@ -561,7 +561,19 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
         reason: "#897: MEASURED 2026-07-24 — a real suite IS detected (so #224's zero-coverage finding does not apply), but it is not mutation-scoreable through corpus-m8.yml: `npm install` fails outright on this target (EUNSUPPORTEDPROTOCOL: `catalog:`), so no runner and no Stryker can be provisioned by the job as it exists. Same class of blocker as rallly/inbox-zero, one step worse — there the install succeeds but resolves only the root packages. Recorded not-run with the reason rather than 0.",
       },
       "M8-intent": { counted: 3, total: 3, note: "#897: MEASURED 2026-07-24 — 1 'Call-count-only test' (Low) and 2 'Happy-path-only tests on security/money-critical code' (Medium: no-legacy-rls.ts, build-payment-journal.ts). A striking ratio: 77 test files across 4,110 source files produce almost no test-intent signal, because there is barely any test surface to inspect." },
-      M9: { counted: 0, total: 1, note: "#897: MEASURED 2026-07-24 — a single Info row, #903's 'M9 not assessed — React Router 7 (framework mode) (framework not supported)'. The App Router module correctly declares itself not-applicable on the largest target in the corpus INSTEAD of returning a silent zero, which is the #903 guard doing its job on real code." },
+      // #940/#964: counted:0 is a PLACEHOLDER meaning "not baselineable yet", NOT a measurement — this
+      // row is intentionally RED. The #897 note below is FALSIFIED: #903 recorded "M9 not assessed —
+      // React Router 7 (framework not supported)" and counted 0, but the M9 boundary model + RR7 adapter
+      // (#916/#917/#918) now ANALYSE RR7, so a fresh `pnpm corpus-drift --target carbon --install`
+      // (2026-07-24) produces 347 non-Info M9 findings: 186 Low SSR-only API misuse, 102 High route-action
+      // missing-input-validation, 56 Medium data-waterfall, 3 High server→client leak. Framework detection
+      // is CORRECT (carbon is @react-router/dev, ssr:true) — but the 347 carries a material, reproduced
+      // false-positive population (≥36/102 input-validation Highs are carbon's `validator(schema).validate()`
+      // wrapper the check's regex misses; ≥59/186 SSR-api are non-component .ts utils + 55 already
+      // optional-chain-guarded). A rebaseline asserts the number is correct (CLAUDE.md); 347 is not, so it is
+      // NOT baselined and the M9 precision work is split to #964. This row goes green when #964 lands a
+      // measured, FP-cleared carbon M9 number here.
+      M9: { counted: 0, total: 1, note: "#940/#964: NOT BASELINED — intentionally red. counted:0 is a placeholder, not a measurement. RR7 is now analysed (#916-918) and carbon produces 347 non-Info M9 findings, but a reproduced FP population (validator()-wrapper input-validation + non-component window SSR-api) means the number cannot be asserted as correct. Precision fix + real carbon M9 baseline tracked in #964; do not rebaseline to 347." },
       M10: { counted: 154, total: 154, note: "#897: MEASURED 2026-07-24 over 859 Supabase migrations — 4,954,187 bytes of SQL classified in 0.1s, 154 PII-bearing tables. The headline scale result: no timeout and no quadratic degradation, the classifier is linear in schema size. The headline QUALITY result is the opposite way round and is recorded in the scale doc — on an ERP carrying employee, supplier and customer records the highest severity produced anywhere in 154 tables is Medium, so the severity model does not separate a real HR/supplier schema from a starter kit's users table." },
     },
   },
@@ -747,14 +759,20 @@ export function scoreMutationBaseline(
 // still scored under M5-slop without this file needing an update to notice it.
 const M5_KNIP_TAXONOMY = "M5 — Slop / dead code";
 
-// The mutation tier's own finding taxonomies (src/mutation-scan.ts M8-00/M8-02, src/stub-check.ts
-// M8-01) — a closed set, unlike detect-static's growing test-intent family, so "M8" enumerates
-// these and "M8-intent" matches the rest of the "M8 " prefix by exclusion (the same open/closed
-// pattern as M5-knip/M5-slop above: a new test-intent class is scored without touching this file).
+// The mutation tier's own finding taxonomies (src/mutation-scan.ts, src/stub-check.ts) — a closed
+// set, unlike detect-static's growing test-intent family, so "M8" enumerates these and "M8-intent"
+// matches the rest of the "M8 " prefix by exclusion (the same open/closed pattern as M5-knip/M5-slop
+// above). Because the M8-intent bucket is defined by exclusion, EVERY mutation-tier taxonomy must be
+// listed here or it silently leaks into M8-intent: #940 — the #932 "Root-workspace test suite not
+// reachable per-app" measurement-gap and #503's "Suite fails unmutated dry run" both landed without
+// this set being updated, so documenso's M8 measurement-gap scored 0 as M8 and inflated M8-intent to
+// 2. When mutation-scan/stub-check add a taxonomy, add it here too.
 const M8_MUTATION_TAXONOMIES = new Set([
   "M8 — No automated test suite",
   "M8 — Survives implementation deletion",
   "M8 — Denial/boundary path untested",
+  "M8 — Root-workspace test suite not reachable per-app",
+  "M8 — Suite fails unmutated dry run (env-fragile tests)",
 ]);
 
 // Exported for corpus-drift.ts's per-module scan-root pass (#322), which needs to swap one
