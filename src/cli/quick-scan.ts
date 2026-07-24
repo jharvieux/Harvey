@@ -6,7 +6,12 @@
 //
 //   pnpm quick-scan --dir <path> [--bundle <path>] [--tenant-key <column>]
 //                    [--tenant-mode per-tenant|per-user] [--json] [--out <file>]
-//                    [--findings-out <file>]
+//                    [--findings-out <file>] [--sarif-out <file>]
+//
+// --sarif-out (#867): the raw mechanical Finding[] as SARIF 2.1.0, for GitHub code scanning or an
+// ASPM the client already runs. quick-scan has NO coverage ledger to export — it is one tier of one
+// module — so the SARIF carries an explicit "no ledger, and here is the scope this actually covers"
+// notification rather than presenting a mechanical scan as a completed audit.
 //
 // --findings-out (#528): write the RAW mechanical Finding[] (the input to the free report, before
 // the free/paid gating) as a JSON array — the machine-readable feed the orchestrator's M1 probe
@@ -25,6 +30,18 @@
 import { writeFileSync } from "node:fs";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { buildQuickScanReport, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
+import { toSarif } from "../sarif.js";
+
+// What a quick-scan SARIF export does and does not cover. Stated in the export itself because a
+// SARIF file outlives the terminal session that produced it: an importer who sees only results has
+// no way to know nine of the ten modules were never attempted.
+const QUICK_SCAN_SARIF_SCOPE =
+  "This is a free quick-scan (M1 mechanical tier only), not a Harvey audit. It covers dependency, " +
+  "secret, and dangerous-config hygiene plus static indicators. The other nine audit modules " +
+  "(M2 pen-test, M3 hotspots, M4 duplication, M5 dead code, M6 maintainability, M7 performance, " +
+  "M8 test quality, M9 App Router boundaries, M10 data classification) and the live/LLM tiers of " +
+  "M1 were NOT run. Absence of a result here is not evidence of absence of a problem. " +
+  "Run `run-audit <target> --sarif-out <file>` for an export carrying a real per-module ledger.";
 
 function arg(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -170,6 +187,13 @@ async function main(): Promise<void> {
 
   const findingsOut = arg("--findings-out");
   if (findingsOut) writeFileSync(findingsOut, `${JSON.stringify(rawFindings, null, 2)}\n`);
+
+  const sarifOut = arg("--sarif-out");
+  if (sarifOut) {
+    const sarif = toSarif(rawFindings, { coverageAbsent: QUICK_SCAN_SARIF_SCOPE }, { baseUri: dir });
+    writeFileSync(sarifOut, `${JSON.stringify(sarif, null, 2)}\n`);
+    console.error(`SARIF 2.1.0 (${rawFindings.length} result(s)) → ${sarifOut}`);
+  }
 
   const out = arg("--out");
   const body = process.argv.includes("--json") ? JSON.stringify(report, null, 2) : render(report);

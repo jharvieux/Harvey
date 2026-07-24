@@ -2,7 +2,8 @@
 // ledger from what actually executed.
 //
 //   pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm]
-//       [--out coverage.json] [--findings-out engagement.json] [--meta meta.json]
+//       [--out coverage.json] [--findings-out engagement.json] [--sarif-out findings.sarif]
+//       [--meta meta.json]
 //       [--artifacts-dir dir] [--supabase <project-ref>]... [--allow-target-install]
 //       [--schema <path>]... | [--schema <app-name>=<path>]...
 //
@@ -57,6 +58,11 @@
 // --meta points at the engagement metadata (client, health, headline); omit it and the file carries
 // a placeholder meta with a loud warning to fill it before the report ships.
 //
+// --sarif-out (#867): the same findings AND the derived coverage ledger as SARIF 2.1.0, for
+// GitHub code scanning / an ASPM the client already runs. The ledger rides as warning-level
+// toolExecutionNotifications so a module that did not run cannot vanish into "no results" — see
+// the decision recorded at the top of src/sarif.ts.
+//
 // --baseline (#457): a prior engagement findings.json for the SAME client. When given (with
 // --findings-out), each current finding is classified resolved/persistent/new by stable finding
 // identity (src/audit-diff.ts) and the deliverable leads with a progress view. Omit it and behaviour
@@ -76,7 +82,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { assembleEngagementDocument } from "../audit-report.js";
+import { assembleEngagementDocument, coverageLedger } from "../audit-report.js";
 import { buildExecutionPlan, formatExecutionPlan } from "../audit-plan.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
 import { applyBaseline } from "../audit-diff.js";
@@ -86,6 +92,7 @@ import { AUDIT_RUNNERS } from "../audit-runners.js";
 import { discoverSchemaFiles } from "../dynamic-validate.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { isGitRepoRoot } from "../scan/secrets.js";
+import { toSarif } from "../sarif.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
 
 // A valid-but-empty meta for the --findings-out scaffold when no engagement --meta was supplied.
@@ -107,6 +114,7 @@ const flagValues = (flag: string): string[] => args.flatMap((a, i) => (a === fla
 const outPath = flagValue("--out");
 const findingsOut = flagValue("--findings-out");
 const metaPath = flagValue("--meta");
+const sarifOut = flagValue("--sarif-out");
 const artifactsDir = flagValue("--artifacts-dir");
 // #506: --supabase is repeatable — one project ref per Supabase project on a monorepo. M7's advisor
 // tier fans out over all of them. supabaseRef keeps the single-ref field for back-compat.
@@ -142,7 +150,7 @@ supabaseRefsArg.forEach((ref, i) => {
 });
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--schema <path> | --schema <app-name>=<path>] [--allow-target-install] [--baseline prior-findings.json]");
+  console.error("usage: pnpm exec tsx src/cli/run-audit.ts <target-dir> [--connected] [--dynamic] [--llm] [--out coverage.json] [--findings-out engagement.json] [--sarif-out findings.sarif] [--meta meta.json] [--artifacts-dir dir] [--supabase <project-ref>] [--schema <path> | --schema <app-name>=<path>] [--allow-target-install] [--baseline prior-findings.json]");
   process.exit(2);
 }
 
@@ -241,6 +249,10 @@ if (outPath) {
 // coverage ledger, so a never-run module is visible in the deliverable rather than reading as
 // "no findings". Meta is engagement metadata run-audit cannot derive: take it from --meta, else
 // scaffold a placeholder and say loudly that it must be filled before the report ships.
+// The findings the SARIF export ships: the assembled document's when one was built (so the
+// baseline diff's tags ride along), else the raw captured set.
+let exportFindings: Finding[] = findings;
+
 if (findingsOut) {
   const meta: ReportMeta = metaPath ? (JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta) : placeholderMeta(targetDir);
   let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots);
@@ -268,6 +280,21 @@ if (findingsOut) {
   writeFileSync(findingsOut, `${JSON.stringify(doc, null, 2)}\n`);
   console.log(`\nEngagement findings (${doc.findings.length} finding(s) + coverage ledger) → ${findingsOut}`);
   if (!metaPath) console.error("⚠ no --meta given: the deliverable carries a PLACEHOLDER meta — fill client/health/headline/scope before rendering the report.");
+  exportFindings = doc.findings;
+}
+
+// #867: SARIF 2.1.0 for the client's own security tooling. The coverage ledger travels with it as
+// toolExecutionNotifications — an export that dropped it would read as a clean bill of health for
+// every module that never ran.
+if (sarifOut) {
+  // coverageLedger, not the raw `recorded` rows: it is the same derived ledger the findings
+  // document carries (module names filled in, and a module that was never accounted for at all
+  // still gets a row), so the two exports of one run cannot disagree about what ran.
+  const ledger = coverageLedger(recorded, env);
+  const sarif = toSarif(exportFindings, { coverage: ledger }, { baseUri: targetDir });
+  writeFileSync(sarifOut, `${JSON.stringify(sarif, null, 2)}\n`);
+  const gaps = ledger.filter((r) => r.status !== "ran").length;
+  console.log(`\nSARIF 2.1.0 (${exportFindings.length} result(s), ${gaps} coverage notification(s)) → ${sarifOut}`);
 }
 
 // #284: the never-run ledger is the complement of this log, so a module that genuinely ran here
