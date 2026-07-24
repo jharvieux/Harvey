@@ -82,20 +82,18 @@ describe("fix §8 acceptance — the FULL gate for a resolvable-detector class (
   });
 });
 
-describe("fix §8 acceptance — disclosed gap: a semgrep-detected class is NOT autonomously green (fail loud)", () => {
-  it("class-4 (open redirect) detector-after is notRun — rerunDetector has no semgrep resolver, so it can never fake green", () => {
+describe("fix §8 acceptance — disclosed gap: an unresolvable detector is NOT autonomously green (fail loud)", () => {
+  it("a semgrep REGISTRY-rule class stays notRun — #1012 replays only the local harvey-* rules (a pack needs a network fetch)", () => {
     const src = readCalibration(CLASS4_FILE);
-    const fixed = src.replace(
-      "  url: z.string().url(),",
-      '  url: z.string().url().refine((u) => new URL(u).host === "app.example.com", "host not allowlisted"),',
-    );
+    const fixed = src.replace("  res.redirect(302, parsed.data.url);", '  res.redirect(302, "/");');
     expect(fixed).not.toEqual(src);
-    const finding = m5Finding({ id: "CAL-REDIRECT", taxonomy: "harvey-open-redirect", location: `${CLASS4_FILE}:9` });
+    const registryRule = "javascript.browser.security.open-redirect.js-open-redirect";
+    const finding = m5Finding({ id: "CAL-REDIRECT", taxonomy: registryRule, location: `${CLASS4_FILE}:18` });
     const r = runFixAcceptance(finding, { file: CLASS4_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
     expect(r.execution.outcome).toBe("diff-verified"); // the diff still applies + clears rails
     expect(r.detectorAfter.notRun).toContain("no detector re-run resolver");
     expect(r.green).toBe(false); // an unrun detector is NOT clean — never a false autonomous green
-    expect(resolvesToDetector("harvey-open-redirect")).toBe(false);
+    expect(resolvesToDetector(registryRule)).toBe(false);
   });
 });
 

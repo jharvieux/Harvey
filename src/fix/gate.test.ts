@@ -65,14 +65,27 @@ describe("runGate — a fix is not closed until the re-audit stops detecting it"
   });
 
   it("reports unverifiable — never resolved — for a taxonomy whose detector cannot be re-run, and never closes its ticket", () => {
+    // A semgrep REGISTRY rule: #1012's resolver replays only the local harvey-* rule directory (a
+    // registry pack needs a network fetch), so this class is still, deliberately, unverifiable.
     const dir = scratch(PLANTED, planted);
-    const f = finding({ taxonomy: "harvey-open-redirect", location: "pages/api/redirect.js:9" });
+    const f = finding({ taxonomy: "javascript.browser.security.open-redirect.js-open-redirect", location: "pages/api/redirect.js:9" });
     const report = runGate([f], dir);
     expect(report.results[0]?.status).toBe("unverifiable");
     expect(report.results[0]?.detail).toContain("no detector re-run resolver");
     const plan = planWriteback(report);
     expect(plan[0]?.intent).toBe("none");
     expect(plan[0]?.reason).toContain("never closed on faith");
+  });
+
+  it("a harvey-* finding whose file is gone from the checkout is unverifiable, NOT resolved (#1012)", () => {
+    // The failure mode the semgrep resolver must not have: a deleted/moved file makes the rule match
+    // nothing. That is an unscanned file, not a fixed bug — the ticket stays open with the reason.
+    const dir = scratch(PLANTED, planted);
+    const f = finding({ taxonomy: "harvey-open-redirect", location: "pages/api/redirect.js:18" });
+    const report = runGate([f], dir);
+    expect(report.results[0]?.status).toBe("unverifiable");
+    expect(report.results[0]?.detail).toContain("does not exist");
+    expect(planWriteback(report)[0]?.intent).toBe("none");
   });
 
   it("stamps each result with the ticket marker findings-to-tickets filed under, per engagement namespace", () => {
