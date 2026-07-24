@@ -222,8 +222,9 @@ const JSON_CONTAINER_NAME_PATTERN =
 // hides in real apps, and name-only matching is structurally blind to their VALUES. A text-typed
 // column with a narrative-shaped name gets a LOW-confidence FREE_TEXT_REVIEW flag — "review this
 // column's contents for unstructured PII/PHI", a flag, never an assertion (mirrors #377's json
-// container flag). This is the interim NAME-based visibility flag so the blind spot appears in the
-// output; the full fix is a content-reading semantic classifier (deferred, #855). Type-gated (only
+// container flag). This is the NAME-based visibility flag so the blind spot appears in the output;
+// #855's opt-in semantic pass reasons over names/types/table context but still never reads VALUES,
+// so a content-reading (value-sampling) tier remains deliberately out of scope. Type-gated (only
 // free-text-shaped types) and vocabulary-scoped so it doesn't flag every string column — still
 // FP-prone (an email `body`, a product `description`), which is exactly why it's low-confidence
 // review, not a classification. Checked LAST, so any higher-signal dictionary/type hit wins first.
