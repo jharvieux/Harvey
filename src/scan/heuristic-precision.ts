@@ -1,9 +1,10 @@
-// M7/M8 heuristic precision gate (#823). The M1 mechanical corpus has a scored recall/precision
-// gate (cli/validate-calibration.ts); the two noisiest HEURISTIC modules — M7 code tier
-// (src/detectors/perf-code.ts) and M8 test intent (test-intent.ts + vitest-intent.ts) — had
+// Heuristic precision gate (#823, extended to M1 tenant-scope by #896). The M1 MECHANICAL corpus
+// has a scored recall/precision gate (cli/validate-calibration.ts); the noisiest HEURISTIC
+// detectors — M7 code tier (src/detectors/perf-code.ts), M8 test intent (test-intent.ts +
+// vitest-intent.ts) and the M1 Prisma tenant-scope/BOLA pass (scan/prisma-tenant-scope.ts) — had
 // per-class fixture pairs but no aggregated precision NUMBER. This module scores the labeled
-// fixture corpus (calibration/m7-code.entries.ts, calibration/m8-intent.entries.ts) against the
-// live detectors and derives, per module:
+// fixture corpus (calibration/m1-tenant-scope.entries.ts, m7-code.entries.ts, m8-intent.entries.ts)
+// against the live detectors and derives, per module:
 //
 //   recall    = positives caught / positives total
 //   precision = positives caught / (positives caught + negatives that fired)
@@ -11,8 +12,11 @@
 // These are CORPUS numbers, not field numbers: the corpus plants one instance per class and one
 // benign lookalike per known FP shape, so "precision" here means "no catalogued noise shape
 // fires", the #61 discipline — a field run's precision depends on how often each shape occurs
-// in the wild. The negative rows encode the ATC-dogfood + 6-repo-triage FP catalog
-// (docs/m7-performance.md §2a), so a guard regression shows up as a measured precision drop.
+// in the wild. The M7/M8 negative rows encode the ATC-dogfood + 6-repo-triage FP catalog
+// (docs/m7-performance.md §2a), so a guard regression shows up as a measured precision drop; the
+// M1 negatives (#896) are distilled from three MIT libraries whose PURPOSE is correct tenant
+// scoping — the case a fixture we wrote ourselves cannot test, because we would write it clean the
+// way we already expect clean to look.
 //
 // Consumers: heuristic-precision.test.ts (the `pnpm verify` gate — the detectors are pure TS,
 // no mechanical binaries needed), cli/validate-precision.ts (standalone report), and
@@ -27,13 +31,15 @@ import { detectTestIntentFindings } from "../detectors/test-intent.js";
 import { detectVitestIntentFindings } from "../detectors/vitest-intent.js";
 import type { Finding } from "../findings.js";
 import { detectionMetrics, type DetectionMetrics } from "./detection-metrics.js";
+import { detectPrismaTenantScopeFindings } from "./prisma-tenant-scope.js";
+import { m1TenantScopeEntries } from "./calibration/m1-tenant-scope.entries.js";
 import { m7CodeEntries } from "./calibration/m7-code.entries.js";
 import { m8IntentEntries } from "./calibration/m8-intent.entries.js";
 import type { HeuristicEntry } from "./calibration/types.js";
 
 export type { HeuristicEntry } from "./calibration/types.js";
 
-export const HEURISTIC_CORPUS: HeuristicEntry[] = [...m7CodeEntries, ...m8IntentEntries];
+export const HEURISTIC_CORPUS: HeuristicEntry[] = [...m1TenantScopeEntries, ...m7CodeEntries, ...m8IntentEntries];
 
 const FIXTURES_ROOT = fileURLToPath(new URL("../detectors/__fixtures__/", import.meta.url));
 
@@ -64,6 +70,7 @@ const COMPILER_ON: SourceInput = {
 
 function runDetectors(entry: HeuristicEntry): Finding[] {
   const files = loadFixtureDir(entry.dir);
+  if (entry.module === "M1") return detectPrismaTenantScopeFindings(files);
   if (entry.module === "M7") {
     return detectPerfCodeFindings(entry.compilerOn ? [...files, COMPILER_ON] : files, entry.framework);
   }

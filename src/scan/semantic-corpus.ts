@@ -296,7 +296,7 @@ export function unscoredTarget(target: SemanticTarget, reason: string): Semantic
   };
 }
 
-export interface SemanticMatrix {
+interface SemanticMatrix {
   targets: SemanticTargetResult[];
   scoredTargets: number;
   unscoredTargets: number;

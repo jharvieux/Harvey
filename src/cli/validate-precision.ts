@@ -1,7 +1,8 @@
-// M7/M8 heuristic-detector precision gate CLI (#823) — the sibling of validate-calibration.ts
-// for the two heuristic modules. Scores the labeled fixture corpus (src/scan/calibration/
-// m7-code.entries.ts + m8-intent.entries.ts) against the LIVE detectors and reports per-module
-// corpus precision/recall. Pure TS — needs none of the mechanical binaries, so it runs anywhere:
+// Heuristic-detector precision gate CLI (#823; M1 tenant-scope added by #896) — the sibling of
+// validate-calibration.ts for the heuristic detectors. Scores the labeled fixture corpus
+// (src/scan/calibration/m1-tenant-scope.entries.ts + m7-code.entries.ts + m8-intent.entries.ts)
+// against the LIVE detectors and reports per-module corpus precision/recall. Pure TS — needs none
+// of the mechanical binaries, so it runs anywhere:
 //
 //   pnpm exec tsx src/cli/validate-precision.ts          # human-readable matrix
 //   pnpm exec tsx src/cli/validate-precision.ts --json   # raw matrix as JSON
@@ -38,7 +39,11 @@ for (const m of matrix.modules) {
 
 console.log(
   "\nCorpus numbers, not field numbers: one planted instance per class, one lookalike per catalogued FP shape " +
-    "(docs/m7-performance.md §2a) — 'precision' means no catalogued noise shape fires.",
+    "(M7/M8: docs/m7-performance.md §2a) — 'precision' means no catalogued noise shape fires.",
+);
+console.log(
+  "M1's negatives are the exception worth naming: they are distilled from three MIT libraries whose purpose IS correct " +
+    "tenant scoping (docs/design/m1-tenant-scope-precision.md), so they test idioms we did not write and did not expect.",
 );
 
 if (!matrix.ok) {

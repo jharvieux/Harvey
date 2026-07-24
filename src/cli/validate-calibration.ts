@@ -166,7 +166,7 @@ if (reviewMisses.length) console.log(`Review-tier recall gaps (non-fatal, tracke
 // corpus (src/scan/heuristic-precision.ts — pure detectors, no binaries), so the calibration
 // report carries a measured precision number for the two noisiest heuristic modules, not just
 // M1. Per-row detail: `pnpm exec tsx src/cli/validate-precision.ts`.
-console.log("\nHeuristic precision (M7 code tier / M8 test intent — labeled fixture corpus, #823):");
+console.log("\nHeuristic precision (M1 tenant-scope / M7 code tier / M8 test intent — labeled fixture corpus, #823/#896):");
 const heuristic = measureHeuristicPrecision();
 for (const m of heuristic.modules) {
   console.log(`  ${m.module.padEnd(4)} ${formatMetrics(m.metrics)}`);

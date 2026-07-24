@@ -10,7 +10,7 @@
 // A zero denominator yields 0, not NaN: a corpus that reported nothing has a precision of zero to
 // report, and NaN in a printed number is how a broken measurement gets mistaken for a missing one.
 
-export interface Confusion {
+interface Confusion {
   tp: number; // planted positives the tier caught
   fp: number; // benign negatives the tier flagged
   tn: number; // benign negatives it left alone

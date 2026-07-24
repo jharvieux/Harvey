@@ -1,0 +1,9 @@
+// The second non-shipping shape measured on 2026-07-23: Errorname/prisma-multi-tenant ships
+// docs/examples/redwood/api/src/services/posts/posts.js (MIT), whose example service updates and
+// deletes by id. It is documentation of the ORM's call signature, not code the client runs — and
+// the shared NON_PRODUCT filter (a `.test.`/`.spec.`/`__tests__` matcher) does not cover it, which
+// is why the tenant-scope detector carries its own broader non-shipping gate.
+
+export const updatePost = ({ id, input }) => db.post.update({ data: input, where: { id } });
+
+export const deletePost = ({ id }) => db.post.delete({ where: { id } });
