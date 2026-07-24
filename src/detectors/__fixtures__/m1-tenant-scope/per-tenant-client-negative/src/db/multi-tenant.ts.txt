@@ -1,0 +1,38 @@
+// Distilled from Errorname/prisma-multi-tenant @ 16f7bff72566ea4fa08acf3b7d7a7299237c6530
+// (MIT License, Copyright (c) 2020 Thibaud Courtoison) — packages/client/src/index.ts. Reduced to
+// the SHAPE that matters for M1 precision: tenancy enforced by giving each tenant its own DATABASE
+// CONNECTION, so a per-tenant client's queries carry NO tenant column at all — by design, because
+// the connection is the boundary. A detector that reads "no tenant column in the where clause" as
+// a finding would flag every query in every app built this way.
+
+interface Tenant {
+  name: string;
+  url: string;
+}
+
+export class MultiTenant<Client extends { $disconnect: () => Promise<void> }> {
+  private readonly tenants: Record<string, Client> = {};
+
+  constructor(
+    private readonly ClientTenant: new (opts: { datasources: { db: { url: string } } }) => Client,
+    private readonly management: { tenant: { findFirst: (args: unknown) => Promise<Tenant | null> } },
+  ) {}
+
+  async get(name: string): Promise<Client> {
+    const existing = this.tenants[name];
+    if (existing) return existing;
+
+    // The lookup is on the MANAGEMENT database, keyed by tenant name — this is the tenant
+    // resolution step itself, not a tenant-scoped business query.
+    const tenant = await this.management.tenant.findFirst({ where: { name } });
+    if (!tenant) throw new Error(`unknown tenant: ${name}`);
+
+    const client = new this.ClientTenant({ datasources: { db: { url: tenant.url } } });
+    this.tenants[name] = client;
+    return client;
+  }
+
+  async disconnect(): Promise<void> {
+    await Promise.all(Object.values(this.tenants).map((c) => c.$disconnect()));
+  }
+}

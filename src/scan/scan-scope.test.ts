@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -32,6 +32,29 @@ describe("resolveScanScope — git repo target", () => {
     try {
       expect(existsSync(join(scanDir, "index.ts"))).toBe(true);
       expect(existsSync(join(scanDir, ".env.local"))).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  // Measured 2026-07-23 on zenstackhq/zenstack (packages/ide/vscode/res is a tracked symlink to a
+  // directory): plain cpSync followed the link, found a directory and threw "Recursive option not
+  // enabled", killing the ENTIRE scan of a real repo. The scan must survive it, and must copy the
+  // link rather than the tree it points at.
+  it("survives a tracked symlink to a directory instead of aborting the whole scan", () => {
+    const repo = tmp("harvey-scope-symlink-");
+    execFileSync("git", ["init", "-q", repo]);
+    mkdirSync(join(repo, "res"));
+    writeFileSync(join(repo, "res", "stdlib.txt"), "content");
+    writeFileSync(join(repo, "index.ts"), "export const x = 1;");
+    symlinkSync("res", join(repo, "link-to-res"));
+    execFileSync("git", ["-C", repo, "add", "-A"]);
+
+    const { scanDir, cleanup } = resolveScanScope(repo);
+    scratches.push(scanDir);
+    try {
+      expect(existsSync(join(scanDir, "index.ts"))).toBe(true);
+      expect(lstatSync(join(scanDir, "link-to-res")).isSymbolicLink()).toBe(true);
     } finally {
       cleanup();
     }

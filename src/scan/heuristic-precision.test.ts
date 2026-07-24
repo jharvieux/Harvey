@@ -1,6 +1,6 @@
-// The `pnpm verify` gate for the M7/M8 heuristic precision corpus (#823): every planted class
-// fires, every catalogued FP lookalike stays silent, and both modules report 100% corpus
-// precision AND recall. The detectors are pure TS, so unlike the M1 gate this runs binary-less
+// The `pnpm verify` gate for the heuristic precision corpus (#823; M1 tenant-scope added by
+// #896): every planted class fires, every catalogued FP lookalike stays silent, and every scored
+// module reports 100% corpus precision AND recall. The detectors are pure TS, so unlike the M1 gate this runs binary-less
 // in CI. Numbers here are corpus numbers — see heuristic-precision.ts's header for what that
 // does and does not claim.
 
@@ -9,7 +9,7 @@ import { HEURISTIC_CORPUS, measureHeuristicPrecision } from "./heuristic-precisi
 
 const matrix = measureHeuristicPrecision();
 
-describe("M7/M8 heuristic precision gate (#823)", () => {
+describe("heuristic precision gate (#823/#896)", () => {
   it("catches every planted positive", () => {
     const missed = matrix.rows.filter((r) => r.kind === "positive" && !r.pass).map((r) => `${r.id}: ${r.detail}`);
     expect(missed).toEqual([]);
@@ -20,8 +20,10 @@ describe("M7/M8 heuristic precision gate (#823)", () => {
     expect(fired).toEqual([]);
   });
 
-  it("measures both M7 and M8 at 100% corpus precision and recall", () => {
-    expect(matrix.modules.map((m) => m.module).sort()).toEqual(["M7", "M8"]);
+  it("measures every scored module at 100% corpus precision and recall", () => {
+    // Pinned, not derived: a module silently dropping out of the corpus would otherwise leave the
+    // remaining ones at 100% and read as a clean gate (#896 added M1 tenant-scope).
+    expect(matrix.modules.map((m) => m.module).sort()).toEqual(["M1", "M7", "M8"]);
     for (const m of matrix.modules) {
       expect.soft(m.precision, `${m.module} precision`).toBe(1);
       expect.soft(m.recall, `${m.module} recall`).toBe(1);

@@ -1,0 +1,27 @@
+// Correct tenant scoping written in the RELATION idiom the tenant-scoping libraries teach — the
+// case the detector's own header claims it clears, asserted here rather than assumed. Shapes taken
+// from prisma-rls's permissions config and zenstack's policy filters (both MIT): the scope reaches
+// the query through a named relation or an AND combinator, never as a flat `tenantId` key.
+
+import { prisma } from "./client";
+
+// Scope via a nested relation: the row is reachable only if the caller is a member of the
+// organization that owns it.
+export function readPost(id: string, userId: string) {
+  return prisma.post.findFirst({
+    where: { id, organization: { members: { some: { userId } } } },
+  });
+}
+
+// Scope via an AND combinator rather than a sibling key.
+export function updatePost(id: string, organizationId: string, title: string) {
+  return prisma.post.update({
+    where: { AND: [{ id }, { organizationId }] },
+    data: { title },
+  });
+}
+
+// deleteMany with the tenant predicate alongside the id — the safe form of the by-id delete.
+export function deletePost(id: string, teamId: string) {
+  return prisma.post.deleteMany({ where: { id, teamId } });
+}

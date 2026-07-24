@@ -142,8 +142,26 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
   return findings;
 }
 
+// #896 — non-shipping code, which this detector must not report on. MEASURED 2026-07-23 over three
+// MIT tenant-scoping libraries (s1owjke/prisma-rls, zenstackhq/zenstack, Errorname/prisma-multi-
+// tenant): 1031 findings, EVERY ONE of them in a test, example, playground or doc path, and zero in
+// any library's shipping source. An ORM test suite is wall-to-wall `prisma.post.update({ where: {
+// id } })` by construction — that is the fixture setting up the case, not an authorization gap, and
+// docs/fp-rules.txt already rules test/fixture/seed/dev-script code out of scope.
+//
+// Broader than the shared NON_PRODUCT (detectors/load-sources.ts), which keys off the `.test.`/
+// `.spec.` suffix and `__tests__/` and would still have passed 1031 → ~20 of these through:
+// zenstack's `tests/**/typecheck.ts` and `.test-d.ts`, prisma-multi-tenant's `docs/examples/**` and
+// `tests/playground/**`. Kept local to this detector rather than widening NON_PRODUCT, because that
+// constant also feeds M6/M7/M9, whose external-corpus baselines are measured against its current
+// meaning — widening it there is a re-measurement, not a precision fix.
+const NON_SHIPPING_PATH = /(^|\/)(tests?|__tests__|__mocks__|__fixtures__|spec|specs|e2e|fixtures?|examples?|playground|docs?|samples?|benchmarks?)\//i;
+const NON_SHIPPING_FILE = /\.(test|spec)([.-]|$)|\.stories\./i;
+
 export function detectPrismaTenantScopeFindings(files: SourceInput[]): Finding[] {
-  return files.filter((f) => SOURCE_EXT.test(f.path)).flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
+  return files
+    .filter((f) => SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
+    .flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
 }
 
 export function scanPrismaTenantScope(projectDir: string): Finding[] {

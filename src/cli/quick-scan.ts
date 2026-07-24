@@ -2,11 +2,21 @@
 // (src/scan/mechanical.ts) against a target directory and prints the free-tier DIAGNOSIS:
 // grade, counts, located findings + a plain-English risk line each, and ONE fully-revealed
 // sample finding with its fix. The remediation for every other finding, the deep scan,
-// monitoring, and the exportable report are gated behind the paid unlock.
+// the re-scan diff, and the exportable report are gated behind the paid unlock.
 //
 //   pnpm quick-scan --dir <path> [--bundle <path>] [--tenant-key <column>]
 //                    [--tenant-mode per-tenant|per-user] [--json] [--out <file>]
-//                    [--findings-out <file>]
+//                    [--findings-out <file>] [--sarif-out <file>] [--sbom-out <file>]
+//
+// --sbom-out (#887): a CycloneDX 1.5 SBOM of the target's dependencies — the procurement artifact
+// buyers ask for contractually. Built from the target's lockfile (src/sbom.ts); when the tree
+// cannot be resolved the document says so in its own compositions/properties AND the CLI prints
+// the reason, so an incomplete inventory is never handed over looking complete.
+//
+// --sarif-out (#867): the raw mechanical Finding[] as SARIF 2.1.0, for GitHub code scanning or an
+// ASPM the client already runs. quick-scan has NO coverage ledger to export — it is one tier of one
+// module — so the SARIF carries an explicit "no ledger, and here is the scope this actually covers"
+// notification rather than presenting a mechanical scan as a completed audit.
 //
 // --findings-out (#528): write the RAW mechanical Finding[] (the input to the free report, before
 // the free/paid gating) as a JSON array — the machine-readable feed the orchestrator's M1 probe
@@ -23,8 +33,22 @@
 // convention instead of only inferring it from a fixed candidate-column list.
 
 import { writeFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { runMechanicalScan } from "../scan/mechanical.js";
+import { buildSbom } from "../sbom.js";
 import { buildQuickScanReport, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
+import { toSarif } from "../sarif.js";
+
+// What a quick-scan SARIF export does and does not cover. Stated in the export itself because a
+// SARIF file outlives the terminal session that produced it: an importer who sees only results has
+// no way to know nine of the ten modules were never attempted.
+const QUICK_SCAN_SARIF_SCOPE =
+  "This is a free quick-scan (M1 mechanical tier only), not a Harvey audit. It covers dependency, " +
+  "secret, and dangerous-config hygiene plus static indicators. The other nine audit modules " +
+  "(M2 pen-test, M3 hotspots, M4 duplication, M5 dead code, M6 maintainability, M7 performance, " +
+  "M8 test quality, M9 App Router boundaries, M10 data classification) and the live/LLM tiers of " +
+  "M1 were NOT run. Absence of a result here is not evidence of absence of a problem. " +
+  "Run `run-audit <target> --sarif-out <file>` for an export carrying a real per-module ledger.";
 
 function arg(flag: string): string | undefined {
   const i = process.argv.indexOf(flag);
@@ -103,10 +127,14 @@ function render(r: QuickScanReport): string {
     lines.push("  Outdated dependencies matching a published CVE range. A version match is not");
     lines.push("  proof of exploitability, so these don't move your grade — the deep scan triages");
     lines.push("  each one against how you actually deploy.");
+    // #874: the list is ordered by whether your code actually imports the package. Say so, or the
+    // ordering looks arbitrary — and say what it is NOT, or "not imported" reads as "safe".
+    lines.push("  Ordered by reachability: packages your code imports first, then ones it doesn't.");
     lines.push("");
     for (const f of r.informational) {
       lines.push(`    [Info] ${f.title}`);
       lines.push(`      ${f.location}`);
+      if (f.reachability) lines.push(...wrap(`Reachability (${f.reachability.status}): ${f.reachability.justification}`, "      "));
       lines.push("");
     }
   }
@@ -133,7 +161,7 @@ function render(r: QuickScanReport): string {
   }
 
   if (r.total === 0 && r.indicators.length === 0 && r.informational.length === 0 && r.handrolled.length === 0) {
-    lines.push("  Stay clean on every push — monitoring is part of the paid unlock.");
+    lines.push("  Re-scan after your next release and we'll diff it against this run.");
     lines.push("");
   }
 
@@ -170,6 +198,21 @@ async function main(): Promise<void> {
 
   const findingsOut = arg("--findings-out");
   if (findingsOut) writeFileSync(findingsOut, `${JSON.stringify(rawFindings, null, 2)}\n`);
+
+  const sarifOut = arg("--sarif-out");
+  if (sarifOut) {
+    const sarif = toSarif(rawFindings, { coverageAbsent: QUICK_SCAN_SARIF_SCOPE }, { baseUri: dir });
+    writeFileSync(sarifOut, `${JSON.stringify(sarif, null, 2)}\n`);
+    console.error(`SARIF 2.1.0 (${rawFindings.length} result(s)) → ${sarifOut}`);
+  }
+
+  const sbomOut = arg("--sbom-out");
+  if (sbomOut) {
+    const { bom, warning } = buildSbom(dir, { targetName: basename(resolve(dir)) });
+    writeFileSync(sbomOut, `${JSON.stringify(bom, null, 2)}\n`);
+    console.error(`CycloneDX SBOM (${(bom as { components: unknown[] }).components.length} component(s)) → ${sbomOut}`);
+    if (warning) console.error(`⚠ SBOM is not a complete inventory: ${warning}`);
+  }
 
   const out = arg("--out");
   const body = process.argv.includes("--json") ? JSON.stringify(report, null, 2) : render(report);
