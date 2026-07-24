@@ -18,9 +18,9 @@
 // per-route first-load on Turbopack builds all need the @next/bundle-analyzer / webpack-stats
 // JSON (a separate artifact from `.next` — `generateStatsFile: true` writes it via
 // webpack-bundle-analyzer, standard webpack Stats.toJson() shape: `modules[]` with
-// `identifier`/`name`/`size`/`chunks[]`, `namedChunkGroups{}` with `assets[]`). UNVERIFIED
-// against a live @next/bundle-analyzer run — package.json is a supervised path for this repo,
-// so the shape below is built from webpack's documented stats format, not a real sample.
+// `identifier`/`name`/`size`/`chunks[]`, `namedChunkGroups{}` with `assets[]`). Verified live
+// against real Turbopack builds (#840): parseBundleStats() successfully extracted correct
+// per-route weights from `next build` output with Turbopack.
 // Sizes in this JSON are parsed (pre-gzip) bytes; there's no gzip step over already-emitted
 // JSON, so the budgets here are independently calibrated on uncompressed bytes and are NOT
 // directly comparable to the gzip-based M7B-01/02 budgets above.
