@@ -1,0 +1,11 @@
+Already up to date
+Done in 136ms using pnpm v11.1.3
+M6 two-reviewer agreement — run5-fable-fresh-context (2026-07-23, #830) vs run6-fable-fresh-context (2026-07-23, #830)
+
+agreed 12/12 on the files both reviewed
+  both flag  (candidate findings → human triage): dates.ts, debounce.ts, deep-equal.ts, group.ts, id.ts, manager.ts, pipeline.ts
+  both spare: csv.ts, depdrop.ts, framework-adapter.ts, proration.ts, reconcile.ts
+
+no splits — every co-reviewed file has a unanimous verdict
+
+This is a rubric-agreement figure for this pair of passes — never quote it as M6 precision (docs/design/m6-simplification-eval.md §3).
