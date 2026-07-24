@@ -8,6 +8,7 @@ import {
   isAllowed,
   isDenied,
   isProtectedBranch,
+  parseDiffFacts,
 } from "./rails.js";
 
 function blast(overrides: Partial<BlastRadius> = {}): BlastRadius {
@@ -109,5 +110,39 @@ describe("checkBlastRadius", () => {
 
   it("passes when all files are allowlisted and the diff fits", () => {
     expect(checkBlastRadius(blast(), ["apps/main/src/**"]).ok).toBe(true);
+  });
+});
+
+describe("parseDiffFacts", () => {
+  it("separates modified from created files and counts changed body lines", () => {
+    const diff = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1,2 +1,3 @@",
+      " keep",
+      "-old",
+      "+new",
+      "+extra",
+      "diff --git a/src/new.ts b/src/new.ts",
+      "--- /dev/null",
+      "+++ b/src/new.ts",
+      "@@ -0,0 +1,1 @@",
+      "+hello",
+      "",
+    ].join("\n");
+    expect(parseDiffFacts(diff)).toEqual({ files: ["src/a.ts"], createdFiles: ["src/new.ts"], changedLines: 4 });
+  });
+
+  it("does not mistake a removed `--- ` content line for a file header", () => {
+    const diff = [
+      "--- a/db/seed.sql",
+      "+++ b/db/seed.sql",
+      "@@ -1,2 +1,1 @@",
+      "--- a legacy SQL comment",
+      " select 1;",
+      "",
+    ].join("\n");
+    expect(parseDiffFacts(diff).files).toEqual(["db/seed.sql"]);
   });
 });

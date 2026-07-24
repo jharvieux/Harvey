@@ -9,9 +9,10 @@
 // M7 entries are excluded from that pass by design (they score via perf-scan.test.ts against
 // recorded advisor output) and are unaffected.
 //
-// expectedTier is "review", not "high": the check is syntactically exact (Splinter's own
-// distinction) but reads cumulative migration text — it cannot see a later `drop policy`/
-// re-create, and a perf lint must never inflate the security free count. See the check's
+// expectedTier is "review", not "high": a perf lint must never inflate the security free count.
+// (Before #937 this was also because the check read cumulative migration text and could not see a
+// later `drop policy` / re-create; #937 closed that — it now lints only the final live policy via
+// parseLivePolicies — but the review tier stands on the free-count argument alone.) See the check's
 // header in src/scan/supabase-static.ts.
 
 import type { CorpusEntry } from "./types.js";

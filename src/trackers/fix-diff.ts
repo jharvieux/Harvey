@@ -11,6 +11,7 @@
 
 import { execFileSync } from "node:child_process";
 import type { SuggestedFix } from "../findings.js";
+import { blastRadiusOf, checkDiffCap, isDenied, parseDiffFacts, type DiffCap } from "../fix/rails.js";
 
 interface VerifyResult {
   verified: boolean;
@@ -23,6 +24,7 @@ interface VerifyResult {
 interface VerifyOptions {
   targetDir: string; // a disposable checkout of the target the diff is written against
   effectCommand?: string[]; // e.g. ["node", "-e", "..."] or ["pnpm", "vitest", "run", "kill-mutant.test.ts"]
+  diffCap?: DiffCap; // engagement diff cap; defaults to the §3.1(4) 300-line/10-file rail
   run?: Runner; // injectable for tests; defaults to a child-process runner
 }
 
@@ -39,10 +41,20 @@ const defaultRunner: Runner = (file, args, input, cwd) => {
   }
 };
 
-// Mechanically verify a proposed diff: it must apply cleanly, and — where an effect command is given
-// — achieve its stated effect. The diff is fed to git on stdin (`git apply -`), never written to the
-// tree except transiently for the effect check, which is reverted in a finally.
+// Mechanically verify a proposed diff: it must clear the §3 path/size rails, apply cleanly, and —
+// where an effect command is given — achieve its stated effect. The rails run FIRST and delegate to
+// the one rail implementation (src/fix/rails.ts), so a diff touching a denylisted path (.env, CI,
+// keys) or exceeding the engagement diff cap can never be marked verified and thus never reaches a
+// ticket body (renderFixSection is gated on `verified`). The diff is fed to git on stdin
+// (`git apply -`), never written to the tree except transiently for the effect check, reverted in a
+// finally.
 export function verifySuggestedFix(diff: string, opts: VerifyOptions): VerifyResult {
+  const facts = parseDiffFacts(diff);
+  const denied = [...facts.files, ...facts.createdFiles].filter(isDenied);
+  if (denied.length) return { verified: false, detail: `refuses denylisted path(s) (secrets/CI/keys/git): ${denied.join(", ")}` };
+  const cap = checkDiffCap(blastRadiusOf(facts), opts.diffCap);
+  if (!cap.ok) return { verified: false, detail: `exceeds engagement diff cap: ${cap.violation}` };
+
   const run = opts.run ?? defaultRunner;
   const git = (args: string[]) => run("git", args, diff, opts.targetDir);
 

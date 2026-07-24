@@ -36,6 +36,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/service-role-literal.ts": "M1",
   "src/scan/job-tenant-scope.ts": "M1",
   "src/scan/prisma-tenant-scope.ts": "M1",
+  "src/scan/drizzle-tenant-scope.ts": "M1",
   "src/scan/secret-rotation.ts": "M1",
   "src/scan/env-schema.ts": "M1",
   "src/scan/webext-manifest.ts": "M1",
