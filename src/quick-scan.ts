@@ -78,11 +78,19 @@ const SEVERITY_PENALTY: Record<Severity, number> = {
   Watch: 0,
 };
 
+// What the unlock actually delivers. This is sales copy on the one surface a prospect reads, so
+// the fail-loud doctrine applies to it exactly as it applies to a coverage row: EVERY LINE HERE
+// MUST NAME A CAPABILITY THAT EXISTS IN THIS REPO TODAY. #866 found it advertising SARIF export,
+// PR checks, and monitoring, none of which existed — a commercial-representation risk, not a
+// roadmap entry. Each line below is backed by shipped code: remediation text rides on every
+// Finding.fix; the deep scan is the LLM pass + src/pentest; the re-scan diff is
+// `run-audit --baseline` (src/audit-diff.ts); the PDF is report-template/render.mjs.
+// Adding a line for something unbuilt is a defect.
 const GATED_CAPABILITIES = [
   "The fix / remediation steps for every finding above",
   "The DEEP scan: LLM semantic review + live RLS/auth pen test",
-  "Re-scan, monitoring, and PR checks",
-  "Exportable report (PDF / SARIF)",
+  "A re-scan diffed against this one — what you resolved, what's still open, what's new",
+  "The written report as a PDF",
 ];
 
 // Categories that are high-precision about the FACT but not about EXPLOITABILITY, so they are

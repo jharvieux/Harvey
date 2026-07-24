@@ -2,7 +2,7 @@
 // (src/scan/mechanical.ts) against a target directory and prints the free-tier DIAGNOSIS:
 // grade, counts, located findings + a plain-English risk line each, and ONE fully-revealed
 // sample finding with its fix. The remediation for every other finding, the deep scan,
-// monitoring, and the exportable report are gated behind the paid unlock.
+// the re-scan diff, and the exportable report are gated behind the paid unlock.
 //
 //   pnpm quick-scan --dir <path> [--bundle <path>] [--tenant-key <column>]
 //                    [--tenant-mode per-tenant|per-user] [--json] [--out <file>]
@@ -133,7 +133,7 @@ function render(r: QuickScanReport): string {
   }
 
   if (r.total === 0 && r.indicators.length === 0 && r.informational.length === 0 && r.handrolled.length === 0) {
-    lines.push("  Stay clean on every push — monitoring is part of the paid unlock.");
+    lines.push("  Re-scan after your next release and we'll diff it against this run.");
     lines.push("");
   }
 

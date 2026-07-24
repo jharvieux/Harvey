@@ -70,6 +70,17 @@ describe("free/gated split", () => {
     expect(report.gated).toEqual([]);
   });
 
+  // #866: the upsell list advertised SARIF export, PR checks, and monitoring, none of which
+  // existed. Sales copy is subject to the same fail-loud rule as a coverage row, so the two
+  // capabilities that are STILL unbuilt are pinned here: if either is ever actually shipped,
+  // delete its entry from this list in the same commit that ships it.
+  const UNBUILT_CAPABILITIES = ["pr check", "monitoring"];
+
+  it("advertises no capability Harvey cannot deliver", () => {
+    const advertised = buildQuickScanReport(findings).gated.join(" ").toLowerCase();
+    for (const unbuilt of UNBUILT_CAPABILITIES) expect(advertised).not.toContain(unbuilt);
+  });
+
   it("never gates the location — every finding is located in the free path", () => {
     const report = buildQuickScanReport(findings);
     expect(report.findings.every((f) => f.location.length > 0)).toBe(true);
