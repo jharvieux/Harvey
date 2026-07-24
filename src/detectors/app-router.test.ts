@@ -808,7 +808,7 @@ function prefixPaths(files: SourceInput[], prefix: string): SourceInput[] {
 describe("monorepo per-workspace framework gate (#597)", () => {
   it("suppresses the SSR family for a Vite workspace's files even when the root verdict is `other`", () => {
     const webFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/web");
-    const findings = detectAppRouterFindings(webFiles, "other", ["apps/web"]);
+    const findings = detectAppRouterFindings(webFiles, "other", [{ rel: "apps/web", framework: "vite" }]);
 
     expect(taxonomies(findings)).not.toContain(SSR_API);
     expect(taxonomies(findings)).toContain(NON_SSR_NOTE);
@@ -818,7 +818,7 @@ describe("monorepo per-workspace framework gate (#597)", () => {
   it("keeps M9 active on a Next workspace in the same monorepo while the Vite workspace is N/A", () => {
     const webFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/web"); // Vite
     const apiFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/api"); // Next
-    const findings = detectAppRouterFindings([...webFiles, ...apiFiles], "other", ["apps/web"]);
+    const findings = detectAppRouterFindings([...webFiles, ...apiFiles], "other", [{ rel: "apps/web", framework: "vite" }]);
 
     // The Vite side is N/A; the Next side still fires SSR-misuse.
     expect(taxonomies(findings)).toContain(NON_SSR_NOTE);
@@ -831,7 +831,7 @@ describe("monorepo per-workspace framework gate (#597)", () => {
 
   it("emits no N/A note for a listed Vite workspace that contributes no files", () => {
     const apiFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/api");
-    const findings = detectAppRouterFindings(apiFiles, "other", ["apps/web"]);
+    const findings = detectAppRouterFindings(apiFiles, "other", [{ rel: "apps/web", framework: "vite" }]);
     expect(taxonomies(findings)).not.toContain(NON_SSR_NOTE);
     expect(taxonomies(findings)).toContain(SSR_API);
   });
@@ -867,9 +867,48 @@ describe("SPA root error-boundary absence (#627)", () => {
 
   it("flags a Vite workspace's entry in a monorepo, located under the workspace dir", () => {
     const webFiles = prefixPaths(loadFixtureDir("spa-error-boundary/positive"), "apps/web");
-    const findings = detectAppRouterFindings(webFiles, "other", ["apps/web"]);
+    const findings = detectAppRouterFindings(webFiles, "other", [{ rel: "apps/web", framework: "vite" }]);
     const boundary = findings.filter((f) => f.taxonomy === SPA_BOUNDARY);
     expect(boundary).toHaveLength(1);
     expect(boundary[0]?.location).toBe("apps/web/main.tsx:5");
+  });
+});
+
+// #872: a recognised non-Next framework (Remix / React Router 7 / TanStack Start / Astro /
+// SvelteKit / Nuxt) has no App Router surface, so running the Next-shaped pass over it produces
+// false-premise findings — and saying nothing lets the absence read as "analysed and clean".
+const UNSUPPORTED_FW_NOTE = "M9 — Not assessed (framework unsupported)";
+
+describe("recognised-but-unsupported framework gate (#872)", () => {
+  it("suppresses the whole pass and names the framework on a Remix target", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"), "remix");
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+    const note = findings.find((f) => f.taxonomy === UNSUPPORTED_FW_NOTE);
+    expect(note).toMatchObject({ severity: "Info", confidence: "N/A", location: "(whole target)" });
+    expect(note?.evidence).toContain("Remix");
+  });
+
+  it("does not claim the SPA root-error-boundary check ran on a non-SPA framework", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("spa-error-boundary/positive"), "sveltekit");
+    expect(taxonomies(findings)).not.toContain(SPA_BOUNDARY);
+    expect(taxonomies(findings)).toContain(UNSUPPORTED_FW_NOTE);
+  });
+
+  it("suppresses per workspace in a monorepo while a Next workspace still runs", () => {
+    const siteFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/site");
+    const apiFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/api");
+    const findings = detectAppRouterFindings([...siteFiles, ...apiFiles], "other", [{ rel: "apps/site", framework: "astro" }]);
+    const note = findings.find((f) => f.taxonomy === UNSUPPORTED_FW_NOTE);
+    expect(note?.location).toBe("apps/site");
+    expect(note?.evidence).toContain("Astro");
+    const ssr = findings.filter((f) => f.taxonomy === SSR_API);
+    expect(ssr.length).toBeGreaterThan(0);
+    expect(ssr.every((f) => f.location.startsWith("apps/api/"))).toBe(true);
+  });
+
+  it("still runs the full pass on `other` — an unrecognised shape is not a licence to skip", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"), "other");
+    expect(taxonomies(findings)).toContain(SSR_API);
+    expect(taxonomies(findings)).not.toContain(UNSUPPORTED_FW_NOTE);
   });
 });

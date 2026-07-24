@@ -13,7 +13,32 @@ import { join, relative, sep } from "node:path";
 import { loadSources } from "../detectors/load-sources.js";
 import { discoverTargets } from "../pentest/targets.js";
 
-export type TargetFramework = "next" | "vite" | "other";
+// #872: `other` used to swallow every non-Next, non-Vite framework — Remix / React Router 7 /
+// TanStack Start / Astro / SvelteKit / Nuxt — and `other` is the bucket with NO compensating
+// behaviour: M9's Next-shaped checks ran over them and their own boundary/rendering surface went
+// unassessed and unmentioned. Each recognised framework is its own value so the consumer can gate
+// on it and disclose it by name.
+export type TargetFramework = "next" | "vite" | "remix" | "react-router" | "tanstack-start" | "astro" | "sveltekit" | "nuxt" | "other";
+
+export const FRAMEWORK_LABELS: Record<TargetFramework, string> = {
+  next: "Next.js",
+  vite: "Vite",
+  remix: "Remix",
+  "react-router": "React Router 7 (framework mode)",
+  "tanstack-start": "TanStack Start",
+  astro: "Astro",
+  sveltekit: "SvelteKit",
+  nuxt: "Nuxt",
+  other: "unrecognised",
+};
+
+// Every non-Next framework we recognise builds on Vite, so the tiers that branch "Next compiler vs
+// Vite tooling" (M7's client-JS checks, the built-artifact location) key on this rather than on the
+// `vite` value alone — a SvelteKit target resolved as `vite` before #872 and must not silently
+// switch to Next-shaped behaviour now that it has its own value.
+export function isViteTooling(framework: TargetFramework | undefined): boolean {
+  return framework !== undefined && framework !== "next" && framework !== "other";
+}
 
 // #757 (part of #756): the target's DB/ORM architecture, orthogonal to the JS framework — an app
 // can be Next+Prisma with no Supabase. Its consumer is the M1 mechanical tier (src/scan/
@@ -58,12 +83,30 @@ function hasDep(pkgText: string | undefined, name: string): boolean {
   return !!(p.dependencies?.[name] ?? p.devDependencies?.[name] ?? p.peerDependencies?.[name]);
 }
 
+// #872: signatures for the SSR frameworks that used to land in `other` (or, when they happened to
+// declare Vite, in `vite`). Checked BEFORE the Vite fallback because they all build on Vite — a
+// SvelteKit app is a SvelteKit app, not a Vite SPA. Dependency signals are the primary evidence;
+// the config file is the fallback for a workspace whose deps live in a parent manifest.
+const FRAMEWORK_SIGNATURES: { framework: TargetFramework; deps: string[]; configs: string[] }[] = [
+  { framework: "remix", deps: ["@remix-run/react", "@remix-run/node", "@remix-run/dev"], configs: ["remix.config.js", "remix.config.ts", "remix.config.mjs"] },
+  { framework: "react-router", deps: ["@react-router/dev", "@react-router/node"], configs: ["react-router.config.ts", "react-router.config.js"] },
+  { framework: "tanstack-start", deps: ["@tanstack/react-start", "@tanstack/start"], configs: [] },
+  { framework: "astro", deps: ["astro"], configs: ["astro.config.mjs", "astro.config.ts", "astro.config.js", "astro.config.cjs"] },
+  { framework: "sveltekit", deps: ["@sveltejs/kit"], configs: [] },
+  { framework: "nuxt", deps: ["nuxt"], configs: ["nuxt.config.ts", "nuxt.config.js", "nuxt.config.mjs"] },
+];
+
 export function detectTargetFramework(dir: string): TargetFramework {
   const sources = loadSources(dir);
   const pkgText = sources.find((s) => s.path === "package.json")?.text;
 
   const isNext = hasDep(pkgText, "next") || NEXT_CONFIGS.some((f) => existsSync(join(dir, f)));
   if (isNext) return "next";
+
+  const recognised = FRAMEWORK_SIGNATURES.find(
+    (s) => s.deps.some((d) => hasDep(pkgText, d)) || s.configs.some((f) => existsSync(join(dir, f))),
+  );
+  if (recognised) return recognised.framework;
 
   const hasViteConfig = VITE_CONFIGS.some((f) => existsSync(join(dir, f)));
   const usesImportMetaEnv = sources.some((s) => s.text.includes("import.meta.env"));
@@ -212,7 +255,7 @@ export function buildDegradedKnipConfig(framework: TargetFramework, pluginNames:
 // engagement entry point). This resolves a framework PER workspace so the M9 gate can suppress the
 // SSR/App-Router family per-app. Workspace enumeration reuses `discoverTargets` (pentest/targets):
 // the same pnpm-workspace.yaml / package.json `workspaces` / glob expansion the M2/M4/M5 passes use.
-interface WorkspaceFramework {
+export interface WorkspaceFramework {
   /** Workspace directory relative to `root`, POSIX-separated ("" for the root itself). */
   rel: string;
   framework: TargetFramework;
@@ -225,12 +268,11 @@ export function detectWorkspaceFrameworks(root: string): WorkspaceFramework[] {
   }));
 }
 
-// Workspace-relative dirs of every non-root Vite workspace under `root`. The M9 gate suppresses the
-// SSR/App-Router family for files under any of these prefixes even when the repo root's OWN verdict
-// is `next`/`other`. A single-app repo enumerates only the root (rel === "") and returns [] — its
-// suppression is the whole-target `detectTargetFramework(root) === "vite"` path, unchanged.
-export function viteWorkspaces(root: string): string[] {
-  return detectWorkspaceFrameworks(root)
-    .filter((w) => w.rel !== "" && w.framework === "vite")
-    .map((w) => w.rel);
+// Every non-root workspace under `root` whose framework M9 cannot analyse — Vite SPAs and (since
+// #872) the recognised non-Next SSR frameworks. The M9 gate suppresses the App-Router family for
+// files under any of these prefixes even when the repo root's OWN verdict is `next`/`other`, and
+// discloses each one by name. A single-app repo enumerates only the root (rel === "") and returns
+// [] — its suppression is the whole-target `detectTargetFramework(root)` path, unchanged.
+export function nonNextWorkspaces(root: string): WorkspaceFramework[] {
+  return detectWorkspaceFrameworks(root).filter((w) => w.rel !== "" && isViteTooling(w.framework));
 }

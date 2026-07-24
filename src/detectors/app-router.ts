@@ -12,7 +12,16 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
-import { ORM_LABELS, rawSqlDriver, recogniseDataLayer, type TargetFramework, type TargetOrm } from "../scan/framework-detect.js";
+import {
+  FRAMEWORK_LABELS,
+  isViteTooling,
+  ORM_LABELS,
+  rawSqlDriver,
+  recogniseDataLayer,
+  type TargetFramework,
+  type TargetOrm,
+  type WorkspaceFramework,
+} from "../scan/framework-detect.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 import {
   AUTH_PATTERN,
@@ -1066,6 +1075,44 @@ function nonSsrSpaCoverageNote(nextId: NextId, framework: TargetFramework, scope
   };
 }
 
+// --- Recognised-but-unsupported framework coverage note (#872) ----------------
+//
+// Remix / React Router 7 / TanStack Start / Astro / SvelteKit / Nuxt all have a boundary and
+// rendering model of their own, and none of it is the one M9 reads. Before #872 they resolved to
+// `vite` (if they declared it) or `other` — and `other` ran the whole Next-shaped pass over them,
+// producing false-premise findings, while their actual surface went unassessed AND unmentioned.
+// Suppress the pass and say so, naming the framework: the report must never let `other` read as
+// "analysed and clean" (the coverage-guard principle in CLAUDE.md).
+function unsupportedFrameworkNote(nextId: NextId, framework: TargetFramework, scope: string): Finding {
+  const label = FRAMEWORK_LABELS[framework];
+  const subject = scope === "(whole target)" ? "Target" : `Workspace \`${scope}\``;
+  return {
+    id: nextId(),
+    title: `M9 not assessed — ${label} (framework not supported)`,
+    severity: "Info",
+    confidence: "N/A",
+    category: "Performance",
+    taxonomy: "M9 — Not assessed (framework unsupported)",
+    location: scope,
+    status: "Open",
+    evidence: `${subject} framework detected as ${label}. Every M9 check is Next.js App Router-specific — the RSC server→client boundary, \`"use server"\` actions, the \`server-only\` guard, route segment config and the Full Route Cache. ${label} has its own routing, data-loading and boundary model that none of these detectors reads, so the pass was SUPPRESSED rather than run (running it would produce false-premise findings, the #575 failure).`,
+    impact: `Boundary/rendering coverage for this scope is missing, not clean: ${label}'s own data-loading and boundary surface was not analysed. Recorded explicitly so the absence of M9 findings reads as "not assessed here".`,
+    fix: `None — informational. Review ${label}'s server/client boundary and data-loading by hand; if this target is in fact a Next.js app, verify framework detection (its package.json \`next\` dependency / next.config).`,
+    value: 1,
+    ease: 5,
+    safety: 5,
+    precisionTier: "high",
+  };
+}
+
+// What M9 emits for a scope it cannot analyse: the Vite/SPA path keeps its own note plus the one
+// SPA-specific check that DOES apply there (#627); every other recognised framework gets the
+// not-assessed row alone.
+function unanalysableFramework(files: SourceInput[], nextId: NextId, framework: TargetFramework, scope: string): Finding[] {
+  if (framework !== "vite") return [unsupportedFrameworkNote(nextId, framework, scope)];
+  return [nonSsrSpaCoverageNote(nextId, framework, scope), ...detectSpaRootErrorBoundary(files, nextId, scope)];
+}
+
 // --- SPA root error-boundary absence [LOW] — Vite/SPA resilience (#627) -------
 //
 // A Vite/SPA entry mounts the React root (`createRoot(el).render(<App/>)`, or the React 17
@@ -1547,16 +1594,18 @@ function runAppRouterPass(files: SourceInput[], nextId: NextId, orm?: TargetOrm)
  * `framework` (from src/scan/framework-detect.ts) gates the whole pass: on a Vite/SPA target the
  * App-Router surface does not exist, so the App-Router family is suppressed to a single N/A
  * coverage note (#575), plus the one SPA-specific resilience check that DOES apply there — the
- * missing-root-error-boundary detector (#627). Omitted (tests/legacy callers) or `next`/`other` →
- * run the full pass as before.
+ * missing-root-error-boundary detector (#627). On a recognised non-Next SSR framework (Remix,
+ * React Router 7, TanStack Start, Astro, SvelteKit, Nuxt) the pass is likewise suppressed, with a
+ * not-assessed row naming the framework (#872) — `other` must never mean "analysed and clean".
+ * Omitted (tests/legacy callers) or `next`/`other` → run the full pass as before.
  *
- * `viteWorkspaceDirs` (workspace-relative dirs, e.g. `["apps/web"]`) makes the gate monorepo-aware
- * (#597): at a monorepo root the root's own verdict is `other` (vite.config lives in the app dir),
- * so the whole-target `vite` short-circuit never fires and the SSR family false-fires on the Vite
- * app's files. Files under any of these prefixes are suppressed (one N/A note per Vite workspace,
- * plus the #627 root-error-boundary check on that workspace's files), and the full pass runs over
- * the remaining files — a genuine Next workspace in the same monorepo is unaffected. Empty
- * (single-app targets, tests) → behaves exactly as before.
+ * `nonNextWorkspaces` (workspace dir + its framework, e.g. `[{ rel: "apps/web", framework: "vite" }]`)
+ * makes the gate monorepo-aware (#597): at a monorepo root the root's own verdict is `other`
+ * (vite.config lives in the app dir), so the whole-target short-circuit never fires and the SSR
+ * family false-fires on that app's files. Files under any of these prefixes are suppressed (one
+ * coverage note per workspace, plus the #627 root-error-boundary check on a Vite workspace's files),
+ * and the full pass runs over the remaining files — a genuine Next workspace in the same monorepo is
+ * unaffected. Empty (single-app targets, tests) → behaves exactly as before.
  *
  * `orm` (from src/scan/framework-detect.ts `detectOrm`) gates the three Supabase-shaped data-layer
  * checks (server→client leak, cache config, waterfall): on a recognized non-Supabase data layer
@@ -1566,23 +1615,20 @@ function runAppRouterPass(files: SourceInput[], nextId: NextId, orm?: TargetOrm)
 export function detectAppRouterFindings(
   files: SourceInput[],
   framework?: TargetFramework,
-  viteWorkspaceDirs: string[] = [],
+  nonNextWorkspaces: WorkspaceFramework[] = [],
   orm?: TargetOrm,
 ): Finding[] {
   let n = 0;
   const nextId: NextId = () => `M9-${String(++n).padStart(2, "0")}`;
+  const inScope = (w: WorkspaceFramework) => (f: SourceInput) => f.path === w.rel || f.path.startsWith(`${w.rel}/`);
 
-  if (framework === "vite") {
-    return [nonSsrSpaCoverageNote(nextId, framework, "(whole target)"), ...detectSpaRootErrorBoundary(files, nextId, "(whole target)")];
+  if (isViteTooling(framework)) {
+    return unanalysableFramework(files, nextId, framework!, "(whole target)");
   }
 
-  const underVite = (p: string) => viteWorkspaceDirs.some((w) => p === w || p.startsWith(`${w}/`));
-  const activeViteWs = viteWorkspaceDirs.filter((w) => files.some((f) => f.path === w || f.path.startsWith(`${w}/`)));
-  const notes = activeViteWs.map((w) => nonSsrSpaCoverageNote(nextId, "vite", w));
-  const spaBoundary = activeViteWs.flatMap((w) =>
-    detectSpaRootErrorBoundary(files.filter((f) => f.path === w || f.path.startsWith(`${w}/`)), nextId, w),
-  );
-  const scoped = notes.length ? files.filter((f) => !underVite(f.path)) : files;
+  const active = nonNextWorkspaces.filter((w) => files.some(inScope(w)));
+  const workspaceNotes = active.flatMap((w) => unanalysableFramework(files.filter(inScope(w)), nextId, w.framework, w.rel));
+  const scoped = active.length ? files.filter((f) => !active.some((w) => inScope(w)(f))) : files;
 
-  return [...notes, ...spaBoundary, ...runAppRouterPass(scoped, nextId, orm)];
+  return [...workspaceNotes, ...runAppRouterPass(scoped, nextId, orm)];
 }
