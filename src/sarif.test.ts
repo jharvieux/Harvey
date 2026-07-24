@@ -165,4 +165,13 @@ describe("#975: CWE tags a CWE-indexed consumer can read", () => {
     const tags = r.tool.driver.rules[0].properties.tags as string[];
     expect(tags.some((t) => t.startsWith("external/cwe/"))).toBe(false);
   });
+
+  it("#976: tolerates a bare-STRING cwe/owasp without throwing (registry rules ship both shapes)", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Finding.cwe is typed string[] but real inputs can carry a bare string
+    const r = run(toSarif([finding({ cwe: "CWE-89: SQL Injection" as any, owasp: "A03:2021 - Injection" as any })], { coverage: RAN }));
+    const tags = r.tool.driver.rules[0].properties.tags as string[];
+    expect(tags).toContain("external/cwe/cwe-89");
+    expect(tags).toContain("CWE-89: SQL Injection");
+    expect(tags).toContain("A03:2021 - Injection");
+  });
 });

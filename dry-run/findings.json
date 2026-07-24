@@ -4022,8 +4022,12 @@
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
-    "cwe": "CWE-319: Cleartext Transmission of Sensitive Information",
-    "owasp": "A03:2017 - Sensitive Data Exposure"
+    "cwe": [
+      "CWE-319: Cleartext Transmission of Sensitive Information"
+    ],
+    "owasp": [
+      "A03:2017 - Sensitive Data Exposure"
+    ]
   },
   {
     "id": "SEM-78",
