@@ -15,7 +15,7 @@
 
 | Module | Source-only coverage |
 |---|---|
-| **M1 Multi-tenant security** | RLS policies in migration SQL (disabled / missing / `USING(true)` / user-metadata / wrong-column & weak-WITH-CHECK semantic review); SECURITY DEFINER functions with unguarded privileged writes; `service_role` usage on client-reachable paths; missing admin-auth guards, permission-matrix gaps, error/PII egress, unvalidated redirect URLs, missing webhook-replay protection, in-memory rate limits. |
+| **M1 Multi-tenant security** | **Supabase targets:** RLS policies in migration SQL (disabled / missing / `USING(true)` / user-metadata / wrong-column & weak-WITH-CHECK semantic review); SECURITY DEFINER functions with unguarded privileged writes; `service_role` usage on client-reachable paths; missing admin-auth guards, permission-matrix gaps, error/PII egress, unvalidated redirect URLs, missing webhook-replay protection, in-memory rate limits. **Non-Supabase targets are also supported, detection-gated:** the DB-level RLS tier doesn't apply on Prisma/Drizzle/Kysely/TypeORM/Sequelize/Knex/Mongoose/raw-SQL data layers, so it's named not-assessed-by-architecture (`M1-ARCH-<LAYER>`) rather than silently skipped; tenant-scope/BOLA is instead checked app-layer, with a real detector for the Prisma and Drizzle query-builder idioms and a named not-assessed row for the remaining query-builder shapes, where Harvey has no detector yet. A non-JS/TS language in the mix gets its own named not-assessed row too (`M1-LANG-00`) — an unassessable layer or language is disclosed by name, never left silent. |
 | **M3 Hotspots** | Churn × complexity, coupling, knowledge-risk, AI-provenance (needs git history). |
 | **M4 Duplication** | jscpd. |
 | **M5 Slop / dead code** | knip + slop detection. |
