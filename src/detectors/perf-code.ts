@@ -15,7 +15,7 @@
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
-import type { TargetFramework } from "../scan/framework-detect.js";
+import { isViteTooling, type TargetFramework } from "../scan/framework-detect.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 
 export type { SourceInput } from "./common.js";
@@ -1566,7 +1566,10 @@ function detectUnsplitRouteComponents(sources: Map<string, ts.SourceFile>, nextI
  */
 export function detectPerfCodeFindings(files: SourceInput[], framework?: TargetFramework): Finding[] {
   const compilerOn = reactCompilerEnabled(files);
-  const isVite = framework === "vite";
+  // #872: every recognised non-Next framework is Vite-tooled, so they keep the Vite-shape tiers
+  // they had when they all resolved to `vite` — the new values must not silently switch them to
+  // Next-compiler assumptions.
+  const isVite = isViteTooling(framework);
   const sources = new Map(
     files.filter((f) => /\.(ts|tsx|jsx|mjs)$/.test(f.path)).map((f) => [f.path, parse(f.path, f.text)]),
   );

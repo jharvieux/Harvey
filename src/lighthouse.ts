@@ -206,14 +206,18 @@ export function lighthouseRunErrorReason(result: LighthouseResult): string | und
 
 // The `npm run <script>` a target uses to serve its production build for the Lighthouse pass. Next
 // serves the `next start` build via the `start` script (`-p <port>`); a Vite app has no `start` —
-// its build is served by `vite preview --port <port>` (the `preview` script) (#577). `other`/unknown
-// falls back to `start`, the create-react-app / generic convention. The build step (`npm run build`)
-// is the same for both, so only the serve command branches.
+// its build is served by `vite preview --port <port>` (the `preview` script) (#577). Astro,
+// SvelteKit and Nuxt ship the same `preview` convention, so #872's new framework values keep the
+// serve command they had when they all resolved to `vite`; Remix / React Router 7 / TanStack Start
+// serve through `start`, like Next. `other`/unknown falls back to `start`, the create-react-app /
+// generic convention. The build step (`npm run build`) is the same for both, so only the serve
+// command branches.
+const PREVIEW_SERVED: TargetFramework[] = ["vite", "astro", "sveltekit", "nuxt"];
+
 export function serveCommand(framework: TargetFramework, port: number): { args: string[]; label: string } {
-  const args =
-    framework === "vite"
-      ? ["run", "preview", "--", "--port", String(port)]
-      : ["run", "start", "--", "-p", String(port)];
+  const args = PREVIEW_SERVED.includes(framework)
+    ? ["run", "preview", "--", "--port", String(port)]
+    : ["run", "start", "--", "-p", String(port)];
   return { args, label: `npm ${args.join(" ")}` };
 }
 

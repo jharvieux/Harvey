@@ -671,6 +671,63 @@ describe("non-Supabase data-layer coverage (#844)", () => {
     expect(hits[0]?.evidence).toContain("Drizzle");
   });
 
+  // #861 (the #844 remainder): a raw-SQL target has no ORM dependency at all, so the checks used to
+  // find nothing AND say nothing. The declared driver dependency is the positive signal.
+  it("names the raw-SQL driver on a `pg` target with no ORM dependency", () => {
+    const findings = detectAppRouterFindings(
+      [
+        { path: "package.json", text: `{"dependencies":{"pg":"^8.11.0","next":"14.0.0"}}` },
+        { path: "app/dashboard/page.tsx", text: `export default function Page() { return <div/>; }` },
+      ],
+      "next",
+      [],
+      "unknown",
+    );
+    for (const tax of DATA_LAYER_TAX) {
+      const hits = findings.filter((f) => f.taxonomy === tax);
+      expect(hits, tax).toHaveLength(1);
+      expect(hits[0]?.evidence).toContain("raw SQL (pg)");
+    }
+  });
+
+  it("names postgres.js as the raw-SQL driver too", () => {
+    const findings = detectAppRouterFindings(
+      [
+        { path: "package.json", text: `{"dependencies":{"postgres":"^3.4.0"}}` },
+        { path: "app/dashboard/page.tsx", text: `export default function Page() { return <div/>; }` },
+      ],
+      "next",
+      [],
+      "unknown",
+    );
+    expect(findings.find((f) => f.taxonomy === DATA_LAYER_TAX[0])?.evidence).toContain("raw SQL (postgres)");
+  });
+
+  it("keeps the real checks on a Supabase app that also ships a raw-SQL driver (#861 precedence)", () => {
+    const findings = detectAppRouterFindings(
+      [
+        { path: "package.json", text: `{"dependencies":{"@supabase/supabase-js":"^2.45.0","pg":"^8.12.0"}}` },
+        ...loadFixtureDir("server-client-leak/positive"),
+      ],
+      "next",
+    );
+    for (const tax of DATA_LAYER_TAX) expect(taxonomies(findings)).not.toContain(tax);
+    expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
+  });
+
+  it("still emits nothing for a DB-less app whose package.json declares no driver (#861 no-false-fire)", () => {
+    const findings = detectAppRouterFindings(
+      [
+        { path: "package.json", text: `{"dependencies":{"next":"14.0.0","react":"^18.0.0"}}` },
+        { path: "app/dashboard/page.tsx", text: `export default function Page() { return <div/>; }` },
+      ],
+      "next",
+      [],
+      "unknown",
+    );
+    for (const tax of DATA_LAYER_TAX) expect(taxonomies(findings)).not.toContain(tax);
+  });
+
   it("runs the real Supabase-shaped checks (no not-assessed rows) on a Supabase target", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("server-client-leak/positive"), "next", [], "supabase");
     expect(taxonomies(findings)).toContain("M9 — Server→client data leak");
@@ -751,7 +808,7 @@ function prefixPaths(files: SourceInput[], prefix: string): SourceInput[] {
 describe("monorepo per-workspace framework gate (#597)", () => {
   it("suppresses the SSR family for a Vite workspace's files even when the root verdict is `other`", () => {
     const webFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/web");
-    const findings = detectAppRouterFindings(webFiles, "other", ["apps/web"]);
+    const findings = detectAppRouterFindings(webFiles, "other", [{ rel: "apps/web", framework: "vite" }]);
 
     expect(taxonomies(findings)).not.toContain(SSR_API);
     expect(taxonomies(findings)).toContain(NON_SSR_NOTE);
@@ -761,7 +818,7 @@ describe("monorepo per-workspace framework gate (#597)", () => {
   it("keeps M9 active on a Next workspace in the same monorepo while the Vite workspace is N/A", () => {
     const webFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/web"); // Vite
     const apiFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/api"); // Next
-    const findings = detectAppRouterFindings([...webFiles, ...apiFiles], "other", ["apps/web"]);
+    const findings = detectAppRouterFindings([...webFiles, ...apiFiles], "other", [{ rel: "apps/web", framework: "vite" }]);
 
     // The Vite side is N/A; the Next side still fires SSR-misuse.
     expect(taxonomies(findings)).toContain(NON_SSR_NOTE);
@@ -774,7 +831,7 @@ describe("monorepo per-workspace framework gate (#597)", () => {
 
   it("emits no N/A note for a listed Vite workspace that contributes no files", () => {
     const apiFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/api");
-    const findings = detectAppRouterFindings(apiFiles, "other", ["apps/web"]);
+    const findings = detectAppRouterFindings(apiFiles, "other", [{ rel: "apps/web", framework: "vite" }]);
     expect(taxonomies(findings)).not.toContain(NON_SSR_NOTE);
     expect(taxonomies(findings)).toContain(SSR_API);
   });
@@ -810,9 +867,48 @@ describe("SPA root error-boundary absence (#627)", () => {
 
   it("flags a Vite workspace's entry in a monorepo, located under the workspace dir", () => {
     const webFiles = prefixPaths(loadFixtureDir("spa-error-boundary/positive"), "apps/web");
-    const findings = detectAppRouterFindings(webFiles, "other", ["apps/web"]);
+    const findings = detectAppRouterFindings(webFiles, "other", [{ rel: "apps/web", framework: "vite" }]);
     const boundary = findings.filter((f) => f.taxonomy === SPA_BOUNDARY);
     expect(boundary).toHaveLength(1);
     expect(boundary[0]?.location).toBe("apps/web/main.tsx:5");
+  });
+});
+
+// #872: a recognised non-Next framework (Remix / React Router 7 / TanStack Start / Astro /
+// SvelteKit / Nuxt) has no App Router surface, so running the Next-shaped pass over it produces
+// false-premise findings — and saying nothing lets the absence read as "analysed and clean".
+const UNSUPPORTED_FW_NOTE = "M9 — Not assessed (framework unsupported)";
+
+describe("recognised-but-unsupported framework gate (#872)", () => {
+  it("suppresses the whole pass and names the framework on a Remix target", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"), "remix");
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+    const note = findings.find((f) => f.taxonomy === UNSUPPORTED_FW_NOTE);
+    expect(note).toMatchObject({ severity: "Info", confidence: "N/A", location: "(whole target)" });
+    expect(note?.evidence).toContain("Remix");
+  });
+
+  it("does not claim the SPA root-error-boundary check ran on a non-SPA framework", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("spa-error-boundary/positive"), "sveltekit");
+    expect(taxonomies(findings)).not.toContain(SPA_BOUNDARY);
+    expect(taxonomies(findings)).toContain(UNSUPPORTED_FW_NOTE);
+  });
+
+  it("suppresses per workspace in a monorepo while a Next workspace still runs", () => {
+    const siteFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/site");
+    const apiFiles = prefixPaths(loadFixtureDir("ssr-browser-api/positive"), "apps/api");
+    const findings = detectAppRouterFindings([...siteFiles, ...apiFiles], "other", [{ rel: "apps/site", framework: "astro" }]);
+    const note = findings.find((f) => f.taxonomy === UNSUPPORTED_FW_NOTE);
+    expect(note?.location).toBe("apps/site");
+    expect(note?.evidence).toContain("Astro");
+    const ssr = findings.filter((f) => f.taxonomy === SSR_API);
+    expect(ssr.length).toBeGreaterThan(0);
+    expect(ssr.every((f) => f.location.startsWith("apps/api/"))).toBe(true);
+  });
+
+  it("still runs the full pass on `other` — an unrecognised shape is not a licence to skip", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"), "other");
+    expect(taxonomies(findings)).toContain(SSR_API);
+    expect(taxonomies(findings)).not.toContain(UNSUPPORTED_FW_NOTE);
   });
 });
