@@ -181,7 +181,7 @@ function exclusionReason(column, sqlType, infotype, tableName) {
   if (infotype === "SPECIAL_CATEGORY" && UI_ORIENTATION.test(column)) {
     return "UI display orientation (screen/page/device), not sexual orientation";
   }
-  if (NAME_INFOTYPES.has(infotype) && tableName && ORG_ENTITY_TABLE_PATTERN.test(String(tableName).toLowerCase())) {
+  if (NAME_INFOTYPES.has(infotype) && tableName && ORG_ENTITY_TABLE_PATTERN.test(toSnakeCase(tableName))) {
     return "entity display name on an org/tenant/company table — not personal PII";
   }
   if (SECRET_INFOTYPES.has(infotype) && CAPABILITY_TOKEN_VERB_PATTERN.test(column) && CAPABILITY_TOKEN_NOUN_PATTERN.test(column)) {
@@ -239,6 +239,22 @@ const REVIEW_FLAG_INFOTYPES = new Set(["OPAQUE_JSON_BLOB", "FREE_TEXT_REVIEW"]);
  * @typedef {{infotype: string, category: "PII"|"SENSITIVE_PII"|"PHI"|"PCI"|"SECRET", confidence: "high"|"medium"|"low"}} ClassifyResult
  */
 
+// #936: the dictionary and every exclusion below anchor on snake_case word boundaries
+// (`(^|_)…(_|$)`), so a camelCase/PascalCase identifier — the Prisma/Drizzle/quoted-identifier
+// convention half the Supabase corpus uses — never presents a boundary and slips through
+// entirely: `firstName`, `mobilePhone`, `emailAddress`, `taxId`, `dateOfBirth`, `nationalId`
+// all classified NONE on carbon's 154-table ERP schema (measured, docs/design/m10-camelcase-
+// tokenization.md). Normalising case boundaries to `_` before matching makes those columns
+// behave exactly as their snake_case equivalents would — the exclusions gain the same boundary
+// too, so `screenOrientation`/`raceId`/`isPinned` stay suppressed. Standard camel→snake with the
+// acronym pass so `taxId`→`tax_id` and `APIKey`→`api_key`.
+function toSnakeCase(s) {
+  return String(s)
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
+
 /**
  * Classify a single column by name (and, optionally, its SQL type for the exclusion pass and
  * its table name for the handful of checks that need table context to disambiguate). Never
@@ -249,14 +265,14 @@ const REVIEW_FLAG_INFOTYPES = new Set(["OPAQUE_JSON_BLOB", "FREE_TEXT_REVIEW"]);
  * @returns {ClassifyResult|null}
  */
 export function classifyColumn(column, sqlType, tableName) {
-  const c = String(column).toLowerCase();
+  const c = toSnakeCase(column);
   for (const [pattern, infotype, category, confidence] of RULES) {
     if (!pattern.test(c)) continue;
     if (exclusionReason(c, sqlType, infotype, tableName)) return null;
     return { infotype, category, confidence };
   }
   if (tableName) {
-    const t = String(tableName).toLowerCase();
+    const t = toSnakeCase(tableName);
     if (BARE_NUMBER_COLUMN_PATTERN.test(c) && PHONE_CONTEXT_TABLE_PATTERN.test(t)) {
       return { infotype: "PHONE", category: "PII", confidence: "medium" };
     }
