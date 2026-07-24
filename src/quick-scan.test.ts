@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, PrecisionTier, Severity } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
+import { DOC_CONTEXT_CREDENTIAL_TAXONOMY } from "./scan/secrets.js";
 import {
   buildQuickScanReport,
   computeGrade,
@@ -195,6 +196,46 @@ describe("exploitabilityVerified overrides the category default (#260)", () => {
     const report = buildQuickScanReport([verified, cve("still-just-a-match", "Critical")]);
     expect(report.total).toBe(1);
     expect(report.informational.map((f) => f.id)).toEqual(["still-just-a-match"]);
+  });
+});
+
+// #934 — the carbon regression. The free tier graded crbnos/carbon F (0/100) on 14 "Critical"
+// placeholder credentials living in self-hosting docs and example docker-composes. Reclassified
+// (src/scan/secrets.ts), those findings carry the doc-context taxonomy at Low, and this suite pins
+// the routing: reported in full, never in the count/grade/teaser.
+describe("doc/example placeholder credentials do not tank the grade (#934)", () => {
+  const docContextCred = (id: string): Finding =>
+    finding(id, "Low", "high", {
+      taxonomy: DOC_CONTEXT_CREDENTIAL_TAXONOMY,
+      location: `contrib/deploying/docker-compose.prod.yml:${id.length}`,
+    });
+
+  it("the carbon shape — 14 doc-context creds and nothing else — grades A, not F", () => {
+    const report = buildQuickScanReport(Array.from({ length: 14 }, (_, i) => docContextCred(`GL-${i + 1}`)));
+    expect(report.grade).toBe("A");
+    expect(report.score).toBe(100);
+    expect(report.total).toBe(0);
+  });
+
+  it("reports them in full rather than hiding them — located, with the reclassification visible", () => {
+    const report = buildQuickScanReport([docContextCred("GL-1")]);
+    expect(report.informational.map((f) => f.id)).toEqual(["GL-1"]);
+    expect(report.informational[0]?.location).toContain("docker-compose.prod.yml");
+  });
+
+  it("a real committed credential alongside them still grades F — the reclassification is not a secrets defang", () => {
+    const report = buildQuickScanReport([
+      finding("real-key", "Critical", "high", { taxonomy: "Committed credential" }),
+      ...Array.from({ length: 14 }, (_, i) => docContextCred(`GL-${i + 1}`)),
+    ]);
+    expect(report.grade).toBe("F");
+    expect(report.total).toBe(1);
+    expect(report.sample?.id).toBe("real-key");
+  });
+
+  it("never picks a doc-context cred as the teaser over a graded finding", () => {
+    const report = buildQuickScanReport([docContextCred("AAA-doc"), finding("zzz-real", "Low", "high")]);
+    expect(report.sample?.id).toBe("zzz-real");
   });
 });
 

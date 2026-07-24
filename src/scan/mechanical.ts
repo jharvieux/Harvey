@@ -32,7 +32,7 @@ import { checkUnassessedSfcFiles } from "./sfc-coverage.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { resolveBundleScan, scanSecrets } from "./secrets.js";
-import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, runSemgrep } from "./semgrep.js";
+import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, runSemgrep, semgrepUnavailableFinding } from "./semgrep.js";
 import {
   checkEdgeFunctionVerifyJwt,
   checkMigrationDefinerAnonGrant,
@@ -218,8 +218,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     const nextVersion = pkg?.dependencies?.next ?? pkg?.devDependencies?.next;
     if (nextVersion) findings.push(...checkNextVersionCVEs(nextVersion.replace(/^[\^~]/, "")));
 
-    // Semgrep footguns + missing-CSP config check.
-    findings.push(...parseSemgrepFindings(runSemgrep(scanDir)));
+    // Semgrep footguns + missing-CSP config check. #950 — a missing/crashing binary degrades to
+    // the SEM-00 disclosure instead of an uncaught ENOENT (mirrors osv-scanner, #512).
+    const semgrep = runSemgrep(scanDir);
+    findings.push(...(semgrep.failure ? [semgrepUnavailableFinding(semgrep.failure)] : parseSemgrepFindings(semgrep.result)));
     findings.push(...checkMissingCsp(scanDir));
     findings.push(...checkHostingConfigHeaders(scanDir));
     findings.push(...checkPublicDirSensitive(scanDir));

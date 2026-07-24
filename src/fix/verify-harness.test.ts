@@ -1,0 +1,150 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import type { CommandRun, DetectorRun } from "./verify.js";
+import {
+  buildVerificationEvidence,
+  discoverClientCommands,
+  extractCiRunSteps,
+  isPullRequestTriggered,
+  runBaseline,
+  type DiscoveredCommand,
+} from "./verify-harness.js";
+
+const created: string[] = [];
+afterEach(() => {
+  for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function scratch(files: Record<string, string>): string {
+  const dir = mkdtempSync(join(tmpdir(), "harvey-vh-"));
+  created.push(dir);
+  for (const [rel, body] of Object.entries(files)) {
+    const full = join(dir, rel);
+    mkdirSync(join(full, ".."), { recursive: true });
+    writeFileSync(full, body);
+  }
+  return dir;
+}
+
+const cleanDetector: DetectorRun = { detectorId: "d", fired: false, output: "clean" };
+
+describe("discoverClientCommands", () => {
+  it("discovers the root verify command and records its provenance", () => {
+    const dir = scratch({ "package.json": JSON.stringify({ scripts: { verify: "tsc && vitest" } }) });
+    const cmds = discoverClientCommands(dir);
+    expect(cmds).toEqual([{ command: "pnpm run verify", workspace: "", source: "package.json (root)" }]);
+  });
+
+  it("adds affected-workspace commands (monorepo rule) alongside the root", () => {
+    const dir = scratch({
+      "package.json": JSON.stringify({ scripts: { lint: "eslint ." } }),
+      "apps/web/package.json": JSON.stringify({ scripts: { test: "vitest" } }),
+    });
+    const cmds = discoverClientCommands(dir, ["apps/web"]);
+    expect(cmds).toContainEqual({ command: "pnpm run lint", workspace: "", source: "package.json (root)" });
+    expect(cmds).toContainEqual({ command: "pnpm run test", workspace: "apps/web", source: "package.json (apps/web)" });
+  });
+
+  it("appends PR-triggered CI steps the scripts don't cover", () => {
+    const dir = scratch({ "package.json": JSON.stringify({ scripts: { verify: "x" } }) });
+    const ci: DiscoveredCommand[] = [{ command: "pnpm knip", workspace: "", source: "ci-workflow (ci.yml)" }];
+    const cmds = discoverClientCommands(dir, [], "pnpm", ci);
+    expect(cmds.map((c) => c.command)).toEqual(["pnpm run verify", "pnpm knip"]);
+    expect(cmds[1]!.source).toContain("ci-workflow");
+  });
+});
+
+describe("isPullRequestTriggered", () => {
+  it("recognizes inline-array, bare, and block on: forms", () => {
+    expect(isPullRequestTriggered("on: [push, pull_request]\n")).toBe(true);
+    expect(isPullRequestTriggered("on: pull_request\n")).toBe(true);
+    expect(isPullRequestTriggered("on:\n  pull_request:\n    branches: [main]\n")).toBe(true);
+  });
+  it("rejects a push-only workflow", () => {
+    expect(isPullRequestTriggered("on:\n  push:\n    branches: [main]\n")).toBe(false);
+  });
+});
+
+describe("extractCiRunSteps", () => {
+  it("extracts inline and block run: steps from PR-triggered workflows only", () => {
+    const dir = scratch({
+      ".github/workflows/ci.yml": [
+        "on: [pull_request]",
+        "jobs:",
+        "  build:",
+        "    steps:",
+        "      - run: pnpm install",
+        "      - run: |",
+        "          pnpm knip",
+        "          pnpm check:duplication",
+      ].join("\n"),
+      ".github/workflows/deploy.yml": ["on:", "  push:", "    branches: [main]", "jobs:", "  d:", "    steps:", "      - run: deploy"].join("\n"),
+    });
+    const steps = extractCiRunSteps(join(dir, ".github/workflows"));
+    const cmds = steps.map((s) => s.command);
+    expect(cmds).toContain("pnpm install");
+    expect(cmds).toContain("pnpm knip\npnpm check:duplication");
+    expect(cmds).not.toContain("deploy"); // push-only workflow is not a PR gate
+  });
+});
+
+describe("buildVerificationEvidence", () => {
+  const commands: DiscoveredCommand[] = [{ command: "pnpm run verify", workspace: "", source: "package.json (root)" }];
+  const okRun = (command: string, cwd: string): CommandRun => ({ command, cwd, exitCode: 0, durationMs: 5, outputTail: "ok" });
+  const failRun = (command: string, cwd: string): CommandRun => ({ command, cwd, exitCode: 1, durationMs: 5, outputTail: "boom" });
+
+  it("is green when the detector is clean and the client check passes — green is decided, not asserted", () => {
+    const baseline = runBaseline(commands, "/base", okRun);
+    const ev = buildVerificationEvidence(
+      { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: cleanDetector, commands, baseline },
+      "/fixed",
+      okRun,
+    );
+    expect(ev.green).toBe(true);
+    expect(ev.clientChecks[0]!.cwd).toBe("/fixed");
+  });
+
+  it("is not green when the detector did not run, even with the client check passing", () => {
+    const baseline = runBaseline(commands, "/base", okRun);
+    const ev = buildVerificationEvidence(
+      { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: { detectorId: "d", fired: false, output: "", notRun: "no resolver" }, commands, baseline },
+      "/fixed",
+      okRun,
+    );
+    expect(ev.green).toBe(false);
+  });
+
+  it("carries a pre-existing baseline failure as skipped, never attributing it to the fix", () => {
+    const baseline = runBaseline(commands, "/base", failRun); // failed on the pinned commit
+    const ev = buildVerificationEvidence(
+      { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: cleanDetector, commands, baseline },
+      "/fixed",
+      okRun,
+    );
+    expect(ev.clientChecks[0]!.skipped).toBe("pre-existing-failure-on-baseline");
+    expect(ev.green).toBe(true); // ambient failure does not sink the fix
+  });
+
+  it("records a needs-ci command as skipped and does not count it against green", () => {
+    const baseline = new Map();
+    const ev = buildVerificationEvidence(
+      { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: cleanDetector, commands, baseline, needsCi: () => true },
+      "/fixed",
+      failRun, // would fail if actually run — proves it is NOT run
+    );
+    expect(ev.clientChecks[0]!.skipped).toBe("needs-ci");
+    expect(ev.green).toBe(true);
+  });
+
+  it("is not green when a runnable client check fails in the fixed worktree", () => {
+    const baseline = runBaseline(commands, "/base", okRun);
+    const ev = buildVerificationEvidence(
+      { findingId: "F", baselineCommit: "b", worktreeCommit: "w", detectorBefore: { detectorId: "d", fired: true, output: "" }, detectorAfter: cleanDetector, commands, baseline },
+      "/fixed",
+      failRun,
+    );
+    expect(ev.green).toBe(false);
+  });
+});

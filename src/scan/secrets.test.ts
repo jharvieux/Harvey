@@ -2,8 +2,41 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { gitHistorySecretsUnavailableFinding, isGitRepoRoot, parseGitleaksFindings, parseTruffleHogFindings, resolveBundleScan, type GitleaksResult, type TruffleHogResult } from "./secrets.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// #950: trufflehog/gitleaks absent from PATH must degrade to a disclosed coverage gap, not an
+// uncaught ENOENT crash (mirrors the osv-scanner pattern, #512). Only those two binary names are
+// faked here — every other execFileSync call (notably "git", used both by isGitRepoRoot and by
+// this file's own test setup below) passes through to the real implementation untouched.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: vi.fn((bin: string, args: string[], opts?: unknown) => {
+      if (bin === "trufflehog" || bin === "gitleaks") {
+        const err = new Error(`spawnSync ${bin} ENOENT`) as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      return actual.execFileSync(bin, args, opts as never);
+    }),
+  };
+});
+
+import {
+  DOC_CONTEXT_CREDENTIAL_TAXONOMY,
+  gitHistorySecretsUnavailableFinding,
+  gitleaksUnavailableFinding,
+  isDocExamplePath,
+  isGitRepoRoot,
+  parseGitleaksFindings,
+  parseTruffleHogFindings,
+  resolveBundleScan,
+  scanSecrets,
+  truffleHogUnavailableFinding,
+  type GitleaksResult,
+  type TruffleHogResult,
+} from "./secrets.js";
 
 describe("parseTruffleHogFindings", () => {
   it("drops unverified hits — only a live-verified secret is ~100% precision", () => {
@@ -157,6 +190,79 @@ describe("parseGitleaksFindings", () => {
   });
 });
 
+// #934: the carbon shape — placeholder/default credentials in documentation and example-deployment
+// paths reclassified to Low + the doc-context taxonomy (routed non-grading by quick-scan), never
+// dropped and never a graded Critical. The four paths below are carbon's own four hit surfaces.
+describe("doc/example-context credential reclassification (#934)", () => {
+  const carbonStylePaths = [
+    "packages/dev/docker/docker-compose.dev.yml", // *.dev.yml compose
+    "contrib/deploying/simple-docker-caddy/docker-compose.prod.yml", // contrib/** (even a .prod.yml)
+    "docs/content/docs/platform/self-hosting/docker-caddy.mdx", // docs/** + .mdx
+    ".claude/skills/agent-browser/references/proxy-support.md", // vendored reference doc (.md)
+  ];
+
+  it("reclassifies a high-precision rule hit in every carbon-style doc/example path: Low, doc-context taxonomy, stated reason", () => {
+    for (const file of carbonStylePaths) {
+      const results: GitleaksResult[] = [
+        { RuleID: "supabase-default-jwt-secret", File: file, StartLine: 5, Match: "your-super-secret-jwt-token-with-at-least-32-characters-long" },
+      ];
+      const f = parseGitleaksFindings(results, "source")[0];
+      expect(f?.severity, file).toBe("Low");
+      expect(f?.taxonomy, file).toBe(DOC_CONTEXT_CREDENTIAL_TAXONOMY);
+      expect(f?.evidence, file).toContain("Reclassified from Critical");
+      // Still a fact-precise match — it stays visible in the free report, not review-buried.
+      expect(f?.precisionTier, file).toBe("high");
+    }
+  });
+
+  it("leaves the same rule at Critical in application source — the rule keys on path context, not the rule id", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "supabase-default-jwt-secret", File: "supabase/docker-compose.yml", StartLine: 5, Match: "your-super-secret-jwt-token-with-at-least-32-characters-long" },
+      { RuleID: "harvey-db-uri-credentials", File: "apps/erp/app/lib/db.server.ts", StartLine: 3, Match: "postgres://app:realpassword@db.internal" },
+    ];
+    const findings = parseGitleaksFindings(results, "source");
+    for (const f of findings) {
+      expect(f.severity).toBe("Critical");
+      expect(f.taxonomy).toBe("Committed credential");
+    }
+  });
+
+  it("does not touch review-tier rules — they are already outside the free grade", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "generic-api-key", File: "docs/setup.md", StartLine: 2, Match: "apikey=abc123" },
+    ];
+    const f = parseGitleaksFindings(results, "source")[0];
+    expect(f?.precisionTier).toBe("review");
+    expect(f?.taxonomy).toBe("Possible committed credential");
+  });
+
+  it("a TruffleHog live-VERIFIED secret in docs still grades Critical — verification outranks the path prior", () => {
+    const results: TruffleHogResult[] = [
+      { DetectorName: "Stripe", Verified: true, SourceMetadata: { Data: { Filesystem: { file: "docs/setup.md", line: 12 } } } },
+    ];
+    const f = parseTruffleHogFindings(results, "source")[0];
+    expect(f?.severity).toBe("Critical");
+    expect(f?.taxonomy).toBe("Committed credential");
+  });
+});
+
+describe("isDocExamplePath (#934)", () => {
+  it.each([
+    ["docs/self-hosting/setup.md", true],
+    ["README.mdx", true],
+    ["contrib/deploying/bin/secrets-entrypoint.sh", true],
+    ["examples/full-stack/compose.yml", true],
+    ["packages/dev/docker/docker-compose.dev.yml", true],
+    ["config/docker-compose.example.yml", true],
+    ["apps/erp/app/lib/db.server.ts", false],
+    ["docker-compose.yml", false], // a repo-root compose is the deployed shape, not an example
+    ["supabase/config.toml", false],
+    ["src/documents/render.ts", false], // "documents" is not the docs/ segment
+  ])("%s -> %s", (path, expected) => {
+    expect(isDocExamplePath(path)).toBe(expected);
+  });
+});
+
 // #528: previously the isGitRepoRoot guard just made the git-history pass return [] with no
 // disclosure — a cold engagement delivered as an archive/subdirectory had that tier silently
 // unassessed. isGitRepoRoot is what scanSecrets branches on to decide whether to emit
@@ -259,5 +365,53 @@ describe("resolveBundleScan (#588)", () => {
     const dir = mkTarget("build/out");
     expect(resolveBundleScan(dir, join(dir, "build", "out")).bundleDir).toBe(join(dir, "build", "out"));
     expect(resolveBundleScan(dir, join(dir, "nope")).disclosure?.id).toBe("SEC-BUNDLE-00");
+  });
+});
+
+// #950: previously scanSecrets threw the raw ENOENT from runJson/runGitleaks, which propagated
+// uncaught to quick-scan's main().catch() and hard-exited the CLI instead of degrading like
+// osv-scanner already does (#512). Both binaries are faked absent (see the module mock above),
+// so this exercises the real scanSecrets control flow end-to-end, not just the pure disclosure
+// finding shape.
+describe("scanSecrets degrades when trufflehog/gitleaks are absent from PATH (#950)", () => {
+  let dir: string;
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("does not throw, and discloses one coverage-gap finding per missing tool", () => {
+    dir = mkdtempSync(join(tmpdir(), "harvey-secrets-missing-bin-"));
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+
+    const findings = scanSecrets(dir, dir);
+
+    const th = findings.find((f) => f.id === "SEC-TH-00");
+    expect(th).toBeDefined();
+    expect(th?.evidence).toContain("trufflehog not found on PATH");
+
+    const gl = findings.find((f) => f.id === "SEC-GL-00");
+    expect(gl).toBeDefined();
+    expect(gl?.evidence).toContain("gitleaks not found on PATH");
+
+    // Exactly one disclosure per tool, not one per pass (filesystem + git-history for
+    // TruffleHog) — the redundant second invocation is skipped once the first fails.
+    expect(findings.filter((f) => f.id === "SEC-TH-00")).toHaveLength(1);
+    expect(findings.filter((f) => f.id === "SEC-GL-00")).toHaveLength(1);
+  });
+});
+
+describe("truffleHogUnavailableFinding / gitleaksUnavailableFinding (#950)", () => {
+  it("truffleHogUnavailableFinding discloses the coverage gap without claiming zero secrets", () => {
+    const finding = truffleHogUnavailableFinding("trufflehog not found on PATH");
+    expect(finding.id).toBe("SEC-TH-00");
+    expect(finding.severity).toBe("Info");
+    expect(finding.confidence).toBe("N/A");
+    expect(finding.impact).toContain("not a finding of zero secrets");
+  });
+
+  it("gitleaksUnavailableFinding discloses the coverage gap without claiming zero secrets", () => {
+    const finding = gitleaksUnavailableFinding("gitleaks not found on PATH");
+    expect(finding.id).toBe("SEC-GL-00");
+    expect(finding.severity).toBe("Info");
+    expect(finding.confidence).toBe("N/A");
+    expect(finding.impact).toContain("not a finding of zero secrets");
   });
 });
