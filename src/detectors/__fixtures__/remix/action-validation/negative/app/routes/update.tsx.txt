@@ -1,0 +1,12 @@
+import { z } from "zod";
+import { supabase } from "~/lib/db";
+import { requireUser } from "~/lib/auth";
+
+const Schema = z.object({ bio: z.string() });
+
+export async function action({ request }: { request: Request }) {
+  const user = await requireUser(request);
+  const { bio } = Schema.parse(Object.fromEntries(await request.formData()));
+  await supabase.from("profiles").update({ bio }).eq("user_id", user.id);
+  return null;
+}

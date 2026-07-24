@@ -22,6 +22,8 @@ import {
   type TargetOrm,
   type WorkspaceFramework,
 } from "../scan/framework-detect.js";
+import type { BoundaryAdapter, M9Check, ServerMutation } from "./boundary-model.js";
+import { notAssessedCheckNote } from "./boundary-model.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 import {
   AUTH_PATTERN,
@@ -36,9 +38,19 @@ import {
   OWNERSHIP_COLUMN,
   rootIdentifier,
 } from "./owner-id.js";
+import { remixAdapter } from "./remix-adapter.js";
+import { tanstackAdapter } from "./tanstack-adapter.js";
 
 export type { SourceInput } from "./common.js";
-const VALIDATION_PATTERN = /\.safeParse\(|(?<!JSON)\.parse\(|\bzod\b|valibot|\byup\.|\bajv\b/i;
+// `validator(`/`.validator(`/`.inputValidator(` recognises chain-level input validation: TanStack
+// Start's `createServerFn().validator(schema)` (#918) and the remix-validated-form / `@rvf` /
+// `@carbon/form` idiom `validator(schema).validate(await request.formData())` (#964) — a BARE
+// `validator(` call plus a `.validate(` invocation, neither of which the old dotted-only regex
+// matched, so fully-validated RR7/Remix route actions (e.g. carbon's OAuth token endpoint) false-
+// fired High. `\b(?:input)?validator\(` covers the bare and dotted forms; `.validate(` covers the
+// schema `.validate(...)` call (yup/joi/@rvf). A real validation signal in any framework, additive
+// and FP-safe for Next.
+const VALIDATION_PATTERN = /\.safeParse\(|(?<!JSON)\.parse\(|\b(?:input)?validator\(|\.validate\(|\bzod\b|valibot|\byup\.|\bajv\b/i;
 const MUTATION_PATTERN = /\.(insert|update|upsert|delete|rpc)\s*\(/;
 const SECRET_ENV_PATTERN = /process\.env\.(?!NEXT_PUBLIC_)[A-Z0-9_]*(SERVICE_ROLE|SECRET|PRIVATE_KEY|API_KEY|TOKEN)[A-Z0-9_]*/;
 const DYNAMIC_API_PATTERN = /^(headers|cookies|noStore|unstable_noStore)$/;
@@ -73,7 +85,7 @@ function isDbMutationChain(text: string): boolean {
   return MUTATION_PATTERN.test(text);
 }
 
-function makeFinding(
+export function makeFinding(
   nextId: NextId,
   input: {
     title: string;
@@ -183,11 +195,11 @@ export function resolveImport(fromPath: string, specifier: string, allPaths: Set
 // possibly with extra literal props. Spreading the whole row copies every field, so a binding of
 // this shape is still a full-row leak (the narrowing the DTO fix requires is `{ name: row.name }`,
 // not a spread). Returns the spread source name if the object spreads a tainted row.
-function objectSpreadsRawRow(expr: ts.Expression, rawRowNames: ReadonlySet<string>): boolean {
+export function objectSpreadsRawRow(expr: ts.Expression, rawRowNames: ReadonlySet<string>): boolean {
   return rowNameOf(expr, rawRowNames) !== undefined;
 }
 
-function rowNameOf(expr: ts.Expression, rawRowNames: ReadonlySet<string>): string | undefined {
+export function rowNameOf(expr: ts.Expression, rawRowNames: ReadonlySet<string>): string | undefined {
   if (!ts.isObjectLiteralExpression(expr)) return undefined;
   for (const p of expr.properties) {
     if (ts.isSpreadAssignment(p) && ts.isIdentifier(p.expression) && rawRowNames.has(p.expression.text)) return p.expression.text;
@@ -200,7 +212,7 @@ function rowNameOf(expr: ts.Expression, rawRowNames: ReadonlySet<string>): strin
 // intermediate before passing it must still flag. `const { name } = row` (a narrowing destructure)
 // is deliberately NOT propagated — it projects, which is the safe shape. The propagation pass runs
 // in source order, so a later alias of an earlier alias is also caught; direct bindings dominate.
-function collectRawRowNames(sf: ts.SourceFile): Set<string> {
+export function collectRawRowNames(sf: ts.SourceFile): Set<string> {
   const rawRowNames = new Set<string>();
   const visit = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && node.initializer) {
@@ -517,11 +529,16 @@ interface ClientOwnerIdResult {
   subsumedNoAuthActions: Set<ts.Node>;
 }
 
-function detectClientSuppliedOwnerId(sources: Map<string, ts.SourceFile>, nextId: NextId): ClientOwnerIdResult {
+function detectClientSuppliedOwnerId(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  mutationsFor: (path: string, sf: ts.SourceFile) => ServerMutation[],
+  noun: string,
+): ClientOwnerIdResult {
   const findings: Finding[] = [];
   const subsumedNoAuthActions = new Set<ts.Node>();
   for (const [path, sf] of sources) {
-    for (const action of collectServerActions(sf)) {
+    for (const action of mutationsFor(path, sf)) {
       const text = sf.text.slice(action.node.getStart(sf), action.node.getEnd());
       if (!isDbMutationChain(text)) continue;
 
@@ -558,8 +575,8 @@ function detectClientSuppliedOwnerId(sources: Map<string, ts.SourceFile>, nextId
         makeFinding(nextId, {
           title:
             site.verb === "eq"
-              ? `Server Action \`${action.name}\` mutates rows scoped by a client-supplied \`${site.column}\`${hasAuth ? "" : " with no auth check"}`
-              : `Server Action \`${action.name}\` writes rows owned by a client-supplied \`${site.column}\`${hasAuth ? "" : " with no auth check"}`,
+              ? `${noun} \`${action.name}\` mutates rows scoped by a client-supplied \`${site.column}\`${hasAuth ? "" : " with no auth check"}`
+              : `${noun} \`${action.name}\` writes rows owned by a client-supplied \`${site.column}\`${hasAuth ? "" : " with no auth check"}`,
           severity: "High",
           confidence: "Likely",
           category: "Security",
@@ -615,10 +632,16 @@ function stripLiteralsAndComments(sf: ts.SourceFile, action: ts.Node): string {
     .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
 }
 
-function detectServerActionAuthAndValidation(sources: Map<string, ts.SourceFile>, nextId: NextId, subsumedNoAuthActions: ReadonlySet<ts.Node>): Finding[] {
+function detectServerActionAuthAndValidation(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  subsumedNoAuthActions: ReadonlySet<ts.Node>,
+  mutationsFor: (path: string, sf: ts.SourceFile) => ServerMutation[],
+  noun: string,
+): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    for (const action of collectServerActions(sf)) {
+    for (const action of mutationsFor(path, sf)) {
       const text = stripLiteralsAndComments(sf, action.node);
       if (!isDbMutationChain(text)) continue; // scope to mutating actions per the brief
 
@@ -628,17 +651,17 @@ function detectServerActionAuthAndValidation(sources: Map<string, ts.SourceFile>
       if (!AUTH_PATTERN.test(text) && !subsumedNoAuthActions.has(action.node)) {
         findings.push(
           makeFinding(nextId, {
-            title: `Server Action \`${action.name}\` mutates data with no visible auth check`,
+            title: `${noun} \`${action.name}\` mutates data with no visible auth check`,
             severity: "High",
             confidence: "Likely",
             category: "Security",
             // Routed to the M1 authorization/client-input-trust class (#221), not scored as
-            // M9 rendering — a Server Action with no auth check is a broken-function-level-authz
+            // M9 rendering — a server mutation with no auth check is a broken-function-level-authz
             // finding, the same class as the other three instances #221 catalogs.
-            taxonomy: "M1 — Server Action missing authorization check",
+            taxonomy: `M1 — ${noun} missing authorization check`,
             location: loc(path, sf, action.node),
-            evidence: `\`${action.name}\` is a Server Action ('use server') that calls insert/update/upsert/delete/rpc with no session/authority check found in its body.`,
-            impact: "Server Actions are public POST endpoints — invocable directly with a crafted request regardless of which page normally calls them. Anyone can trigger this mutation.",
+            evidence: `\`${action.name}\` is a ${noun} that calls insert/update/upsert/delete/rpc with no session/authority check found in its body.`,
+            impact: `${noun}s are public POST endpoints — invocable directly with a crafted request regardless of which page normally calls them. Anyone can trigger this mutation.`,
             fix: "Verify the caller's session/tenant before the DB call (e.g. `auth.getUser()` + a tenant-scoped `.eq(...)`, or a shared `requireUser()`/`assertPermission()` gate).",
             value: 5,
             ease: 3,
@@ -650,11 +673,11 @@ function detectServerActionAuthAndValidation(sources: Map<string, ts.SourceFile>
       if (!VALIDATION_PATTERN.test(text)) {
         findings.push(
           makeFinding(nextId, {
-            title: `Server Action \`${action.name}\` has no input schema validation`,
+            title: `${noun} \`${action.name}\` has no input schema validation`,
             severity: "High",
             confidence: "Likely",
             category: "Security",
-            taxonomy: "M9 — Server Action missing input validation",
+            taxonomy: `M9 — ${noun} missing input validation`,
             location: loc(path, sf, action.node),
             evidence: `\`${action.name}\` reads its arguments/formData straight into a DB mutation with no Zod/valibot (or similar) \`.parse\`/\`.safeParse\` call found in its body.`,
             impact: "Unvalidated input is type-unsafe and injectable, and any id/tenant field on it is trusted from the client.",
@@ -752,10 +775,14 @@ function findAwaitedDbDeclarations(block: ts.Block, sf: ts.SourceFile): AwaitedD
   return out;
 }
 
-function detectDataFetchingWaterfalls(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+function detectDataFetchingWaterfalls(
+  sources: Map<string, ts.SourceFile>,
+  nextId: NextId,
+  isClientContext: (sf: ts.SourceFile) => boolean = (sf) => leadingDirective(sf) === "use client",
+): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (leadingDirective(sf) === "use client") continue;
+    if (isClientContext(sf)) continue;
 
     const visit = (node: ts.Node) => {
       if ((ts.isFunctionDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && node.body && ts.isBlock(node.body)) {
@@ -934,6 +961,10 @@ function detectAccidentalDynamicRendering(sources: Map<string, ts.SourceFile>, n
 //   - guarded by `typeof window !== "undefined"` (or any browser global).
 const BROWSER_GLOBALS = new Set(["window", "document", "localStorage", "sessionStorage", "navigator"]);
 const TYPEOF_GUARD = /typeof\s+(window|document|localStorage|sessionStorage|navigator)\b/;
+// Optional-chaining a browser global (`window?.x`, `document?.foo`) is the author's explicit signal
+// that the global may be absent — treated as an SSR guard, same as `typeof` (#964). Matched both on
+// the access itself and on an enclosing `if (window?.x)` condition.
+const OPTIONAL_CHAIN_GUARD = /\b(window|document|localStorage|sessionStorage|navigator)\?\./;
 
 // Names bound anywhere in the file (imports, params, variable/function/class declarations). If a
 // browser-global name is also a local binding, the access is not the DOM global — skip it, so an
@@ -966,34 +997,44 @@ function isFunctionScope(node: ts.Node): boolean {
 
 // Whether the access is on the synchronous SSR render path. The nearest enclosing function tells
 // deferred (effect/handler/callback — browser-only) from render-path code:
-//   0 enclosing functions → module top-level: runs during SSR → on path.
-//   1, and it's a free function / arrow → a component or module-level helper render body → on path.
+//   0 enclosing functions → module top-level: runs during SSR on import → on path.
+//   1, and it's a free function / arrow IN A JSX MODULE (.tsx/.jsx) → a component or module-level
+//     helper render body → on path.
+//   1, but the file is a non-JSX .ts/.js module → a plain util/service function, not a component
+//     render body (a component needs JSX, so it can't live here) → off path. At carbon's scale the
+//     old "any free function is a render body" heuristic false-fired on 59 non-component `.ts`
+//     utilities (#964); only module-top-level code in such a file runs during SSR unconditionally.
 //   1, but it's a CLASS MEMBER (method/accessor/ctor) → not the App Router render path but an
 //     OO/framework lifecycle method (e.g. a Lexical node's client-only `createDOM`) → off path.
 //   ≥2 → nested in a deferred closure (effect callback, event handler) → off path.
-function isOnSsrRenderPath(node: ts.Node): boolean {
+function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile): boolean {
   const fns: ts.Node[] = [];
   for (let cur = node.parent; cur; cur = cur.parent) {
     if (isFunctionScope(cur)) fns.push(cur);
   }
   if (fns.length >= 2) return false;
   const nearest = fns[0];
-  if (nearest && (ts.isMethodDeclaration(nearest) || ts.isConstructorDeclaration(nearest) || ts.isGetAccessorDeclaration(nearest) || ts.isSetAccessorDeclaration(nearest))) {
-    return false;
+  if (nearest) {
+    if (ts.isMethodDeclaration(nearest) || ts.isConstructorDeclaration(nearest) || ts.isGetAccessorDeclaration(nearest) || ts.isSetAccessorDeclaration(nearest)) {
+      return false;
+    }
+    if (!/\.[jt]sx$/.test(sf.fileName)) return false;
   }
   return true;
 }
 
-// True when a `typeof <global>` check gates this node — an enclosing `if`, ternary, or `&&`/`||`
-// whose condition/left operand tests a browser global. The standard SSR-safe guard.
-function isTypeofGuarded(node: ts.Node, sf: ts.SourceFile): boolean {
+// True when a browser-global guard gates this node — an enclosing `if`, ternary, or `&&`/`||` whose
+// condition/left operand tests a browser global via `typeof` or optional chaining (`window?.x`).
+// The two standard SSR-safe guards.
+function isSsrGuarded(node: ts.Node, sf: ts.SourceFile): boolean {
+  const guards = (text: string) => TYPEOF_GUARD.test(text) || OPTIONAL_CHAIN_GUARD.test(text);
   for (let cur = node.parent; cur; cur = cur.parent) {
-    if (ts.isIfStatement(cur) && TYPEOF_GUARD.test(cur.expression.getText(sf))) return true;
-    if (ts.isConditionalExpression(cur) && TYPEOF_GUARD.test(cur.condition.getText(sf))) return true;
+    if (ts.isIfStatement(cur) && guards(cur.expression.getText(sf))) return true;
+    if (ts.isConditionalExpression(cur) && guards(cur.condition.getText(sf))) return true;
     if (
       ts.isBinaryExpression(cur) &&
       (cur.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken || cur.operatorToken.kind === ts.SyntaxKind.BarBarToken) &&
-      TYPEOF_GUARD.test(cur.left.getText(sf))
+      guards(cur.left.getText(sf))
     ) {
       return true;
     }
@@ -1013,7 +1054,10 @@ function detectSsrBrowserApiMisuse(sources: Map<string, ts.SourceFile>, nextId: 
         !declared.has(node.expression.text);
       if (onGlobal) {
         const global = (node.expression as ts.Identifier).text;
-        if (isOnSsrRenderPath(node) && !isTypeofGuarded(node, sf)) {
+        // An optional-chained access (`window?.x`) is itself a guard — the author signalled the
+        // global may be absent, so it never throws a bare ReferenceError shape we flag (#964).
+        const optionalChained = (node as ts.PropertyAccessExpression | ts.ElementAccessExpression).questionDotToken !== undefined;
+        if (!optionalChained && isOnSsrRenderPath(node, sf) && !isSsrGuarded(node, sf)) {
           const atModuleTop = !ts.findAncestor(node.parent, isFunctionScope);
           findings.push(
             makeFinding(nextId, {
@@ -1557,30 +1601,80 @@ function dataLayerNotAssessed(nextId: NextId, layer: string): Finding[] {
   }));
 }
 
-function runAppRouterPass(files: SourceInput[], nextId: NextId, orm?: TargetOrm): Finding[] {
+// The Next.js App Router adapter — the boundary model's original and reference implementation
+// (#916). Its markers ARE the Next literals the module was built on: a client context is a
+// `"use client"` module, a server mutation is a `"use server"` function (collectServerActions), and
+// a server→client crossing is a raw row passed as a JSX prop into an imported Client Component. It
+// supports every check, so runBoundaryPass over it reproduces the pre-refactor Next output exactly.
+const NEXT_CHECKS: readonly M9Check[] = [
+  "server-client-leak",
+  "server-mutation-authz",
+  "server-mutation-validation",
+  "client-owner-id",
+  "ssr-browser-api",
+  "data-waterfall",
+  "missing-server-only",
+  "accidental-dynamic",
+  "cache-config",
+  "route-segment-config",
+  "missing-suspense",
+  "unbounded-route",
+];
+
+const nextAdapter: BoundaryAdapter = {
+  framework: "next",
+  label: FRAMEWORK_LABELS.next,
+  supports: new Set(NEXT_CHECKS),
+  mutationNoun: "Server Action",
+  isClientContext: (sf) => leadingDirective(sf) === "use client",
+  detectServerClientLeak: (sources, nextId, files) => detectServerClientLeak(sources, nextId, collectPathAliases(files)),
+  serverMutations: (_path, sf) => collectServerActions(sf),
+};
+
+// The generic boundary pass: runs each M9 check the adapter's `supports` set enables, expressed
+// against the adapter's markers rather than Next literals, and discloses every check the adapter
+// does NOT implement as a not-assessed row naming it (fail loud). For the Next adapter (supports
+// all) this is behaviour-identical to the pre-#916 runAppRouterPass.
+function runBoundaryPass(adapter: BoundaryAdapter, files: SourceInput[], nextId: NextId, orm?: TargetOrm, scope = "(whole target)"): Finding[] {
   const sources = new Map(files.map((f) => [f.path, parse(f.path, f.text)]));
   const pagesRouterOnly = isPagesRouterOnly(files);
-  const aliases = collectPathAliases(files);
   const otherDataLayer = nonSupabaseDataLayer(orm, files);
+  const S = adapter.supports;
+  const mutations = (path: string, sf: ts.SourceFile) => adapter.serverMutations(path, sf);
 
   // Owner-id runs first: its subsumed-action set feeds the missing-auth dedupe (#465).
-  const ownerId = detectClientSuppliedOwnerId(sources, nextId);
+  const ownerId = S.has("client-owner-id")
+    ? detectClientSuppliedOwnerId(sources, nextId, mutations, adapter.mutationNoun)
+    : { findings: [] as Finding[], subsumedNoAuthActions: new Set<ts.Node>() };
+
   // The three Supabase-shaped data-layer checks run only on a Supabase/unknown data layer; on a
   // recognized non-Supabase ORM they are replaced by explicit not-assessed rows (#844).
   const dataLayer = otherDataLayer
     ? dataLayerNotAssessed(nextId, otherDataLayer)
-    : [...detectServerClientLeak(sources, nextId, aliases), ...detectUnsafeCacheConfig(sources, nextId), ...detectDataFetchingWaterfalls(sources, nextId)];
-  return [
+    : [
+        ...(S.has("server-client-leak") ? adapter.detectServerClientLeak(sources, nextId, files) : []),
+        ...(S.has("cache-config") ? detectUnsafeCacheConfig(sources, nextId) : []),
+        ...(S.has("data-waterfall") ? detectDataFetchingWaterfalls(sources, nextId, adapter.isClientContext) : []),
+      ];
+
+  const out: Finding[] = [
     ...dataLayer,
-    ...detectMissingServerOnly(sources, nextId, pagesRouterOnly, aliases),
-    ...detectServerActionAuthAndValidation(sources, nextId, ownerId.subsumedNoAuthActions),
+    ...(S.has("missing-server-only") ? detectMissingServerOnly(sources, nextId, pagesRouterOnly, collectPathAliases(files)) : []),
+    ...(S.has("server-mutation-authz") || S.has("server-mutation-validation")
+      ? detectServerActionAuthAndValidation(sources, nextId, ownerId.subsumedNoAuthActions, mutations, adapter.mutationNoun)
+      : []),
     ...ownerId.findings,
-    ...detectAccidentalDynamicRendering(sources, nextId),
-    ...detectSsrBrowserApiMisuse(sources, nextId),
-    ...detectUnboundedRouteOrEdge(sources, nextId),
-    ...detectRouteSegmentConfig(sources, nextId),
-    ...detectMissingSuspenseBoundary(sources, nextId),
+    ...(S.has("accidental-dynamic") ? detectAccidentalDynamicRendering(sources, nextId) : []),
+    ...(S.has("ssr-browser-api") ? detectSsrBrowserApiMisuse(sources, nextId) : []),
+    ...(S.has("unbounded-route") ? detectUnboundedRouteOrEdge(sources, nextId) : []),
+    ...(S.has("route-segment-config") ? detectRouteSegmentConfig(sources, nextId) : []),
+    ...(S.has("missing-suspense") ? detectMissingSuspenseBoundary(sources, nextId) : []),
   ];
+
+  // Disclose every check this framework's adapter does not implement — partial coverage is stated,
+  // never silently upgraded to full (the coverage guard).
+  for (const c of NEXT_CHECKS) if (!S.has(c)) out.push(notAssessedCheckNote(nextId, adapter, c, scope));
+  return out;
 }
 
 // --- Orchestrator ------------------------------------------------------------
@@ -1594,10 +1688,13 @@ function runAppRouterPass(files: SourceInput[], nextId: NextId, orm?: TargetOrm)
  * `framework` (from src/scan/framework-detect.ts) gates the whole pass: on a Vite/SPA target the
  * App-Router surface does not exist, so the App-Router family is suppressed to a single N/A
  * coverage note (#575), plus the one SPA-specific resilience check that DOES apply there — the
- * missing-root-error-boundary detector (#627). On a recognised non-Next SSR framework (Remix,
- * React Router 7, TanStack Start, Astro, SvelteKit, Nuxt) the pass is likewise suppressed, with a
- * not-assessed row naming the framework (#872) — `other` must never mean "analysed and clean".
- * Omitted (tests/legacy callers) or `next`/`other` → run the full pass as before.
+ * missing-root-error-boundary detector (#627). Remix, React Router 7 and TanStack Start route to
+ * their own boundary-model adapters (#916/#917/#918): the portable checks (server→client leak,
+ * server-mutation authz + input-validation, client-owner-id, SSR misuse, waterfall) run, and every
+ * check the adapter does not implement is disclosed as a not-assessed row naming it. Astro,
+ * SvelteKit and Nuxt have no adapter yet and stay suppressed with a not-assessed note (#872) —
+ * `other` must never mean "analysed and clean". Omitted (tests/legacy callers) or `next`/`other` →
+ * run the full Next pass.
  *
  * `nonNextWorkspaces` (workspace dir + its framework, e.g. `[{ rel: "apps/web", framework: "vite" }]`)
  * makes the gate monorepo-aware (#597): at a monorepo root the root's own verdict is `other`
@@ -1623,6 +1720,8 @@ export function detectAppRouterFindings(
   const inScope = (w: WorkspaceFramework) => (f: SourceInput) => f.path === w.rel || f.path.startsWith(`${w.rel}/`);
 
   if (isViteTooling(framework)) {
+    const adapter = selectAdapter(framework!);
+    if (adapter) return runBoundaryPass(adapter, files, nextId, orm);
     return unanalysableFramework(files, nextId, framework!, "(whole target)");
   }
 
@@ -1630,5 +1729,20 @@ export function detectAppRouterFindings(
   const workspaceNotes = active.flatMap((w) => unanalysableFramework(files.filter(inScope(w)), nextId, w.framework, w.rel));
   const scoped = active.length ? files.filter((f) => !active.some((w) => inScope(w)(f))) : files;
 
-  return [...workspaceNotes, ...runAppRouterPass(scoped, nextId, orm)];
+  return [...workspaceNotes, ...runBoundaryPass(nextAdapter, scoped, nextId, orm)];
+}
+
+// The non-Next boundary-model adapters (#917/#918). Remix and React Router 7 share one adapter
+// (RR7 absorbed Remix's loader/action model); TanStack Start has its own (`createServerFn`). Astro,
+// SvelteKit and Nuxt have no adapter yet → undefined → the #872 not-assessed note.
+function selectAdapter(framework: TargetFramework): BoundaryAdapter | undefined {
+  switch (framework) {
+    case "remix":
+    case "react-router":
+      return remixAdapter(framework);
+    case "tanstack-start":
+      return tanstackAdapter;
+    default:
+      return undefined;
+  }
 }

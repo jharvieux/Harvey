@@ -1,0 +1,13 @@
+import { json } from "@remix-run/node";
+import { useLoaderData } from "@remix-run/react";
+import { supabase } from "~/lib/db";
+
+export async function loader({ params }: { params: { id: string } }) {
+  const { data: user } = await supabase.from("users").select("name").eq("id", params.id).single();
+  return json({ name: user.name });
+}
+
+export default function Dashboard() {
+  const { name } = useLoaderData<typeof loader>();
+  return <div>{name}</div>;
+}

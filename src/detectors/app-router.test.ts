@@ -505,6 +505,46 @@ describe("SSR-only browser API misuse (#381)", () => {
     ]);
     expect(taxonomies(findings)).not.toContain(SSR_API);
   });
+
+  // #964: at carbon's scale (RR7 monorepo) the "any free function is a render body" heuristic
+  // false-fired on 59 non-component `.ts` utilities. A component needs JSX, so it can only live in
+  // a `.tsx`/`.jsx` module — a function in a plain `.ts` service file is not a render body.
+  it("does not flag a browser-global read inside a function in a non-component `.ts` util file", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/components/Configurator/utils.ts",
+        text: `export function convertTypescriptToJavaScript(src: string) {\n  if (window?.ts) {\n    return window.ts.transpile(src);\n  }\n  return src;\n}\n`,
+      },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
+
+  // #964: module-top-level code in a `.ts` file DOES run during SSR on import, so it must stay
+  // flagged — the fix scopes function bodies, it does not blanket-suppress `.ts`.
+  it("still flags a browser-global read at module top level of a `.ts` file", () => {
+    const findings = detectAppRouterFindings([
+      { path: "lib/theme.ts", text: `export const width = window.innerWidth;\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(SSR_API);
+  });
+
+  // #964: optional-chaining a browser global (`window?.x`) is the author's explicit absent-guard —
+  // even in a `.tsx` component render body it must not fire.
+  it("does not flag an optional-chained browser-global read (`window?.x`) in a component body", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/screen.tsx", text: `export default function Screen() {\n  const w = window?.innerWidth ?? 0;\n  return <div>{w}</div>;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
+
+  // #964: an inner unguarded read (`window.ts`) is still safe when an enclosing `if (window?.ts)`
+  // optional-chaining guard gates it.
+  it("does not flag a read gated by an enclosing `if (window?.x)` optional-chaining guard", () => {
+    const findings = detectAppRouterFindings([
+      { path: "app/widget.tsx", text: `export default function Widget() {\n  if (window?.ts) {\n    return <div>{window.ts.version}</div>;\n  }\n  return null;\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(SSR_API);
+  });
 });
 
 const SEGMENT_CFG = "M9 — Unsafe route segment config";
@@ -874,18 +914,18 @@ describe("SPA root error-boundary absence (#627)", () => {
   });
 });
 
-// #872: a recognised non-Next framework (Remix / React Router 7 / TanStack Start / Astro /
-// SvelteKit / Nuxt) has no App Router surface, so running the Next-shaped pass over it produces
-// false-premise findings — and saying nothing lets the absence read as "analysed and clean".
+// #872: a recognised non-Next framework (Astro / SvelteKit / Nuxt) has no adapter yet, so the
+// Next-shaped pass is suppressed and disclosed as not-assessed rather than run over a false premise.
+// Remix / React Router 7 / TanStack Start now route to their own adapters (#916/#917/#918) below.
 const UNSUPPORTED_FW_NOTE = "M9 — Not assessed (framework unsupported)";
 
 describe("recognised-but-unsupported framework gate (#872)", () => {
-  it("suppresses the whole pass and names the framework on a Remix target", () => {
+  it("analyses a Remix target on its adapter — the SSR check runs (framework-agnostic detector)", () => {
+    // Remix routes to the boundary-model adapter now: the framework-agnostic SSR-misuse detector
+    // fires, and there is no blanket unsupported-framework note.
     const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"), "remix");
-    expect(taxonomies(findings)).not.toContain(SSR_API);
-    const note = findings.find((f) => f.taxonomy === UNSUPPORTED_FW_NOTE);
-    expect(note).toMatchObject({ severity: "Info", confidence: "N/A", location: "(whole target)" });
-    expect(note?.evidence).toContain("Remix");
+    expect(taxonomies(findings)).toContain(SSR_API);
+    expect(taxonomies(findings)).not.toContain(UNSUPPORTED_FW_NOTE);
   });
 
   it("does not claim the SPA root-error-boundary check ran on a non-SPA framework", () => {
@@ -910,5 +950,106 @@ describe("recognised-but-unsupported framework gate (#872)", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"), "other");
     expect(taxonomies(findings)).toContain(SSR_API);
     expect(taxonomies(findings)).not.toContain(UNSUPPORTED_FW_NOTE);
+  });
+});
+
+const LEAK = "M9 — Server→client data leak";
+const WATERFALL = "M9 — Data-fetching waterfall";
+
+// #917 — Remix / React Router 7 adapter on the boundary model.
+describe("Remix / React Router 7 boundary adapter (#917)", () => {
+  for (const framework of ["remix", "react-router"] as const) {
+    it(`flags a full DB row returned from a loader (${framework})`, () => {
+      const findings = detectAppRouterFindings(loadFixtureDir("remix/leak/positive"), framework);
+      const leaks = findings.filter((f) => f.taxonomy === LEAK);
+      expect(leaks).toHaveLength(1);
+      expect(leaks[0]?.title).toContain("Remix loader");
+      expect(leaks[0]?.location).toBe("app/routes/dashboard.tsx:7");
+      expect(leaks[0]?.precisionTier).toBe("review");
+    });
+
+    it(`stays silent when the loader returns a narrowed projection (${framework})`, () => {
+      const findings = detectAppRouterFindings(loadFixtureDir("remix/leak/negative"), framework);
+      expect(taxonomies(findings)).not.toContain(LEAK);
+    });
+  }
+
+  it("flags an action mutating with no auth check, with the framework-true noun", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("remix/action-authz/positive"), "remix");
+    const hits = findings.filter((f) => f.taxonomy === "M1 — route action missing authorization check");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("route action");
+  });
+
+  it("flags an action reading input into a mutation with no validation", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("remix/action-validation/positive"), "remix");
+    expect(taxonomies(findings)).toContain("M9 — route action missing input validation");
+  });
+
+  // #964: carbon validates through `@carbon/form`'s `validator(schema).validate(...)` wrapper — a
+  // BARE `validator(` call plus `.validate(`, which the old dotted-only regex missed, false-firing
+  // High on fully-validated route actions (its OAuth token endpoint). Recognise the idiom.
+  it("does not flag a route action validated through the `validator(schema).validate(...)` wrapper", () => {
+    const findings = detectAppRouterFindings(
+      [
+        {
+          path: "app/routes/_oauth+/token.tsx",
+          text: `import { validator } from "@carbon/form";\nimport { oauthTokenValidator } from "./validators";\nexport async function action({ request }: { request: Request }) {\n  const validation = await validator(oauthTokenValidator).validate(await request.formData());\n  await db.from("oauthToken").insert({ token: validation.data.token });\n  return null;\n}\n`,
+        },
+      ],
+      "react-router",
+    );
+    expect(taxonomies(findings)).not.toContain("M9 — route action missing input validation");
+  });
+
+  it("reuses the framework-agnostic SSR-misuse and waterfall detectors on Remix files", () => {
+    expect(taxonomies(detectAppRouterFindings(loadFixtureDir("ssr-browser-api/positive"), "remix"))).toContain(SSR_API);
+    expect(taxonomies(detectAppRouterFindings(loadFixtureDir("waterfall/positive"), "remix"))).toContain(WATERFALL);
+  });
+
+  it("discloses every non-ported check as a not-assessed row naming the framework", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("remix/leak/positive"), "remix");
+    const na = findings.filter((f) => f.confidence === "N/A" && f.taxonomy.includes("not assessed"));
+    expect(na.some((f) => f.taxonomy.includes("cache config"))).toBe(true);
+    expect(na.some((f) => f.taxonomy.includes("route segment"))).toBe(true);
+    expect(na.every((f) => f.taxonomy.includes("Remix"))).toBe(true);
+  });
+});
+
+// #918 — TanStack Start adapter (createServerFn shape).
+describe("TanStack Start boundary adapter (#918)", () => {
+  it("flags a full DB row returned from a createServerFn handler", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("tanstack/leak/positive"), "tanstack-start");
+    const leaks = findings.filter((f) => f.taxonomy === LEAK);
+    expect(leaks).toHaveLength(1);
+    expect(leaks[0]?.title).toContain("TanStack server function");
+    expect(leaks[0]?.evidence).toContain("getUser");
+  });
+
+  it("stays silent on a narrowed createServerFn return", () => {
+    expect(taxonomies(detectAppRouterFindings(loadFixtureDir("tanstack/leak/negative"), "tanstack-start"))).not.toContain(LEAK);
+  });
+
+  it("flags a server function mutating with no auth check", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("tanstack/action-authz/positive"), "tanstack-start");
+    const hits = findings.filter((f) => f.taxonomy === "M1 — server function missing authorization check");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.title).toContain("server function");
+  });
+
+  it("counts a chain-level `.validator()` as input validation (no false missing-validation)", () => {
+    // action-authz/positive has `.validator(z.object(...))` — validation must NOT fire, only authz.
+    const findings = detectAppRouterFindings(loadFixtureDir("tanstack/action-authz/positive"), "tanstack-start");
+    expect(taxonomies(findings)).not.toContain("M9 — server function missing input validation");
+  });
+
+  it("flags a server function with no validator and no body validation", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("tanstack/action-validation/positive"), "tanstack-start");
+    expect(taxonomies(findings)).toContain("M9 — server function missing input validation");
+  });
+
+  it("clears the validator-guarded negative", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("tanstack/action-validation/negative"), "tanstack-start");
+    expect(taxonomies(findings)).not.toContain("M9 — server function missing input validation");
   });
 });

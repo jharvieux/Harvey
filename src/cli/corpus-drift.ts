@@ -24,6 +24,7 @@
 // finding — #470: this pass NEVER invokes Stryker; real mutation scoring is corpus-m8.yml's job,
 // and a target whose M8 is a mutation baseline gets an explicit deferred row here rather than a
 // crash or a silent skip), M10 (classifyMigrationSql over the target's own cloned SQL migrations,
+// or #758's Prisma classifier when the manifest's schemaPath names a `schema.prisma` — #894,
 // #279 — a target with no schemaPath in the manifest is skipped here and stays not-run. #299
 // closed the one target that used to hit this: boxyhq's Prisma migrations parse fine now that
 // parseColumns/parseTableNames read quoted identifiers.).
@@ -50,6 +51,7 @@ import {
   FREE_TIER_EXPECTATIONS,
   isMutationBaseline,
   isNotRun,
+  m10FindingsFromPrismaSchema,
   m10FindingsFromSchema,
   moduleMatches,
   revalidateNotRunReasons,
@@ -236,11 +238,17 @@ for (const target of targets) {
     // per the coverage guard. A schemaPath that doesn't resolve in the cloned tree is a stale
     // manifest entry, not an absent module — that throws rather than silently scoring 0.
     if (target.schemaPath) {
-      const schemaDir = join(dir, target.schemaPath);
-      if (!existsSync(schemaDir)) {
+      const schemaPath = join(dir, target.schemaPath);
+      if (!existsSync(schemaPath)) {
         throw new Error(`${target.slug}: schemaPath "${target.schemaPath}" not found in the cloned tree — the manifest's path is stale`);
       }
-      findings.push(...m10FindingsFromSchema(readMigrationSql(schemaDir)));
+      // #894: a Prisma-path target declares a `schema.prisma` FILE, not a migrations dir — those
+      // targets have no CREATE TABLE SQL for classifyMigrationSql to read, so they route through
+      // #758's Prisma model/field classifier instead. Routed on the extension rather than a new
+      // manifest field: the path already says which input it is.
+      findings.push(...(target.schemaPath.endsWith(".prisma")
+        ? m10FindingsFromPrismaSchema(readFileSync(schemaPath, "utf8"))
+        : m10FindingsFromSchema(readMigrationSql(schemaPath))));
     }
 
     for (const row of scoreExternalBaseline(target, findings)) {
