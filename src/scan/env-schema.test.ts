@@ -100,4 +100,69 @@ describe("detectEnvSchemaFindings", () => {
     const app: SourceInput = { path: "src/server.ts", text: `const x = process.env.SOME_OTHER_VAR;` };
     expect(run([helper, app])).toHaveLength(0);
   });
+
+  // #902 — framework-aware env conventions.
+  describe("framework-aware conventions (#902)", () => {
+    const viteSchema: SourceInput = {
+      path: "src/env.ts",
+      text: `import { z } from "zod";
+        const schema = z.object({ VITE_API_URL: z.string() });
+        export const env = schema.parse(import.meta.env);`,
+    };
+    const viteReads: SourceInput = {
+      path: "src/app.ts",
+      text: `const a = import.meta.env.VITE_API_URL; const b = import.meta.env.VITE_ANALYTICS_ID;`,
+    };
+
+    it("collects import.meta.env reads and recognizes a .parse(import.meta.env) schema on Vite", () => {
+      const ids = detectEnvSchemaFindings([viteSchema, viteReads], "vite")
+        .filter((f) => f.taxonomy === UNDECLARED)
+        .map((f) => f.id);
+      expect(ids).toContain("ENV-undeclared-read-VITE_ANALYTICS_ID"); // read, not declared
+      expect(ids).not.toContain("ENV-undeclared-read-VITE_API_URL"); // declared in the schema
+    });
+
+    it("marks a VITE_-prefixed undeclared read client-exposed on Vite", () => {
+      const finding = detectEnvSchemaFindings([viteSchema, viteReads], "vite").find(
+        (f) => f.id === "ENV-undeclared-read-VITE_ANALYTICS_ID",
+      );
+      expect(finding?.impact).toContain("client-exposed");
+      expect(finding?.impact).toContain("VITE_");
+    });
+
+    it("does NOT collect import.meta.env reads on a Next target (server compiler, process.env only)", () => {
+      // A stray import.meta.env read on a Next app is not this framework's convention — not collected,
+      // so it can't false-fire as an undeclared read.
+      const found = detectEnvSchemaFindings([schema, { path: "src/x.ts", text: `const a = import.meta.env.VITE_X;` }], "next");
+      expect(found.map((f) => f.id)).not.toContain("ENV-undeclared-read-VITE_X");
+    });
+
+    it("does NOT mark a VITE_ read client-exposed on a Next target (wrong prefix for the framework)", () => {
+      // Same fixture, but the client-exposed prefix set is framework-specific: on Next, VITE_ is not it.
+      const nextViteReads: SourceInput = { path: "src/app.ts", text: `const a = process.env.VITE_LEGACY;` };
+      const finding = detectEnvSchemaFindings([schema, nextViteReads], "next").find(
+        (f) => f.id === "ENV-undeclared-read-VITE_LEGACY",
+      );
+      expect(finding?.impact).not.toContain("client-exposed");
+    });
+
+    it("discloses SvelteKit $env usage as a not-assessed convention (even with no process.env schema)", () => {
+      const svelte: SourceInput = { path: "src/routes/+page.server.ts", text: `import { SECRET_KEY } from "$env/static/private";` };
+      const findings = detectEnvSchemaFindings([svelte], "sveltekit");
+      const disclosure = findings.find((f) => f.id === "ENV-SCHEMA-CONVENTION-00");
+      expect(disclosure).toBeDefined();
+      expect(disclosure).toMatchObject({ severity: "Info", confidence: "N/A" });
+      expect(disclosure?.impact).toContain("PARTIAL");
+    });
+
+    it("discloses Nuxt runtimeConfig usage as a not-assessed convention", () => {
+      const nuxt: SourceInput = { path: "nuxt.config.ts", text: `export default defineNuxtConfig({ runtimeConfig: { apiSecret: "" } });` };
+      expect(detectEnvSchemaFindings([nuxt], "nuxt").some((f) => f.id === "ENV-SCHEMA-CONVENTION-00")).toBe(true);
+    });
+
+    it("does not disclose on a SvelteKit target that uses no $env modules (no noise)", () => {
+      const plain: SourceInput = { path: "src/routes/+page.ts", text: `export const load = () => ({ ok: true });` };
+      expect(detectEnvSchemaFindings([plain], "sveltekit").some((f) => f.id === "ENV-SCHEMA-CONVENTION-00")).toBe(false);
+    });
+  });
 });
