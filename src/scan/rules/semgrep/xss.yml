@@ -156,6 +156,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"]
+      owasp: ["A03:2021 - Injection"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -182,6 +184,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"]
+      owasp: ["A03:2021 - Injection"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -209,6 +213,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"]
+      owasp: ["A03:2021 - Injection"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -236,6 +242,8 @@ rules:
     languages: [javascript, typescript]
     severity: ERROR
     metadata:
+      cwe: ["CWE-346: Origin Validation Error"]
+      owasp: ["A07:2021 - Identification and Authentication Failures"]
       confidence: HIGH
       category: security
       harveySeverity: High
@@ -256,6 +264,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-346: Origin Validation Error"]
+      owasp: ["A07:2021 - Identification and Authentication Failures"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -280,6 +290,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-522: Insufficiently Protected Credentials"]
+      owasp: ["A04:2021 - Insecure Design"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -305,6 +317,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-353: Missing Support for Integrity Check"]
+      owasp: ["A08:2021 - Software and Data Integrity Failures"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium

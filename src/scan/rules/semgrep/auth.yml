@@ -49,6 +49,8 @@ rules:
     languages: [typescript, javascript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-862: Missing Authorization"]
+      owasp: ["A01:2021 - Broken Access Control"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -121,6 +123,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-862: Missing Authorization"]
+      owasp: ["A01:2021 - Broken Access Control"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -237,6 +241,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-639: Authorization Bypass Through User-Controlled Key"]
+      owasp: ["A01:2021 - Broken Access Control"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -279,6 +285,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes"]
+      owasp: ["A08:2021 - Software and Data Integrity Failures"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -314,6 +322,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes"]
+      owasp: ["A08:2021 - Software and Data Integrity Failures"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -350,6 +360,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes"]
+      owasp: ["A08:2021 - Software and Data Integrity Failures"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -379,6 +391,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-602: Client-Side Enforcement of Server-Side Security"]
+      owasp: ["A04:2021 - Insecure Design"]
       confidence: MEDIUM
       category: security
       harveySeverity: High
@@ -408,6 +422,8 @@ rules:
     languages: [typescript, javascript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"]
+      owasp: ["A01:2021 - Broken Access Control"]
       confidence: MEDIUM
       category: security
       harveySeverity: Low
@@ -433,6 +449,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"]
+      owasp: ["A01:2021 - Broken Access Control"]
       confidence: MEDIUM
       category: security
       harveySeverity: Low
@@ -459,6 +477,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-285: Improper Authorization"]
+      owasp: ["A01:2021 - Broken Access Control"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -501,6 +521,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-668: Exposure of Resource to Wrong Sphere"]
+      owasp: ["A01:2021 - Broken Access Control"]
       confidence: MEDIUM
       category: security
       harveySeverity: High
@@ -542,6 +564,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-863: Incorrect Authorization"]
+      owasp: ["A01:2021 - Broken Access Control"]
       confidence: MEDIUM
       category: security
       harveySeverity: High

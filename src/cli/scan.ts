@@ -11,6 +11,7 @@
 // Prints a Finding[] JSON array to stdout (or writes it to --out).
 
 import { writeFileSync } from "node:fs";
+import { enrichFindingsCwe } from "../cwe-map.js";
 import type { Finding } from "../findings.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { runSupabaseScan } from "../scan/supabase.js";
@@ -27,7 +28,8 @@ function tenantMode(raw: string | undefined): "per-tenant" | "per-user" | undefi
 }
 
 function emit(findings: Finding[]): void {
-  const json = JSON.stringify(findings, null, 2);
+  // #975 — declare AST/connected-tier detector CWEs (Supabase static/config/advisor rows).
+  const json = JSON.stringify(enrichFindingsCwe(findings), null, 2);
   const out = arg("--out");
   if (out) writeFileSync(out, json);
   else console.log(json);

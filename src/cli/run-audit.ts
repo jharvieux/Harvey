@@ -96,6 +96,7 @@ import { AUDIT_RUNNERS } from "../audit-runners.js";
 import { discoverSchemaFiles } from "../dynamic-validate.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { isGitRepoRoot } from "../scan/secrets.js";
+import { enrichFindingsCwe } from "../cwe-map.js";
 import { toSarif } from "../sarif.js";
 import { buildSbom } from "../sbom.js";
 import { type Finding, type FindingsDocument, type ReportMeta, validateFindings } from "../findings.js";
@@ -238,6 +239,9 @@ if (Object.keys(schemaHints).length) console.log(`Per-app schema hints (M10, #53
 console.log("");
 
 const { recorded, failures, findings, hotspots } = runAudit(AUDIT_RUNNERS, ctx);
+// #975 — declare CWEs across the assembled deliverable (mechanical rows arrive enriched; captured
+// artifact/config-tier rows get theirs here) so --findings-out and --sarif-out both carry them.
+enrichFindingsCwe(findings);
 const report = buildAuditCoverage(recorded, env);
 
 console.log(formatAuditCoverage(report));

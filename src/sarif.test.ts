@@ -143,3 +143,26 @@ describe("document shape", () => {
     expect(declared).toContain("harvey/coverage/absent");
   });
 });
+
+describe("#975: CWE tags a CWE-indexed consumer can read", () => {
+  it("emits both the machine external/cwe/cwe-NNN tag and the human CWE string", () => {
+    const r = run(toSarif([finding({ cwe: ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"], owasp: ["A03:2021 - Injection"] })], { coverage: RAN }));
+    const tags = r.tool.driver.rules[0].properties.tags as string[];
+    expect(tags).toContain("external/cwe/cwe-89");
+    expect(tags).toContain("CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')");
+    expect(tags).toContain("A03:2021 - Injection");
+  });
+
+  it("emits a machine tag for every CWE when a finding carries several", () => {
+    const r = run(toSarif([finding({ cwe: ["CWE-79: XSS", "CWE-116: Improper Encoding or Escaping of Output"] })], { coverage: RAN }));
+    const tags = r.tool.driver.rules[0].properties.tags as string[];
+    expect(tags).toContain("external/cwe/cwe-79");
+    expect(tags).toContain("external/cwe/cwe-116");
+  });
+
+  it("omits CWE tags entirely for a finding with no CWE (no empty/garbage tag)", () => {
+    const r = run(toSarif([finding({ cwe: undefined })], { coverage: RAN }));
+    const tags = r.tool.driver.rules[0].properties.tags as string[];
+    expect(tags.some((t) => t.startsWith("external/cwe/"))).toBe(false);
+  });
+});

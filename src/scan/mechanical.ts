@@ -8,6 +8,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { enrichFindingsCwe } from "../cwe-map.js";
 import type { Finding } from "../findings.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
@@ -342,7 +343,8 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       // Fail loud rather than letting unranked rows sink silently to the bottom of a sorted list.
       ranked.findings.push(unrankedCveDisclosure(ranked.unranked));
     }
-    return ranked.findings;
+    // #975 — declare each AST detector's CWE (semgrep rows already carry theirs from rule metadata).
+    return enrichFindingsCwe(ranked.findings);
   } finally {
     cleanup();
   }

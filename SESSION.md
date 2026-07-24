@@ -2,7 +2,18 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-24 (day) — LARGE issue-sweep (two waves): **17 PRs merged, 51 issues closed (0 stale), 26 net-new open → net −25**. corpus-drift now FULLY GREEN for the first time this session. See the block immediately below. Earlier blocks remain historical._
+_Last updated: 2026-07-24 (later) — executed #975 (CWE-enrich every harvey-\* rule + AST detector) → **PR #979 open, awaiting CI**. See the block immediately below. Earlier blocks remain historical._
+
+## 2026-07-24 (later) — executed #975: CWE-enrich every rule + AST detector → PR #979
+
+Picked up the documented next step (#975, the BenchProctor follow-on that unblocks #976). **PR #979 open** (awaiting CI).
+- **All 92 harvey-\* semgrep rules now carry `metadata.cwe`** (was ~19); 88 also carry the matching official OWASP Top-10-2021 category, 4 are cwe-only (CWE-693/489/1321/1333 — OWASP has no category). CWE flows to findings via the existing semgrep-metadata path.
+- **New `src/cwe-map.ts`** — taxonomy→CWE registry declaring each TS/AST detector's CWE by its stable `taxonomy` string; every non-security taxonomy (M5–M9 quality/perf, coverage/arch disclosures, supply-chain posture) recorded as no-clean-CWE **with a reason**. Applied idempotently at 4 assembly seams (mechanical / `scan.ts emit` / dry-run combine / run-audit deliverable). NOT added to detector-census OWNERS — it enriches, doesn't detect.
+- **SARIF** now emits the machine `external/cwe/cwe-NNN` tag GitHub keys on, alongside the human string.
+- Fail-loud tests: owasp-mapping (all 92 rules ↔ OWASP official mapping), cwe-map enumeration (every detector taxonomy literal classified — already caught one miss, "Public bucket with no policies"), sarif machine-tag.
+- `pnpm verify` green (2927 tests); dry-run regenerated (358 findings unchanged, cwe/owasp added); calibration **GATE PASS 199/202, 192/192** (metadata-only edits, detection unchanged).
+- **No CLAUDE.md sentence falsified** (grep-checked — no CWE-coverage claim there; the "199/202, 191/191" figure in the Measure-don't-recall bullet is self-disclaiming "run the gate, never quote"; my run shows 192/192 negatives, a pre-existing drift not caused by this metadata-only change).
+- **Next natural step:** execute #976 (BenchProctor injection/XSS/SSRF re-score, now unblocked), then #977 (deterministic-triage spike).
 
 ## 2026-07-24 (day, post-sweep) — benchmark research thread → BenchProctor evaluated, deterministic-triage spike filed
 
