@@ -26,7 +26,15 @@ export const b3InjectionEntries: CorpusEntry[] = [
   { id: "P-REDOS", kind: "positive", cls: "ReDoS (catastrophic backtracking)", location: "parse.js", match: ["redos"], expectedTier: "review", note: "new RegExp('^(a+)+$') in lib/parse.js — nested quantifier. harvey-redos (metavariable-regex on the nested-quantifier shape) → review." },
   { id: "P-LOG-INJECTION", kind: "positive", cls: "Log injection / forging", location: "track.js", match: ["log-injection"], expectedTier: "review", note: "console.log(`... ${req.query.u} ...`) in pages/api/track.js — CR/LF log forging. harvey-log-injection taint → review (common shape, low severity)." },
 
+  // #984: cookies/headers as taint sources. Before #984 the request source set was only
+  // req.query/body/params/searchParams, so any injection entering through req.cookies/req.headers
+  // went dark. These prove a cookie/header source reaches a free-count sink, and that the new
+  // sources don't over-fire on a parameterized query.
+  { id: "P-SQLI-COOKIE-SOURCE", kind: "positive", cls: "SQLi via req.cookies source", location: "cookie-report.js", match: ["sql"], expectedTier: "high", note: "#984: req.cookies.session_token interpolated into a raw SQL string reaching pool.query in pages/api/cookie-report.js. harvey-sql-injection-template taint with the new req.cookies source → high." },
+  { id: "P-CMD-HEADER-SOURCE", kind: "positive", cls: "Command injection via req.headers source", location: "header-exec.js", match: ["command"], expectedTier: "high", note: "#984: req.headers['x-forwarded-host'] interpolated into exec(`nslookup ${host}`) in pages/api/header-exec.js. harvey-command-injection taint with the new req.headers source → high." },
+
   // --- NEGATIVES (must NOT be flagged in the free count) ---
+  { id: "N-HEADER-PARAM-QUERY", kind: "negative", cls: "Header value passed as a bound param", location: "header-param.js", note: "#984: req.headers['x-tenant-id'] passed as a $1 bound parameter in pages/api/header-param.js — never interpolated into the SQL string. harvey-sql-injection-template focuses the sink on the SQL text arg, so the new cookies/headers sources must not FP here. Regression guard mirroring N-PARAM-QUERY for the #984 sources." },
   { id: "N-CMD-SAFE", kind: "negative", cls: "execFile with argv array (no shell)", location: "img.js", note: "execFile('convert', [inputPath, ...]) in lib/img.js — discrete argv, no shell, no injection. harvey-command-injection fires only on exec/execSync of a string — cleared." },
   { id: "N-EVAL-JSON", kind: "negative", cls: "JSON.parse, not eval", location: "cfg.js", note: "JSON.parse(req.body) in lib/cfg.js parses data, cannot execute. harvey-code-injection-eval fires only on eval/new Function — cleared." },
   { id: "N-PROTO-SAFE", kind: "negative", cls: "Shallow Object.assign of picked fields", location: "opts.js", note: "Object.assign({}, DEFAULTS, {theme, pageSize}) in lib/opts.js — shallow, explicit fields, no recursive merge. harvey-prototype-pollution fires only on merge/defaultsDeep/mergeWith — cleared." },

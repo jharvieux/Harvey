@@ -33,7 +33,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -65,7 +72,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -95,7 +109,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -123,7 +144,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -150,6 +178,9 @@ rules:
     pattern-sources:
       - pattern: req.body
       - pattern: req.query
+      # #984: cookies/headers are attacker-controllable request sources.
+      - pattern: req.cookies
+      - pattern: req.headers
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -179,6 +210,9 @@ rules:
     pattern-sources:
       - pattern: req.body
       - pattern: req.query
+      # #984: cookies/headers are attacker-controllable request sources.
+      - pattern: req.cookies
+      - pattern: req.headers
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -228,7 +262,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sanitizers:
       - pattern: path.basename(...)
     pattern-sinks:
@@ -283,7 +324,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
       # App Router route handler body: `const { template } = await req.json()` (#570)
       - pattern: await $REQ.json()
     pattern-sinks:
@@ -338,7 +386,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -500,7 +555,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern: require($X)
@@ -527,7 +589,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern: $OBJ[$IDX](...)
@@ -575,7 +644,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern: $RES.send(`...`)

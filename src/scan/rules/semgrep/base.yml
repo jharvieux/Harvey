@@ -40,7 +40,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -73,7 +80,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
       - pattern: $SP.get(...)
     pattern-sinks:
       - patterns:
@@ -269,7 +283,14 @@ rules:
       - pattern: req.query
       - pattern: req.body
       - pattern: req.params
+      # #984: cookies/headers are attacker-controllable request sources (session tokens,
+      # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+      - pattern: req.cookies
+      - pattern: req.headers
       - pattern: $REQ.nextUrl.searchParams
+      # #984: App Router next/headers request sources (cookies()/headers()).
+      - pattern: cookies()
+      - pattern: headers()
       - pattern: new URL($REQ.url).searchParams
       - pattern: $SP.get(...)
       - pattern: await $REQ.json()
@@ -277,6 +298,17 @@ rules:
       - patterns:
           - pattern-either:
               - pattern: fetch($URL, ...)
+              # #985: the node http/https modules and the axios/request HTTP clients are equally
+              # SSRF-capable sinks — a request-controlled URL fetched through any of them is the same
+              # bug as fetch(). (harvey-ssrf-fetch previously only matched fetch().)
+              - pattern: http.get($URL, ...)
+              - pattern: https.get($URL, ...)
+              - pattern: http.request($URL, ...)
+              - pattern: https.request($URL, ...)
+              - pattern: axios($URL, ...)
+              - pattern: axios.get($URL, ...)
+              - pattern: axios.post($URL, ...)
+              - pattern: request($URL, ...)
               - patterns:
                   - pattern: $FN($URL, ...)
                   - metavariable-regex:
