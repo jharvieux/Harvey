@@ -44,6 +44,11 @@ rules:
       # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
       - pattern: req.cookies
       - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms propagate through semgrep's taint dataflow
+      # once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
       # #984: App Router next/headers request sources (cookies()/headers()).
       - pattern: cookies()
@@ -91,6 +96,11 @@ rules:
       # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
       - pattern: req.cookies
       - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms propagate through semgrep's taint dataflow
+      # once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
       # #984: App Router next/headers request sources (cookies()/headers()).
       - pattern: cookies()
@@ -294,6 +304,11 @@ rules:
       # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
       - pattern: req.cookies
       - pattern: req.headers
+      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+      # destructured/bracket/aliased/multi-hop forms propagate through semgrep's taint dataflow
+      # once the base object is a source; the method form is a distinct call shape.
+      - pattern: req.get(...)
+      - pattern: req.header(...)
       - pattern: $REQ.nextUrl.searchParams
       # #984: App Router next/headers request sources (cookies()/headers()).
       - pattern: cookies()
