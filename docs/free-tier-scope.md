@@ -15,7 +15,7 @@
 
 | Module | Source-only coverage |
 |---|---|
-| **M1 Multi-tenant security** (lead) | RLS policies in migration SQL (disabled / missing / `USING(true)` / user-metadata / wrong-column & weak-WITH-CHECK semantic review); SECURITY DEFINER functions with unguarded privileged writes; `service_role` usage on client-reachable paths; missing admin-auth guards, permission-matrix gaps, error/PII egress, unvalidated redirect URLs, missing webhook-replay protection, in-memory rate limits. |
+| **M1 Multi-tenant security** | RLS policies in migration SQL (disabled / missing / `USING(true)` / user-metadata / wrong-column & weak-WITH-CHECK semantic review); SECURITY DEFINER functions with unguarded privileged writes; `service_role` usage on client-reachable paths; missing admin-auth guards, permission-matrix gaps, error/PII egress, unvalidated redirect URLs, missing webhook-replay protection, in-memory rate limits. |
 | **M3 Hotspots** | Churn × complexity, coupling, knowledge-risk, AI-provenance (needs git history). |
 | **M4 Duplication** | jscpd. |
 | **M5 Slop / dead code** | knip + slop detection. |
