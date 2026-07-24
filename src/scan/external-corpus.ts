@@ -505,18 +505,24 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     securityVerdict: "NOT ASSESSED — source-tier quality baselines only (#894). No M1 semantic pass, no dynamic tier, no disclosure filed.",
     schemaPath: "packages/prisma/schema.prisma",
     modules: {
-      // #894: this baseline was measured TWICE and the two runs disagreed — recorded here because
-      // the disagreement is the finding. Cloned under a deep scratch path, quality-scan printed
-      // "M4 duplication: 0% (0/0 lines) — 0 clone cluster(s)" on this 3,395-file repo; cloned by
-      // corpus-drift into its own mkdtemp, the SAME pinned tree measures 835 counted / 1,256 total.
-      // The number below is the corpus-drift one, because that is the environment the scorer runs
-      // in. The zero is still a live product defect: runJscpd maps a missing jscpd report to a
-      // synthetic zero-duplication report (#505's "<2 comparable files" branch), so a jscpd run
-      // that analysed NOTHING is indistinguishable from a genuinely clone-free repo — the silent
-      // under-count the coverage guard forbids. Filed as a follow-up with #894.
-      M4: { counted: 835, total: 1256, note: "#894: MEASURED 2026-07-24 in corpus-drift's own clone — 835 counted (54 Medium + 736 Low + 29 Medium/16 Low security-path), 420 Info plus the #365 M4-00 disclosure (166 small clones) for 1,256. SECOND MEASUREMENT, and the first one is on the record above: the same pin cloned to a deeper scratch path produced `0% (0/0 lines) — 0 clone cluster(s)`, a clean bill of health from a run that analysed nothing, because runJscpd cannot distinguish 'jscpd wrote no report' from 'no clones exist'. Trust this number, watch for the zero." },
-      "M4-diverged": { counted: 2, total: 2, note: "#894: MEASURED 2026-07-24 — 2 High review-tier diverged security-path clone findings. Notably these fired in BOTH runs, including the one where jscpd's exact-clone pass returned nothing — the diverged pass walks the tree itself instead of shelling out to jscpd, which is what first showed the M4 zero to be an invocation failure rather than a property of the repo." },
-      "M5-knip": { counted: 1359, total: 1361, note: "#894: MEASURED 2026-07-24 after `npm install` (2127 packages). 1,311 unused files + unused-export files, with 1/16 scopes in #810 reduced mode (M5-98 Info) and 8/16 flagged uncertain (#580 M5-99 Info) — both disclosure rows are part of the baseline. Measured 1359 in corpus-drift's clone and 1360 in a scratch-path clone of the same pin; 1359 is recorded because that is the scorer's own environment, and the ±1 is on the record here rather than absorbed into a tolerance nobody would see. CAVEAT recorded with the number: 1,311 unused FILES on a turbo monorepo whose entry surface knip cannot fully resolve (8 uncertain scopes says so in the output) is a DRIFT baseline, not a claim that documenso has 1,311 dead files." },
+      // #894: M4 on this target is ENVIRONMENT-DEPENDENT and therefore has no trustworthy number to
+      // record. Three runs of the SAME pinned tree, 2026-07-24:
+      //   - ubuntu-latest, corpus-drift --install (the scorer's own environment): 0 counted
+      //   - macOS, cloned under a deep scratch path:                              0 counted
+      //   - macOS, cloned into corpus-drift's own mkdtemp:                      835 counted / 1,256
+      // jscpd writes no report at all in the first two, and runJscpd maps a missing report to a
+      // SYNTHETIC zero-duplication report (#505's "<2 comparable files" branch, written before #544
+      // moved jscpd back to whole-repo). So a run that analysed NOTHING is indistinguishable from a
+      // clone-free repo, and quality-scan prints `0% (0/0 lines)` — a clean bill of health on a
+      // 3,395-file tree. Recorded not-run with the reason rather than baselined at 0 (which would
+      // assert cleanliness) or at 835 (which the scorer's own environment does not reproduce).
+      // In an environment where jscpd DOES run, revalidateNotRunReasons fires a loud "this reason
+      // has outlived its truth" row — which is the correct signal, not a nuisance. Filed as #931.
+      M4: {
+        reason: "#894/#931: MEASURED 2026-07-24 as ENVIRONMENT-DEPENDENT, not as a number. The same pinned tree scores 0 counted on ubuntu-latest under `corpus-drift --install` (the scheduled scorer's own environment) and 0 on macOS under a deep scratch path, but 835 counted / 1,256 total on macOS in corpus-drift's mkdtemp. In the zero cases jscpd writes no report file at all, and runJscpd turns a missing report into a synthetic zero-duplication report (#505's '<2 comparable files' branch, written before #544 moved jscpd back to whole-repo) — so quality-scan prints `M4 duplication: 0% (0/0 lines) — 0 clone cluster(s)`, a clean bill of health from a run that analysed nothing. Corroboration that the zero is an invocation failure and not a property of the repo: the diverged-clone pass, which walks the tree itself instead of shelling out to jscpd, produces its 2 findings in EVERY run. Recorded not-run rather than baselined at 0 (which would assert cleanliness Harvey did not earn) or at 835 (which the scorer's own environment does not reproduce). Re-measure and replace this reason once #931 lands.",
+      },
+      "M4-diverged": { counted: 2, total: 2, note: "#894: MEASURED 2026-07-24 — 2 High review-tier diverged security-path clone findings, reproduced in all three runs including both in which jscpd's exact-clone pass returned nothing. That invariance is what showed the M4 zero to be an invocation failure rather than a property of the repo (#931)." },
+      "M5-knip": { counted: 1360, total: 1362, note: "#894: MEASURED 2026-07-24 after `npm install` (2127 packages). 1,311 unused files + unused-export files, with 1/16 scopes in #810 reduced mode (M5-98 Info) and 8/16 flagged uncertain (#580 M5-99 Info) — both disclosure rows are part of the baseline. ±1 ACROSS ENVIRONMENTS, recorded rather than absorbed into a tolerance nobody would see: 1360 on ubuntu-latest under `corpus-drift --install` AND on macOS under a scratch path, 1359 on macOS in corpus-drift's mkdtemp. The split tracks the M4 environment split exactly (see this target's M4 reason and #931), so re-measure this alongside it. 1360 is recorded because it is what the scheduled scorer's own environment produces. CAVEAT recorded with the number: 1,311 unused FILES on a turbo monorepo whose entry surface knip cannot fully resolve (8 uncertain scopes says so in the output) is a DRIFT baseline, not a claim that documenso has 1,311 dead files." },
       "M5-slop": { counted: 262, total: 267, note: "#894: MEASURED 2026-07-24." },
       "M6-indicator": { counted: 21, total: 21, note: "#894: MEASURED 2026-07-24 — 21 hand-rolled-shape indicators. All Info/non-grading (#267); counted === total by construction." },
       M7: { counted: 127, total: 258, note: "#894: MEASURED 2026-07-24 — 127 counted with the corpus's largest Info tail (131 hook-dependency style notes), plus a 16-image/19.1 MB oversized-asset roll-up. The Info tail is itself worth pinning: #230 demoted that class rather than dropping it, and this is the target where the demotion carries the most weight." },
