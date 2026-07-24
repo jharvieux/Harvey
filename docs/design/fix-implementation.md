@@ -330,7 +330,7 @@ Ruling of record (2026-07-23, #885): **this is being built.** Remaining pieces, 
 | #923 | Verification harness: client-command discovery against a real checkout, workflow parse, baseline run, `VerificationEvidence` assembly | §2.1, §2.2, §2.4 |
 | #924 | Detector re-run — `detectorId` has no producer or consumer, so `computeGreen()` can never return true today | §2.3 |
 | #925 | Branch + push + draft-PR transport at a **wrapped** git/`gh` client (`checkPushRef`/`isProtectedBranch` are pure functions no wrapper enforces) | §1.4, §3.1, §6, §7 |
-| #926 | Batching (`batch()` has no caller), parallel worktrees, concurrency caps, merge order, client handoff | §1.3, §1.5, §4 |
+| #926 | Batching (`batch()` has no caller), parallel worktrees, concurrency caps, merge order, client handoff — **landed, see §9.2 below** | §1.3, §1.5, §4 |
 | #927 | The §8 calibration acceptance gate | §8 |
 | #928 | `verifySuggestedFix()` has no path rails — adjacent hole found while surveying | §3.1 |
 
@@ -354,7 +354,20 @@ Sequencing: #922 → #924 → #923 → #927 → #925 → #926. **#925 is not fir
 | `src/fix/transport.ts` | §3.1/§6/§7 the repo's **first privileged, network-writing path**: one wrapped git/`gh` client where the push-ref + protected-branch + Harvey-self rails are enforced at the WRAPPER; `gh pr create --draft` is the only PR-affecting command (merge/ready/settings **absent**, source-guarded by a test); `--dry-run` is the default and withholds every push; `deliverFix()` opens a draft PR ONLY on `evidence.green === true`, aborts a green fix whose diff would falsify the §7 rollback paragraph, and returns `recommend-only` (with evidence) otherwise. | §1.4, §3.1, §6, §7 | #925 |
 | `package.json` | `fix-dry-run` / `fix-execute` scripts wired (the operator action item from #929). | — | #929 |
 
-Remaining after this slice: **#926** (batching `batch()` has a caller now only in tests, parallel worktrees, concurrency caps, merge order, client handoff) and **#957** (the full autonomous §8 calibration run). Credential handling (§6: engagement-scoped PAT in the OS keychain, revoked at close) is an operator process, not code — `transport.ts` relies on the ambient `gh`/git auth and never stores a token.
+Credential handling (§6: engagement-scoped PAT in the OS keychain, revoked at close) is an operator process, not code — `transport.ts` relies on the ambient `gh`/git auth and never stores a token.
+
+**Update (2026-07-24, #926 — batching, scheduling, merge order, client handoff):**
+
+| File | What it provides | Design ref | Issue |
+|---|---|---|---|
+| `src/fix/schedule.ts` | The **real caller of `batch()`** (until now it existed only in its own test): `scheduleFixes()` turns eligible fixes into file-overlap conflict components ordered internally (severity desc, then BFTB desc) and against each other (highest contained severity first); `emitMergeOrder()` produces the §4 merge advisory with a "PRs for A and B touch `<file>`; merge A first" note per within-component overlap; `detectLateConflict()` is the pre-push dynamic check (a completed fix's changed-file set vs. every already-pushed branch); `runScheduled()` ENFORCES the §4 caps at a semaphore — default 4 implement/verify slots, at most 2 concurrent full client-check runs — proven observable (peak-concurrency assertions), not documented. | §1.3, §4 | #926 |
+| `src/fix/handoff.ts` | `assembleHandoff()` — the §1.5 client-handoff artifact: every APPROVED finding as a row (PR-opened / verified-inert / awaiting-implementer / manual / recommend-only / rails-blocked / verify-failed / aborted / not-approved) with its status, PR link, verification, reason, and merge rank. A downgraded/blocked fix is a ROW WITH A REASON, never a silent omission. Carries the merge-order advisory alongside. | §1.5, §4 | #926 |
+| `src/cli/fix-execute.ts` | Now assembles a handoff from intake + executions and writes `fix-handoff.json` next to `fix-execution.json`, and prints the recommended merge order. This is `batch()`'s first non-test caller in a real CLI path. | §1.5 | #926 |
+| `report-template/render.mjs` | `fixSection()` renders `data.fixHandoff` (an operator folds `fix-handoff.json` into `findings.<client>.json`): a "Fix delivery" table (merge # → finding → status → PR → verification) plus the merge-order notes, and a "Recommended fixes (why not automated)" downgrade table. Optional — renders only when a `fixHandoff` is present. | §1.5 | #926 |
+
+Deliberate limit of this slice: `runScheduled` is the concurrency ENGINE and `detectLateConflict` the pre-push check, but the one-command runner that drives real worktrees + `transport.deliverFix()` through them end-to-end is not assembled — each piece is unit-proven and composes. The inert-diff `fix-execute` path emits `verified-inert` handoff rows (no live push); a transport-integrated runner would emit `pr-opened` rows via `deliverFix`.
+
+Remaining after this slice: **#957** (the full autonomous §8 calibration run).
 
 **Still not built, still deliberate:**
 
