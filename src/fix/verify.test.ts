@@ -76,6 +76,15 @@ describe("computeGreen", () => {
     ).toBe(false);
   });
 
+  it("is not green when the detector did not run — an unrun detector is not a clean one", () => {
+    expect(
+      computeGreen({
+        detectorAfter: { detectorId: "d", fired: false, output: "", notRun: "no resolver for taxonomy" },
+        clientChecks: [check({})],
+      }),
+    ).toBe(false);
+  });
+
   it("does not count skipped checks (needs-ci / pre-existing) against green", () => {
     expect(
       computeGreen({

@@ -164,7 +164,10 @@ export function checkPublicDirSensitive(dir: string): Finding[] {
   return findings;
 }
 
-export function runSemgrep(dir: string): SemgrepOutput {
+// #950: mirrors the osv-scanner pattern (#512, src/scan/dependencies.ts) — a missing/crashing
+// semgrep binary must degrade to a disclosed coverage gap, never an uncaught ENOENT that hard-
+// exits the whole quick-scan CLI. `failure` set ⇒ the caller substitutes semgrepUnavailableFinding.
+export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: string } {
   const args = [
     "--config", "p/typescript",
     "--config", "p/react",
@@ -182,9 +185,30 @@ export function runSemgrep(dir: string): SemgrepOutput {
   try {
     out = execFileSync("semgrep", args, { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 });
   } catch (err) {
-    const e = err as { stdout?: string };
+    const e = err as { stdout?: string; code?: string; message?: string };
     if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
-    else throw err;
+    else return { result: {}, failure: e.code === "ENOENT" ? "semgrep not found on PATH" : (e.message ?? "semgrep failed with no output") };
   }
-  return JSON.parse(out) as SemgrepOutput;
+  return { result: JSON.parse(out) as SemgrepOutput };
+}
+
+// Same disclosure contract as DEP-OSV-00/SEC-TH-GH-00/SEC-BUNDLE-00: a visible not-assessed row,
+// never a silent skip — a missing semgrep binary must not read as "zero footguns found".
+export function semgrepUnavailableFinding(reason: string): Finding {
+  return {
+    id: "SEM-00",
+    title: "Semgrep footgun scan did not run",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Next.js/web footgun",
+    taxonomy: "Next.js/web footgun — coverage not assessed",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `Semgrep failed to run: ${reason}`,
+    impact: "Semgrep footgun coverage for this engagement is incomplete for this pass — a disclosed coverage gap, not a finding of zero footguns.",
+    fix: "Install semgrep on the scanning machine (see this file's header) and re-run the scan.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
 }

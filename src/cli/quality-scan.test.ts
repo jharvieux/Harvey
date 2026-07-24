@@ -310,3 +310,62 @@ describe("quality-scan CLI — M5 runs without the target's node_modules via a p
     expect(findings.find((f) => f.id === "M5-00")).toBeUndefined();
   }, 30000);
 });
+
+// #948 (remainder of #931): jscpd resolves its `.jscpd.json` auto-discovery AND, separately, its
+// own CWD's `.gitignore` (a second, less-anchored .gitignore reader in jscpd's own CLI package,
+// distinct from the one @jscpd/finder uses for the scanned directory itself) relative to
+// `process.cwd()` of the CHILD PROCESS — not the target directory passed on the command line.
+// Confirmed by instrumenting jscpd 4.2.5 directly: a multi-segment `.gitignore` entry read from an
+// unrelated CWD gets converted into an ANY-DEPTH glob that can accidentally match a directory name
+// inside a wholly unrelated scanned tree, silently emptying jscpd's file list — exactly the
+// "some absolute paths" cwd-dependence #931 measured on documenso. This engineers a deterministic
+// collision (rather than relying on a real repo's real path to coincidentally collide) and proves
+// quality-scan's own jscpd invocation is no longer cwd-dependent: pinning `cwd: dir` in runJscpd
+// (src/cli/quality-scan.ts) makes the child read the TARGET's own .gitignore/.jscpd.json
+// regardless of where quality-scan itself happens to be launched from.
+function poisonCwdFixture(): { poisonCwd: string; target: string } {
+  const poisonCwd = mkdtempSync(join(tmpdir(), "harvey-quality-poison-cwd-"));
+  dirs.push(poisonCwd);
+  execFileSync("git", ["init", "-q"], { cwd: poisonCwd });
+  // A multi-segment, non-rooted .gitignore entry — jscpd's CWD-based reader (src/init/ignore.ts)
+  // has no concept of a scan-relative baseDir, so it converts this into a bare "**/zzz/dup/**"
+  // any-depth glob instead of anchoring it to poisonCwd, unlike @jscpd/finder's own (correct)
+  // per-scanDir gitignore collector.
+  writeFileSync(join(poisonCwd, ".gitignore"), "zzz/dup\n");
+
+  const target = mkdtempSync(join(tmpdir(), "harvey-quality-poison-target-"));
+  dirs.push(target);
+  execFileSync("git", ["init", "-q"], { cwd: target });
+  writeFileSync(join(target, "package.json"), JSON.stringify({ name: "poison-target-fixture", private: true }));
+  // Every comparable source file lives under zzz/dup/ — if the poisoned CWD's any-depth glob
+  // leaks into this scan, it excludes the target's ENTIRE file list, not just a subset.
+  write(target, "zzz/dup/a.ts", CLONED_BLOCK);
+  write(target, "zzz/dup/b.ts", CLONED_BLOCK);
+  return { poisonCwd, target };
+}
+
+function runCliFromCwd(cwd: string, repo: string): Finding[] {
+  const outPath = join(repo, "quality-out.json");
+  // Absolute tsx path: `cwd` here is the whole point under test (an unrelated directory), so a
+  // repo-relative "node_modules/.bin/tsx" (which every other helper in this file can use because
+  // THEY pin cwd: REPO_ROOT) would not resolve.
+  execFileSync(join(REPO_ROOT, "node_modules", ".bin", "tsx"), [CLI, repo, "--out", outPath], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  return JSON.parse(readFileSync(outPath, "utf8")) as Finding[];
+}
+
+describe("quality-scan CLI — jscpd is not poisoned by an unrelated CWD's .gitignore/.jscpd.json (#948)", () => {
+  it("finds the real cross-file clone even when launched from a CWD whose own .gitignore would (if leaked) exclude the whole target", () => {
+    const { poisonCwd, target } = poisonCwdFixture();
+    const findings = runCliFromCwd(poisonCwd, target);
+
+    const clone = findings.filter((f) => f.taxonomy.startsWith("M4 —") && f.location.includes("zzz/dup/a.ts") && f.location.includes("zzz/dup/b.ts"));
+    expect(clone.length).toBeGreaterThan(0);
+    // The coverage-gap disclosure (jscpd wrote no report / analysed nothing) must NOT fire —
+    // that's the exact symptom this test guards against regressing to.
+    expect(findings.find((f) => f.id === "M4-99")).toBeUndefined();
+  }, 30000);
+});

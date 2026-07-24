@@ -52,11 +52,18 @@ const AUTO_SAFETY_MIN = 4;
 // Keyword heuristics that mark a fix as touching sensitive machinery (design §5 trigger 2).
 const SENSITIVE_KEYWORDS = ["assertpermission", "transition", "payout", "stripe", "webhook"];
 
+// §5 trigger 2: the fix touches state-machine / auth-permission / payment-adjacent code, by either an
+// engagement-configured sensitive path prefix or a keyword heuristic. One source of truth for both
+// the starting-tier decision (assignTier) and the escalation ladder (src/fix/escalation.ts).
+export function touchesSensitive(finding: Finding, sensitivePaths: string[] = []): boolean {
+  if (sensitivePaths.some((p) => finding.location.startsWith(p))) return true;
+  const haystack = `${finding.location} ${finding.category} ${finding.evidence} ${finding.fix}`.toLowerCase();
+  return SENSITIVE_KEYWORDS.some((k) => haystack.includes(k));
+}
+
 function assignTier(finding: Finding, opts: ScreenOptions): EscalationTier {
   if (finding.severity === "Critical" || finding.severity === "High") return "standard";
-  if ((opts.sensitivePaths ?? []).some((p) => finding.location.startsWith(p))) return "standard";
-  const haystack = `${finding.location} ${finding.category} ${finding.evidence} ${finding.fix}`.toLowerCase();
-  if (SENSITIVE_KEYWORDS.some((k) => haystack.includes(k))) return "standard";
+  if (touchesSensitive(finding, opts.sensitivePaths ?? [])) return "standard";
   return "cheap";
 }
 

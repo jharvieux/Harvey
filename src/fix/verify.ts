@@ -19,6 +19,11 @@ export interface DetectorRun {
   detectorId: string;
   fired: boolean;
   output: string;
+  // §2.3 honesty: set when the detector for this finding could NOT be re-run (no resolver for its
+  // taxonomy, the external engine wasn't available, …). An unrun detector is NOT a clean detector —
+  // computeGreen treats a notRun `detectorAfter` as not-green, so a caller filling in `fired: false`
+  // for something that never executed cannot manufacture a false green (the repo's signature defect).
+  notRun?: string;
 }
 
 export interface VerificationEvidence {
@@ -96,6 +101,7 @@ export function runCommand(command: string, cwd: string): CommandRun {
 // fails. Skipped checks (needs-ci, pre-existing baseline failures) don't count
 // against green — but they're always visible in the evidence (§2.2).
 export function computeGreen(ev: Pick<VerificationEvidence, "detectorAfter" | "clientChecks">): boolean {
+  if (ev.detectorAfter.notRun !== undefined) return false; // fail loud: an unrun detector is not clean
   if (ev.detectorAfter.fired) return false;
   return ev.clientChecks.every((c) => c.skipped !== undefined || c.exitCode === 0);
 }
