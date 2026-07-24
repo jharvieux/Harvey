@@ -1,0 +1,9 @@
+// The call site: filtered by id alone, safe only because `db` (imported from ../../lib/rls) is
+// the $extends-wrapped client that injects `tenantId` centrally — the same shape the AST cannot
+// tell apart from a genuinely unscoped query.
+import { db } from "@/lib/rls";
+
+export async function GET(request: Request, { params }: { params: { id: string } }) {
+  const post = await db.post.findUnique({ where: { id: params.id } });
+  return Response.json(post);
+}

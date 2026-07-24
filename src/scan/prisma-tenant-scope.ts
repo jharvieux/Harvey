@@ -20,6 +20,8 @@
 // Review tier, never free-count: the AST proves the where clause carries no tenant column, not that
 // an ownership check in a wrapper/middleware it can't see is absent.
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
@@ -162,12 +164,60 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 export const NON_SHIPPING_PATH = /(^|\/)(tests?|__tests__|__mocks__|__fixtures__|spec|specs|e2e|fixtures?|examples?|playground|docs?|samples?|benchmarks?)\//i;
 export const NON_SHIPPING_FILE = /\.(test|spec)([.-]|$)|\.stories\./i;
 
+// #911: an APPLICATION built on a tenant-scoping wrapper library still draws findings from this
+// detector, because the wrapper injects the tenant predicate at runtime — a `db.post.findUnique({
+// where: { id } })` call site is safe when `db` is a prisma-rls/ZenStack-enhanced client, but the
+// AST at the call site is identical to the genuinely-unscoped case (#896 measured this as an open
+// question: the three library repos it scanned are not applications, so no such call site existed
+// to measure there). Rather than try to tell an enhanced client binding apart from a raw one at
+// each call site — which the AST cannot do reliably — this gates the WHOLE detector off for a
+// target that shows either recognized signal, matching the dependency-gated precedent in
+// framework-detect.ts's detectOrm/recogniseDataLayer:
+//   - a package.json dependency on a known wrapper package (prisma-rls, ZenStack's runtime); or
+//   - an in-tree Prisma client extension using the `$extends(...).$allOperations` idiom those
+//     wrappers are built on, vendored rather than imported (prisma-rls's own shape, see
+//     extension-scoping-negative).
+// This is a coarser gate than per-call-site precision — a target that depends on the wrapper but
+// doesn't route every query through it would go silent too — but it is the same trade-off #896
+// already made for the libraries themselves, and it is what the issue asked for measured.
+const TENANT_SCOPING_WRAPPER_DEPS = ["prisma-rls", "@zenstackhq/runtime", "zenstack"];
+
+function hasTenantScopingWrapperDependency(pkgText: string | undefined): boolean {
+  if (!pkgText) return false;
+  let pkg: unknown;
+  try {
+    pkg = JSON.parse(pkgText);
+  } catch {
+    return false;
+  }
+  if (typeof pkg !== "object" || pkg === null) return false;
+  const p = pkg as Record<string, Record<string, unknown> | undefined>;
+  const deps = { ...p.dependencies, ...p.devDependencies, ...p.peerDependencies };
+  return TENANT_SCOPING_WRAPPER_DEPS.some((d) => d in deps);
+}
+
+const EXTENDS_CALL = /\$extends\s*\(/;
+const ALL_OPERATIONS = /\$allOperations\b/;
+
+function hasInTreeExtensionWrapper(files: SourceInput[]): boolean {
+  return files.some((f) => SOURCE_EXT.test(f.path) && EXTENDS_CALL.test(f.text) && ALL_OPERATIONS.test(f.text));
+}
+
+function hasTenantScopingWrapper(files: SourceInput[]): boolean {
+  const pkgText = files.find((f) => f.path === "package.json")?.text;
+  return hasTenantScopingWrapperDependency(pkgText) || hasInTreeExtensionWrapper(files);
+}
+
 export function detectPrismaTenantScopeFindings(files: SourceInput[]): Finding[] {
+  if (hasTenantScopingWrapper(files)) return [];
   return files
     .filter((f) => SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
     .flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
 }
 
 export function scanPrismaTenantScope(projectDir: string): Finding[] {
-  return detectPrismaTenantScopeFindings(walkSourceFiles(projectDir));
+  const files = walkSourceFiles(projectDir);
+  const pkgPath = join(projectDir, "package.json");
+  if (existsSync(pkgPath)) files.push({ path: "package.json", text: readFileSync(pkgPath, "utf8") });
+  return detectPrismaTenantScopeFindings(files);
 }

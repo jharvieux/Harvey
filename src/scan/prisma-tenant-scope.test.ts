@@ -64,4 +64,45 @@ describe("prisma-tenant-scope (#760 — Prisma query filtered by primary key alo
     expect(detectPrismaTenantScopeFindings(file(viaThis))).toHaveLength(1);
     expect(detectPrismaTenantScopeFindings(file(viaCtx))).toHaveLength(1);
   });
+
+  // #911: an app built on a tenant-scoping wrapper library still drew this finding, because the
+  // wrapper injects the predicate at runtime and the AST at the call site can't see it.
+  describe("wrapper-injected gate (#911)", () => {
+    it("stays silent when package.json depends on a recognized wrapper (ZenStack runtime)", () => {
+      const files = [
+        { path: "package.json", text: JSON.stringify({ dependencies: { "@zenstackhq/runtime": "^2.0.0" } }) },
+        { path: "src/db/task-repo.ts", text: positive },
+      ];
+      expect(detectPrismaTenantScopeFindings(files)).toHaveLength(0);
+    });
+
+    it("stays silent when package.json depends on prisma-rls", () => {
+      const files = [
+        { path: "package.json", text: JSON.stringify({ devDependencies: { "prisma-rls": "^1.0.0" } }) },
+        { path: "src/db/task-repo.ts", text: positive },
+      ];
+      expect(detectPrismaTenantScopeFindings(files)).toHaveLength(0);
+    });
+
+    it("stays silent when an in-tree $extends(...).$allOperations wrapper exists, without any dependency", () => {
+      const wrapper = `export const db = prisma.$extends({ query: { $allModels: { async $allOperations({ args, query }) { return query(args); } } } });`;
+      const files = [
+        { path: "src/lib/rls.ts", text: wrapper },
+        { path: "src/db/task-repo.ts", text: positive },
+      ];
+      expect(detectPrismaTenantScopeFindings(files)).toHaveLength(0);
+    });
+
+    it("still fires when no wrapper dependency or in-tree extension is present", () => {
+      expect(detectPrismaTenantScopeFindings(file(positive))).toHaveLength(1);
+    });
+
+    it("does not suppress on an unrelated package.json (no recognized wrapper dependency)", () => {
+      const files = [
+        { path: "package.json", text: JSON.stringify({ dependencies: { "@prisma/client": "^5.0.0" } }) },
+        { path: "src/db/task-repo.ts", text: positive },
+      ];
+      expect(detectPrismaTenantScopeFindings(files)).toHaveLength(1);
+    });
+  });
 });
