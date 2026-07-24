@@ -233,7 +233,8 @@ export default function Pricing() {
             <div className="addons" style={{ marginTop: "14px" }}>
               <span className="addon-tag">Included</span>
               <p>
-                <b>Re-audit credit.</b> When you ship the fixes, we re-verify the critical findings for free. The
+                <b>Re-audit credit.</b> When you ship the fixes, we re-verify the critical findings once at no extra
+                charge — additional re-audits are available as a paid add-on. The
                 repeat-customer diff automates it, so it&apos;s cheap for us and high-trust for you.
               </p>
             </div>

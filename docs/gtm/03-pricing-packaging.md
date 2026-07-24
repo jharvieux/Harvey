@@ -118,8 +118,10 @@ are customers to renew — the path from service revenue to recurring revenue.
 - **Publish the grid.** VibeAudits and most of Band 2 hide pricing behind a call.
   Transparent, size-based pricing is a differentiator, a friction-remover for a
   self-serve-leaning buyer, and on-brand with Harvey's coverage-honesty identity.
-- **Offer a re-audit credit** (Valletta does): re-verify critical findings free after the
-  client ships fixes. Cheap to deliver (the diff feature automates it), high trust.
+- **Offer a re-audit credit** (Valletta does): re-verify critical findings once at no extra
+  charge after the client ships fixes; **additional re-audits are a paid add-on** (one
+  included, extra rescans charged — operator decision 2026-07-24, #1013). Cheap to deliver
+  (the diff feature automates it), high trust.
 
 ## Free vs. paid — the honest distinction (do not undersell the paid tiers)
 
