@@ -1,0 +1,9 @@
+import { supabase } from "~/lib/db";
+import { requireUser } from "~/lib/auth";
+
+export async function action({ request }: { request: Request }) {
+  const user = await requireUser(request);
+  const form = await request.formData();
+  await supabase.from("profiles").update({ bio: form.get("bio") }).eq("user_id", user.id);
+  return null;
+}

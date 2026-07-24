@@ -7,6 +7,7 @@ import {
   detectTestEnv,
   detectTestRunner,
   detectTs7TsconfigCrash,
+  detectWorkspaceTestSuites,
   dryRunFailureFinding,
   dryRunFailureModuleRecord,
   isIncompatibleTypeScript7,
@@ -16,10 +17,10 @@ import {
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
   reRootReportToApp,
+  resolveJsonReporterPath,
   rootScopedMutateGlobs,
   rootWorkspaceTestFinding,
   rootWorkspaceTestModuleRecord,
-  resolveJsonReporterPath,
   scaffoldStrykerConfig,
   scopedRunModuleRecord,
   summarizeLineCoverage,
@@ -29,6 +30,8 @@ import {
   TS7_TSCONFIG_BYPASS_FILENAME,
   verifyMutationScope,
   withTs7TsconfigBypass,
+  workspaceTestSuiteFinding,
+  workspaceTestSuiteModuleRecord,
   type AncestorTestSignals,
   type IstanbulCoverageSummary,
   type StrykerMutant,
@@ -713,6 +716,55 @@ describe("detectRootWorkspaceTestSuite (#623)", () => {
     const record = rootWorkspaceTestModuleRecord(info);
     expect(record.status).toBe("partial");
     expect(record.note).toMatch(/#623/);
+    expect(record.note).toMatch(/not suite-absent/);
+  });
+});
+
+// #932: the inverse of #623 — a monorepo ROOT invoked directly whose own package.json carries no
+// test script/runner dep, while its WORKSPACES carry the actual suites (documenso, measured
+// 2026-07-24: root has neither, packages/lib declares `"test": "vitest run"`, 128 tracked spec
+// files — the false M8-00 zero-coverage High this regression guards against).
+describe("detectWorkspaceTestSuites (#932)", () => {
+  it("finds a workspace child with its own test script", () => {
+    const found = detectWorkspaceTestSuites([
+      { path: "packages/lib", pkg: { scripts: { test: "vitest run" } } },
+      { path: "apps/web", pkg: { scripts: {} } },
+    ]);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toEqual({ path: "packages/lib", reason: 'a "test" script' });
+  });
+
+  it("finds a workspace child via a known runner dependency, with no script named test", () => {
+    const found = detectWorkspaceTestSuites([{ path: "packages/signing", pkg: { devDependencies: { vitest: "^3" } } }]);
+    expect(found).toEqual([{ path: "packages/signing", reason: "a vitest dependency" }]);
+  });
+
+  it("does NOT fire when no workspace child has a test script or runner dependency", () => {
+    const found = detectWorkspaceTestSuites([
+      { path: "apps/web", pkg: { scripts: {} } },
+      { path: "packages/ui", pkg: undefined },
+    ]);
+    expect(found).toEqual([]);
+  });
+
+  it("ignores an npm-init placeholder test script on a workspace child, same as detectNoTestSuite's root check", () => {
+    const found = detectWorkspaceTestSuites([{ path: "packages/x", pkg: { scripts: { test: 'echo "Error: no test specified" && exit 1' } } }]);
+    expect(found).toEqual([]);
+  });
+
+  it("emits an M8-04 measurement-gap finding and partial record naming the workspaces — NOT the M8-00 zero-coverage shape", () => {
+    const suites = [
+      { path: "packages/lib", reason: 'a "test" script' },
+      { path: "packages/signing", reason: "a vitest dependency" },
+    ];
+    const finding = workspaceTestSuiteFinding(suites);
+    expect(finding.id).toBe("M8-04");
+    expect(finding.evidence).toContain("packages/lib");
+    expect(finding.evidence).toContain("packages/signing");
+    expect(finding.evidence).toMatch(/measurement gap/i);
+    const record = workspaceTestSuiteModuleRecord(suites);
+    expect(record.status).toBe("partial");
+    expect(record.note).toMatch(/#932/);
     expect(record.note).toMatch(/not suite-absent/);
   });
 });

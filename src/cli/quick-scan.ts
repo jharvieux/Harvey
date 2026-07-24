@@ -35,6 +35,7 @@
 import { writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { runMechanicalScan } from "../scan/mechanical.js";
+import { relativizeScanScope } from "../scan/scan-scope.js";
 import { buildSbom } from "../sbom.js";
 import { buildQuickScanReport, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
 import { toSarif } from "../sarif.js";
@@ -193,7 +194,15 @@ async function main(): Promise<void> {
   const tenantKey = arg("--tenant-key");
   const mode = tenantMode(arg("--tenant-mode"));
   const tenancyOverride = tenantKey || mode ? { tenantKey, mode } : undefined;
-  const rawFindings = await runMechanicalScan({ dir, bundleDir: bundle, tenancyOverride, handrolledIndicators: true });
+  // #933: runMechanicalScan walks a scratch copy of the target (src/scan/scan-scope.ts, #101),
+  // so every raw location carries that run's mkdtemp `harvey-scan-scope-*` prefix. Relativized
+  // HERE, before any consumer below (the free report, --findings-out, the handrolled grouping,
+  // SARIF) — quick-scan is the client-facing free report; a per-run/per-machine scratch path in
+  // front of every finding location is unreadable and looks like a leaked internal path.
+  const rawFindings = (await runMechanicalScan({ dir, bundleDir: bundle, tenancyOverride, handrolledIndicators: true })).map((f) => ({
+    ...f,
+    location: relativizeScanScope(f.location),
+  }));
   const report = buildQuickScanReport(rawFindings);
 
   const findingsOut = arg("--findings-out");
