@@ -34,6 +34,7 @@
 import { M4_DIVERGED_TAXONOMY } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
 import type { QuickScanReport } from "../quick-scan.js";
+import { DOC_CONTEXT_CREDENTIAL_TAXONOMY } from "./secrets.js";
 import { classifyMigrationSql, classifyPrismaSchema } from "../../tools/pii-classify.mjs";
 import { M8_CORPUS_CONFIGS, type M8CorpusConfig } from "./m8-corpus.js";
 
@@ -551,7 +552,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     license: "none in-tree at this pin (GitHub reports NOASSERTION — all rights reserved by default)",
     provenance: "ai-assisted",
     provenanceNote: "#897: a real commercial ERP/MES/QMS with Rust crates, patches/, a versioned release history and BACKWARD_COMPATIBILITY.md, that also ships CLAUDE.md + AGENTS.md + a .claude/skills tree. Capable-dev-with-AI.",
-    securityVerdict: "NOT ASSESSED — #897 is a SCALE measurement, not an audit. The free-tier quick-scan does grade this target F (0/100) on 14 Critical secret findings, and every one inspected is a placeholder credential in self-hosting docs or an example docker-compose; that cry-wolf result is the product finding, recorded in docs/design/carbon-scale-measurement.md and in the follow-up issue, NOT a security verdict on carbon. No disclosure filed and none warranted from this pass.",
+    securityVerdict: "NOT ASSESSED — #897 is a SCALE measurement, not an audit. The free-tier quick-scan originally graded this target F (0/100) on 14 Critical secret findings, every one a placeholder credential in self-hosting docs or an example docker-compose; #934 reclassified that class (re-measured 2026-07-24: all 14 now Low/informational with the reason stated, 0 graded — see FREE_TIER_EXPECTATIONS below). The grade remains F (0/100) on 11 graded Highs pending their own precision decisions (#996). NOT a security verdict on carbon; no disclosure filed and none warranted from this pass.",
     schemaPath: "packages/database/supabase/migrations",
     modules: {
       M4: { counted: 3251, total: 4526, note: "#897: MEASURED 2026-07-24 — the corpus's largest M4 surface by 9x. jscpd completed whole-repo inside quality-scan's 39.4s: no timeout, no hang, no quadratic blow-up at 4,110 TS files. The finding VOLUME is the product finding (see the scale doc), not a scanner failure." },
@@ -625,7 +626,16 @@ export interface FreeTierExpectation {
   mustNotScoreF: boolean;
   // true  -> at least one non-Info tenant-isolation indicator (the app IS known-vulnerable)
   // false -> no such indicator (a decent repo must not be accused)
-  mustRaiseLoudIndicator: boolean;
+  // #934: OPTIONAL — undefined means the target's tenancy posture is NOT ASSESSED (carbon: no M1
+  // semantic pass, no dynamic tier), so neither direction can honestly be asserted. An undefined
+  // posture still emits an explicit "not asserted" row rather than silently scoring one fewer
+  // check — an absent row never shows up in a tally (the coverage-guard rule, applied here).
+  mustRaiseLoudIndicator?: boolean;
+  // #934: the scale invariant carbon broke — placeholder/default credentials in docs/example
+  // deployment paths must be REPORTED (in the non-grading informational section) and must NOT
+  // appear in the graded set. Two-sided on purpose: "not graded" alone would also pass if the
+  // detector stopped firing entirely, which would be a recall regression wearing a pass.
+  mustNotGradeDocContextCreds?: boolean;
   why: string;
 }
 
@@ -654,6 +664,27 @@ export const FREE_TIER_EXPECTATIONS: FreeTierExpectation[] = [
     mustRaiseLoudIndicator: true,
     why: "The other don't-stay-quiet case: world-readable invitation tokens (#214 Critical). Measured: 1 High RLS indicator on organisation_invitations — the very table the Critical is about.",
   },
+  // #934: the first LARGE repo in this gate — the invariant had only ever been scored against
+  // starter kits, and carbon is the target that broke it at scale (F (0/100), every Critical a
+  // placeholder credential in self-hosting docs / example docker-composes).
+  {
+    slug: "carbon",
+    // DELIBERATELY false for now, with the measured reason on record (2026-07-24, post-#934 fix):
+    // the 14 placeholder-cred Criticals are reclassified (the check below pins that), but the
+    // graded set still carries 11 Highs + 1 Low → F (0/100). Those 11 need their own decisions
+    // before mustNotScoreF can be truthfully asserted: 7 harvey-permissive-cors bare-wildcard hits
+    // that are all intended-public endpoints (OAuth .well-known discovery metadata — RFC 8414
+    // REQUIRES public readability — an MCP endpoint, a public file route, the documented Supabase
+    // edge-function corsHeaders idiom), 3 registry GHA workflow findings (curl|sh, run-shell
+    // injection — real CI hygiene), 1 postMessage-wildcard. Flipping this to true is tracked in
+    // #996 (the #934 remainder) — asserting it today would add a knowingly-failing weekly gate.
+    mustNotScoreF: false,
+    // No M1 semantic pass and no dynamic tier has ever run against carbon (securityVerdict: NOT
+    // ASSESSED), so the indicator posture is unasserted — scoreFreeTierExpectation emits an
+    // explicit "not asserted" row for it.
+    mustNotGradeDocContextCreds: true,
+    why: "#934's scale case: a professionally-maintained ERP whose self-hosting docs/contrib/dev-compose surface drew 14 'Critical' placeholder credentials and an F (0/100). The weekly assertion is the reclassification invariant — those hits stay REPORTED (informational) and stay OUT of the graded set — scored against a real 4k-file repo, not only starter kits.",
+  },
 ];
 
 interface FreeTierRow {
@@ -679,17 +710,48 @@ export function scoreFreeTierExpectation(expectation: FreeTierExpectation, repor
     });
   }
 
-  const raised = loud.length > 0;
-  rows.push({
-    slug: expectation.slug,
-    check: expectation.mustRaiseLoudIndicator ? "must raise a loud tenant-isolation indicator" : "must not accuse a sound repo of a tenancy hole",
-    pass: raised === expectation.mustRaiseLoudIndicator,
-    detail: raised === expectation.mustRaiseLoudIndicator
-      ? `${loud.length} non-Info indicator(s)`
-      : expectation.mustRaiseLoudIndicator
-        ? `STAYED QUIET: 0 non-Info indicators on a known-vulnerable repo (${report.indicators.length} Info-only) — the deep-scan Critical has no free-tier signal`
-        : `CRIED WOLF: ${loud.length} non-Info indicator(s) (${loud.map((i) => i.title).join("; ")}) on a repo #227 calls sound`,
-  });
+  // #934: an unasserted indicator posture (tenancy NOT ASSESSED for this target) is an explicit
+  // passing row, never a silently-absent check.
+  if (expectation.mustRaiseLoudIndicator === undefined) {
+    rows.push({
+      slug: expectation.slug,
+      check: "indicator posture",
+      pass: true,
+      detail: `not asserted — this target's tenancy posture is NOT ASSESSED (no M1 semantic/dynamic pass), so neither "must raise" nor "must not accuse" can honestly be scored; ${loud.length} non-Info indicator(s) observed`,
+    });
+  } else {
+    const raised = loud.length > 0;
+    rows.push({
+      slug: expectation.slug,
+      check: expectation.mustRaiseLoudIndicator ? "must raise a loud tenant-isolation indicator" : "must not accuse a sound repo of a tenancy hole",
+      pass: raised === expectation.mustRaiseLoudIndicator,
+      detail: raised === expectation.mustRaiseLoudIndicator
+        ? `${loud.length} non-Info indicator(s)`
+        : expectation.mustRaiseLoudIndicator
+          ? `STAYED QUIET: 0 non-Info indicators on a known-vulnerable repo (${report.indicators.length} Info-only) — the deep-scan Critical has no free-tier signal`
+          : `CRIED WOLF: ${loud.length} non-Info indicator(s) (${loud.map((i) => i.title).join("; ")}) on a repo #227 calls sound`,
+    });
+  }
+
+  // #934: the doc-context credential invariant, two-sided (see FreeTierExpectation). Graded rows
+  // must carry none; the informational section must still carry them — the pinned carbon tree HAS
+  // placeholder creds in its docs/contrib/dev-compose surface, so zero reported means the detector
+  // regressed, not that the repo cleaned up (the tree is frozen at the pin).
+  if (expectation.mustNotGradeDocContextCreds) {
+    const graded = report.findings.filter((f) => f.taxonomy === DOC_CONTEXT_CREDENTIAL_TAXONOMY);
+    const reported = report.informational.filter((f) => f.taxonomy === DOC_CONTEXT_CREDENTIAL_TAXONOMY);
+    const pass = graded.length === 0 && reported.length > 0;
+    rows.push({
+      slug: expectation.slug,
+      check: "doc/example placeholder creds reported but never graded",
+      pass,
+      detail: pass
+        ? `${reported.length} doc-context credential(s) in the informational section, 0 in the graded set`
+        : graded.length > 0
+          ? `CRIED WOLF: ${graded.length} doc-context credential(s) reached the graded set — #934's reclassification regressed`
+          : "GONE DARK: 0 doc-context credentials reported on a pinned tree known to contain them — the detector (not the repo) changed; a lost finding is a recall regression, not a pass",
+    });
+  }
 
   return rows;
 }
