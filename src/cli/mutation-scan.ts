@@ -71,6 +71,7 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, sta
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceInput } from "../detectors/common.js";
+import { discoverTargets } from "../pentest/targets.js";
 import { runStubCheck, stubSurvivalFindings, type StubTestRunner } from "../stub-check.js";
 import { mirrorNodeModules } from "../stub-worktree.js";
 import {
@@ -81,6 +82,7 @@ import {
   detectTestEnv,
   detectTestRunner,
   detectTs7TsconfigCrash,
+  detectWorkspaceTestSuites,
   dryRunFailureFinding,
   dryRunFailureModuleRecord,
   isIncompatibleTypeScript7,
@@ -101,6 +103,8 @@ import {
   toReportRows,
   verifyMutationScope,
   withTs7TsconfigBypass,
+  workspaceTestSuiteFinding,
+  workspaceTestSuiteModuleRecord,
   type AncestorTestSignals,
   type DetectedEnvVar,
   type IstanbulCoverageSummary,
@@ -352,6 +356,19 @@ function collectAncestorSignals(dir: string): AncestorTestSignals[] {
   return out;
 }
 
+// #932: the inverse of collectAncestorSignals — a monorepo ROOT invoked directly whose own
+// package.json has no test script/runner dep, while its own workspace CHILDREN carry the actual
+// suites. discoverTargets' app enumeration already reads pnpm-workspace.yaml / package.json
+// workspaces (the same glob walk quality-scan uses for per-workspace knip, #505); it falls back to
+// [targetDir] itself when there's no workspace manifest, so filtering that self-entry out here
+// leaves an empty list for a genuine single-package target — no false positive.
+function collectWorkspaceSignals(dir: string): { path: string; pkg?: PackageJsonForTestDetection }[] {
+  return discoverTargets(dir)
+    .apps.map((a) => a.path)
+    .filter((p) => resolve(p) !== resolve(dir))
+    .map((p) => ({ path: relative(dir, p), pkg: readPackageJsonAt(p) }));
+}
+
 // #503: replicate the test env the target itself declares (TZ/LANG/LC_ALL from its runner config,
 // test script, or CI workflow) when running its suite — under the audit machine's ambient env an
 // env-fragile suite fails its dry run and M8 voids. Applies to stub-check, ordinary Stryker runs,
@@ -473,6 +490,26 @@ if (!reportPath) {
           ? { ...baseRecord, note: `${baseRecord.note} Attempted a root-scoped run (#655) but could not complete it: ${attempt.degradeReason}.` }
           : baseRecord;
         const output = { finding: rootWorkspaceTestFinding(rootSuite), moduleRecord };
+        const json = JSON.stringify(output, null, 2);
+        if (outPath) {
+          writeFileSync(outPath, json + "\n");
+          console.error(`wrote M8 finding to ${outPath}`);
+        } else {
+          console.log(json);
+        }
+        process.exit(0);
+      }
+    } else {
+      // #932: the inverse of #623 — this target has no ancestor-root suite covering it, but it
+      // may ITSELF be a monorepo root whose test scripts/runner deps live in its own workspaces
+      // (documenso: root has neither, packages/lib declares `"test": "vitest run"`, 128 tracked
+      // spec files). Checked here, not before detectRootWorkspaceTestSuite, so a target that's
+      // both (unusual, but not impossible) reports the ancestor-root gap first.
+      const workspaceSuites = detectWorkspaceTestSuites(collectWorkspaceSignals(targetDir));
+      if (workspaceSuites.length) {
+        console.error(`✗ ${targetDir}: no root-level test suite, but ${workspaceSuites.length} workspace(s) carry their own (e.g. ${workspaceSuites[0]!.path}) — measurement gap, not 'no test suite' (#932).`);
+        console.error(`M8 coverage: partial (workspace test suites not reachable from the root, #932) — emitting the measurement-gap finding instead of M8-00.`);
+        const output = { finding: workspaceTestSuiteFinding(workspaceSuites), moduleRecord: workspaceTestSuiteModuleRecord(workspaceSuites) };
         const json = JSON.stringify(output, null, 2);
         if (outPath) {
           writeFileSync(outPath, json + "\n");

@@ -329,6 +329,52 @@ describe("mutation-scan monorepo root-workspace suite (#623, child process)", ()
   });
 });
 
+// #932: the inverse of #623 — a monorepo ROOT invoked directly whose own package.json has no test
+// script/runner dep, while its WORKSPACE CHILDREN carry the actual suites (documenso, measured
+// 2026-07-24: root has neither, packages/lib declares `"test": "vitest run"`, 128 tracked spec
+// files — the false M8-00 zero-coverage High this regression guards against).
+describe("mutation-scan monorepo root invoked directly, tests live in workspaces (#932, child process)", () => {
+  function monorepoRoot(): string {
+    const root = mkdtempSync(join(tmpdir(), "harvey-m8-monorepo-root-"));
+    dirs.push(root);
+    mkdirSync(join(root, ".git"), { recursive: true });
+    // The ROOT package declares NO test script and NO runner dependency of its own.
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "root", private: true, workspaces: ["packages/*"] }));
+    const lib = join(root, "packages", "lib");
+    mkdirSync(lib, { recursive: true });
+    writeFileSync(join(lib, "package.json"), JSON.stringify({ name: "@app/lib", scripts: { test: "vitest run" }, devDependencies: { vitest: "^3.0.0" } }));
+    writeFileSync(join(lib, "index.test.ts"), REAL_SPEC);
+    return root;
+  }
+
+  function runCliOn(target: string, extraArgs: string[]): { status: number; out: string } {
+    const outPath = join(target, "m8-out.json");
+    try {
+      execFileSync("node_modules/.bin/tsx", [CLI, target, ...extraArgs, "--out", outPath], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
+      });
+      return { status: 0, out: readFileSync(outPath, "utf8") };
+    } catch (err) {
+      const e = err as { status?: number };
+      return { status: e.status ?? 1, out: "" };
+    }
+  }
+
+  it("emits the M8-04 measurement-gap finding for a root whose workspaces carry the test scripts — NOT the false M8-00", () => {
+    const root = monorepoRoot();
+    const { status, out } = runCliOn(root, ["--detect-only"]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
+    expect(parsed.finding.id).toBe("M8-04");
+    expect(parsed.finding.evidence).toContain("packages/lib");
+    expect(parsed.moduleRecord.status).toBe("partial");
+    expect(parsed.moduleRecord.note).toMatch(/#932/);
+  });
+});
+
 // #655: closes the #623 measurement gap — WITHOUT --detect-only, the CLI must actually ATTEMPT a
 // root-scoped Stryker run instead of jumping straight to the gap disclosure. Neither fixture below
 // has a Stryker install anywhere (this suite runs with no stryker on PATH, like #470's), so both

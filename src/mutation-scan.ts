@@ -486,6 +486,69 @@ export function rootWorkspaceTestModuleRecord(info: RootWorkspaceTestSuite): { s
   };
 }
 
+// #932: the inverse of #623 — a monorepo ROOT invoked directly whose own package.json carries no
+// test script/runner dep (all detectNoTestSuite looks at), while its WORKSPACES carry the actual
+// suites (documenso: root has neither, packages/lib declares `"test": "vitest run"`, 128 tracked
+// spec/test files). Reuses the same script/dep check ancestorTestSuite already applies climbing
+// UP from an app to its root, applied instead to each of the root's own workspace children.
+// Callers receive this as the inferred return of detectWorkspaceTestSuites / the param of the
+// finding+record builders — no name needs exporting (mirrors RootWorkspaceTestSuite above).
+interface WorkspaceTestSuite {
+  path: string;
+  reason: string;
+}
+
+function workspaceOwnTestSuite(pkg: PackageJsonForTestDetection | undefined): string | undefined {
+  const scripts = pkg?.scripts ?? {};
+  const testScript = Object.entries(scripts).find(([k, v]) => TEST_SCRIPT_KEY.test(k) && !PLACEHOLDER_TEST_SCRIPT.test(v));
+  if (testScript) return `a "${testScript[0]}" script`;
+  const deps = { ...pkg?.dependencies, ...pkg?.devDependencies };
+  const dep = KNOWN_TEST_RUNNER_DEPS.find((d) => d in deps);
+  if (dep) return `a ${dep} dependency`;
+  return undefined;
+}
+
+// `workspaces` are the target's OWN workspace children (e.g. from discoverTargets), each paired
+// with its own package.json (or undefined if unreadable) — a pure filesystem-facts-in transform,
+// same split as detectRootWorkspaceTestSuite above.
+export function detectWorkspaceTestSuites(workspaces: readonly { path: string; pkg?: PackageJsonForTestDetection }[]): WorkspaceTestSuite[] {
+  const found: WorkspaceTestSuite[] = [];
+  for (const w of workspaces) {
+    const reason = workspaceOwnTestSuite(w.pkg);
+    if (reason) found.push({ path: w.path, reason });
+  }
+  return found;
+}
+
+export function workspaceTestSuiteFinding(suites: readonly WorkspaceTestSuite[]): Finding {
+  const examples = suites.slice(0, 5).map((s) => `${s.path} (${s.reason})`).join(", ");
+  const more = suites.length > 5 ? `, +${suites.length - 5} more` : "";
+  return {
+    id: "M8-04",
+    status: "Open",
+    category: "Test quality",
+    title: "Test suites live in workspaces — root-level mutation scan could not reach them",
+    severity: "Medium",
+    confidence: "Confirmed",
+    taxonomy: "M8 — Root-workspace test suite not reachable per-app",
+    location: "package.json",
+    evidence: `This monorepo root declares no test script/runner of its own, but ${suites.length} workspace(s) carry their own test suite: ${examples}${more}. A root-level mutation scan runs only the root, so it cannot execute any workspace's suite — this is a measurement gap, NOT an absent suite.`,
+    impact: "M8 could not measure this monorepo from a root-level invocation, and the workspaces above may in fact be well covered — reported as a coverage gap rather than a false 'no automated test suite' (which would read as zero coverage on a tested monorepo).",
+    fix: "Re-run M8 per workspace (pnpm mutation-scan <workspace-path>) so each workspace's own suite is measured.",
+    value: 3,
+    ease: 3,
+    safety: 5,
+  };
+}
+
+export function workspaceTestSuiteModuleRecord(suites: readonly WorkspaceTestSuite[]): { status: "partial"; note: string } {
+  const names = suites.map((s) => s.path).join(", ");
+  return {
+    status: "partial",
+    note: `${suites.length} workspace(s) carry their own test suite (${names}) but this root-level invocation cannot run them — M8 here is a measurement GAP, not suite-absent (#932). Re-run M8 per workspace to measure it.`,
+  };
+}
+
 // #655: closes the #623 measurement gap — rather than only DISCLOSING that the app's suite lives
 // at the workspace root, the CLI now invokes Stryker there. scaffoldStrykerConfig's mutate globs
 // are relative to wherever Stryker's cwd is; a per-app scaffold (cwd = the app) produces app-
