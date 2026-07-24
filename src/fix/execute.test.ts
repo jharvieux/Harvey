@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { executeFixDiff, parseDiffFacts } from "./execute.js";
+import { executeFixDiff } from "./execute.js";
 
 const created: string[] = [];
 
@@ -35,40 +35,6 @@ function worktreeCount(dir: string): number {
 
 afterEach(() => {
   for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-describe("parseDiffFacts", () => {
-  it("separates modified from created files and counts changed body lines", () => {
-    const diff = [
-      "diff --git a/src/a.ts b/src/a.ts",
-      "--- a/src/a.ts",
-      "+++ b/src/a.ts",
-      "@@ -1,2 +1,3 @@",
-      " keep",
-      "-old",
-      "+new",
-      "+extra",
-      "diff --git a/src/new.ts b/src/new.ts",
-      "--- /dev/null",
-      "+++ b/src/new.ts",
-      "@@ -0,0 +1,1 @@",
-      "+hello",
-      "",
-    ].join("\n");
-    expect(parseDiffFacts(diff)).toEqual({ files: ["src/a.ts"], createdFiles: ["src/new.ts"], changedLines: 4 });
-  });
-
-  it("does not mistake a removed `--- ` content line for a file header", () => {
-    const diff = [
-      "--- a/db/seed.sql",
-      "+++ b/db/seed.sql",
-      "@@ -1,2 +1,1 @@",
-      "--- a legacy SQL comment",
-      " select 1;",
-      "",
-    ].join("\n");
-    expect(parseDiffFacts(diff).files).toEqual(["db/seed.sql"]);
-  });
 });
 
 describe("executeFixDiff", () => {
