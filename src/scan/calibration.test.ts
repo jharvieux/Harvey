@@ -610,6 +610,9 @@ describe("Batch B14 app-logic heuristics corpus (real leftover-auth greps → ti
   const fixtures: { path: string; content: string }[] = [
     { path: "pages/api/promote.js", content: "if (req.headers[\"x-role\"] === \"admin\") { await admin.from(\"users\").update({ role: \"admin\" }).eq(\"id\", req.body.userId); }" },
     { path: "pages/api/promote-safe.js", content: "const { data: { user } } = await admin.auth.getUser(t); if (user?.app_metadata?.role === \"admin\") { await admin.from(\"users\").update({ role: \"admin\" }); }" },
+    // #991 — allowlist-grant / multi-hop authz decision from untrusted input, and its session-gated twin.
+    { path: "pages/api/authorize.js", content: "const userInput = req.body.action || \"\"; const data = String(userInput).split(\",\").join(\",\"); const allowedActions = [\"read\", \"write\", \"admin\"]; if (allowedActions.includes(String(data))) { res.json({ access: \"granted\", role: \"admin\" }); return; } res.json({ done: true });" },
+    { path: "pages/api/authorize-safe.js", content: "function authzCheck(user, resource) { return Boolean(user) && Array.isArray(user.roles) && user.roles.includes(String(resource)); } const data = String(req.body.action || \"\"); const allowedActions = [\"read\", \"write\", \"admin\"]; if (!authzCheck(req.session.user, data)) { res.status(403).json({ error: \"forbidden\" }); return; } if (allowedActions.includes(data)) { res.json({ ok: true }); }" },
     { path: "pages/api/checkout.js", content: "await stripe.paymentIntents.create({ amount: req.body.amount, currency: \"usd\" });" },
     { path: "pages/api/checkout-safe.js", content: "await stripe.paymentIntents.create({ amount: product.price_cents * req.body.quantity, currency: \"usd\" });" },
     { path: "pages/api/webhooks/inbound.js", content: "const event = req.body; await admin.from(\"subscriptions\").update({ status: event.status }).eq(\"customer_id\", event.customerId);" },
@@ -634,12 +637,12 @@ describe("Batch B14 app-logic heuristics corpus (real leftover-auth greps → ti
     }
   });
 
-  it("promotes none of the app-logic heuristics to the free count (0 high, 7 review)", () => {
+  it("promotes none of the app-logic heuristics to the free count (0 high, 8 review)", () => {
     const m = buildCoverageMatrix(findings, b14AppLogicEntries);
     const positives = b14AppLogicEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
     expect(m.positivesCaughtHigh).toBe(0);
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(7);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(8);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });

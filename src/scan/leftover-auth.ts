@@ -61,6 +61,29 @@ function isClientSideAuthz(content: string): boolean {
   return USER_ROLE_COMPARE.test(content) && CLIENT_GATE.test(content);
 }
 
+// #991 — allowlist-grant / multi-hop authz decision from untrusted input. Broadens the
+// direct-equality client-priv-header check to the shape BenchProctor and real code use: a privileged
+// branch reached via an allowlist MEMBERSHIP test on request-derived input, or a role/"granted"
+// value echoed straight back into the response. Discriminated from the safe twin — a verified-session
+// identity check (authzCheck / req.session) that denies by default (403/forbidden) — which is excluded.
+const AUTHZ_REQ_SOURCE = /(req|request)\.(body|query|params|headers)\b/i;
+// An array/Set literal listing a privilege value, so a membership hit grants a privilege.
+const PRIV_ALLOWLIST = /(?:\[|new\s+Set\s*\(\s*\[)[^\]]*['"](?:admin|owner|root|superadmin|super-admin|superuser|staff|privileged|elevated)['"][^\]]*\]/i;
+const MEMBERSHIP_TEST = /\.\s*(?:includes|has)\s*\(/;
+// A privilege/access grant written into the response body.
+const ROLE_GRANT_RESPONSE = /(?:res|response)\s*\.\s*(?:json|send)\s*\(\s*\{[^}]*(?:role\s*:\s*['"](?:admin|owner|root|superadmin|super-admin|superuser|staff)['"]|access\s*:\s*['"]granted['"])/i;
+// Safe twin: a verified-session identity decision that denies by default.
+const VERIFIED_SESSION_GUARD = /(req|request)\.session|\bauthzCheck\s*\(|\bsession\.user\b/i;
+const DENY_DEFAULT = /status\s*\(\s*40[13]\s*\)|['"](?:forbidden|unauthorized)['"]/i;
+
+function hasAllowlistGrant(content: string): boolean {
+  if (!AUTHZ_REQ_SOURCE.test(content)) return false;
+  const grant = (PRIV_ALLOWLIST.test(content) && MEMBERSHIP_TEST.test(content)) || ROLE_GRANT_RESPONSE.test(content);
+  if (!grant) return false;
+  if (VERIFIED_SESSION_GUARD.test(content) && DENY_DEFAULT.test(content)) return false;
+  return true;
+}
+
 // B14 (#71): app-logic heuristics — all "review" tier (a grep can't prove the missing check
 // isn't enforced elsewhere, only that its shape is absent here). See
 // docs/design/corpus-roadmap-to-100.md §3f and GROUND-TRUTH.md §B14.
@@ -74,6 +97,18 @@ const B14_CHECKS: { id: string; title: string; taxonomy: string; category: strin
     fix: "Derive the role from the verified session (e.g. supabase.auth.getUser().app_metadata), never from the request.",
     // A privilege literal (admin/owner/…) compared directly against a req header/body/query value.
     test: (f) => /(req|request)\.(headers\s*\[[^\]]+\]|(body|query)\.\w+)\s*={2,3}\s*['"](admin|superadmin|super-admin|owner|root|staff)['"]/i.test(f.content),
+  },
+  {
+    // #991 — the allowlist-grant / multi-hop variant of the same class: the privilege is granted by
+    // an allowlist membership test on request-derived input (or echoed back as a role/"granted"
+    // response), rather than a direct `=== 'admin'` comparison. Same taxonomy/class as above.
+    id: "client-authz-allowlist-grant",
+    title: "authorization decision made from client-controlled input (allowlist grant)",
+    taxonomy: "Authz decision from client-controlled input",
+    category: "Broken access control",
+    impact: "A client can supply a value that passes the allowlist (or drives the granted role), so the privileged branch runs on attacker-controlled input.",
+    fix: "Derive the role/permission from the verified session and deny by default; never grant a privilege from a request-derived value passing an allowlist check.",
+    test: (f) => hasAllowlistGrant(f.content),
   },
   {
     id: "client-payment-amount",

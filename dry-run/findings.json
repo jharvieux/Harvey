@@ -8052,6 +8052,30 @@
     ]
   },
   {
+    "id": "AUTH-client-authz-allowlist-grant-pages-api-authorize-js",
+    "title": "pages/api/authorize.js — authorization decision made from client-controlled input (allowlist grant)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Authz decision from client-controlled input",
+    "location": "pages/api/authorize.js",
+    "status": "Open",
+    "evidence": "Heuristic \"client-authz-allowlist-grant\" matched in pages/api/authorize.js.",
+    "impact": "A client can supply a value that passes the allowlist (or drives the granted role), so the privileged branch runs on attacker-controlled input.",
+    "fix": "Derive the role/permission from the verified session and deny by default; never grant a privilege from a request-derived value passing an allowlist check.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
     "id": "AUTH-client-payment-amount-pages-api-checkout-js",
     "title": "pages/api/checkout.js — payment amount taken directly from the request",
     "severity": "High",

@@ -1047,6 +1047,7 @@ free count.
 | id | location | detection | tier |
 |---|---|---|---|
 | P-CLIENT-PRIV-HEADER | `pages/api/promote.js:5` | leftover-auth `client-priv-header` (privilege literal compared directly against a `req` header/body/query value) | review |
+| P-CLIENT-AUTHZ-ALLOWLIST | `pages/api/authorize.js:10` | leftover-auth `client-authz-allowlist-grant` (allowlist membership on multi-hop `req.body.action` → `res.json({ role: 'admin' })`; excluded when a verified-session deny-default guard is present) (#991) | review |
 | P-CLIENT-PAYMENT-AMOUNT | `pages/api/checkout.js:9` | leftover-auth `client-payment-amount` (`amount…: req.(body\|query\|params)`) | review |
 | P-WEBHOOK-NO-SIG | `pages/api/webhooks/inbound.js:6` | leftover-auth `webhook-no-sig` (`webhook`-path route + privileged write + no signature hint) | review |
 | P-SENSITIVE-CONSOLE-LOG | `lib/audit-login.js:4` | leftover-auth `sensitive-console-log` (`console.*` argument carrying password/secret/token/api_key/…) | review |
@@ -1057,6 +1058,7 @@ free count.
 | id | location | why benign / suppression |
 |---|---|---|
 | N-PRIV-FROM-SESSION | `pages/api/promote-safe.js` | the role is read from `getUser().app_metadata`, compared against a session value — no `req.*` operand on the comparison, so `client-priv-header` doesn't match. |
+| N-AUTHZ-SESSION-GATED | `pages/api/authorize-safe.js` | same allowlist-membership shape on `req.body.action`, but gated by `authzCheck(req.session.user, …)` returning 403/forbidden by default — `client-authz-allowlist-grant` excludes any verified-session deny-default guard (#991). |
 | N-PAYMENT-DB-PRICE | `pages/api/checkout-safe.js` | `amount: product.price_cents * req.body.quantity` — `amount:` is followed by the DB price, not `req.*`. |
 | N-WEBHOOK-SIGNED | `pages/api/webhooks/inbound-signed.js` | `stripe.webhooks.constructEvent(...)` verifies the signature before the write; the signature-hint regex matches. |
 | N-LOG-OUTCOME-ONLY | `lib/audit-login-safe.js` | logs `{ email, success }` — no sensitive identifier in the `console.*` argument. |
