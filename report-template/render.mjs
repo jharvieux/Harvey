@@ -314,6 +314,56 @@ function reviewFlagSection(items) {
     <table class="cov"><tr><th>Table</th><th>Column(s) to review</th><th>Also holds asserted PII?</th></tr>${rows}</table>`;
 }
 
+// Fix delivery section (#926, design §1.5). Renders the client-handoff artifact
+// (src/fix/handoff.ts assembleHandoff → fix-handoff.json, folded into findings.<client>.json as
+// data.fixHandoff): two tables — the PRs/fixes being delivered with their verification status and
+// recommended merge order, and the "why not automated" downgrades — plus the merge-order advisory.
+// Optional: renders only when a fixHandoff is present, so existing engagements are unaffected. A
+// downgraded/blocked fix is a ROW WITH A REASON, never omitted (silent omission reads as "handled").
+const FIX_STATUS = {
+  "pr-opened": { label: "PR opened (draft)", c: "#15803d", bg: "#f0fdf4", bd: "#bbf7d0" },
+  "verified-inert": { label: "Verified — pending transport", c: "#2563eb", bg: "#eff6ff", bd: "#bfdbfe" },
+  "awaiting-implementer": { label: "Awaiting implementer", c: "#b88600", bg: "#fffbeb", bd: "#fde68a" },
+  manual: { label: "Manual (operator)", c: "#b88600", bg: "#fffbeb", bd: "#fde68a" },
+  "recommend-only": { label: "Recommend only", c: "#7c3aed", bg: "#f5f3ff", bd: "#ddd6fe" },
+  "rails-blocked": { label: "Blocked by rails", c: "#b3261e", bg: "#fef2f2", bd: "#fecaca" },
+  "verify-failed": { label: "Verification failed", c: "#b3261e", bg: "#fef2f2", bd: "#fecaca" },
+  aborted: { label: "Aborted", c: "#b3261e", bg: "#fef2f2", bd: "#fecaca" },
+  "not-approved": { label: "Not approved", c: "#64748b", bg: "#f8fafc", bd: "#e5e7eb" },
+};
+const DELIVERABLE_FIX = new Set(["pr-opened", "verified-inert", "awaiting-implementer"]);
+function fixBadge(status) {
+  const s = FIX_STATUS[status] ?? FIX_STATUS["not-approved"];
+  return `<span class="cov-badge" style="color:${s.c};background:${s.bg};border:1px solid ${s.bd}">${s.label}</span>`;
+}
+function fixSection(h) {
+  const rows = h.rows ?? [];
+  if (!rows.length) return "";
+  const delivered = rows.filter((r) => DELIVERABLE_FIX.has(r.status)).sort((a, b) => (a.mergeRank ?? 99) - (b.mergeRank ?? 99));
+  const downgraded = rows.filter((r) => !DELIVERABLE_FIX.has(r.status));
+  const prCell = (r) => (r.prUrl ? `<a href="${esc(r.prUrl)}">${esc(r.prUrl)}</a>` : "—");
+  const deliveredTable = delivered.length
+    ? `<table class="cov"><tr><th>Merge #</th><th>Finding</th><th>Status</th><th>PR</th><th>Verification</th></tr>${delivered
+        .map((r) => `<tr><td class="b">${r.mergeRank ?? "—"}</td><td class="b">${esc(r.findingId)}</td><td>${fixBadge(r.status)}</td><td>${prCell(r)}</td><td>${esc(r.verification ?? "—")}</td></tr>`)
+        .join("")}</table>`
+    : `<div class="kv">No automated fixes delivered this engagement.</div>`;
+  const notesBlock = h.mergeOrder?.notes?.length
+    ? `<div class="kv" style="margin-top:8px"><b>Merge order</b> ${h.mergeOrder.notes.map((n) => esc(n)).join("<br>")}</div>`
+    : "";
+  const downgradeTable = downgraded.length
+    ? `<h2>Recommended fixes (why not automated)</h2>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Approved findings that did NOT become an automated PR — downgraded, blocked, or awaiting review. Each is listed with its reason; none is silently dropped.</div>
+      <table class="cov"><tr><th>Finding</th><th>Status</th><th>Reason</th></tr>${downgraded
+        .map((r) => `<tr><td class="b">${esc(r.findingId)}</td><td>${fixBadge(r.status)}</td><td>${esc(r.reason ?? "—")}</td></tr>`)
+        .join("")}</table>`
+    : "";
+  return `<h2>Fix delivery</h2>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">Fixes prepared for <b>${esc(h.client)}</b> at <code>${esc(h.baselineCommit)}</code>. Every PR stays a draft until the operator flips it; <b>the client merges — Harvey never merges</b>. Follow the merge order where two PRs touch the same file.</div>
+    ${deliveredTable}
+    ${notesBlock}
+    ${downgradeTable}`;
+}
+
 function buildHtml(data) {
   const all = data.findings.map((x) => ({ ...x, _bftb: bftb(x) }));
   const f = all.filter((x) => x.confidence !== "N/A" && !x.reviewFlagOnly); // live findings
@@ -457,6 +507,7 @@ function buildHtml(data) {
     <h2>Findings</h2>
     ${rolledUp.length ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px">High-volume shapes are rolled up (#935): ${rolledUp.length} shape(s) totalling ${rolledUp.reduce((s, g) => s + g.count, 0)} findings render as grouped blocks — top instances in full, the rest disclosed by count with every location listed. Nothing is omitted from the underlying findings.json.</div>` : ""}
     ${findingItems.map((item) => (item.kind === "group" ? groupCard(item) : findingCard(item.finding))).join("")}
+    ${data.fixHandoff ? fixSection(data.fixHandoff) : ""}
     ${data.baseline?.resolved?.length ? resolvedSection(data.baseline.resolved) : ""}
     ${reviewFlagged.length ? reviewFlagSection(reviewFlagged) : ""}
     ${na.length ? `<h2>Checked &amp; ruled out (not applicable)</h2>
