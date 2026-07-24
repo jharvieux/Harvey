@@ -24,7 +24,23 @@ afterEach(() => {
 
 const SCRATCH_PREFIX = /harvey-scan-scope-/;
 
-describe("quick-scan CLI — no scratch-scope path leaks into client-facing output (#933)", () => {
+// These two tests drive the REAL mechanical scan (src/scan/mechanical.ts) as a child process, so
+// they need semgrep/trufflehog/gitleaks actually installed — same requirement mechanical.test.ts
+// documents (it mocks those sub-scanners specifically because pnpm verify's own convention is
+// deterministic-offline, matching the CI `verify` job which — per .github/workflows/ci.yml —
+// deliberately does not install them, unlike the separate `dry-run` job). Skip with a named
+// reason rather than a silent pass: this is the existing offline-suite convention, not a new one.
+function hasBinary(name: string): boolean {
+  try {
+    execFileSync("which", [name], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const MECHANICAL_BINARIES_PRESENT = ["semgrep", "trufflehog", "gitleaks"].every(hasBinary);
+
+describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-scope path leaks into client-facing output (#933)", () => {
   // 30s: drives the real mechanical scan (semgrep/trufflehog/gitleaks/osv-scanner) as a child
   // process, well over vitest's 5s default under load.
   it("does not leak the harvey-scan-scope-* mkdtemp prefix into the rendered report", () => {
