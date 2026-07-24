@@ -49,7 +49,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-3",
@@ -67,7 +73,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-4",
@@ -121,7 +133,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-7",
@@ -193,7 +211,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-11",
@@ -211,7 +235,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-12",
@@ -229,7 +259,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-13",
@@ -247,7 +283,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-14",
@@ -283,7 +325,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-16",
@@ -319,7 +367,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-18",
@@ -373,7 +427,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-21",
@@ -427,7 +487,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-24",
@@ -463,7 +529,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-26",
@@ -535,7 +607,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-30",
@@ -571,7 +649,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-32",
@@ -625,7 +709,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-35",
@@ -697,7 +787,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-39",
@@ -733,7 +829,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-41",
@@ -751,7 +853,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-42",
@@ -787,23 +895,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
-  },
-  {
-    "id": "SEC-BUNDLE-00",
-    "title": "Built-bundle secret scan did not run",
-    "severity": "Info",
-    "confidence": "N/A",
-    "category": "Secret exposure",
-    "taxonomy": "Client-inlined secret — coverage not assessed",
-    "location": "(bundle)",
-    "status": "Open",
-    "evidence": "Built-bundle secret pass did not run: no built bundle found (.next/static or dist/) — run a production build so client-inlined secrets can be scanned.",
-    "impact": "Client-inlined secrets (VITE_*/NEXT_PUBLIC_*/REACT_APP_* baked into the shipped JS) are not covered — a disclosed coverage gap, not a finding of zero secrets in the bundle.",
-    "fix": "Produce a production build (`next build` -> .next/static, or `vite build` -> dist/) and re-run the scan, or pass --bundle <dir> at the built assets.",
-    "value": 1,
-    "ease": 3,
-    "safety": 5
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "DEP-OSV-GHSA-grv7-fg5c-xmjg",
@@ -1934,6 +2032,30 @@
     }
   },
   {
+    "id": "DEP-OSV-GHSA-r28c-9q8g-f849",
+    "title": "postcss@8.4.31: PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "package-lock.json (postcss@8.4.31)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-r28c-9q8g-f849 against postcss@8.4.31.",
+    "impact": "PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure",
+    "fix": "Upgrade postcss past the vulnerable range (see GHSA-r28c-9q8g-f849).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "dependency": "postcss",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "postcss is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
     "id": "DEP-OSV-GHSA-5c6j-r48x-rmvq",
     "title": "serialize-javascript@4.0.0: Serialize JavaScript is Vulnerable to RCE via RegExp.flags and Date.prototype.toISOString()",
     "severity": "Medium",
@@ -2106,7 +2228,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-4",
@@ -2172,7 +2300,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-7",
@@ -2214,7 +2348,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-9",
@@ -2256,7 +2396,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-11",
@@ -2298,7 +2444,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-13",
@@ -2340,7 +2492,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-15",
@@ -2382,7 +2540,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-17",
@@ -2400,7 +2564,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-18",
@@ -2418,7 +2588,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-19",
@@ -2460,7 +2636,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-21",
@@ -2478,7 +2660,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-22",
@@ -2496,7 +2684,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-863: Incorrect Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-23",
@@ -2514,7 +2708,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-863: Incorrect Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-24",
@@ -2532,7 +2732,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-25",
@@ -2574,7 +2780,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-863: Incorrect Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-27",
@@ -2616,7 +2828,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+    ],
+    "owasp": [
+      "A05:2021 - Security Misconfiguration"
+    ]
   },
   {
     "id": "SEM-29",
@@ -2634,7 +2852,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-30",
@@ -2652,7 +2876,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-31",
@@ -2670,7 +2900,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-32",
@@ -2688,7 +2924,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-33",
@@ -2706,7 +2948,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-34",
@@ -2724,7 +2972,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-35",
@@ -2742,7 +2996,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes"
+    ],
+    "owasp": [
+      "A08:2021 - Software and Data Integrity Failures"
+    ]
   },
   {
     "id": "SEM-36",
@@ -2760,7 +3020,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes"
+    ],
+    "owasp": [
+      "A08:2021 - Software and Data Integrity Failures"
+    ]
   },
   {
     "id": "SEM-37",
@@ -2802,7 +3068,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-39",
@@ -2820,7 +3092,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-40",
@@ -2838,7 +3116,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-41",
@@ -2856,7 +3140,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-42",
@@ -2874,7 +3164,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-43",
@@ -2917,7 +3213,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEM-45",
@@ -2935,7 +3237,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEM-46",
@@ -2953,7 +3261,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-47",
@@ -2971,7 +3285,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-353: Missing Support for Integrity Check"
+    ],
+    "owasp": [
+      "A08:2021 - Software and Data Integrity Failures"
+    ]
   },
   {
     "id": "SEM-48",
@@ -3013,7 +3333,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-50",
@@ -3056,7 +3382,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-52",
@@ -3074,7 +3406,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-346: Origin Validation Error"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEM-53",
@@ -3117,7 +3455,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-346: Origin Validation Error"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEM-55",
@@ -3135,7 +3479,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-347: Improper Verification of Cryptographic Signature"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-56",
@@ -3225,7 +3575,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-540: Inclusion of Sensitive Information in Source Code"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-60",
@@ -3243,7 +3599,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-918: Server-Side Request Forgery (SSRF)"
+    ],
+    "owasp": [
+      "A10:2021 - Server-Side Request Forgery (SSRF)"
+    ]
   },
   {
     "id": "SEM-61",
@@ -3261,7 +3623,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-346: Origin Validation Error"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEM-62",
@@ -3304,7 +3672,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-347: Improper Verification of Cryptographic Signature"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-64",
@@ -3322,7 +3696,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+    ],
+    "owasp": [
+      "A05:2021 - Security Misconfiguration"
+    ]
   },
   {
     "id": "SEM-65",
@@ -3386,7 +3766,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-68",
@@ -3429,7 +3815,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-70",
@@ -3447,7 +3839,10 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-489: Active Debug Code"
+    ]
   },
   {
     "id": "SEM-71",
@@ -3465,7 +3860,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+    ],
+    "owasp": [
+      "A05:2021 - Security Misconfiguration"
+    ]
   },
   {
     "id": "SEM-72",
@@ -3483,7 +3884,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+    ],
+    "owasp": [
+      "A05:2021 - Security Misconfiguration"
+    ]
   },
   {
     "id": "SEM-73",
@@ -3501,7 +3908,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes"
+    ],
+    "owasp": [
+      "A08:2021 - Software and Data Integrity Failures"
+    ]
   },
   {
     "id": "SEM-74",
@@ -3519,7 +3932,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-602: Client-Side Enforcement of Server-Side Security"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "SEM-75",
@@ -3562,7 +3981,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-77",
@@ -3624,7 +4049,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-613: Insufficient Session Expiration"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEM-80",
@@ -3642,7 +4073,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-81",
@@ -3660,7 +4097,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-82",
@@ -3678,7 +4121,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEM-83",
@@ -3696,7 +4145,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-613: Insufficient Session Expiration"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEM-84",
@@ -3762,7 +4217,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-87",
@@ -3780,7 +4241,10 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-1321: Improperly Controlled Modification of Object Prototype Attributes ('Prototype Pollution')"
+    ]
   },
   {
     "id": "SEM-88",
@@ -3798,7 +4262,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-1333: Inefficient Regular Expression Complexity"
+    ]
   },
   {
     "id": "SEM-89",
@@ -3816,7 +4283,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-319: Cleartext Transmission of Sensitive Information"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-90",
@@ -3859,7 +4332,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG)"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-92",
@@ -3877,7 +4356,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-327: Use of a Broken or Risky Cryptographic Algorithm"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-93",
@@ -3895,7 +4380,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-285: Improper Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-94",
@@ -3913,7 +4404,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-95",
@@ -3956,7 +4453,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-116: Improper Encoding or Escaping of Output"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-97",
@@ -3974,7 +4477,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-116: Improper Encoding or Escaping of Output"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-98",
@@ -3992,7 +4501,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-99",
@@ -4010,7 +4525,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-100",
@@ -4028,7 +4549,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
   },
   {
     "id": "SEM-101",
@@ -4046,7 +4570,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-321: Use of Hard-coded Cryptographic Key"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-102",
@@ -4064,7 +4594,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-613: Insufficient Session Expiration"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEM-103",
@@ -4082,7 +4618,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-329: Generation of Predictable IV with CBC Mode"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-104",
@@ -4100,7 +4642,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-105",
@@ -4118,7 +4666,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-330: Use of Insufficiently Random Values"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-106",
@@ -4160,7 +4714,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-598: Use of GET Request Method With Sensitive Query Strings"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "SEM-108",
@@ -4178,7 +4738,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-522: Insufficiently Protected Credentials"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "SEM-109",
@@ -4196,7 +4762,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-319: Cleartext Transmission of Sensitive Information"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-110",
@@ -4214,7 +4786,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-347: Improper Verification of Cryptographic Signature"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-111",
@@ -4232,7 +4810,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+    ],
+    "owasp": [
+      "A05:2021 - Security Misconfiguration"
+    ]
   },
   {
     "id": "SEM-112",
@@ -4250,7 +4834,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-113",
@@ -4268,7 +4858,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-114",
@@ -4286,7 +4882,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-1021: Improper Restriction of Rendered UI Layers or Frames"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "SEM-115",
@@ -4304,7 +4906,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-319: Cleartext Transmission of Sensitive Information"
+    ],
+    "owasp": [
+      "A02:2021 - Cryptographic Failures"
+    ]
   },
   {
     "id": "SEM-116",
@@ -4322,7 +4930,10 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
   },
   {
     "id": "SEM-117",
@@ -4366,7 +4977,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-119",
@@ -4384,7 +5001,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-120",
@@ -4402,7 +5025,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-121",
@@ -4420,7 +5049,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-122",
@@ -4438,7 +5073,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-123",
@@ -4505,7 +5146,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-126",
@@ -4523,7 +5170,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-127",
@@ -4541,7 +5194,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-128",
@@ -4583,7 +5242,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-130",
@@ -4601,7 +5266,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-131",
@@ -4619,7 +5290,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-132",
@@ -4637,7 +5314,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-133",
@@ -4655,7 +5338,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-134",
@@ -4673,7 +5362,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-135",
@@ -4691,7 +5386,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-136",
@@ -4709,7 +5410,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-137",
@@ -4727,7 +5434,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-942: Permissive Cross-domain Policy with Untrusted Domains"
+    ],
+    "owasp": [
+      "A05:2021 - Security Misconfiguration"
+    ]
   },
   {
     "id": "SEM-138",
@@ -4745,7 +5458,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-139",
@@ -4763,7 +5482,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-140",
@@ -4781,7 +5506,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-470: Use of Externally-Controlled Input to Select Classes or Code ('Unsafe Reflection')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-141",
@@ -4799,7 +5530,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-142",
@@ -4865,7 +5602,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-943: Improper Neutralization of Special Elements in Data Query Logic"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-145",
@@ -4883,7 +5626,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-146",
@@ -4951,7 +5700,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-149",
@@ -4969,7 +5724,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-150",
@@ -4987,7 +5748,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-151",
@@ -5005,7 +5772,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-152",
@@ -5023,7 +5796,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-153",
@@ -5041,7 +5820,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-154",
@@ -5059,7 +5844,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-209: Generation of Error Message Containing Sensitive Information"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "SEM-155",
@@ -5077,7 +5868,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-156",
@@ -5095,7 +5892,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-157",
@@ -5113,7 +5916,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-158",
@@ -5156,7 +5965,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-829: Inclusion of Functionality from Untrusted Control Sphere"
+    ],
+    "owasp": [
+      "A08:2021 - Software and Data Integrity Failures"
+    ]
   },
   {
     "id": "SEM-160",
@@ -5174,7 +5989,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-161",
@@ -5192,7 +6013,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-162",
@@ -5210,7 +6037,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-163",
@@ -5228,7 +6061,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes"
+    ],
+    "owasp": [
+      "A08:2021 - Software and Data Integrity Failures"
+    ]
   },
   {
     "id": "SEM-164",
@@ -5246,7 +6085,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-165",
@@ -5288,7 +6133,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-167",
@@ -5306,7 +6157,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-256: Plaintext Storage of a Password"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "SEM-168",
@@ -5324,7 +6181,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-209: Generation of Error Message Containing Sensitive Information"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "SEM-169",
@@ -5367,7 +6230,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-94: Improper Control of Generation of Code ('Code Injection')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-171",
@@ -5409,7 +6278,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-173",
@@ -5451,7 +6326,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-175",
@@ -5469,7 +6350,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-614: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute"
+    ],
+    "owasp": [
+      "A05:2021 - Security Misconfiguration"
+    ]
   },
   {
     "id": "SEM-176",
@@ -5487,7 +6374,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-113: Improper Neutralization of CRLF Sequences in HTTP Headers ('HTTP Response Splitting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-177",
@@ -5505,7 +6398,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-178",
@@ -5523,7 +6422,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SEM-179",
@@ -5541,7 +6446,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-117: Improper Output Neutralization for Logs"
+    ],
+    "owasp": [
+      "A09:2021 - Security Logging and Monitoring Failures"
+    ]
   },
   {
     "id": "SEM-180",
@@ -5559,7 +6470,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-209: Generation of Error Message Containing Sensitive Information"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "SEM-181",
@@ -5577,7 +6494,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-182",
@@ -5595,7 +6518,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-183",
@@ -5613,7 +6542,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-184",
@@ -5631,7 +6566,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-185",
@@ -5649,7 +6590,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-186",
@@ -5813,7 +6760,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-668: Exposure of Resource to Wrong Sphere"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-193",
@@ -5881,7 +6834,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-522: Insufficiently Protected Credentials"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "SEM-196",
@@ -5899,7 +6858,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-197",
@@ -5917,7 +6882,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEM-198",
@@ -5935,7 +6906,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEM-199",
@@ -5978,7 +6955,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
   },
   {
     "id": "HOSTING-HEADER-hsts",
@@ -5996,7 +6976,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
   },
   {
     "id": "HOSTING-HEADER-frame-options",
@@ -6014,7 +6997,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
   },
   {
     "id": "HOSTING-HEADER-nosniff",
@@ -6032,7 +7018,10 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
   },
   {
     "id": "SEM-PUBLIC-1",
@@ -6050,7 +7039,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-538: Insertion of Sensitive Information into Externally-Accessible File or Directory"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEM-PUBLIC-2",
@@ -6068,7 +7063,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-538: Insertion of Sensitive Information into Externally-Accessible File or Directory"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SB-RLS-STATIC-audit_logs",
@@ -6086,7 +7087,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SB-RLS-STATIC-coupon_redemptions",
@@ -6104,7 +7111,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SB-RLS-STATIC-nocode_tickets",
@@ -6122,7 +7135,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SB-RLS-STATIC-workspaces",
@@ -6140,7 +7159,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SB-RLS-POLICY-public.profiles.profiles_select_self",
@@ -6374,7 +7399,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-269: Improper Privilege Management"
+    ]
   },
   {
     "id": "SB-PLPGSQL-SQLI-public.search_tickets_unsafe",
@@ -6392,7 +7420,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
   },
   {
     "id": "SB-RLS-INITPLAN-profiles-profiles_select_self",
@@ -6536,7 +7570,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SB-OPEN-SIGNUP",
@@ -6554,7 +7594,13 @@
     "ease": 4,
     "safety": 5,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-287: Improper Authentication"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SB-EMAIL-CONFIRM-OFF",
@@ -6572,7 +7618,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-287: Improper Authentication"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "WEBEXT-OVERBROAD-apps/extension/manifest.json",
@@ -6590,7 +7642,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-250: Execution with Unnecessary Privileges"
+    ]
   },
   {
     "id": "SUP-TYPO-expres",
@@ -6680,7 +7735,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-sensitive-route-app-api-admin-pricing-route-ts",
@@ -6698,7 +7759,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-sensitive-route-app-api-admin-tenants-route-ts",
@@ -6716,7 +7783,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-sensitive-console-log-lib-audit-login-js",
@@ -6734,7 +7807,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-532: Insertion of Sensitive Information into Log File"
+    ],
+    "owasp": [
+      "A09:2021 - Security Logging and Monitoring Failures"
+    ]
   },
   {
     "id": "AUTH-mw-matcher-excludes-api-middleware-ts",
@@ -6752,7 +7831,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-sensitive-route-pages-api-admin-dashboard-js",
@@ -6770,7 +7855,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-is-admin-true-pages-api-admin-reset-js",
@@ -6788,7 +7879,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-sensitive-route-pages-api-admin-reset-js",
@@ -6806,7 +7903,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-no-rate-limit-pages-api-auth-login-js",
@@ -6824,7 +7927,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-307: Improper Restriction of Excessive Authentication Attempts"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "AUTH-client-payment-amount-pages-api-checkout-js",
@@ -6842,7 +7951,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-602: Client-Side Enforcement of Server-Side Security"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "AUTH-todo-auth-pages-api-comments-create-js",
@@ -6860,7 +7975,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-sensitive-route-pages-api-dev-seed-js",
@@ -6878,7 +7999,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-draftmode-no-secret-pages-api-preview-enable-js",
@@ -6896,7 +8023,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-unscoped-write-pages-api-profile-update-js",
@@ -6914,7 +8047,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-client-priv-header-pages-api-promote-js",
@@ -6932,7 +8071,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-no-rate-limit-pages-api-register-js",
@@ -6950,7 +8095,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-307: Improper Restriction of Excessive Authentication Attempts"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "AUTH-bypass-auth-pages-api-reports-export-js",
@@ -6968,7 +8119,13 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-upload-no-limit-pages-api-upload-js",
@@ -6986,7 +8143,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-434: Unrestricted Upload of File with Dangerous Type"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "AUTH-webhook-no-sig-pages-api-webhooks-inbound-js",
@@ -7004,7 +8167,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-345: Insufficient Verification of Data Authenticity"
+    ],
+    "owasp": [
+      "A08:2021 - Software and Data Integrity Failures"
+    ]
   },
   {
     "id": "AUTH-client-side-authz-src-components-AdminGateStorage-tsx",
@@ -7022,7 +8191,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-602: Client-Side Enforcement of Server-Side Security"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "AUTH-client-side-authz-src-components-AdminGateUser-tsx",
@@ -7040,7 +8215,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-602: Client-Side Enforcement of Server-Side Security"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
   },
   {
     "id": "RACE-read-modify-write-counters-pages-api-counter-increment-js",
@@ -7058,7 +8239,10 @@
     "ease": 4,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-362: Concurrent Execution using Shared Resource with Improper Synchronization ('Race Condition')"
+    ]
   },
   {
     "id": "AUTH-bola-body-owner-pages-api-billing-invoice-js",
@@ -7076,7 +8260,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEC-PG-IDOR-lib-express-pg-idor-js-438",
@@ -7094,7 +8284,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEC-PG-RESJSON-lib-express-pg-resjson-direct-js-469",
@@ -7166,7 +8362,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-prisma-tenant-scope-task-src-db-task-repo-ts-499",
@@ -7184,7 +8386,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-prisma-tenant-scope-task-src-db-task-repo-ts-613",
@@ -7202,7 +8410,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-drizzle-tenant-scope-select-src-db-task-repo-drizzle-ts-471",
@@ -7220,7 +8434,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-drizzle-tenant-scope-update-src-db-task-repo-drizzle-ts-593",
@@ -7238,7 +8458,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "AUTH-drizzle-tenant-scope-delete-src-db-task-repo-drizzle-ts-708",
@@ -7256,7 +8482,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SEC-SRL-lib-admin-js-767",
@@ -7274,7 +8506,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-SRL-src-lib-crossFileServiceClient-ts-592",
@@ -7292,7 +8530,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-SRL-src-lib-nocodeServiceClient-ts-801",
@@ -7310,7 +8554,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "high"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "AUTH-job-tenant-scope-gmail_inbound_messages-src-inngest-import-inbound-ts",
@@ -7328,7 +8578,13 @@
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
   },
   {
     "id": "SECRET-rotation-pair-REVALIDATE_SECRET-pages-api-isr-rebuild-secret-js",

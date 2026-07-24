@@ -135,9 +135,11 @@ export interface Finding {
   baselineStatus?: BaselineStatus;
   lowConfidenceMatch?: string;
   // CWE / OWASP Top-10 identifiers (#455), for ticket-routing/compliance mapping. Populated from
-  // the scanner's own metadata (semgrep rule `metadata.cwe`/`metadata.owasp` — both the external
-  // p/owasp-top-ten pack and, where the mapping is unambiguous, the harvey-* custom rules), never
-  // invented at report time. Absent on any finding with no defensible mapping.
+  // the detector's own declaration, never invented at report time: for a semgrep row from the rule
+  // `metadata.cwe`/`metadata.owasp` (the external p/owasp-top-ten pack AND every harvey-* rule, all
+  // of which now carry a CWE — #975); for a TS/AST detector row from the taxonomy→CWE registry in
+  // src/cwe-map.ts, keyed on the detector's stable `taxonomy` string. Absent only where the taxonomy
+  // is a deliberate no-clean-CWE (a quality/perf/coverage signal, recorded with a reason in cwe-map).
   cwe?: string[];
   owasp?: string[];
   // #515: cross-module hotspot enrichment. Set at assembly time when a finding's location sits on

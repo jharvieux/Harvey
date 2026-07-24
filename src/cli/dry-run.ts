@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { classifyMigrationSql } from "../../tools/pii-classify.mjs";
 import { classifyDefinerFunctions, definerFindings, type DefinerFunction } from "../definer-classifier.js";
+import { enrichFindingsCwe } from "../cwe-map.js";
 import type { Finding } from "../findings.js";
 import { classifyNoPolicyTables, grantFindings, type NoPolicyTable } from "../grant-classifier.js";
 import { parseDefinerFunctions, parseRlsState } from "../migration-sql-parse.js";
@@ -198,6 +199,9 @@ async function main(): Promise<void> {
     notes: `${piiPhase.result.columns.length} columns classified across ${Object.keys(dataMap).length} tables with PII/PHI/PCI hits.${unknownTypeNote}`,
   });
 
+  // #975 — declare CWEs for the out-of-mechanical-scan classifier findings too (definer/grant);
+  // mech.findings are already enriched, and the pass is idempotent.
+  enrichFindingsCwe(allFindings);
   // findings.json is committed, so it must be diffable across runs and machines (issue #285).
   const portableFindings = allFindings.map((f) => ({ ...f, location: relativizeScanScope(f.location) }));
   writeFileSync(join(outDir, "findings.json"), JSON.stringify(portableFindings, null, 2));

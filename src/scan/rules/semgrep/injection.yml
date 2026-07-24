@@ -111,6 +111,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-943: Improper Neutralization of Special Elements in Data Query Logic"]
+      owasp: ["A03:2021 - Injection"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -137,6 +139,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      # #975: no clean OWASP Top-10-2021 category maps to this CWE; cwe carried, owasp omitted.
+      cwe: ["CWE-1321: Improperly Controlled Modification of Object Prototype Attributes ('Prototype Pollution')"]
       confidence: MEDIUM
       category: security
       harveySeverity: High
@@ -267,6 +271,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-94: Improper Control of Generation of Code ('Code Injection')"]
+      owasp: ["A03:2021 - Injection"]
       confidence: MEDIUM
       category: security
       harveySeverity: High
@@ -297,6 +303,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      # #975: no clean OWASP Top-10-2021 category maps to this CWE; cwe carried, owasp omitted.
+      cwe: ["CWE-1333: Inefficient Regular Expression Complexity"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -318,6 +326,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-117: Improper Output Neutralization for Logs"]
+      owasp: ["A09:2021 - Security Logging and Monitoring Failures"]
       confidence: MEDIUM
       category: security
       harveySeverity: Low
@@ -352,6 +362,8 @@ rules:
     languages: [javascript, typescript]
     severity: ERROR
     metadata:
+      cwe: ["CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"]
+      owasp: ["A03:2021 - Injection"]
       confidence: HIGH
       category: security
       harveySeverity: Critical
@@ -374,6 +386,8 @@ rules:
     languages: [javascript, typescript]
     severity: ERROR
     metadata:
+      cwe: ["CWE-319: Cleartext Transmission of Sensitive Information"]
+      owasp: ["A02:2021 - Cryptographic Failures"]
       confidence: HIGH
       category: security
       harveySeverity: High
@@ -399,6 +413,8 @@ rules:
     languages: [javascript, typescript]
     severity: ERROR
     metadata:
+      cwe: ["CWE-798: Use of Hard-coded Credentials"]
+      owasp: ["A07:2021 - Identification and Authentication Failures"]
       confidence: HIGH
       category: security
       harveySeverity: Critical
@@ -423,6 +439,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"]
+      owasp: ["A01:2021 - Broken Access Control"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -446,6 +464,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-862: Missing Authorization"]
+      owasp: ["A01:2021 - Broken Access Control"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -468,6 +488,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-829: Inclusion of Functionality from Untrusted Control Sphere"]
+      owasp: ["A08:2021 - Software and Data Integrity Failures"]
       confidence: MEDIUM
       category: security
       harveySeverity: High
@@ -492,6 +514,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-470: Use of Externally-Controlled Input to Select Classes or Code ('Unsafe Reflection')"]
+      owasp: ["A03:2021 - Injection"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
@@ -516,6 +540,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"]
+      owasp: ["A03:2021 - Injection"]
       confidence: MEDIUM
       category: security
       harveySeverity: High
@@ -537,6 +563,8 @@ rules:
     mode: taint
     severity: WARNING
     metadata:
+      cwe: ["CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"]
+      owasp: ["A03:2021 - Injection"]
       confidence: MEDIUM
       category: security
       harveySeverity: High
@@ -559,6 +587,8 @@ rules:
     languages: [javascript, typescript]
     severity: WARNING
     metadata:
+      cwe: ["CWE-116: Improper Encoding or Escaping of Output"]
+      owasp: ["A03:2021 - Injection"]
       confidence: MEDIUM
       category: security
       harveySeverity: Medium
