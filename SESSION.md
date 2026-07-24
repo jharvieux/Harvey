@@ -2,11 +2,21 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-24 (later) — executed #975 (CWE-enrich every harvey-\* rule + AST detector) → **PR #979 open, awaiting CI**. See the block immediately below. Earlier blocks remain historical._
+_Last updated: 2026-07-24 (evening) — executed the full #975→#976→#977 benchmark thread: **3 PRs merged (#979/#980/#981), 3 issues closed, net −3**. See the block immediately below. Earlier blocks remain historical._
 
-## 2026-07-24 (later) — executed #975: CWE-enrich every rule + AST detector → PR #979
+## 2026-07-24 (evening) — #975/#976/#977 benchmark thread executed end-to-end → 3 PRs merged
 
-Picked up the documented next step (#975, the BenchProctor follow-on that unblocks #976). **PR #979 open** (awaiting CI).
+Picked up the documented next step and ran the whole BenchProctor thread the prior block queued. **All merged to main, all 3 issues CLOSED.**
+
+- **#975 → PR #979 (merged):** CWE-enriched every rule + AST detector (details in the block below). Surfaced a latent bug it then fixed in #980.
+- **#976 → PR #980 (merged): BenchProctor re-score — DON'T-ADOPT STANDS.** Re-ran the JS/TS quicktest slice (12,400 cases) post-enrichment. Fair (cwe-mode) Youden rose only +4.0→**+5.7%** (JS) / +3.9→**+5.5%** (TS) — **refuting #973's "roughly double" prediction.** SARIF CWE coverage DID jump to **1624/1673 results tagged (97%)** — the enrichment did its #455 job — but the residual cwe-vs-filename gap is **CWE-label granularity, not missing tags**: Harvey fires on argument_injection/genericcmdi/el_injection/basic_xss at 68–82% (filename) yet 0% (cwe) because BenchProctor keys on child CWEs (88/77/917/80) vs Harvey's canonical parents (78/94/79). Only loginjection(117) flipped 0→+4. No `validate-benchproctor` wired. **Also fixed a #975 regression** the re-run surfaced: `quick-scan --sarif-out` threw `cwe.map is not a function` on a semgrep *registry* rule shipping `metadata.cwe` as a bare string (root fix `strList` in semgrep.ts + defensive `asArray` in sarif.ts + regression tests + dry-run regen SEM-77 string→array). Addendum in `docs/design/benchproctor-evaluation.md`.
+- **#977 → PR #981 (merged): deterministic-triage ceiling spike (docs-only measurement).** Measured the (a) guard-decidable vs (b) intent-requiring split. **All 10/10 sqli safe-twin FPs on `harvey-sql-injection-template` are guard-decidable (a).** Prototype numeric-coercion sanitizer: sqli **FPR 32%→18%, TPR 60%→60% (0 recall loss), Youden +28%→+42%** (7 safe cleared, 0 vuln lost). The **(b) core** (from real AOP engagement triage) is uniformly **multi-tenant/authorization INTENT** — not taint-decidable, not in BenchProctor. Recommendation (operator-gated): **hybrid split** — deterministic taint for (a) generic classes (a1 cheap now, a2 = #873); retain LLM/human for (b). No shipped rule changed. Report: `docs/design/deterministic-triage-ceiling-977.md`.
+- **CLAUDE.md relay:** none owed — no sentence falsified. (The string-cwe fix is in code, not CLAUDE.md; the eval doc is a design/measurement doc, not GTM IP.)
+- **Natural next steps queued:** #975's follow-ups if desired (map Harvey rules to BenchProctor child CWEs = benchmark-gaming, DON'T); #977's recommendation → build a1 sanitizers into the taint rules (operator-gated product decision) and/or #873 interprocedural taint for a2.
+
+## 2026-07-24 (later) — executed #975: CWE-enrich every rule + AST detector → PR #979 (MERGED)
+
+Picked up the documented next step (#975, the BenchProctor follow-on that unblocks #976). **PR #979 MERGED.**
 - **All 92 harvey-\* semgrep rules now carry `metadata.cwe`** (was ~19); 88 also carry the matching official OWASP Top-10-2021 category, 4 are cwe-only (CWE-693/489/1321/1333 — OWASP has no category). CWE flows to findings via the existing semgrep-metadata path.
 - **New `src/cwe-map.ts`** — taxonomy→CWE registry declaring each TS/AST detector's CWE by its stable `taxonomy` string; every non-security taxonomy (M5–M9 quality/perf, coverage/arch disclosures, supply-chain posture) recorded as no-clean-CWE **with a reason**. Applied idempotently at 4 assembly seams (mechanical / `scan.ts emit` / dry-run combine / run-audit deliverable). NOT added to detector-census OWNERS — it enriches, doesn't detect.
 - **SARIF** now emits the machine `external/cwe/cwe-NNN` tag GitHub keys on, alongside the human string.
