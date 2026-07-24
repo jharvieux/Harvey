@@ -808,9 +808,11 @@ function countedFor(findings: Finding[], module: string): number {
 // target's deps first (corpus-drift.yml --install), so saas-lite's knip is re-tested exactly when
 // its dependency tree moves, which is #321's specific ask.
 //
-// "did not run" disclosures (knip's #223 M5-00, mutation-scan's #224 M8-00) are NOT evidence the
-// module now runs — they are the tool reporting it still couldn't — so they don't count as output.
-const DID_NOT_RUN_SENTINELS = new Set(["M5-00", "M8-00"]);
+// "did not run" disclosures (knip's #223 M5-00, mutation-scan's #224 M8-00, jscpd's #505/#931 M4-99)
+// are NOT evidence the module now runs — they are the tool reporting it still couldn't — so they
+// don't count as output. (M4-00, by contrast, is a REAL small-clone disclosure counted in totals,
+// not a did-not-run sentinel — it must not be listed here.)
+const DID_NOT_RUN_SENTINELS = new Set(["M5-00", "M8-00", "M4-99"]);
 
 export function revalidateNotRunReasons(target: ExternalTarget, findings: Finding[]): DriftRow[] {
   return Object.entries(target.modules).flatMap(([module, baseline]) => {
