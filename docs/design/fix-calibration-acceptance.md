@@ -90,9 +90,43 @@ Still not autonomous, and genuinely out of reach for a mechanical assembly:
   mechanical before/after strings). #922 landed `producePlan` (no diff); the actual diff-*generating*
   implementer is an LLM/operator pass, not deterministic code — so "every planted class yields a green
   result the pipeline produced itself" is not met.
-- **Semgrep/M1 detector-after resolver.** `rerunDetector` resolves only the M5/M6/M7/M9 AST engines. The
-  §8 in-scope classes 1–4 are semgrep/M1 (open redirect, verbose error, SQLi, unchecked mutation); their
-  detector-after cannot be scored green until a semgrep re-run resolver is added.
+- ~~**Semgrep/M1 detector-after resolver.**~~ **CLOSED by #1012** — see the update below.
 - **Plant classes 1/2/5 as before/after fix fixtures.** The scan corpus plants classes 3/4 cleanly; 1
   (zero-row-update `error: null`), 2 (unchecked Supabase mutation), 5 (`void`-prefixed async) are not
   enumerated as fix-pipeline before/after fixtures with a known mechanical fix.
+
+## Update (2026-07-24, #1012/#1009) — the semgrep-detected §8 classes now run the same full gate
+
+`rerunDetector` gained a second resolver family: a finding whose taxonomy names a **local `harvey-*`
+semgrep rule** is verified by replaying that rule against the finding's own file (scoped exactly as
+the AST path is). So the §8 classes the M1 mechanical tier detects are no longer stuck at `notRun`.
+
+Measured (`src/fix/calibration-acceptance.test.ts`, offline except the `semgrep` binary; the
+binary-dependent cases skip with a named reason when it is absent, matching `quick-scan.test.ts`):
+
+| §8 class | Planted at | Mechanical fix that reaches GREEN |
+|---|---|---|
+| 4 — open redirect | `pages/api/redirect.js:18` (`harvey-open-redirect`) | request names a destination KEY (`z.enum`), every reachable target a literal |
+| 3 — raw error egress | `pages/api/verbose.js:8` (`harvey-verbose-error`) | log the error server-side, return a generic message |
+| SQLi (planted bug #4) | `pages/api/search.js:9` (`harvey-sql-injection-template`) | bind the tainted value as a query parameter instead of SQL text |
+
+The gate still follows the DETECTOR, never the fix author's intent: a plausible-looking host-allowlist
+`.refine()` on the redirect **does not** go green, because `harvey-open-redirect`'s taint path still
+reaches the sink. Whether the rule is over-strict there is a detector question, tracked separately —
+what §8 needs is that the gate reports what the detector says.
+
+**What stays disclosed rather than scored** (the honesty half of the same change):
+
+- A semgrep **registry-pack** rule (`p/owasp-top-ten` et al) is `notRun`: replaying it needs a network
+  fetch, so only the local rule directory is replayable.
+- A `harvey-*` rule id that no longer exists in `src/scan/rules/semgrep/` does not resolve — a deleted
+  rule must not "stop firing" and read as a fixed bug.
+- semgrep absent from PATH, the finding's file missing from the checkout, or source semgrep cannot
+  parse are each `notRun` **with the reason**. Semgrep exits 0 on a syntax error with zero results,
+  which read naively is indistinguishable from a clean file; `runSemgrepOnFile` surfaces it as a failure.
+
+**Blocker re-measured, 2026-07-24:** §8 classes 1 (zero-row update returning `error: null`), 2
+(unchecked Supabase mutation) and 5 (`void`-prefixed async) have **no detector anywhere in `src/`** —
+no `harvey-*` semgrep rule, no AST engine (verified by `resolvesToDetector` returning false for all
+three, locked as a test). Planting before/after fix fixtures for them would produce `notRun` rows, not
+green ones: the detector has to exist first. That ordering is the remainder, not a fixture chore.
