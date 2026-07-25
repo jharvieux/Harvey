@@ -2,7 +2,7 @@
 
 The mechanical tier has a scored gate (`pnpm validate:calibration`). The M7/M8 heuristics have one
 (`pnpm exec tsx src/cli/validate-precision.ts`). The **paid semantic pass** — `/vuln-scan --extra
-docs/scan-extras.txt` → `/triage --fp-rules docs/fp-rules.txt` — had **none**, and the answer-keyed
+briefs/scan-extras.txt` → `/triage --fp-rules briefs/fp-rules.txt` — had **none**, and the answer-keyed
 measurements say it is the tier carrying the product: it is the difference between 1/8 and 8/8 on
 nocode-rescue, 6/12 and 12/12 on SuperRedHat, and 100% of the catch on SupatestVibeDemo. A brief
 edit, a model change or an `fp-rules.txt` tweak could degrade it and nothing would fail.
@@ -49,7 +49,7 @@ git clone https://github.com/SuperRedHat/secure-code-review-demo /tmp/srh
 git -C /tmp/srh checkout vulnerable
 
 # 2. run the semantic pass over it and write the triage output as report-schema findings
-#    (/vuln-scan --extra docs/scan-extras.txt → /triage --fp-rules docs/fp-rules.txt)
+#    (/vuln-scan --extra briefs/scan-extras.txt → /triage --fp-rules briefs/fp-rules.txt)
 
 # 3. record it under the target's slug
 pnpm record-pass --module M1 --pass semantic --target /tmp/srh \
@@ -89,7 +89,7 @@ planted-flaw match or weakens a precision negative fails there without needing a
 
 Proven end-to-end on one target, not just unit tested. `yagaMI-Reverse/nocode-rescue` was cloned to
 a scratch dir, a semantic pass was run over `before/` (5 files, 155 lines) guided by
-`docs/scan-extras.txt` and triaged against `docs/fp-rules.txt`, its 9 findings were recorded with
+`briefs/scan-extras.txt` and triaged against `briefs/fp-rules.txt`, its 9 findings were recorded with
 `pnpm record-pass`, and the gate scored them: **8/8 planted findings caught, GATE PASS**, with the
 generous-match caveat firing on 2 findings that each satisfied two entries. The other three targets
 printed as `NOT SCORED` with their reasons and stayed out of the ratio, which is the behaviour that
@@ -99,7 +99,7 @@ matters most here.
 
 The other three targets were cloned (`superredhat` at the `vulnerable` branch, `supatest` and
 `cipherx` at `main`), a semantic pass was run over each target's shipped source + migrations guided by
-`docs/scan-extras.txt` and triaged against `docs/fp-rules.txt`, and the passes were recorded and
+`briefs/scan-extras.txt` and triaged against `briefs/fp-rules.txt`, and the passes were recorded and
 scored. Every planted flaw was re-confirmed present in the current source (cipherx's later
 `*_fix_*`/`*_legacy_compat_*` migrations resolve an RLS recursion error only — the weak policies
 remain), and the gate scored:

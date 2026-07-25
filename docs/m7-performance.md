@@ -2,7 +2,7 @@
 
 > The "cost" third of the audit alongside M1 (security) and M3–M6 (maintainability): slow paths
 > and what they cost the client, ranked by user-facing impact and mapped into §3b Performance of
-> `docs/audit-report-skeleton.md`. See `docs/audit-modules.md` M7 for the one-paragraph spec this
+> `docs/audit-report-skeleton.md`. See `briefs/audit-modules.md` M7 for the one-paragraph spec this
 > generalizes, and `report-template/findings.atc.json` (F-04, F-05, F-06, F-07, F-08) for a real
 > prior engagement's output shape.
 

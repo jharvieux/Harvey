@@ -162,7 +162,7 @@ was changed. Target re-cloned to `/private/tmp`, deleted after; the M2 stack sel
   four binaries present) + `pnpm detect-static before` (M6/M7/M8/M9) + `pnpm pii-classify --schema
   before/schema.sql` (M10).
 - **Semantic (LLM):** rigorous manual security review of the five `before/` source files, guided by
-  `docs/scan-extras.txt`, triaged by `docs/fp-rules.txt`. All eight planted findings are genuine,
+  `briefs/scan-extras.txt`, triaged by `briefs/fp-rules.txt`. All eight planted findings are genuine,
   real, FP-clean bugs — a competent manual pass catches every one.
 - **Dynamic (M2):** `pnpm dynamic-validate before --execute`. Verdict **GO (postgrest-only)** — the
   root `schema.sql` is applied directly to a local Supabase (#574), two tenants + auth users are

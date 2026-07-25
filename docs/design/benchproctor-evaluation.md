@@ -136,9 +136,15 @@ hardcodedcreds(798) +4. TS/Express was within ~2 pts of JS on every one.
 ### Why the number is low — three concrete, measured causes (not a Harvey capability verdict)
 
 Harvey's own app-layer source gate (#945) measures 97.4% recall on request→sink fixtures, and the
-M1 calibration gate ~198/201. The low BenchProctor J is a **corpus-fit** result, not a contradiction:
+M1 calibration gate 218/221 (MEASURED 2026-07-24; it was ~198/201 when this was first written, and
+it moves with every detector that lands — run `validate-calibration` rather than quoting either).
+The low BenchProctor J is a **corpus-fit** result, not a contradiction:
 
-1. **CWE-strict scoring under-credits Harvey structurally.** Harvey's SARIF carries a CWE tag on only
+1. **CWE-strict scoring under-credits Harvey structurally.** *(This cause was measured at the #973
+   run and is now HISTORICAL: #975 CWE-enriched every `harvey-*` rule, so the "only ~12 tagged
+   rules" fact below no longer holds. The re-score addendum is the authority — it found the residual
+   gap is CWE-label **granularity**, not missing tags, so the conclusion survives while the
+   mechanism named here does not.)* Harvey's SARIF carried a CWE tag on only
    ~12 distinct rules (16 CWE strings total in the 1,673-result JS export). The CWE-mode winners
    (79, 78, 502, 22, 95, 94, 89, 798, 601, 1336, 295) are *exactly* the categories that scored >0.
    Categories where Harvey clearly fires but tags no CWE — argument_injection(88), genericcmdi(77),

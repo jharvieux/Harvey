@@ -2,7 +2,7 @@
 
 Status: draft v1 · Owner: operator · Scope: runtime design for the audit service, the epic/user-story builder, and the fix-implementation system. Model-selection internals are out of scope (see `model-routing.md`); the router appears here as an interface only.
 
-Related: `docs/audit-modules.md` (the module spec), `src/findings.ts` (findings schema), `report-template/render.mjs` (report renderer), `docs/go-no-go.md` (venture context). Issue: #19.
+Related: `briefs/audit-modules.md` (the module spec), `src/findings.ts` (findings schema), `report-template/render.mjs` (report renderer), `docs/go-no-go.md` (venture context). Issue: #19.
 
 ---
 

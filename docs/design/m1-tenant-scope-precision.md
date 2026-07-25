@@ -45,7 +45,7 @@ Two findings in one, and they point opposite ways:
   (prisma-multi-tenant). That is the publishable half.
 - **Every one of the 1031 was in a test, e2e, example, playground or docs path.** An ORM or policy
   test suite is wall-to-wall `prisma.post.update({ where: { id } })` — that is the fixture setting
-  up the case, not an authorization gap, and `docs/fp-rules.txt` already rules test/fixture/seed/
+  up the case, not an authorization gap, and `briefs/fp-rules.txt` already rules test/fixture/seed/
   dev-script code out of scope. Triage verdict: **1031 FP, 0 TP.**
 
 Each was classified by path and by reading the call site; the classification is recorded per class

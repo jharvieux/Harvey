@@ -272,7 +272,7 @@ RS256 service JWTs. No cross-tenant data-exposure path was found in the reviewed
 
 Nothing in CLAUDE.md was falsified by this run. Two brief-level observations for the operator (human-owned IP —
 not edited by me):
-- `docs/scan-extras.txt` pre-states ATC advisor conclusions ("2 of 3 [DEFINER] cleared", "11 of 13
+- `briefs/scan-extras.txt` pre-states ATC advisor conclusions ("2 of 3 [DEFINER] cleared", "11 of 13
   [no-policy] confirmed locked"). Re-measured live this run: the counts still hold (3 DEFINER flagged, 2
   caller-scoped cleared + `tenant_is_active` residual; no-policy tables all service-role-only). The pre-stated
   numbers are currently accurate but are recall — the brief could note "verify live, do not quote."

@@ -22,8 +22,17 @@
 | **M6 Simplification / reuse** | **Indicators only, non-grading:** mechanically-recognisable hand-rolled shapes listed as "this looks hand-rolled; may be worth investigating" — never naming a replacement (that judgment is paid). Same form as the M1 source-tier RLS/authz indicators. Operator ruling 2026-07-15; the detectors shipped in #267 and this section renders in the free report today. Run `pnpm detector-census` for the current M6 count — don't quote a stored one. |
 | **M7 Performance** | Code-level: render patterns, hook dependencies, oversized assets. Bundle-size pass **if** a build artifact is provided. |
 | **M8 Test quality** | Static test-intent detectors: assertion-free, tautological, mock-of-the-subject, snapshot-only, call-count-only, tenant-isolation tests that mock the DB client, happy-path-only coverage on security-critical code. No tests at all is itself a finding, never a skip. Running the suite (mutation testing) is paid. |
-| **M9 App-router / cache correctness** | Static. |
+| **M9 Server→client boundary / cache correctness** | Static — and no longer Next-only (#916–#918): a framework-agnostic boundary model routes **Remix**, **React Router 7** and **TanStack Start** to their own adapters alongside Next App Router. Astro/SvelteKit/Nuxt get a named not-assessed row rather than a silent Next-premise run. |
 | **M10 PII/PHI/PCI** | Detection: classify sensitive columns from the schema in migrations — "here's every sensitive column and where it lives." |
+
+### Machine-readable exports (#867/#887)
+
+The free source scan can also emit the two artifacts a buyer's own tooling ingests:
+`quick-scan --sarif-out <file>` writes SARIF 2.1.0 for GitHub code scanning / ASPM, and
+`--sbom-out <file>` writes a CycloneDX 1.5 dependency inventory. Both flags are also on `run-audit`,
+where the SARIF additionally carries the per-module coverage ledger as `toolExecutionNotifications`
+— so a module that did not run cannot disappear into "no results." Prefer the `run-audit` form when
+the ledger matters.
 
 ## What source-only structurally cannot see (the mechanical ceiling)
 

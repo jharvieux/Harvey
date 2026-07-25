@@ -79,7 +79,7 @@ The dynamic tier could not add live proof for any of them because the stand-up s
   PHOTO`. Corroborates the PII sensitivity behind CX-08/CX-09.
 - **Semantic (LLM):** manual `/vuln-scan`-style review of every `src/app/api/**/route.ts`, the RLS/RPC
   migrations, storage/bucket config, role-gating (`src/lib/roles.ts`, `admin.ts`), and the seed scripts;
-  each finding grounded in a re-read file:line; triaged against `docs/fp-rules.txt` (which is what keeps
+  each finding grounded in a re-read file:line; triaged against `briefs/fp-rules.txt` (which is what keeps
   CX-21 out — a mock CVE list is not a dependency finding).
 - **Dynamic (M2, autonomous):** `HARVEY_APP_PORT=65367 pnpm dynamic-validate <t> --execute --out <dir>`
   — self-provisioned a fresh local Supabase, applied the migrations, attempted the two-tenant + auth-user

@@ -10,7 +10,7 @@ verdict — a reviewer must read it and name replacements. This document is that
 | | |
 |---|---|
 | Target | `stoimera/Cravab` (`git clone --depth 1`, a real AI-generated Supabase/Next.js SaaS; the #543 corpus repo with the richest hand-rolled-primitive signal) |
-| Packet | `pnpm simplify-scan <target>` → 357 source files + the `docs/quality-extras.txt` M6 rubric + the target's `package.json` dependency manifest |
+| Packet | `pnpm simplify-scan <target>` → 357 source files + the `briefs/quality-extras.txt` M6 rubric + the target's `package.json` dependency manifest |
 | Reviewer pass | manual review of the packet, grounded by targeted searches over the cloned source |
 | Recorded as | `pnpm record-pass --module M6 --pass verdict …` → `M6.pass.json` (6 findings), then `run-audit <target> --llm --artifacts-dir <dir> --record` derived M6 `ran` from the fresh verdict artifact and banked it into `audit-execution-log.json` |
 
