@@ -8,7 +8,7 @@
 
 **Market on the wedge; deliver the breadth.** Lead every pitch with the thing nobody else does well —
 multi-tenant security / cross-tenant isolation for Supabase + Next.js (what's underserved and gets the
-meeting). But the **deliverable is a full codebase-health audit** across 7 modules (see `audit-modules.md`):
+meeting). But the **deliverable is a full codebase-health audit** across 7 modules (see `briefs/audit-modules.md`):
 
 1. **Multi-tenant security** (M1 — the lead/differentiator)
 2. **Local penetration test** (M2 — dynamic, *proves* the security findings)

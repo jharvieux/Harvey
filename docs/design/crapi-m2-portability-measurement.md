@@ -70,6 +70,29 @@ reasons below):
 
 ## Where it does NOT port — the gaps, re-verified against crAPI
 
+> **STATUS UPDATE 2026-07-24 — all six gaps below are CLOSED; this section is the record of what was
+> measured, not the current state.**
+>
+> - **Gaps 1–4 → #965.** The victim-id source is externalized (operator seed `--victim-id` →
+>   PostgREST oracle → **victim self-read**, `src/pentest/object-ids.ts`); leak confirmation is
+>   **response-shape aware** — it walks the body rather than matching a fixed top-level key list, so
+>   domain-named id keys and multi-key envelopes are inspected (`src/pentest/object-leak.ts`); an
+>   OpenAPI→`DiscoveredRoute[]` adapter exists and turns **per-path `servers` into per-route
+>   origins**, which is gap 4's multi-service wrinkle (`src/pentest/openapi-routes.ts`); and the
+>   external entrypoint is `pnpm exec tsx src/cli/pentest.ts --mode=external --app-url <origin>
+>   [--openapi <spec>]` (`src/pentest/external-target.ts`). Proven live on VAmPI, where IDOR-OBJECT
+>   reached `proven` — **not re-run against crAPI's 8-container stack**, so crAPI's specific shapes
+>   (the `{order,payment}` envelope, `carId`) are covered by design and by offline control, not by a
+>   live crAPI measurement. That live re-run is the honest remaining verification.
+> - **Gap 5 → #995/#966.** MASS-ASSIGNMENT no longer reports a vacuous "none persisted" with no
+>   read-back surface; with no oracle it reports **not-applicable**, so the silent clean is gone.
+> - **Gap 6 → #995/#967.** Privileged-route discovery no longer keys on an `/admin/` URL segment
+>   alone — a role/permission comparison in source (`role === "mechanic"`) now marks the route
+>   privileged (`src/pentest/discovery.ts`).
+>
+> Falsify the crAPI-shape half by re-running the reproduction below through
+> `pentest.ts --mode=external --openapi openapi-spec/crapi-openapi-spec.json`.
+
 **Gap 1 — IDOR-OBJECT foreign-id ACQUISITION is PostgREST-oracle-coupled. HOLDS IDENTICALLY.**
 `collectOwnedIds` (`src/pentest/verify.ts:459`) discovers the victim ids by reading
 `GET {apiUrl}/rest/v1/<table>` with the service-role oracle. crAPI has no PostgREST endpoint, so the

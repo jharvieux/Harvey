@@ -88,7 +88,7 @@ Order strictly by severity. For each finding use this block:
 ## 3b. Codebase-health findings (the full-audit modules)
 
 The security findings above (M1/M2) are the headline. These modules make it a *full* audit — lead the pitch
-with security, but this is what justifies the bigger package. See `audit-modules.md` for method per module.
+with security, but this is what justifies the bigger package. See `briefs/audit-modules.md` for method per module.
 
 ### Hotspots (M3)
 Files that are **both** high-churn and high-complexity — where bugs and maintenance cost concentrate. Cross-

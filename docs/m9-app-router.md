@@ -1,7 +1,18 @@
-# M9 — Next.js App Router boundary & rendering
+# M9 — server→client boundary & rendering
 
-Detector: `src/detectors/app-router.ts` (`detectAppRouterFindings`). Brief: `docs/scan-extras.txt`
+Detector: `src/detectors/app-router.ts` (`detectAppRouterFindings`). Brief: `briefs/scan-extras.txt`
 (M9 section). Tests/fixtures: `src/detectors/app-router.test.ts`, `src/detectors/__fixtures__/`.
+
+> **M9 is no longer Next-only (#916/#917/#918).** The checks below are written against Next.js App
+> Router, which is still the default and best-covered path, but `detectAppRouterFindings` now routes
+> through a **framework-agnostic boundary model** (`src/detectors/boundary-model.ts`): a target
+> detected as **Remix** or **React Router 7** runs the shared `remix-adapter.ts` (RR7 absorbed
+> Remix's loader/action model), and **TanStack Start** runs `tanstack-adapter.ts`
+> (`createServerFn`). The same boundary checks — server→client leak, server-action authz/validation
+> and the rest — run through the adapter's own idioms. **Astro, SvelteKit and Nuxt have no adapter
+> yet** (#920/#921): they fall through to the #872 not-assessed note, an Info row that names the
+> framework, never a silent Next-premise run. Where a section below says "App Router," read it as
+> "the Next adapter's shape of this check." Falsify with `pnpm detect-static <a-remix-target>`.
 
 ## Method
 

@@ -225,10 +225,10 @@ Each new positive rule needs a lookalike that models the FP a competing tool thr
 | N-REDOS-SAFE `[exists]` | Linear regex looks like ReDoS | `validate.js` `^[^\s@]+@[^\s@]+\.[^\s@]+$` | P-REDOS / Sonar S5852 | [Sonar S5852](https://community.sonarsource.com/t/false-positive-regex-dos-vulnerability/102019) |
 | N-FS-STATIC `[exists]` | Static/unrelated `fs`/`.open()` | `read-config.js` `fs.readFileSync(path.join(__dirname,…))` | P-PATH-TRAVERSAL / eslint fs rules | [eslint #26](https://github.com/nodesecurity/eslint-plugin-security/issues/26) |
 | N-DEV-DEP `[exists]` | Vulnerable dep in devDependencies | `webpack@4.42.0` (dev) | OSV/`npm audit` | [overreacted](https://overreacted.io/npm-audit-broken-by-design/) |
-| N-SERVICE-ROLE-SERVER `[exists]` | Legit server-only service-role use | `cron.js` `import 'server-only'` + admin | `harvey-service-role-in-client` | `docs/fp-rules.txt` |
-| N-RLS-DENY-ALL `[exists]` | RLS-enabled-no-policy, service-only table | `service_state` RLS on, 0 policies | Advisor 0008 | `docs/fp-rules.txt` |
-| N-URL-ENV `[exists]` | Operator/env config URL | `redis.js` `z.string().url()` on `REDIS_URL` | SSRF/url rules | `docs/fp-rules.txt` |
-| N-INMEM-CACHE `[exists]` | `Map` as cache, not limiter | `memo.js` module-level `Map` | rate-limit rule | `docs/fp-rules.txt` |
+| N-SERVICE-ROLE-SERVER `[exists]` | Legit server-only service-role use | `cron.js` `import 'server-only'` + admin | `harvey-service-role-in-client` | `briefs/fp-rules.txt` |
+| N-RLS-DENY-ALL `[exists]` | RLS-enabled-no-policy, service-only table | `service_state` RLS on, 0 policies | Advisor 0008 | `briefs/fp-rules.txt` |
+| N-URL-ENV `[exists]` | Operator/env config URL | `redis.js` `z.string().url()` on `REDIS_URL` | SSRF/url rules | `briefs/fp-rules.txt` |
+| N-INMEM-CACHE `[exists]` | `Map` as cache, not limiter | `memo.js` module-level `Map` | rate-limit rule | `briefs/fp-rules.txt` |
 | N-CMD-SAFE | `execFile`/`spawn` with array args, no shell | `lib/img.js` `execFile('convert',[a,b])` | P-CMD-INJECTION | [Node child_process](https://nodejs.org/api/child_process.html) |
 | N-EVAL-JSON | `JSON.parse`, not `eval` | `lib/cfg.js` `JSON.parse(body)` | P-EVAL-CODE-INJ | [CWE-95](https://cwe.mitre.org/data/definitions/95.html) |
 | N-PROTO-SAFE | `Object.assign({}, defaults, validated)` | `lib/opts.js` guarded merge (no proto keys) | P-PROTO-POLLUTION | [CWE-1321](https://cwe.mitre.org/data/definitions/1321.html) |
@@ -258,7 +258,7 @@ Each new positive rule needs a lookalike that models the FP a competing tool thr
 | N-NEXT-SUPPORTED | Current supported Next version | `next@15.5.x` | P-NEXT-EOL / CVE ranges | [Next blog](https://nextjs.org/blog) |
 | N-ERROR-GENERIC | Generic error message, no stack | `res.status(500).json({error:'Server error'})` | P-VERBOSE-ERROR / P-DB-ERROR | [CWE-209](https://cwe.mitre.org/data/definitions/209.html) |
 | N-STORAGE-PRIVATE | Private Storage bucket | `public=false` bucket | P-STORAGE-PUBLIC (connected) | [Supabase storage](https://supabase.com/docs/guides/storage/security/access-control) |
-| N-DEFINER-SCOPED | SECURITY DEFINER fn with `auth.uid()` check | caller-scoped definer fn | P-SECDEF-VIEW (connected) | `docs/scan-extras.txt` |
+| N-DEFINER-SCOPED | SECURITY DEFINER fn with `auth.uid()` check | caller-scoped definer fn | P-SECDEF-VIEW (connected) | `briefs/scan-extras.txt` |
 | N-SERVER-ONLY-PRESENT | Secret module with `import 'server-only'` | `lib/secret.js` guarded | P-MISSING-SERVER-ONLY | [Next server-only](https://nextjs.org/docs/app/building-your-application/rendering/composition-patterns) |
 | N-SB-DEMO-KEY-SVC | Supabase local-dev demo service_role key | `supabase/seed.sql` — the fixed public demo key (decoded `iss:"supabase-demo"`) | gitleaks `supabase-service-role-jwt` + demo-key-marker correlation | [mechanical-toolchain #210](https://supabase.com/docs/guides/getting-started/api-keys) |
 | N-SB-DEMO-KEY-ANON | Supabase local-dev demo anon key | `supabase/seed.sql` — demo key's anon-role sibling | gitleaks (role:anon, no high-precision rule) | [mechanical-toolchain #210](https://supabase.com/docs/guides/getting-started/api-keys) |
@@ -309,7 +309,7 @@ Do **not** pad the mechanical count with these. They belong to the DEEP / dynami
 
 ## 6. Sources (all URLs)
 
-**Reused repo docs (not re-derived):** `docs/design/calibration-corpus-spec.md`, `docs/design/scan-coverage-gaps.md`, `docs/design/mechanical-toolchain.md`, `docs/scan-extras.txt`, `docs/fp-rules.txt`, `src/scan/rules/semgrep-nextjs-supabase.yml`, `src/scan/calibration.ts`, `targets/calibration/GROUND-TRUTH.md`.
+**Reused repo docs (not re-derived):** `docs/design/calibration-corpus-spec.md`, `docs/design/scan-coverage-gaps.md`, `docs/design/mechanical-toolchain.md`, `briefs/scan-extras.txt`, `briefs/fp-rules.txt`, `src/scan/rules/semgrep-nextjs-supabase.yml`, `src/scan/calibration.ts`, `targets/calibration/GROUND-TRUTH.md`.
 
 **OWASP frameworks (breadth source):**
 - OWASP Top 10 2021: https://owasp.org/Top10/

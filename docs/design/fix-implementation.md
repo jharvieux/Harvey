@@ -104,7 +104,7 @@ Run once per engagement (cached in the engagement manifest, operator-editable):
 
 ### 2.3 Re-run the detector
 
-Every plan carries `detectorId` — the scan detector (from `scan-extras.txt` / the D-091 gate set / the module scanner) that produced the finding. Verification re-runs **that detector scoped to the fixed location** and requires it to no longer fire. Detector-clean without client-checks-green is not done; client-checks-green without detector-clean is not done. Both, or it fails.
+Every plan carries `detectorId` — the scan detector (from `briefs/scan-extras.txt` / the D-091 gate set / the module scanner) that produced the finding. Verification re-runs **that detector scoped to the fixed location** and requires it to no longer fire. Detector-clean without client-checks-green is not done; client-checks-green without detector-clean is not done. Both, or it fails.
 
 ### 2.4 Evidence
 
@@ -267,7 +267,7 @@ The rollback section is mandatory and must be *true* — it's the enforcement mi
 
 ## 8. MVP cut
 
-**In-scope finding classes first** — mechanical, high-`safety`, detector-verifiable, all with exact before/after shapes already documented in `docs/runbooks/anti-patterns.md`:
+**In-scope finding classes first** — mechanical, high-`safety`, detector-verifiable, all with exact before/after shapes already documented in `briefs/anti-patterns.md`:
 
 1. **Zero-row update returns `error: null`** (D-091 #7) — chain `.select('id')` + assert row count. Purely additive, per-site.
 2. **Unchecked Supabase mutations** (D-091 #3) — add error handling on ignored `{ error }`.

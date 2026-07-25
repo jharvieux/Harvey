@@ -20,13 +20,13 @@ M6 is the "simplification / reuse / don't reinvent the wheel" third of the maint
 audit (alongside M4 duplication and M5 dead code — `docs/m4-m6-quality.md`). Where M4/M5 are
 mechanical (jscpd text-match, knip static analysis), M6 is a judgment call: "is this code more
 complicated than it needs to be, and if so, what's the concrete simpler shape?" That's an LLM
-opinion (the `/simplify` skill run against the `docs/quality-extras.txt` M6 brief), not a
+opinion (the `/simplify` skill run against the `briefs/quality-extras.txt` M6 brief), not a
 true/false fact a tool can assert.
 
 ## 2. The rubric
 
-Drawn from `docs/quality-extras.txt`'s SIMPLIFICATION / REUSE section and the repo's own D-091
-anti-pattern doctrine (`docs/runbooks/anti-patterns.md`, `docs/runbooks/slop-detection.md`),
+Drawn from `briefs/quality-extras.txt`'s SIMPLIFICATION / REUSE section and the repo's own D-091
+anti-pattern doctrine (`briefs/anti-patterns.md`, `docs/runbooks/slop-detection.md`),
 which independently converged on the same classes for a different codebase (ATC) — evidence this
 rubric generalizes rather than being Harvey-specific.
 
@@ -51,7 +51,7 @@ rubric generalizes rather than being Harvey-specific.
 - A deliberate re-implementation that trades a small amount of hand-rolled code for **not**
   pulling in a heavy dependency — the tradeoff should be noted, not flagged as a defect. The
   signal that separates this from a genuine positive: an explicit `// WHY:` comment recording the
-  tradeoff (`docs/runbooks/anti-patterns.md`'s broader doctrine: WHY comments are the good kind).
+  tradeoff (`briefs/anti-patterns.md`'s broader doctrine: WHY comments are the good kind).
 
 This is the same discipline M1 already applies to security findings (a rule has a positive class
 and a documented FP/negative class) — M6 just can't be scored by a tool the way a Semgrep rule
@@ -59,11 +59,22 @@ can.
 
 ## 3. How it's assessed — rubric agreement, not precision
 
-There is no `Finding[]`-emitting scanner for M6, so it cannot plug into
+M6's **verdict** — the assertion that a shape is a genuine reinvention plus the concrete
+replacement to use — has no `Finding[]`-emitting scanner, so it cannot plug into
 `src/scan/calibration.ts`'s `buildCoverageMatrix` the way M4/M5/M7/M8/M10 do (those all have an
-adapter that maps a real tool's output into `Finding[]` with a `precisionTier`). M6's output is
-prose — a reviewer's writeup, produced by running the `/simplify` skill (or an M6-scoped LLM
-review pass) against a target directory.
+adapter that maps a real tool's output into `Finding[]` with a `precisionTier`). The verdict's
+output is prose — a reviewer's writeup, produced by running the `/simplify` skill (or an M6-scoped
+LLM review pass) against a target directory.
+
+> **Correction (2026-07-24).** This section previously said flatly "there is no `Finding[]`-emitting
+> scanner for M6." That is FALSE as written: `src/detectors/handrolled.ts` (#267, extended by #814)
+> emits `Finding[]` with `precisionTier`, and `pnpm detector-census` MEASURED 2026-07-24 reports
+> **33 M6 indicator detectors** (5 of them shipped in the free report today). What survives the
+> correction is narrower and still true: (a) those detectors emit shape-PRESENCE indicators, never
+> the verdict this eval is about, and (b) M6 has no `*.entries.ts` in the calibration corpus —
+> `ls src/scan/calibration/*.entries.ts` shows M1/M3/M4/M5/M7/M8/M9/M10 files and no M6 one — so
+> nothing about M6 is scored by `buildCoverageMatrix` regardless. Falsify with
+> `pnpm detector-census` and that `ls`.
 
 **The eval, concretely:**
 
@@ -102,7 +113,7 @@ The eval had never been executed since the corpus landed 2026-07-09 (#72). First
 
 | run | date | reviewer | positives flagged | negatives spared | verdict |
 |---|---|---|---|---|---|
-| 1 | 2026-07-15 | Claude Opus 4.8, M6 brief (`docs/quality-extras.txt` §SIMPLIFICATION) as the prompt, no other context | 4/4 | 2/2 | **contaminated — do not treat as a pass** |
+| 1 | 2026-07-15 | Claude Opus 4.8, M6 brief (`briefs/quality-extras.txt` §SIMPLIFICATION) as the prompt, no other context | 4/4 | 2/2 | **contaminated — do not treat as a pass** |
 | 2 | 2026-07-15 | Claude Opus 4.8, M6 brief as the prompt, against the de-labelled corpus | 4/4 | **1/2** | **usable baseline** — one negative flagged (`framework-adapter.ts`), correctly: the fixture was defective, rebuilt in #290. Scored 1/2 against the key it ran against, not re-scored; see §3.2 |
 | 3 | 2026-07-16 | Claude Fable 5 (fresh-context subagent), the `pnpm simplify-scan` packet as the sole input, against the corrected corpus (#290 rebuild) | 4/4 | **2/2** | **first trustworthy negative datum** — both negatives spared on code evidence alone; see §3.3 |
 | 4 | 2026-07-16 | Claude Fable 5 (a second, distinct fresh-context subagent), the packet as the sole input, against the seven-file corpus (M6-N-SEAM added, #325) | 4/4 | **2/3** | the new seam negative spared for the designed reason; `framework-adapter.ts` flagged on a new, self-rated-low-confidence argument the packet gave it no way to check — see §3.4 |
@@ -499,9 +510,9 @@ pass's quality bar either way.
 
 ## 6. Sources
 
-`docs/design/spec-72-crossmodule-corpus.md` §M6 (locked scope authority), `docs/quality-extras.txt`
+`docs/design/spec-72-crossmodule-corpus.md` §M6 (locked scope authority), `briefs/quality-extras.txt`
 (the M6 brief), `docs/m4-m6-quality.md` §0/§2 (M6's existing "not mechanically detectable" status
-and report-mapping guidance), `docs/runbooks/anti-patterns.md` + `docs/runbooks/slop-detection.md`
+and report-mapping guidance), `briefs/anti-patterns.md` + `docs/runbooks/slop-detection.md`
 (the D-091 catalog this rubric cross-checks against), `src/scan/calibration.ts` +
 `src/scan/calibration/types.ts` (the `CorpusEntry`/`buildCoverageMatrix` machinery this eval
 deliberately does not join), `targets/calibration/GROUND-TRUTH.md` (existing per-module corpus

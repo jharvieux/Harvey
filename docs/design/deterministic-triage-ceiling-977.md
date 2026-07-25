@@ -4,7 +4,7 @@
 that suppresses mechanical-tier false positives can be made **deterministic** (sanitizer-aware taint),
 and where does the LLM/human boundary genuinely remain? Every number below is from a run in this
 session (2026-07-24) against the BenchProctor `2026.07.22` JS/Express quicktest slice + Harvey's own
-`docs/fp-rules.txt` + a real engagement's recorded triage decisions. Nothing is recalled.
+`briefs/fp-rules.txt` + a real engagement's recorded triage decisions. Nothing is recalled.
 
 ## Answer in one line
 
@@ -67,7 +67,7 @@ remainder maps exactly onto the #873 syntactic→interprocedural-taint gap.
 
 ## Measured — the (b) population, from real triage decisions
 
-`docs/fp-rules.txt` (Harvey's *already-mechanized* FP catalogue) is 14/16 (a) and 2/16 (b) — but it is
+`briefs/fp-rules.txt` (Harvey's *already-mechanized* FP catalogue) is 14/16 (a) and 2/16 (b) — but it is
 selection-biased toward what could be written as a deterministic rule, so it is not the ratio. The
 honest (b) sample is the **recorded triage decisions from a real engagement** (`docs/design/aop-audit-
 2026-07-18.md`, "Triaged OUT"). Classifying them:
@@ -92,7 +92,7 @@ it. This is the boundary the issue told us to state, not blur.
 | FP-suppression population | mechanizable? | how |
 |---|---|---|
 | (a1) transformation sanitizers | **yes, cheaply** | semgrep taint `pattern-sanitizers` (demonstrated: sqli FPR 32%→18%, 0 recall loss) |
-| (a2) validator / interprocedural guards | **yes, harder** | control-flow / interprocedural taint (#873); semgrep `--pro` or a richer engine |
+| (a2) validator / interprocedural guards | **yes** — and cheaper than this row claimed | ~~semgrep `--pro` or a richer engine~~ → **semgrep OSS `pattern-sanitizers` with `by-side-effect: true`**, shipped in #989. See the correction below. |
 | (b) authorization / tenant-isolation intent | **no** | genuinely LLM or human — Harvey's multi-tenant core |
 
 **Ceiling, stated honestly:** for the **generic injection/XSS/SSRF classes**, a sanitizer- and guard-
@@ -111,6 +111,19 @@ cannot be gated away.
    applied to guard-decidable suppressions.
 2. **Escalate (a2) to interprocedural taint (#873)** as a follow-on — deterministic but a real engine
    investment; measure per-class ROI before committing.
+
+   > **CORRECTION 2026-07-24 (#989) — this document's (a2) premise was wrong, and re-testing is what
+   > caught it.** The premise ("needs control-flow / interprocedural taint — semgrep `--pro` or a
+   > richer engine") was ASSUMED, not measured. Re-tested on semgrep **1.164.0 OSS**: `pattern-sanitizers`
+   > with `by-side-effect: true` **can** model an intraprocedural validator guard, so the (a2) win was
+   > reachable in OSS and **shipped** without buying an engine. The measurement also inverted the ROI
+   > argument: the residue that genuinely needs interprocedural analysis measured **100% authz/authn**
+   > — the (b) population this same document already rules not taint-decidable — so the engine would
+   > buy reach into territory taint cannot decide anyway. Recorded verdict: **DON'T buy**. Note that
+   > no `--pro` number is claimed either way; `semgrep --pro` was **not available on this machine**
+   > (`Failed to find semgrep-core-proprietary`), which is a disclosure, not a measurement. Full
+   > evaluation, the unsound-modeling trap it had to avoid, and the OSS rules it justified:
+   > `docs/design/a2-validator-guard-taint-989.md`.
 3. **Keep the LLM/human tier for (b)** — multi-tenant authorization intent. Do **not** market or design
    it as retirable: BenchProctor cannot benchmark it, taint cannot decide it, and it is the audit's
    differentiator. Reproducibility/defensibility for (b) come from recording the LLM's rationale

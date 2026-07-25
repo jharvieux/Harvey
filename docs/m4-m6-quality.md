@@ -3,7 +3,7 @@
 > The maintainability third of the audit: wiring already-existing tooling (jscpd, knip) plus the
 > `/simplify` review doctrine into §3b of the deliverable. Security (M1, `docs/tier1-runbook.md`)
 > leads the pitch; this is what makes the engagement a *full* audit and the reason a one-time audit
-> becomes a recurring relationship (see `docs/audit-modules.md` for the module catalog this
+> becomes a recurring relationship (see `briefs/audit-modules.md` for the module catalog this
 > generalizes).
 
 ## 0. What's wired vs. manual
@@ -11,8 +11,8 @@
 | Module | Tool | Automated by | Manual step |
 |---|---|---|---|
 | M4 Duplication | jscpd | `src/cli/quality-scan.ts` (`pnpm quality-scan`) | Pick consolidation approach per cluster |
-| M5 Slop / dead code | knip + `src/detectors/slop.ts` + `quality-extras.txt` checklist | `src/cli/quality-scan.ts` for dead exports/files; **`detectSlopFindings` (`src/detectors/slop.ts`, ids `SLOP-*`, run via `pnpm detect-static`)** now mechanizes 11 AI-slop classes — see §5; the residue (judgment-heavy simplification) stays a manual read against `quality-extras.txt` | Manual read for the classes neither knip nor the slop detector can see |
-| M6 Simplification / reuse | `pnpm simplify-scan` + `quality-extras.txt` | Not mechanically detectable — the runner assembles a brief+source review packet (`src/cli/simplify-scan.ts`); a reviewer judges it | Fully manual, brief-driven |
+| M5 Slop / dead code | knip + `src/detectors/slop.ts` + `briefs/quality-extras.txt` checklist | `src/cli/quality-scan.ts` for dead exports/files; **`detectSlopFindings` (`src/detectors/slop.ts`, ids `SLOP-*`, run via `pnpm detect-static`)** now mechanizes 11 AI-slop classes — see §5; the residue (judgment-heavy simplification) stays a manual read against `briefs/quality-extras.txt` | Manual read for the classes neither knip nor the slop detector can see |
+| M6 Simplification / reuse | `pnpm simplify-scan` + `briefs/quality-extras.txt` | Not mechanically detectable — the runner assembles a brief+source review packet (`src/cli/simplify-scan.ts`); a reviewer judges it | Fully manual, brief-driven |
 
 ## 1. Running the scan (M4 + M5)
 
@@ -68,7 +68,7 @@ and was never meant to be hand-maintained.
 Run the FP-control funnel from `docs/tier1-runbook.md` §4 before anything ships:
 - **Correctness gate:** confirm the clone/dead-export is real, not a jscpd/knip artifact (check
   the fp-rules-equivalent classes below).
-- Known FP classes (`quality-extras.txt` "FALSE POSITIVES"):
+- Known FP classes (`briefs/quality-extras.txt` "FALSE POSITIVES"):
   - A "single-use" helper that exists for testability/seam reasons, or clearly about to gain
     callers.
   - An abstraction mandated by a framework/library contract (not gratuitous).
@@ -100,7 +100,7 @@ adjust confidence/severity after triage if the mechanical default doesn't match 
   state that plainly as a disclosed coverage gap rather than implying zero dead code.
 - **§3b Simplification / reuse (M6):** this module has no mechanical detector — run
   `pnpm simplify-scan <target>` to assemble the review packet, then review it against
-  `docs/quality-extras.txt`'s SIMPLIFICATION section
+  `briefs/quality-extras.txt`'s SIMPLIFICATION section
   (hand-rolled primitives, hand-rolled versions of an already-in-the-dependency-tree library,
   over-abstraction, premature generality, inconsistent patterns, "would a senior engineer call this
   overcomplicated"). For each item found: the current code → the concrete replacement (stdlib,
@@ -110,10 +110,10 @@ adjust confidence/severity after triage if the mechanical default doesn't match 
 
 ## 3. Test quality (M8) note
 
-`quality-extras.txt` also carries the M8 test-quality brief (tests that can't fail — tautological,
+`briefs/quality-extras.txt` also carries the M8 test-quality brief (tests that can't fail — tautological,
 snapshot-only, asserts-what-not-why, mocks the thing under test). That module runs on StrykerJS
 mutation output, not jscpd/knip, and is tracked separately — out of scope for this runbook's wiring
-(see `docs/audit-modules.md` M8 status: net-new, needs a working test runner in the client repo
+(see `briefs/audit-modules.md` M8 status: net-new, needs a working test runner in the client repo
 before it can run at all).
 
 ## 4. Wiring code

@@ -27,7 +27,7 @@
 
 # Spec — Issue #72: extend the calibration corpus + #61 validation gate beyond M1 (security) to the rest of the deliverable
 
-Status: research draft (2026-07-08). Scope authority: `docs/audit-modules.md` (module definitions), `docs/design/calibration-corpus-spec.md` + `src/scan/calibration.ts` + `targets/calibration/GROUND-TRUTH.md` (the security corpus + gate this replicates), `docs/quality-extras.txt` (M5/M6/M8 briefs), `docs/m4-m6-quality.md` / `docs/m7-performance.md` / `docs/m8-test-quality.md` (the already-built module scanners' runbooks), `tools/pii-classify.mjs` (M10).
+Status: research draft (2026-07-08). Scope authority: `briefs/audit-modules.md` (module definitions), `docs/design/calibration-corpus-spec.md` + `src/scan/calibration.ts` + `targets/calibration/GROUND-TRUTH.md` (the security corpus + gate this replicates), `briefs/quality-extras.txt` (M5/M6/M8 briefs), `docs/m4-m6-quality.md` / `docs/m7-performance.md` / `docs/m8-test-quality.md` (the already-built module scanners' runbooks), `tools/pii-classify.mjs` (M10).
 
 > This is a research deliverable. It defines what #72 should build. It does **not** change any rule, fixture, or scanner.
 
@@ -74,7 +74,7 @@ Terminology carried from `src/scan/calibration.ts`: `expectedTier` ∈ {`high`, 
 | M3-N-CHURN-TRIVIAL | a generated/lockfile-like file (`*.gen.ts`, or a config) with very high churn but trivial complexity | must not top the hotspot table (vitals' core>test, complexity-weighted ROI ranking should sink it) |
 | M3-N-MULTIAUTHOR | a file committed by ≥3 distinct seeded authors | must not be flagged truck-factor-1 |
 
-(c) **Tool + invocation:** the `vitals` plugin, `vitals_cli.py report --json <path>` (per `docs/audit-modules.md` M3 — "run, don't build"). There is **no Harvey scanner module** for M3 today; #72 must add a thin adapter that (i) runs `vitals_cli.py report --json`, (ii) parses its JSON, (iii) maps hotspot rows / truck-factor flags / coupling edges into the answer-key scorer (§3).
+(c) **Tool + invocation:** the `vitals` plugin, `vitals_cli.py report --json <path>` (per `briefs/audit-modules.md` M3 — "run, don't build"). There is **no Harvey scanner module** for M3 today; #72 must add a thin adapter that (i) runs `vitals_cli.py report --json`, (ii) parses its JSON, (iii) maps hotspot rows / truck-factor flags / coupling edges into the answer-key scorer (§3).
 
 (d) **Precision tier:** N/A — regression-gated, not precision-gated. Boolean sub-signals (truck-factor, coupling) can be asserted as pass/fail; the ranking is asserted only as "planted hotspot ∈ top-K."
 
@@ -136,19 +136,22 @@ Terminology carried from `src/scan/calibration.ts`: `expectedTier` ∈ {`high`, 
 
 ### M6 — Simplification / reuse / maintainability
 
-**What "precision/recall" even means here (read first):** M6's **verdict** has no mechanical detector — it is the `/simplify` LLM review against `docs/quality-extras.txt` (`docs/m4-m6-quality.md` §0: "Not mechanically detectable"). You cannot gate an LLM suggestion with a precision number the way you gate jscpd. #72 must **not** manufacture one. What #72 *can* build is a **labeled rubric-eval set**: known hand-rolled-vs-stdlib patterns the reviewer *should* flag + benign lookalikes it *should* spare, run through `/simplify`, reported as an **agreement rate against the rubric**, explicitly not a "precision" claim.
+**What "precision/recall" even means here (read first):** M6's **verdict** has no mechanical detector — it is the `/simplify` LLM review against `briefs/quality-extras.txt` (`docs/m4-m6-quality.md` §0: "Not mechanically detectable"). You cannot gate an LLM suggestion with a precision number the way you gate jscpd. #72 must **not** manufacture one. What #72 *can* build is a **labeled rubric-eval set**: known hand-rolled-vs-stdlib patterns the reviewer *should* flag + benign lookalikes it *should* spare, run through `/simplify`, reported as an **agreement rate against the rubric**, explicitly not a "precision" claim.
 
-> _Revision (2026-07-16, #267):_ under the free-indicator ruling in the preamble, a **mechanical
-> subset** now exists — `src/detectors/handrolled.ts` (run via `pnpm detect-static`), emitting
-> hedged, Info-only, non-grading `M6 — Indicator: …` findings for five shapes: JSON-stringify
-> deep-equal, manual query-string parsing, manual cookie parsing, `Math.random()`-chain string
-> ids, and hand-rolled class-string merge (dep-gated). These are shape-presence facts, each gated
-> by a positive+negative fixture pair in `handrolled.test.ts` — they carry no `CorpusEntry`, no
-> `expectedTier`, and no precision claim, so everything in this section about the VERDICT still
-> holds unchanged. Boundary calls: the JSON round-trip clone stays `M7 — JSON deep-clone` (the
-> #278 no-double-count rule); retry/backoff and Supabase pagination did not graduate
-> (judgment-bearing negative / cross-statement analysis respectively). The graduation ledger:
-> `docs/quality-extras.txt` "MECHANICAL SUBSET".
+> _Revision (2026-07-16, #267; count refreshed 2026-07-24):_ under the free-indicator ruling in the
+> preamble, a **mechanical subset** now exists — `src/detectors/handrolled.ts` (run via
+> `pnpm detect-static`), emitting hedged, Info-only, non-grading `M6 — Indicator: …` findings. It
+> started at five shapes (JSON-stringify deep-equal, manual query-string parsing, manual cookie
+> parsing, `Math.random()`-chain string ids, hand-rolled class-string merge) and has grown since —
+> `pnpm detector-census` MEASURED 2026-07-24 reports **33** M6 indicator detectors, 5 of them
+> shipped in the free report today. Don't quote that number back; re-run the census. These are
+> shape-presence facts, each gated by a positive+negative fixture pair in `handrolled.test.ts` —
+> they carry no `CorpusEntry`, no `expectedTier`, and no precision claim, so everything in this
+> section about the VERDICT still holds unchanged. Boundary calls: the JSON round-trip clone stays
+> `M7 — JSON deep-clone` (the #278 no-double-count rule); retry/backoff and Supabase pagination
+> were originally held back (judgment-bearing negative / cross-statement analysis respectively) and
+> both later graduated in #814. The graduation ledger: `briefs/quality-extras.txt`
+> "MECHANICAL SUBSET".
 
 (a) **Planted positives (should be flagged for replacement)**
 
@@ -167,7 +170,7 @@ Terminology carried from `src/scan/calibration.ts`: `expectedTier` ∈ {`high`, 
 | M6-N-FRAMEWORK | an abstraction mandated by a framework/library contract (e.g. a required provider/adapter shape) | "an abstraction mandated by a framework/library contract (not gratuitous)" |
 | M6-N-SEAM | `simplify/reconcile.ts` — a single-use helper (one caller) that is the exported pure money-math half of an I/O-entangled function, i.e. a deliberate testability seam (added 2026-07-16, #325) | "a 'single-use' helper that exists for testability/seam reasons, or that's clearly about to have more callers" |
 
-(c) **Tool + invocation:** the `/simplify` skill / pre-pr-reviewer doctrine, run against the `simplify/` fixture dir. Output is prose recommendations, not `Finding[]` — the eval harness must parse "did the reviewer name fixture X" (by file/line mention).
+(c) **Tool + invocation:** the `/simplify` skill / pre-pr-reviewer doctrine, run against the `simplify/` fixture dir. The **verdict's** output is prose recommendations, not `Finding[]` — the eval harness must parse "did the reviewer name fixture X" (by file/line mention). (The indicator layer added by #267/#814 *does* emit `Finding[]`; it is not what this eval scores.)
 
 (d) **Precision tier:** N/A — **rubric agreement rate**, not precision. Report "reviewer flagged 4/4 planted reinventions and spared 2/2 benign lookalikes on this rubric set," never "M6 precision = X%."
 
@@ -367,13 +370,13 @@ Recorded-output fixtures for the Layer-1 unit gates (no binaries), colocated wit
 
 ## 6. Sources
 
-Repo (authority, reused not re-derived): `docs/audit-modules.md`, `docs/design/calibration-corpus-spec.md`, `docs/design/mechanical-toolchain.md` §6–§7, `docs/quality-extras.txt`, `docs/m4-m6-quality.md`, `docs/m7-performance.md`, `docs/m8-test-quality.md`, `targets/calibration/GROUND-TRUTH.md`, `src/scan/calibration.ts`, `src/cli/validate-calibration.ts`, `src/quality-scan.ts`, `src/perf-scan.ts`, `src/mutation-scan.ts`, `src/findings.ts`, `tools/pii-classify.mjs`.
+Repo (authority, reused not re-derived): `briefs/audit-modules.md`, `docs/design/calibration-corpus-spec.md`, `docs/design/mechanical-toolchain.md` §6–§7, `briefs/quality-extras.txt`, `docs/m4-m6-quality.md`, `docs/m7-performance.md`, `docs/m8-test-quality.md`, `targets/calibration/GROUND-TRUTH.md`, `src/scan/calibration.ts`, `src/cli/validate-calibration.ts`, `src/quality-scan.ts`, `src/perf-scan.ts`, `src/mutation-scan.ts`, `src/findings.ts`, `tools/pii-classify.mjs`.
 
 Tool methodology:
 - jscpd (copy/paste detection, token threshold): https://github.com/kucherenko/jscpd
 - knip (dead exports/files; dynamic-reference & entry-point FP class): https://knip.dev/
 - StrykerJS (mutation testing; `coverageAnalysis: perTest`, mutation score = detected/valid; mutation ≠ line coverage): https://stryker-mutator.io/docs/stryker-js/ · mutation-testing-elements schema: https://github.com/stryker-mutator/mutation-testing-elements
 - Supabase database advisors / Splinter (performance lints: `unindexed_foreign_keys`, `unused_index`, `auth_rls_initplan`): https://supabase.com/docs/guides/database/database-advisors · RLS initplan (`(select auth.uid())`): https://supabase.com/docs/guides/database/postgres/row-level-security#call-functions-with-select
-- vitals plugin (churn×complexity ROI ranking, truck-factor, co-change coupling, AI-provenance): `docs/audit-modules.md` M3 (external `vitals_cli.py`; no public doc captured — schema unverified).
+- vitals plugin (churn×complexity ROI ranking, truck-factor, co-change coupling, AI-provenance): `briefs/audit-modules.md` M3 (external `vitals_cli.py`; no public doc captured — schema unverified).
 - PII taxonomies the classifier aligns to: Google Cloud DLP infoTypes https://cloud.google.com/dlp/docs/infotypes-reference · Microsoft Presidio https://microsoft.github.io/presidio/ · HIPAA 18 identifiers · GDPR Art. 9 · PCI-DSS cardholder/SAD.
 - #61 two-layer gate pattern: `src/scan/calibration.ts` + `src/scan/calibration.test.ts` + `src/cli/validate-calibration.ts`.

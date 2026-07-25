@@ -43,6 +43,28 @@ prove it — for the two precise, code-grounded reasons below.
 
 ## Where it does NOT port (the harness gaps — #880's real deliverable)
 
+> **STATUS UPDATE 2026-07-24 (#965) — all four gaps below are CLOSED; this section is the record of
+> what was measured, not the current state.** Each was shipped and the fix was proven live against a
+> real VAmPI container: (1) the victim-id source is externalized — operator seed (`--victim-id`) →
+> PostgREST oracle → **victim self-read** (`src/pentest/object-ids.ts`), no oracle required;
+> (2) leak confirmation is response-shape-aware — it walks the returned body and takes
+> target-supplied identity keys instead of the fixed Supabase `OBJECT_SCOPE_KEYS` list
+> (`src/pentest/object-leak.ts`); (3) an OpenAPI→`DiscoveredRoute[]` adapter exists
+> (`src/pentest/openapi-routes.ts`), with templated params keeping their domain names and per-path
+> servers becoming route origins; (4) there is a point-at-a-running-app entrypoint,
+> `pnpm exec tsx src/cli/pentest.ts --mode=external --app-url <origin> [--openapi <spec>]`
+> (`src/pentest/external-target.ts`). **IDOR-OBJECT reached `proven` on the headline cross-user BOLA
+> this document records as MISSED**, with the victim id obtained with no oracle and confirmed
+> out-of-band against a negative control. Offline controls:
+> `src/pentest/{external-target,object-leak,openapi-routes}.test.ts`.
+>
+> Two scope facts that did NOT change: an external run probes the **route-adaptive tier only** — the
+> DB oracle, the Supabase platform surfaces and every schema-derived probe are disclosed as
+> not-probed rows, never as coverage; and MASS-ASSIGNMENT off-Supabase still reports not-applicable
+> rather than a false clean, because it needs a read-back oracle an external target does not expose
+> (#995). Falsify with `pnpm exec tsx src/cli/pentest.ts --mode=external --app-url http://localhost:5001`
+> against the container in "Reproduction" below.
+
 1. **IDOR-OBJECT's foreign-id ACQUISITION is PostgREST-service-role-oracle-coupled.**
    `collectOwnedIds` (`src/pentest/verify.ts:459`) discovers the victim object ids to substitute by
    reading `GET {apiUrl}/rest/v1/<table>` with the **service-role oracle** header. That is a Supabase
@@ -74,12 +96,13 @@ VAmPI's documented classes and Harvey's mechanical/M2 result this run:
 | VAmPI vuln | Harvey M2 result |
 |------------|------------------|
 | Excessive Data Exposure (`/users/v1/_debug`) | **CAUGHT** (MISSING-AUTH-SWEEP, proven High) |
-| BOLA (`GET /users/v1/:username`) | **MISSED** — gaps 1+2 above (oracle-coupled acquisition; non-matching scope keys) |
+| BOLA (`GET /users/v1/:username`) | **MISSED at this measurement** — gaps 1+2 above (oracle-coupled acquisition; non-matching scope keys). **Now PROVEN** since #965 closed both, re-run live against the same container. |
 | BOLA update (`PUT /users/v1/:username/email`) | not reached (same acquisition gap) |
 | Mass assignment (register `admin:true`) | **MISSED** (surface: registration, not in-place write) |
 | Broken auth (JWT) / user enumeration / RegexDoS | out of the three replay probes' scope this run |
 
-**1 of the object-authorization classes proven, the headline BOLA missed for two precise reasons.**
+**At this measurement: 1 of the object-authorization classes proven, the headline BOLA missed for two
+precise reasons** (both since fixed — see the status update above).
 This matches #880's expectation ("record the harness gaps this surfaces … those are the portability
 findings, and they are the real deliverable even if the score is mediocre"). The industry claim
 #880 cites — that generic scanners fail BOLA because they cannot infer object ownership — is

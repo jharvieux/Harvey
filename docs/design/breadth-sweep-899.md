@@ -126,7 +126,7 @@ Six curated corpus targets never stress these; a 15-repo volume sweep does. What
   definition that survives a monorepo counting the same shape N times (#900 item 3), and the
   clustering + ranking is a triage pass (#900 item 2). Not done here.
 - **FP catalogue (#899 deliverable 4 → #900 item 5):** FP shapes distilled from the sweep are
-  *proposed* to `docs/fp-rules.txt` — a supervised, human-owned file. Not touched here.
+  *proposed* to `briefs/fp-rules.txt` — a supervised, human-owned file. Not touched here.
 - **#882 population:** these are the population, not a sample — but no aggregate statistic may be
   stated until the triage pass completes (#900 item 2) and disclosure is handled (#900 item 4).
 

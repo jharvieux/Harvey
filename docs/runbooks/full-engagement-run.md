@@ -123,8 +123,8 @@ semantic focus brief and M6's `simplify-scan --hotspots` consume next.
 
 ```bash
 pnpm scan-focus hotspots.txt --out focus.md
-/vuln-scan --extra docs/scan-extras.txt --extra focus.md
-/triage --fp-rules docs/fp-rules.txt
+/vuln-scan --extra briefs/scan-extras.txt --extra focus.md
+/triage --fp-rules briefs/fp-rules.txt
 ```
 
 `scan-focus` must run after M3 (it reads `hotspots.txt`); `/vuln-scan` must run after
@@ -184,6 +184,28 @@ pnpm exec tsx src/cli/pentest.ts --mode=coverage --repo <target-dir> --tested <i
 
 This throws, naming any enumerated target `--tested` didn't cover — the M2-specific version of
 the coverage guard.
+
+### 4a. External targets — an app Harvey did not provision (#965)
+
+When the engagement gives you a **running** app rather than a repo Harvey can stand up — a
+non-Supabase API, another language, a staging URL — use the external runner instead of
+`dynamic-validate`:
+
+```bash
+pnpm exec tsx src/cli/pentest.ts --mode=external --app-url <origin> [--openapi <spec.json>]
+```
+
+It adapts an OpenAPI spec into routes (templated params keep their domain names; per-path `servers`
+become per-route origins, so a multi-service topology works), and it obtains the victim object ids
+IDOR needs without a PostgREST oracle — operator seed (`--victim-id`) first, then the victim's own
+authenticated self-read. Leak confirmation walks the response body rather than matching a fixed
+Supabase key list.
+
+**Read the scope rows before writing any sentence about this run.** An external run probes the
+**route-adaptive tier only**: the DB oracle, every Supabase platform surface, and every
+schema-derived probe are disclosed as not-probed rows, never as coverage. MASS-ASSIGNMENT reports
+not-applicable off-Supabase rather than a false clean, because it needs a read-back oracle an
+external target does not expose (#995).
 
 ## 5. Connected tiers — per backend
 
@@ -321,16 +343,24 @@ clean bill of health.
 This is the human-run version of what `run-audit` should eventually orchestrate on its own.
 Tracked gaps, current as of this sweep:
 
-- **#523** — the orchestrator's own M8 probe cannot yet pass `--install` through; run
-  `mutation-scan --install` directly (step 6) rather than through `run-audit`.
-- **#159 / #161** — the M2 live pipeline (`dynamic-validate --execute`) is operator-run
-  end-to-end, not yet wired into `run-audit` itself.
-- **#508** — M2 monorepo migration discovery/wiring for a target with more than one
-  `supabase/` config is still being generalized.
-- **#514** — the two-tenant seed/fixture harness M2 depends on is still ATC-specific in places;
-  generalizing it for an arbitrary client schema is open.
+**All five gaps this section used to list are now CLOSED** (verified against the tracker
+2026-07-24) and are recorded here only so a reader who remembers them knows where they went:
 
-Closed this sweep and reflected above rather than listed as a gap: #502 (M3→M1 sequencing),
+- **#523 CLOSED** — `run-audit` now threads mutation-install consent to the M8 probe as
+  `--allow-target-install`. Without it, M8 degrades to the loud "re-run with `--install`" partial
+  rather than installing into a client target silently. You no longer need to run `mutation-scan
+  --install` out of band.
+- **#159 / #161 CLOSED** — the seam probes and the NO-RATE-LIMIT loop have both been exercised
+  live to a finding-producing verdict; `dynamic-validate --execute` provisions its own stack with
+  no operator step. It is still driven as its own command (step 4) and banks an `M2.pass.json` for
+  `--artifacts-dir`, which is the intended shape, not a gap.
+- **#508 CLOSED** — M2 discovers and applies migrations per-DB across a monorepo's Supabase
+  projects (#610).
+- **#514 CLOSED** — M2 stands up its own stack and seeds a generic two-tenant fixture, inferring
+  per-user owner columns from the FK-to-`auth` graph (#617/#1001). Nothing ATC-specific remains in
+  the path.
+
+Older items closed and reflected above rather than listed as a gap: #502 (M3→M1 sequencing),
 #503 (M8 target test-env detection/replication), #504 (scoped mutation runs), #505 (M4/M5
 per-workspace + timeout), #506 (monorepo target enumeration), #507 (M3 vitals plugin-location
 discovery), #509 (report completeness derived from the coverage ledger), #513 (M8 Stryker config

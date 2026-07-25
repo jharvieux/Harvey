@@ -19,7 +19,7 @@ services. Scans were run against `stages/` because that is where the expected-fi
 | M1 mechanical (secrets/semgrep) | yes | `quick-scan` (whole repo + per-stage) + Harvey `semgrep` rules over `stages/` |
 | Static AST detectors (M5/M6/M9…) | yes | `detect-static` per stage |
 | Deps (M4/M5 osv) | yes | osv-scanner via quick-scan |
-| Semantic (LLM M1) | yes | manual review of every staged vuln module, guided by `docs/scan-extras.txt`, triaged by `docs/fp-rules.txt` |
+| Semantic (LLM M1) | yes | manual review of every staged vuln module, guided by `briefs/scan-extras.txt`, triaged by `briefs/fp-rules.txt` |
 | M2 dynamic pen-test | **N/A — partial-with-reason** | Harvey's M2 is the Supabase local-stack PostgREST cross-tenant matrix; the target is Express+pg. Not the M2 path. Not a miss — recorded partial. |
 | M10 live PII | **N/A — partial-with-reason** | no Supabase DB / migrations to classify. |
 
