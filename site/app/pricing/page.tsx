@@ -378,9 +378,10 @@ export default function Pricing() {
                 <h3>Is the small-tier Full audit a real pentest?</h3>
                 <p>
                   It&apos;s a genuine audit of a small app, and the Full tier does run a live pen-test on a copy of your
-                  stack. We keep the language honest: a small MVP is scoped-small, comparable to the $199–$1,499
-                  vibe-audit band — not a formal enterprise pentest. If you need a compliance letter, we&apos;ll point you
-                  to a pentest firm for that specifically.
+                  stack. We keep the language honest: a small MVP is scoped-small, so it sits alongside the
+                  $1,500–$5,000 source-review audits rather than a formal enterprise pentest — the difference being
+                  that those are source-only, and this one actually runs. If you need a compliance letter, we&apos;ll
+                  point you to a pentest firm for that specifically.
                 </p>
               </div>
               <div className="faq-item">
