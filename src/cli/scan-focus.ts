@@ -4,7 +4,7 @@
 //
 // <m3-hotspot-file> is the newline-ranked list `hotspot-scan.ts --hotspots-out` writes (the same file
 // M8's `mutation-scan --hotspots` and M6's `simplify-scan --hotspots` consume). The brief is meant to
-// be appended to the `/vuln-scan` pass's `--extra` inputs alongside docs/scan-extras.txt, so semantic
+// be appended to the `/vuln-scan` pass's `--extra` inputs alongside briefs/scan-extras.txt, so semantic
 // review is prioritized on the hottest files. Prints to stdout, or writes --out.
 //
 // Thin I/O wrapper per the repo convention — the transform is the tested pure function in
@@ -34,7 +34,7 @@ try {
 if (outPath) {
   writeFileSync(outPath, brief);
   console.error(`M1 vuln-scan focus brief: ${hotspots.length} hotspot(s) → ${outPath}`);
-  console.error(`Pass it to the semantic pass: /vuln-scan --extra docs/scan-extras.txt --extra ${outPath}`);
+  console.error(`Pass it to the semantic pass: /vuln-scan --extra briefs/scan-extras.txt --extra ${outPath}`);
 } else {
   console.log(brief);
 }

@@ -2,7 +2,7 @@
 // zenstackhq/zenstack and Errorname/prisma-multi-tenant: an ORM/policy test suite is wall-to-wall
 // by-id reads and writes, because that is how a test sets up and asserts a case. Modelled on
 // prisma-rls's tests/update.test.ts and zenstack's tests/e2e/orm/client-api/update.test.ts (both
-// MIT). docs/fp-rules.txt rules test/fixture/seed/dev-script code out of scope; this dir is the
+// MIT). briefs/fp-rules.txt rules test/fixture/seed/dev-script code out of scope; this dir is the
 // regression guard that keeps it out.
 
 import { expect, test } from "vitest";

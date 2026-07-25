@@ -130,7 +130,7 @@ const RULES = [
   [/(access_?token|refresh_?token|auth_?token|session_?token)/, "AUTH_TOKEN", "SECRET", "high"],
 ];
 
-// Every rule above over-matches on real schemas (validated on ATC — see docs/audit-modules.md
+// Every rule above over-matches on real schemas (validated on ATC — see briefs/audit-modules.md
 // M10). These are the observed FP classes: a column *about* an infotype (a descriptor/category
 // column, a boolean flag referencing the concept) is not a column *of* that infotype. Checked
 // after a dictionary match, before the hit is returned — an excluded name never asserts PII.

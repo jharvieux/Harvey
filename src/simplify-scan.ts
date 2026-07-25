@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { relative } from "node:path";
 
 // The brief's M6 section only — the file also carries M5/M8 sections that would dilute the pass.
-// Delimited by the "## " headings in docs/quality-extras.txt.
+// Delimited by the "## " headings in briefs/quality-extras.txt.
 export function extractM6Brief(briefText: string): string {
   const lines = briefText.split("\n");
   const start = lines.findIndex((l) => l.startsWith("## SIMPLIFICATION"));

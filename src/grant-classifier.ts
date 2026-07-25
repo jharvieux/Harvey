@@ -1,4 +1,4 @@
-// M1 DETECT DEEPER — RLS-no-policy grant classifier (docs/scan-extras.txt).
+// M1 DETECT DEEPER — RLS-no-policy grant classifier (briefs/scan-extras.txt).
 // Turns "RLS enabled, zero policies, confirm intent" into a verdict per table by
 // cross-referencing role_table_grants against whether client code (vs. only
 // service-role) reads the table. Pure transform: src/cli/detect-deeper.ts does

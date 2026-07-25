@@ -23,7 +23,7 @@
 
 import { neverExecutedModules, readExecutionLog } from "./audit-execution-log.js";
 
-// The ten modules of the audit. Authoritative scope: docs/audit-modules.md — audit-coverage.test.ts
+// The ten modules of the audit. Authoritative scope: briefs/audit-modules.md — audit-coverage.test.ts
 // reads that file and asserts this list matches it, so the doc cannot drift from the code (#275).
 export const AUDIT_MODULES = ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10"] as const;
 
@@ -208,7 +208,7 @@ export function buildAuditCoverage(recorded: ModuleCoverage[], env?: EngagementE
 //
 // Why never-run throws rather than warns (#266): a warning is what M6 has effectively had — every
 // engagement recorded a correct, well-reasoned excuse and nobody noticed the module had never
-// produced a single finding while docs/audit-modules.md sold it as a product wedge. A status that
+// produced a single finding while briefs/audit-modules.md sold it as a product wedge. A status that
 // doesn't stop anything is the same silence with better paperwork. It is deliberately unsatisfiable
 // by reason-writing: the only way to clear it is to run the module once and drop it from
 // MODULES_NEVER_EXECUTED.

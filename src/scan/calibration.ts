@@ -53,7 +53,7 @@ export type { CorpusEntry } from "./calibration/types.js";
 // corpus batch (#71/#72 fan-out) adds a `<batch>.entries.ts` file exporting a CorpusEntry[] and
 // one spread below — this keeps parallel batches conflict-free (a new batch touches only its own
 // file plus this single line). Positives extend GROUND-TRUTH.md's planted bugs; negatives are
-// the benign lookalikes from the FP catalog (docs/fp-rules.txt).
+// the benign lookalikes from the FP catalog (briefs/fp-rules.txt).
 export const CORPUS: CorpusEntry[] = [
   ...baseEntries,
   ...secretsEntries,

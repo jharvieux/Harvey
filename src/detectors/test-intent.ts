@@ -603,7 +603,7 @@ function detectRlsMockedDb(ctx: TestFileContext, byPath: ReadonlyMap<string, Sou
 
 // --- SHAPE-ONLY response assertions — "asserts WHAT, not WHY" (#821) ----------------
 
-// Category 3 of the intent brief (docs/quality-extras.txt via docs/m8-test-quality.md §4):
+// Category 3 of the intent brief (briefs/quality-extras.txt via docs/m8-test-quality.md §4):
 // a test that PARSES a response body and then asserts only incidental facts about it — a
 // success status, a nonzero count, mere existence — never a business VALUE from the data it
 // read. "Returns 200 with 2 rows" passes even when the rows belong to the wrong tenant.

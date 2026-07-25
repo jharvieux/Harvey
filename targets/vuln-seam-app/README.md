@@ -18,7 +18,7 @@ is the permanent, versioned regression target that drives each to a proven verdi
 | `NO-RATE-LIMIT` | `POST /api/coupon/redeem` — replayable with no throttle/one-time-use | `POST /api/checkout` — per-process token bucket → 429 |
 
 The full planted-finding enumeration and scoring key is in
-[`docs/design/vuln-seam-app-answer-key.md`](../../docs/design/vuln-seam-app-answer-key.md).
+[`ANSWER-KEY.md`](./ANSWER-KEY.md).
 
 ## Running the live proof
 

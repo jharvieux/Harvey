@@ -43,7 +43,7 @@ export function buildExecutionPlan(env: EngagementEnv): PlanStep[] {
     });
     steps.push({
       label: "M1 semantic (/vuln-scan → /triage)",
-      command: "/vuln-scan --extra docs/scan-extras.txt --extra focus.md  →  /triage --fp-rules docs/fp-rules.txt",
+      command: "/vuln-scan --extra briefs/scan-extras.txt --extra focus.md  →  /triage --fp-rules briefs/fp-rules.txt",
       dependsOn: "M1 semantic focus brief",
     });
     steps.push({

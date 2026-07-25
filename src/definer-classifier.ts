@@ -1,4 +1,4 @@
-// M1 DETECT DEEPER — SECURITY DEFINER body classifier (docs/scan-extras.txt).
+// M1 DETECT DEEPER — SECURITY DEFINER body classifier (briefs/scan-extras.txt).
 // Turns "SECURITY DEFINER exposed to anon/authenticated, confirm intent" into a
 // verdict per function by reading the actual body instead of stopping at the
 // advisor's summary. Pure transform: src/cli/detect-deeper.ts does the live
