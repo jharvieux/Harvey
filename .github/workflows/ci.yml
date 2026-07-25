@@ -13,8 +13,8 @@ jobs:
   # Tier router: inspect the change set and decide which heavy jobs are needed.
   # Prose-doc-only PRs (SESSION.md, docs/**.md) skip both. Workflow-only PRs need
   # actionlint, not the full JS verify (tsc/eslint/vitest/knip never read workflow
-  # YAML). Everything else — code, config, docs/*.txt briefs, targets/** — runs the
-  # full verify. A push to main runs everything as a post-merge safety net.
+  # YAML). Everything else — code, config, briefs/**, targets/** — runs the full
+  # verify. A push to main runs everything as a post-merge safety net.
   changes:
     name: changes
     runs-on: ubuntu-latest
@@ -41,11 +41,10 @@ jobs:
             [ -z "$f" ] && continue
             case "$f" in
               .github/workflows/*) workflows=true ;;
-              # Inert prose docs skip the build. Exceptions: docs consumed by the
-              # test suite (readFileSync in a *.test.ts) MUST run verify — the
-              # ci-docs-tier test fails loud if a new such doc appears here.
-              docs/audit-modules.md) code=true ;;
-              docs/design/vuln-seam-app-answer-key.md) code=true ;;
+              # Everything under docs/ is prose (SESSION.md too) — skip the build.
+              # Every functional/tool-input doc lives under briefs/, targets/, or
+              # src/, which all fall through to the catch-all below. No per-file
+              # exceptions needed (#994).
               SESSION.md|docs/*.md) ;;
               *) code=true ;;
             esac
