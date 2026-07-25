@@ -10,7 +10,7 @@ Everything below was executed for real on 2026-07-22 — a "measure, don't recal
 
 - Docker 29.5.2, Supabase CLI 2.102.0, psql (PostgreSQL) 18.4, node v24.15.0
 - Target: `targets/vuln-seam-app` (the Harvey-owned deliberately-vulnerable fixture, #718)
-- Answer key scored against: `docs/design/vuln-seam-app-answer-key.md`
+- Answer key scored against: `targets/vuln-seam-app/ANSWER-KEY.md` (moved fixture-adjacent by #994)
 
 ## Command under test
 

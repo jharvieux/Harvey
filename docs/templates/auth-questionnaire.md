@@ -1,6 +1,6 @@
 # Auth & tenancy kickoff questionnaire (canonical)
 
-> **Detect > ask.** Per `docs/audit-modules.md` M10 and the applicability framework in
+> **Detect > ask.** Per `briefs/audit-modules.md` M10 and the applicability framework in
 > `docs/tier1-runbook.md` §5: anything derivable from code, schema, or config is detected, not
 > asked (e.g. PII/PHI/PCI columns are matched against infoType dictionaries, never self-reported).
 > This questionnaire covers **only the remainder** — facts that live in the client's head or their
@@ -109,7 +109,7 @@ sensitive that doesn't look like standard PII by column name.*
 
 ## 5. Staging environment and M2 dynamic testing
 
-*Why: M2 (local penetration test, `docs/audit-modules.md`) proves the highest-severity static
+*Why: M2 (local penetration test, `briefs/audit-modules.md`) proves the highest-severity static
 findings by actually attempting cross-tenant access. It needs somewhere to run that isn't
 production, and needs the client's consent to put synthetic data there.*
 

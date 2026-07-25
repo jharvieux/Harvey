@@ -47,7 +47,7 @@ never on a recall gap, because a recall gap is the measurement.
 |---|---|---|---|
 | **Source-detector recall (this gate)** | app-layer request→sink fixtures | semgrep taint + AST taint detectors | **38/39 (97.4%)** |
 | SCA / SecBench (#879) | ~600 real npm CVEs (library-internal) | osv-scanner | 0/600 source; SCA per the #879 gate |
-| M1 mixed corpus (`validate-calibration`) | all M1 mechanical classes | all mechanical engines | ~198/201 |
+| M1 mixed corpus (`validate-calibration`) | all M1 mechanical classes | all mechanical engines | 218/221 (MEASURED 2026-07-24) |
 
 The M1 mixed number blends the source detectors with the SCA, secret, security-header, crypto-primitive,
 `next.config`, and RLS-config/schema tiers — a different answer key measuring a different thing. No
@@ -136,7 +136,9 @@ a named, distinct cause (never blended into one "hard" bucket):
 
 Like the planted-fixture gate, a recall gap here is **the measurement, not a gate failure** — `--real`
 always exits 0 and reports; it does not fail a build. Distinct from every other number on this page:
-never blend 0/3 into 38/39, or either into the M1 mixed ~198/201. The real value of this tier is turning
+never blend 0/3 into 38/39, or either into the M1 mixed figure (218/221 as measured 2026-07-24 — a
+number that moves with every detector that lands, so re-run `validate-calibration` rather than quoting
+it). The real value of this tier is turning
 "real code is presumably harder than what we planted" from an assumption into three itemized, re-testable,
 named limitations — a punch list for cross-file taint and function-parameter-sourced BOLA, not just a
 lower percentage.

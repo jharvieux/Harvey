@@ -2,7 +2,7 @@
 
 > The repeatable scan → triage → report flow for a Tier-1 engagement: multi-tenant security (M1),
 > powered by the `anthropics/defending-code-reference-harness` skills and the D-091 brief files
-> (`scan-extras.txt`, `fp-rules.txt`). This is the low-marginal-cost delivery engine — the thing that
+> (`briefs/scan-extras.txt`, `briefs/fp-rules.txt`). This is the low-marginal-cost delivery engine — the thing that
 > makes the audit service repeatable instead of bespoke every time. Codebase-health modules (M4–M6)
 > have their own runbook: `docs/m4-m6-quality.md`.
 
@@ -12,7 +12,7 @@
 
 - A **signed engagement** covering authorized-testing scope, data handling, and liability terms —
   no scan work starts without one (see `docs/audit-report-skeleton.md` §0).
-- Confirm the D-091 brief files are current: `docs/scan-extras.txt` (scan), `docs/fp-rules.txt`
+- Confirm the D-091 brief files are current: `briefs/scan-extras.txt` (scan), `briefs/fp-rules.txt`
   (triage), `docs/audit-report-skeleton.md` (deliverable shape).
 
 ## 1. Runbook steps
@@ -47,7 +47,7 @@
    pass.
 3. **`/threat-model bootstrap <repo>`** → establishes focus areas (tenancy model, auth provider,
    the surfaces that matter for *this* app) before the scan runs blind.
-4. **`/vuln-scan <repo's source root> --extra docs/scan-extras.txt`** → raw findings
+4. **`/vuln-scan <repo's source root> --extra briefs/scan-extras.txt`** → raw findings
    (`VULN-FINDINGS.{md,json}`). This is the high-recall pass — over-flagging here is fine and
    expected; triage is what fixes it. Use the app's actual source root, not literally `src` — plenty
    of real Pages Router apps (and this runbook's own calibration target) have no `src/` directory at
@@ -55,10 +55,10 @@
    candidate count is high (dozens+) and time-boxed; every finding still reaches `/triage`
    unfiltered either way. **Known blind spot, verified 2026-07-09:** `/vuln-scan`'s built-in review
    brief hardcodes "open redirect" into its own DO-NOT-REPORT list, independent of
-   `docs/scan-extras.txt` — an open-redirect bug will not surface from this stage even if a
-   subagent's focus area covers the exact route, unless `scan-extras.txt` is changed to explicitly
+   `briefs/scan-extras.txt` — an open-redirect bug will not surface from this stage even if a
+   subagent's focus area covers the exact route, unless `briefs/scan-extras.txt` is changed to explicitly
    override that default (it currently does not).
-5. **`/triage VULN-FINDINGS.json --fp-rules docs/fp-rules.txt`** → verified, deduped, re-ranked
+5. **`/triage VULN-FINDINGS.json --fp-rules briefs/fp-rules.txt`** → verified, deduped, re-ranked
    findings. See §4 for the methodology this step runs. **Known blind spot, verified 2026-07-09:**
    `/triage`'s own built-in verifier exclusion list separately (and redundantly) classifies open
    redirect as a "low-impact nuisance" false positive, so even a finding that somehow survived step
@@ -123,7 +123,7 @@ the checklist items that don't apply.
 > (`docs/templates/auth-questionnaire.md`) covering tenancy model, roles/permissions, data
 > sensitivity/compliance context, staging availability for M2, and integration surface — not yet
 > written as of this runbook. The list above is the Tier-1-scan-relevant subset (the items that map
-> directly to `scan-extras.txt` preconditions); once #31 lands, treat its questionnaire as the
+> directly to `briefs/scan-extras.txt` preconditions); once #31 lands, treat its questionnaire as the
 > canonical kickoff artifact and this section as a pointer into it, not a duplicate to maintain
 > separately.
 
@@ -133,8 +133,8 @@ FP control is a **pipeline property**, not per-scanner perfection. Every finding
 before it reaches the report:
 
 1. **Two stages: find (high recall) → triage (high precision).** Never ship raw scanner output.
-   The scan brief (`scan-extras.txt`) may over-flag; triage (`fp-rules.txt`) kills the noise.
-2. **Deterministic suppression — `fp-rules.txt`.** Codifies known-FP classes (service-role bypass
+   The scan brief (`briefs/scan-extras.txt`) may over-flag; triage (`briefs/fp-rules.txt`) kills the noise.
+2. **Deterministic suppression — `briefs/fp-rules.txt`.** Codifies known-FP classes (service-role bypass
    by itself, RLS-enabled-no-policy on a service-role-only table, derived-absolute-value updates,
    operator/env config URLs, shared permission gates with matching authority, in-process caches,
    upstream replay protection, test/fixture/seed code) and honors the client's own inline
@@ -171,7 +171,7 @@ confidence.
 
 ## 5. Applicability framework — detect > ask > infer
 
-Every rule in `scan-extras.txt` has a **precondition** (its `[when: …]` tag) — a fact about the
+Every rule in `briefs/scan-extras.txt` has a **precondition** (its `[when: …]` tag) — a fact about the
 app that must hold for the finding to be real. Establish each precondition in this priority order:
 
 1. **Detect** (from code/schema) — preferred: deterministic, no client effort, immune to "I don't

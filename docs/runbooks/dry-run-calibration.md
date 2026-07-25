@@ -149,7 +149,7 @@ Fixed inline during this pass (small, mechanical, no issue needed):
 Trivial wording gaps, noted here per the task's "list trivial ones inline" — not filed as
 issues, and `docs/tier1-runbook.md` itself is a supervised path this pass didn't touch:
 
-- Step 4's example invocation is `/vuln-scan <repo>/src --extra docs/scan-extras.txt` — this
+- Step 4's example invocation is `/vuln-scan <repo>/src --extra briefs/scan-extras.txt` — this
   assumes a `src/`-rooted app layout. `targets/calibration` (and plenty of real Pages-Router
   apps) have no `src/` directory at all; the wording should say "the app's source root," not
   literally `src`.
@@ -158,7 +158,7 @@ issues, and `docs/tier1-runbook.md` itself is a supervised path this pass didn't
   present a guess as fact" rather than asserting either way.
 
 Steps that worked exactly as written: step 0 (engagement/brief-file prerequisites —
-`docs/scan-extras.txt`, `docs/fp-rules.txt`, `docs/audit-report-skeleton.md` all exist and are
+`briefs/scan-extras.txt`, `briefs/fp-rules.txt`, `docs/audit-report-skeleton.md` all exist and are
 current); step 2 (repo/scope/commit capture — straightforward for a local target).
 
 ## 5. Requires live environment
@@ -388,7 +388,7 @@ not part of "the app"):
    threats. The swarm alone surfaced several of the ground-truth bugs directly (the RLS gaps, the
    raw-SQL routes, the unscoped UPDATE) before `/vuln-scan` even ran, which is exactly the intended
    effect of threat-modeling before scanning blind.
-2. **`/vuln-scan --extra docs/scan-extras.txt --no-score`** — scoped by the `THREAT_MODEL.md` from
+2. **`/vuln-scan --extra briefs/scan-extras.txt --no-score`** — scoped by the `THREAT_MODEL.md` from
    step 1, fanned out to 10 focus-area subagents (RLS/PostgREST, raw SQL, service-role
    scoping/IDOR, webhook replay, concurrency, XSS/redirect, middleware/CORS, server actions,
    Postgres functions/views, secrets/supply-chain). `--no-score` (skips the skill's optional
@@ -396,9 +396,9 @@ not part of "the app"):
    candidates — well beyond the original 8-bug scope — to keep the run tractable; every finding
    still reached `/triage` unfiltered. Wrote `VULN-FINDINGS.json`/`.md` (45 findings: 33 HIGH / 9
    MEDIUM / 3 LOW, scanner-claimed severities).
-3. **`/triage --fp-rules docs/fp-rules.txt --auto`** — ran Phase 1 (ingest), Phase 2 (light dedupe),
+3. **`/triage --fp-rules briefs/fp-rules.txt --auto`** — ran Phase 1 (ingest), Phase 2 (light dedupe),
    Phase 3 (adversarial verification: one independent subagent per finding, reading source itself
-   and applying both the skill's 16 built-in exclusion rules and `docs/fp-rules.txt`'s org-specific
+   and applying both the skill's 16 built-in exclusion rules and `briefs/fp-rules.txt`'s org-specific
    rules). **`--votes 1` instead of the skill's default 3** was used as a disclosed adaptation for
    the same volume reason as above — a full 3-vote run remains available as a stricter follow-up.
    Phase 4 (severity re-ranking) and Phase 5 (owner routing) were **not** run this pass — confirmed
@@ -424,7 +424,7 @@ a skeptical verifier (not just carried over from the scan stage's claim):
 | 5 | WEBHOOK-REPLAY | Medium | **caught** | HMAC check correct; verifier confirmed no nonce/timestamp/dedup exists anywhere in the path |
 | 6 | COUNTER-RACE | Medium | **caught** | verifier explicitly reasoned through "is this a realistic concurrent-request window or theoretical" (the pipeline's own exclusion rule 16 for theoretical-only races) and confirmed it's realistic |
 | 7 | UPDATE-UNSCOPED | High | **caught, with a nuance** | verifier confirmed the route uses the raw `pg.Pool` (`lib/db.js`), not PostgREST — so it is **not** protected by the PostgREST "UPDATE requires WHERE" guard that made this bug non-exploitable-as-planted in §8's live dynamic-pentest run (issue #59). The static/LLM read and the dynamic pen-test are both correct; they're reading different reachability paths to the same planted code. |
-| 8 | OPEN-REDIRECT | Low | **missed — by design, not by gap** | `pages/api/redirect.js` was explicitly seen by the `/vuln-scan` subagent scoped to that route, and explicitly *not* reported, because the skill's own built-in review brief hardcodes "open redirect" into its default DO-NOT-REPORT list — independent of `docs/scan-extras.txt`, which doesn't add an override. `/triage`'s own built-in verifier exclusion rule #12 separately classifies open redirect as a "low-impact nuisance" false positive, so it's excluded twice over. This is **not** a scanning gap the way the mechanical layer's misses are (§3) — it's a deliberate, hardcoded suppression shipped with the reference-harness skills themselves. If open-redirect coverage matters for an engagement, this pipeline as shipped won't surface it; use the kickoff questionnaire (runbook §3) or a manual check instead. |
+| 8 | OPEN-REDIRECT | Low | **missed — by design, not by gap** | `pages/api/redirect.js` was explicitly seen by the `/vuln-scan` subagent scoped to that route, and explicitly *not* reported, because the skill's own built-in review brief hardcodes "open redirect" into its default DO-NOT-REPORT list — independent of `briefs/scan-extras.txt`, which doesn't add an override. `/triage`'s own built-in verifier exclusion rule #12 separately classifies open redirect as a "low-impact nuisance" false positive, so it's excluded twice over. This is **not** a scanning gap the way the mechanical layer's misses are (§3) — it's a deliberate, hardcoded suppression shipped with the reference-harness skills themselves. If open-redirect coverage matters for an engagement, this pipeline as shipped won't surface it; use the kickoff questionnaire (runbook §3) or a manual check instead. |
 
 **Read plainly: the LLM pipeline is the strongest detection layer measured against this calibration
 target so far** — 7/8 vs. the mechanical layer's 0/8 (§3) and the dynamic pen-test's 5/8-with-correct-verdicts
@@ -439,7 +439,7 @@ well-known example key (`docs/aws-setup.md`).
 
 ### 10.4 Beyond the original 8 — what else the pipeline surfaced
 
-`docs/scan-extras.txt`/`docs/fp-rules.txt` scope the pipeline for a real audit, and this calibration
+`briefs/scan-extras.txt`/`briefs/fp-rules.txt` scope the pipeline for a real audit, and this calibration
 target's source tree also holds planted bugs from later batches (B1/B3/B4/B5/B6/B7/B8, tracked
 separately under issue #71/#72 for the *mechanical* scanner's coverage). Scanning the same
 directories inevitably surfaced some of those too — the LLM pipeline confirmed 33 true positives
@@ -459,7 +459,7 @@ pipeline limitation, not a correct call: secret-scanning findings are presence-b
 credential is a leak the moment it's committed, regardless of whether any code currently imports the
 file), not reachability-based like the injection/auth-bypass classes the exclusion rules were
 designed for. Worth a manual override in a real engagement if a secrets-scan finding gets dismissed
-this way; not filing a new issue for it since `docs/fp-rules.txt` is an operator-owned file and the
+this way; not filing a new issue for it since `briefs/fp-rules.txt` is an operator-owned file and the
 fix (if any) belongs there, not in the pipeline's shipped defaults.
 
 ### 10.5 Confidence read

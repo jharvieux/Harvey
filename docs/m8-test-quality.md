@@ -9,8 +9,8 @@
 > "asserts WHAT, not WHY" response-assertion detector, #821), and the deletion-
 > survival litmus test runs executed via `--stub-check` (#373) — the hand review starts from
 > their output instead of a blank page. See
-> `docs/audit-modules.md` M8 for the module catalog entry this generalizes, and
-> `docs/quality-extras.txt`'s "TEST QUALITY / INTENT (M8)" section for the hand-review brief.
+> `briefs/audit-modules.md` M8 for the module catalog entry this generalizes, and
+> `briefs/quality-extras.txt`'s "TEST QUALITY / INTENT (M8)" section for the hand-review brief.
 
 ## 0. What's wired vs. manual
 
@@ -18,7 +18,7 @@
 |---|---|---|---|
 | Mutation scan | StrykerJS (external CLI, not an npm dep of this repo) | `src/cli/mutation-scan.ts` (`pnpm mutation-scan`) shapes the report | Running Stryker itself (needs the client's own test-runner config); triaging surviving mutants |
 | Deletion-survival check | `src/stub-check.ts` (#373) | `pnpm mutation-scan <t> --stub-check` — stubs each covered exported function, re-runs its covering tests, emits `M8-01-*` per suite that survives; no Stryker install | Triaging which survivals matter; Stryker remains ground truth for partial mutant survival |
-| Tests-for-intent review | `quality-extras.txt` M8 brief + `src/detectors/test-intent.ts` (#372/#384/#386/#821) | `pnpm detect-static <t>` — the structurally-dead classes: mock-of-subject, assertion-free, tautological, snapshot-only, call-count-only, tenant-isolation tests that mock the DB client, happy-path-only coverage on security/money-critical code, and the shape-only response-assertion form of "asserts WHAT, not WHY" (#821) | Brief-driven read of high-value tests for what the AST can't see (the rest of asserts-WHAT-not-WHY beyond the mechanized shape-only form, accidental mutant kills) |
+| Tests-for-intent review | `briefs/quality-extras.txt` M8 brief + `src/detectors/test-intent.ts` (#372/#384/#386/#821) | `pnpm detect-static <t>` — the structurally-dead classes: mock-of-subject, assertion-free, tautological, snapshot-only, call-count-only, tenant-isolation tests that mock the DB client, happy-path-only coverage on security/money-critical code, and the shape-only response-assertion form of "asserts WHAT, not WHY" (#821) | Brief-driven read of high-value tests for what the AST can't see (the rest of asserts-WHAT-not-WHY beyond the mechanized shape-only form, accidental mutant kills) |
 
 ## 1. Running the mutation scan
 
@@ -60,7 +60,7 @@ pnpm mutation-scan <client-repo-path> \
   fixes a batch of surviving mutants only re-tests what changed, not the whole repo again. Use it
   on every run (first run pays the full cost and seeds the incremental file; subsequent runs are
   fast).
-- **This is a one-time whole-repo batch job**, not a subset scan — per `docs/audit-modules.md` M8,
+- **This is a one-time whole-repo batch job**, not a subset scan — per `briefs/audit-modules.md` M8,
   don't scope it down to "just the auth module." A partial scan can't produce a credible overall
   mutation score, and the surviving-mutant map is only a complete blind-spot map if it's whole-repo.
 - The wrapper shells out to the `stryker` binary (`execFileSync("stryker", ...)`); it throws a
@@ -180,7 +180,7 @@ rather than treating every surviving mutant as equally urgent.
 ## 4. Tests-for-intent hand-review method
 
 The mutation scan is the mechanical half; this is the qualitative half — apply
-`docs/quality-extras.txt`'s M8 section directly. Start from the mechanical pre-screen: `pnpm
+`briefs/quality-extras.txt`'s M8 section directly. Start from the mechanical pre-screen: `pnpm
 detect-static <t>` already emits the structurally-dead classes (categories 1, 2, and 6 below,
 category 5's keyword-scoped first layer, the shape-only response-assertion form of category 3
 (#821), plus assertion-free and call-count-only tests — `src/detectors/test-intent.ts`,
@@ -190,11 +190,11 @@ auth, tenant isolation, payments/money math, state machines. Don't attempt to ha
 whole suite — that's what the mutation scan is for; the manual read exists because a mutant
 surviving *is* proof of a blind spot, but a mutant that *doesn't* survive doesn't prove the test
 is good (a test can kill a mutant for an accidental reason and still be intent-less on the actual
-business rule). For each high-value test, ask the litmus test from `quality-extras.txt`:
+business rule). For each high-value test, ask the litmus test from `briefs/quality-extras.txt`:
 
 > If you deleted or inverted the logic it covers, would this test go red?
 
-Flag it when the answer is no, using the six categories from `quality-extras.txt`:
+Flag it when the answer is no, using the six categories from `briefs/quality-extras.txt`:
 
 1. **Tautological** — asserts a value it just set, or mocks the very thing under test.
 2. **Snapshot-only** — a snapshot is the only assertion; "update snapshots" silently absorbs

@@ -40,10 +40,14 @@ stand the local stack up. Edge-function count is extra M1 service-role surface.
   859 migrations and 39 edge functions is an order of magnitude past anything else in the corpus, and an
   ERP's employee/supplier/customer tables are real M10 PII. Unlicensed → scan locally, do not vendor, do
   not publish. **Scale result: nothing timed out and nothing degraded quadratically** — M10 classified
-  4.95 MB of DDL into 154 tables in 0.1 s; the whole free tier ran in 76 s. What DID fail is written up
-  in `docs/design/carbon-scale-measurement.md`: 8,027 counted findings from one target, a cry-wolf
+  4.95 MB of DDL in 0.1 s; the whole free tier ran in 76 s. What DID fail is written up in
+  `docs/design/carbon-scale-measurement.md`: 8,027 counted findings from one target, a cry-wolf
   free-tier **F (0/100)** driven entirely by placeholder credentials in self-hosting docs, and an M10
-  severity model that tops out at Medium on an HR/supplier schema.
+  severity model that topped out at Medium on an HR/supplier schema. **Two of those three are since
+  fixed and re-measured 2026-07-24:** #934 + #996 took the grade from F (0/100) to **A (97/100)** with
+  all 27 findings still reported, and #936's camelCase tokenization raised M10 from 154 tables /
+  Medium ceiling to **214 tables / High ceiling** (60 PII tables had been silently classified NONE).
+  The finding-volume problem stands and got larger. Re-check with `pnpm corpus-drift --target carbon`.
 - **`marmelab/atomic-crm` is the best next `dynamic-validate --execute` target.** 23 migrations + 6 edge
   functions is enough to be a real M2 test, 834 files is small enough to audit end-to-end in one pass, and
   MIT means a writeup is publishable after disclosure. `ArnasDon/wacrm` is the same shape one size up.
@@ -74,7 +78,8 @@ exercise `detectOrm` routing, the Prisma tenant-scope/BOLA detector (#760), M7 F
   (5 findings).
 - **`inbox-zero` is the M8 pick** — 586 test files is the deepest public mutation-testing surface on the
   Prisma side; the current corpus's largest real suite is boxyhq's 8. **Measured:** 305 M8-intent
-  findings (100× the corpus's previous maximum) and 52 M9 findings, the largest App Router boundary
+  findings (100× the corpus's previous maximum) and 40 M9 findings — re-measured 2026-07-24 after
+  #964's SSR precision fix dropped 12 FPs from the original 52 — the largest App Router boundary
   surface pinned. The *mutation* tier is still not scoreable on it — `npm install` on a pnpm workspace
   resolves only root packages, so `corpus-m8.yml` has no runner to drive; recorded not-run with that
   reason.

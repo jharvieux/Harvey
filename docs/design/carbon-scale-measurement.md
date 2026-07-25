@@ -63,21 +63,34 @@ The free source tier produced **8,027 counted findings** on this one target:
 | M8-intent | 3 | 3 |
 | M4-diverged / M9 | 0 | 0 / 1 |
 
+> Two rows in that table have since moved and are kept as the original reading: **M10** is 214, not
+> 154 (#936 camelCase tokenization, see §3), and **M9** is 241, not 0 (#916–#918 React Router 7
+> support, see "What could NOT be measured"). The volume finding gets worse, not better.
+
 `quality-scan` alone wrote a 7,301-finding JSON. That is not a report a client can act on, and it is
 not something the renderer was designed against — the corpus's previous maximum was proposit's 105.
 **The scanners scale; the deliverable does not.** Filed as its own issue rather than treated as a
 reason to drop the target, per #897's own instruction.
 
-### 2. The free tier cries wolf at scale — grade **F (0/100)** on placeholder credentials
+### 2. The free tier cried wolf at scale — grade **F (0/100)** on placeholder credentials (FIXED, #934 + #996)
 
 > **Update 2026-07-24 (#934):** the placeholder-credential class is reclassified — gitleaks
 > high-precision hits in doc/example-deployment paths (`docs/**`, `contrib/**`, `*.md`/`*.mdx`,
 > example/sample files, `*.dev.yml` composes) now report at Low in the non-grading informational
 > section with the reason stated; TruffleHog live-VERIFIED secrets are exempt. Re-measured on this
 > pin: all 14 former Criticals report informational, 0 graded. carbon is now in
-> `FREE_TIER_EXPECTATIONS` (weekly-scored `mustNotGradeDocContextCreds` invariant). The grade
-> remains F (0/100) on 11 graded Highs; their precision/severity decisions and the
-> `mustNotScoreF: true` flip are tracked in #996.
+> `FREE_TIER_EXPECTATIONS` (weekly-scored `mustNotGradeDocContextCreds` invariant).
+>
+> **Update 2026-07-24 (#996) — the F is gone; this section is a historical record.** The remaining
+> 11 graded Highs were re-tiered: 7 bare-wildcard CORS headers with no credentials signal (the
+> correct shape for a deliberately-public endpoint) route to `harvey-permissive-cors-bare`, 3
+> GitHub-Actions workflow findings move to a non-grading "CI/CD pipeline hygiene" report section,
+> and 1 `postMessage(data, "*")` becomes non-grading informational — data sensitivity is a paid-LLM
+> judgment. `computeGrade` also now penalizes distinct problem CLASSES rather than copies (full
+> penalty for a class's most severe instance, +3 per repeat). MEASURED 2026-07-24 post-change:
+> **grade A (97/100)**, graded set 1 Low (unpinned deps), 27 findings before AND after — all 11
+> former Highs still fully reported. carbon's `mustNotScoreF` is now `true` in
+> `FREE_TIER_EXPECTATIONS`. Falsify with `pnpm corpus-drift --target carbon`.
 
 `quick-scan` graded carbon **F (0/100)** on 26 verified hygiene issues: 14 Critical, 11 High, 1 Low.
 Every one of the 14 Criticals inspected is a **placeholder credential in documentation or an example
@@ -90,13 +103,23 @@ only shows up at scale because a large repo ships a large self-hosting/docs surf
 one docker-compose; an ERP has nine. **This is a finding about Harvey, not about carbon** — no
 disclosure is warranted and none was filed.
 
-### 3. M10's severity model does not separate an ERP from a starter kit
+### 3. M10's severity model did not separate an ERP from a starter kit — half of it was a tokenizer bug (#936)
 
 154 PII-bearing tables were classified across a schema carrying **employee, supplier, customer,
-contact and address records**. The highest severity produced anywhere in those 154 tables is
-**Medium**. `subscription-payments` — a billing demo with 5 classified tables — also tops out at High.
-A model that ranks a manufacturing ERP's HR and supplier data at or below a Stripe template's is not
-discriminating, and volume alone (154 rows) gives an operator nothing to triage by.
+contact and address records**, and the highest severity produced anywhere in those 154 tables was
+**Medium** — at or below what `subscription-payments`, a 5-table billing demo, tops out at. That
+read as a severity-model problem.
+
+> **Update 2026-07-24 (#936/#968):** a large part of it was not the severity model but the
+> **tokenizer** — M10 split column names on `_` only, so every camelCase column was invisible and
+> **60 PII-bearing tables were silently classified NONE**. With camelCase tokenization the same pin
+> MEASURED **214 PII-bearing tables** (4,951 columns scanned, 177 PII-bearing) at 4 High / 14
+> Medium / 196 Low, and the severity ceiling moved Medium → **High**: `company` 6.3
+> (taxId+address+phone+fax+email), `oauthClient`/`printerRoute` 6.3 (name+apiKey), `oauthToken` 6
+> (authToken). **This supersedes the "154 tables / Medium ceiling" figures above**, which are kept
+> only as the record of what the bug looked like. The residual complaint — that 214 undifferentiated
+> rows give an operator little to triage by — stands. Falsify with
+> `pnpm corpus-drift --target carbon`.
 
 ## What could NOT be measured, and why
 
@@ -111,10 +134,18 @@ Recorded as reasons, never omitted (the coverage guard):
   across all 36 workspaces and discloses it as the M5-98 row. The 2,773 is a **drift** baseline, not a
   dead-code claim. This reproduces in CI (the job's install fails the same way), which is why the
   baseline is recorded from a no-deps run rather than a locally-privileged one.
-- **M9 is not applicable.** carbon is React Router 7 (framework mode), not Next.js App Router. #903's
-  guard emits `M9 not assessed — React Router 7 (framework mode) (framework not supported)` as an Info
-  row instead of a silent zero. This is the largest target in the corpus and the guard behaved
-  correctly on it.
+- **M9 was not applicable *at the time of this measurement*.** carbon is React Router 7 (framework
+  mode), not Next.js App Router. #903's guard emitted `M9 not assessed — React Router 7 (framework
+  mode) (framework not supported)` as an Info row instead of a silent zero, and the guard behaved
+  correctly on the corpus's largest target.
+
+  > **Update 2026-07-24 (#916–#918, #964):** M9 is no longer Next-only — the framework-agnostic
+  > boundary model routes React Router 7 to an adapter, so carbon **is** analysed now. MEASURED on
+  > the same pin: **241 counted / 248 total** (7 Info not-assessed rows), after #964's precision fix
+  > removed 106 reproduced FPs from an initial 347. The residual 241 were individually confirmed:
+  > 116 Low SSR-only API misuse, 66 High route-action missing input validation, 56 Medium
+  > data-fetching waterfall, 3 High server→client leak. The `M9 0 / 1` row in the volume table above
+  > is therefore the pre-#916 reading. Falsify with `pnpm corpus-drift --target carbon`.
 - **M1 semantic, M2 dynamic, M3, M6 verdict, M7 advisors, M10 live.** Out of scope for #897, which is
   a source-tier scale measurement. No live stack was stood up and no client DB exists for this target.
 

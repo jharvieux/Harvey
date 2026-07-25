@@ -108,7 +108,7 @@ quoted.
 
 ## Delivery gate — module coverage (before the report ships)
 
-The audit is a ten-module product (M1–M10, `docs/audit-modules.md`). A delivery is only complete
+The audit is a ten-module product (M1–M10, `briefs/audit-modules.md`). A delivery is only complete
 when **every** module is accounted for — run, or explicitly recorded as unable to run with a reason.
 The preferred path is the full-audit runner (`pnpm run-audit <target>`, #229/#310),
 which **derives** the coverage ledger from what each probe actually reported. `assertAuditComplete`

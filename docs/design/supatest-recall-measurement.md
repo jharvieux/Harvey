@@ -30,7 +30,7 @@ mechanical, semantic (LLM), and dynamic (M2 autonomous stand-up).
     static open-signup / password / realtime config checks (#588 and the connected-tier
     `supabase-config` checks) have nothing to read — recorded as requires-live-run, not a skip.
 - **Semantic (LLM):** manual security review of the four components + the migration SQL, guided by
-  `docs/scan-extras.txt`, triaged against `docs/fp-rules.txt`.
+  `briefs/scan-extras.txt`, triaged against `briefs/fp-rules.txt`.
 - **Dynamic (M2):** `pnpm dynamic-validate <t> --execute --out <dir>` — the autonomous live
   pipeline (`supabase start` → apply the client migration → seed two auth users → live PostgREST
   cross-principal matrix). Self-isolated per #604 (`project-id harvey-dv-3569abe86e`, DB ports
