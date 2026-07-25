@@ -552,7 +552,7 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
     license: "none in-tree at this pin (GitHub reports NOASSERTION — all rights reserved by default)",
     provenance: "ai-assisted",
     provenanceNote: "#897: a real commercial ERP/MES/QMS with Rust crates, patches/, a versioned release history and BACKWARD_COMPATIBILITY.md, that also ships CLAUDE.md + AGENTS.md + a .claude/skills tree. Capable-dev-with-AI.",
-    securityVerdict: "NOT ASSESSED — #897 is a SCALE measurement, not an audit. The free-tier quick-scan originally graded this target F (0/100) on 14 Critical secret findings, every one a placeholder credential in self-hosting docs or an example docker-compose; #934 reclassified that class (re-measured 2026-07-24: all 14 now Low/informational with the reason stated, 0 graded — see FREE_TIER_EXPECTATIONS below). The grade remains F (0/100) on 11 graded Highs pending their own precision decisions (#996). NOT a security verdict on carbon; no disclosure filed and none warranted from this pass.",
+    securityVerdict: "NOT ASSESSED — #897 is a SCALE measurement, not an audit. The free-tier quick-scan originally graded this target F (0/100) on 14 Critical secret findings, every one a placeholder credential in self-hosting docs or an example docker-compose; #934 reclassified that class (re-measured 2026-07-24: all 14 now Low/informational with the reason stated, 0 graded — see FREE_TIER_EXPECTATIONS below). #996 then resolved the remaining 11 graded Highs (7 bare-wildcard CORS on intended-public endpoints → non-grading confirm-intent informational; 3 GitHub-Actions workflow findings → the non-grading CI/CD pipeline hygiene section; 1 postMessage wildcard → non-grading informational) — re-measured 2026-07-24 post-change: grade A (97/100), graded set 1 Low (unpinned deps), all 11 former Highs still fully reported. NOT a security verdict on carbon; no disclosure filed and none warranted from this pass.",
     schemaPath: "packages/database/supabase/migrations",
     modules: {
       M4: { counted: 3251, total: 4526, note: "#897: MEASURED 2026-07-24 — the corpus's largest M4 surface by 9x. jscpd completed whole-repo inside quality-scan's 39.4s: no timeout, no hang, no quadratic blow-up at 4,110 TS files. The finding VOLUME is the product finding (see the scale doc), not a scanner failure." },
@@ -669,21 +669,22 @@ export const FREE_TIER_EXPECTATIONS: FreeTierExpectation[] = [
   // placeholder credential in self-hosting docs / example docker-composes).
   {
     slug: "carbon",
-    // DELIBERATELY false for now, with the measured reason on record (2026-07-24, post-#934 fix):
-    // the 14 placeholder-cred Criticals are reclassified (the check below pins that), but the
-    // graded set still carries 11 Highs + 1 Low → F (0/100). Those 11 need their own decisions
-    // before mustNotScoreF can be truthfully asserted: 7 harvey-permissive-cors bare-wildcard hits
-    // that are all intended-public endpoints (OAuth .well-known discovery metadata — RFC 8414
-    // REQUIRES public readability — an MCP endpoint, a public file route, the documented Supabase
-    // edge-function corsHeaders idiom), 3 registry GHA workflow findings (curl|sh, run-shell
-    // injection — real CI hygiene), 1 postMessage-wildcard. Flipping this to true is tracked in
-    // #996 (the #934 remainder) — asserting it today would add a knowingly-failing weekly gate.
-    mustNotScoreF: false,
+    // #996 (the #934 remainder): flipped to true on a fresh measurement, not on the recorded
+    // numbers. Re-measured 2026-07-24 pre-change: F (0/100), graded set 11 High + 1 Low — the 11
+    // Highs were 7 harvey-permissive-cors bare-wildcard hits, all intended-public endpoints
+    // (OAuth .well-known discovery metadata — RFC 8414 REQUIRES public readability — an MCP
+    // endpoint, a public file route, the documented Supabase edge-function corsHeaders idiom),
+    // 3 registry GHA workflow findings (curl|sh ×2, run-shell-injection ×1), 1 postMessage
+    // wildcard. Post-change (same day, same pin): the CORS-bare and postMessage classes route
+    // non-grading informational, the GHA findings route to the non-grading CI/CD pipeline
+    // hygiene section — measured grade A (97/100), graded set 1 Low, all 11 former Highs still
+    // fully reported in the free output.
+    mustNotScoreF: true,
     // No M1 semantic pass and no dynamic tier has ever run against carbon (securityVerdict: NOT
     // ASSESSED), so the indicator posture is unasserted — scoreFreeTierExpectation emits an
     // explicit "not asserted" row for it.
     mustNotGradeDocContextCreds: true,
-    why: "#934's scale case: a professionally-maintained ERP whose self-hosting docs/contrib/dev-compose surface drew 14 'Critical' placeholder credentials and an F (0/100). The weekly assertion is the reclassification invariant — those hits stay REPORTED (informational) and stay OUT of the graded set — scored against a real 4k-file repo, not only starter kits.",
+    why: "#934's scale case: a professionally-maintained ERP whose self-hosting docs/contrib/dev-compose surface drew 14 'Critical' placeholder credentials and an F (0/100). The weekly assertions: the reclassification invariant (those hits stay REPORTED informational and OUT of the graded set) and, since #996, mustNotScoreF — measured 2026-07-24 post-#996 at A (97/100), graded set 1 Low (unpinned deps); the former 11 Highs (7 bare-wildcard CORS, 3 GHA workflow, 1 postMessage) are non-grading but still reported. Scored against a real 4k-file repo, not only starter kits.",
   },
 ];
 

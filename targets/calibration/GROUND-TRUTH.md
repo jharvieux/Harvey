@@ -79,7 +79,7 @@ Every secret value in these fixtures is FAKE (valid-shape only); this app is nev
 | ~~P-NEXT-CVE-RSC~~ | ~~`package.json` (`next@^14.2.5`)~~ | **RETIRED (#212) — it was a false positive.** The RSC-RCE advisory (GHSA-9qr9-h5gf-34mp) opens at `14.3.0-canary.77`, so no released 14.x is affected and the `< 14.2.35` boundary this row asserted was fabricated. Re-registered inverted as B10's `N-NEXT-RSC-14X-UNAFFECTED`. | — |
 | P-DEP-CVE | `package.json` (`lodash@4.17.11`) | OSV-Scanner over the committed `package-lock.json` (issue #65) — live run 2026-07-08 matches 7 GHSA advisories against `lodash@4.17.11` (prototype pollution among them) | review (caught) |
 | P-XSS-DSIH | `pages/post.js:8` | Semgrep `harvey-dangerously-set-inner-html` (taint: `router.query` → `__html`) | high |
-| P-CORS-WILDCARD | `pages/api/data.js:5` | Semgrep `harvey-permissive-cors` | high |
+| P-CORS-WILDCARD | `pages/api/data.js:5` | Semgrep `harvey-permissive-cors` (#996: every branch now requires the wildcard AND a credentials signal; this fixture sets both, so it stays a graded High — the bare-wildcard shapes fire `harvey-permissive-cors-bare`, high tier but routed non-grading/informational) | high |
 | P-NO-CSP | `next.config.js` | `checkMissingCsp` (no CSP in next.config/middleware/vercel.json) | review |
 | P-SSRF-FETCH | `pages/api/fetch-preview.js:5` | Semgrep `harvey-ssrf-fetch` (taint: `req.query` → `fetch`) | review |
 | P-SLOPSQUAT | `package.json` (`react-supabase-helpers`) | `checkSlopsquat` npm-registry existence check (issue #66) — live 404 against `registry.npmjs.org/react-supabase-helpers` | high (caught) |
@@ -901,7 +901,7 @@ B9's `P-SIGNED-URL-TOKEN-SRC` (a committed signed-URL token) — different file,
 | P-SERVERACTIONS-ORIGIN-WILD | `config-variants/insecure.config.js:19` | Semgrep `harvey-serveractions-origin-wild` (bare `"*"` in `allowedOrigins`) | high |
 | P-PUBLIC-DIR-SENSITIVE | `public/backup.sql`, `public/.env.production` | `checkPublicDirSensitive` (filesystem walk of `public/`) | high |
 | P-SIGNED-URL-TTL | `lib/signed-url-ttl.js:11` | Semgrep `harvey-signed-url-ttl` (`createSignedUrl($P, $N)`, `$N > 604800`) | high |
-| P-POSTMESSAGE-WILDCARD | `components/PostMessageWild.jsx:6` | Semgrep `harvey-postmessage-wildcard` (literal `"*"` targetOrigin) | high |
+| P-POSTMESSAGE-WILDCARD | `components/PostMessageWild.jsx:6` | Semgrep `harvey-postmessage-wildcard` (literal `"*"` targetOrigin; #996: still high tier / detected, but routed non-grading/informational — the data's sensitivity is a paid-LLM-tier judgment) | high |
 | P-TOKEN-IN-WEBSTORAGE | `lib/webstorage-token.js:6` | Semgrep `harvey-token-in-webstorage` (auth-token-named Web Storage key) | review |
 | P-MISSING-SRI | `components/CdnScript.jsx:6` | Semgrep `harvey-missing-sri` (external CDN `<script>` with no `integrity`) | review |
 | P-ISR-REVALIDATE-NOSECRET | `pages/api/isr-rebuild.js:8` | Semgrep `harvey-isr-revalidate-nosecret` (`res.revalidate` on a request path, no secret gate) | review |

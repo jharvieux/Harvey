@@ -237,7 +237,13 @@ rules:
 
   # postMessage() with targetOrigin '*' broadcasts the message to whatever site currently frames the
   # page — any origin can read it. When the payload is session/auth data this leaks it cross-origin.
-  # The literal "*" targetOrigin is unambiguous; an explicit origin does not match. HIGH → free count.
+  # The literal "*" targetOrigin is unambiguous; an explicit origin does not match. #996 (operator
+  # decision): the "*" is exact but whether the DATA is sensitive is a semantic judgment the
+  # mechanical tier cannot make (the common real-world shape — player/embed commands, resize
+  # events — is benign; carbon's one hit was a lesson-player route). Still ERROR + HIGH (the fact
+  # is exact, so it reaches the free report) but harveyTaxonomy routes it to the non-grading
+  # informational section; the paid LLM pass makes the sensitivity call. Taxonomy string must stay
+  # in sync with POSTMESSAGE_WILDCARD_TAXONOMY in src/scan/semgrep.ts (pinned by semgrep.test.ts).
   - id: harvey-postmessage-wildcard
     languages: [javascript, typescript]
     severity: ERROR
@@ -246,11 +252,14 @@ rules:
       owasp: ["A07:2021 - Identification and Authentication Failures"]
       confidence: HIGH
       category: security
-      harveySeverity: High
+      harveySeverity: Medium
+      harveyTaxonomy: "postMessage to any origin — a leak only if the data is sensitive (confirm)"
     message: >
       postMessage() is called with targetOrigin '*' — the message is delivered to any site that
-      frames this page, leaking it cross-origin. Pass the exact expected origin as the second
-      argument instead of '*'.
+      frames this page. That is a cross-origin leak only if the data is sensitive (session/auth
+      material), which this scan cannot verify — confirm, or pass the exact expected origin as
+      the second argument instead of '*'. Not counted in the grade; the deep scan judges the
+      payload's sensitivity.
     patterns:
       - pattern-either:
           - pattern: $W.postMessage($DATA, "*")
