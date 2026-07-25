@@ -15,7 +15,7 @@ const SCORECARD: { n: string; mod: string; fnd: string; st: Status; label: strin
   { n: "06", mod: "Maintainability", fnd: "hand-rolled auth, use a library", st: "rev", label: "Review" },
   { n: "07", mod: "Performance", fnd: "2 N+1 queries, 1 missing index", st: "crit", label: "Critical" },
   { n: "08", mod: "Test quality", fnd: "41% of tests can't actually fail", st: "rev", label: "Review" },
-  { n: "09", mod: "App Router boundaries", fnd: "server env reachable from client", st: "rev", label: "Review" },
+  { n: "09", mod: "Server→client boundaries", fnd: "server env reachable from client", st: "rev", label: "Review" },
   { n: "10", mod: "Data classification", fnd: "PII in 3 unprotected columns", st: "rev", label: "Review" },
 ];
 
@@ -28,7 +28,7 @@ const MODULES: { n: string; h: string; p: string }[] = [
   { n: "06", h: "Maintainability", p: "Hand-rolled code with a better replacement." },
   { n: "07", h: "Performance", p: "N+1 queries, missing indexes, Core Web Vitals." },
   { n: "08", h: "Test quality", p: "Which of your tests can't actually catch a bug." },
-  { n: "09", h: "App Router boundaries", p: "Server→client leaks, Server Action auth." },
+  { n: "09", h: "Server→client boundaries", p: "Server→client leaks, server-action auth. Next.js, Remix, React Router 7, TanStack Start." },
   { n: "10", h: "Data classification", p: "Every piece of PII / PHI / PCI, and where it lives." },
 ];
 
@@ -254,12 +254,12 @@ export default function Home() {
                   </tr>
                   <tr>
                     <td>Dependabot</td>
-                    <td>Flags &amp; bumps vulnerable dependencies</td>
+                    <td>Flags vulnerable dependencies &amp; names the upgrade</td>
                     <td className="c hl"><span className="yes">✓</span></td>
                   </tr>
                   <tr>
                     <td>ESLint</td>
-                    <td>Style, syntax &amp; lint rules</td>
+                    <td>Static analysis of your source for code defects</td>
                     <td className="c hl"><span className="yes">✓</span></td>
                   </tr>
                   <tr>
@@ -269,7 +269,7 @@ export default function Home() {
                   </tr>
                   <tr>
                     <td>CodeRabbit</td>
-                    <td>AI summaries of your pull requests</td>
+                    <td>AI review of the code your AI wrote</td>
                     <td className="c hl"><span className="yes">✓</span></td>
                   </tr>
                 </tbody>
@@ -390,9 +390,9 @@ export default function Home() {
               </ul>
             </div>
             <div className="card stack">
-              <h3>Prisma / Postgres</h3>
+              <h3>Prisma / Drizzle / Postgres</h3>
               <ul>
-                <li>Tenant-scope &amp; BOLA detection on Prisma queries</li>
+                <li>Tenant-scope &amp; BOLA detection on Prisma and Drizzle queries</li>
                 <li>No RLS safety net — isolation lives entirely in app code</li>
                 <li>Live cross-tenant pen-test on a seeded Postgres instance</li>
                 <li>PII/PHI/PCI mapped straight from schema.prisma</li>
@@ -401,12 +401,18 @@ export default function Home() {
           </div>
           <div className="wrap narrow">
             <p style={{ color: "var(--muted)", fontSize: "17px", margin: "22px 0 0" }}>
-              <b style={{ color: "var(--text)" }}>Prisma apps have no RLS to fall back on.</b> There&apos;s no
-              database-level tenant enforcement — the boundary between customers is whatever your query code
+              <b style={{ color: "var(--text)" }}>Prisma and Drizzle apps have no RLS to fall back on.</b> There&apos;s
+              no database-level tenant enforcement — the boundary between customers is whatever your query code
               enforces, or it isn&apos;t enforced at all. Harvey audits exactly that: static detectors that catch a
               query missing its tenant scope, plus a live pen-test that stands up Postgres, seeds two tenants, and
               tries to cross between them through your app — detection-gated, and proven end-to-end on a real Prisma
               codebase.
+            </p>
+            <p style={{ color: "var(--muted)", fontSize: "17px", margin: "18px 0 0" }}>
+              Harvey also recognises Kysely, TypeORM, Sequelize, Knex, Mongoose and raw SQL drivers, and routes them
+              the same way. Where we don&apos;t yet have a dedicated tenant-scope detector for your query layer, the
+              report says so by name rather than reporting silence as clean — the same rule that governs everything
+              below.
             </p>
           </div>
         </section>
@@ -553,7 +559,13 @@ export default function Home() {
                     <td colSpan={4}>Reads your source</td>
                   </tr>
                   <tr>
-                    <td className="cap">Findings across all ten modules</td>
+                    <td className="cap">Findings from every module source alone can run</td>
+                    <td className="dot"><span className="on">●</span></td>
+                    <td className="dot"><span className="on">●</span></td>
+                    <td className="dot feat"><span className="on">●</span></td>
+                  </tr>
+                  <tr>
+                    <td className="cap">Coverage ledger: all ten modules, status and reason</td>
                     <td className="dot"><span className="on">●</span></td>
                     <td className="dot"><span className="on">●</span></td>
                     <td className="dot feat"><span className="on">●</span></td>
@@ -638,7 +650,7 @@ export default function Home() {
               <div className="amt">$0</div>
               <ul>
                 <li><Check />Source-only, no credentials</li>
-                <li><Check />All ten modules, static findings</li>
+                <li><Check />Static findings + a ten-module coverage ledger</li>
                 <li><Check />Same-day, yours to keep</li>
               </ul>
               <a href="#scan" className="btn btn-ghost">
@@ -772,6 +784,11 @@ export default function Home() {
                 <span className="pill part">Not run</span>
               </div>
             </div>
+            <p style={{ color: "var(--muted)", fontSize: "17px", margin: "22px 0 0" }}>
+              It goes past modules. If your repo holds infrastructure code, source in a language our rules
+              don&apos;t read, or a framework we don&apos;t yet model, the report names it and counts the files
+              rather than staying quiet. What we couldn&apos;t assess is stated, not implied.
+            </p>
           </div>
         </section>
 

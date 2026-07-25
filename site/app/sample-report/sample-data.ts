@@ -96,7 +96,7 @@ export const sampleFindings: {
   },
   {
     id: "F-06",
-    module: "M9 · App Router boundaries",
+    module: "M9 · Server→client boundaries",
     title: "A Server Action mutates without checking the caller",
     severity: "Low",
     location: "app/bookings/actions.ts (cancelBooking)",
@@ -158,6 +158,6 @@ export const sampleLedger: { module: string; why: string; status: LedgerStatus }
   { module: "M6 · Maintainability", why: "indicators + reviewed verdict", status: "ran" },
   { module: "M7 · Performance", why: "code tier + DB advisors + Lighthouse", status: "ran" },
   { module: "M8 · Test quality", why: "mutation run complete", status: "ran" },
-  { module: "M9 · App Router boundaries", why: "static AST pass", status: "ran" },
+  { module: "M9 · Server→client boundaries", why: "static AST pass", status: "ran" },
   { module: "M10 · Data classification", why: "schema classification; live PII grants pending client sign-off", status: "part" },
 ];

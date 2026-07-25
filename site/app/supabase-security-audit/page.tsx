@@ -222,8 +222,8 @@ CREATE POLICY "users can read" ON documents
               </p>
               <ul>
                 <li>
-                  <b>Free scan — $0.</b> Source-only, no credentials, same-day. Ten modules&apos; worth of static
-                  findings, yours to keep.
+                  <b>Free scan — $0.</b> Source-only, no credentials, same-day. Static findings from every module
+                  source alone can run, plus the ten-module coverage ledger, yours to keep.
                 </li>
                 <li>
                   <b>Connected audit — from $500.</b> The full review with real verdicts, plus a read of your live
