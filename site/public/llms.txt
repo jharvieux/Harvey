@@ -13,7 +13,14 @@ Harvey is a productized codebase audit for AI-generated apps — an independent 
 code your AI wrote. It is not a single-issue security scanner. It reviews the whole codebase
 the way a senior quality/QA leader would and hands the founder a plain-English readiness
 verdict. Security is one of ten equally weighted modules. Coverage is deepest on Supabase,
-Next.js, and Vite, but the ten modules apply to any codebase.
+Next.js, and Vite, but the ten modules apply to any codebase. Prisma, Drizzle and other
+Postgres query layers are supported alongside Supabase.
+
+A defining principle: Harvey states what it could NOT assess. Every report carries a
+coverage ledger naming each module's status and, where it could not run, the reason —
+plus explicit rows for infrastructure code, source languages, and frameworks outside
+what the analysis covers. An unstated limitation reads as a clean bill of health, so
+nothing is silently omitted.
 
 ## The ten modules
 
@@ -25,7 +32,8 @@ Next.js, and Vite, but the ten modules apply to any codebase.
 6. Maintainability — hand-rolled code with a better replacement.
 7. Performance — N+1 queries, missing indexes, Core Web Vitals, scalability.
 8. Test quality — which tests cannot actually catch a bug (mutation-tested).
-9. App Router boundaries — server-to-client leaks, Server Action auth.
+9. Server-to-client boundaries — server-to-client leaks, server-action auth. Analysed on
+   Next.js, Remix, React Router 7 and TanStack Start.
 10. Data classification — every piece of PII/PHI/PCI, and where it lives.
 
 ## Tiers

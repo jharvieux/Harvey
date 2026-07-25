@@ -26,7 +26,7 @@ const MODULES: { n: string; h: string; p: string; tier: string }[] = [
   {
     n: "M2",
     h: "Live pen-test",
-    p: "We stand up a copy of your stack locally, seed two tenants and two users, and actually try to cross the boundary — reading tenant B's rows as tenant A, probing auth attacks, endpoints, and service seams. A finding here isn't a warning; it's the row we should never have been able to read.",
+    p: "We stand up a copy of your stack locally, seed two tenants and two users, and actually try to cross the boundary — reading tenant B's rows as tenant A, probing auth attacks, session lifecycle, endpoints, storage objects, invitations and share links, data left behind after a delete, and service seams. A finding here isn't a warning; it's the row we should never have been able to read. Every run also records what it stood up, and every access path it did not exercise, with the reason.",
     tier: "Full audit only (stands up your stack)",
   },
   {
@@ -67,8 +67,8 @@ const MODULES: { n: string; h: string; p: string; tier: string }[] = [
   },
   {
     n: "M9",
-    h: "App Router boundaries",
-    p: "Server→client data leaks, environment variables reachable from the browser, and Server Actions missing auth or input validation — the Next.js-specific ways a boundary quietly becomes public.",
+    h: "Server→client boundaries",
+    p: "Server→client data leaks, environment variables reachable from the browser, and server actions missing auth or input validation — the ways a boundary quietly becomes public. Analysed on Next.js, Remix, React Router 7 and TanStack Start; a framework we don't yet model is named in the ledger as not assessed, never run on a false premise.",
     tier: "Free (source)",
   },
   {
@@ -190,8 +190,9 @@ export default function TheAudit() {
               </p>
               <ol>
                 <li>
-                  <b>We stand up a copy of your stack.</b> Harvey provisions its own local Supabase, applies your
-                  migrations, and boots your app — no contact with your production environment.
+                  <b>We stand up a copy of your stack.</b> Harvey provisions its own local Supabase — or plain
+                  Postgres for a Prisma app — applies your migrations, and boots your app. No contact with your
+                  production environment.
                 </li>
                 <li>
                   <b>We seed two tenants and two users.</b> Two separate accounts with separate data, exactly like two
@@ -206,6 +207,11 @@ export default function TheAudit() {
                   <b>The finding is the evidence.</b> If the boundary holds, we record that it holds. If it doesn&apos;t,
                   the report shows the actual row we retrieved that we never should have been able to see. Proof, not a
                   warning.
+                </li>
+                <li>
+                  <b>And we record what we stood up.</b> A local copy built from your code and migrations is not your
+                  production configuration, so every run states what was reconstructed, from which commit, and which
+                  access paths it did not exercise. You get the boundary of the evidence along with the evidence.
                 </li>
               </ol>
               <p>

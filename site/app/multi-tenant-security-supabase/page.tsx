@@ -158,8 +158,11 @@ CREATE POLICY "read" ON documents
               </ol>
               <p>
                 This cross-tenant test is exactly what Harvey&apos;s live pen-test automates: it stands up a copy of your
-                stack, seeds two tenants, and runs the full read-and-write matrix across your API, routes, and functions.
-                A source scan flags the suspicious policy; the live test proves whether it actually leaks.
+                stack, seeds two tenants, and runs the read-and-write matrix across your REST and GraphQL APIs and your
+                app routes, then probes the paths a matrix alone misses — anon-callable privileged functions, storage
+                objects, invitations and share links, and data left behind after a delete. A source scan flags the
+                suspicious policy; the live test proves whether it actually leaks. Whatever the run could not reach is
+                listed as unprobed, with the reason.
               </p>
 
               <h2>A quick self-audit</h2>

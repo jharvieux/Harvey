@@ -97,7 +97,7 @@ export default function Pricing() {
                 </li>
                 <li>
                   <Check />
-                  All ten modules, static findings
+                  Static findings + a ten-module coverage ledger
                 </li>
                 <li>
                   <Check />
@@ -238,6 +238,15 @@ export default function Pricing() {
                 repeat-customer diff automates it, so it&apos;s cheap for us and high-trust for you.
               </p>
             </div>
+            <div className="addons" style={{ marginTop: "14px" }}>
+              <span className="addon-tag">Included</span>
+              <p>
+                <b>Machine-readable exports.</b> Ask and your findings also ship as SARIF — the format GitHub code
+                scanning and security tooling ingest — plus a CycloneDX software bill of materials of your
+                dependencies, the artifact enterprise buyers ask for. The coverage ledger travels inside the SARIF,
+                so a module that didn&apos;t run can&apos;t disappear into &quot;no results.&quot;
+              </p>
+            </div>
           </div>
         </section>
 
@@ -272,7 +281,13 @@ export default function Pricing() {
                     <td colSpan={4}>Reads your source</td>
                   </tr>
                   <tr>
-                    <td className="cap">Findings across all ten modules</td>
+                    <td className="cap">Findings from every module source alone can run</td>
+                    <td className="dot"><span className="on">●</span></td>
+                    <td className="dot"><span className="on">●</span></td>
+                    <td className="dot feat"><span className="on">●</span></td>
+                  </tr>
+                  <tr>
+                    <td className="cap">Coverage ledger: all ten modules, status and reason</td>
                     <td className="dot"><span className="on">●</span></td>
                     <td className="dot"><span className="on">●</span></td>
                     <td className="dot feat"><span className="on">●</span></td>
