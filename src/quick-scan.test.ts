@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Finding, PrecisionTier, Severity } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
+import { CI_PIPELINE_CATEGORY, CORS_BARE_WILDCARD_TAXONOMY, POSTMESSAGE_WILDCARD_TAXONOMY } from "./scan/semgrep.js";
 import { DOC_CONTEXT_CREDENTIAL_TAXONOMY } from "./scan/secrets.js";
 import {
   buildQuickScanReport,
@@ -109,14 +110,57 @@ describe("grade computation", () => {
     expect(computeGrade([finding("c", "Critical", "high")])).toEqual({ grade: "F", score: 50 });
   });
 
-  it("one High is a B, two Highs a D", () => {
+  // #244 promises, consciously re-recorded under #996 (decision D): "two Highs a D" now holds
+  // for two DISTINCT problem classes; two copies of the SAME class are one problem plus a small
+  // increment (C), not double-counted.
+  it("one High is a B, two distinct-class Highs a D", () => {
     expect(computeGrade([finding("h", "High", "high")]).grade).toBe("B");
-    expect(computeGrade([finding("h1", "High", "high"), finding("h2", "High", "high")]).grade).toBe("D");
+    expect(
+      computeGrade([finding("h1", "High", "high", { taxonomy: "cls-1" }), finding("h2", "High", "high", { taxonomy: "cls-2" })]).grade,
+    ).toBe("D");
   });
 
   it("score floors at 0, never negative", () => {
-    const many = Array.from({ length: 5 }, (_, i) => finding(`c${i}`, "Critical", "high"));
+    const many = Array.from({ length: 5 }, (_, i) => finding(`c${i}`, "Critical", "high", { taxonomy: `cls-${i}` }));
     expect(computeGrade(many)).toEqual({ grade: "F", score: 0 });
+  });
+});
+
+// #996 (decision D): the grade counts DISTINCT problem classes (taxonomy), not copies — full
+// penalty for a class's first instance, +3 per repeat. Fixes "7 copies of one misconfig = F"
+// (carbon) while keeping three genuinely different Highs an F.
+describe("distinct-class penalty curve (#996)", () => {
+  const high = (id: string, taxonomy: string): Finding => finding(id, "High", "high", { taxonomy });
+
+  it("two same-class Highs are one problem plus change — C, not D", () => {
+    expect(computeGrade([high("h1", "same"), high("h2", "same")])).toEqual({ grade: "C", score: 77 });
+  });
+
+  it("the carbon shape — 7 copies of one High-class misconfig — is a D, not an automatic F", () => {
+    const copies = Array.from({ length: 7 }, (_, i) => high(`h${i}`, "wildcard-cors"));
+    expect(computeGrade(copies)).toEqual({ grade: "D", score: 62 }); // 20 + 6×3
+  });
+
+  it("three DISTINCT High classes still fail the repo", () => {
+    expect(computeGrade([high("a", "cls-1"), high("b", "cls-2"), high("c", "cls-3")]).grade).toBe("F");
+  });
+
+  it("repeats of a Critical still sink the grade — the increment never resurrects a failed repo", () => {
+    const copies = Array.from({ length: 3 }, (_, i) => finding(`c${i}`, "Critical", "high", { taxonomy: "same" }));
+    expect(computeGrade(copies).grade).toBe("F"); // 50 + 2×3
+  });
+
+  it("a repeat never costs more than a first instance — Low repeats stay at the Low penalty", () => {
+    expect(computeGrade([finding("l1", "Low", "high", { taxonomy: "same" }), finding("l2", "Low", "high", { taxonomy: "same" })])).toEqual({
+      grade: "A",
+      score: 94, // 3 + min(3, 3)
+    });
+  });
+
+  it("charges the class's full penalty on its most severe instance regardless of input order", () => {
+    const a = [finding("lo", "Low", "high", { taxonomy: "same" }), finding("hi", "High", "high", { taxonomy: "same" })];
+    expect(computeGrade(a)).toEqual(computeGrade([...a].reverse()));
+    expect(computeGrade(a).score).toBe(77); // 20 full + min(3, 3), never 3 full + min(20, 3)
   });
 });
 
@@ -236,6 +280,47 @@ describe("doc/example placeholder credentials do not tank the grade (#934)", () 
   it("never picks a doc-context cred as the teaser over a graded finding", () => {
     const report = buildQuickScanReport([docContextCred("AAA-doc"), finding("zzz-real", "Low", "high")]);
     expect(report.sample?.id).toBe("zzz-real");
+  });
+});
+
+// #996 — the carbon remainder. The three classes the operator ruled out of the grade, each
+// two-sided: it must stay REPORTED (informational/CI section) and must stay OUT of the grade.
+describe("#996 non-grading classes stay reported, never graded", () => {
+  const corsWild = (id: string): Finding =>
+    finding(id, "Low", "high", { taxonomy: CORS_BARE_WILDCARD_TAXONOMY, category: "Next.js/web footgun" });
+  const postMsg = (id: string): Finding =>
+    finding(id, "Medium", "high", { taxonomy: POSTMESSAGE_WILDCARD_TAXONOMY, category: "Next.js/web footgun" });
+  const ciHigh = (id: string): Finding => finding(id, "High", "high", { category: CI_PIPELINE_CATEGORY, taxonomy: `gha-${id}` });
+
+  it("the carbon shape — 7 bare-wildcard CORS + 3 CI Highs + 1 postMessage — grades A, not F", () => {
+    const report = buildQuickScanReport([
+      ...Array.from({ length: 7 }, (_, i) => corsWild(`cors-${i}`)),
+      ...Array.from({ length: 3 }, (_, i) => ciHigh(`ci-${i}`)),
+      postMsg("pm-1"),
+    ]);
+    expect(report.grade).toBe("A");
+    expect(report.total).toBe(0);
+    expect(report.informational).toHaveLength(11); // every one still reported
+  });
+
+  it("CI findings keep their real severity in the report — reported, never 'not assessed'", () => {
+    const report = buildQuickScanReport([ciHigh("inj")]);
+    expect(report.informational[0]?.severity).toBe("High");
+    expect(report.informational[0]?.location.length).toBeGreaterThan(0);
+  });
+
+  it("wildcard CORS WITH credentials still grades — the demotion is only the bare shape", () => {
+    // The graded rule keeps its check_id taxonomy, which is not in the non-grading set.
+    const graded = finding("creds", "High", "high", { taxonomy: "src.scan.rules.semgrep.harvey-permissive-cors", category: "Next.js/web footgun" });
+    const report = buildQuickScanReport([graded, corsWild("bare")]);
+    expect(report.total).toBe(1);
+    expect(report.grade).toBe("B");
+    expect(report.informational.map((f) => f.id)).toEqual(["bare"]);
+  });
+
+  it("none of the three is ever the teaser over a graded finding", () => {
+    const report = buildQuickScanReport([corsWild("aaa"), ciHigh("aab"), postMsg("aac"), finding("zzz", "Low", "high")]);
+    expect(report.sample?.id).toBe("zzz");
   });
 });
 

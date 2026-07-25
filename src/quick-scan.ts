@@ -19,6 +19,7 @@
 import type { DependencyReachability, Finding, Severity } from "./findings.js";
 import { SEVERITIES } from "./findings.js";
 import { byReachabilityThenSeverity } from "./scan/dep-reachability.js";
+import { CI_PIPELINE_CATEGORY, CORS_BARE_WILDCARD_TAXONOMY, POSTMESSAGE_WILDCARD_TAXONOMY } from "./scan/semgrep.js";
 import { DOC_CONTEXT_CREDENTIAL_TAXONOMY } from "./scan/secrets.js";
 
 export type Grade = "A" | "B" | "C" | "D" | "F";
@@ -115,7 +116,12 @@ const GATED_CAPABILITIES = [
 // "License compliance" (#456) joins the set for the same reason: a copyleft SPDX match or a
 // missing-license disclosure is a legal judgment about redistribution terms, not a security
 // verdict — surfaced in full, never auto-failing the grade.
-const NON_GRADING_CATEGORIES = new Set(["Dependency CVE", "License compliance"]);
+// "CI/CD pipeline hygiene" (#996) joins for the same fact-vs-exploitability split: a curl|sh or
+// expression-injection in a workflow file is exact about the pattern, but exploitability hinges
+// on repository/trigger settings the scan cannot see — and the headline grade presents itself as
+// a grade of the APP's code. Reported in full (its own free-report section, never "not
+// assessed"), outside the grade.
+const NON_GRADING_CATEGORIES = new Set(["Dependency CVE", "License compliance", CI_PIPELINE_CATEGORY]);
 
 // #934: the finding-level version of the same fact-vs-exploitability split, keyed on taxonomy
 // because the category ("Secret exposure") still carries real graded Criticals. A credential-FORMAT
@@ -123,7 +129,12 @@ const NON_GRADING_CATEGORIES = new Set(["Dependency CVE", "License compliance"])
 // string and near-certainly a shipped placeholder — grading it produced carbon's false F (0/100),
 // 14 "Criticals" that were all self-hosting docs and example docker-composes. Reported in full,
 // never graded; a TruffleHog live-VERIFIED secret never carries this taxonomy and grades as before.
-const NON_GRADING_TAXONOMIES = new Set([DOC_CONTEXT_CREDENTIAL_TAXONOMY]);
+// #996 adds the two confirm-intent classes measured as grade-level FPs on carbon: a bare wildcard
+// CORS header with no credentials signal (the correct shape for a deliberately-public endpoint —
+// 7/7 of carbon's graded CORS Highs; wildcard+credentials and reflected-origin still grade), and
+// postMessage(data, "*") (a leak only if the data is sensitive — a semantic judgment reserved to
+// the paid LLM tier). Both stay fully reported with the reason stated on the finding.
+const NON_GRADING_TAXONOMIES = new Set([DOC_CONTEXT_CREDENTIAL_TAXONOMY, CORS_BARE_WILDCARD_TAXONOMY, POSTMESSAGE_WILDCARD_TAXONOMY]);
 
 const isNonGrading = (f: Finding): boolean =>
   (NON_GRADING_CATEGORIES.has(f.category) || NON_GRADING_TAXONOMIES.has(f.taxonomy)) && !f.exploitabilityVerified;
@@ -221,10 +232,33 @@ function categorize(findings: Finding[]): { category: string; count: number }[] 
     .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category));
 }
 
+// #996 (decision D): the grade penalizes DISTINCT problem classes, not copies. The first
+// instance of a class (keyed by taxonomy) carries its full severity penalty; each repeat of the
+// SAME class adds this small increment instead — one misconfiguration copy-pasted seven times is
+// one problem plus change, not seven (carbon: 7 identical CORS hits were an automatic F, while
+// three genuinely different Highs still sum to one). Capped at the severity's own penalty so a
+// repeat can never cost more than a first instance (relevant for the zero-penalty severities).
+// Repeats are still listed and counted in full — only the arithmetic stops multiplying.
+const REPEAT_PENALTY = 3;
+
 // Grades the HYGIENE classes only — the caller passes selectGradedFindings' output. Passing an
 // ungraded class here would silently re-create the #213 inversion.
+// Pinned promises (#244, consciously re-recorded under #996): 1 Critical → F, 1 High → B, and
+// two DISTINCT-class Highs → D. What #996 changed: two SAME-class Highs are now C, not D.
 export function computeGrade(findings: Finding[]): { grade: Grade; score: number } {
-  const penalty = findings.reduce((sum, f) => sum + SEVERITY_PENALTY[f.severity], 0);
+  const byClass = new Map<string, Finding[]>();
+  for (const f of findings) {
+    const list = byClass.get(f.taxonomy) ?? [];
+    list.push(f);
+    byClass.set(f.taxonomy, list);
+  }
+  let penalty = 0;
+  for (const instances of byClass.values()) {
+    // Most severe instance charges the class's full penalty, deterministically, whatever order
+    // the findings arrived in; the rest are repeats.
+    const penalties = instances.map((f) => SEVERITY_PENALTY[f.severity]).sort((a, b) => b - a);
+    penalty += (penalties[0] ?? 0) + penalties.slice(1).reduce((sum, p) => sum + Math.min(p, REPEAT_PENALTY), 0);
+  }
   const score = Math.max(0, 100 - penalty);
   const grade: Grade = score >= 90 ? "A" : score >= 80 ? "B" : score >= 70 ? "C" : score >= 60 ? "D" : "F";
   return { grade, score };

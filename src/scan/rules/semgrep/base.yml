@@ -151,8 +151,14 @@ rules:
               - pattern: "<$EL dangerouslySetInnerHTML={{ __html: $VAL }}>...</$EL>"
           - focus-metavariable: $VAL
 
-  # Permissive CORS: wildcard Access-Control-Allow-Origin. Combined with Allow-Credentials this
-  # defeats same-origin protection for authenticated requests. HIGH → free count.
+  # Permissive CORS: wildcard Access-Control-Allow-Origin TOGETHER WITH a credentials signal —
+  # the combination that defeats same-origin protection for authenticated requests. HIGH → free
+  # count, graded. #996 made every branch consistent with the #614/#663 both-signals design: the
+  # setHeader/headers.set/object-literal shapes now also require Allow-Credentials alongside the
+  # wildcard. A bare wildcard with NO credentials signal — the common, intended public-endpoint
+  # shape (OAuth .well-known discovery per RFC 8414, public file routes, the Supabase edge-function
+  # corsHeaders idiom; measured 7/7 FP on crbnos/carbon) — routes to harvey-permissive-cors-bare
+  # below: reported, never graded.
   - id: harvey-permissive-cors
     languages: [typescript, javascript]
     severity: ERROR
@@ -163,17 +169,36 @@ rules:
       category: security
       harveySeverity: High
     message: >
-      Access-Control-Allow-Origin is wildcarded. If credentials are also allowed on this
-      response, this defeats CORS's same-origin protection for authenticated requests.
+      Access-Control-Allow-Origin is wildcarded AND credentials are allowed on the same
+      response — any site can read authenticated responses cross-origin, defeating CORS's
+      same-origin protection.
     patterns:
       - pattern-either:
-          - pattern: $RES.setHeader("Access-Control-Allow-Origin", "*")
-          - pattern: $RES.headers.set("Access-Control-Allow-Origin", "*")
+          # #996: the setHeader / headers.set shapes require the credentials header in the same
+          # statement sequence (either order) — the wildcard alone is the public-endpoint shape.
+          - pattern: |
+              $RES.setHeader("Access-Control-Allow-Origin", "*")
+              ...
+              $RES.setHeader("Access-Control-Allow-Credentials", "true")
+          - pattern: |
+              $RES.setHeader("Access-Control-Allow-Credentials", "true")
+              ...
+              $RES.setHeader("Access-Control-Allow-Origin", "*")
+          - pattern: |
+              $RES.headers.set("Access-Control-Allow-Origin", "*")
+              ...
+              $RES.headers.set("Access-Control-Allow-Credentials", "true")
+          - pattern: |
+              $RES.headers.set("Access-Control-Allow-Credentials", "true")
+              ...
+              $RES.headers.set("Access-Control-Allow-Origin", "*")
           # #570: App Router idiom — the wildcard is declared in an object-literal headers map
           # (`const CORS_HEADERS = { "Access-Control-Allow-Origin": "*", ... }`) then passed to
-          # NextResponse.json(body, { headers }) or returned from a Deno edge function. The object
-          # literal itself carries the wildcard regardless of where it is later spread.
-          - pattern: '{ ..., "Access-Control-Allow-Origin": "*", ... }'
+          # NextResponse.json(body, { headers }) or returned from a Deno edge function. #996:
+          # graded only when the same literal also allows credentials.
+          - patterns:
+              - pattern: '{ ..., "Access-Control-Allow-Origin": "*", ... }'
+              - pattern: '{ ..., "Access-Control-Allow-Credentials": "true", ... }'
           # #614: the Express `cors` middleware config idiom — `cors({ origin: "*", credentials:
           # true })`. A wildcard origin TOGETHER WITH credentials is the dangerous combination (the
           # cors lib reflects the origin, defeating same-origin protection for authenticated
@@ -189,6 +214,59 @@ rules:
           - patterns:
               - pattern: "{ ..., origin: true, ... }"
               - pattern: "{ ..., credentials: true, ... }"
+
+  # #996 (operator decision on the #934 remainder): the bare wildcard — no credentials signal —
+  # is fully REPORTED but NEVER graded. It is the correct configuration for a deliberately-public
+  # endpoint (RFC 8414 OAuth discovery metadata REQUIRES public readability; measured on carbon:
+  # all 7 graded bare-wildcard Highs were intended-public endpoints — FP rate 7/7). Still ERROR +
+  # HIGH confidence (the FACT is exact) so it reaches the free report; metadata.harveyTaxonomy
+  # routes it to the non-grading informational section (NON_GRADING_TAXONOMIES, src/quick-scan.ts)
+  # with the confirm-intent reason stated. The taxonomy string must stay in sync with
+  # CORS_BARE_WILDCARD_TAXONOMY in src/scan/semgrep.ts (pinned by semgrep.test.ts).
+  # NOTE: the cors()-middleware bare shapes (origin:"*"/origin:true, no credentials) stay DARK, not
+  # informational — they are pinned as calibration negatives (N-CORS-EXPRESS-NOCREDS,
+  # N-CORS-EXPRESS-ORIGINTRUE-NOCREDS): a high-tier hit there, even non-grading, would be an FP in
+  # the free report. Only the three shapes that previously GRADED a bare wildcard are re-tiered.
+  - id: harvey-permissive-cors-bare
+    languages: [typescript, javascript]
+    severity: ERROR
+    metadata:
+      cwe: ["CWE-942: Permissive Cross-domain Policy with Untrusted Domains"]
+      owasp: ["A05:2021 - Security Misconfiguration"]
+      confidence: HIGH
+      category: security
+      harveySeverity: Low
+      harveyTaxonomy: "Permissive CORS — wildcard without credentials (confirm intent)"
+    message: >
+      Access-Control-Allow-Origin is wildcarded with no credentials signal on this response.
+      Any site may read it, which is the correct configuration for a deliberately-public
+      endpoint — confirm this endpoint is meant to be public. Not counted in the grade: without
+      credentials the response cannot be read as a logged-in user cross-origin.
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $RES.setHeader("Access-Control-Allow-Origin", "*")
+              - pattern-not-inside: |
+                  $RES.setHeader("Access-Control-Allow-Origin", "*")
+                  ...
+                  $RES.setHeader("Access-Control-Allow-Credentials", "true")
+              - pattern-not-inside: |
+                  $RES.setHeader("Access-Control-Allow-Credentials", "true")
+                  ...
+                  $RES.setHeader("Access-Control-Allow-Origin", "*")
+          - patterns:
+              - pattern: $RES.headers.set("Access-Control-Allow-Origin", "*")
+              - pattern-not-inside: |
+                  $RES.headers.set("Access-Control-Allow-Origin", "*")
+                  ...
+                  $RES.headers.set("Access-Control-Allow-Credentials", "true")
+              - pattern-not-inside: |
+                  $RES.headers.set("Access-Control-Allow-Credentials", "true")
+                  ...
+                  $RES.headers.set("Access-Control-Allow-Origin", "*")
+          - patterns:
+              - pattern: '{ ..., "Access-Control-Allow-Origin": "*", ... }'
+              - pattern-not: '{ ..., "Access-Control-Allow-Credentials": "true", ... }'
 
   # Service-role key referenced inside a Client Component ("use client"). Gating on the
   # "use client" directive is the high-precision signal: it means the module (and the key) ships

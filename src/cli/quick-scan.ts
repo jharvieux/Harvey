@@ -36,6 +36,7 @@ import { writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { relativizeScanScope } from "../scan/scan-scope.js";
+import { CI_PIPELINE_CATEGORY } from "../scan/semgrep.js";
 import { buildSbom } from "../sbom.js";
 import { buildQuickScanReport, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
 import { toSarif } from "../sarif.js";
@@ -123,19 +124,45 @@ function render(r: QuickScanReport): string {
     }
   }
 
-  if (r.informational.length > 0) {
+  // #996: workflow-file findings are real and fully reported — but they grade the CI pipeline,
+  // not the app, and exploitability depends on repo/trigger settings the scan can't see, so they
+  // get their own clearly-labeled non-grading section (never folded into "not assessed" — these
+  // files WERE assessed). Severity labels are kept: the section's framing carries the "not
+  // graded", and a shell-injection finding softened to [Info] would undersell a real CI risk.
+  const ciFindings = r.informational.filter((f) => f.category === CI_PIPELINE_CATEGORY);
+  const informational = r.informational.filter((f) => f.category !== CI_PIPELINE_CATEGORY);
+
+  if (ciFindings.length > 0) {
+    lines.push("  ── CI/CD pipeline hygiene — reported, not graded ─────────────");
+    lines.push("  Findings in your GitHub Actions workflows. Real, and worth fixing — but they");
+    lines.push("  grade your build pipeline, not your application code, and whether they are");
+    lines.push("  exploitable depends on repository settings (who can open PRs, which events");
+    lines.push("  trigger the workflow) that a source scan cannot see. Not counted in the grade.");
+    lines.push("");
+    for (const f of ciFindings) {
+      lines.push(`    [${f.severity}] ${f.title}`);
+      lines.push(`      ${f.location}`);
+      lines.push(...wrap(`Why it matters: ${f.risk}`, "      "));
+      lines.push("");
+    }
+  }
+
+  if (informational.length > 0) {
     lines.push("  ── Informational — not graded ─────────────");
     lines.push("  Facts we verified but won't grade you on: dependency versions matching a");
-    lines.push("  published CVE range (a version match is not proof of exploitability) and");
+    lines.push("  published CVE range (a version match is not proof of exploitability),");
     lines.push("  credential-shaped strings in docs/example deployment files (near-certainly");
-    lines.push("  placeholders, stated per finding). The deep scan triages each one.");
+    lines.push("  placeholders), and confirm-intent configuration — wildcard CORS with no");
+    lines.push("  credentials signal (correct for public endpoints) or a wildcard postMessage");
+    lines.push("  (a leak only if the data is sensitive). Reason stated per finding. The deep");
+    lines.push("  scan triages each one.");
     // #874: the list is ordered by whether your code actually imports the package. Say so, or the
     // ordering looks arbitrary — and say what it is NOT, or "not imported" reads as "safe".
     lines.push("  CVE rows are ordered by reachability: packages your code imports first.");
     lines.push("");
     // Deliberately labeled [Info] rather than each row's underlying severity: an ungraded row
     // printed "[Critical]" would talk over the section's own "not graded" framing (#213).
-    for (const f of r.informational) {
+    for (const f of informational) {
       lines.push(`    [Info] ${f.title}`);
       lines.push(`      ${f.location}`);
       if (f.reachability) lines.push(...wrap(`Reachability (${f.reachability.status}): ${f.reachability.justification}`, "      "));

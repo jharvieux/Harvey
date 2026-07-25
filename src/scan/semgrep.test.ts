@@ -1,8 +1,19 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, runSemgrep, semgrepUnavailableFinding, type SemgrepOutput } from "./semgrep.js";
+import {
+  checkMissingCsp,
+  checkPublicDirSensitive,
+  CI_PIPELINE_CATEGORY,
+  CORS_BARE_WILDCARD_TAXONOMY,
+  parseSemgrepFindings,
+  POSTMESSAGE_WILDCARD_TAXONOMY,
+  runSemgrep,
+  semgrepUnavailableFinding,
+  type SemgrepOutput,
+} from "./semgrep.js";
 
 // #950: semgrep absent from PATH must degrade to a disclosed coverage gap, not an uncaught
 // ENOENT crash (mirrors the osv-scanner pattern, #512). Only "semgrep" is faked here — every
@@ -105,6 +116,57 @@ describe("parseSemgrepFindings", () => {
     expect(findings[0]?.owasp).toBeUndefined();
   });
 
+  it("#996: routes a workflow-file finding to the CI/CD pipeline category with the routing reason on the finding", () => {
+    const output: SemgrepOutput = {
+      results: [
+        {
+          check_id: "yaml.github-actions.security.run-shell-injection.run-shell-injection",
+          path: ".github/workflows/release.yml",
+          start: { line: 38 },
+          extra: { message: "shell injection", severity: "ERROR", metadata: { confidence: "HIGH" } },
+        },
+      ],
+    };
+    const f = parseSemgrepFindings(output)[0];
+    expect(f?.category).toBe(CI_PIPELINE_CATEGORY);
+    expect(f?.severity).toBe("High"); // severity kept — the section is non-grading, the finding is not softened
+    expect(f?.precisionTier).toBe("high"); // still reaches the free report
+    expect(f?.impact).toContain("outside the app-hygiene grade");
+  });
+
+  it("#996: a non-workflow finding keeps the app category untouched", () => {
+    const output: SemgrepOutput = {
+      results: [
+        {
+          check_id: "harvey-permissive-cors",
+          path: "app/api/route.ts",
+          extra: { message: "cors", severity: "ERROR", metadata: { confidence: "HIGH", harveySeverity: "High" } },
+        },
+      ],
+    };
+    expect(parseSemgrepFindings(output)[0]?.category).toBe("Next.js/web footgun");
+  });
+
+  it("#996: metadata.harveyTaxonomy overrides the path-prefixed check_id as the finding's taxonomy", () => {
+    const output: SemgrepOutput = {
+      results: [
+        {
+          check_id: "src.scan.rules.semgrep.harvey-permissive-cors-bare",
+          path: "app/api/public/route.ts",
+          extra: {
+            message: "bare wildcard",
+            severity: "ERROR",
+            metadata: { confidence: "HIGH", harveySeverity: "Low", harveyTaxonomy: CORS_BARE_WILDCARD_TAXONOMY },
+          },
+        },
+      ],
+    };
+    const f = parseSemgrepFindings(output)[0];
+    expect(f?.taxonomy).toBe(CORS_BARE_WILDCARD_TAXONOMY);
+    expect(f?.severity).toBe("Low");
+    expect(f?.precisionTier).toBe("high");
+  });
+
   it("#976: normalizes a registry rule's bare-STRING cwe/owasp to an array (a string reached .cwe.map and threw)", () => {
     const output: SemgrepOutput = {
       results: [
@@ -119,6 +181,21 @@ describe("parseSemgrepFindings", () => {
     const findings = parseSemgrepFindings(output);
     expect(findings[0]?.cwe).toEqual(["CWE-89: SQL Injection"]);
     expect(findings[0]?.owasp).toEqual(["A03:2021 - Injection"]);
+  });
+});
+
+// #996: the canonical non-grading taxonomies live twice — as exported constants (what
+// NON_GRADING_TAXONOMIES keys on) and as metadata.harveyTaxonomy in the rule YAML (what the
+// findings actually carry). A drift between them silently re-grades the class, so pin the sync.
+describe("#996: rule YAML harveyTaxonomy stays in sync with the exported constants", () => {
+  const ruleDir = fileURLToPath(new URL("./rules/semgrep/", import.meta.url));
+
+  it("harvey-permissive-cors-bare declares CORS_BARE_WILDCARD_TAXONOMY", () => {
+    expect(readFileSync(join(ruleDir, "base.yml"), "utf8")).toContain(`harveyTaxonomy: "${CORS_BARE_WILDCARD_TAXONOMY}"`);
+  });
+
+  it("harvey-postmessage-wildcard declares POSTMESSAGE_WILDCARD_TAXONOMY", () => {
+    expect(readFileSync(join(ruleDir, "xss.yml"), "utf8")).toContain(`harveyTaxonomy: "${POSTMESSAGE_WILDCARD_TAXONOMY}"`);
   });
 });
 
