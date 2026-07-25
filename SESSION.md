@@ -2,21 +2,29 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-24 (evening 3) — #994: the six functional docs (M1 semantic brief, FP catalog, M6 brief, D-091 catalog, audit scope authority, vuln-seam-app answer key) moved from `docs/` to a new `briefs/` dir (+ the answer key to `targets/vuln-seam-app/ANSWER-KEY.md`). See the block immediately below. Earlier blocks remain historical._
+_Last updated: 2026-07-24 (evening 3) — issue-sweep: **9 PRs merged, 11 issues closed, 6 filed → net −5**. Docs consolidated to `briefs/`, CI router simplified, all CLAUDE.md relays APPLIED. See the block immediately below. Earlier blocks remain historical._
 
-## 2026-07-24 (evening 3) — #994: functional docs consolidated to `briefs/`
+## 2026-07-24 (evening 3) — issue-sweep: M2/fix-pipeline/calibration/taint/docs → 9 PRs merged
 
-`docs/scan-extras.txt`, `docs/fp-rules.txt`, `docs/quality-extras.txt`, `docs/runbooks/anti-patterns.md`, and `docs/audit-modules.md` now live at `briefs/scan-extras.txt`, `briefs/fp-rules.txt`, `briefs/quality-extras.txt`, `briefs/anti-patterns.md`, `briefs/audit-modules.md`. `docs/design/vuln-seam-app-answer-key.md` moved to `targets/vuln-seam-app/ANSWER-KEY.md` (fixture-adjacent, mirrors `targets/calibration/GROUND-TRUTH.md`). Every `src/`/`tools/` runtime path and CLI-invocation-example reference was updated and re-verified (`pnpm verify` green). **NOT done (supervised, needs operator):** the CI tier router (`.github/workflows/ci.yml`) simplification this consolidation was meant to unlock — split to a remainder issue. **NOT done (out of this issue's named scope):** ~26 `docs/**.md` prose files still cite the old paths in passing (grep `docs/scan-extras\|docs/fp-rules\|docs/quality-extras\|docs/audit-modules\|anti-patterns.md\|vuln-seam-app-answer-key` under `docs/`) — human-owned prose, not auto-edited; low-priority cleanup. CLAUDE.md falsified-sentence relays are below.
+**Merged:** #1017 (M9 source-recall tier, #1011) · #1018 (Realtime wire shape proven live, #1003) · #1019 (external-target M2, #965) · #1020 (CORS/GHA/postMessage re-tier + class-based grade curve, #996) · #1022 (semgrep resolver + §8 gate, #1012/#1009) · #1024 (FK-graph seeding + API-token probe, #997/#1001) · #1028 (a2 validator-guard taint, #989) · #1026 (docs → `briefs/`, #994) · #1031 (CI router + CLAUDE.md relays, #1025).
 
-### ⚠️ CLAUDE.md RELAYS OWED (agents can't edit CLAUDE.md — operator to apply)
-1. Opening paragraph: "the audit briefs and venture docs (`docs/`)" → the audit briefs moved; should read "the venture docs (`docs/`), the functional audit briefs (`briefs/`)".
-2. "Full spec: `docs/audit-modules.md`, `docs/go-no-go.md`. Briefs: `docs/scan-extras.txt`, `docs/quality-extras.txt`, `docs/fp-rules.txt`." → `briefs/audit-modules.md`, `docs/go-no-go.md` (unchanged). Briefs: `briefs/scan-extras.txt`, `briefs/quality-extras.txt`, `briefs/fp-rules.txt`.
-3. "Authoritative scope: `docs/audit-modules.md`." → `briefs/audit-modules.md`.
-4. M1 table row's `/vuln-scan --extra docs/scan-extras.txt ... /triage --fp-rules docs/fp-rules.txt` → `briefs/` for both.
-5. M6 table row's "assembles the `docs/quality-extras.txt` brief" → `briefs/quality-extras.txt`.
-6. "Reference material in `docs/runbooks/`: `anti-patterns.md` (the D-091 catalog ...), `slop-detection.md`, `pr-self-review.md`, `flaky-test-policy.md`." → anti-patterns.md moved out; split into two sentences (see PR #994 body for exact wording).
-7. "`docs/` — briefs, specs, venture docs. `docs/runbooks/` — operational references." → briefs moved out of `docs/`; add a `briefs/` line to File conventions.
-8. Sensitive-paths list doesn't yet classify `briefs/` — operator should decide whether it needs the same explicit-naming protection as `docs/*.txt`/`docs/*.md`, since it now holds M1/M6 brief content that shapes detection judgment even though it isn't GTM/positioning IP.
+### Open items carried forward
+- **#1021** — fix-pipeline §8: LLM implementer diffs + detectors for classes 1/2/5. The diff generator was deliberately NOT stubbed; classes 1/2/5 have **no detector at all** (re-measured — the old "unplanted fixtures" reason was wrong). Build order is detector → fixture, now locked as a test.
+- **#1023** — M2 guest / cross-org collaborator identity class. Needs a third principal: widens the seeder's `"a"|"b"` discriminator and the closed `PersonaId` union.
+- **#1027** — (a2) validator guards: projection-guards + non-allowlist guard forms. Field magnitude unmeasured (BenchProctor is synthetic; that gap is #960).
+- **#1029** — M2 Realtime **Broadcast/Presence + RLS on `realtime.messages` are unprobed**. The `M2-REALTIME-SCOPE` row currently speaks only to `postgres_changes`, so a reader can over-read the Realtime verdict.
+- **#1030** — Realtime probe covers only `cfg.tables[0]`, not every published table (disclosed in-finding, not fixed).
+
+### ⚠️ OPEN OPERATOR DECISION
+**Should `briefs/` get the same explicit-file-naming protection as `docs/*.txt`/`docs/*.md` in CLAUDE.md's sensitive-paths list?** It now holds the M1/M6 briefs, FP catalog, D-091 catalog and the audit scope authority — content that shapes detection judgment — though it is not GTM/positioning IP. The 2026-07-24 permission was scoped to that one move, **not** a standing grant. Deliberately not decided by an agent.
+
+### Dropped as cosmetic (recorded on #994, veto to re-file)
+~26 `docs/**.md` prose files and 4 calibration-corpus comments still cite pre-move paths; `reports/atc/findings.atc-2026-07-17.json` untouched as client data. None is a runtime path, so none can cause a silent tool failure.
+
+### Notes worth keeping
+- **Precision-only measurement cannot see unsoundness** (#989): Youden's J scored identically (+0%) between doing nothing and a sanitizer that silently cleared 3 real injections. Every guard model must now ship an adversarial POSITIVE, not just a clearing negative.
+- **`semgrep --pro`: DON'T buy** — 100% of the 274 interprocedural guards are authz/authn, the non-taint-decidable territory Harvey scores 0% TPR on. The (a2) win was reachable in OSS.
+- Three separate recorded reasons were re-tested this sweep and found **wrong** (#977's `--pro` premise, #997's "token identity unreachable", #1009's "unplanted fixtures"), plus a false claim in #1011's issue body and its design doc.
 
 ## 2026-07-24 (evening 2) — issue-sweep: detection batch + fix-pipeline + M2/free-tier → 11 PRs merged, 29 closed, net −21
 
