@@ -2,7 +2,21 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-24 (evening 2) — issue-sweep EXECUTED the #983–#991 detection batch + M2/fix-pipeline/free-tier/calibration/docs work: **11 PRs merged, 29 issues closed, net −21**. Survived a GitHub major outage mid-sweep. See the block immediately below. Earlier blocks remain historical._
+_Last updated: 2026-07-24 (evening 3) — #994: the six functional docs (M1 semantic brief, FP catalog, M6 brief, D-091 catalog, audit scope authority, vuln-seam-app answer key) moved from `docs/` to a new `briefs/` dir (+ the answer key to `targets/vuln-seam-app/ANSWER-KEY.md`). See the block immediately below. Earlier blocks remain historical._
+
+## 2026-07-24 (evening 3) — #994: functional docs consolidated to `briefs/`
+
+`docs/scan-extras.txt`, `docs/fp-rules.txt`, `docs/quality-extras.txt`, `docs/runbooks/anti-patterns.md`, and `docs/audit-modules.md` now live at `briefs/scan-extras.txt`, `briefs/fp-rules.txt`, `briefs/quality-extras.txt`, `briefs/anti-patterns.md`, `briefs/audit-modules.md`. `docs/design/vuln-seam-app-answer-key.md` moved to `targets/vuln-seam-app/ANSWER-KEY.md` (fixture-adjacent, mirrors `targets/calibration/GROUND-TRUTH.md`). Every `src/`/`tools/` runtime path and CLI-invocation-example reference was updated and re-verified (`pnpm verify` green). **NOT done (supervised, needs operator):** the CI tier router (`.github/workflows/ci.yml`) simplification this consolidation was meant to unlock — split to a remainder issue. **NOT done (out of this issue's named scope):** ~26 `docs/**.md` prose files still cite the old paths in passing (grep `docs/scan-extras\|docs/fp-rules\|docs/quality-extras\|docs/audit-modules\|anti-patterns.md\|vuln-seam-app-answer-key` under `docs/`) — human-owned prose, not auto-edited; low-priority cleanup. CLAUDE.md falsified-sentence relays are below.
+
+### ⚠️ CLAUDE.md RELAYS OWED (agents can't edit CLAUDE.md — operator to apply)
+1. Opening paragraph: "the audit briefs and venture docs (`docs/`)" → the audit briefs moved; should read "the venture docs (`docs/`), the functional audit briefs (`briefs/`)".
+2. "Full spec: `docs/audit-modules.md`, `docs/go-no-go.md`. Briefs: `docs/scan-extras.txt`, `docs/quality-extras.txt`, `docs/fp-rules.txt`." → `briefs/audit-modules.md`, `docs/go-no-go.md` (unchanged). Briefs: `briefs/scan-extras.txt`, `briefs/quality-extras.txt`, `briefs/fp-rules.txt`.
+3. "Authoritative scope: `docs/audit-modules.md`." → `briefs/audit-modules.md`.
+4. M1 table row's `/vuln-scan --extra docs/scan-extras.txt ... /triage --fp-rules docs/fp-rules.txt` → `briefs/` for both.
+5. M6 table row's "assembles the `docs/quality-extras.txt` brief" → `briefs/quality-extras.txt`.
+6. "Reference material in `docs/runbooks/`: `anti-patterns.md` (the D-091 catalog ...), `slop-detection.md`, `pr-self-review.md`, `flaky-test-policy.md`." → anti-patterns.md moved out; split into two sentences (see PR #994 body for exact wording).
+7. "`docs/` — briefs, specs, venture docs. `docs/runbooks/` — operational references." → briefs moved out of `docs/`; add a `briefs/` line to File conventions.
+8. Sensitive-paths list doesn't yet classify `briefs/` — operator should decide whether it needs the same explicit-naming protection as `docs/*.txt`/`docs/*.md`, since it now holds M1/M6 brief content that shapes detection judgment even though it isn't GTM/positioning IP.
 
 ## 2026-07-24 (evening 2) — issue-sweep: detection batch + fix-pipeline + M2/free-tier → 11 PRs merged, 29 closed, net −21
 

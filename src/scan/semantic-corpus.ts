@@ -1,6 +1,6 @@
 // M1 SEMANTIC-tier recall gate (#870). The mechanical tier has a scored gate
-// (cli/validate-calibration.ts); the paid semantic pass (`/vuln-scan --extra docs/scan-extras.txt`
-// → `/triage --fp-rules docs/fp-rules.txt`) had none — so a prompt-brief edit, a model change or an
+// (cli/validate-calibration.ts); the paid semantic pass (`/vuln-scan --extra briefs/scan-extras.txt`
+// → `/triage --fp-rules briefs/fp-rules.txt`) had none — so a prompt-brief edit, a model change or an
 // fp-rules tweak could degrade the tier that carries the product and nothing would fail.
 //
 // This module holds the ANSWER KEY for the four targets whose semantic tier was measured against a

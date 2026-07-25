@@ -2,7 +2,7 @@
   "name": "vuln-seam-app",
   "version": "0.0.0",
   "private": true,
-  "description": "INTENTIONALLY VULNERABLE M2 seam fixture for the Harvey pen-test kit. Never deploy. Ships deliberately insecure seams (unsigned webhook, unfronted internal route, alg:none service-JWT, un-rate-limited flow) so the seam + NO-RATE-LIMIT probes' proven branches can be exercised live. Answer key: docs/design/vuln-seam-app-answer-key.md.",
+  "description": "INTENTIONALLY VULNERABLE M2 seam fixture for the Harvey pen-test kit. Never deploy. Ships deliberately insecure seams (unsigned webhook, unfronted internal route, alg:none service-JWT, un-rate-limited flow) so the seam + NO-RATE-LIMIT probes' proven branches can be exercised live. Answer key: ANSWER-KEY.md.",
   "scripts": {
     "build": "next build",
     "start": "next start"

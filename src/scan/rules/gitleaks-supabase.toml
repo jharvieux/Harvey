@@ -85,7 +85,7 @@ regex = '''(?i)bearer\s+[a-z0-9_\-]{24,}'''
 # A committed database connection URI with an inline (non-placeholder) password. The scheme +
 # user:password@host shape is high-specificity; sample/placeholder URIs live in path-allowlisted
 # files (.env.example, *.sample). Requires a 6+ char password to skip trivial "x:y@" fragments.
-# Only DB schemes — redis://amqp:// operator/config URLs are exempt (docs/fp-rules.txt).
+# Only DB schemes — redis://amqp:// operator/config URLs are exempt (briefs/fp-rules.txt).
 [[rules]]
 id = "harvey-db-uri-credentials"
 description = "Database connection URI with an inline password"

@@ -1,6 +1,7 @@
-// docs/runbooks/anti-patterns.md is Harvey's VENDORED copy of ATC's canonical D-091 catalog, and
-// docs/scan-extras.txt is the M1 semantic brief derived from it. This diffs the vendored copy
-// against a target repo that ships its OWN copy of the same catalog, so an engagement fails loud
+// briefs/anti-patterns.md is Harvey's VENDORED copy of ATC's canonical D-091 catalog, and
+// briefs/scan-extras.txt is the M1 semantic brief derived from it. This diffs the vendored copy
+// against a target repo that ships its OWN copy of the same catalog (conventionally at
+// docs/runbooks/anti-patterns.md in the target — the target's layout, not Harvey's), so an engagement fails loud
 // when Harvey's brief is BEHIND the source it was derived from (#678). Comparison is by class
 // TITLE (not the item number) because Harvey renumbers — a reworded or added class in the target
 // is exactly the drift we want to surface.

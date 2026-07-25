@@ -14,7 +14,7 @@
 //   - ZERO of them in any library's shipping source — the detector was silent on all three
 //     correct implementations, which is the result the issue asked for;
 //   - ALL 1031 in test / e2e / example / playground / docs paths, where an ORM suite is by-id
-//     reads and writes by construction. Every one is a false positive under docs/fp-rules.txt's
+//     reads and writes by construction. Every one is a false positive under briefs/fp-rules.txt's
 //     scope rule ("test / fixture / seed / dev-script code is out of scope").
 // The non-shipping gate in prisma-tenant-scope.ts is the fix; re-scanning the same three clones
 // afterwards measured 0 findings on all three. The negatives below are that result as fixtures.

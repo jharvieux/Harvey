@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { buildPacket, renderPacket, scopePacketFiles } from "../simplify-scan.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const briefPath = join(repoRoot, "docs", "quality-extras.txt");
+const briefPath = join(repoRoot, "briefs", "quality-extras.txt");
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage"]);
 

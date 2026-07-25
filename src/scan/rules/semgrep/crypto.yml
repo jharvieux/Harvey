@@ -85,7 +85,7 @@ rules:
                   regex: (?i).*(password|pwd|passwd|secret|token|signature|signing).*
           # Split statement (#988): const h = createHash("md5"); … h.update(namedSecret) — the
           # security context is the named .update() argument, which keeps the cache-key/ETag use
-          # (hashing JSON.stringify(params), N-WEAK-HASH-CACHE) silent per docs/fp-rules.txt.
+          # (hashing JSON.stringify(params), N-WEAK-HASH-CACHE) silent per briefs/fp-rules.txt.
           - patterns:
               - pattern-either:
                   - pattern: |

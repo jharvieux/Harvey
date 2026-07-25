@@ -19,21 +19,21 @@ const allTen = (): ModuleCoverage[] => AUDIT_MODULES.map(ran);
 // never be a gap or a never-run — it was absent from the definition of "complete" itself. No test
 // caught it because every test derived its fixture FROM the guard's own list (see allTen), which
 // makes the enumeration true by construction: the one thing a guard cannot check about itself is
-// its own list. So this reads the SCOPE AUTHORITY — docs/audit-modules.md, the doc CLAUDE.md and
+// its own list. So this reads the SCOPE AUTHORITY — briefs/audit-modules.md, the doc CLAUDE.md and
 // this gate both cite — rather than restating the module set here. A second hand-kept list would
 // just be the two-list drift of #288 again, one layer up: the doc and the code cannot disagree if
 // only one of them is written down.
 const documentedModules = (): string[] => {
-  const doc = readFileSync(fileURLToPath(new URL("../docs/audit-modules.md", import.meta.url)), "utf8");
+  const doc = readFileSync(fileURLToPath(new URL("../briefs/audit-modules.md", import.meta.url)), "utf8");
   const ids = [...doc.matchAll(/^\|\s*(M\d+)\s*\|/gm)].map((m) => m[1]).filter((id): id is string => id !== undefined);
   // A doc whose table stopped parsing would make every assertion below vacuously true — the exact
   // "true by construction" failure (#275) this test exists to break.
-  if (ids.length === 0) throw new Error("parsed no modules from docs/audit-modules.md — the table's shape changed");
+  if (ids.length === 0) throw new Error("parsed no modules from briefs/audit-modules.md — the table's shape changed");
   return ids;
 };
 
 describe("the module enumeration itself (#275)", () => {
-  it("enumerates exactly the modules docs/audit-modules.md documents — read, not restated", () => {
+  it("enumerates exactly the modules briefs/audit-modules.md documents — read, not restated", () => {
     expect([...AUDIT_MODULES]).toEqual(documentedModules());
   });
 
@@ -45,7 +45,7 @@ describe("the module enumeration itself (#275)", () => {
     // The root defect of #289: the scope authority said 7 in its prose, ten in its table, and
     // M1–M9 in its Packaging section. A count in prose can drift from the table silently, so pin
     // the two claims that a reader actually acts on to the table's real length.
-    const doc = readFileSync(fileURLToPath(new URL("../docs/audit-modules.md", import.meta.url)), "utf8");
+    const doc = readFileSync(fileURLToPath(new URL("../briefs/audit-modules.md", import.meta.url)), "utf8");
     expect(doc).toContain(`A full audit is ten modules (M1–M${documentedModules().length})`);
     expect(doc).toContain(`**Full codebase audit** (M1–M${documentedModules().length}`);
   });

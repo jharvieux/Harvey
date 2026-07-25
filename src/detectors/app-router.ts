@@ -1,6 +1,6 @@
 // M9 — Next.js App Router boundary & rendering. Static AST checks over
 // TypeScript/TSX source for the App-Router-specific security/perf surface
-// generic tools miss (docs/scan-extras.txt, M9 section). Shapes results as
+// generic tools miss (briefs/scan-extras.txt, M9 section). Shapes results as
 // Finding[] (src/findings.ts) for §3 (security) / §3b (performance).
 //
 // Method: TypeScript compiler API (already a devDependency; no ts-morph in
@@ -954,7 +954,7 @@ function detectAccidentalDynamicRendering(sources: Map<string, ts.SourceFile>, n
 //
 // `window`/`document`/`localStorage`/`sessionStorage`/`navigator` referenced on a path that
 // runs during SSR → "ReferenceError: window is not defined" or a hydration mismatch (#381,
-// docs/scan-extras.txt M9 "SSR-ONLY API MISUSE"). App Router components server-render by
+// briefs/scan-extras.txt M9 "SSR-ONLY API MISUSE"). App Router components server-render by
 // default, so the read fires on the server unless it is deferred to the browser. The two
 // standard SSR-safe idioms are the FP boundary and must stay silent:
 //   - inside a useEffect/useLayoutEffect callback or an event handler (browser-only, deferred),
@@ -1259,7 +1259,7 @@ function detectSpaRootErrorBoundary(files: SourceInput[], nextId: NextId, scope:
 
 // --- Unbounded / self-calling route or edge fn [MED] (#843) -----------------
 //
-// The M9 brief's "UNBOUNDED / SELF-CALLING ROUTE OR EDGE FN" surface (docs/scan-extras.txt): an
+// The M9 brief's "UNBOUNDED / SELF-CALLING ROUTE OR EDGE FN" surface (briefs/scan-extras.txt): an
 // API route / edge function whose handler either loops forever or fetches its own URL → runaway
 // compute, cost, and timeouts. Two precise AST shapes, both scoped to server request handlers
 // (route.ts(x), pages/api, middleware.ts, or any file declaring `runtime = "edge"`):

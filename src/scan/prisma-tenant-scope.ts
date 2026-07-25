@@ -153,7 +153,7 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
 // tenant): 1031 findings, EVERY ONE of them in a test, example, playground or doc path, and zero in
 // any library's shipping source. An ORM test suite is wall-to-wall `prisma.post.update({ where: {
 // id } })` by construction — that is the fixture setting up the case, not an authorization gap, and
-// docs/fp-rules.txt already rules test/fixture/seed/dev-script code out of scope.
+// briefs/fp-rules.txt already rules test/fixture/seed/dev-script code out of scope.
 //
 // Broader than the shared NON_PRODUCT (detectors/load-sources.ts), which keys off the `.test.`/
 // `.spec.` suffix and `__tests__/` and would still have passed 1031 → ~20 of these through:
