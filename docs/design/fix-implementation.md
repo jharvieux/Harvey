@@ -379,6 +379,18 @@ Remaining after this slice: **#957** (the full autonomous §8 calibration run).
 
 **#957 is a verified-PARTIAL, split → #1009.** Blockers 2 (detector-after re-run) and 3 (corpus materialization) are CLOSED. Still not fully autonomous, and genuinely out of reach for a mechanical assembly: (a) the fix diffs are still hand-authored — the diff-**generating** LLM implementer is #922's other half, not deterministic code; (b) `rerunDetector` has no semgrep/M1 resolver, so the §8 in-scope classes 1–4 report `notRun` (correct fail-loud) rather than green; (c) classes 1/2/5 aren't planted as before/after fix fixtures. All three are #1009, cross-linked from `docs/design/fix-calibration-acceptance.md`.
 
+**Update (2026-07-24, #1012 + #1009's detector half — the semgrep resolver):** clause (b) above is now CLOSED, and clause (c)'s recorded reason was re-measured and found to be the wrong shape.
+
+| File | What changed | Design ref | Issue |
+|---|---|---|---|
+| `src/scan/semgrep.ts` | `harveyRuleIds()` reads the replayable rule ids off `src/scan/rules/semgrep/*.yml` (so a renamed/deleted rule stops resolving rather than silently "not firing"), and `runSemgrepOnFile()` runs the custom rule directory against ONE file — returning a per-path semgrep error as a `failure`, because semgrep exits 0 on a syntax error with zero results and that must never be read as a clean file. | §2.3 | #1012 |
+| `src/fix/detector-rerun.ts` | Second resolver family beside the AST engines: a finding whose taxonomy names a local `harvey-*` rule is verified by replaying that rule, scoped to the finding's own file. `resolvesToDetector` accepts both the bare id and the config-path-prefixed `check_id` a `--config <dir>` scan emits. Registry-pack rules (network fetch), missing files, unparseable source and an absent binary are each `notRun` **with the reason** — the unverifiable-is-never-resolved posture is widened, not weakened. | §2.3 | #1012 |
+| `src/fix/calibration-acceptance.test.ts` | The §8 classes detected by a `harvey-*` rule now run the SAME full gate as the M5 class and reach GREEN against the real planted sources: class 4 (open redirect, `pages/api/redirect.js`), class 3 (raw error egress, `pages/api/verbose.js`), and the planted SQLi (`pages/api/search.js`). The gate follows the DETECTOR, not intent — a host-allowlist `.refine()` the taint path still reaches is NOT green. | §8 | #1009 |
+
+**Re-measured 2026-07-24 — clause (c)'s blocker is upstream of the fixtures.** §8 classes 1 (zero-row update returning `error: null`), 2 (unchecked Supabase mutation) and 5 (`void`-prefixed async) have **no detector anywhere in `src/`** — no `harvey-*` semgrep rule, no AST engine (locked as a test asserting `resolvesToDetector` is false for all three). Planting before/after fixtures for them would produce `notRun` rows, not green ones. The detector has to be built first; the fixture is the second step, not the first.
+
+**#1009's remainder after this slice:** the diff-**generating** LLM implementer (a), and detectors-then-fixtures for §8 classes 1/2/5 (c).
+
 **Still not built, still deliberate:**
 
 - **Model tiering** is config surface only: `escalation.ts` decides which tier each attempt runs at and records the trail in `tiersUsed`, but there is no multi-provider router in `src/` that maps those tiers to real models — see `docs/design/model-routing.md` for the target `bulk`/`standard`/`flagship` mapping. The implementer that actually drafts a diff at a tier is the operator/LLM pass, not code here.

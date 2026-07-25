@@ -50,6 +50,11 @@ export interface SemgrepResult {
 
 export interface SemgrepOutput {
   results?: SemgrepResult[];
+  // Per-path problems semgrep reports WITHOUT failing the run (a syntax error in one file, an
+  // unreadable scanning root). Empty results next to an error on the scanned path means the rules
+  // never evaluated that file — load-bearing for the fix pipeline's re-run (#1012), which must not
+  // read "no match" off a file semgrep could not parse.
+  errors?: { type?: string; message?: string; path?: string }[];
 }
 
 const SEVERITY_FROM_SEMGREP: Record<string, Severity> = { ERROR: "High", WARNING: "Medium", INFO: "Low" };
@@ -219,6 +224,44 @@ export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: stri
     else return { result: {}, failure: e.code === "ENOENT" ? "semgrep not found on PATH" : (e.message ?? "semgrep failed with no output") };
   }
   return { result: JSON.parse(out) as SemgrepOutput };
+}
+
+// #1012 — the fix pipeline's detector re-run replays ONE finding's rule against ONE fixed file
+// (src/fix/detector-rerun.ts). Only the custom rule directory is replayed: the `p/*` registry packs
+// need a network fetch, so a registry-rule finding is deliberately NOT resolvable this way and is
+// reported notRun rather than given a false clean. These are the rule ids that CAN be replayed —
+// read from the rule files themselves, so a renamed or deleted rule stops resolving (a rule that no
+// longer exists would otherwise "not fire" and read as a fixed bug).
+export function harveyRuleIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const file of readdirSync(CUSTOM_RULES)) {
+    if (!file.endsWith(".yml")) continue;
+    for (const m of readFileSync(join(CUSTOM_RULES, file), "utf8").matchAll(/^\s*-\s*id:\s*(harvey-[\w-]+)\s*$/gm)) {
+      ids.add(m[1] as string);
+    }
+  }
+  return ids;
+}
+
+// Run the custom rules against a single file. A per-path semgrep error (unparseable source, missing
+// scanning root) is returned as `failure`, NOT as an empty result set: semgrep exits 0 having scanned
+// nothing, and "no match on a file the rules never evaluated" must never be read as "clean".
+export function runSemgrepOnFile(absFile: string): { result: SemgrepOutput; failure?: string } {
+  let out: string;
+  try {
+    out = execFileSync("semgrep", ["--config", CUSTOM_RULES, "--exclude", "node_modules", "--json", "--quiet", absFile], {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 128,
+    });
+  } catch (err) {
+    const e = err as { stdout?: string; code?: string; message?: string };
+    if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
+    else return { result: {}, failure: e.code === "ENOENT" ? "semgrep not found on PATH" : (e.message ?? "semgrep failed with no output") };
+  }
+  const result = JSON.parse(out) as SemgrepOutput;
+  const pathError = (result.errors ?? []).find((e) => e.path === absFile);
+  if (pathError) return { result, failure: `semgrep could not scan the file: ${pathError.message ?? pathError.type ?? "unknown error"}` };
+  return { result };
 }
 
 // Same disclosure contract as DEP-OSV-00/SEC-TH-GH-00/SEC-BUNDLE-00: a visible not-assessed row,

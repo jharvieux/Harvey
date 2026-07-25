@@ -9,12 +9,15 @@
 //   • The FULL §2 gate (apply-clean + §3 rails + detector-after clean) for a class rerunDetector can
 //     resolve — the M5 "Unused parameter" planting. This is the "detector-after gate actually re-runs"
 //     proof the acceptance requires: it fires on the unfixed source and is clean after the fix.
-//   • The §3 rails + inert-diff transport for the semgrep class-4 (open redirect), whose detector-after
-//     is DISCLOSED not-autonomously-resolvable (notRun) — the honest split remainder, never faked green.
+//   • The SAME full gate for the §8 classes detected by a harvey-* semgrep rule (open redirect,
+//     raw error egress, SQLi) — #1012's semgrep resolver, which retired their disclosed `notRun`.
+//   • What is STILL disclosed rather than scored: a semgrep REGISTRY-pack rule (needs a network
+//     fetch to replay), and §8 classes 1/2/5, which no detector in src/ implements at all.
 //   • Clause 2: an out-of-scope planted bug downgraded to recommend-only through intake/screening.
 //
 // Companion record: docs/design/fix-calibration-acceptance.md.
 
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Finding, FindingsDocument, ReportMeta } from "../findings.js";
@@ -45,9 +48,11 @@ const m5Finding = (o: Partial<Finding> = {}): Finding => ({
 });
 const m5Fixed = (src: string) => src.replace("export async function GET(request: Request) {", "export async function GET() {");
 
-// Class 4 (§8): z.string().url() open redirect at pages/api/redirect.js:9 — detected by a SEMGREP rule
-// (harvey-open-redirect), which rerunDetector cannot resolve. Its detector-after is a disclosed gap.
-const CLASS4_FILE = "pages/api/redirect.js";
+// The §8 classes detected by a harvey-* SEMGREP rule. Since #1012 rerunDetector resolves these too,
+// so they run the same full gate as the M5 class above (they were disclosed `notRun` before).
+const CLASS4_FILE = "pages/api/redirect.js"; // class 4: z.string().url() open redirect (harvey-open-redirect)
+const CLASS3_FILE = "pages/api/verbose.js"; // class 3: raw error egress (harvey-verbose-error)
+const SQLI_FILE = "pages/api/search.js"; // planted bug #4: SQLi via template literal (harvey-sql-injection-template)
 
 describe("fix §8 acceptance — the FULL gate for a resolvable-detector class (M5)", () => {
   it("yields GREEN: the mechanical fix applies clean, clears the rails, and the detector-after is clean", () => {
@@ -82,20 +87,112 @@ describe("fix §8 acceptance — the FULL gate for a resolvable-detector class (
   });
 });
 
-describe("fix §8 acceptance — disclosed gap: a semgrep-detected class is NOT autonomously green (fail loud)", () => {
-  it("class-4 (open redirect) detector-after is notRun — rerunDetector has no semgrep resolver, so it can never fake green", () => {
+// #1009/#1012: the semgrep resolver landed, so the §8 in-scope classes detected by a harvey-* rule
+// now run the SAME full gate as the M5 class — they were `notRun` (a disclosed gap) before. The
+// `semgrep` binary is external and the CI `verify` job deliberately does not install it, so these
+// skip with a named reason when it is absent rather than passing silently.
+function hasBinary(name: string): boolean {
+  try {
+    execFileSync("which", [name], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const SEMGREP_PRESENT = hasBinary("semgrep");
+// Each of these runs semgrep over the whole rule directory on top of a git materialize+apply cycle,
+// comfortably over vitest's 5s default when the full suite runs in parallel.
+const SEMGREP_TIMEOUT_MS = 30_000;
+
+describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for the semgrep-detected classes (#1009)", () => {
+  it("class 4 (open redirect) reaches GREEN: the redirect target becomes a literal picked by an enum key", () => {
+    const src = readCalibration(CLASS4_FILE);
+    const fixed = src
+      .replace("  url: z.string().url(),", '  dest: z.enum(["home", "settings"]),')
+      .replace(
+        "  res.redirect(302, parsed.data.url);",
+        '  if (parsed.data.dest === "settings") {\n    return res.redirect(302, "/settings");\n  }\n  res.redirect(302, "/");',
+      );
+    expect(fixed).not.toEqual(src);
+    const finding = m5Finding({ id: "CAL-REDIRECT", taxonomy: "harvey-open-redirect", location: `${CLASS4_FILE}:18` });
+    const r = runFixAcceptance(finding, { file: CLASS4_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    expect(r.execution.outcome).toBe("diff-verified");
+    expect(r.execution.railViolations).toEqual([]); // §8 clause 3
+    expect(r.detectorAfter.notRun).toBeUndefined(); // the rule really re-ran
+    expect(r.detectorAfter.fired).toBe(false);
+    expect(r.green).toBe(true);
+    expect(resolvesToDetector("harvey-open-redirect")).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("class 4 does NOT go green on a host-allowlist `.refine()` the rule still flags — the gate follows the DETECTOR, not the intent", () => {
+    // A plausible-looking fix (a zod .refine host check) that harvey-open-redirect's taint path still
+    // reaches. Whether the rule is over-strict here is a detector question; what matters for §8 is that
+    // the gate reports what the detector says, never what the fix author meant.
     const src = readCalibration(CLASS4_FILE);
     const fixed = src.replace(
       "  url: z.string().url(),",
       '  url: z.string().url().refine((u) => new URL(u).host === "app.example.com", "host not allowlisted"),',
     );
     expect(fixed).not.toEqual(src);
-    const finding = m5Finding({ id: "CAL-REDIRECT", taxonomy: "harvey-open-redirect", location: `${CLASS4_FILE}:9` });
+    const finding = m5Finding({ id: "CAL-REDIRECT-REFINE", taxonomy: "harvey-open-redirect", location: `${CLASS4_FILE}:18` });
     const r = runFixAcceptance(finding, { file: CLASS4_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
-    expect(r.execution.outcome).toBe("diff-verified"); // the diff still applies + clears rails
+    expect(r.execution.outcome).toBe("diff-verified"); // it applies + clears the rails
+    expect(r.detectorAfter.fired).toBe(true);
+    expect(r.green).toBe(false);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("class 3 (raw error egress) reaches GREEN: the stack is logged server-side and the client gets a generic error", () => {
+    const src = readCalibration(CLASS3_FILE);
+    const fixed = src.replace(
+      "    res.status(500).json({ ok: false, stack: err.stack });",
+      '    console.error(err);\n    res.status(500).json({ ok: false, error: "Server error" });',
+    );
+    expect(fixed).not.toEqual(src);
+    const finding = m5Finding({ id: "CAL-VERBOSE", taxonomy: "harvey-verbose-error", location: `${CLASS3_FILE}:8` });
+    const r = runFixAcceptance(finding, { file: CLASS3_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    expect(r.execution.outcome).toBe("diff-verified");
+    expect(r.execution.railViolations).toEqual([]);
+    expect(r.detectorAfter.notRun).toBeUndefined();
+    expect(r.green).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("the SQLi class reaches GREEN once the tainted value is a bound parameter instead of SQL text", () => {
+    const src = readCalibration(SQLI_FILE);
+    const fixed = src.replace(
+      "  const sql = `select id, tenant_id, title from documents where title ilike '%${q}%'`;\n\n  const { rows } = await pool.query(sql);",
+      '  const sql = "select id, tenant_id, title from documents where title ilike $1";\n\n  const { rows } = await pool.query(sql, [`%${q}%`]);',
+    );
+    expect(fixed).not.toEqual(src);
+    const finding = m5Finding({ id: "CAL-SQLI", taxonomy: "harvey-sql-injection-template", location: `${SQLI_FILE}:9` });
+    const r = runFixAcceptance(finding, { file: SQLI_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    expect(r.execution.outcome).toBe("diff-verified");
+    expect(r.detectorAfter.notRun).toBeUndefined();
+    expect(r.green).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+});
+
+describe("fix §8 acceptance — still-disclosed gaps, never faked green (#1009 remainder)", () => {
+  it("a semgrep REGISTRY rule stays notRun — only the local harvey-* rules are replayable without a network fetch", () => {
+    const src = readCalibration(CLASS4_FILE);
+    const fixed = src.replace("  res.redirect(302, parsed.data.url);", '  res.redirect(302, "/");');
+    expect(fixed).not.toEqual(src);
+    const registryRule = "javascript.browser.security.open-redirect.js-open-redirect";
+    const finding = m5Finding({ id: "CAL-REG", taxonomy: registryRule, location: `${CLASS4_FILE}:18` });
+    const r = runFixAcceptance(finding, { file: CLASS4_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    expect(r.execution.outcome).toBe("diff-verified");
     expect(r.detectorAfter.notRun).toContain("no detector re-run resolver");
-    expect(r.green).toBe(false); // an unrun detector is NOT clean — never a false autonomous green
-    expect(resolvesToDetector("harvey-open-redirect")).toBe(false);
+    expect(r.green).toBe(false);
+    expect(resolvesToDetector(registryRule)).toBe(false);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("§8 classes 1, 2 and 5 have no detector at all, so no fixture can score them — the honest remainder", () => {
+    // Zero-row update returning `error: null` (D-091 #7), unchecked Supabase mutations (D-091 #3) and
+    // `void`-prefixed async (D-091 #8) are named in §8, but nothing in src/ detects them: no semgrep
+    // rule, no AST engine. Planting before/after fixtures would produce notRun rows, not green ones —
+    // the detector has to exist first. Tracked as #1009's remainder.
+    for (const taxonomy of ["harvey-zero-row-update", "harvey-unchecked-mutation", "harvey-void-async"]) {
+      expect(resolvesToDetector(taxonomy)).toBe(false);
+    }
   });
 });
 

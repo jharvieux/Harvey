@@ -4,6 +4,7 @@
 // hermetic (no external binary). detectorBefore fires; after the mechanical fix (drop the unused
 // param) the scoped re-run is clean.
 
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -68,17 +69,141 @@ describe("rerunDetector — §2.3 against targets/calibration", () => {
   });
 
   it("reports notRun for a taxonomy with no resolver — never a false clean", () => {
+    // A semgrep REGISTRY rule (p/owasp-top-ten et al): #1012 replays only the local harvey-* rule
+    // directory, because a registry pack needs a network fetch. So this stays deliberately unresolvable.
+    const registryRule = "javascript.browser.security.open-redirect.js-open-redirect";
     const dir = scratch(PLANTED, planted);
-    const run = rerunDetector(finding({ taxonomy: "harvey-open-redirect", location: "pages/api/redirect.js:9" }), dir);
+    const run = rerunDetector(finding({ taxonomy: registryRule, location: "pages/api/redirect.js:9" }), dir);
     expect(run.notRun).toContain("no detector re-run resolver");
     expect(run.fired).toBe(false);
     // fail loud: an unrun detector is not clean, so a fix over it can never be green
     expect(computeGreen({ detectorAfter: run, clientChecks: [] })).toBe(false);
-    expect(resolvesToDetector("harvey-open-redirect")).toBe(false);
+    expect(resolvesToDetector(registryRule)).toBe(false);
+  });
+
+  it("a harvey-* rule id that no longer exists in the rule directory does NOT resolve — a deleted rule is not a fixed bug", () => {
+    expect(resolvesToDetector("harvey-rule-that-was-deleted")).toBe(false);
+    const run = rerunDetector(finding({ taxonomy: "harvey-rule-that-was-deleted" }), scratch(PLANTED, planted));
+    expect(run.notRun).toContain("no detector re-run resolver");
   });
 
   it("carries detectorBefore verbatim from the scan (§2.4), fired by construction", () => {
     const before = detectorBefore(finding());
     expect(before).toEqual({ detectorId: "M5 — Unused parameter", fired: true, output: "GET(request: Request) never reads request" });
   });
+});
+
+// #1012 — the semgrep resolver. Proven against the REAL planted calibration sources for two §8
+// in-scope M1 classes (open redirect, verbose error), same fixture discipline as the M5 block above.
+// The `semgrep` binary is external (the CI `verify` job deliberately does not install it, per
+// .github/workflows/ci.yml), so the firing tests skip with a NAMED reason when it is absent —
+// matching src/cli/quick-scan.test.ts's convention. The honesty tests below (semgrep-absent ⇒
+// notRun) run unconditionally, because those are the ones that must never regress silently.
+function hasBinary(name: string): boolean {
+  try {
+    execFileSync("which", [name], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const SEMGREP_PRESENT = hasBinary("semgrep");
+// Each semgrep invocation loads the whole rule directory and takes seconds, comfortably over
+// vitest's 5s default when the full suite runs in parallel.
+const SEMGREP_TIMEOUT_MS = 30_000;
+
+const REDIRECT = "pages/api/redirect.js";
+const VERBOSE = "pages/api/verbose.js";
+const redirectFinding = (o: Partial<Finding> = {}): Finding =>
+  finding({
+    id: "F-redirect", title: "Open redirect", taxonomy: "harvey-open-redirect", location: `${REDIRECT}:18`,
+    category: "Next.js/web footgun", evidence: "z.string().url() validates shape, not host", ...o,
+  });
+
+describe.skipIf(!SEMGREP_PRESENT)("rerunDetector — the semgrep resolver (#1012), against targets/calibration", () => {
+  const redirectSrc = readFileSync(join(REPO_ROOT, "targets/calibration", REDIRECT), "utf8");
+  const verboseSrc = readFileSync(join(REPO_ROOT, "targets/calibration", VERBOSE), "utf8");
+
+  it("fires on the real planted open redirect before the fix", () => {
+    const run = rerunDetector(redirectFinding(), scratch(REDIRECT, redirectSrc));
+    expect(run.notRun).toBeUndefined();
+    expect(run.fired).toBe(true);
+    expect(run.output).toContain("harvey-open-redirect still firing");
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("is clean after the mechanical fix (redirect to a literal chosen by an enum key, no URL from the request)", () => {
+    const fixed = redirectSrc
+      .replace("  url: z.string().url(),", '  dest: z.enum(["home", "settings"]),')
+      .replace(
+        "  res.redirect(302, parsed.data.url);",
+        '  if (parsed.data.dest === "settings") {\n    return res.redirect(302, "/settings");\n  }\n  res.redirect(302, "/");',
+      );
+    expect(fixed).not.toEqual(redirectSrc);
+    const after = rerunDetector(redirectFinding(), scratch(REDIRECT, fixed));
+    expect(after.notRun).toBeUndefined(); // the rule really re-ran
+    expect(after.fired).toBe(false);
+    expect(computeGreen({ detectorAfter: after, clientChecks: [] })).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("a cosmetic edit that leaves the bug in place still FIRES — the resolver is not an always-clean stub", () => {
+    const noop = redirectSrc.replace("export default function handler(req, res) {", "export default function handler(req, res) { // touched");
+    expect(noop).not.toEqual(redirectSrc);
+    expect(rerunDetector(redirectFinding(), scratch(REDIRECT, noop)).fired).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("resolves a second §8 class (verbose error) — fires planted, clean once the stack stops being echoed", () => {
+    const f = (o: Partial<Finding> = {}) =>
+      finding({ id: "F-verbose", taxonomy: "harvey-verbose-error", location: `${VERBOSE}:8`, ...o });
+    expect(rerunDetector(f(), scratch(VERBOSE, verboseSrc)).fired).toBe(true);
+
+    const fixed = verboseSrc.replace(
+      "    res.status(500).json({ ok: false, stack: err.stack });",
+      '    console.error(err);\n    res.status(500).json({ ok: false, error: "Server error" });',
+    );
+    expect(fixed).not.toEqual(verboseSrc);
+    const after = rerunDetector(f(), scratch(VERBOSE, fixed));
+    expect(after.notRun).toBeUndefined();
+    expect(after.fired).toBe(false);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("scopes to the fixed file — the same rule firing elsewhere in the target does not keep the fix red", () => {
+    const fixed = redirectSrc.replace("  res.redirect(302, parsed.data.url);", '  res.redirect(302, "/");');
+    const dir = scratch(REDIRECT, fixed);
+    mkdirSync(join(dir, "pages/api/other"), { recursive: true });
+    writeFileSync(join(dir, "pages/api/other/go.js"), "export default function handler(req, res) {\n  res.redirect(302, req.query.next);\n}\n");
+    expect(rerunDetector(redirectFinding(), dir).fired).toBe(false);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("carries the config-path-prefixed check_id a --config <dir> scan produces (that IS the finding's taxonomy)", () => {
+    const prefixed = "src.scan.rules.semgrep.harvey-open-redirect";
+    expect(resolvesToDetector(prefixed)).toBe(true);
+    expect(rerunDetector(redirectFinding({ taxonomy: prefixed }), scratch(REDIRECT, redirectSrc)).fired).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+});
+
+describe("rerunDetector — the semgrep resolver never manufactures a clean detector (#1012)", () => {
+  const redirectSrc = readFileSync(join(REPO_ROOT, "targets/calibration", REDIRECT), "utf8");
+
+  it("a file the fix's location names but that is absent from the worktree is notRun, not clean", () => {
+    const dir = scratch("unrelated.js", "export default 1;\n");
+    const run = rerunDetector(redirectFinding(), dir);
+    expect(run.notRun).toContain("does not exist");
+    expect(computeGreen({ detectorAfter: run, clientChecks: [] })).toBe(false);
+  });
+
+  it.skipIf(!SEMGREP_PRESENT)("source semgrep cannot parse is notRun — an unevaluated file is not a fixed file", () => {
+    // Semgrep exits 0 on a syntax error, reporting it in `errors` with zero results. Read naively that
+    // is indistinguishable from "the rule matched nothing" — the exact shape of the repo's signature defect.
+    const dir = scratch(REDIRECT, `${redirectSrc}\nexport default function handler(req, res) { res.redirect(302, req.query.u\n`);
+    const run = rerunDetector(redirectFinding(), dir);
+    expect(run.notRun).toContain("could not be re-run");
+    expect(run.fired).toBe(false);
+    expect(computeGreen({ detectorAfter: run, clientChecks: [] })).toBe(false);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it.skipIf(SEMGREP_PRESENT)("semgrep absent from PATH is notRun on this machine — resolvable ≠ runnable", () => {
+    const run = rerunDetector(redirectFinding(), scratch(REDIRECT, redirectSrc));
+    expect(run.notRun).toContain("semgrep not found on PATH");
+    expect(computeGreen({ detectorAfter: run, clientChecks: [] })).toBe(false);
+  }, SEMGREP_TIMEOUT_MS);
 });
