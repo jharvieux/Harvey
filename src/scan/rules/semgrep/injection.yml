@@ -52,6 +52,24 @@ rules:
       - pattern: parseInt(...)
       - pattern: parseFloat(...)
       - pattern: Number(...)
+      # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
+      # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
+      # by-side-effect on the guarded variable. Soundness constraints, each with a calibration
+      # positive that must still fire: the regex must be ANCHORED (^…$ — an unanchored allowlist
+      # matches a prefix and is a broken safeguard) and its class POSITIVE (a negated [^…] class is
+      # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      if (!$RE.test($X)) { ... return; }
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern: |
+                  if (!$ARR.includes($X)) { ... return; }
+          - focus-metavariable: $X
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -100,6 +118,25 @@ rules:
       # #984: App Router next/headers request sources (cookies()/headers()).
       - pattern: cookies()
       - pattern: headers()
+    pattern-sanitizers:
+      # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
+      # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
+      # by-side-effect on the guarded variable. Soundness constraints, each with a calibration
+      # positive that must still fire: the regex must be ANCHORED (^…$ — an unanchored allowlist
+      # matches a prefix and is a broken safeguard) and its class POSITIVE (a negated [^…] class is
+      # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      if (!$RE.test($X)) { ... return; }
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern: |
+                  if (!$ARR.includes($X)) { ... return; }
+          - focus-metavariable: $X
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -144,6 +181,25 @@ rules:
       - pattern: $REQ.nextUrl.searchParams
       - pattern: cookies()
       - pattern: headers()
+    pattern-sanitizers:
+      # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
+      # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
+      # by-side-effect on the guarded variable. Soundness constraints, each with a calibration
+      # positive that must still fire: the regex must be ANCHORED (^…$ — an unanchored allowlist
+      # matches a prefix and is a broken safeguard) and its class POSITIVE (a negated [^…] class is
+      # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      if (!$RE.test($X)) { ... return; }
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern: |
+                  if (!$ARR.includes($X)) { ... return; }
+          - focus-metavariable: $X
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -192,6 +248,25 @@ rules:
       # #984: App Router next/headers request sources (cookies()/headers()).
       - pattern: cookies()
       - pattern: headers()
+    pattern-sanitizers:
+      # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
+      # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
+      # by-side-effect on the guarded variable. Soundness constraints, each with a calibration
+      # positive that must still fire: the regex must be ANCHORED (^…$ — an unanchored allowlist
+      # matches a prefix and is a broken safeguard) and its class POSITIVE (a negated [^…] class is
+      # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      if (!$RE.test($X)) { ... return; }
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern: |
+                  if (!$ARR.includes($X)) { ... return; }
+          - focus-metavariable: $X
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -457,6 +532,24 @@ rules:
       - pattern: headers()
     pattern-sanitizers:
       - pattern: path.basename(...)
+      # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
+      # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
+      # by-side-effect on the guarded variable. Soundness constraints, each with a calibration
+      # positive that must still fire: the regex must be ANCHORED (^…$ — an unanchored allowlist
+      # matches a prefix and is a broken safeguard) and its class POSITIVE (a negated [^…] class is
+      # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      if (!$RE.test($X)) { ... return; }
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern: |
+                  if (!$ARR.includes($X)) { ... return; }
+          - focus-metavariable: $X
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -874,6 +967,24 @@ rules:
       - pattern: sanitize(...)
       - pattern: escapeHtml(...)
       - pattern: escape(...)
+      # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
+      # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
+      # by-side-effect on the guarded variable. Soundness constraints, each with a calibration
+      # positive that must still fire: the regex must be ANCHORED (^…$ — an unanchored allowlist
+      # matches a prefix and is a broken safeguard) and its class POSITIVE (a negated [^…] class is
+      # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      if (!$RE.test($X)) { ... return; }
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern: |
+                  if (!$ARR.includes($X)) { ... return; }
+          - focus-metavariable: $X
     pattern-sinks:
       - patterns:
           - pattern: $RES.send(`...`)
