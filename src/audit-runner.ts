@@ -146,6 +146,12 @@ interface AuditRunResult {
   // Report-schema findings captured from the module CLIs that emit them (#312). Raw and possibly
   // overlapping (shared CLIs feed two probes); assembleEngagementDocument de-duplicates.
   findings: Finding[];
+  // #1064: the same findings before the merge above erases who produced them. Module attribution is
+  // exactly what `findings` loses, and its loss is why #1062 was invisible from the deliverable —
+  // the M7 probe captured nothing while M9's unfiltered sweep re-collected the same rows, so the
+  // assembled document looked complete. The conservation gate asks "did M7 ITSELF produce its
+  // planted finding", which only this map can answer.
+  findingsByModule: Partial<Record<AuditModule, Finding[]>>;
   // #515: M3's top-K hotspot ranking, when the M3 probe captured one. Fed to the assembler so every
   // module's findings get the shared hotspot enrichment. Absent ⇒ M3 produced no ranking this run.
   hotspots?: string[];
@@ -184,6 +190,7 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
   const recorded: ModuleCoverage[] = [];
   const failures: ModuleFailure[] = [];
   const findings: Finding[] = [];
+  const findingsByModule: Partial<Record<AuditModule, Finding[]>> = {};
   let hotspots: string[] | undefined;
   // #1049: merged across a monorepo's per-app M10 rows — one engagement, one table→data-class view.
   // Two apps declaring the same table name collapse to the later app's classification; the join is a
@@ -229,9 +236,9 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
       // app's finding is distinct (and the location/instance still says which app it is). Only when
       // an instance is set: a single-target run keeps its ids unchanged.
       if (outcome.status !== "requires-live-run" && outcome.findings) {
-        findings.push(
-          ...(outcome.instance ? outcome.findings.map((f) => ({ ...f, id: `${f.id}@${outcome.instance}` })) : outcome.findings),
-        );
+        const produced = outcome.instance ? outcome.findings.map((f) => ({ ...f, id: `${f.id}@${outcome.instance}` })) : outcome.findings;
+        findings.push(...produced);
+        findingsByModule[module] = [...(findingsByModule[module] ?? []), ...produced];
       }
       if (outcome.status !== "requires-live-run" && outcome.hotspots?.length) hotspots = outcome.hotspots;
       if (outcome.status !== "requires-live-run" && outcome.dataMap) dataMap = { ...dataMap, ...outcome.dataMap };
@@ -239,7 +246,7 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
     }
   }
 
-  return { recorded, failures, findings, ...(hotspots ? { hotspots } : {}), ...(dataMap ? { dataMap } : {}), ...(testQuality ? { testQuality } : {}) };
+  return { recorded, failures, findings, findingsByModule, ...(hotspots ? { hotspots } : {}), ...(dataMap ? { dataMap } : {}), ...(testQuality ? { testQuality } : {}) };
 }
 
 export function formatFailures(failures: ModuleFailure[]): string {
