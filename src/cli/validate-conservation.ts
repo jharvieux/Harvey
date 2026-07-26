@@ -17,10 +17,10 @@
 // src/audit-conservation.test.ts, which seeds each violation into the gate's logic and proves it
 // fails; this CLI proves the wiring.
 //
-// --require <Mn>  hold a module recorded in UNEXERCISED to the full standard anyway. This is the
-//                 falsifier path for its recorded reason (#1033): `--require M2` exits 0 the day M2
-//                 delivers findings from this fixture, i.e. the day "cannot be exercised offline"
-//                 stops being true.
+// --require <Mn>  hold a module recorded in UNEXERCISED to the full standard anyway — the falsifier
+//                 path for its recorded reason (#1033). UNEXERCISED is currently EMPTY: M2, its last
+//                 member, gained an offline plant in #1155 (the injected #416 dynamic-pass artifact),
+//                 so `--require` is retained for a future genuinely-live-only module, not M2.
 // --seed-loss <Mn>  SEED A VIOLATION: discard everything module Mn's probe produced, before
 //                 assembly, reproducing the #1040/#1061 break in which results were produced and
 //                 then dropped. The gate must fail naming Mn. It exists because a gate nobody has
@@ -43,7 +43,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkConservation, formatConservation } from "../audit-conservation.js";
+import { checkConservation, formatConservation, writeM2ConservationPlant } from "../audit-conservation.js";
 import { baselineLedger, conservationLedger, type DeclaredDrop, formatBaselineLedger, formatLedger } from "../conservation-ledger.js";
 import { assembleEngagementDocument } from "../audit-report.js";
 import { applyBaseline } from "../audit-diff.js";
@@ -63,8 +63,18 @@ const required = flagValues("--require") as AuditModule[];
 const seedLoss = new Set(flagValues("--seed-loss") as AuditModule[]);
 
 const captureDir = mkdtempSync(join(tmpdir(), "harvey-conservation-"));
+
+// #1155 — the M2 plant. M2 has no offline detector: its findings reach the deliverable through the
+// #416 dynamic-pass artifact a live pen-test writes, which run-audit's m2 probe reads via
+// findFreshPass. Injecting that artifact (fresh, target-matched) makes the gate span the offline
+// consume→assemble half of the M2 delivery path — the seam #1042 silently dropped. The LIVE
+// pentest→artifact half needs a stood-up stack and stays out of this offline gate (#1155).
+const artifactsDir = mkdtempSync(join(tmpdir(), "harvey-conservation-artifacts-"));
+writeM2ConservationPlant(artifactsDir, targetDir, new Date().toISOString());
+
 const ctx: RunContext = {
   targetDir,
+  artifactsDir,
   env: { connected: false, dynamic: false, llm: false },
   // #1109: shared with run-audit rather than copied. A gate that shells out differently from the
   // orchestrator it is gating measures the copy, not the thing.
