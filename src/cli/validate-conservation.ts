@@ -8,10 +8,14 @@
 // that produced nothing for its plant, or produced it and did not deliver it.
 //
 // PREREQUISITES, same as `pnpm validate:calibration`: the mechanical binaries (semgrep, trufflehog,
-// gitleaks, osv-scanner) on PATH and a full git history for the target. Deliberately NOT part of
-// `pnpm verify` for exactly the reason dry-run-drift and corpus-drift are not — `pnpm verify` runs
-// in a CI job with none of those. What IS in `pnpm verify` is src/audit-conservation.test.ts, which
-// seeds each violation into the gate's logic and proves it fails; this CLI proves the wiring.
+// gitleaks, osv-scanner) on PATH and a full git history for the target — PLUS the `vitals` plugin,
+// because M3's plant is a truck-factor-1 row and knowledge-risk analysis exists only in vitals' full
+// tier: without it hotspot-scan drops to the reduced churn×complexity tier (#807) and M3 correctly
+// reports GONE. `.github/workflows/conservation.yml` installs it from source at a pinned commit.
+// Deliberately NOT part of `pnpm verify` for exactly the reason dry-run-drift and corpus-drift are
+// not — `pnpm verify` runs in a CI job with none of those. What IS in `pnpm verify` is
+// src/audit-conservation.test.ts, which seeds each violation into the gate's logic and proves it
+// fails; this CLI proves the wiring.
 //
 // --require <Mn>  hold a module recorded in UNEXERCISED to the full standard anyway. This is the
 //                 falsifier path for its recorded reason (#1033): `--require M2` exits 0 the day M2

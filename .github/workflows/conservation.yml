@@ -4,11 +4,12 @@
 # produced == delivered + deduped + suppressed + capped, with any unaccounted delta a failure.
 #
 # Why this is NOT part of `pnpm verify` (the required per-PR check): validate-conservation drives
-# the mechanical tier, so it needs semgrep/trufflehog/gitleaks/osv-scanner on PATH plus full git
-# history for the target — none of which the `verify` job has, on exactly the precedent
-# dry-run-drift.yml and corpus-drift.yml set. What IS under `verify` is the gate's LOGIC
-# (src/audit-conservation.test.ts, src/conservation-ledger.test.ts, each violation seeded and proven
-# to fail) and one wiring run through the CLI. This job proves the wiring against the real binaries.
+# the mechanical tier, so it needs semgrep/trufflehog/gitleaks/osv-scanner on PATH, the `vitals`
+# plugin for M3's full tier, plus full git history for the target — none of which the `verify` job
+# has, on exactly the precedent dry-run-drift.yml and corpus-drift.yml set. What IS under `verify`
+# is the gate's LOGIC (src/audit-conservation.test.ts, src/conservation-ledger.test.ts, each
+# violation seeded and proven to fail) and one wiring run through the CLI. This job proves the
+# wiring against the real binaries.
 #
 # Until this existed the gate ran only when a human ran it — the shape #350 is about: a guard that
 # is true of the code, has tests, and is never actually executed.
@@ -82,6 +83,35 @@ jobs:
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
             | tar -xz -C "$HOME/.local/bin" gitleaks
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # M3's FULL tier is the `vitals` plugin. Without it hotspot-scan drops to the reduced
+      # churn×complexity tier (#807), which computes a ranking but no knowledge-risk analysis — so
+      # it structurally cannot produce M3's planted truck-factor-1 row and the gate correctly
+      # reported `GONE M3` on this workflow's first run. vitals is not on npm/PyPI, but it is a
+      # public zero-dependency Python 3 repo, so CI can have the real thing rather than an excuse.
+      #
+      # Pinned by commit, not by branch: src/cli/hotspot-scan.ts asserts the install reports
+      # EXPECTED_VITALS_VERSION (0.2.0), the version src/hotspot-scan.ts's report schema was
+      # verified against (#94/#369/#808). A floating clone that moved to 0.3.0 would exit 1 on that
+      # check — loud, and correct, but it would block this job on an unrelated upstream release.
+      # Bumping the pin means re-verifying the schema first.
+      - name: Install the vitals plugin (M3's full tier)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/vitals"
+          git -C "$HOME/vitals" init -q
+          git -C "$HOME/vitals" fetch -q --depth 1 https://github.com/chopratejas/vitals.git 9c580c8160c7c58cbf2cef821a8d92cfcbb2fd62
+          git -C "$HOME/vitals" checkout -q FETCH_HEAD
+          echo "$HOME/vitals/scripts" >> "$GITHUB_PATH"
+
+      # Asserted in its own step so a broken install (upstream gone, network, a bad pin) reads as
+      # "vitals is missing" here rather than as `GONE M3` three steps later. The gate's own message
+      # does quote the probe's reason, so nothing is lost either way — this just puts the toolchain
+      # failure where a toolchain failure belongs, one step after the install.
+      - name: Assert vitals resolves at the pinned version
+        run: |
+          set -euo pipefail
+          vitals_cli.py version
 
       - name: Conservation gate (must PASS)
         run: pnpm exec tsx src/cli/validate-conservation.ts

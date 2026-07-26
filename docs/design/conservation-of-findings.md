@@ -73,19 +73,34 @@ can silently omit a module is the exact shape it exists to catch.
 
 ## Where the gate runs, and where it does not
 
-`validate-conservation` needs the mechanical binaries (semgrep, trufflehog, gitleaks, osv-scanner)
-and a full git history for the target. The CI `verify` job installs none of them — which is why
-`dry-run-drift`, `corpus-drift` and `corpus-m8` are separate workflows — so this CLI is
-**deliberately not part of `pnpm verify`**, on the same precedent.
+`validate-conservation` needs the mechanical binaries (semgrep, trufflehog, gitleaks, osv-scanner),
+the `vitals` plugin, and a full git history for the target. The CI `verify` job installs none of
+them — which is why `dry-run-drift`, `corpus-drift` and `corpus-m8` are separate workflows — so this
+CLI is **deliberately not part of `pnpm verify`**, on the same precedent.
+
+`vitals` is in that list because of M3, and the reason is worth stating plainly: M3's plant is a
+truck-factor-1 row, and knowledge-risk analysis exists only in vitals' full tier. Without the plugin
+`hotspot-scan` falls back to the reduced churn×complexity tier (#807), which produces a ranking and
+no knowledge-risk at all, so the gate reports `GONE M3` — **correctly**, because M3 really did not
+run in full. That is the shape a coverage guard is supposed to have: the missing toolchain surfaces
+as a named failure rather than as a quietly narrower scan. It is fixed by installing the tool, never
+by softening the plant — `conservation.yml` fetches vitals from source at a pinned commit.
+
+One decay risk is tracked rather than assumed away: vitals derives truck-factor from files churning
+in a **90-day** window (`vitals_cli.py:103,131`), so if `targets/calibration` goes that long without
+two commits to a qualifying source file, M3 reddens with no scanner defect behind it. Measured
+2026-07-26: 2 qualifying files, i.e. a thin margin. Issue #1112 holds the options.
 
 What *is* under `pnpm verify`:
 
 - `src/audit-conservation.test.ts` — the gate's **logic**, with each violation shape seeded and
   proven to fail. Fast, offline, no binaries.
 - `src/cli/validate-conservation.test.ts` — the **wiring**, through the real CLI against
-  `targets/calibration`. Self-skips with a printed reason where the binaries are absent, and carries
-  a reason block naming the falsifier for that skip. It runs the orchestrator **once**, with
-  `--seed-loss M7`, and asserts both directions from that one output: M7 fails, and the other eight
+  `targets/calibration`. Self-skips with a printed reason where the binaries **or vitals** are
+  absent (asserting `PASS M3` on a vitals-less machine would fail for a toolchain gap and read as a
+  conservation break), and carries a reason block naming the falsifier for each skip. It runs the
+  orchestrator **once**, with `--seed-loss M7`, and asserts both directions from that one output:
+  M7 fails, and the other eight
   plants all travelled probe → deliverable intact. Two runs starved the vitest worker RPC
   (`Timeout calling "onTaskUpdate"`, twice in three `pnpm verify` runs on 2026-07-26; clean with the
   file excluded) — each run is a ~30s synchronous `execFileSync` that blocks its worker, alongside
@@ -93,10 +108,12 @@ What *is* under `pnpm verify`:
 
 Scheduled since #1096: `.github/workflows/conservation.yml` (weekly Mondays 07:30 UTC, on
 `workflow_dispatch`, and on any PR touching the pipeline), installing the same binary set as
-`dry-run-drift`. **Its negative controls are part of the job**: after the gate passes, the workflow
-runs `--seed-loss M7` and `--seed-unaccounted` and fails if either exits 0. A green run therefore
-means "the gate passed AND the gate can still fail" — a materially stronger claim than "the gate
-passed", and the one #1065 showed is worth paying for.
+`dry-run-drift` plus `vitals`, cloned from source at a pinned commit and asserted to report
+`EXPECTED_VITALS_VERSION` in its own step — so a failed install reads as "vitals is missing" there
+rather than as "M3 detected nothing" three steps later. **Its negative controls are part of the
+job**: after the gate passes, the workflow runs `--seed-loss M7` and `--seed-unaccounted` and fails
+if either exits 0. A green run therefore means "the gate passed AND the gate can still fail" — a
+materially stronger claim than "the gate passed", and the one #1065 showed is worth paying for.
 
 ## Proof, dated
 
@@ -120,6 +137,21 @@ Re-measured 2026-07-26 after #1096 landed the ledger and the typed-result tranch
 | `pnpm exec tsx src/cli/run-audit.ts targets/calibration --findings-out …` | exit 0 — ledger balanced, 575 findings written, M9 row reads `[examined 388 product source files]` |
 | `pnpm exec vitest run src/conservation-ledger.test.ts src/probe-result.test.ts` | 19 passed |
 | `pnpm exec tsx src/cli/validate-calibration.ts` | `GATE PASS` — 230/233 static positives, 218/218 negatives (unchanged by this work) |
+
+Re-measured 2026-07-26 after the workflow's own first run reported `GONE M3`. The CI environment was
+reproduced locally by pointing `HOME` at an empty directory, which hides the `~/.claude/plugins`
+install and is the only way vitals reaches a Harvey run — the no-vitals row below matches the CI
+failure line for line, including its ledger arithmetic:
+
+| Command (all with `HOME` pointed at an empty dir) | Result |
+| --- | --- |
+| gate, no vitals anywhere | exit 1 — `598 = 568 + 30`, `GONE M3 produced=0 delivered=0`, probe reason `vitals plugin unavailable — reduced M3 tier` (identical to the CI run) |
+| gate, with vitals fetched at the pinned commit onto `PATH` | exit 0 — `605 = 575 + 30`, `PASS M3 produced=2 delivered=2`, `CONSERVATION PASS` |
+| `--seed-loss M7`, same vitals-on-PATH environment | exit 1 — `GONE M7 produced=0 delivered=1` |
+| `--seed-unaccounted`, same environment | exit 1 — `LEDGER FAIL … UNACCOUNTED 1` |
+
+The 7-finding gap between the two ledgers is exactly M3's vitals-only sub-signals (2 truck-factor-1,
+5 co-change coupling) — the reduced tier does not produce them, so the plant has nothing to match.
 
 ## Invariant 1 — the conservation ledger (#1096)
 
