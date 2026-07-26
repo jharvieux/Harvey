@@ -26,9 +26,19 @@ import { join, relative, resolve } from "node:path";
 
 type ReasonKind = "empirical" | "decisional";
 
-const KEYS = ["REASON", "KIND", "PROVENANCE", "FALSIFIER", "OWNER", "DECISION", "TOUCHES"] as const;
+const KEYS = ["REASON", "KIND", "PROVENANCE", "FALSIFIER", "FALSIFIER-TIER", "OWNER", "DECISION", "TOUCHES"] as const;
 type Key = (typeof KEYS)[number];
 const KNOWN = new Set<string>(KEYS);
+
+// #1072 — some empirical falsifiers can only be re-run against a live tier: a two-tenant M2 stack, a
+// Lighthouse/CWV pass, a SecBench run, the paired Supabase security labs. Recording those with a
+// plain FALSIFIER: forces one of two dishonesties — a fake offline proxy command that re-tests
+// nothing, or an UNVERIFIABLE failure on every offline run. FALSIFIER-TIER: names the environment
+// the command needs; on an offline run it is SKIPPED-with-a-reason (disclosed and counted, never
+// dropped), and on the run that declares that tier available (`--tier <name>` / `--live`) it runs
+// exactly like any other falsifier. A value outside this set is malformed rather than silently
+// always-skipped — this is the single place a new live tier is registered (like #341's OWNERS map).
+export const KNOWN_FALSIFIER_TIERS = new Set(["m2-stack", "lighthouse", "secbench", "supabase-labs"]);
 
 export interface ParsedReason {
   file: string;
@@ -131,13 +141,16 @@ export function validateRecordedReason(r: ParsedReason): string[] {
   if (!f.PROVENANCE) errors.push('PROVENANCE: missing — tag it MEASURED/TRIED/ASSUMED plus the date, e.g. "ASSUMED 2026-07-25"');
   else if (!PROVENANCE_FORM.test(f.PROVENANCE)) errors.push(`PROVENANCE: must start "MEASURED|TRIED|ASSUMED YYYY-MM-DD", got "${f.PROVENANCE}"`);
 
+  const tier = f["FALSIFIER-TIER"];
   if (kind === "empirical") {
     if (!f.FALSIFIER) errors.push("FALSIFIER: missing — an empirical reason with no re-test command is unfalsifiable and therefore permanent (#1033). Write a command that EXITS 0 WHEN THE BLOCKER IS GONE.");
     else if (PLACEHOLDER.test(f.FALSIFIER)) errors.push(`FALSIFIER: "${f.FALSIFIER}" is a placeholder, not a command — it would satisfy this gate while re-testing nothing`);
     if (f.OWNER) errors.push("OWNER: belongs on a decisional reason (who makes the ruling); an empirical reason is settled by its FALSIFIER, not by a person");
+    if (tier !== undefined && !KNOWN_FALSIFIER_TIERS.has(tier)) errors.push(`FALSIFIER-TIER: "${tier}" is not a registered live tier — a typo would make this falsifier silently always-skipped. Known tiers: ${[...KNOWN_FALSIFIER_TIERS].join(", ")} (register a new one in KNOWN_FALSIFIER_TIERS, #1072)`);
   }
   if (kind === "decisional") {
     if (f.FALSIFIER) errors.push("FALSIFIER: refused on a decisional reason — a human ruling is not re-testable by command, and sweeping it into the re-validation gate produces noise that discredits the gate (#1033)");
+    if (tier !== undefined) errors.push("FALSIFIER-TIER: refused on a decisional reason — it qualifies a FALSIFIER, which a decisional reason must not carry (#1072)");
     if (!f.OWNER) errors.push("OWNER: missing — a decisional reason needs the person or role who makes the ruling");
     if (!f.DECISION) errors.push("DECISION: missing — point at the decision record (a doc path or issue ref) the ruling lives in");
   }
@@ -157,7 +170,7 @@ function touchedPaths(r: ParsedReason): string[] {
   return (r.fields.TOUCHES ?? "").split(/[,\s]+/).filter(Boolean);
 }
 
-type RevalidationStatus = "holds" | "STALE" | "UNVERIFIABLE";
+type RevalidationStatus = "holds" | "STALE" | "UNVERIFIABLE" | "SKIPPED-LIVE";
 
 interface RevalidationRow {
   file: string;
@@ -176,13 +189,22 @@ export interface FalsifierResult {
 // 127 is the shell's "command not found". A mistyped falsifier exits non-zero, which under the
 // contract below would read as "the blocker still holds" — the exact silent-pass this file exists to
 // prevent — so it is called out as UNVERIFIABLE instead. Same for a signal/timeout (code null).
-export function revalidateReasons(reasons: ParsedReason[], run: (command: string) => FalsifierResult): RevalidationRow[] {
+//
+// `availableTiers` names the live tiers this run can exercise (empty offline). A falsifier tagged
+// FALSIFIER-TIER whose tier is not available is SKIPPED-LIVE — disclosed and counted, not run and
+// not a failure. Skipping it silently, or failing it as UNVERIFIABLE, would recreate the #1072
+// defect this field exists to fix.
+export function revalidateReasons(reasons: ParsedReason[], run: (command: string) => FalsifierResult, availableTiers: Set<string> = new Set()): RevalidationRow[] {
   return reasons.flatMap((r): RevalidationRow[] => {
     if (reasonKind(r) !== "empirical") return [];
     const command = r.fields.FALSIFIER;
     if (!command) return [];
-    const { code, output } = run(command);
     const base = { file: r.file, line: r.line, claim: r.fields.REASON ?? "" };
+    const tier = r.fields["FALSIFIER-TIER"];
+    if (tier !== undefined && !availableTiers.has(tier)) {
+      return [{ ...base, status: "SKIPPED-LIVE" as const, detail: `live-only falsifier not run — its tier "${tier}" is not available on this run. Re-run where that tier exists: \`--tier ${tier}\` (or \`--live\`). \`${command}\`` }];
+    }
+    const { code, output } = run(command);
     if (code === null || code === 127) {
       return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier could not be run (${code === null ? "signal/timeout" : "command not found"}): \`${command}\` — a reason whose re-test cannot execute is as unguarded as one with no re-test at all. ${output.trim().slice(0, 200)}` }];
     }
