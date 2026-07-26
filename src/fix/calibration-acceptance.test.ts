@@ -23,7 +23,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Finding, FindingsDocument, ReportMeta } from "../findings.js";
 import { runFixAcceptance } from "./acceptance.js";
 import { rerunDetector, resolvesToDetector } from "./detector-rerun.js";
@@ -39,6 +39,30 @@ function track(c: MaterializedCorpus): MaterializedCorpus {
   created.push(c);
   return c;
 }
+
+// #1134: every test in this file is fully synchronous — runFixAcceptance/rerunDetector/materialize
+// shell out to git and semgrep via execFileSync *inside production code* (src/scan/semgrep.ts,
+// materialize-calibration.ts, execute.ts), not as a CLI child process the test file itself spawns.
+// Converting those call chains to async, unlike the four src/cli/*.test.ts files in the same sweep,
+// would ripple through the fix pipeline and the scanner core that other callers depend on — out of
+// scope for a test-infra change. So this file takes the threshold-check option #1134 offers instead
+// of conversion: each test's own synchronous execution IS the single blocking window (nothing in the
+// body yields to the event loop), so timing beforeEach->afterEach measures exactly that window and
+// fails loud, naming the elapsed time, if it drifts anywhere near vitest's hardcoded 60s worker-RPC
+// ack window (see vitest.config.ts's HEAVY_CLI_TESTS comment). MEASURED 2026-07-26: the slowest test
+// in this file runs in ~5.3s, so 30s leaves ample margin while still catching real drift long before
+// it becomes the #1120/#1133 failure mode (exit 1, zero failing tests, nothing named).
+const BLOCKING_WINDOW_MS = 30_000;
+let __blockingWindowStart = 0;
+beforeEach(() => {
+  __blockingWindowStart = performance.now();
+});
+afterEach(() => {
+  const elapsed = performance.now() - __blockingWindowStart;
+  expect(elapsed, `test blocked the vitest worker's event loop for ${Math.round(elapsed)}ms (#1134 guard, threshold ${BLOCKING_WINDOW_MS}ms)`).toBeLessThan(
+    BLOCKING_WINDOW_MS,
+  );
+});
 
 // The one §8 in-scope class whose detector rerunDetector CAN resolve today (M5 AST): the unused-param
 // slop planted at app/api/ar-cors-reflected-safe/route.ts:8 — the same planting detector-rerun.test.ts
