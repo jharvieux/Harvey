@@ -20,13 +20,28 @@ const cleanOutput = (argv: string[]): string => {
   if (cmd.includes("detect-static")) return "loaded 42 source files (30 product source, 2 config, 10 test/story) from /target\n\n3 findings across 2 classes:";
   if (cmd.includes("hotspot-scan.ts")) return "M3 hotspot table — /target (5 rows, worst first)";
   if (cmd.includes("pentest.ts")) return JSON.stringify({ findings: [] });
+  // #1109: the unit counts a clean run prints — quick-scan's codebase-size line and pii-classify's
+  // column tally. A probe that cannot read them now says it examined nothing, so a double that
+  // withheld them would be modelling a BROKEN tool, not a clean one.
+  if (cmd.includes("quick-scan")) return "  4,778 lines of application code across 400 file(s)\n  Band: Small";
+  if (cmd.includes("pii-classify")) return "Scanned 120 columns. PII-bearing columns: 9 across 4 tables.";
   return "";
 };
+
+// #1109: quality-scan reports the jscpd line total and knip's scope count on STDERR (stdout carries
+// its Finding[]), so the clean-run double has to speak both streams.
+const cleanStderr = (argv: string[]): string => {
+  const cmd = argv.join(" ");
+  if (cmd.includes("quality-scan")) return "M4 duplication: 1.2% (60/5000 lines) — 3 clone cluster(s)\nM5 dead code across 2 scope(s): 1 unused file(s)";
+  return "";
+};
+
+const cleanRun = (argv: string[]): { ok: true; output: string; stderr: string } => ({ ok: true, output: cleanOutput(argv), stderr: cleanStderr(argv) });
 
 const ctx = (over: Partial<RunContext> = {}): RunContext => ({
   targetDir: "/target",
   env: { connected: false, dynamic: false, llm: false },
-  exec: (_command, argv) => ({ ok: true, output: cleanOutput(argv) }),
+  exec: (_command, argv) => cleanRun(argv),
   exists: () => true,
   isGitRepoRoot: () => true,
   ...over,
@@ -136,7 +151,7 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
       exists: (p) => !p.endsWith("node_modules"),
       exec: (_c, argv) => {
         if (argv.includes("quality-scan")) invoked.push(argv.join(" "));
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     });
     const m5 = runAudit(AUDIT_RUNNERS, noDeps).recorded.find((r) => r.module === "M5");
@@ -150,7 +165,7 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
   it("M5 reports the #810 reduced tier when quality-scan emitted M5-98", () => {
     const reduced = ctx({
       exists: (p) => !p.endsWith("node_modules"),
-      exec: (_c, argv) => (argv.includes("quality-scan") ? { ok: true, output: JSON.stringify([{ id: "M5-98" }]) } : { ok: true, output: cleanOutput(argv) }),
+      exec: (_c, argv) => (argv.includes("quality-scan") ? { ...cleanRun(argv), output: JSON.stringify([{ id: "M5-98" }]) } : cleanRun(argv)),
     });
     const m5 = runAudit(AUDIT_RUNNERS, reduced).recorded.find((r) => r.module === "M5");
     expect(m5?.status).toBe("partial");
@@ -171,7 +186,7 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
       exec: (_c, argv) =>
         argv.includes("mutation-scan")
           ? { ok: true, output: JSON.stringify({ moduleRecord: { status: "partial", note: "Mutation scoring did not run: the target has a vitest suite but no Stryker install (@stryker-mutator/core, @stryker-mutator/vitest-runner missing) — re-run with --install to provision them." } }) }
-          : { ok: true, output: cleanOutput(argv) },
+          : cleanRun(argv),
     });
     const m8 = runAudit(AUDIT_RUNNERS, noDeps).recorded.find((r) => r.module === "M8");
     expect(m8?.status).toBe("partial");
@@ -191,7 +206,7 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
       exists: (p) => !p.endsWith("node_modules"),
       captureDir: "/capture",
       readArtifact: () => artifact,
-      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : { ok: true, output: cleanOutput(argv) }),
+      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv)),
     });
     const { recorded, findings } = runAudit(AUDIT_RUNNERS, noPackageJson);
     const m8 = recorded.find((r) => r.module === "M8");
@@ -226,7 +241,7 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
     const connectedWithRef = ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRef: "my-project-ref",
-      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: argv.includes("my-project-ref"), output: "" } : { ok: true, output: cleanOutput(argv) }),
+      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: argv.includes("my-project-ref"), output: "" } : cleanRun(argv)),
     });
     const m7 = runAudit(AUDIT_RUNNERS, connectedWithRef).recorded.find((r) => r.module === "M7");
     expect(m7?.status).toBe("partial");
@@ -278,7 +293,7 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
       schemaHint: "/given/schema.sql",
       exec: (_c, argv) => {
         if (argv.includes("pii-classify")) seen.push(argv[argv.indexOf("--schema") + 1]!);
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     }));
     expect(seen).toContain("/given/schema.sql");
@@ -321,7 +336,7 @@ describe("M10 discovers schema DDL beyond the conventional locations (#770)", ()
       discoverSchemaFiles,
       exec: (_c, argv) => {
         if (argv.includes("pii-classify")) seenArgv.push(argv);
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     })).recorded.find((r) => r.module === "M10");
 
@@ -368,7 +383,7 @@ describe("M10 discovers schema DDL beyond the conventional locations (#770)", ()
       discoverSchemaFiles,
       exec: (_c, argv) => {
         if (argv.includes("pii-classify")) seenArgv.push(argv);
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     }));
     const schemaArgs = seenArgv[0]!.slice(seenArgv[0]!.indexOf("--schema") + 1);
@@ -399,7 +414,7 @@ describe("M10 classifies a Prisma app's schema.prisma when no migrations have be
       exists: existsSync,
       exec: (_c, argv) => {
         if (argv.includes("pii-classify")) seenArgv.push(argv);
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     })).recorded.find((r) => r.module === "M10");
 
@@ -463,10 +478,12 @@ const status = (runners: typeof AUDIT_RUNNERS, over: Partial<RunContext>, module
 describe("probes derive status from evidence, not the exit code (#350)", () => {
   it("M5 — knip did not run (M5-00 disclosure emitted, exit 0) is NOT recorded ran", () => {
     // quality-scan exits 0 by design (#223) so M4 keeps its findings; the M5-00 finding is the tell.
-    const knipFailed = { exec: () => ({ ok: true, output: JSON.stringify([{ id: "M4-00" }, { id: "M5-00", title: "M5 dead-code scan (knip) did not run" }]) }) };
+    // #1109: knip having run on NO scope is a not-assessed, not a partial — the typed result draws
+    // the line the old `partial` blurred, because a partial with no unit count reads as coverage.
+    const knipFailed = { exec: (_c: string, argv: string[]) => ({ ...cleanRun(argv), output: JSON.stringify([{ id: "M4-00" }, { id: "M5-00", title: "M5 dead-code scan (knip) did not run" }]) }) };
     const m5 = status(AUDIT_RUNNERS, knipFailed, "M5");
     expect(m5?.status).not.toBe("ran");
-    expect(m5?.status).toBe("partial");
+    expect(m5?.status).toBe("requires-live-run");
     expect(m5?.reason).toMatch(/knip did not run/);
   });
 
@@ -474,7 +491,7 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
   // (the gap is disclosed as a finding, not a crash) so this is exactly the #350 shape: the exit
   // code says nothing, the M4-99 finding is the tell.
   it("M4 — jscpd did not complete on every workspace (M4-99 disclosure emitted, exit 0) is NOT recorded ran", () => {
-    const jscpdTimedOut = { exec: () => ({ ok: true, output: JSON.stringify([{ id: "M5-01" }, { id: "M4-99", title: "M4 duplication scan (jscpd) did not complete for every workspace" }]) }) };
+    const jscpdTimedOut = { exec: (_c: string, argv: string[]) => ({ ...cleanRun(argv), output: JSON.stringify([{ id: "M5-01" }, { id: "M4-99", title: "M4 duplication scan (jscpd) did not complete for every workspace" }]) }) };
     const m4 = status(AUDIT_RUNNERS, jscpdTimedOut, "M4");
     expect(m4?.status).not.toBe("ran");
     expect(m4?.status).toBe("partial");
@@ -492,7 +509,7 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     const noSuite = ctx({
       captureDir: "/capture",
       readArtifact: () => artifact,
-      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : { ok: true, output: cleanOutput(argv) }),
+      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: JSON.stringify(artifact) } : cleanRun(argv)),
     });
     const { recorded, findings } = runAudit(AUDIT_RUNNERS, noSuite);
     const m8 = recorded.find((r) => r.module === "M8");
@@ -508,7 +525,7 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
       exec: (_c: string, argv: string[]) =>
         argv.includes("mutation-scan")
           ? { ok: true, output: JSON.stringify({ summary: { overall: { mutationScore: 91.2 } }, reportRows: [], moduleRecord: { status: "partial", note: "Scoped mutation run — run covered 263 file(s) but the configured mutate globs match 812 — 549 file(s) were never mutated (e.g. src/other.ts). A subset measurement is not M8's result: recorded partial, never ran (#504)." } }) }
-          : { ok: true, output: cleanOutput(argv) },
+          : cleanRun(argv),
     };
     const m8 = status(AUDIT_RUNNERS, scopedRun, "M8");
     expect(m8?.status).not.toBe("ran");
@@ -525,7 +542,7 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
       exec: (_c: string, argv: string[]) =>
         argv.includes("mutation-scan")
           ? { ok: true, output: JSON.stringify({ finding: { id: "M8-03" }, moduleRecord: { status: "partial", note: "Stryker's initial dry run FAILED — the target suite does not pass under the invoked environment (TZ=UTC (from ci.yml)): × format-date.test.ts. M8 mutation scoring could not run (#503); the suite must pass an unmutated run first." } }) }
-          : { ok: true, output: cleanOutput(argv) },
+          : cleanRun(argv),
     };
     const m8 = status(AUDIT_RUNNERS, dryRunFailed, "M8");
     expect(m8?.status).toBe("partial");
@@ -543,7 +560,7 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
         ...over,
         exec: (_c, argv) => {
           if (argv.includes("mutation-scan")) seen = argv;
-          return { ok: true, output: cleanOutput(argv) };
+          return cleanRun(argv);
         },
       }));
       return seen;
@@ -580,6 +597,61 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
   });
 });
 
+// #1109 — the same rule as #350/#1065, now applied to the seven probes that had no unit count at
+// all. Each tool below exits 0 and reports that it examined NOTHING; before the migration every one
+// of these read as a `partial` or a `ran` whose reason discussed missing TIERS, never the fact that
+// the tier which did run had no subject matter.
+describe("a probe that examined nothing is not-assessed, not a clean row (#1096/#1109)", () => {
+  const withTool = (match: string, output: string, stderr = ""): Partial<RunContext> => ({
+    exec: (_c, argv) => (argv.join(" ").includes(match) ? { ok: true, output, stderr } : cleanRun(argv)),
+  });
+
+  it("M1 — quick-scan measuring 0 application files is not a mechanical-tier partial", () => {
+    const noCode = withTool("quick-scan", "  0 lines of application code across 0 file(s)");
+    const m1 = status(AUDIT_RUNNERS, noCode, "M1");
+    expect(m1?.status).toBe("requires-live-run");
+    expect(m1?.reason).toMatch(/0 application source files/);
+  });
+
+  it("M1 — a real file count rides onto the row, so the client can check the zero", () => {
+    const m1 = status(AUDIT_RUNNERS, {}, "M1");
+    expect(m1?.status).toBe("partial");
+    expect(m1?.detail).toContain("examined 400 application source files");
+  });
+
+  it("M3 — a hotspot table over 0 ranked files is not an M3 pass", () => {
+    const m3 = status(AUDIT_RUNNERS, withTool("hotspot-scan.ts", "M3 hotspot table — /target (0 rows, worst first)"), "M3");
+    expect(m3?.status).toBe("requires-live-run");
+    expect(m3?.reason).toMatch(/ranked 0 files/);
+  });
+
+  it("M4 — quality-scan exiting 0 with no jscpd line total is not a duplication measurement", () => {
+    const m4 = status(AUDIT_RUNNERS, withTool("quality-scan", "[]", "jscpd: nothing to report"), "M4");
+    expect(m4?.status).toBe("requires-live-run");
+    expect(m4?.reason).toMatch(/no jscpd line total/);
+  });
+
+  it("M4/M5 — the counts quality-scan prints on STDERR reach the ledger row (the #1109 blocker)", () => {
+    expect(status(AUDIT_RUNNERS, {}, "M4")?.detail).toContain("examined 5000 source lines compared by jscpd");
+    expect(status(AUDIT_RUNNERS, {}, "M5")?.detail).toContain("examined 2 workspace scopes analysed by knip");
+  });
+
+  it("M10 — pii-classify classifying 0 columns is not a schema-tier partial", () => {
+    const m10 = status(AUDIT_RUNNERS, withTool("pii-classify", "Scanned 0 columns. PII-bearing columns: 0 across 0 tables."), "M10");
+    expect(m10?.status).toBe("requires-live-run");
+    expect(m10?.reason).toMatch(/classified 0 columns/);
+  });
+
+  it("M10 — the classified column count rides onto the schema-tier row", () => {
+    expect(status(AUDIT_RUNNERS, {}, "M10")?.detail).toContain("examined 120 database columns");
+  });
+
+  it("M8 — the test-intent tier's file count is the unit on every rung of the verdict ladder", () => {
+    const m8 = status(AUDIT_RUNNERS, {}, "M8");
+    expect(m8?.detail).toContain("examined 42 source files (test-intent tier, tests included)");
+  });
+});
+
 // #682: M8 has two sub-steps — the source-only test-intent tier and the Stryker mutation tier. When
 // the mutation sub-step is BLOCKED (a non-zero exit / unrecognized output, e.g. the #623 harness
 // failure) the probe must NOT drop to requires-live-run and discard the test-intent tier's already-
@@ -597,7 +669,7 @@ describe("a blocked M8 mutation sub-step keeps the test-intent tier's findings (
 
   it("a non-zero mutation-scan exit reads partial+sub-step-blocked and keeps the test-intent findings", () => {
     const blocked = withStatic({
-      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: false, output: "TypeError undefined (harness #623)" } : { ok: true, output: cleanOutput(argv) }),
+      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: false, output: "TypeError undefined (harness #623)" } : cleanRun(argv)),
     });
     const { recorded, findings } = runAudit(AUDIT_RUNNERS, blocked);
     const m8 = recorded.find((r) => r.module === "M8");
@@ -611,7 +683,7 @@ describe("a blocked M8 mutation sub-step keeps the test-intent tier's findings (
 
   it("an unrecognized mutation verdict also degrades to partial+sub-step-blocked, findings kept", () => {
     const unknown = withStatic({
-      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: "not json at all" } : { ok: true, output: cleanOutput(argv) }),
+      exec: (_c, argv) => (argv.includes("mutation-scan") ? { ok: true, output: "not json at all" } : cleanRun(argv)),
     });
     const { recorded, findings } = runAudit(AUDIT_RUNNERS, unknown);
     const m8 = recorded.find((r) => r.module === "M8");
@@ -625,7 +697,7 @@ describe("a blocked M8 mutation sub-step keeps the test-intent tier's findings (
       exec: (_c, argv) => {
         if (argv.includes("mutation-scan")) return { ok: false, output: "crash" };
         if (argv.includes("detect-static")) return { ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty" };
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     });
     const m8 = status(AUDIT_RUNNERS, bothDown, "M8");
@@ -763,7 +835,7 @@ describe("a blocked M6 simplify-scan keeps the indicator tier's findings (#683)"
 
   it("a non-zero simplify-scan reads partial+sub-step-blocked and keeps the indicator findings", () => {
     const blocked = withIndicator({
-      exec: (_c, argv) => (argv.includes("simplify-scan") ? { ok: false, output: "packet assembly crashed" } : { ok: true, output: cleanOutput(argv) }),
+      exec: (_c, argv) => (argv.includes("simplify-scan") ? { ok: false, output: "packet assembly crashed" } : cleanRun(argv)),
     });
     const { recorded, findings } = runAudit(AUDIT_RUNNERS, blocked);
     const m6 = recorded.find((r) => r.module === "M6");
@@ -781,7 +853,7 @@ describe("a blocked M6 simplify-scan keeps the indicator tier's findings (#683)"
       exec: (_c, argv) => {
         if (argv.includes("simplify-scan")) return { ok: false, output: "crash" };
         if (argv.includes("detect-static")) return { ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty" };
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     });
     const m6 = status(AUDIT_RUNNERS, bothDown, "M6");
@@ -980,7 +1052,7 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     // does. A probe that could not run its own tiers becomes partial — something ran — not `ran`.
     it("a recorded pass lifts a not-run module to partial, never to ran", () => {
       const noSource = withPass("M9", { pass: "captured", findings: [{ id: "M9-PASS-1" }] }, {
-        exec: (_c: string, argv: string[]) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /target" } : { ok: true, output: cleanOutput(argv) }),
+        exec: (_c: string, argv: string[]) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /target" } : cleanRun(argv)),
       });
       const m9 = status(AUDIT_RUNNERS, noSource, "M9");
       expect(m9?.status).toBe("partial");
@@ -1088,7 +1160,7 @@ describe("M10 surfaces its data map for the severity join (#1049)", () => {
 
   it("passes --data-map-out to pii-classify and returns the parsed map", () => {
     const argvSeen: string[][] = [];
-    const result = runAudit(AUDIT_RUNNERS, ctx({ ...capturing(), exec: (_c, argv) => (argvSeen.push(argv), { ok: true, output: cleanOutput(argv) }) }));
+    const result = runAudit(AUDIT_RUNNERS, ctx({ ...capturing(), exec: (_c, argv) => (argvSeen.push(argv), cleanRun(argv)) }));
     expect(argvSeen.some((argv) => argv.includes("pii-classify") && argv.includes("--data-map-out"))).toBe(true);
     expect(result.dataMap).toEqual(dataMap);
   });
@@ -1114,7 +1186,7 @@ describe("M1 collects the mechanical tier's findings into the deliverable (#1040
       readFindings: (p: string) => (p.endsWith("M1.json") ? [critical, indicator, sfc] : []),
       exec: (_c, argv) => {
         if (argv.join(" ").includes("quick-scan")) expect(argv).toContain("--findings-out");
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     });
 
@@ -1195,7 +1267,7 @@ describe("monorepo per-instance fan-out (#506)", () => {
       apps,
       exec: (_c, argv) => {
         if (argv.includes("quality-scan")) seen.push(argv[argv.indexOf("quality-scan") + 1]!);
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     }));
     expect(seen).toEqual(expect.arrayContaining(["/target/apps/main", "/target/apps/rag"]));
@@ -1214,7 +1286,7 @@ describe("monorepo per-instance fan-out (#506)", () => {
     const m7 = runAudit(AUDIT_RUNNERS, ctx({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main", "proj-rag"],
-      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : { ok: true, output: cleanOutput(argv) }),
+      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : cleanRun(argv)),
     })).recorded.filter((r) => r.module === "M7");
     expect(m7.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
     // #527: advisor success is `partial` (Lighthouse/CWV tier unmeasured), never `ran`.
@@ -1228,7 +1300,7 @@ describe("monorepo per-instance fan-out (#506)", () => {
       supabaseRefs: ["proj-main", "proj-rag"],
       exec: (_c, argv) => {
         if (argv.includes("perf-scan")) return { ok: !argv.includes("proj-rag"), output: "advisors 500" };
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     })).recorded.filter((r) => r.module === "M7");
     // #527: both rows are partial now, but for different reasons — the coverage guard needs each row
@@ -1267,7 +1339,7 @@ describe("monorepo per-instance fan-out (#506)", () => {
           const out = argv[argv.indexOf("--out") + 1] ?? "";
           envByRef.set(out, opts?.env?.SUPABASE_DB_URL);
         }
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     })).recorded.filter((r) => r.module === "M10");
     expect(m10.map((r) => r.instance).sort()).toEqual(["proj-main", "proj-rag"]);
@@ -1305,7 +1377,7 @@ describe("monorepo per-instance fan-out (#506)", () => {
       schemaHints: { "apps/rag": "/given/apps-rag-schema.sql" },
       exec: (_c, argv) => {
         if (argv.includes("pii-classify")) schemasSeen.push(argv[argv.indexOf("--schema") + 1]!);
-        return { ok: true, output: cleanOutput(argv) };
+        return cleanRun(argv);
       },
     }));
     // apps/rag used its own hint; apps/main had none, so it fell back to the conventional probe
@@ -1344,7 +1416,7 @@ describe("M7 collects the code tier's findings into the deliverable (#1062)", ()
 
   it("passes --out to the code tier's detect-static run", () => {
     const argvSeen: string[][] = [];
-    runAudit(AUDIT_RUNNERS, capturing({ exec: (_c, argv) => (argvSeen.push(argv), { ok: true, output: cleanOutput(argv) }) }));
+    runAudit(AUDIT_RUNNERS, capturing({ exec: (_c, argv) => (argvSeen.push(argv), cleanRun(argv)) }));
     const m7Run = argvSeen.find((argv) => argv.includes("detect-static") && argv.includes("/cap/M7.json"));
     expect(m7Run).toBeDefined();
   });
@@ -1366,7 +1438,7 @@ describe("M7 collects the code tier's findings into the deliverable (#1062)", ()
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main"],
       readFindings: (p: string) => (p.endsWith("M7.json") ? [perf, boundary] : p.includes("M7-proj-main") ? [advisor] : []),
-      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : { ok: true, output: cleanOutput(argv) }),
+      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : cleanRun(argv)),
     }));
     expect(findings.map((f) => f.id)).toEqual(expect.arrayContaining(["M7C-01", "M7A-01"]));
   });
@@ -1378,7 +1450,7 @@ describe("M7 collects the code tier's findings into the deliverable (#1062)", ()
     const { findings } = runAudit(AUDIT_RUNNERS, capturing({
       env: { connected: true, dynamic: false, llm: false },
       supabaseRefs: ["proj-main", "proj-rag"],
-      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : { ok: true, output: cleanOutput(argv) }),
+      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : cleanRun(argv)),
     }));
     expect(findings.filter((f) => f.id.startsWith("M7C-01"))).toHaveLength(1);
   });
@@ -1391,7 +1463,7 @@ describe("M7 collects the code tier's findings into the deliverable (#1062)", ()
   });
 
   it("a scan that found nothing to run still carries no findings — capture is not a status", () => {
-    const noFiles = capturing({ exec: (_c, argv) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files" } : { ok: true, output: cleanOutput(argv) }) });
+    const noFiles = capturing({ exec: (_c, argv) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files" } : cleanRun(argv)) });
     const m7 = runAudit(AUDIT_RUNNERS, noFiles).recorded.find((r) => r.module === "M7");
     expect(m7?.status).toBe("requires-live-run");
   });

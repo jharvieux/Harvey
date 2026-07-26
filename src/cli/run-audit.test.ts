@@ -13,7 +13,7 @@
 // enumerated package (here shared/Widget.tsx) was lost from the deliverable outright. Hence the
 // two-workspace fixture: it is the only shape in which the loss is observable.
 
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -42,17 +42,30 @@ function buildMonorepo(root: string): void {
   writeFileSync(join(root, "shared", "Widget.tsx"), 'export function Widget() {\n  return <img src="/w.png" alt="w" />;\n}\n');
 }
 
-const run = (args: string[]): void => {
-  execFileSync("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "ignore", "ignore"] });
-};
+// #1120: spawn + await, NOT execFileSync. This was the last unfixed instance of the flake and the
+// only one serializing the heavy files did not cure. execFileSync blocks the vitest worker's event
+// loop, and a blocked worker cannot service the birpc ack for the task update it already sent; that
+// ack has a 60s window vitest hardcodes. The beforeAll below is TWO full ten-module orchestrator
+// runs in a single uninterrupted block — MEASURED 2026-07-26 at 62s on a GitHub ubuntu runner, over
+// the line, so it failed the run with `Timeout calling "onTaskUpdate"` and ZERO failing tests even
+// with nothing else on the machine. Awaiting a spawned child leaves the loop free, so the ack lands.
+//
+// This is the constraint for every heavy CLI test, not just this one: no single blocking window may
+// approach 60s. The others each block ~15s at most, which is why they were not converted with it.
+const run = (args: string[]): Promise<void> =>
+  new Promise((res, rej) => {
+    const child = spawn("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: "ignore" });
+    child.on("error", rej);
+    child.on("close", (code) => (code === 0 ? res() : rej(new Error(`run-audit ${args.join(" ")} exited ${code}`))));
+  });
 
 describe("run-audit CLI export capture", () => {
   // 300s: two full ten-module runs of the real orchestrator as child processes.
-  beforeAll(() => {
+  beforeAll(async () => {
     scratch = mkdtempSync(join(tmpdir(), "harvey-run-audit-test-"));
     buildMonorepo(join(scratch, "target"));
-    run([join(scratch, "target"), "--sarif-out", join(scratch, "only.sarif")]);
-    run([join(scratch, "target"), "--findings-out", join(scratch, "engagement.json")]);
+    await run([join(scratch, "target"), "--sarif-out", join(scratch, "only.sarif")]);
+    await run([join(scratch, "target"), "--findings-out", join(scratch, "engagement.json")]);
     sarifOnly = JSON.parse(readFileSync(join(scratch, "only.sarif"), "utf8"));
     engagement = JSON.parse(readFileSync(join(scratch, "engagement.json"), "utf8")) as FindingsDocument;
   }, 300000);

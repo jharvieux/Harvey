@@ -15,8 +15,8 @@
 //
 // REASON: the shared source loader reads only .ts/.tsx/.jsx/.mjs, so no static/AST pass in Harvey sees a .svelte/.vue/.astro component — this file counts and discloses what is unread rather than parsing it (#920 is the parse layer)
 // KIND: empirical
-// PROVENANCE: MEASURED 2026-07-25 (ran the falsifier below; it exits 1)
-// FALSIFIER: grep -Eq "svelte|vue|astro" src/detectors/load-sources.ts
+// PROVENANCE: MEASURED 2026-07-26 (re-ran the falsifier below; it exits 1 — SOURCE_FILE is still ts/tsx/jsx/js/mjs/cjs/mts/cts only). The 2026-07-25 form matched anywhere in the file and started reporting STALE the same day, on `.svelte-kit` in EXCLUDED_DIR — an SFC directory being SKIPPED is the opposite of the loader learning to read one, so it is now pinned to the SOURCE_FILE line.
+// FALSIFIER: grep -E "^export const SOURCE_FILE" src/detectors/load-sources.ts | grep -Eq "svelte|vue|astro"
 // TOUCHES: src/detectors/load-sources.ts
 
 import { readdirSync, statSync } from "node:fs";

@@ -89,7 +89,7 @@ export function parseRecordedReasons(text: string, file: string): ParsedReason[]
 
 /** The prose and code surfaces the convention governs. `briefs/` is scanner input, not prose, but
  * carries the same kind of standing claim. */
-export const DEFAULT_ROOTS = ["src", "docs", "briefs", "CLAUDE.md", "SESSION.md"];
+export const DEFAULT_ROOTS = ["src", "docs", "briefs", "CLAUDE.md", "SESSION.md", "vitest.config.ts"];
 
 const SCANNED = /\.(ts|md|txt|yml|sql)$/;
 // targets/ is vendored third-party source — Harvey's convention does not govern it.

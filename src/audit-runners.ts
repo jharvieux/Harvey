@@ -10,7 +10,7 @@
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
 import { findFreshPass, type PassArtifact, ranFromPass } from "./audit-pass-artifact.js";
-import { type Examined, type ModuleRunner, type ProbeOutcome, type ProbeReport, type ProbeResult, type RunContext, TYPED_PROBES } from "./audit-runner.js";
+import { type Examined, type ModuleRunner, type NotAssessed, type ProbeReport, type ProbeResult, type RunContext, TYPED_PROBES } from "./audit-runner.js";
 import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
 import type { Finding } from "./findings.js";
 import { testQualityFromArtifact } from "./mutation-scan.js";
@@ -223,6 +223,30 @@ const productFilesScanned = (output: string): number | undefined => {
   return m ? Number(m[1]) : undefined;
 };
 
+// quick-scan's free report prints the #1044 codebase-size line to stdout — "4,778 lines of
+// application code across 400 file(s)". #1109 MEASURED 2026-07-26 (`pnpm quick-scan --dir
+// targets/calibration`): that line IS the M1 probe's unit count, so the recorded blocker "quick-scan
+// prints no unit count this probe can read" was false. The probe passes --findings-out, never --out,
+// so the report body always lands on the stdout ctx.exec returns.
+const applicationFilesMeasured = (output: string): number | undefined => {
+  const m = output.match(/lines of application code across ([\d,]+) file\(s\)/);
+  return m ? Number(m[1]!.replace(/,/g, "")) : undefined;
+};
+
+// pii-classify prints "Scanned N columns. PII-bearing columns: H across T tables." to stdout on both
+// its tiers (live and --schema), so M10's unit count does not depend on a capture path.
+const columnsClassified = (output: string): number | undefined => {
+  const m = output.match(/Scanned (\d+) columns/);
+  return m ? Number(m[1]) : undefined;
+};
+
+// hotspot-scan prints its ranked-row count in the M3 table header — "(N rows, worst first)" or, on
+// the reduced tier with more qualifying files than rows shown, "(showing top N of M files …)".
+const rankedFiles = (output: string): number | undefined => {
+  const m = output.match(/M3 hotspot table — .*?\((?:showing top )?(\d+)(?: of \d+ files)?[ ,]/);
+  return m ? Number(m[1]) : undefined;
+};
+
 // M1 mechanical tier. #311 DECISION (option 1 — the honest stopgap): M1 is PERMANENTLY `partial`
 // under the orchestrator. The semantic (LLM `/vuln-scan → /triage`) and live (`detect-deeper`)
 // layers are operator/LLM-driven passes that leave no artifact this probe can read, so the earlier
@@ -256,10 +280,25 @@ const gitHistoryGapNote = (ctx: RunContext): string => {
 // and validateFindings would refuse to write the deliverable at all.
 const m1: ModuleRunner = {
   module: "M1",
-  run: (ctx) => {
+  typed: true,
+  run: (ctx): ProbeResult => {
     const outPath = captureOut(ctx, "M1");
+    const command = `pnpm quick-scan --dir ${ctx.targetDir}`;
     const { ok, output } = ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir, ...(outPath ? ["--findings-out", outPath] : [])]);
-    if (!ok) return { status: "requires-live-run", reason: `pnpm quick-scan exited non-zero: ${trimOut(output)}` };
+    if (!ok) return { kind: "not-assessed", reason: `pnpm quick-scan exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
+    // #1109: the file count is the evidence a scan happened, the same rule M9 applies to
+    // detect-static's product-source count. quick-scan exits 0 over a directory with no application
+    // code, and without this a 0-file mechanical tier reported the same reassuring partial as a
+    // 400-file one.
+    const filesMeasured = applicationFilesMeasured(output);
+    if (!filesMeasured) {
+      return {
+        kind: "not-assessed",
+        reason: `quick-scan measured ${filesMeasured === 0 ? "0 application source files" : "no application source files (the codebase-size line was absent from its report)"} under ${ctx.targetDir} — the mechanical tier had nothing to scan (#1065/#1109): ${trimOut(output)}`,
+        provenance: "MEASURED",
+        falsifier: `${command} — a non-zero "lines of application code across N file(s)" count on that report makes this reason false`,
+      };
+    }
     const mechanical = readCaptured(ctx, outPath).filter((f) => !f.taxonomy.startsWith(M6_TAXONOMY_PREFIX) && f.id !== "M1-SFC-00");
     // #416: a fresh semantic/live pass artifact is the evidence #311 said `ran` needs. With it, the
     // flagship LLM/live work is proven (and its triage findings flow into the deliverable); without
@@ -277,11 +316,14 @@ const m1: ModuleRunner = {
           : pass.artifact.hotspotFocus
             ? " [hotspot-focused: M3 → M1 (#502)]"
             : " [WARNING: no M3 hotspot focus — the semantic pass was NOT hotspot-prioritized; run M3 first and feed `pnpm scan-focus` into /vuln-scan (#502)]";
-      return { ...ran, detail: `${ran.detail}${focusNote}`, ...(findings.length ? { findings } : {}) };
+      return { kind: "examined", detail: `${ran.detail}${focusNote}`, unitsExamined: filesMeasured, scope: "application source files", findings };
     }
     return {
-      status: "partial",
+      kind: "examined",
       detail: "pnpm quick-scan (mechanical tier)",
+      unitsExamined: filesMeasured,
+      scope: "application source files",
+      findings: mechanical,
       reason:
         withRejectedPass(
           "mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). The MECHANICAL tier's findings ARE collected into this deliverable (#1040); what is missing is the semantic/live tier's output, so absence of THOSE is not-collected, not clean (#420)",
@@ -289,7 +331,6 @@ const m1: ModuleRunner = {
         ) +
         (outPath ? "" : " This run captured no findings (coverage-only, no --findings-out/--sarif-out), so the mechanical tier's findings are not collected here either — absence is not-collected, not clean (#420).") +
         gitHistoryGapNote(ctx),
-      ...(mechanical.length ? { findings: mechanical } : {}),
     };
   },
 };
@@ -302,17 +343,32 @@ const m1: ModuleRunner = {
 // accident that would break the moment that tool exits 0 on a no-op (#350). M2 therefore reports
 // requires-live-run under the orchestrator; run `pentest.ts` directly against a stood-up stack, and
 // `ran` becomes derivable once that run writes a durable results artifact (option 2, #416).
+//
+// #1109: migrated to the typed result. The recorded blocker said M2's migration "is NotAssessed-only
+// and belongs with the M2 live-run work" — TRIED 2026-07-26 and half false: the not-run branches are
+// NotAssessed, but the pass-artifact branch (#416) is a real Examined over the one thing this probe
+// demonstrably read, the recorded dynamic-pass artifact. Counting that artifact is the honest unit;
+// it does not wait on the live-run work, and it does not invent a probe count M2 never had.
 const m2: ModuleRunner = {
   module: "M2",
-  run: (ctx) => {
+  typed: true,
+  run: (ctx): ProbeResult => {
     // #416: a fresh dynamic-pass artifact (pentest.ts explore/verify results written after a real
     // run against a stood-up stack) is the reachable-stack evidence #356 said the flag was not.
     const pass = findFreshPass(ctx, "M2");
-    if (pass.fresh) return ranFromPass(pass.artifact, "pnpm exec tsx src/cli/pentest.ts (dynamic)");
+    if (pass.fresh) {
+      const ran = ranFromPass(pass.artifact, "pnpm exec tsx src/cli/pentest.ts (dynamic)");
+      return { kind: "examined", detail: ran.detail, findings: ran.findings ?? [], unitsExamined: 1, scope: "recorded M2 dynamic pass artifact" };
+    }
     const base = ctx.env.dynamic
       ? "no local supabase stack confirmed — --dynamic asserts a stack exists but the orchestrator cannot reach or verify one; run `pnpm exec tsx src/cli/pentest.ts` directly against a stood-up two-tenant stack (docs/runbooks/m2-pentest-ops.md). A flag is not a reachable stack (#356; artifact path #416). No M2 findings are collected into this deliverable — they come from that live pen-test run, so absence here is not-collected, not clean (#420)"
       : "no local supabase stack in scope — M2 probes a running two-tenant stack (see CLAUDE.md's module table). No M2 findings are collected into this deliverable — they come from a live pen-test run (#420)";
-    return { status: "requires-live-run", reason: withRejectedPass(base, pass.reason) };
+    return {
+      kind: "not-assessed",
+      reason: withRejectedPass(base, pass.reason),
+      provenance: "MEASURED",
+      falsifier: "pnpm record-pass --module M2 --target <dir> --pass dynamic --out <artifacts-dir> --findings <pentest.json> — a fresh recorded pass makes this row Examined on the next run",
+    };
   },
 };
 
@@ -341,68 +397,86 @@ const m2: ModuleRunner = {
 // bare Finding[], so the M3 findings are read via readArtifact (which pulls `findings` out) rather
 // than readCaptured. The stdout table still gates the `ran` status, so a no-op vitals exit cannot
 // slip through.
+//
+// #1109: migrated to the typed result. The unit is the RANKED-FILE count off the table header the
+// probe already gates `ran` on — so a table with 0 rows (a ranking over nothing) can no longer read
+// as a clean M3 run. The recorded blocker said the count was "a one-line read this tranche did not
+// take", and it was: the header carries it whether or not the run captured an artifact.
 const m3: ModuleRunner = {
   module: "M3",
-  run: (ctx) => {
+  typed: true,
+  run: (ctx): ProbeResult => {
     const outPath = captureOut(ctx, "M3");
     const { ok, output } = ctx.exec("pnpm", ["exec", "tsx", "src/cli/hotspot-scan.ts", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
     const command = `pnpm exec tsx src/cli/hotspot-scan.ts ${ctx.targetDir}`;
-    if (ok && /M3 hotspot table/.test(output)) {
+    const ranked = rankedFiles(output);
+    // A fresh pass artifact is the one thing these branches demonstrably read; #530's hotspot
+    // ranking rides out on it exactly as before.
+    const fromPass = (artifact: PassArtifact): Examined => {
+      const ran = ranFromPass(artifact, "captured vitals report");
+      return {
+        kind: "examined",
+        detail: ran.detail,
+        findings: ran.findings ?? [],
+        unitsExamined: 1,
+        scope: "recorded M3 vitals pass artifact",
+        ...(artifact.hotspots?.length ? { hotspots: artifact.hotspots } : {}),
+      };
+    };
+    if (ok && ranked && /M3 hotspot table/.test(output)) {
       const artifact = readArtifact(ctx, outPath);
       const findings = artifactFindings(artifact);
       // #515: surface the top-K hotspot ranking so the assembler can enrich every module's findings.
       const hotspots = Array.isArray(artifact?.topK) ? (artifact!.topK as string[]) : undefined;
+      const rankedTier = (over: Partial<Examined>): Examined => ({ kind: "examined", detail: command, unitsExamined: ranked, scope: "ranked source files", findings, ...over });
       // #807: the CLI dropped to its reduced Harvey-side tier (vitals not installed) — a churn×
       // complexity ranking only, no coupling/knowledge-risk/AI-provenance. Keyed off the stdout
       // banner so it holds even without an artifacts dir. That is a `partial`, never a clean `ran`;
       // but a fresh full-vitals capture still beats it.
       if (/M3 REDUCED TIER/.test(output)) {
         const pass = findFreshPass(ctx, "M3");
-        if (pass.fresh) {
-          const ran = ranFromPass(pass.artifact, "captured vitals report");
-          return pass.artifact.hotspots?.length ? { ...ran, hotspots: pass.artifact.hotspots } : ran;
-        }
-        return {
-          status: "partial",
-          detail: command,
+        if (pass.fresh) return fromPass(pass.artifact);
+        return rankedTier({
           reason: "vitals plugin unavailable — reduced M3 tier: churn×complexity ranking only (no coupling/knowledge-risk/AI-provenance). Install vitals for the full signal.",
           ...(hotspots?.length ? { hotspots } : {}),
-        };
+        });
       }
       // #1075: vitals ran (installed, real report) but in "complexity-only" mode (no git history in
       // the target) — every hotspot's risk_score is 0.0, so the ranking is filesystem-walk order,
       // not a churn×complexity ranking. `hotspots` is always [] here (the CLI withholds topK when
       // unranked — see src/cli/hotspot-scan.ts), so this never reaches cross-module enrichment.
       if (/M3 UNRANKED/.test(output)) {
-        return {
-          status: "partial",
-          detail: command,
+        return rankedTier({
           reason: 'vitals ran in "complexity-only" mode (no git history in the target) — every file scores risk_score 0.0, so the hotspot table is NOT a churn×complexity ranking and was excluded from cross-module enrichment/cross-reference.',
-          ...(findings.length ? { findings } : {}),
-        };
+        });
       }
-      return {
-        status: "ran",
-        detail: command,
-        ...(findings.length ? { findings } : {}),
-        ...(hotspots?.length ? { hotspots } : {}),
-      };
+      return rankedTier({ ...(hotspots?.length ? { hotspots } : {}) });
     }
     // #416: vitals is not on PATH here (the common case — it's an external plugin). A fresh captured
     // vitals pass artifact still proves M3 ran, so the orchestrator need not have vitals installed to
     // record a real prior run.
+    // #530: surface the pass artifact's top-K ranking so the cross-module enrichment (#515) fires
+    // in the common vitals-off-PATH flow too, not only when M3 was captured in-process.
     const pass = findFreshPass(ctx, "M3");
-    if (pass.fresh) {
-      // #530: surface the pass artifact's top-K ranking so the cross-module enrichment (#515) fires
-      // in the common vitals-off-PATH flow too, not only when M3 was captured in-process.
-      const ran = ranFromPass(pass.artifact, "captured vitals report");
-      return pass.artifact.hotspots?.length ? { ...ran, hotspots: pass.artifact.hotspots } : ran;
-    }
+    if (pass.fresh) return fromPass(pass.artifact);
     const base = !ok
       ? `vitals plugin unavailable or hotspot-scan failed: ${trimOut(output)}`
-      : `hotspot-scan produced no M3 table — vitals report empty or unrecognized: ${trimOut(output)}`;
-    return { status: "requires-live-run", reason: withRejectedPass(base, pass.reason) };
+      : ranked === 0
+        ? `hotspot-scan ranked 0 files under ${ctx.targetDir} — a ranking over nothing is not an M3 pass (#1109): ${trimOut(output)}`
+        : `hotspot-scan produced no M3 table — vitals report empty or unrecognized: ${trimOut(output)}`;
+    return { kind: "not-assessed", reason: withRejectedPass(base, pass.reason), provenance: "MEASURED", falsifier: command };
   },
+};
+
+// quality-scan's two summary lines go to STDERR (stdout is reserved for the bare Finding[] a
+// non-capturing run prints), so these read ctx.exec's `stderr` — see the #1109 note on RunContext.
+const linesCompared = (stderr: string | undefined): number | undefined => {
+  const m = stderr?.match(/M4 duplication: [\d.]+% \(\d+\/(\d+) lines\)/);
+  return m ? Number(m[1]) : undefined;
+};
+const scopesAnalysed = (stderr: string | undefined): number | undefined => {
+  const m = stderr?.match(/M5 dead code across (\d+) scope\(s\)/);
+  return m ? Number(m[1]) : undefined;
 };
 
 // M4 (jscpd) and M5 (knip) share one CLI, but they are two modules with two prereqs: jscpd reads
@@ -418,18 +492,37 @@ const m3: ModuleRunner = {
 // #506: jscpd is also a per-app tier — on a monorepo, perApp runs this once per enumerated app so
 // each app's duplication is a distinct row (with #505's per-app M4-99 timeout signal intact), not
 // folded into the first app's.
-const m4Run = (ctx: RunContext): ProbeOutcome => {
+//
+// #1109: migrated to the typed result. The recorded blocker — "quality-scan reports its jscpd line
+// total on STDERR, which ctx.exec discards on success" — was MEASURED and true of the code, and the
+// fix is to stop discarding it: ctx.exec now hands back the child's stderr alongside its stdout
+// (src/cli/run-audit.ts), so the line total jscpd actually compared is readable without changing
+// quality-scan's bare-Finding[] --out schema. No stderr ⇒ no unit ⇒ NotAssessed, because "jscpd
+// exited 0" without a line total is exactly the reassuring silence #1096 exists to remove.
+const m4Run = (ctx: RunContext): ProbeResult => {
   const outPath = captureOut(ctx, "M4");
   const command = `pnpm quality-scan ${ctx.targetDir}`;
-  const { ok, output } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
-  if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
+  const { ok, output, stderr } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+  if (!ok) return { kind: "not-assessed", reason: `${command} exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
   const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
-  if (!findings) return { status: "requires-live-run", reason: `could not read quality-scan output to confirm jscpd ran: ${trimOut(output)}` };
+  if (!findings) return { kind: "not-assessed", reason: `could not read quality-scan output to confirm jscpd ran: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
+  const lines = linesCompared(stderr);
+  if (!lines) {
+    return {
+      kind: "not-assessed",
+      reason: `quality-scan exited 0 but reported no jscpd line total (${lines === 0 ? "0 lines compared — nothing to duplicate-check" : 'no "M4 duplication: …%(d/t lines)" line on stderr'}) under ${ctx.targetDir} — an exit code alone is not evidence duplication was measured (#350/#1109)`,
+      provenance: "MEASURED",
+      falsifier: `${command} 2>&1 >/dev/null | grep -E "^M4 duplication: [0-9.]+% \\([0-9]+/[1-9][0-9]* lines\\)"`,
+    };
+  }
   const own = ownRows(findings, "M4");
-  if (findings.some((f) => (f as { id?: string }).id === "M4-99")) return { status: "partial", detail: command, reason: "jscpd did not complete on every workspace — quality-scan emitted the M4-99 disclosure finding, so duplication coverage is incomplete for this pass (#505)", findings: own };
-  return own.length ? { status: "ran", detail: command, findings: own } : { status: "ran", detail: command };
+  const scanned = { unitsExamined: lines, scope: "source lines compared by jscpd" } as const;
+  if (findings.some((f) => (f as { id?: string }).id === "M4-99")) {
+    return { kind: "examined", detail: command, ...scanned, reason: "jscpd did not complete on every workspace — quality-scan emitted the M4-99 disclosure finding, so duplication coverage is incomplete for this pass (#505)", findings: own };
+  }
+  return { kind: "examined", detail: command, ...scanned, findings: own };
 };
-const m4: ModuleRunner = { module: "M4", run: perApp(m4Run) };
+const m4: ModuleRunner = { module: "M4", typed: true, run: perApp(m4Run) };
 
 // M5 (#350): knip exits 0 even when it could not run — quality-scan then substitutes an M5-00
 // disclosure finding (#223). So the exit code is not the evidence; the presence of that finding in
@@ -447,41 +540,64 @@ const m4: ModuleRunner = { module: "M4", run: perApp(m4Run) };
 // distinction it was protecting survives as a STATUS rather than a refusal to run — without
 // installed deps M5 tops out at `partial`, because dead code found against an inferred entry graph
 // is review-tier, never confirmed.
-const m5Run = (ctx: RunContext): ProbeOutcome => {
+//
+// #1109: migrated alongside M4 — same CLI, same stderr fix (see m4Run). knip's unit is the SCOPE
+// count: it analyses one workspace scope at a time, and quality-scan now names the total on its
+// stderr summary line. The M5-00 rung is the one branch that becomes a NotAssessed rather than an
+// Examined, and correctly so — "knip did not run on any scope" means nothing was examined, which is
+// exactly the sentence a `partial` with no unit count could not distinguish from a clean sweep.
+const m5Run = (ctx: RunContext): ProbeResult => {
   const depsInstalled = hasNodeModules(ctx);
   const outPath = captureOut(ctx, "M5");
   const command = `pnpm quality-scan ${ctx.targetDir}`;
-  const { ok, output } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
-  if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
+  const { ok, output, stderr } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
+  if (!ok) return { kind: "not-assessed", reason: `${command} exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
   // The verdict array is read from the captured --out file when capturing (quality-scan writes a
   // bare Finding[] there and stays silent on stdout), else parsed from stdout (#312/#419).
   const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
-  if (!findings) return { status: "requires-live-run", reason: `could not read quality-scan output to confirm knip ran: ${trimOut(output)}` };
+  if (!findings) return { kind: "not-assessed", reason: `could not read quality-scan output to confirm knip ran: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
   const emitted = (id: string): boolean => findings.some((f) => (f as { id?: string }).id === id);
+  const scopeFalsifier = `${command} 2>&1 >/dev/null | grep -E "^M5 dead code across [1-9][0-9]* scope\\(s\\)"`;
+  if (emitted("M5-00")) {
+    return {
+      kind: "not-assessed",
+      reason: "knip did not run — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage was skipped this pass (M4 duplication still ran) (#223/#350)",
+      provenance: "MEASURED",
+      falsifier: scopeFalsifier,
+    };
+  }
+  const scopes = scopesAnalysed(stderr);
+  if (!scopes) {
+    return {
+      kind: "not-assessed",
+      reason: `quality-scan exited 0 and emitted no M5-00, but reported no knip scope count on stderr — an exit code alone is not evidence dead code was analysed (#350/#1109): ${trimOut(stderr ?? "")}`,
+      provenance: "MEASURED",
+      falsifier: scopeFalsifier,
+    };
+  }
   const own = ownRows(findings, "M5");
-  const captured = outPath && own.length ? { findings: own } : {};
-  if (emitted("M5-00")) return { status: "partial", detail: command, reason: "knip did not run — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage was skipped this pass (M4 duplication still ran) (#223/#350)" };
+  const analysed = { unitsExamined: scopes, scope: "workspace scopes analysed by knip", findings: outPath ? own : [] } as const;
   if (emitted("M5-98")) {
     return {
-      status: "partial",
+      kind: "examined",
       detail: command,
+      ...analysed,
       reason: "reduced (no-dependencies) tier — knip could not load the target's own config, so it re-ran with all plugins disabled and Harvey-inferred entry points (M5-98, #810). Dead code IS reported; the file-level findings are review-tier, not confirmed. Install the target's dependencies and re-run for confirmed file findings (#1035)",
-      ...captured,
     };
   }
   if (!depsInstalled) {
     return {
-      status: "partial",
+      kind: "examined",
       detail: command,
+      ...analysed,
       reason: "target has no node_modules — knip completed from source alone against a Harvey-inferred entry graph (#696), so its file-level dead code is review-tier, not confirmed. Run `npm install` in the target and re-run for confirmed file findings (#1035)",
-      ...captured,
     };
   }
-  return { status: "ran", detail: command, ...captured };
+  return { kind: "examined", detail: command, ...analysed };
 };
 // #506: knip is the clearest per-app tier — it needs each app's own node_modules/config, so a
 // monorepo runs it once per enumerated app.
-const m5: ModuleRunner = { module: "M5", run: perApp(m5Run) };
+const m5: ModuleRunner = { module: "M5", typed: true, run: perApp(m5Run) };
 
 // M6's free indicator layer (src/detectors/handrolled.ts, taxonomy `M6 — Indicator: …`) runs INSIDE
 // detect-static, the same CLI M7/M9 shell out to — same pattern as M8_TAXONOMY_PREFIX below (M8's
@@ -698,9 +814,20 @@ const testIntentFindings = (findings: Finding[]): Finding[] => findings.filter((
 // #435: a real Stryker run's --out now also carries a `findings` array (denial/boundary-concentrated
 // survivors, src/mutation-scan.ts's survivingMutantFindings) — artifactFindings picks it up the same
 // way it already does M3's `findings` key, so a real run is no longer a zero-finding "ran".
+// The test-intent tier reads the FULL source set, tests included — they are its subject matter (see
+// filesScanned above) — so its unit is deliberately the total, not the product-source count M7/M9 use.
+const TEST_INTENT_SCOPE = "source files (test-intent tier, tests included)";
+
+// A real Stryker report's mutant total, off the same --out artifact the verdict is read from.
+const mutantsMeasured = (artifact: Record<string, unknown> | undefined): number | undefined => {
+  const total = (artifact as { summary?: { overall?: { totalMutants?: unknown } } } | undefined)?.summary?.overall?.totalMutants;
+  return typeof total === "number" && total > 0 ? total : undefined;
+};
+
 const m8: ModuleRunner = {
   module: "M8",
-  run: (ctx) => {
+  typed: true,
+  run: (ctx): ProbeResult => {
     // #401: the free-tier test-intent detectors (src/detectors/test-intent.ts) are source-only AST
     // passes — they need no installed deps. Run this first so its status/findings are available
     // whether or not the mutation tier below can proceed (and are kept, not dropped, if it can't).
@@ -721,20 +848,23 @@ const m8: ModuleRunner = {
     // produced findings. Degrading to requires-live-run would DISCARD them — the silent omission the
     // coverage doctrine forbids — so if the test-intent tier scanned, record partial WITH its
     // findings and flag the blocked sub-step; only when it too could not scan is this a not-run.
-    const mutationBlocked = (why: string): ProbeOutcome =>
+    const mutationBlocked = (why: string): ProbeResult =>
       staticScanned
         ? {
-            status: "partial",
+            kind: "examined",
             subStatus: "sub-step-blocked",
             detail: `${staticCmd} (test-intent tier)`,
+            unitsExamined: staticScanned,
+            scope: TEST_INTENT_SCOPE,
             reason: `mutation tier blocked (${why}); the source-only test-intent tier still ran, so its findings are kept rather than dropped (#682)`,
-            ...(staticFindings.length ? { findings: staticFindings } : {}),
+            findings: staticFindings,
           }
-        : { status: "requires-live-run", reason: `mutation tier blocked and the test-intent tier could not scan either — ${why}` };
+        : { kind: "not-assessed", reason: `mutation tier blocked and the test-intent tier could not scan either — ${why}`, provenance: "MEASURED", falsifier: `${staticCmd} && ${command}` };
     const { ok, output } = ctx.exec("pnpm", ["mutation-scan", ctx.targetDir, ...installArg, ...(outPath ? ["--out", outPath] : [])]);
     if (!ok) return mutationBlocked(`${command} exited non-zero: ${trimOut(output)}`);
     const artifact = readArtifact(ctx, outPath);
     const verdict = mutationVerdict(artifact ?? output);
+    if (verdict.kind === "unknown") return mutationBlocked(`mutation-scan produced no recognizable verdict: ${trimOut(output)}`);
     // #1045: the per-module §3b measurement rides out on its own channel — findings carry the
     // survivor narratives, but the Module/Line-cov/Mutation-score/Surviving table lives only in
     // this artifact, and before this it was computed and then dropped by the orchestrator. A
@@ -742,19 +872,30 @@ const m8: ModuleRunner = {
     // withholding it would hide a real measurement rather than qualify it.
     const testQuality = testQualityFromArtifact(artifact);
     const tq = testQuality ? { testQuality } : {};
-    if (verdict.kind === "partial") {
-      const findings = [...artifactFindings(artifact), ...staticFindings];
-      return findings.length ? { status: "partial", detail: command, reason: verdict.note, findings, ...tq } : { status: "partial", detail: command, reason: verdict.note, ...tq };
+    const findings = [...artifactFindings(artifact), ...staticFindings];
+    // #1109: the unit is the test-intent tier's file count — the tier that runs on EVERY rung of the
+    // ladder, so all four verdicts carry a comparable number. When the mutation tier produced a real
+    // Stryker report its mutant total is the better unit for that row (it is what was measured), and
+    // it is the only unit available at all if detect-static could not scan.
+    const mutants = mutantsMeasured(artifact);
+    const measured: Pick<Examined, "unitsExamined" | "scope"> | undefined = staticScanned
+      ? { unitsExamined: staticScanned, scope: mutants ? `${TEST_INTENT_SCOPE} (mutation tier measured ${mutants} mutants)` : TEST_INTENT_SCOPE }
+      : mutants
+        ? { unitsExamined: mutants, scope: "mutants (test-intent tier reported no file count on this run)" }
+        : undefined;
+    if (!measured) {
+      return {
+        kind: "not-assessed",
+        reason: `mutation-scan returned a ${verdict.kind} verdict but neither tier reported a unit count — the test-intent tier scanned no files and the artifact carries no mutant total, so there is nothing to say M8 examined (#1109): ${trimOut(output)}`,
+        provenance: "MEASURED",
+        falsifier: `${staticCmd} && ${command}`,
+      };
     }
+    if (verdict.kind === "partial") return { kind: "examined", detail: command, ...measured, reason: verdict.note, findings, ...tq };
     // #754: no test suite at all is a COMPLETE assessment — the M8-00 zero-coverage finding IS the
     // verdict (CLAUDE.md / #224) — so this reads `ran`, unlike the measurement-gap `partial` above.
-    if (verdict.kind === "no-suite") {
-      const findings = [...artifactFindings(artifact), ...staticFindings];
-      return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
-    }
-    if (verdict.kind === "unknown") return mutationBlocked(`mutation-scan produced no recognizable verdict: ${trimOut(output)}`);
-    const findings = [...artifactFindings(artifact), ...staticFindings];
-    return findings.length ? { status: "ran", detail: command, findings, ...tq } : { status: "ran", detail: command, ...tq };
+    if (verdict.kind === "no-suite") return { kind: "examined", detail: command, ...measured, findings };
+    return { kind: "examined", detail: command, ...measured, findings, ...tq };
   },
 };
 
@@ -830,13 +971,26 @@ const SCHEMA_CANDIDATE_SUBPATHS = [
   join("prisma", "schema.prisma"),
 ];
 
+// pii-classify exits 0 over a schema (or a database) with no columns to classify — the M10 twin of
+// #1065's zero-file scan, and the reason it is a NotAssessed rather than a clean "ran, 0 findings".
+const notClassified = (ctx: RunContext, output: string, columns: number | undefined, command: string, instance: { instance?: string }): NotAssessed => ({
+  kind: "not-assessed",
+  reason:
+    columns === 0
+      ? `pii-classify classified 0 columns under ${ctx.targetDir} — no schema columns to assess (#1065/#1109): ${trimOut(output)}`
+      : `could not read pii-classify's output to confirm columns were classified (no "Scanned N columns" line): ${trimOut(output)}`,
+  provenance: "MEASURED",
+  falsifier: `${command} — a non-zero "Scanned N columns" line makes this reason false`,
+  ...instance,
+});
+
 // #506/#538: the schema tier is per-app — each app can carry its own schema layout. Runs against
 // the given app dir; `instance` is set only on a multi-app monorepo so a single-app target is one
 // untagged row exactly as before. A hint wins over the probe: on a single-target run (no
 // instanceName) that's ctx.schemaHint; on a monorepo fan-out, it's ctx.schemaHints[instanceName] —
 // its OWN app's hint, never smeared across the fan-out — so an app with an unconventional layout
 // still gets pointed at the right place.
-const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): ProbeOutcome => {
+const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): ProbeResult => {
   const instance = instanceName ? { instance: instanceName } : {};
   const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
   const hintPath = instanceName ? ctx.schemaHints?.[instanceName] : ctx.schemaHint;
@@ -850,7 +1004,13 @@ const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): Pro
   const schemas = conventional ? [conventional] : (discovered?.files ?? []);
   if (schemas.length === 0) {
     const probed = [...candidates, ...(discovered?.probed ?? [])];
-    return { status: "requires-live-run", reason: `no live DB and no schema found — nothing to classify. Probed: ${probed.join(", ")}. pii-classify --schema accepts a migrations dir (supabase/prisma/drizzle) or a schema.sql file (#529)`, ...instance };
+    return {
+      kind: "not-assessed",
+      reason: `no live DB and no schema found — nothing to classify. Probed: ${probed.join(", ")}. pii-classify --schema accepts a migrations dir (supabase/prisma/drizzle) or a schema.sql file (#529)`,
+      provenance: "MEASURED",
+      falsifier: `pnpm pii-classify --schema <path> — point it at this target's schema (run-audit --schema ${instanceName ? `${instanceName}=` : ""}<path>) and the reason is false`,
+      ...instance,
+    };
   }
   const detail = `pnpm pii-classify --schema ${schemas.join(" ")}`;
   // #1043: the schema tier classifies PRESENCE only. Whether a sensitive column is PROTECTED needs
@@ -860,32 +1020,52 @@ const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): Pro
     "schema tier only — no live DB, so row-level data was not sampled AND PII protection was not verified (RLS state, anon/authenticated grants and encryption-at-rest are live-only facts); see the M10-PROT-00 row";
   const mapPath = dataMapOut(ctx, instanceName);
   const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", ...schemas, ...(outPath ? ["--out", outPath] : []), ...(mapPath ? ["--data-map-out", mapPath] : [])]);
-  if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify --schema exited non-zero: ${trimOut(output)}`, ...instance };
-  if (!outPath) return { status: "partial", detail, reason: `${schemaOnly}. And ${M10_NOT_COLLECTED}`, ...instance };
-  const findings = readCaptured(ctx, outPath);
+  const command = `pnpm pii-classify --schema ${schemas.join(" ")}`;
+  if (!ok) return { kind: "not-assessed", reason: `pnpm pii-classify --schema exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command, ...instance };
+  const columns = columnsClassified(output);
+  if (!columns) return notClassified(ctx, output, columns, command, instance);
   const dataMap = readDataMap(ctx, mapPath);
-  return findings.length ? { status: "partial", detail, reason: schemaOnly, findings, ...dataMap, ...instance } : { status: "partial", detail, reason: schemaOnly, ...dataMap, ...instance };
+  return {
+    kind: "examined",
+    detail,
+    unitsExamined: columns,
+    scope: "database columns (parsed from schema DDL)",
+    findings: outPath ? readCaptured(ctx, outPath) : [],
+    reason: outPath ? schemaOnly : `${schemaOnly}. And ${M10_NOT_COLLECTED}`,
+    ...dataMap,
+    ...instance,
+  };
 };
 
 // The env-bound live tier: with no per-DB URL threaded, pii-classify reads SUPABASE_DB_URL from the
 // inherited env, so it reaches exactly the one project the operator pointed it at. `dbUrl` (#520)
 // overlays a per-project SUPABASE_DB_URL onto the child env so a monorepo classifies EACH enumerated
 // project against its own DB, not only the env-configured one.
-const m10Live = (ctx: RunContext, instanceName?: string, dbUrl?: string): ProbeOutcome => {
+const m10Live = (ctx: RunContext, instanceName?: string, dbUrl?: string): ProbeResult => {
   const instance = instanceName ? { instance: instanceName } : {};
   const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
   const execOpts = dbUrl ? { env: { SUPABASE_DB_URL: dbUrl } } : undefined;
   const mapPath = dataMapOut(ctx, instanceName);
   const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : []), ...(mapPath ? ["--data-map-out", mapPath] : [])], execOpts);
-  if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify exited non-zero: ${trimOut(output)}`, ...instance };
-  if (!outPath) return { status: "partial", detail: "pnpm pii-classify (live)", reason: `live classification ran, but ${M10_NOT_COLLECTED}`, ...instance };
-  const findings = readCaptured(ctx, outPath);
+  if (!ok) return { kind: "not-assessed", reason: `pnpm pii-classify exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: "pnpm pii-classify", ...instance };
+  const columns = columnsClassified(output);
+  if (!columns) return notClassified(ctx, output, columns, "pnpm pii-classify", instance);
   const dataMap = readDataMap(ctx, mapPath);
-  return findings.length ? { status: "ran", detail: "pnpm pii-classify (live)", findings, ...dataMap, ...instance } : { status: "ran", detail: "pnpm pii-classify (live)", ...dataMap, ...instance };
+  return {
+    kind: "examined",
+    detail: "pnpm pii-classify (live)",
+    unitsExamined: columns,
+    scope: "live database columns",
+    findings: outPath ? readCaptured(ctx, outPath) : [],
+    ...(outPath ? {} : { reason: `live classification ran, but ${M10_NOT_COLLECTED}` }),
+    ...dataMap,
+    ...instance,
+  };
 };
 
 const m10: ModuleRunner = {
   module: "M10",
+  typed: true,
   run: (ctx) => {
     if (ctx.env.connected) {
       const refs = supabaseRefs(ctx);
@@ -895,12 +1075,14 @@ const m10: ModuleRunner = {
       // (run-audit reads SUPABASE_DB_URL_<ref>, the first ref also falling back to plain SUPABASE_DB_URL).
       // A ref with a URL is live-classified against that DB; a ref WITHOUT one keeps an honest
       // requires-live-run row naming the missing credential — never a silent skip.
-      return refs.map((ref): ProbeOutcome => {
+      return refs.map((ref): ProbeResult => {
         const dbUrl = ctx.supabaseDbUrls?.[ref];
         if (!dbUrl) {
           return {
-            status: "requires-live-run",
+            kind: "not-assessed",
             reason: `no per-DB connection URL for ${ref} — set SUPABASE_DB_URL_<ref> (or SUPABASE_DB_URL for the first project) to live-classify it; see run-audit --help (#520). Recorded, not silently omitted.`,
+            provenance: "MEASURED",
+            falsifier: `SUPABASE_DB_URL_${refSlug(ref)}=<url> pnpm pii-classify — with the URL set the project is live-classified`,
             instance: ref,
           };
         }

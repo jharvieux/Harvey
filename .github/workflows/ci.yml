@@ -67,6 +67,68 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify
 
+  # #1120: the seven heavy child-process test files vitest.config.ts keeps out of `pnpm verify`'s
+  # shared worker pool. They are not dropped, they are moved here — serialized (maxForks 1, set by
+  # the config when HARVEY_HEAVY_CLI_TESTS=1) so they cannot starve each other's worker RPC channel
+  # the way they did inside the main suite.
+  #
+  # This job installs the mechanical binaries and the `build` job deliberately does not, which also
+  # closes a standing blind spot: three of these files gate blocks behind
+  # skipIf(!MECHANICAL_BINARIES_PRESENT) / skipIf(!SEMGREP_PRESENT), so until now those blocks had
+  # never executed in CI at all — main looked green while they ran nowhere.
+  #
+  # It is in the `verify` gate's needs below, not advisory: these seven files WERE part of the
+  # required check until this change, and moving required coverage to a non-blocking job would be
+  # the silent-omission failure this repo's coverage guard exists to prevent.
+  heavy-cli:
+    name: heavy CLI tests (serialized, real binaries)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # The mechanical scan these drive reads git history (trufflehog/gitleaks); a shallow clone
+      # would quietly narrow what they cover. Same reason as conservation.yml.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Same pins as conservation.yml / dry-run-drift.yml — each scanner degrades to "found nothing"
+      # rather than failing when its binary is absent, so a missing one here would read as a passing
+      # test instead of an unrun one.
+      - name: Install mechanical-tier scanner binaries
+        run: |
+          set -euo pipefail
+          pipx install semgrep
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+            | sh -s -- -b "$HOME/.local/bin"
+          curl -sSfL -o "$HOME/.local/bin/osv-scanner" \
+            https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_amd64
+          chmod +x "$HOME/.local/bin/osv-scanner"
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            | tar -xz -C "$HOME/.local/bin" gitleaks
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Asserted separately so a broken install reads as a missing binary here rather than as a
+      # skipped describe block three steps later — a skipIf is a silent pass by design.
+      - name: Assert the binaries the skipIf blocks gate on are actually present
+        run: |
+          set -euo pipefail
+          for b in semgrep trufflehog gitleaks osv-scanner; do
+            command -v "$b" >/dev/null || { echo "::error::$b is not on PATH — the heavy tests would skip silently"; exit 1; }
+          done
+
+      - name: Heavy CLI tests
+        env:
+          HARVEY_HEAVY_CLI_TESTS: "1"
+        run: pnpm exec vitest run
+
   actionlint:
     name: actionlint
     needs: changes
@@ -90,14 +152,14 @@ jobs:
   # (the whole point of the tiers) leave this green.
   verify:
     name: verify
-    needs: [changes, build, actionlint]
+    needs: [changes, build, heavy-cli, actionlint]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Gate on required jobs
         run: |
-          echo "changes=${{ needs.changes.result }} build=${{ needs.build.result }} actionlint=${{ needs.actionlint.result }}"
-          for r in '${{ needs.changes.result }}' '${{ needs.build.result }}' '${{ needs.actionlint.result }}'; do
+          echo "changes=${{ needs.changes.result }} build=${{ needs.build.result }} heavy-cli=${{ needs['heavy-cli'].result }} actionlint=${{ needs.actionlint.result }}"
+          for r in '${{ needs.changes.result }}' '${{ needs.build.result }}' '${{ needs['heavy-cli'].result }}' '${{ needs.actionlint.result }}'; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "A required job did not pass."
               exit 1
