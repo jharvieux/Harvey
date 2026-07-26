@@ -7,8 +7,10 @@ import { describe, expect, it } from "vitest";
 import { divergedCloneFindings, wholeRepoDivergedCloneFindings } from "./diverged-clones.js";
 import {
   duplicationSummary,
+  JSCPD_DISCLOSED_GLOBS,
   JSCPD_IGNORE_GLOBS,
   jscpdAnalysedNothingReason,
+  jscpdIgnoreScopeFinding,
   jscpdToFindings,
   jscpdUnavailableFinding,
   knipEntryUncertainFinding,
@@ -16,10 +18,13 @@ import {
   knipReducedTierFinding,
   knipToFindings,
   knipUnavailableFinding,
+  matchesGlob,
+  matchesJscpdIgnoreGlob,
   mergeJscpdReports,
   mergeKnipReports,
   touchesSecurityPath,
   touchesTenantSupabasePath,
+  type JscpdGlobMatch,
   type JscpdReport,
   type KnipReport,
 } from "./quality-scan.js";
@@ -91,9 +96,9 @@ describe("jscpdToFindings", () => {
     expect(big?.impact).toBe("60 duplicated lines (900 tokens) — a fix in one copy is a fix missed in the other.");
   });
 
-  it("assigns unique sequential M4 ids, with the #365 sub-threshold aggregate as the trailing meta row", () => {
+  it("assigns unique sequential M4 ids, with the #365/#1080 meta rows trailing and never colliding with the sequential ids", () => {
     const findings = jscpdToFindings(jscpdReport);
-    expect(findings.map((f) => f.id)).toEqual(["M4-01", "M4-02", "M4-00"]);
+    expect(findings.map((f) => f.id)).toEqual(["M4-01", "M4-02", "M4-00", "M4-SELF-00"]);
   });
 
   it("tags every clone at the high precision tier (issue #72 calibration)", () => {
@@ -125,7 +130,7 @@ describe("jscpdToFindings — sub-threshold small-clone disclosure (#365)", () =
     expect(disclosure?.evidence).toContain("src/c.ts:1-6 ↔ src/d.ts:1-6 (6 lines)");
   });
 
-  it("does not count self-file repetition in the disclosure — #232 excludes it at any size", () => {
+  it("does not count self-file repetition in the M4-00 sub-threshold disclosure — it gets its own M4-SELF-00 row instead (#1080)", () => {
     const selfOnly: JscpdReport = {
       statistics: { total: { percentage: 0, duplicatedLines: 0, lines: 100 } },
       duplicates: [
@@ -139,7 +144,9 @@ describe("jscpdToFindings — sub-threshold small-clone disclosure (#365)", () =
         },
       ],
     };
-    expect(jscpdToFindings(selfOnly)).toEqual([]);
+    const findings = jscpdToFindings(selfOnly);
+    expect(findings.find((f) => f.id === "M4-00")).toBeUndefined();
+    expect(findings.map((f) => f.id)).toEqual(["M4-SELF-00"]);
   });
 
   it("emits no disclosure row at all when nothing was dropped — an empty band is not a finding", () => {
@@ -426,6 +433,43 @@ describe("JSCPD_IGNORE_GLOBS", () => {
   });
 });
 
+// #1080: the ignore globs are never disclosed to the reader — this exercises the glob matcher and
+// the M4-SCOPE-00 disclosure row built from it.
+describe("matchesJscpdIgnoreGlob / matchesGlob (#1080)", () => {
+  it("matches a build-artifact path via a leading **/ + trailing /** glob", () => {
+    expect(matchesJscpdIgnoreGlob("apps/main/node_modules/foo/bar.ts")).toBe(true);
+    expect(matchesJscpdIgnoreGlob("src/normal/file.ts")).toBe(false);
+  });
+
+  it("requires an exact basename match for a literal glob, not a substring", () => {
+    expect(matchesGlob("**/database.types.ts", "src/database.types.ts")).toBe(true);
+    expect(matchesGlob("**/database.types.ts", "src/foodatabase.types.ts")).toBe(false);
+  });
+
+  it("the demo glob is a SUBSTRING match — a shipped demos/ directory is excluded by it too", () => {
+    expect(matchesGlob("**/*demo*/**", "apps/demos/product-tour.tsx")).toBe(true);
+  });
+});
+
+describe("jscpdIgnoreScopeFinding (#1080)", () => {
+  it("returns undefined when nothing matched any disclosed glob", () => {
+    const matches = JSCPD_DISCLOSED_GLOBS.map((glob) => ({ glob, count: 0 }));
+    expect(jscpdIgnoreScopeFinding(matches)).toBeUndefined();
+  });
+
+  it("names the matched globs, their counts, and an example, naming the demos/ substring risk", () => {
+    const matches: JscpdGlobMatch[] = JSCPD_DISCLOSED_GLOBS.map((glob) => ({ glob, count: 0 }));
+    const demoGlob = matches.find((m) => m.glob === "**/*demo*/**")!;
+    demoGlob.count = 3;
+    demoGlob.example = "apps/demos/tour.tsx";
+    const finding = jscpdIgnoreScopeFinding(matches);
+    expect(finding?.id).toBe("M4-SCOPE-00");
+    expect(finding?.evidence).toContain("apps/demos/tour.tsx");
+    expect(finding?.evidence).toContain("3 files");
+    expect(finding?.evidence).toContain("SUBSTRING match");
+  });
+});
+
 // Shaped from a real knip fixture: one fully-dead file + one file with two
 // unreferenced exports (a function and a const).
 const knipReport: KnipReport = {
@@ -512,6 +556,76 @@ describe("knipToFindings — unused dependencies (#1050)", () => {
     const findings = knipToFindings(depReport, {}, new Set(), new Set(["package.json"]));
     expect(findings.every((f) => f.confidence === "Review" && f.precisionTier === "review")).toBe(true);
     expect(findings[0]?.fix).toContain("Install the target's dependencies");
+  });
+});
+
+// #1080: the six IssueRecords keys #1050 left dropped at the KnipIssue type boundary — MEASURED
+// against knip 5.88.1's json reporter (node_modules/knip/dist/reporters/json.js). Not captured tool
+// output; hand-built to cover each new category's own emission path.
+describe("knipToFindings — #1080 (unlisted/unresolved/duplicates/enumMembers/optionalPeerDependencies/catalog/binaries/owners)", () => {
+  const report: KnipReport = {
+    files: [],
+    issues: [
+      {
+        file: "src/lib/report.ts",
+        owners: [{ name: "@team-platform" }],
+        exports: [],
+        types: [],
+        unlisted: [{ name: "chalk", line: 2 }],
+        unresolved: [{ name: "./missing-module", line: 4 }],
+        duplicates: [[{ name: "helper", line: 5 }, { name: "default", line: 5 }]],
+        enumMembers: { Status: [{ name: "ARCHIVED", line: 9 }] },
+        optionalPeerDependencies: [{ name: "react-dom", line: 1 }],
+        catalog: [{ name: "typescript", line: 1 }],
+        binaries: [{ name: "some-cli" }],
+      },
+    ],
+  };
+
+  it("reports an unlisted import as a supply-chain-flagged Medium finding", () => {
+    const findings = knipToFindings(report);
+    const f = findings.find((r) => r.title.includes("Unlisted import"));
+    expect(f?.severity).toBe("Medium");
+    expect(f?.evidence).toContain("chalk");
+    expect(f?.impact).toContain("supply-chain");
+    expect(f?.impact).toContain("@team-platform"); // owners enrichment threaded through
+  });
+
+  it("reports an unresolved import as a broken-import finding", () => {
+    const findings = knipToFindings(report);
+    const f = findings.find((r) => r.title.includes("Unresolved import"));
+    expect(f?.severity).toBe("Medium");
+    expect(f?.evidence).toContain("./missing-module");
+  });
+
+  it("reports duplicate exports of the same symbol", () => {
+    const findings = knipToFindings(report);
+    const f = findings.find((r) => r.title.includes("Duplicate export"));
+    expect(f?.evidence).toContain("helper / default");
+  });
+
+  it("reports unused enum members", () => {
+    const findings = knipToFindings(report);
+    const f = findings.find((r) => r.title.includes("Unused enum member"));
+    expect(f?.evidence).toContain("Status.ARCHIVED");
+  });
+
+  it("reports unused optional peer dependencies and catalog entries as separate findings", () => {
+    const findings = knipToFindings(report);
+    expect(findings.find((r) => r.title.includes("optional peer dependency"))?.evidence).toContain("react-dom");
+    expect(findings.find((r) => r.title.includes("catalog"))?.evidence).toContain("typescript");
+  });
+
+  it("reports an unused declared binary at review tier", () => {
+    const findings = knipToFindings(report);
+    const f = findings.find((r) => r.title.includes("binary"));
+    expect(f?.evidence).toContain("some-cli");
+    expect(f?.precisionTier).toBe("review");
+  });
+
+  it("emits nothing for any of the six categories when absent (back-compat with a merged/legacy report)", () => {
+    const bare: KnipReport = { files: [], issues: [{ file: "src/clean.ts", exports: [], types: [] }] };
+    expect(knipToFindings(bare)).toEqual([]);
   });
 });
 

@@ -33,14 +33,16 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { divergedCloneFindings, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
+import { divergedCloneFindings, divergedScopeFinding, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { buildDegradedKnipConfig, buildInferredKnipConfig, detectTargetFramework } from "../scan/framework-detect.js";
 import {
   duplicationSummary,
+  JSCPD_DISCLOSED_GLOBS,
   JSCPD_IGNORE_GLOBS,
   jscpdAnalysedNothingReason,
+  jscpdIgnoreScopeFinding,
   jscpdToFindings,
   jscpdUnavailableFinding,
   knipEntryUncertainFinding,
@@ -48,10 +50,12 @@ import {
   knipReducedTierFinding,
   knipToFindings,
   knipUnavailableFinding,
+  matchesGlob,
   mergeJscpdReports,
   mergeKnipReports,
   touchesSecurityPath,
   touchesTenantSupabasePath,
+  type JscpdGlobMatch,
   type JscpdReport,
   type KnipReport,
 } from "../quality-scan.js";
@@ -391,6 +395,34 @@ function countSourceFiles(dir: string, rel = ""): number {
   return count;
 }
 
+// #1080: deliberately its OWN walk, not countSourceFiles'/securityPathFiles' — those already skip
+// generated/vendor/patches/demo-named directories before a file is ever seen, which would make every
+// one of JSCPD_DISCLOSED_GLOBS's counts read as zero. This walk only skips the build-artifact dirs
+// (node_modules/dist/.next/.git — the ones deliberately NOT in JSCPD_DISCLOSED_GLOBS, see its header)
+// so it actually visits the files the disclosed globs are about.
+const GLOB_TALLY_SKIP_DIRS = new Set(["node_modules", "dist", ".next", ".git"]);
+
+function tallyJscpdIgnoredFiles(dir: string, rel = ""): JscpdGlobMatch[] {
+  const counts = new Map<string, { count: number; example?: string }>(JSCPD_DISCLOSED_GLOBS.map((g) => [g, { count: 0 }]));
+  const walk = (curRel: string): void => {
+    for (const entry of readdirSync(join(dir, curRel), { withFileTypes: true })) {
+      const relPath = curRel ? `${curRel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!GLOB_TALLY_SKIP_DIRS.has(entry.name)) walk(relPath);
+        continue;
+      }
+      for (const g of JSCPD_DISCLOSED_GLOBS) {
+        if (!matchesGlob(g, relPath)) continue;
+        const hit = counts.get(g)!;
+        hit.count += 1;
+        if (!hit.example) hit.example = relPath;
+      }
+    }
+  };
+  walk(rel);
+  return [...counts.entries()].map(([glob, { count, example }]) => ({ glob, count, example }));
+}
+
 const VITE_CONFIG_NAMES = ["vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cjs", "vite.config.mts", "vite.config.cts"];
 
 function hasViteEntryMarkers(dir: string): boolean {
@@ -490,6 +522,11 @@ if (wholeRepoDiverged) {
   wholeRepoDivergedFindings = wholeRepoDivergedCloneFindings(wideFiles);
 }
 
+// #1080: disclose the security-path-only scope of the pass above when nothing wider ran — suppressed
+// once --whole-repo-diverged covers the remainder itself (nothing was skipped in that case).
+const eligibleFileCount = countSourceFiles(targetDir);
+const divergedScopeDisclosure = wholeRepoDiverged ? undefined : divergedScopeFinding(narrowFiles.length, eligibleFileCount);
+
 const knipReport = knipReports.length ? mergeKnipReports(knipReports) : undefined;
 
 const fileLineCounts: Record<string, number> = {};
@@ -500,10 +537,17 @@ if (knipReport) {
   }
 }
 
+// #1080: file counts the ignore globs excluded, disclosed as M4-SCOPE-00 (see jscpdIgnoreScopeFinding's
+// header for why this is its own walk rather than reusing countSourceFiles/securityPathFiles).
+const jscpdGlobMatches = tallyJscpdIgnoredFiles(targetDir);
+const jscpdScopeDisclosure = jscpdIgnoreScopeFinding(jscpdGlobMatches);
+
 const findings: Finding[] = [
   ...jscpdToFindings(jscpdReport),
   ...divergedFindings,
   ...wholeRepoDivergedFindings,
+  ...(divergedScopeDisclosure ? [divergedScopeDisclosure] : []),
+  ...(jscpdScopeDisclosure ? [jscpdScopeDisclosure] : []),
   ...(knipReport ? knipToFindings(knipReport, fileLineCounts, inferredEntryFiles, unresolvedDepScopes) : []),
 ];
 // #505: a gap disclosure coexists with real findings from the scopes that DID complete — unlike
@@ -521,8 +565,10 @@ if (knipReducedScopes.length) findings.push(knipReducedTierFinding(knipReducedSc
 
 const dup = duplicationSummary(jscpdReport);
 console.error(
-  `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s), ${dup.subThresholdCloneCount} sub-threshold small clone(s) disclosed in M4-00 (#365), ${divergedFindings.length} diverged security-path clone pair(s) (#360, review tier)` +
+  `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s), ${dup.subThresholdCloneCount} sub-threshold small clone(s) disclosed in M4-00 (#365), ${dup.selfFileCloneCount} self-file clone(s) disclosed in M4-SELF-00 (#1080), ${divergedFindings.length} diverged security-path clone pair(s) (#360, review tier)` +
     (jscpdGaps.length ? `, whole-repo scan incomplete (#544, see M4-99)` : "") +
+    (jscpdScopeDisclosure ? `, ${jscpdGlobMatches.reduce((sum, m) => sum + m.count, 0)} file(s) excluded by ignore globs disclosed in M4-SCOPE-00 (#1080)` : "") +
+    (divergedScopeDisclosure ? `, diverged-clone pass covered ${narrowFiles.length}/${eligibleFileCount} eligible files (#1080, see M4-97)` : "") +
     (wholeRepoDiverged ? `, ${wholeRepoDivergedFindings.filter((f) => f.id !== "M4-98").length} diverged clone(s) outside the security path (#809, review tier)` : ""),
 );
 if (knipReport) {
