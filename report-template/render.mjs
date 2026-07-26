@@ -16,7 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
 import { capActionPlan, rollupFindings } from "./rollup.mjs";
-import { draftTermsBadge, esc, legalTermsSection, testQualityBlock } from "./sections.mjs";
+import { draftTermsBadge, esc, legalTermsSection, tenantIsolationPill, testQualityBlock } from "./sections.mjs";
 
 const SEV = {
   Critical: { c: "#b3261e", o: 0 },
@@ -387,6 +387,7 @@ function buildHtml(data) {
   .headline{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 18px;margin-top:22px;font-size:13px}
   .headline b{color:#15803d}
   .pill{display:inline-block;background:#dcfce7;color:#15803d;border-radius:999px;padding:2px 10px;font-weight:700;font-size:11px}
+  .pill-unverified{background:#fef2f2;color:#b3261e;font-size:10px;white-space:normal}
   .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;color:var(--muted);font-size:11px}
   .leg i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:middle}
   h2{font-size:15px;margin:26px 0 10px;padding-bottom:6px;border-bottom:2px solid var(--ink);letter-spacing:.3px}
@@ -452,7 +453,7 @@ function buildHtml(data) {
       <div class="card" style="text-align:center">${severityDonut(counts)}<div class="legend" style="justify-content:center">${legend}</div></div>
       <div class="card" style="flex:1">
         <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Tenant isolation</div>
-        <div style="font-size:22px;font-weight:800;margin:4px 0 10px">${esc(m.tenantIsolation)} <span class="pill">verified</span></div>
+        <div style="font-size:22px;font-weight:800;margin:4px 0 10px">${esc(m.tenantIsolation)} ${tenantIsolationPill(data.coverage)}</div>
         <div style="display:flex;gap:10px">
           ${["Critical", "High", "Medium", "Low"].map((s) => `<div style="text-align:center"><div style="font-size:22px;font-weight:800;color:${SEV[s].c}">${sevCount(s)}</div><div style="font-size:10px;color:var(--muted)">${s}</div></div>`).join("")}
         </div>

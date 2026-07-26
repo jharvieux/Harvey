@@ -196,6 +196,21 @@ describe("mutation-scan --stub-check crash safety (#600)", () => {
     expect(readFileSync(join(repo, "src/add.ts"), "utf8")).toBe(SUBJECT);
   });
 
+  // #1067: `false` always exits non-zero — a suite that cannot run at all. Every stubbed run then
+  // "fails", which stubSurvivalFindings reads as "the test caught the deletion", so the CLI used
+  // to print the strongest possible test-quality result (0 survivals) having measured nothing.
+  it("records a partial instead of a perfect score when the suite fails its own unmutated baseline", () => {
+    const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
+    const { status, out } = runCli(repo, ["--stub-check", "--test-cmd", "false"]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { runs: unknown[]; findings: unknown[]; baselineFailed: boolean; moduleRecord?: { status: string; note: string } };
+    expect(parsed.baselineFailed).toBe(true);
+    expect(parsed.runs).toEqual([]);
+    expect(parsed.findings).toEqual([]);
+    expect(parsed.moduleRecord?.status).toBe("partial");
+    expect(parsed.moduleRecord?.note).toMatch(/UNMUTATED baseline/);
+  });
+
   it("a run killed (SIGTERM) mid-mutation leaves the target checkout byte-identical", async () => {
     const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
     const outPath = join(repo, "m8-out.json");

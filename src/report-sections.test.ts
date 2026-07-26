@@ -18,6 +18,7 @@ import {
   derivedScopeLimits,
   draftTermsBadge,
   legalTermsSection,
+  tenantIsolationPill,
   testQualityAction,
   testQualityBlock,
   testQualitySection,
@@ -207,5 +208,40 @@ describe("§0 Limitations & liability (#1048)", () => {
 
   it("does not claim completeness when the ledger is absent", () => {
     expect(derivedScopeLimits(undefined)).toContain("treat the scope as unstated rather than complete");
+  });
+});
+
+// #1067: the cover's tenant-isolation pill said "verified" in hardcoded HTML — the report's most
+// prominent security claim, asserted on every engagement including the ones where M2 never ran.
+// The completeness banner a few lines below it would say "Partial audit"; the two disagreed and
+// the more visually dominant one was the unearned claim. Now derived from the same ledger.
+describe("cover tenant-isolation pill (#1067)", () => {
+  const ledger = (status: CoverageRow["status"]): CoverageRow[] => [
+    { module: "M1", name: "Multi-tenant security", status: "ran", detail: "pnpm scan" },
+    status === "ran"
+      ? { module: "M2", name: "Local pen-test", status: "ran", detail: "two-tenant stack" }
+      : { module: "M2", name: "Local pen-test", status, reason: "no local stack was stood up" },
+  ];
+
+  it("claims verified only when M2 actually ran", () => {
+    expect(tenantIsolationPill(ledger("ran"))).toContain(">verified<");
+  });
+
+  for (const status of ["partial", "requires-live-run"] as const) {
+    it(`withdraws the claim and names the reason when M2 is ${status}`, () => {
+      const pill = tenantIsolationPill(ledger(status));
+      expect(pill).not.toContain(">verified<");
+      expect(pill).toContain("NOT verified this engagement");
+      expect(pill).toContain(`M2 ${status}`);
+      expect(pill).toContain("see Module coverage");
+    });
+  }
+
+  it("withdraws the claim when there is no ledger at all, rather than defaulting to verified", () => {
+    for (const absent of [undefined, [] as CoverageRow[]]) {
+      const pill = tenantIsolationPill(absent);
+      expect(pill).toContain("NOT verified this engagement");
+      expect(pill).toContain("absent from the coverage ledger");
+    }
   });
 });

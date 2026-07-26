@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, classifyLicense } from "./supply-chain.js";
+import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, classifyLicense, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding } from "./supply-chain.js";
 
 describe("checkTyposquat", () => {
   it("flags a name one edit from a popular package", () => {
@@ -134,24 +134,26 @@ describe("checkSlopsquat", () => {
     expect(calls[0]).toBe("https://registry.npmjs.org/%40supabase%2Fsupabase-js");
   });
 
-  it("degrades gracefully (no finding, no throw) on a network error", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  // #1067: a network error used to console.warn and return [] — a message on the operator's
+  // terminal, and a deliverable in which the check is indistinguishable from "checked, clean".
+  it("discloses SUP-SLOPSQUAT-00 naming the indeterminate packages on a network error", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("getaddrinfo ENOTFOUND registry.npmjs.org");
     }) as unknown as typeof fetch;
-    const findings = await checkSlopsquat(["react"], fetchImpl);
-    expect(findings).toEqual([]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("indeterminate"));
-    warn.mockRestore();
+    const findings = await checkSlopsquat(["react", "left-pad"], fetchImpl);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe("SUP-SLOPSQUAT-00");
+    expect(findings[0]?.confidence).toBe("N/A");
+    expect(findings[0]?.title).toContain("2 dependencies");
+    expect(findings[0]?.evidence).toContain("react, left-pad");
+    expect(findings[0]?.evidence).toContain("ENOTFOUND");
   });
 
-  it("does not flag on a non-404 error status (e.g. registry rate-limiting) — indeterminate, not confirmed missing", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("does not flag on a non-404 error status (e.g. rate-limiting) but counts it as unassessed", async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
     const findings = await checkSlopsquat(["react"], fetchImpl);
-    expect(findings).toEqual([]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("indeterminate"));
-    warn.mockRestore();
+    expect(findings.map((f) => f.id)).toEqual(["SUP-SLOPSQUAT-00"]);
+    expect(findings[0]?.evidence).toContain("HTTP 503");
   });
 });
 
@@ -237,14 +239,35 @@ describe("checkLicenseCompliance", () => {
     expect(findings[0]?.evidence).toContain("the npm registry");
   });
 
-  it("degrades gracefully (no finding, no throw) on a network error", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("discloses SUP-LICENSE-00 naming the indeterminate packages on a network error (#1067)", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("getaddrinfo ENOTFOUND registry.npmjs.org");
     }) as unknown as typeof fetch;
     const findings = await checkLicenseCompliance({ react: "^18.2.0" }, fetchImpl);
-    expect(findings).toEqual([]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("indeterminate"));
-    warn.mockRestore();
+    expect(findings.map((f) => f.id)).toEqual(["SUP-LICENSE-00"]);
+    expect(findings[0]?.confidence).toBe("N/A");
+    expect(findings[0]?.evidence).toContain("react");
+  });
+});
+
+// #1067: `skipNetworkChecks` (the deterministic dry-run harness) omitted both tiers with nothing
+// said about it, so the committed artifact's silence read as two clean verdicts.
+describe("deliberately skipped registry tier (#1067)", () => {
+  it("states which packages went unassessed and that the skip was deliberate", () => {
+    for (const finding of [slopsquatCoverageFinding(["react", "next"], NETWORK_SKIPPED_REASON), licenseCoverageFinding(["react", "next"], NETWORK_SKIPPED_REASON)]) {
+      expect(finding.severity).toBe("Info");
+      expect(finding.confidence).toBe("N/A");
+      expect(finding.evidence).toContain("deliberately skipped");
+      expect(finding.evidence).toContain("react, next");
+      expect(finding.impact).toMatch(/NOT a (finding that every dependency exists|clean license bill)/);
+    }
+  });
+
+  it("samples rather than dumps the name list once it is long", () => {
+    const names = Array.from({ length: 30 }, (_, i) => `pkg-${i}`);
+    const evidence = slopsquatCoverageFinding(names, NETWORK_SKIPPED_REASON).evidence;
+    expect(evidence).toContain("pkg-0");
+    expect(evidence).toContain("and 10 more");
+    expect(evidence).not.toContain("pkg-29");
   });
 });
