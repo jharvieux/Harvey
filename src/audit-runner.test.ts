@@ -1035,6 +1035,46 @@ describe("M10 captures its classification findings (#436)", () => {
   });
 });
 
+// #1101: M4 and M5 are two probes over ONE CLI — `pnpm quality-scan` emits both modules' rows, and
+// each probe invoked it and captured the WHOLE array, so every quality-scan finding reached the
+// deliverable twice. dedupeFindings keys on the full JSON body, so that stayed invisible for as long
+// as the two independent invocations agreed byte-for-byte. knip's issue order does not guarantee
+// that (MEASURED 2026-07-26: 8 identical `pnpm quality-scan targets/calibration` runs produced 3
+// distinct orderings), and M5 ids are positional — so the same id arrived with two different bodies,
+// dedupe could not collapse it, and validateFindings rejected the assembled deliverable outright.
+// The stub reproduces exactly that disagreement, deterministically and with no dependency on which
+// packages happen to be installed.
+describe("M4 and M5 each capture only their own rows (#1101)", () => {
+  const qualityScanOutput = (swapped: boolean): Finding[] =>
+    [
+      { id: "M4-01", location: "src/dup.ts" },
+      { id: "M5-01", location: swapped ? "app/api/b/route.ts" : "app/api/a/route.ts" },
+      { id: "M5-02", location: swapped ? "app/api/a/route.ts" : "app/api/b/route.ts" },
+    ] as never;
+
+  // The two probes shell out separately, so they read two separate captures — here in the two
+  // different orders knip is free to emit.
+  const racing = (): Partial<RunContext> => ({
+    captureDir: "/cap",
+    readFindings: (p: string) => (p.endsWith("M4.json") ? qualityScanOutput(false) : p.endsWith("M5.json") ? qualityScanOutput(true) : []),
+  });
+
+  it("delivers no id twice, even when the two invocations disagree on order", () => {
+    const ids = runAudit(AUDIT_RUNNERS, ctx(racing())).findings.map((f) => (f as { id?: string }).id);
+    expect(ids).toEqual([...new Set(ids)]);
+  });
+
+  it("credits each module with its own findings only — M4's ledger must not carry M5's rows", () => {
+    const { findingsByModule } = runAudit(AUDIT_RUNNERS, ctx(racing()));
+    // The conservation gate compares what each module PRODUCED against what was delivered, so a
+    // produced-count inflated with the other module's rows is the wrong number for that comparison
+    // (MEASURED 2026-07-26 on the unfixed code: all 41 quality-scan rows attributed to M5, and the
+    // same 41 to M4).
+    expect(findingsByModule.M4?.map((f) => f.id)).toEqual(["M4-01"]);
+    expect(findingsByModule.M5?.map((f) => f.id)).toEqual(["M5-01", "M5-02"]);
+  });
+});
+
 // #1049: the data map is an INPUT to every other module's severity, so the probe has to hand it back
 // as well as the findings. A run that captured findings but no map would escalate nothing and say
 // nothing about why.
