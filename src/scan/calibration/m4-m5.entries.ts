@@ -17,6 +17,16 @@ export const m4m5Entries: CorpusEntry[] = [
   { module: "M4", id: "M4-P-CLONE-B", kind: "positive", cls: "Copy-pasted report aggregation block", location: "report-a.ts", expectedTier: "high", note: "dup/report-a.ts and dup/report-b.ts share a 52-line copy-pasted metric-aggregation block (658 tokens). jscpd clone cluster; jscpdToFindings' severityForClone -> Medium (>=50 lines)." },
   { module: "M4", id: "M4-P-CLONE-SEC", kind: "positive", cls: "Copy-pasted session/tenant validation block in an auth path", location: "auth/session-check-api.ts", expectedTier: "high", note: "dup/auth/session-check-api.ts and dup/auth/session-check-action.ts share a genuine 25-line copy-pasted session/tenant validation block (246 tokens) under an auth/ path. jscpd clone cluster; touchesSecurityPath fires (#361) so jscpdToFindings elevates Low->Medium and appends the M1 cross-check note. Severity/note asserted in src/quality-scan.test.ts (the matrix scores caught-at-tier only)." },
 
+  // #1095: the self-file band. #232 excluded it as inert repeated DATA; #1080 measured that false
+  // (76% copy-pasted test setup, 7% JSX render blocks, ZERO SVG/enum clusters on a real 2755-file
+  // target) and the operator ruled the band back into the SCORED findings on 2026-07-26.
+  { module: "M4", id: "M4-P-CLONE-SELF", kind: "positive", cls: "Copy-pasted block repeated within one file", location: "self-file-shipping.ts", expectedTier: "high", note: "dup/self-file-shipping.ts repeats a 16-line accumulate-and-format block between summariseDomesticShipment and summariseInternationalShipment IN THE SAME FILE. jscpd clone cluster with both refs on one path; since #1095 jscpdToFindings scores it like any other clone (Low, 15-49 lines) with in-file fix text, instead of dropping it into the M4-SELF-00 count." },
+
+  // #1095: the same-file case of the near-miss pass. Both divergedCloneFindings and
+  // wholeRepoDivergedCloneFindings used to `continue` on a.path === b.path, so two drifted copies
+  // of one guard in ONE file — the case with the weakest discovery cues — were unreachable.
+  { module: "M4", id: "M4-P-DIVERGED-SELF", kind: "positive", cls: "Diverged copy-pasted guard within one file", location: "workspace-guard.ts", match: ["diverged"], expectedTier: "review", note: "dup/auth/workspace-guard.ts holds assertWorkspaceMember and assertProjectMember 12 lines apart: structurally identical, disagreeing on the ownership column (row.owner_id vs row.id) with drifted error strings. No contiguous exact span reaches jscpd's floor, and before #1095 the near-miss pass skipped same-file pairs outright — so nothing saw this pair at all. divergedCloneFindings -> M4-DIV-* reviewFinding (High, review tier)." },
+
   // #360: the Type-3 shape jscpd structurally cannot see — a copy-pasted tenant guard whose
   // copies have DIVERGED (tenant_id vs owner_id scoping literal). Caught by the near-miss pass
   // (src/diverged-clones.ts), review tier: it is an adjudication request, not a verdict.

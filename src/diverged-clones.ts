@@ -10,7 +10,7 @@
 //     supabase query scoped by a tenant-key literal, touchesTenantSupabasePath — the per-entity
 //     lib/ai/tools/*/lib/stores/* copy-paste vein that sits outside the v1 path vocabulary) —
 //     this pass never runs repo-wide;
-//   - only function-level comparison, cross-file, with a minimum token mass;
+//   - only function-level comparison, with a minimum token mass;
 //   - consistent whole-function renames (Type-2, Baker's parameterized match) are SKIPPED:
 //     a faithfully-renamed copy is plain duplication, not divergence. What fires is literal
 //     drift ('tenant_id' vs 'owner_id'), inconsistent identifier mapping, or a small
@@ -20,6 +20,28 @@
 // file selection (the caller may pass any subset, including non-security files), generic wording
 // and Medium severity instead of the security framing, plus a volume cap since the caller can no
 // longer be relied on to hand-pick a small file set.
+//
+// #1095 removes the cross-file-only restriction both passes carried. It cited #232's M4 rationale
+// ("self-file clones are internally-repetitive DATA — SVG icon tables, enum literals"), which was
+// MEASURED FALSE on 2026-07-25 against a real 2755-file target: 76% copy-pasted test setup/mock
+// chains, 7% JSX render blocks, ZERO SVG/enum clusters. Two near-identical functions in ONE file
+// where a fix landed in one copy and not the other are exactly what this detector exists to catch,
+// and the in-file case has WEAKER discovery cues than the cross-file one — a different filename is
+// a memory jog, a second copy 300 lines down in a file you believe you have read is not. The
+// nested-function subsequence pair that only same-file comparison can produce is excluded in
+// compare() (isNested).
+//
+// The cost was MEASURED, not guessed (2026-07-26, crbnos/carbon @ 92e19c04 — 4,080 source files,
+// 4,043 into the whole-repo pass, capped at MAX_WIDE_FUNCTIONS; two runs of each variant, same
+// machine, same optimized build):
+//   - the ALWAYS-ON security-path pass: 60-70 ms -> 90-155 ms, and 0 -> 3 diverged families on a
+//     target where cross-file comparison found none;
+//   - the OPT-IN whole-repo pass: 175-213 s -> 242-459 s, and 204 -> 282 families (+38%). The
+//     variance is machine noise; the direction is real, and it lands where it should — same-file
+//     pairs are the ones most likely to clear the length prefilter and reach the LCS.
+// The same commit precomputes rawJoined/normJoined, which is why the whole-repo pass is FASTER
+// than it is without this change on the pre-#1095 code (618 s on the same target) while doing
+// strictly more work. MAX_WIDE_FUNCTIONS + M4-98 already bound that pass, so no new cap is added.
 //
 // Everything emitted is REVIEW tier (reviewFinding) — "these two checks disagree; which one is
 // right?" is an adjudication question, not a mechanical verdict. Full Type-4 semantic clone
@@ -50,6 +72,10 @@ const MIN_SIMILARITY = 0.9;
 // Cheap prefilter: a pair whose token counts differ by more than this ratio cannot reach
 // MIN_SIMILARITY, so skip the O(n*m) LCS.
 const MIN_LENGTH_RATIO = 0.8;
+// #474: token sequences are joined with a separator no token can contain, so `["a","bc"]` and
+// `["ab","c"]` never compare equal. It used to sit inline as a raw U+001F byte, invisible in every
+// editor and diff; naming it keeps #474's guarantee legible.
+const TOKEN_SEP = "\u001f";
 
 interface FnTokens {
   path: string;
@@ -60,6 +86,11 @@ interface FnTokens {
   norm: string[];
   /** Actual token text, index-aligned with norm. */
   raw: string[];
+  /** #1095: `raw`/`norm` joined ONCE at extraction. compare() ran both joins per PAIR, so the
+   *  two cheap identity checks were the pass's dominant cost — O(tokens) of string allocation on
+   *  every one of the O(n^2) comparisons. Precomputing makes them string-compares. */
+  rawJoined: string;
+  normJoined: string;
 }
 
 function isTsxPath(path: string): boolean {
@@ -116,6 +147,8 @@ function functionsOf(file: SecurityPathFile): FnTokens[] {
       endLine: sf.getLineAndCharacterOfPosition(node.getEnd()).line + 1,
       norm,
       raw,
+      rawJoined: raw.join(TOKEN_SEP),
+      normJoined: norm.join(TOKEN_SEP),
     });
   };
 
@@ -186,9 +219,19 @@ function alignedDivergence(a: FnTokens, b: FnTokens): string[] | null {
   return diffs.length > 0 ? diffs : null;
 }
 
+// #1095: same-file pairs ARE compared now (see divergedCloneFindings' header), but a function
+// NESTED inside another is a token SUBSEQUENCE of its parent, which LCS scores as near-identity —
+// a containment relationship, not two copies that drifted. Cross-file comparison could never
+// produce this pair, so the exclusion appears only now. Line ranges, not token math: exact.
+function isNested(a: FnTokens, b: FnTokens): boolean {
+  if (a.path !== b.path) return false;
+  return (a.startLine <= b.startLine && a.endLine >= b.endLine) || (b.startLine <= a.startLine && b.endLine >= a.endLine);
+}
+
 function compare(a: FnTokens, b: FnTokens): Divergence | null {
-  if (a.raw.join("") === b.raw.join("")) return null; // Type-1 exact — jscpd's job
-  if (a.norm.join("") === b.norm.join("")) {
+  if (isNested(a, b)) return null;
+  if (a.rawJoined === b.rawJoined) return null; // Type-1 exact — jscpd's job
+  if (a.normJoined === b.normJoined) {
     const diffs = alignedDivergence(a, b);
     return diffs ? { a, b, diffs } : null; // null = consistent Type-2 rename, skip
   }
@@ -200,6 +243,13 @@ function compare(a: FnTokens, b: FnTokens): Divergence | null {
 
 const MAX_DIFFS_SHOWN = 4;
 const MAX_MEMBERS_SHOWN = 5;
+
+// #1095: two-member titles. Since same-file pairs are now compared, printing the path on both
+// sides would read as a rendering bug on the common in-file case; collapse it the way
+// selfFileCloneDisclosureFinding (src/quality-scan.ts) already does for jscpd's self-clones.
+function pairLabel(a: FnTokens, b: FnTokens): string {
+  return a.path === b.path ? `${a.path}::${a.name} ↔ ::${b.name}` : `${a.path}::${a.name} ↔ ${b.path}::${b.name}`;
+}
 
 // One finding per FAMILY (connected component of flagged pairs), not per pair. Measured
 // 2026-07-16 on the #222 corpus: per-pair emission turned boxyhq's one drifted
@@ -252,7 +302,7 @@ function familyFinding(fam: Family, i: number): Finding {
     id: `M4-DIV-${String(i + 1).padStart(2, "0")}`,
     title:
       members.length === 2
-        ? `Diverged security-path clones: ${members[0]!.path}::${members[0]!.name} ↔ ${members[1]!.path}::${members[1]!.name}`
+        ? `Diverged security-path clones: ${pairLabel(members[0]!, members[1]!)}`
         : `Diverged security-path clone family (${members.length} functions): ${members[0]!.name} et al.`,
     severity: "High",
     category: "Security-relevant duplication",
@@ -278,7 +328,6 @@ export function divergedCloneFindings(files: SecurityPathFile[]): Finding[] {
     for (let j = i + 1; j < fns.length; j++) {
       const a = fns[i]!;
       const b = fns[j]!;
-      if (a.path === b.path) continue; // cross-file only, mirroring #232's M4 discipline
       const d = compare(a, b);
       if (d) divergences.push(d);
     }
@@ -306,7 +355,7 @@ function wideFamilyFinding(fam: Family, i: number): Finding {
     id: `M4-DIVW-${String(i + 1).padStart(2, "0")}`,
     title:
       members.length === 2
-        ? `Diverged clone: ${members[0]!.path}::${members[0]!.name} ↔ ${members[1]!.path}::${members[1]!.name}`
+        ? `Diverged clone: ${pairLabel(members[0]!, members[1]!)}`
         : `Diverged clone family (${members.length} functions): ${members[0]!.name} et al.`,
     severity: "Medium",
     category: "Duplication debt",
@@ -397,7 +446,6 @@ export function wholeRepoDivergedCloneFindings(files: SecurityPathFile[], opts: 
     for (let j = i + 1; j < byLength.length; j++) {
       const b = byLength[j]!;
       if (b.norm.length > a.norm.length / MIN_LENGTH_RATIO) break; // sorted ascending: nothing further can reach MIN_LENGTH_RATIO
-      if (a.path === b.path) continue; // cross-file only, mirroring #232's M4 discipline
       const d = compare(a, b);
       if (d) divergences.push(d);
     }

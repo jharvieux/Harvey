@@ -94,8 +94,39 @@ describe("divergedCloneFindings — divergence classes", () => {
     expect(divergedCloneFindings([{ path: "auth/a.ts", source: src }, { path: "auth/b.ts", source: src }])).toEqual([]);
   });
 
-  it("never compares functions within the same file", () => {
+  // #1095 (operator ruling 2026-07-26) reverses the previous "never compares functions within the
+  // same file" behaviour. It cited #232's "self-file clones are inert DATA" rationale, measured
+  // false on 2026-07-25 — so two drifted copies of a guard in ONE file, the case with the WEAKEST
+  // discovery cues, were invisible to the detector that exists to catch exactly that.
+  it("compares functions within the same file — a drifted copy 12 lines down is the same bug (#1095)", () => {
     const source = guardSource("requireRecordA", "tenant_id") + guardSource("requireRecordB", "owner_id");
+    const findings = divergedCloneFindings([{ path: "auth/a.ts", source }]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.severity).toBe("High");
+    expect(findings[0]!.evidence).toContain("tenant_id");
+    expect(findings[0]!.evidence).toContain("owner_id");
+    // The path is stated once, not echoed on both sides of the arrow.
+    expect(findings[0]!.title).toBe("Diverged security-path clones: auth/a.ts::requireRecordA ↔ ::requireRecordB");
+  });
+
+  // The one pair only same-file comparison can produce: a nested function is a token SUBSEQUENCE
+  // of its parent, which LCS scores as near-identity. Containment is not divergence.
+  it("does not flag a nested function against the parent that contains it (#1095)", () => {
+    const source = `
+export function requireRecordOuter(req: Req, id: string) {
+  const load = async (recordId: string) => {
+    const session = await getSession(req);
+    if (!session) throw new Error("unauthenticated");
+    const row = await db.query("select * from records where id = $1 and tenant_id = $2", [recordId, session.tenantId]);
+    if (!row) throw new Error("not found");
+    if (row.tenant_id !== session.tenantId) throw new Error("forbidden");
+    if (row.deleted_at !== null) throw new Error("gone");
+    await audit.write(session.tenantId, "read", recordId);
+    return row;
+  };
+  return load(id);
+}
+`;
     expect(divergedCloneFindings([{ path: "auth/a.ts", source }])).toEqual([]);
   });
 
