@@ -1,0 +1,265 @@
+{
+  "statistics": {
+    "detectionDate": "2026-07-26T22:15:23.020Z",
+    "formats": {
+      "typescript": {
+        "sources": {
+          "/Users/johnharvieux/ClaudeCodeProjects/Harvey/.claude/worktrees/agent-a195d6a87e0a6d7e5/scratch-jscpd-src/src/tiny2.ts": {
+            "lines": 8,
+            "tokens": 140,
+            "sources": 1,
+            "clones": 1,
+            "duplicatedLines": 7,
+            "duplicatedTokens": 138,
+            "percentage": 87.5,
+            "percentageTokens": 98.57,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/Users/johnharvieux/ClaudeCodeProjects/Harvey/.claude/worktrees/agent-a195d6a87e0a6d7e5/scratch-jscpd-src/src/tiny1.ts": {
+            "lines": 8,
+            "tokens": 140,
+            "sources": 1,
+            "clones": 1,
+            "duplicatedLines": 7,
+            "duplicatedTokens": 138,
+            "percentage": 87.5,
+            "percentageTokens": 98.57,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/Users/johnharvieux/ClaudeCodeProjects/Harvey/.claude/worktrees/agent-a195d6a87e0a6d7e5/scratch-jscpd-src/src/small2.ts": {
+            "lines": 9,
+            "tokens": 149,
+            "sources": 1,
+            "clones": 1,
+            "duplicatedLines": 9,
+            "duplicatedTokens": 136,
+            "percentage": 100,
+            "percentageTokens": 91.28,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/Users/johnharvieux/ClaudeCodeProjects/Harvey/.claude/worktrees/agent-a195d6a87e0a6d7e5/scratch-jscpd-src/src/small1.ts": {
+            "lines": 9,
+            "tokens": 149,
+            "sources": 1,
+            "clones": 1,
+            "duplicatedLines": 9,
+            "duplicatedTokens": 136,
+            "percentage": 100,
+            "percentageTokens": 91.28,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/Users/johnharvieux/ClaudeCodeProjects/Harvey/.claude/worktrees/agent-a195d6a87e0a6d7e5/scratch-jscpd-src/src/selfclone.ts": {
+            "lines": 38,
+            "tokens": 771,
+            "sources": 1,
+            "clones": 2,
+            "duplicatedLines": 32,
+            "duplicatedTokens": 724,
+            "percentage": 84.21,
+            "percentageTokens": 93.9,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/Users/johnharvieux/ClaudeCodeProjects/Harvey/.claude/worktrees/agent-a195d6a87e0a6d7e5/scratch-jscpd-src/src/big2.ts": {
+            "lines": 57,
+            "tokens": 598,
+            "sources": 1,
+            "clones": 1,
+            "duplicatedLines": 57,
+            "duplicatedTokens": 582,
+            "percentage": 100,
+            "percentageTokens": 97.32,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          },
+          "/Users/johnharvieux/ClaudeCodeProjects/Harvey/.claude/worktrees/agent-a195d6a87e0a6d7e5/scratch-jscpd-src/src/big1.ts": {
+            "lines": 57,
+            "tokens": 598,
+            "sources": 1,
+            "clones": 1,
+            "duplicatedLines": 57,
+            "duplicatedTokens": 582,
+            "percentage": 100,
+            "percentageTokens": 97.32,
+            "newDuplicatedLines": 0,
+            "newClones": 0
+          }
+        },
+        "total": {
+          "lines": 186,
+          "tokens": 2545,
+          "sources": 7,
+          "clones": 4,
+          "duplicatedLines": 89,
+          "duplicatedTokens": 1218,
+          "percentage": 47.85,
+          "percentageTokens": 47.86,
+          "newDuplicatedLines": 0,
+          "newClones": 0
+        }
+      }
+    },
+    "total": {
+      "lines": 186,
+      "tokens": 2545,
+      "sources": 7,
+      "clones": 4,
+      "duplicatedLines": 89,
+      "duplicatedTokens": 1218,
+      "percentage": 47.85,
+      "percentageTokens": 47.86,
+      "newDuplicatedLines": 0,
+      "newClones": 0
+    }
+  },
+  "duplicates": [
+    {
+      "format": "typescript",
+      "lines": 8,
+      "fragment": "export function buildRetryOptions(attempt: number, base: number, cap: number) {\n  const exp = base * Math.pow(2, attempt);\n  const delay = Math.min(cap, exp);\n  const jitter = Math.random() * delay * 0.25;\n  const total = delay + jitter;\n  const capped = total >= cap;\n  return { attempt, delay, jitter, total, capped };\n}",
+      "tokens": 138,
+      "firstFile": {
+        "name": "src/tiny1.ts",
+        "start": 2,
+        "end": 9,
+        "startLoc": {
+          "line": 2,
+          "column": 1,
+          "position": 2
+        },
+        "endLoc": {
+          "line": 9,
+          "column": 2,
+          "position": 140
+        }
+      },
+      "secondFile": {
+        "name": "src/tiny2.ts",
+        "start": 2,
+        "end": 9,
+        "startLoc": {
+          "line": 2,
+          "column": 1,
+          "position": 2
+        },
+        "endLoc": {
+          "line": 9,
+          "column": 2,
+          "position": 140
+        }
+      }
+    },
+    {
+      "format": "typescript",
+      "lines": 10,
+      "fragment": ";\n\nexport function formatAddress(parts: AddressParts): string {\n  const line1 = parts.street.trim();\n  const line2 = `${parts.city}, ${parts.region} ${parts.postal}`;\n  const country = parts.country.toUpperCase();\n  const joined = [line1, line2, country].filter(Boolean).join(\"\\n\");\n  const normalized = joined.replace(/\\s+/g, \" \").trim();\n  return normalized;\n}",
+      "tokens": 136,
+      "firstFile": {
+        "name": "src/small1.ts",
+        "start": 1,
+        "end": 10,
+        "startLoc": {
+          "line": 1,
+          "column": 45,
+          "position": 13
+        },
+        "endLoc": {
+          "line": 10,
+          "column": 2,
+          "position": 149
+        }
+      },
+      "secondFile": {
+        "name": "src/small2.ts",
+        "start": 1,
+        "end": 10,
+        "startLoc": {
+          "line": 1,
+          "column": 45,
+          "position": 13
+        },
+        "endLoc": {
+          "line": 10,
+          "column": 2,
+          "position": 149
+        }
+      }
+    },
+    {
+      "format": "typescript",
+      "lines": 17,
+      "fragment": "(value: number, ceiling: number, weightFactor: number, baselineOffset: number, hardLimit: number) {\n  const rounded = Math.round(value * 100) / 100;\n  const clamped = Math.max(0, Math.min(rounded, ceiling));\n  const scaled = clamped * weightFactor;\n  const shifted = scaled + baselineOffset;\n  const bounded = shifted > hardLimit ? hardLimit : shifted;\n  const normalized = bounded / hardLimit;\n  const percent = Math.round(normalized * 10000) / 100;\n  const banded = percent >= 90 ? \"high\" : percent >= 60 ? \"mid\" : \"low\";\n  const tokens = banded.length + Math.floor(percent);\n  const decorated = `${banded}:${percent}:${tokens}`;\n  const parity = tokens % 2 === 0 ? \"even\" : \"odd\";\n  const signature = `${decorated}:${parity}`;\n  const audit = signature.split(\":\").reverse().join(\"|\");\n  const checksum = audit.length * 31 + percent;\n  return { banded, percent, tokens, parity, signature, audit, checksum };\n}",
+      "tokens": 362,
+      "firstFile": {
+        "name": "src/selfclone.ts",
+        "start": 23,
+        "end": 39,
+        "startLoc": {
+          "line": 23,
+          "column": 30,
+          "position": 409
+        },
+        "endLoc": {
+          "line": 39,
+          "column": 2,
+          "position": 771
+        }
+      },
+      "secondFile": {
+        "name": "src/selfclone.ts",
+        "start": 1,
+        "end": 17,
+        "startLoc": {
+          "line": 1,
+          "column": 29,
+          "position": 5
+        },
+        "endLoc": {
+          "line": 17,
+          "column": 2,
+          "position": 367
+        }
+      }
+    },
+    {
+      "format": "typescript",
+      "lines": 58,
+      "fragment": ";\n\nexport function reconcileLedgerBatch(rows: LedgerRow[]): LedgerSummary {\n  let debit = 0;\n  let credit = 0;\n  let pending = 0;\n  const flagged: string[] = [];\n  for (const row of rows) {\n    if (row.kind === \"debit\") {\n      debit += row.amount;\n    } else if (row.kind === \"credit\") {\n      credit += row.amount;\n    } else {\n      pending += row.amount;\n    }\n    if (row.amount > 100000) {\n      flagged.push(row.id);\n    }\n    if (row.currency !== \"USD\") {\n      flagged.push(row.id + \":fx\");\n    }\n    if (row.postedAt === undefined) {\n      pending += 1;\n    }\n  }\n  const net = debit - credit;\n  const status = net >= 0 ? \"surplus\" : \"deficit\";\n  const ratio = credit === 0 ? 0 : debit / credit;\n  const rounded = Math.round(ratio * 1000) / 1000;\n  const band = rounded >= 2 ? \"leveraged\" : rounded >= 1 ? \"balanced\" : \"liquid\";\n  const alerts: string[] = [];\n  if (net < -500000) {\n    alerts.push(\"net-deficit-critical\");\n  }\n  if (pending > 25) {\n    alerts.push(\"pending-backlog\");\n  }\n  if (flagged.length > 10) {\n    alerts.push(\"too-many-flags\");\n  }\n  const summary: LedgerSummary = {\n    debit,\n    credit,\n    pending,\n    net,\n    status,\n    ratio,\n    flagged,\n    flaggedCount: flagged.length,\n    healthy: flagged.length === 0 && pending === 0,\n  };\n  if (summary.healthy) {\n    summary.note = \"all rows reconciled cleanly\";\n  } else {\n    summary.note = \"review flagged rows before close\";\n  }\n  return summary;\n}",
+      "tokens": 582,
+      "firstFile": {
+        "name": "src/big1.ts",
+        "start": 1,
+        "end": 58,
+        "startLoc": {
+          "line": 1,
+          "column": 62,
+          "position": 16
+        },
+        "endLoc": {
+          "line": 58,
+          "column": 2,
+          "position": 598
+        }
+      },
+      "secondFile": {
+        "name": "src/big2.ts",
+        "start": 1,
+        "end": 58,
+        "startLoc": {
+          "line": 1,
+          "column": 62,
+          "position": 16
+        },
+        "endLoc": {
+          "line": 58,
+          "column": 2,
+          "position": 598
+        }
+      }
+    }
+  ]
+}
