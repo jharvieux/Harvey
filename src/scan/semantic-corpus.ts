@@ -93,7 +93,7 @@ const superRedHat: SemanticTarget = {
     { id: "F-08", kind: "positive", cls: "Math.random token + MD5 hashing for API tokens", locations: ["lib/tokens.ts"], match: ["math.random", "md5", "weak hash", "randomness"], note: "" },
     { id: "F-09", kind: "positive", cls: "insecure JWT — no expiry, unpinned alg, hardcoded fallback secret", locations: ["lib/jwt.ts"], match: ["jwt", "expiresin", "algorithm", "secret"], note: "Mechanical caught 1 of 3 facets; the semantic tier carried the other two (mechanized since, #595)." },
     { id: "F-10", kind: "positive", cls: "wildcard CORS on the authenticated API", locations: ["lib/cors.ts"], match: ["cors"], note: "" },
-    { id: "F-11", kind: "positive", cls: "no CSRF protection / no rate limiting", locations: ["app/api/notes", "app/api/import/route.ts"], match: ["csrf", "rate limit", "rate-limit"], note: "No static detector exists at all — semantic and the M2 CSRF probe are the only tiers that reach it." },
+    { id: "F-11", kind: "positive", cls: "no CSRF protection / no rate limiting", locations: ["app/api/notes", "app/api/import/route.ts"], match: ["csrf", "rate limit", "rate-limit"], note: "Corrected 2026-07-25 (#1033): this said 'no static detector exists at all', which is false — harvey-csrf-missing and leftover-auth.ts's rate-limit checks both exist; neither REACHES this shape (Server-Action-scoped and auth-endpoint-scoped respectively, while F-11 is a plain App Router route handler). Semantic and the M2 CSRF probe are still the only tiers that reach it." },
     { id: "F-12", kind: "positive", cls: "vulnerable ejs dependency + SSTI render endpoint", locations: ["package.json", "app/api/render/route.ts"], match: ["ejs", "ssti", "template injection"], note: "" },
     {
       id: "F-N1",
