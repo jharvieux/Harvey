@@ -1,0 +1,7 @@
+// The vuln-seam-app shape (#1087): the split and the decode are two separate statements, not one
+// expression — the base64 source is a local identifier bound to the split-dot-index result.
+export function decodeUnverified(bearer: string): Record<string, unknown> {
+  const token = bearer.replace(/^Bearer\s+/i, "");
+  const payload = token.split(".")[1] ?? "";
+  return JSON.parse(Buffer.from(payload, "base64").toString("utf8"));
+}

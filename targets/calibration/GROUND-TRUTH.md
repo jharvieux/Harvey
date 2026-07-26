@@ -1433,6 +1433,58 @@ happened to pass, since the weak test is weak in its *assertions*, not broken as
 running the target's own tests through the root suite was never the intent, and a future,
 deliberately-failing weak-test fixture would break `pnpm verify` on an unrelated branch).
 
+### M8 (#1100) — testFiles/coveredBy/killedBy join (vacuous-test detector) + STATIC downgrade
+
+`StrykerMutant.coveredBy`/`killedBy` always parsed as opaque test-id strings, and `StrykerReport`
+never parsed `testFiles` (upstream's `TestFileDefinitionDictionary`) at all — nothing resolved a
+test id to a file/name, so a test that executes code but kills nothing was structurally
+unreachable. `StrykerMutant.static` (upstream: "loaded once during initialization" — a
+module-level mutant Stryker can only run once for the whole suite, not per covering test) was
+also unparsed.
+
+**New fixture:** `test-quality/vacuous.ts` — `gradeScore(score)`, covered ONLY by
+`vacuous.smoke.test.ts`, which calls `gradeScore(85)` then asserts `expect(true).toBe(true)` — a
+constant tautology that never depends on the call's actual return value. This is the planted
+VACUOUS test (M8-P-VACUOUS-STRYKER), distinct from the M8-P-DELETION-SURVIVING stub-check pair
+above: that one is scored by deletion-survival execution; this one by real Stryker mutation
+testing (the `coveredBy`/`killedBy` join).
+
+Scored via its OWN config, `test-quality/stryker.vacuous.config.json` (`mutate: ["vacuous.ts"]`),
+deliberately separate from `stryker.config.json` so the discount.ts/authz.ts pair's recorded live
+result above stays reproducible.
+
+**M8 live result (2026-07-26, live: Stryker 9.6.1, `@stryker-mutator/vitest-runner` 9.6.1, vitest
+3.2.6, no Docker):** `npx stryker run stryker.vacuous.config.json` against
+`targets/calibration/test-quality/`:
+
+- **`vacuous.ts`: 12 mutants — 0 Killed, 10 Survived, 2 NoCoverage → mutation score 0.0%.** The
+  covering test (`vacuous.smoke.test.ts`, test id `"0"`) appears in `coveredBy` for all 10
+  Survived mutants (it genuinely executes `gradeScore`'s reachable branches) but in `killedBy`
+  for NONE of them — every mutation of the comparison/branch logic still passes because the
+  assertion never inspects the return value. **M8-P-VACUOUS-STRYKER: caught —
+  `vacuousTestFiles`/`vacuousTestFindings` (`src/mutation-scan.ts`) flags `vacuous.smoke.test.ts`
+  as a vacuous test file (10 mutants executed, 0 killed), emitting an `M8-06-*` finding.**
+- `testFiles` in the raw report resolves test id `"0"` to `vacuous.smoke.test.ts` and its test
+  name — the join `vacuousTestFiles` needs. Recorded verbatim (trimmed to the `StrykerReport`
+  shape) as `vacuousReport` in `src/mutation-scan.test.ts`'s "vacuousTestFiles /
+  vacuousTestFindings (#1100) — live Stryker capture" block.
+
+**STATIC field:** MEASURED against a live capture of a scratch fixture (a top-level `const LIMIT
+= 10 * 2`, not committed here — its own module-level arithmetic mutant read `static: true`,
+`coveredBy: []`, and was still killed) — confirms upstream's documented semantics: a static
+mutant cannot be attributed to any one test by perTest coverage analysis, so it is weaker
+evidence regardless of its final status. Neither `discount.ts`/`authz.ts` nor `vacuous.ts`
+naturally produce a static mutant (both fixtures are plain functions, no module-level computed
+state), so the STATIC confidence-downgrade path (`survivingMutantFindings` → `"Review"` when a
+boundary-concentrated file's survivors are mostly static) is unit-tested against a synthetic-but-
+schema-verified literal in `src/mutation-scan.test.ts` ("STATIC confidence downgrade") rather than
+a new calibration fixture — planting one purely to force a `static: true` mutant into this corpus
+would add a third isolated Stryker config for no additional real-world signal.
+
+Answer key: `src/scan/calibration/m8.entries.ts` (`M8-P-VACUOUS-STRYKER`). Gate: `pnpm verify`
+(offline) — the real Stryker JSON capture above is recorded verbatim into
+`src/mutation-scan.test.ts`, same convention as the discount.ts/authz.ts pair.
+
 ---
 
 ## Batch B7 (#71) — auth / access-control heuristics
@@ -2109,9 +2161,80 @@ findings on safe twins. Zero new false positives.
    `harvey-ssrf-fetch` would have been inert. Not modeled here because the naive version is UNSOUND:
    allowlisting `new URL(x).hostname` does not make `x` safe (`https://good.host@evil.tld/`,
    userinfo/path/fragment tricks). Needs its own adversarial positives before any suppression ships
-   — split to its own issue.
+   — split to its own issue. **SUPERSEDED by #1057, which modeled it** — see the section below;
+   this entry stands as the record of the refusal, not as a current claim.
 
 Answer key for the new fixtures: `src/scan/calibration/b3-injection.entries.ts` (#1027 block).
+
+## #1057 — projection guards, the fourth form, modeled
+
+The refusal above said the naive version is unsound. It is. The version that shipped is not naive,
+and the difference is one property of **the one-argument WHATWG constructor specifically**:
+`new URL(x)` is defined only when `x` is an ABSOLUTE URL, and `.hostname` is then exactly the host a
+WHATWG-compliant consumer (a browser following `Location`, Node's http client, undici) reaches when
+handed `x`. Everything that breaks that property is a different syntactic shape, and every one of
+them is excluded and alarmed.
+
+The sanitizer is anchored at the PROJECTION SITE — `$HOST = new URL($X).hostname` — with the
+membership test on `$HOST` required lexically in scope, `by-side-effect` on `$X`. Added to
+`harvey-open-redirect` and `harvey-ssrf-fetch` only; those are the two rules with a measured FP
+population of this shape, and a projection allowlist means nothing on a SQL or shell sink.
+
+### Adversarial positives — built FIRST, and each one is a working alarm
+
+MEASURED 2026-07-26, semgrep 1.164.0: loosening ONE constraint at a time in a scratch copy of
+`src/scan/rules/semgrep/` silences exactly the positive that guards it, and nothing else.
+
+| loosening applied | goes SILENT | also breaks |
+|---|---|---|
+| admit AFFIX membership (`!$HOST.endsWith($SUF)`) | `P-REDIRECT-HOST-AFFIX` | `N-REDIRECT-HOST-ALLOWLIST` starts firing |
+| drop the early return from the guard statement | `P-REDIRECT-HOST-NO-RETURN` | — |
+| match the guard condition deeply (`<... !$ALLOW.includes($HOST) ...>`), so a nested boolean qualifies | `P-REDIRECT-HOST-RELATIVE` | — |
+| unpin the projection from the WHATWG constructor | `P-REDIRECT-HOST-USERINFO`, `P-SSRF-HOST-USERINFO` | both negatives start firing |
+
+`P-REDIRECT-HOST-BACKSLASH` is the alarm on the guard being on EVERY path rather than nested behind
+another condition, which is the taint engine's flow-sensitivity rather than a constraint in the
+pattern — so it is falsified differentially instead: unwrapping its outer `/^https?:\/\//` pre-test,
+the ONLY edit, makes the file clear. That unwrapped file is `redirect-host-allowlist-safe.js`.
+
+The three payloads the issue named: `https://api.trusted.example@evil.tld/` (userinfo — reads as
+`api.trusted.example` to a hand-rolled extractor, `evil.tld` to every WHATWG parser),
+`//evil.tld` (protocol-relative — `new URL` throws, the null-host branch skips the allowlist), and
+`/\evil.tld` (backslash — fails the absolute-looking pre-test, and WHATWG normalises `\` to `/`).
+
+### Measured result — per class, before vs after, on the REAL shipped rules
+
+BenchProctor `2026.07.22`, `Benchmarks/quicktest/javascript`, semgrep 1.164.0, 2026-07-26. A case
+counts as flagged if ANY `harvey-*` rule fires. Rules-dir A = `main`, rules-dir B = this branch.
+
+**express slice (6,200 cases)**
+
+| Category | J before | J after | safe twins cleared | **real vulns lost** |
+|---|---:|---:|---:|---:|
+| redirect | −6.0% | **+56.0%** | 31 (FP 31 → 0) | **0** (TP 28 → 28) |
+| ssrf | −10.0% | **+10.0%** | 10 (FP 14 → 4) | **0** (TP 9 → 9) |
+| cloud_ssrf_metadata | +2.0% | +2.0% | 0 | **0** (TP 32 → 32) |
+| **whole slice** | **+19.1%** | **+20.4%** | **41** | **0** |
+
+TP is byte-identical across the whole slice (995/3,100 both runs) and TN moves by exactly +41, so
+the sanitizer removed 41 findings, all of them on safe twins, and added none. The 41 is the same
+population #1027 measured (31 + 10).
+
+**koa slice (6,200 cases):** redirect J +6.0% → +8.0%, ssrf −4.0% → +0.0%, whole slice +1.9% →
++2.0%; TP 173 → 173, 3 safe twins cleared, 0 real vulns lost.
+
+`cloud_ssrf_metadata` is unmoved by construction: its 5 cases carrying `new URL(x).hostname` all use
+AFFIX guards, which the model refuses — the corpus and the rule draw the exact-vs-affix line in the
+same place.
+
+### Why the corpus's own labels are not the argument
+
+Every one of the 75 express cases with `new URL(x).hostname` + a negated exact-membership guard is
+labeled SAFE, and all 10 real vulns carrying that projection lack the exact guard. That is
+corroboration, not evidence — BenchProctor's labels are its author's opinion of the same question.
+The argument is the parser property above; the adversarial positives are what make it falsifiable.
+
+Answer key: `src/scan/calibration/b3-injection.entries.ts` (#1057 block).
 
 ## #1066 — suppressions the AUDITED PARTY controls, and the four adversarial positives
 
@@ -2156,3 +2279,37 @@ which grew by 400+ lines. Regenerate and READ that diff — a review-tier precis
 invisible to the gate.
 
 Answer keys: `src/scan/calibration/b3-injection.entries.ts`, `b4-xss.entries.ts`, `b7-auth.entries.ts`.
+
+## #1060 — the corpus's first data-class ESCALATION
+
+M10's data-aware severity join (`src/data-class-escalation.ts`, #1049) was proven by unit tests and
+demonstrably matched real corpus output — and had never RAISED anything, because the corpus did not
+contain the case the feature exists for.
+
+MEASURED 2026-07-25 (re-measured 2026-07-26 before the fix), running `escalateFindingsByDataClass`
+over the committed `dry-run/findings.json` × `dry-run/pii-data-map.json`: **7 matches, 0
+escalations** — every table a planted finding named (`profiles`, `perf_orders`, `documents`,
+`internal_notes`, `tautology_articles`) scores Low, so the join correctly declined every time. The
+regulated tables were there (`pii_calibration_fixture` Critical/78, `legacy_accounts` High/7,
+`support_tickets` High/4) and no planted finding named any of them. Unit tests green, headline path
+untested.
+
+`20260726000001_regulated_overbroad_policy.sql` closes it. `public.patient_billing` carries
+`member_ssn` (US_SSN/SENSITIVE_PII, 4) + `card_number` (CARD/PCI, 6) = **10 → Critical**, declares
+`tenant_id`, and gets a `for select using (true)` policy — the same read-side leak as the
+`documents_select_all` plant, so `usingTrueReview` fires at High. AFTER: **8 matches, 1 escalation**
+— High → Critical, `dataClass.escalatedFrom: "High"`, naming `patient_billing` and its US_SSN/CARD
+infotypes.
+
+Column names are deliberately `member_ssn`/`card_number`, not `customer_ssn`/`card_last4`: those two
+are the M10 per-infotype answer key's own `location` values (`m10.entries.ts`), and this table must
+not become the fixture those entries score against. The M10 census is unchanged (20 positives / 10
+negatives).
+
+Effect on the recall gate, `pnpm exec tsx src/cli/validate-calibration.ts` 2026-07-26: GATE PASS,
+TP 237 FN 3 FP 0 TN 220 — the new positive is caught, no negative moved.
+
+Answer key: `P-RLS-USING-TRUE-REGULATED` in `src/scan/calibration/rls-static-semantics.entries.ts`
+(detection). The escalation itself is asserted against the committed artifacts by
+`src/data-class-escalation.test.ts` — detection and escalation are separate assertions on purpose,
+because the #1060 failure was precisely a working detector whose finding never reached the join.

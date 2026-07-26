@@ -35,6 +35,29 @@ export interface StrykerMutant {
   location: { start: { line: number; column: number }; end: { line: number; column: number } };
   coveredBy?: string[];
   killedBy?: string[];
+  // #1100: MEASURED against a real `npx stryker run` capture (targets/calibration/test-quality,
+  // Stryker 9.6.1) — upstream's mutation-testing-report-schema.json describes it as "loaded once
+  // during initialization" (a module-level mutant Stryker can only run once for the whole suite,
+  // not per covering test). A live probe (a top-level `const LIMIT = 10 * 2`) confirmed the real
+  // shape: coveredBy is empty ([]) on a static mutant even when it still gets killed — perTest
+  // coverage tracking cannot attribute it to any one test, so it is weaker evidence than an
+  // ordinary per-test mutant regardless of its final status.
+  static?: boolean;
+}
+
+// #1100: upstream's TestFileDefinitionDictionary (mutation-testing-report-schema.json's `testFiles`,
+// MEASURED against the same live capture) — resolves the opaque test ids coveredBy/killedBy already
+// carry into a file path + test name, so a vacuous-test detector can join on them. Not exported
+// (same rule as the other not-exported shapes in this file): nothing outside needs to name it —
+// callers get it as StrykerTestFile.tests' element type, or vacuousTestFiles' inferred return.
+interface StrykerTestDefinition {
+  id: string;
+  name: string;
+}
+
+export interface StrykerTestFile {
+  source?: string;
+  tests: StrykerTestDefinition[];
 }
 
 export interface StrykerFileReport {
@@ -53,6 +76,8 @@ export interface StrykerReport {
   // using a non-JSON stryker.conf.mjs/.js (previously "not statically readable") is no longer
   // scope-blind.
   config?: Record<string, unknown>;
+  // #1100: keyed by test file path — see StrykerTestFile above.
+  testFiles?: Record<string, StrykerTestFile>;
 }
 
 // Not exported: nothing outside this file needs to name these shapes — callers get them as
@@ -84,6 +109,9 @@ interface SurvivingMutant {
   status: "Survived" | "NoCoverage";
   replacement?: string;
   hotspot: boolean;
+  // #1100: threaded through so survivingMutantFindings can downgrade confidence when a
+  // boundary-concentrated file's survivors are mostly mutants Stryker only ran once, statically.
+  static: boolean;
 }
 
 // #386 layer 2: the mutator families that encode negation/boundary logic. Survivors
@@ -193,6 +221,7 @@ export function summarizeMutationReport(report: StrykerReport, hotspotFiles: rea
         status: m.status as "Survived" | "NoCoverage",
         replacement: m.replacement,
         hotspot: hotspots.has(file),
+        static: m.static ?? false,
       });
     }
   }
@@ -955,6 +984,14 @@ export function mutationNotRunModuleRecord(reason: string): { status: "partial";
 // in the denial/boundary mutator families (mutatorBreakdown.denialBoundaryConcentrated) — "the denial
 // branch was never tested", one finding per file, not one per mutant. Distinct id family from M8-00
 // (no suite) and M8-01-* (stub-check, src/stub-check.ts): M8-02-*.
+// #1100: MEASURED — a static mutant (see StrykerMutant.static) is one Stryker could only run once
+// for the whole suite, not per covering test; it never got the chance an ordinary mutant gets to be
+// caught by a SPECIFIC test's assertions. A boundary-concentrated file whose survivors are mostly
+// static ones is weaker evidence of an untested denial branch than one whose survivors ran per-test
+// and still got through, so confidence downgrades to "Review" rather than "Confirmed". "Mostly" =
+// majority, matching NO_COVERAGE_RATIO_THRESHOLD's threshold below.
+const STATIC_SURVIVOR_RATIO_THRESHOLD = 0.5;
+
 export function survivingMutantFindings(summary: MutationSummary): Finding[] {
   let n = 0;
   return summary.mutatorBreakdown
@@ -963,16 +1000,19 @@ export function survivingMutantFindings(summary: MutationSummary): Finding[] {
       const hotspot = summary.survivingMutants.some((s) => s.file === b.file && s.hotspot);
       const total = b.boundarySurvivors + b.otherSurvivors;
       const mutators = Object.entries(b.survivorsByMutator).map(([k, v]) => `${k}: ${v}`).join(", ");
+      const boundarySurvivorMutants = summary.survivingMutants.filter((s) => s.file === b.file && BOUNDARY_MUTATORS.has(s.mutatorName));
+      const staticCount = boundarySurvivorMutants.filter((s) => s.static).length;
+      const mostlyStatic = boundarySurvivorMutants.length > 0 && staticCount / boundarySurvivorMutants.length >= STATIC_SURVIVOR_RATIO_THRESHOLD;
       return {
         id: `M8-02-${String(++n).padStart(2, "0")}`,
         status: "Open",
         category: "Test quality",
         title: `Denial/boundary path untested: ${b.file}`,
         severity: hotspot ? "High" : "Medium",
-        confidence: "Confirmed",
+        confidence: mostlyStatic ? "Review" : "Confirmed",
         taxonomy: "M8 — Denial/boundary path untested",
         location: b.file,
-        evidence: `${b.boundarySurvivors}/${total} surviving mutant(s) are boundary/negation mutants (${mutators})${hotspot ? " — this file is a flagged M1/M3 hotspot" : ""}.`,
+        evidence: `${b.boundarySurvivors}/${total} surviving mutant(s) are boundary/negation mutants (${mutators})${hotspot ? " — this file is a flagged M1/M3 hotspot" : ""}${mostlyStatic ? ` — ${staticCount}/${boundarySurvivorMutants.length} of the boundary survivors are STATIC (Stryker ran them once for the whole suite, not per test — weaker evidence, confidence downgraded)` : ""}.`,
         impact: "The suite never proved itself against the negation/boundary condition here (e.g. an inverted comparison or off-by-one) — a real defect on that path would pass every existing test.",
         fix: "Add test cases that exercise the boundary/negation condition directly (e.g. equal-to, just-over, just-under, and the inverted branch) for the mutators listed above.",
         value: 4,
@@ -980,6 +1020,66 @@ export function survivingMutantFindings(summary: MutationSummary): Finding[] {
         safety: 5,
       } satisfies Finding;
     });
+}
+
+// #1100: the vacuous-test signal — a test that RAN against mutated code (it appears in some
+// mutant's coveredBy) but never appears in ANY mutant's killedBy across the whole run. Distinct
+// from survivingMutantFindings above (which is about UNTESTED code paths): this is about a test
+// that DID execute code and still proved nothing, the "calls the subject, asserts nothing" smell
+// stub-check's M8-01 already catches via deletion-survival — this is the same smell surfaced from
+// the Stryker side, for suites stub-check's transpile-and-run path can't reach. One finding per
+// test FILE (matching M8-02/M8-05's file/module granularity): a file where every one of its tests
+// that touched mutated code contributed zero kills. Not exported (same convention as
+// SurvivingMutant/FileMutatorBreakdown above): callers get it as vacuousTestFiles' inferred return.
+interface VacuousTestFile {
+  path: string;
+  vacuousTests: StrykerTestDefinition[];
+  executedMutantCount: number;
+}
+
+export function vacuousTestFiles(report: StrykerReport): VacuousTestFile[] {
+  const testFiles = report.testFiles;
+  if (!testFiles) return [];
+  const killing = new Set<string>();
+  const coverageCount = new Map<string, number>();
+  for (const fileReport of Object.values(report.files)) {
+    for (const m of fileReport.mutants) {
+      for (const id of m.killedBy ?? []) killing.add(id);
+      for (const id of m.coveredBy ?? []) coverageCount.set(id, (coverageCount.get(id) ?? 0) + 1);
+    }
+  }
+  const result: VacuousTestFile[] = [];
+  for (const [path, file] of Object.entries(testFiles)) {
+    if (file.tests.some((t) => killing.has(t.id))) continue; // at least one real kill — not vacuous
+    const executedMutantCount = file.tests.reduce((sum, t) => sum + (coverageCount.get(t.id) ?? 0), 0);
+    if (executedMutantCount === 0) continue; // never ran against mutated code at all — a different gap (NoCoverage), not this one
+    result.push({ path, vacuousTests: file.tests, executedMutantCount });
+  }
+  return result.sort((a, b) => (a.path < b.path ? -1 : 1));
+}
+
+export function vacuousTestFindings(report: StrykerReport): Finding[] {
+  let n = 0;
+  return vacuousTestFiles(report).map((v) => {
+    const names = v.vacuousTests.slice(0, 5).map((t) => t.name).join("; ");
+    const more = v.vacuousTests.length > 5 ? `, +${v.vacuousTests.length - 5} more` : "";
+    return {
+      id: `M8-06-${String(++n).padStart(2, "0")}`,
+      status: "Open",
+      category: "Test quality",
+      title: `Vacuous test file: executes code, kills zero mutants: ${v.path}`,
+      severity: "Medium",
+      confidence: "Confirmed",
+      taxonomy: "M8 — Vacuous test (executes code, kills zero mutants)",
+      location: v.path,
+      evidence: `${v.vacuousTests.length} test(s) in this file ran against ${v.executedMutantCount} mutant(s) total but killed NONE of them across the whole run (${names}${more}).`,
+      impact: "This test file executes real code paths but its assertions (if any) never catch an injected fault — it contributes nothing to the suite's actual defect-catching power despite showing up as coverage.",
+      fix: "Strengthen or replace these tests' assertions so they fail when the code they exercise is broken (a call with no expect()/assert on the result is the classic shape), then re-run mutation testing and confirm these tests start killing mutants.",
+      value: 4,
+      ease: 3,
+      safety: 5,
+    } satisfies Finding;
+  });
 }
 
 // #1076: NoCoverage was parsed and counted per module (ModuleMutationSummary.noCoverage, computed

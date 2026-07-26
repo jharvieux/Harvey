@@ -11,6 +11,11 @@
 // schema from QuickScanReport (src/quick-scan.ts), the FREE tier's grade/indicators/
 // informational shape. quick-scan has no export into this renderer today; don't
 // conflate the two when either schema changes.
+//
+// #1099: healthGauge/severityDonut/completenessBanner/coverageSection/limitationsSection are
+// exported (only) so they have a test — see src/report-render.test.ts, same pattern sections.mjs
+// already established (report-sections.test.ts) rather than testing them where they were unhomed.
+// The bottom of this file (reading argv, launching Chromium) stays a script, not a library.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -53,7 +58,7 @@ function arc(cx, cy, r, a0, a1, color, w) {
   return `<path d="M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}" fill="none" stroke="${color}" stroke-width="${w}" stroke-linecap="round"/>`;
 }
 
-function healthGauge(v) {
+export function healthGauge(v) {
   const frac = Math.max(0, Math.min(1, v / 10));
   const col = v >= 7 ? "#15803d" : v >= 4 ? "#ca8a04" : "#b3261e";
   return `<svg width="190" height="120" viewBox="0 0 190 120">
@@ -64,7 +69,7 @@ function healthGauge(v) {
   </svg>`;
 }
 
-function severityDonut(counts) {
+export function severityDonut(counts) {
   const entries = Object.entries(counts).filter(([, n]) => n > 0).sort((a, b) => SEV[a[0]].o - SEV[b[0]].o);
   const total = entries.reduce((s, [, n]) => s + n, 0) || 1;
   let a = -90;
@@ -215,7 +220,7 @@ const COV = {
 // duplication pattern as bftb() above: render.mjs is plain JS, not built from src/*.ts). Renders
 // ahead of meta.headline so a "the audit is done" headline can never talk over a ledger that
 // disagrees — the ATC incident this closes. No ledger (hand-authored legacy doc) ⇒ no banner.
-function completenessBanner(rows) {
+export function completenessBanner(rows) {
   if (!rows?.length) return "";
   const gaps = rows.filter((r) => r.status !== "ran");
   if (!gaps.length) {
@@ -229,7 +234,7 @@ function completenessBanner(rows) {
 
 // The derived coverage ledger, rendered as the report's authoritative coverage statement (#349).
 // Replaces the hand-typed meta.outOfScope as the source of truth; outOfScope is demoted to a note.
-function coverageSection(rows, m) {
+export function coverageSection(rows, m) {
   const body = rows.map((r) => {
     // #682: a partial whose status is a BLOCKED sub-step (its sibling sub-step still ran and
     // surfaced findings) is badged distinctly from an ordinary partial — the reader must be able to
@@ -279,7 +284,7 @@ const MODULE_LIMITATIONS = {
 // Rendered alongside (never instead of) the coverage ledger — coverage says whether a module ran
 // this engagement; this says what its result proves and doesn't, independent of that. Same gate as
 // coverageSection (no ledger ⇒ no section) so the two never appear out of sync.
-function limitationsSection(rows) {
+export function limitationsSection(rows) {
   const present = new Set(rows.map((r) => r.module));
   const body = Object.entries(MODULE_LIMITATIONS)
     .filter(([id]) => present.has(id))
@@ -513,26 +518,31 @@ function sevRank(f) {
   return { Critical: 5, High: 4, Medium: 3, Low: 1, Perf: 1, Info: 0, Watch: 0 }[f.severity] ?? 0;
 }
 
-const [, , findingsPath, outDirArg] = process.argv;
-const data = JSON.parse(fs.readFileSync(findingsPath, "utf8"));
-const outDir = outDirArg ?? path.join(path.dirname(findingsPath), "out");
-fs.mkdirSync(outDir, { recursive: true });
-const html = buildHtml(data);
-fs.writeFileSync(path.join(outDir, "report.html"), html);
+// #1099: guarded so `import { healthGauge, ... } from "./render.mjs"` (the test file) doesn't also
+// run the CLI (argv parsing, a real Chromium launch) as a side effect of importing the exports.
+const isMain = import.meta.url === `file://${process.argv[1]}`;
+if (isMain) {
+  const [, , findingsPath, outDirArg] = process.argv;
+  const data = JSON.parse(fs.readFileSync(findingsPath, "utf8"));
+  const outDir = outDirArg ?? path.join(path.dirname(findingsPath), "out");
+  fs.mkdirSync(outDir, { recursive: true });
+  const html = buildHtml(data);
+  fs.writeFileSync(path.join(outDir, "report.html"), html);
 
-const browser = await chromium.launch();
-const page = await browser.newPage();
-await page.setContent(html, { waitUntil: "networkidle" });
-await page.pdf({
-  path: path.join(outDir, "report.pdf"),
-  format: "A4",
-  printBackground: true,
-  margin: { top: "0", bottom: "26px", left: "0", right: "0" },
-  displayHeaderFooter: true,
-  headerTemplate: "<div></div>",
-  footerTemplate: `<div style="width:100%;font-size:8px;color:#94a3b8;padding:0 54px;display:flex;justify-content:space-between"><span>${esc(data.meta.client)} — Confidential</span><span class="pageNumber"></span></div>`,
-});
-await page.setViewportSize({ width: 880, height: 1100 });
-await page.screenshot({ path: path.join(outDir, "page1.png"), clip: { x: 0, y: 0, width: 880, height: 1080 } });
-await browser.close();
-console.log("wrote", path.join(outDir, "report.pdf"));
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  await page.setContent(html, { waitUntil: "networkidle" });
+  await page.pdf({
+    path: path.join(outDir, "report.pdf"),
+    format: "A4",
+    printBackground: true,
+    margin: { top: "0", bottom: "26px", left: "0", right: "0" },
+    displayHeaderFooter: true,
+    headerTemplate: "<div></div>",
+    footerTemplate: `<div style="width:100%;font-size:8px;color:#94a3b8;padding:0 54px;display:flex;justify-content:space-between"><span>${esc(data.meta.client)} — Confidential</span><span class="pageNumber"></span></div>`,
+  });
+  await page.setViewportSize({ width: 880, height: 1100 });
+  await page.screenshot({ path: path.join(outDir, "page1.png"), clip: { x: 0, y: 0, width: 880, height: 1080 } });
+  await browser.close();
+  console.log("wrote", path.join(outDir, "report.pdf"));
+}

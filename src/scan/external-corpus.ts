@@ -825,12 +825,17 @@ const M5_KNIP_TAXONOMY = "M5 — Slop / dead code";
 // reachable per-app" measurement-gap and #503's "Suite fails unmutated dry run" both landed without
 // this set being updated, so documenso's M8 measurement-gap scored 0 as M8 and inflated M8-intent to
 // 2. When mutation-scan/stub-check add a taxonomy, add it here too.
+// #1100: found the same #940 gap recurring — #1076's noCoverageFindings ("M8 — Module has no
+// mutation test coverage") landed without this set being updated either. Fixed inline alongside
+// #1100's own new taxonomy (vacuousTestFindings) rather than left for a future drift run to hide.
 const M8_MUTATION_TAXONOMIES = new Set([
   "M8 — No automated test suite",
   "M8 — Survives implementation deletion",
   "M8 — Denial/boundary path untested",
   "M8 — Root-workspace test suite not reachable per-app",
   "M8 — Suite fails unmutated dry run (env-fragile tests)",
+  "M8 — Module has no mutation test coverage",
+  "M8 — Vacuous test (executes code, kills zero mutants)",
 ]);
 
 // Exported for corpus-drift.ts's per-module scan-root pass (#322), which needs to swap one

@@ -103,6 +103,7 @@ import {
   summarizeMutationReport,
   survivingMutantFindings,
   toReportRows,
+  vacuousTestFindings,
   verifyMutationScope,
   withTs7TsconfigBypass,
   workspaceTestSuiteFinding,
@@ -949,8 +950,9 @@ if (lineCoverage.status === "partial") {
 // #435: findings from the denial/boundary-concentration mapper — a real Stryker run's survivors
 // contribute report-schema findings the same way the no-test-suite branch's M8-00 already does.
 // #1076: noCoverageFindings adds the "never executed at all" signal ModuleMutationSummary already
-// counted but nothing turned into a Finding.
-const findings = [...survivingMutantFindings(summary), ...noCoverageFindings(summary)];
+// counted but nothing turned into a Finding. #1100: vacuousTestFindings needs the raw report (the
+// testFiles/coveredBy/killedBy join lives at that level, not in the collapsed MutationSummary).
+const findings = [...survivingMutantFindings(summary), ...noCoverageFindings(summary), ...vacuousTestFindings(report)];
 const output = {
   summary,
   reportRows: toReportRows(summary, lineCoverage.byModule),

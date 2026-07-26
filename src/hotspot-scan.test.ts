@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Finding } from "./findings.js";
-import { aiProvenanceFiles, buildFallbackReport, classifyChurn, complexityProxy, couplingEdges, crossReferenceHotspots, enrichFindingsWithHotspots, fallbackQualifyingCount, isUnranked, rankHotspots, toFactFindings, topKFiles, trendFindings, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
+import { aiProvenanceFiles, buildFallbackReport, classifyChurn, complexityProxy, couplingEdges, crossReferenceHotspots, enrichFindingsWithHotspots, fallbackQualifyingCount, isUnranked, knowledgeRiskNotAssessed, rankHotspots, toFactFindings, topKFiles, trendFindings, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
 import { summarizeMutationReport, type StrykerReport } from "./mutation-scan.js";
 import { buildCoverageMatrix } from "./scan/calibration.js";
 import { m3Entries } from "./scan/calibration/m3.entries.js";
@@ -203,11 +203,17 @@ describe("M3 reduced tier (#807, vitals-unavailable fallback)", () => {
     expect(r.hotspots[0]?.churn_label).toBe("MED");
   });
 
-  it("emits NO coupling / knowledge-risk sub-signals — reduced tier invents no facts", () => {
+  it("emits NO coupling / knowledge-risk sub-signals — reduced tier invents no facts, but says so", () => {
     const r = buildFallbackReport([{ file_path: "a.ts", changes: 5, complexity: 4 }]);
     expect(r.coupling).toEqual([]);
     expect(r.knowledge_risk).toEqual([]);
-    expect(toFactFindings(r)).toEqual([]); // no truck-factor/coupling/AI-prov findings fabricated
+    const findings = toFactFindings(r);
+    // #1112 tightened this from "emits nothing" to "emits no FACT": the reduced tier's inability to
+    // assess knowledge risk is cause (c) of M3-KNOWLEDGE-00, and a silent absence is the thing the
+    // disclosure family exists to prevent. What must still hold is that no truck-factor / coupling /
+    // AI-provenance FINDING is fabricated from a report that measured none.
+    expect(findings.map((f) => f.id)).toEqual(["M3-KNOWLEDGE-00"]);
+    expect(findings[0]?.confidence).toBe("N/A");
   });
 
   it("caps the ranking at topN", () => {
@@ -323,5 +329,59 @@ describe("M3 trend findings (#1075)", () => {
   it("does not appear in the calibration corpus fixture (trends: null there — regression check)", () => {
     expect(report.trends).toBeNull();
     expect(toFactFindings(report).map((f) => f.id)).not.toContain("M3-TREND-00");
+  });
+});
+
+// #1112 — the issue asked for a plant that cannot decay; the measurement said the plant decays on a
+// TWO-YEAR clock (not the 90-day churn window it was filed on) and, more importantly, that its
+// failure was indistinguishable from a detector regression. These pin the disclosure that separates
+// the two, because "GONE M3" carries a standing instruction never to rebaseline — so the row that
+// says WHY is the thing keeping that instruction honest.
+describe("M3 knowledge-risk disclosure (#1112)", () => {
+  const noKnowledge: VitalsReport = { ...report, knowledge_risk: [] };
+  const multiAuthorOnly: VitalsReport = {
+    ...report,
+    knowledge_risk: report.knowledge_risk.map((r) => ({ ...r, truck_factor: 3 })),
+  };
+
+  it("stays silent while a truck-factor-1 file exists — no row alongside the finding it would explain", () => {
+    expect(truckFactorOneFiles(report).length).toBeGreaterThan(0);
+    expect(knowledgeRiskNotAssessed(report)).toEqual([]);
+    expect(toFactFindings(report).map((f) => f.id)).not.toContain("M3-KNOWLEDGE-00");
+  });
+
+  it("distinguishes 'analysed and found none' from 'nothing to analyse'", () => {
+    const measured = knowledgeRiskNotAssessed(multiAuthorOnly)[0];
+    expect(measured?.title).toContain(`analysed across ${report.knowledge_risk.length}`);
+    expect(measured?.confidence).toBe("Confirmed");
+    expect(measured?.impact).toContain("None");
+
+    const starved = knowledgeRiskNotAssessed(noKnowledge)[0];
+    expect(starved?.title).toContain("NOT assessed");
+    expect(starved?.confidence).toBe("N/A");
+    expect(starved?.impact).toContain("NOT evidence the knowledge is well distributed");
+  });
+
+  it("names the TWO-YEAR authorship horizon, not the 90-day churn window", () => {
+    // The correction #1112 turned on: MEASURED 2026-07-26, a repo whose newest commit is 200 days
+    // old still emits both truck-factor rows (vitals_cli.py:131 falls back to all tracked source
+    // files); at 800 days they are gone (git_analysis.py:260, --since=2.years.ago). A reader sent
+    // after the churn window would look in the wrong place.
+    const evidence = knowledgeRiskNotAssessed(noKnowledge)[0]?.evidence ?? "";
+    expect(evidence).toContain("TWO YEARS");
+    expect(evidence).toContain("NOT the 90-day churn window");
+  });
+
+  it("carries a taxonomy the conservation gate's M3 plant cannot match", () => {
+    // The gate matches M3 on `Knowledge risk (truck-factor-1)`. If this row shared that taxonomy it
+    // would satisfy the plant while the plant was gone — a disclosure that hides the thing it
+    // discloses.
+    expect(knowledgeRiskNotAssessed(noKnowledge)[0]?.taxonomy).not.toBe("Knowledge risk (truck-factor-1)");
+  });
+
+  it("does not disturb the M3 corpus scoring", () => {
+    const matrix = buildCoverageMatrix(toFactFindings(report), m3Entries);
+    expect(matrix.ok).toBe(true);
+    expect(matrix.negativesCleared).toBe(matrix.negativesTotal);
   });
 });

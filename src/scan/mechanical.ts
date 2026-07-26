@@ -36,6 +36,7 @@ import {
   checkMissingCsp,
   checkPublicDirSensitive,
   parseSemgrepFindings,
+  partitionGuardTokenSuppressed,
   partitionMarkerSuppressed,
   runSemgrep,
   semgrepErrorFinding,
@@ -57,7 +58,7 @@ import {
 } from "./supabase-static.js";
 import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, type DependencyMap } from "./supply-chain.js";
 import { checkWebExtensionManifest } from "./webext-manifest.js";
-import { lockfileLicenses } from "../sbom.js";
+import { lockfileLicenses, lockfileVersions } from "../sbom.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
@@ -239,7 +240,13 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     if (semgrep.failure) {
       findings.push(semgrepUnavailableFinding(semgrep.failure));
     } else {
-      const { reported, suppressed } = partitionMarkerSuppressed(semgrep.result);
+      // #1093 — harvey-route-noauth/harvey-authed-no-role-check now match unconditionally in the
+      // YAML; this re-derives their guard/role-check clause on the real matched span before
+      // nosem re-derivation runs. A function the guard-token check clears was never a finding to
+      // begin with (not an in-repo suppression), so it must not reach partitionMarkerSuppressed or
+      // SEM-SUPPRESS-00.
+      const { reported: guardCleared } = partitionGuardTokenSuppressed(semgrep.result);
+      const { reported, suppressed } = partitionMarkerSuppressed({ results: guardCleared });
       findings.push(...parseSemgrepFindings({ results: reported }));
       findings.push(...semgrepSuppressionFinding(suppressed, scanDir));
       findings.push(...semgrepScopeFinding(scanDir, semgrep.result));
@@ -313,8 +320,9 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
         findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
         // #456 — license compliance (SPDX + copyleft/unknown flags). #1079: the lockfile Harvey
         // already parses for the SBOM answers most of these, so pass it in — the registry is only
-        // queried for names it does not cover.
-        findings.push(...(await checkLicenseCompliance(allDeps, fetch, lockfileLicenses(scanDir))));
+        // queried for names it does not cover. #1099: also pass the resolved-version map so a
+        // registry fallback reads the INSTALLED version's license, not the latest publish's.
+        findings.push(...(await checkLicenseCompliance(allDeps, fetch, lockfileLicenses(scanDir), lockfileVersions(scanDir))));
       }
     }
     findings.push(...checkLockfilePresence(scanDir));
