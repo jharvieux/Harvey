@@ -959,6 +959,10 @@ function findAwaitedDbDeclarations(block: ts.Block, sf: ts.SourceFile): AwaitedD
   return out;
 }
 
+// #1081: how many additional independent-pair locations a waterfall finding cites by name — the
+// pair count itself is always exact, this only bounds how long the evidence string gets.
+const MAX_EXTRA_PAIRS_SHOWN = 4;
+
 function detectDataFetchingWaterfalls(
   sources: Map<string, ts.SourceFile>,
   nextId: NextId,
@@ -971,11 +975,26 @@ function detectDataFetchingWaterfalls(
     const visit = (node: ts.Node) => {
       if ((ts.isFunctionDeclaration(node) || ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && node.body && ts.isBlock(node.body)) {
         const decls = findAwaitedDbDeclarations(node.body, sf);
+        // #1081: collect EVERY independent pair in this function instead of stopping at the first —
+        // one finding per function is still the right amount of signal (the fix, "wrap the whole
+        // function's queries in Promise.all", already covers every pair), but the dropped pairs need
+        // to survive into the evidence rather than vanish with no count.
+        const independentPairs: { cur: AwaitedDbDeclaration; next: AwaitedDbDeclaration }[] = [];
         for (let i = 0; i < decls.length - 1; i++) {
           const cur = decls[i];
           const next = decls[i + 1];
           if (!cur || !next) continue;
           if (cur.boundNames.some((n) => next.text.includes(n))) continue; // depends on the prior result — legitimately sequential
+          independentPairs.push({ cur, next });
+        }
+        if (independentPairs.length > 0) {
+          const first = independentPairs[0]!;
+          const extraPairs = independentPairs.slice(1, 1 + MAX_EXTRA_PAIRS_SHOWN).map((p) => `\`${p.cur.displayName}\`/\`${p.next.displayName}\` (${loc(path, sf, p.next.node)})`);
+          const overflow = independentPairs.length > 1 + MAX_EXTRA_PAIRS_SHOWN ? `, +${independentPairs.length - 1 - MAX_EXTRA_PAIRS_SHOWN} more` : "";
+          const countNote =
+            independentPairs.length > 1
+              ? ` (first of ${independentPairs.length} independent sequential pairs in this function; the rest: ${extraPairs.join(", ")}${overflow})`
+              : "";
           findings.push(
             makeFinding(nextId, {
               title: `Independent sequential DB queries could run in parallel`,
@@ -983,8 +1002,8 @@ function detectDataFetchingWaterfalls(
               confidence: "Review",
               category: "Performance",
               taxonomy: "M9 — Data-fetching waterfall",
-              location: loc(path, sf, next.node),
-              evidence: `\`${cur.displayName}\` (${loc(path, sf, cur.node)}) and \`${next.displayName}\` (${loc(path, sf, next.node)}) are awaited sequentially and neither's query depends on the other's result.`,
+              location: loc(path, sf, first.next.node),
+              evidence: `\`${first.cur.displayName}\` (${loc(path, sf, first.cur.node)}) and \`${first.next.displayName}\` (${loc(path, sf, first.next.node)}) are awaited sequentially and neither's query depends on the other's result.${countNote}`,
               impact: "Each unrelated await serializes a network round-trip that could run concurrently, adding latency (and, compounded across requests, DB load) on every render.",
               fix: `Combine into \`Promise.all([...])\` (or a single joined query/RPC) so the round-trips overlap.`,
               value: 3,
@@ -992,7 +1011,6 @@ function detectDataFetchingWaterfalls(
               safety: 4,
             }),
           );
-          break; // one finding per function is enough signal without piling on noise
         }
       }
       ts.forEachChild(node, visit);

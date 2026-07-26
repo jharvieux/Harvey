@@ -146,4 +146,27 @@ describe("prisma-app-perf filter-column-without-index (#793)", () => {
     const findings = detectPrismaAppPerfFindings(file(text), schema);
     expect(findings.filter((f) => f.taxonomy === "M7 — Prisma filter column without index")).toHaveLength(1);
   });
+
+  // #1081: the dedup key (one finding per model+column-set, GLOBAL across the scan) is correct —
+  // this only checks the collapsed finding discloses how many call sites it collapsed and cites
+  // their locations, instead of reading as a single hot query when there may be dozens.
+  it("discloses the collapsed call-site count and locations across MULTIPLE files, not just one", () => {
+    const text = `
+      export const a = () => prisma.note.findMany({ where: { status: "active" } });
+      export const b = () => prisma.note.findMany({ where: { status: "archived" } });
+    `;
+    const findings = detectPrismaAppPerfFindings(
+      [
+        { path: "src/lib/notes-a.ts", text },
+        { path: "src/lib/notes-b.ts", text: `export const c = () => prisma.note.count({ where: { status: "pending" } });` },
+      ],
+      schema,
+    );
+    const filterFindings = findings.filter((f) => f.taxonomy === "M7 — Prisma filter column without index");
+    expect(filterFindings).toHaveLength(1);
+    expect(filterFindings[0]?.evidence).toContain("3 call sites");
+    expect(filterFindings[0]?.evidence).toContain("src/lib/notes-a.ts");
+    expect(filterFindings[0]?.evidence).toContain("src/lib/notes-b.ts");
+    expect(filterFindings[0]?.impact).toContain("Every one of the 3 call sites");
+  });
 });

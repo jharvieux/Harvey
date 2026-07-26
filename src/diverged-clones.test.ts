@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   divergedCloneFindings,
+  divergedScopeFinding,
   M4_DIVERGED_TAXONOMY,
   M4_DIVERGED_WIDE_TAXONOMY,
   type SecurityPathFile,
@@ -206,5 +207,18 @@ export function summarizeOrders(orders: { total: number }[]): number {
       { maxFunctions: 10 },
     );
     expect(findings.some((f) => f.id === "M4-98")).toBe(false);
+  });
+});
+
+// #1080: the security-path pass runs ONLY over the caller's narrow (security/tenant-relevant)
+// subset by default — before this, the only disclosure of that scoping was a CLI stderr line, never
+// the deliverable. This is a plain scope-count disclosure, not a divergence finding.
+describe("divergedScopeFinding (#1080)", () => {
+  it("names the covered/eligible file counts and the remainder left unassessed", () => {
+    const finding = divergedScopeFinding(12, 200);
+    expect(finding.id).toBe("M4-97");
+    expect(finding.taxonomy).toBe(M4_DIVERGED_WIDE_TAXONOMY);
+    expect(finding.evidence).toContain("12 security/tenant-relevant file(s) of 200 eligible");
+    expect(finding.evidence).toContain("188 file(s) were NOT compared");
   });
 });

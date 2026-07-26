@@ -35,12 +35,29 @@ interface KnipExportIssue {
 // entry). They were absent from this type, so they were dropped at the type boundary and M5
 // under-reported a scope brief `briefs/audit-modules.md` names explicitly — with no disclosure, so
 // the absence read as a clean result. Optional because a merged/legacy report may predate them.
+// #1080: the six IssueRecords keys #1050 left behind (MEASURED against knip 5.88.1's json reporter,
+// node_modules/knip/dist/reporters/json.js: `initRow` builds all of these, and
+// get-included-issue-types.js's defaults exclude only classMembers/nsExports/nsTypes — Harvey passes
+// no --include/--exclude, so the rest are on and were silently dropped at this type boundary the
+// same way dependencies/devDependencies were). `binaries` carries only `{name}` (the reporter pushes
+// it directly, not through `convert()`); `duplicates` is one array of symbols PER duplicate cluster;
+// `enumMembers` is keyed by the enum's own name. `owners` is the CODEOWNERS enrichment knip attaches
+// to the row when the target ships a CODEOWNERS file — not an issue type, threaded into evidence
+// below rather than its own finding.
 export interface KnipIssue {
   file: string;
+  owners?: { name: string }[];
   exports: KnipExportIssue[];
   types: KnipExportIssue[];
   dependencies?: KnipExportIssue[];
   devDependencies?: KnipExportIssue[];
+  optionalPeerDependencies?: KnipExportIssue[];
+  unlisted?: KnipExportIssue[];
+  unresolved?: KnipExportIssue[];
+  binaries?: { name: string }[];
+  duplicates?: KnipExportIssue[][];
+  enumMembers?: Record<string, KnipExportIssue[]>;
+  catalog?: KnipExportIssue[];
 }
 
 export interface KnipReport {
@@ -69,6 +86,84 @@ export const JSCPD_IGNORE_GLOBS = [
   "**/*-demo-*.*",
 ];
 
+// #1080: the project-scope subset of JSCPD_IGNORE_GLOBS worth a disclosed file count. The
+// build-artifact directories (node_modules/dist/.next) are the universal, expected exclusion every
+// tool applies and are never walked for a count here — walking node_modules on a real target is
+// O(10^5) files for a fact nobody finds surprising. These five are Harvey-specific product-scope
+// DECISIONS that silently narrow what "M4 duplication" means for the repo, which is exactly what
+// read as a whole-repo figure with no disclosure (#1080) — most notably `**/*demo*/**`, a SUBSTRING
+// glob that also excludes a shipped `demos/` product directory, not just mock/test-labeled paths.
+export const JSCPD_DISCLOSED_GLOBS = JSCPD_IGNORE_GLOBS.filter((g) => !["**/node_modules/**", "**/dist/**", "**/.next/**"].includes(g));
+
+// Minimal glob→RegExp translator scoped to the shapes JSCPD_IGNORE_GLOBS actually uses: a leading
+// "**/" (zero or more leading path segments), a trailing "/**" (zero or more trailing path segments),
+// and "*" within a segment (any run of non-separator characters). Anchored full-match against a
+// POSIX-relative path. Not a general globber — deliberately narrow to what this list needs, so it
+// stays auditable against the 8 patterns above rather than pulling in a transitive glob dependency
+// undeclared in package.json (the exact "unlisted" defect #1080's knip fix discloses).
+function globToRegExp(glob: string): RegExp {
+  let g = glob;
+  let prefix = "";
+  let suffix = "";
+  if (g.startsWith("**/")) {
+    prefix = "(?:.*/)?";
+    g = g.slice(3);
+  }
+  if (g.endsWith("/**")) {
+    suffix = "(?:/.*)?";
+    g = g.slice(0, -3);
+  }
+  const body = g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*");
+  return new RegExp(`^${prefix}${body}${suffix}$`);
+}
+
+/** Does `relPath` (POSIX-relative to the scan root) match one of jscpd's own ignore globs? */
+export function matchesJscpdIgnoreGlob(relPath: string): boolean {
+  return JSCPD_IGNORE_GLOBS.some((g) => globToRegExp(g).test(relPath));
+}
+
+/** Does `relPath` match this specific glob? For per-glob tallying (jscpdIgnoreScopeFinding). */
+export function matchesGlob(glob: string, relPath: string): boolean {
+  return globToRegExp(glob).test(relPath);
+}
+
+export interface JscpdGlobMatch {
+  glob: string;
+  count: number;
+  example?: string;
+}
+
+// #1080: one Info row naming the exclusion globs and the file count each matched, per the
+// INFRA-SCOPE-00 disclosure precedent (src/scan/infra-scope.ts) — `matches` is caller-supplied
+// (the CLI walks the target and tallies per JSCPD_DISCLOSED_GLOBS, src/cli/quality-scan.ts) so
+// this stays a pure, testable transform.
+export function jscpdIgnoreScopeFinding(matches: JscpdGlobMatch[]): Finding | undefined {
+  const withHits = matches.filter((m) => m.count > 0);
+  if (withHits.length === 0) return undefined;
+  const total = withHits.reduce((sum, m) => sum + m.count, 0);
+  const summary = withHits.map((m) => `\`${m.glob}\`: ${m.count} file${m.count === 1 ? "" : "s"}${m.example ? ` (e.g. ${m.example})` : ""}`).join("; ");
+  return {
+    // Same collision-avoidance reasoning as M4-SELF-00 above — outside jscpdToFindings' sequential
+    // per-clone id space.
+    id: "M4-SCOPE-00",
+    title: `${total} file(s) excluded from M4 duplication scope by ignore globs`,
+    severity: "Info",
+    confidence: "N/A",
+    category: "Maintainability",
+    taxonomy: "M4 — Duplication",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `M4's jscpd pass excludes files matching these globs, on top of the standard node_modules/dist/.next build-artifact exclusion (not counted here): ${summary}. \`**/*demo*/**\` is a SUBSTRING match — it excludes a shipped \`demos/\` product directory just as readily as a mock/test-labeled path.`,
+    impact:
+      "The M4 duplication percentage and clone findings elsewhere in this report are computed over this narrowed file set, not the whole repo — a reader who assumes 'whole-repo' over- or under-trusts the percentage depending on how much of the excluded set is real product code (most often a demos/ directory) versus genuinely generated/vendored output.",
+    fix: "If any excluded path above is real, hand-maintained product code, re-run jscpd directly over it with a narrower --ignore to get its own duplication figure.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+    precisionTier: "high",
+  };
+}
+
 function severityForClone(lines: number): Finding["severity"] {
   if (lines >= 50) return "Medium";
   if (lines >= 15) return "Low";
@@ -85,12 +180,23 @@ function elevateForSecurityPath(severity: Finding["severity"]): Finding["severit
   return severity;
 }
 
-// #232: jscpd matching a file against itself is how it reports internally-repetitive DATA (SVG
-// icon-path tables, enum/lookup literal blocks) — not cross-file logic duplication a client could
-// "extract into a shared module" (the M4 fix text). Excluded from scoring, not just re-labeled,
-// since the fix recommendation genuinely doesn't apply to it.
+// #232 excluded self-file clones on the assumption they were internally-repetitive DATA (SVG
+// icon-path tables, enum/lookup literal blocks) that "extract into a shared module" doesn't apply
+// to. #1080 RETRACTS that assumption as measured-false: run against a real 2755-file production
+// target (2026-07-25, `pnpm exec tsx` ad hoc jscpd invocation, not a stored fixture), self-file
+// clones were dominated by copy-pasted test setup/mock chains (327/431 clusters, 76%; 3178/4372
+// duplicated lines, 73%) and repeated JSX render blocks (32/431, 7%) — both genuinely extractable
+// (a shared test helper, a row-renderer component), not data. No SVG-icon-table or enum-literal
+// cluster appeared in the sample. Still excluded from the SCORED findings below (a self-match
+// pair has no cross-file "which copy is canonical" story the way a true clone does, and the
+// measurement is one target, not a corpus) but see selfFileCloneDisclosureFinding (M4-SELF-00) — this is
+// disclosed as a probably-actionable band pending a scoring-policy decision, not dismissed as noise.
 function isCrossFileClone(dup: JscpdDuplicate): boolean {
   return dup.firstFile.name !== dup.secondFile.name;
+}
+
+function isSelfFileClone(dup: JscpdDuplicate): boolean {
+  return !isCrossFileClone(dup);
 }
 
 // jscpd's own default gate (minLines 5 / minTokens 50) still lets through clusters the #232
@@ -150,6 +256,38 @@ function subThresholdDisclosureFinding(smallClones: JscpdDuplicate[]): Finding {
   };
 }
 
+// #1080: the self-file band #232 excludes entirely (see isCrossFileClone's header — the "it's just
+// data" assumption is retracted, measured-false). Disclosed as one aggregate, same shape as
+// subThresholdDisclosureFinding, so a large self-file band is visible rather than silently absorbed.
+function selfFileCloneDisclosureFinding(selfClones: JscpdDuplicate[]): Finding {
+  const worst = [...selfClones].sort((a, b) => b.lines - a.lines);
+  const totalLines = selfClones.reduce((sum, d) => sum + d.lines, 0);
+  const examples = worst
+    .slice(0, 3)
+    .map((d) => `${d.firstFile.name}:${d.firstFile.start}-${d.firstFile.end} ↔ :${d.secondFile.start}-${d.secondFile.end} (${d.lines} lines)`)
+    .join("; ");
+  return {
+    // Deliberately NOT in the "M4-01"/"M4-02"/… sequential space jscpdToFindings assigns to
+    // individual clone findings below — a report with that many significant clusters would collide.
+    id: "M4-SELF-00",
+    title: `${selfClones.length} self-file clone(s) excluded from the M4 duplication score`,
+    severity: "Info",
+    confidence: "Confirmed",
+    category: "Maintainability",
+    taxonomy: "M4 — Duplication",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `jscpd found ${selfClones.length} clone(s) where both copies sit in the SAME file (${totalLines} lines total), e.g. ${examples}. Excluded from the findings above and from the headline duplication percentage — the M4 fix text ("extract into a shared module") only applies across files.`,
+    impact:
+      "MEASURED 2026-07-25 (#1080) on a 2755-file production target: self-file clones were dominated by copy-pasted test setup/mock chains (76% of clusters, 73% of duplicated lines) and repeated JSX render blocks (7%), not primarily inert data (SVG icon tables, enum literals) as the original #232 exclusion assumed — that assumption is retracted as measured-false. Most of this band is genuinely extractable (a shared test helper, a row-renderer component); it stays out of the SCORED findings above pending a scoring-policy decision, not because it's confirmed noise.",
+    fix: "No per-item action from this aggregate. Sample the evidence pairs above — a large count concentrated in test files usually means one setup helper/fixture should exist; concentrated in JSX usually means one row/row-renderer component should be extracted.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+    precisionTier: "high",
+  };
+}
+
 // jscpd's json reporter always writes duplicates in discovery order, not
 // worst-first, so re-sort by duplicated lines to surface the worst clusters.
 export function jscpdToFindings(report: JscpdReport): Finding[] {
@@ -200,6 +338,10 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
   const smallClones = report.duplicates.filter(isSubThresholdClone);
   if (smallClones.length > 0) findings.push(subThresholdDisclosureFinding(smallClones));
 
+  // #1080: the dropped self-file band, disclosed the same way (M4-SELF-00).
+  const selfClones = report.duplicates.filter(isSelfFileClone);
+  if (selfClones.length > 0) findings.push(selfFileCloneDisclosureFinding(selfClones));
+
   return findings;
 }
 
@@ -208,14 +350,18 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
 // matches what the findings above actually claim. Reimplements jscpd's own
 // Statistic.calculatePercentage (round(cloned/total*10000)/100, verified against
 // @jscpd/core's source) rather than guessing a formula.
-export function duplicationSummary(report: JscpdReport): { percentage: number; duplicatedLines: number; totalLines: number; subThresholdCloneCount: number } {
+export function duplicationSummary(
+  report: JscpdReport,
+): { percentage: number; duplicatedLines: number; totalLines: number; subThresholdCloneCount: number; selfFileCloneCount: number } {
   const totalLines = report.statistics.total.lines;
   const duplicatedLines = report.duplicates.filter(isSignificantClone).reduce((sum, d) => sum + d.lines, 0);
   const percentage = totalLines ? Math.round((10000 * duplicatedLines) / totalLines) / 100 : 0;
   // #365: not part of the headline percentage (that stands behind the significant findings), but
   // surfaced so the small-clone band is visible wherever the summary is printed.
   const subThresholdCloneCount = report.duplicates.filter(isSubThresholdClone).length;
-  return { percentage, duplicatedLines, totalLines, subThresholdCloneCount };
+  // #1080: same idea for the self-file band — never part of the percentage, always surfaced.
+  const selfFileCloneCount = report.duplicates.filter(isSelfFileClone).length;
+  return { percentage, duplicatedLines, totalLines, subThresholdCloneCount, selfFileCloneCount };
 }
 
 // #223/#505: knip throws (rather than reporting) when it can't resolve a target's config/plugin
@@ -494,6 +640,10 @@ export function knipToFindings(
 
   for (const issue of report.issues) {
     const securityPath = touchesSecurityPath(issue.file);
+    // #1080: knip's CODEOWNERS enrichment on this row (present only when the target ships a
+    // CODEOWNERS file) — appended to every finding built from this issue below rather than its own
+    // finding, since it's routing metadata for an existing issue, not an issue of its own.
+    const ownerNote = issue.owners?.length ? ` Owned by: ${issue.owners.map((o) => o.name).join(", ")}.` : "";
 
     // Unused VALUE exports — genuine dead code once entry config is set (#72): confirmed and
     // grade-counted, "delete or inline".
@@ -511,9 +661,10 @@ export function knipToFindings(
         location: issue.file,
         status: "Open",
         evidence: `knip: unreferenced export(s) ${names.join(", ")}.`,
-        impact: securityPath
-          ? `${partialImpact} Defined but never called in an auth/guard/security path — confirm where authz is actually enforced before dismissing as dead weight (cross-check against the M1 authorization review).`
-          : partialImpact,
+        impact:
+          (securityPath
+            ? `${partialImpact} Defined but never called in an auth/guard/security path — confirm where authz is actually enforced before dismissing as dead weight (cross-check against the M1 authorization review).`
+            : partialImpact) + ownerNote,
         fix: "Delete the unused exports, or inline them if they're only used internally.",
         value: securityPath ? 4 : 2,
         ease: 4,
@@ -541,7 +692,7 @@ export function knipToFindings(
         location: issue.file,
         status: "Open",
         evidence: `knip: exported type(s) not imported by name elsewhere: ${names.join(", ")}.`,
-        impact: `${names.length} exported type${names.length === 1 ? "" : "s"} with no external importer. Often not dead: component Props/option types are commonly exported by convention and used only within their own file.`,
+        impact: `${names.length} exported type${names.length === 1 ? "" : "s"} with no external importer. Often not dead: component Props/option types are commonly exported by convention and used only within their own file.${ownerNote}`,
         fix: "Remove the `export` keyword if the type is only used in this file; leave it exported (with a one-line note) if it's an intentional public/convention surface — don't delete without checking.",
         value: 1,
         ease: 4,
@@ -578,9 +729,11 @@ export function knipToFindings(
         location: issue.file,
         status: "Open",
         evidence: `knip: ${label} declared but never imported: ${names.join(", ")}.${unresolved ? " Entry/plugin resolution was incomplete for this scope, so config-only usages may be invisible." : ""}`,
-        impact: dev
-          ? `${names.length} declared devDependenc${names.length === 1 ? "y" : "ies"} nothing imports — install time, lockfile churn and CI minutes spent on packages the build doesn't use.`
-          : `${names.length} declared runtime dependenc${names.length === 1 ? "y" : "ies"} nothing imports — each ships into the installed tree with its own transitive packages and CVE exposure, for no functionality. Unused runtime deps are supply-chain surface, not just tidiness.`,
+        impact:
+          (dev
+            ? `${names.length} declared devDependenc${names.length === 1 ? "y" : "ies"} nothing imports — install time, lockfile churn and CI minutes spent on packages the build doesn't use.`
+            : `${names.length} declared runtime dependenc${names.length === 1 ? "y" : "ies"} nothing imports — each ships into the installed tree with its own transitive packages and CVE exposure, for no functionality. Unused runtime deps are supply-chain surface, not just tidiness.`) +
+          ownerNote,
         fix: unresolved
           ? `Install the target's dependencies so knip can resolve its config and plugins, re-run \`pnpm quality-scan\`, then remove whichever of ${names.join(", ")} is still reported.`
           : `Remove ${names.join(", ")} from ${label} in ${issue.file} (check for config-file-only or CLI-only usage first — knip sees imports, not shell scripts).`,
@@ -588,6 +741,155 @@ export function knipToFindings(
         ease: 5,
         safety: 4,
         precisionTier: unresolved ? "review" : "high",
+      });
+    }
+
+    // #1080: unlisted — imported in source but ABSENT from package.json (MEASURED against knip
+    // 5.88.1, #1080). A supply-chain/build-reproducibility fact, not just tidiness: the import
+    // resolves today only because some OTHER declared dependency happens to provide the same
+    // package (a transitive hoist) or a global install — a stricter installer or a lockfile change
+    // can break the build with no declared cause.
+    if (issue.unlisted?.length) {
+      const names = issue.unlisted.map((u) => u.name);
+      n += 1;
+      findings.push({
+        id: `M5-${String(n).padStart(2, "0")}`,
+        title: `Unlisted import(s) in ${issue.file}`,
+        severity: "Medium",
+        confidence: "Confirmed",
+        category: "Maintainability",
+        taxonomy: "M5 — Slop / dead code",
+        location: issue.file,
+        status: "Open",
+        evidence: `knip: import(s) resolved with no matching package.json entry: ${names.join(", ")}.`,
+        impact: `${names.length} import${names.length === 1 ? "" : "s"} resolve today only because another declared dependency happens to provide the same package (a transitive hoist) or a global install — a supply-chain and build-reproducibility gap, not just tidiness.${ownerNote}`,
+        fix: `Add ${names.join(", ")} to package.json directly (dependencies, or devDependencies if it's build/test-only) instead of relying on transitive resolution.`,
+        value: 3,
+        ease: 4,
+        safety: 4,
+        precisionTier: "high",
+      });
+    }
+
+    // #1080: unresolved — an import knip could not resolve to any file/package at all.
+    if (issue.unresolved?.length) {
+      const names = issue.unresolved.map((u) => u.name);
+      n += 1;
+      findings.push({
+        id: `M5-${String(n).padStart(2, "0")}`,
+        title: `Unresolved import(s) in ${issue.file}`,
+        severity: "Medium",
+        confidence: "Confirmed",
+        category: "Maintainability",
+        taxonomy: "M5 — Slop / dead code",
+        location: issue.file,
+        status: "Open",
+        evidence: `knip: import specifier(s) that resolve to nothing: ${names.join(", ")}.`,
+        impact: `${names.length} import${names.length === 1 ? "" : "s"} point at a module/package that does not exist from this file's location — likely a typo, a moved/renamed file, or a dependency removed without updating every call site.${ownerNote}`,
+        fix: `Fix or remove the unresolved import(s): ${names.join(", ")}.`,
+        value: 3,
+        ease: 4,
+        safety: 4,
+        precisionTier: "high",
+      });
+    }
+
+    // #1080: duplicates — the same symbol exported twice from one file. Not dead code, but a
+    // tidiness/drift-risk signal knip surfaces separately from unused exports.
+    if (issue.duplicates?.length) {
+      const groups = issue.duplicates.map((g) => g.map((s) => s.name).join(" / "));
+      n += 1;
+      findings.push({
+        id: `M5-${String(n).padStart(2, "0")}`,
+        title: `Duplicate export(s) in ${issue.file}`,
+        severity: "Low",
+        confidence: "Confirmed",
+        category: "Maintainability",
+        taxonomy: "M5 — Slop / dead code",
+        location: issue.file,
+        status: "Open",
+        evidence: `knip: the same symbol is exported under more than one name: ${groups.join("; ")}.`,
+        impact: `A caller can import either name for the same value — no functional bug, but two names for one symbol invites drift (one gets renamed/removed, the other doesn't) and confuses which is canonical.${ownerNote}`,
+        fix: "Pick one canonical export name per symbol and update importers, or re-export the alias explicitly with a comment stating why both exist.",
+        value: 1,
+        ease: 4,
+        safety: 4,
+        precisionTier: "high",
+      });
+    }
+
+    // #1080: enumMembers — enum members never referenced anywhere. Dead code inside a live enum.
+    if (issue.enumMembers && Object.keys(issue.enumMembers).length > 0) {
+      const parts = Object.entries(issue.enumMembers).map(([parent, members]) => `${parent}.${members.map((m) => m.name).join("/")}`);
+      n += 1;
+      findings.push({
+        id: `M5-${String(n).padStart(2, "0")}`,
+        title: `Unused enum member(s) in ${issue.file}`,
+        severity: "Low",
+        confidence: "Confirmed",
+        category: "Maintainability",
+        taxonomy: "M5 — Slop / dead code",
+        location: issue.file,
+        status: "Open",
+        evidence: `knip: enum member(s) never referenced: ${parts.join(", ")}.`,
+        impact: `Dead enum members ship in the bundle and widen the type's surface with values nothing produces or consumes.${ownerNote}`,
+        fix: "Remove the unused member(s), or confirm they're a deliberate public/reserved surface.",
+        value: 1,
+        ease: 4,
+        safety: 4,
+        precisionTier: "high",
+      });
+    }
+
+    // #1080: optionalPeerDependencies / catalog — same "declared but nothing imports it" shape as
+    // the dependencies block above, for the two dependency-declaration surfaces #1050 didn't cover.
+    const namedDepClasses = [
+      { entries: issue.optionalPeerDependencies, kind: "optional peer dependency", plural: "optional peer dependencies", where: "peerDependenciesMeta/peerDependencies" },
+      { entries: issue.catalog, kind: "pnpm catalog entry", plural: "pnpm catalog entries", where: "the pnpm-workspace.yaml catalog" },
+    ];
+    for (const { entries, kind, plural, where } of namedDepClasses) {
+      if (!entries?.length) continue;
+      const names = entries.map((d) => d.name);
+      n += 1;
+      findings.push({
+        id: `M5-${String(n).padStart(2, "0")}`,
+        title: `Unused ${names.length === 1 ? kind : plural} declared in ${issue.file}`,
+        severity: "Low",
+        confidence: "Confirmed",
+        category: "Maintainability",
+        taxonomy: "M5 — Slop / dead code",
+        location: issue.file,
+        status: "Open",
+        evidence: `knip: ${names.length === 1 ? kind : plural} declared but never imported: ${names.join(", ")}.`,
+        impact: `${names.length} declared ${names.length === 1 ? kind : plural} nothing in this scope imports — a stale declaration, or a consumer-facing surface no longer used.${ownerNote}`,
+        fix: `Remove ${names.join(", ")} from ${where} if genuinely unused, or confirm it's kept for a downstream consumer.`,
+        value: 1,
+        ease: 5,
+        safety: 4,
+        precisionTier: "high",
+      });
+    }
+
+    // #1080: binaries — a CLI binary nothing in the scripts/config knip scanned invokes.
+    if (issue.binaries?.length) {
+      const names = issue.binaries.map((b) => b.name);
+      n += 1;
+      findings.push({
+        id: `M5-${String(n).padStart(2, "0")}`,
+        title: `Unused binary/binaries declared in ${issue.file}`,
+        severity: "Low",
+        confidence: "Confirmed",
+        category: "Maintainability",
+        taxonomy: "M5 — Slop / dead code",
+        location: issue.file,
+        status: "Open",
+        evidence: `knip: binary/binaries never invoked from any script/config knip scanned: ${names.join(", ")}.`,
+        impact: `${names.length} CLI binar${names.length === 1 ? "y" : "ies"} nothing in this scope's scripts/config invokes — its backing package may itself be unused (cross-check against the unused-dependency rows above).${ownerNote}`,
+        fix: `Confirm ${names.join(", ")} isn't invoked from a shell script, CI workflow, or Makefile knip doesn't parse; if genuinely unused, remove the backing package.`,
+        value: 1,
+        ease: 4,
+        safety: 4,
+        precisionTier: "review",
       });
     }
   }
