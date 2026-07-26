@@ -1242,6 +1242,76 @@ describe("monorepo per-instance fan-out (#506)", () => {
   });
 });
 
+// #1062: the M7 code tier shelled out to detect-static with NO --out, so its findings were empty by
+// construction — the M7 row asserted `pnpm detect-static (code tier)` ran while carrying zero
+// evidence. The intent under test is that the code tier's own findings reach the deliverable on
+// every branch that reports it ran, filtered to M7's taxonomy so M9's unfiltered per-app sweep is
+// not re-attributed to M7.
+describe("M7 collects the code tier's findings into the deliverable (#1062)", () => {
+  const perf = { id: "M7C-01", taxonomy: "M7 — Unbounded select", severity: "Perf" } as unknown as Finding;
+  const boundary = { id: "M9-01", taxonomy: "M9 — Client/server boundary", severity: "Medium" } as unknown as Finding;
+  const capturing = (over: Partial<RunContext> = {}) =>
+    ctx({
+      captureDir: "/cap",
+      readFindings: (p: string) => (p.endsWith("M7.json") ? [perf, boundary] : []),
+      ...over,
+    });
+
+  it("passes --out to the code tier's detect-static run", () => {
+    const argvSeen: string[][] = [];
+    runAudit(AUDIT_RUNNERS, capturing({ exec: (_c, argv) => (argvSeen.push(argv), { ok: true, output: cleanOutput(argv) }) }));
+    const m7Run = argvSeen.find((argv) => argv.includes("detect-static") && argv.includes("/cap/M7.json"));
+    expect(m7Run).toBeDefined();
+  });
+
+  it("the source-only branch (no DB creds) carries the code tier's findings, not an empty row", () => {
+    const m7 = runAudit(AUDIT_RUNNERS, capturing()).recorded.find((r) => r.module === "M7");
+    expect(m7?.status).toBe("partial");
+    expect(runAudit(AUDIT_RUNNERS, capturing()).findings.map((f) => f.id)).toContain("M7C-01");
+  });
+
+  it("the connected-but-no-project-ref branch carries them too", () => {
+    const { findings } = runAudit(AUDIT_RUNNERS, capturing({ env: { connected: true, dynamic: false, llm: false } }));
+    expect(findings.map((f) => f.id)).toContain("M7C-01");
+  });
+
+  it("the advisor branch carries the code tier's findings alongside the advisors'", () => {
+    const advisor = { id: "M7A-01", taxonomy: "M7 — Missing index", severity: "Perf" } as unknown as Finding;
+    const { findings } = runAudit(AUDIT_RUNNERS, capturing({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRefs: ["proj-main"],
+      readFindings: (p: string) => (p.endsWith("M7.json") ? [perf, boundary] : p.includes("M7-proj-main") ? [advisor] : []),
+      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : { ok: true, output: cleanOutput(argv) }),
+    }));
+    expect(findings.map((f) => f.id)).toEqual(expect.arrayContaining(["M7C-01", "M7A-01"]));
+  });
+
+  // The code tier scans the target ONCE, so it must not be multiplied by the number of enumerated
+  // databases — same reasoning as #1042's Lighthouse pass. (On a multi-project run the row is
+  // instance-tagged, so runAudit namespaces the id by the project it rode in on, per #620.)
+  it("the code tier ran once, so its findings appear once even across several Supabase projects", () => {
+    const { findings } = runAudit(AUDIT_RUNNERS, capturing({
+      env: { connected: true, dynamic: false, llm: false },
+      supabaseRefs: ["proj-main", "proj-rag"],
+      exec: (_c, argv) => (argv.includes("perf-scan") ? { ok: true, output: "" } : { ok: true, output: cleanOutput(argv) }),
+    }));
+    expect(findings.filter((f) => f.id.startsWith("M7C-01"))).toHaveLength(1);
+  });
+
+  it("does not claim M9's classes from the shared detect-static pass under the M7 row", () => {
+    const m7Outcome = AUDIT_RUNNERS.find((r) => r.module === "M7")!.run(capturing());
+    const outcome = Array.isArray(m7Outcome) ? m7Outcome[0]! : m7Outcome;
+    const collected = outcome.status === "requires-live-run" ? [] : (outcome.findings ?? []);
+    expect(collected.map((f) => f.id)).toEqual(["M7C-01"]);
+  });
+
+  it("a scan that found nothing to run still carries no findings — capture is not a status", () => {
+    const noFiles = capturing({ exec: (_c, argv) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files" } : { ok: true, output: cleanOutput(argv) }) });
+    const m7 = runAudit(AUDIT_RUNNERS, noFiles).recorded.find((r) => r.module === "M7");
+    expect(m7?.status).toBe("requires-live-run");
+  });
+});
+
 describe("formatFailures", () => {
   it("names each crashed module and calls the crash a bug, not a tier", () => {
     const out = formatFailures([{ module: "M4", error: "jscpd binary missing" }]);

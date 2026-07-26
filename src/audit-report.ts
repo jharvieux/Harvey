@@ -28,9 +28,14 @@ export function coverageLedger(recorded: ModuleCoverage[], env?: EngagementEnv):
 }
 
 // Drops byte-identical duplicates (same id AND same content) — the shared-CLI capture case, where
-// quality-scan is captured under both M4 and M5, and detect-static under both M7 and M9, yields the
-// same Finding[] twice. A same-id-but-different-content collision is deliberately left in place so
-// validateFindings flags it loudly rather than letting one variant silently win.
+// quality-scan is captured under both M4 and M5, and detect-static is captured under M6, M7, M8 and
+// M9, yields the same Finding[] twice. #1062 corrects what this comment used to assert: M6/M7/M8
+// each filter that shared array to their OWN taxonomy prefix, so their rows carry a byte-identical
+// SUBSET of M9's unfiltered capture, which is what this collapses on a single-target run. (And it
+// was flatly false for M7 until #1062 — the M7 probe passed no --out at all, so it contributed
+// nothing to collapse. Falsifier: grep the m7 runner in src/audit-runners.ts for `captureOut`.)
+// A same-id-but-different-content collision is deliberately left in place so validateFindings flags
+// it loudly rather than letting one variant silently win.
 export function dedupeFindings(findings: Finding[]): Finding[] {
   const seen = new Set<string>();
   const out: Finding[] = [];
@@ -68,5 +73,5 @@ export function assembleEngagementDocument(recorded: ModuleCoverage[], env: Enga
 // not-assessed row names the actual cause instead of restating that it is absent.
 function m10NotRunReason(recorded: ModuleCoverage[]): string {
   const reasons = recorded.filter((r) => r.module === "M10" && r.reason).map((r) => `${r.instance ? `${r.instance}: ` : ""}${r.reason}`);
-  return reasons.length ? reasons.join(" | ") : "M10 emitted no data-map artifact this run (no --findings-out capture, or the classifier wrote none).";
+  return reasons.length ? reasons.join(" | ") : "M10 emitted no data-map artifact this run (no --findings-out/--sarif-out capture, or the classifier wrote none).";
 }
