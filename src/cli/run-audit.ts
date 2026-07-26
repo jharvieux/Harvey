@@ -87,7 +87,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { assembleEngagementDocument, coverageLedger } from "../audit-report.js";
-import { conservationLedger, formatLedger } from "../conservation-ledger.js";
+import { baselineLedger, conservationLedger, formatBaselineLedger, formatLedger } from "../conservation-ledger.js";
 import { buildExecutionPlan, formatExecutionPlan } from "../audit-plan.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
 import { applyBaseline } from "../audit-diff.js";
@@ -287,7 +287,17 @@ if (findingsOut || sarifOut) {
       process.exit(1);
     }
     const priorLabel = [prior.meta?.date, prior.meta?.commit].filter(Boolean).join(" @ ") || undefined;
+    // #1146: the conservation ledger above stops at assembly; the baseline diff runs here and was
+    // unmeasured. Ledger it too — a bug that drops a NEW finding while tagging must fail loud, not
+    // ship a report short one row behind a clean coverage pass.
+    const beforeBaseline = doc.findings;
     doc = applyBaseline(doc, prior.findings, priorLabel);
+    const bLedger = baselineLedger(beforeBaseline, doc.findings, findingsByModule);
+    console.log(`\n${formatBaselineLedger(bLedger)}`);
+    if (!bLedger.ok) {
+      console.error("\nRefusing to export: the baseline diff dropped or invented a finding between assembly and the deliverable.");
+      process.exit(1);
+    }
     console.log(`\nBaseline diff vs ${baselinePath}: ${doc.baseline?.counts.resolved} resolved, ${doc.baseline?.counts.persistent} persistent, ${doc.baseline?.counts.new} new`);
   }
 

@@ -3,7 +3,7 @@
 // that it can (#350's guard passed review, had tests, and could not fire for nine months).
 
 import { describe, expect, it } from "vitest";
-import { conservationLedger, formatLedger } from "./conservation-ledger.js";
+import { baselineLedger, conservationLedger, formatBaselineLedger, formatLedger } from "./conservation-ledger.js";
 import type { Finding } from "./findings.js";
 
 const finding = (id: string, over: Partial<Finding> = {}): Finding => ({
@@ -101,5 +101,92 @@ describe("conservation ledger — SEEDED violations, each proven to fail", () =>
     const a = finding("A");
     const ledger = conservationLedger([a, { ...a, title: "x" }], [], { M4: [a], M5: [a] });
     expect(formatLedger(ledger)).toContain("produced by M4, M5");
+  });
+});
+
+// #1146: the suppressed/capped/not-applicable columns get a real, validated producer — a DeclaredDrop.
+// The same drop that is `unaccounted` (a failure) when nobody claims it becomes an accounted column
+// when a transform declares it, and a claim that does not match a real loss is itself a failure.
+describe("conservation ledger — declared dispositions (#1146)", () => {
+  it("accounts a declared drop into its column instead of failing as unaccounted", () => {
+    const produced = [finding("A"), finding("B")];
+    const undeclared = conservationLedger(produced, [produced[0]!], { M9: produced });
+    expect(undeclared.ok).toBe(false); // baseline: an unexplained drop fails
+
+    const ledger = conservationLedger(produced, [produced[0]!], { M9: produced }, [
+      { id: "B", disposition: "capped", reason: "over the per-shape threshold", by: "rollupFindings" },
+    ]);
+    expect(ledger.ok).toBe(true);
+    expect(ledger.capped).toBe(1);
+    expect(ledger.unaccounted).toBe(0);
+    expect(ledger.produced).toBe(ledger.deliveredFromProduced + ledger.capped);
+    expect(ledger.rows.find((r) => r.id === "B")?.reason).toMatch(/over the per-shape threshold — dropped by rollupFindings/);
+  });
+
+  it("routes each disposition to the right column", () => {
+    const produced = [finding("A"), finding("B"), finding("C"), finding("D")];
+    const ledger = conservationLedger(produced, [produced[0]!], { M9: produced }, [
+      { id: "B", disposition: "suppressed", reason: "s", by: "x" },
+      { id: "C", disposition: "capped", reason: "c", by: "x" },
+      { id: "D", disposition: "not-applicable", reason: "n", by: "x" },
+    ]);
+    expect(ledger.ok).toBe(true);
+    expect([ledger.suppressed, ledger.capped, ledger.notApplicable]).toEqual([1, 1, 1]);
+  });
+
+  // SEED: a disposition claimed against a finding that is STILL delivered — the column would close
+  // the arithmetic on a fiction. Must fail loud.
+  it("FAILS when a declared drop's finding is actually still delivered", () => {
+    const produced = [finding("A"), finding("B")];
+    const ledger = conservationLedger(produced, produced, { M9: produced }, [
+      { id: "B", disposition: "suppressed", reason: "s", by: "x" },
+    ]);
+    expect(ledger.ok).toBe(false);
+    expect(ledger.misdeclaredDispositions).toEqual(["B"]);
+    expect(ledger.suppressed).toBe(0);
+    expect(formatLedger(ledger)).toMatch(/did not actually go missing/);
+  });
+
+  // SEED: a disposition claimed against an id no probe produced.
+  it("FAILS when a declared drop names a finding that was never produced", () => {
+    const produced = [finding("A")];
+    const ledger = conservationLedger(produced, produced, { M9: produced }, [
+      { id: "GHOST", disposition: "capped", reason: "c", by: "x" },
+    ]);
+    expect(ledger.ok).toBe(false);
+    expect(ledger.misdeclaredDispositions).toEqual(["GHOST"]);
+  });
+});
+
+// #1146: the baseline seam. applyBaseline TAGS the current set and drops/adds nothing to it, so the
+// invariant is entered == retained == exited. A dropped NEW finding or an invented row must fail.
+describe("baseline ledger — across applyBaseline (#1146)", () => {
+  it("passes when the baseline diff only tags (no member of the current set added or removed)", () => {
+    const before = [finding("A"), finding("B")];
+    const after = before.map((f) => ({ ...f, baselineStatus: "new" as const }));
+    const ledger = baselineLedger(before, after, { M9: before });
+    expect(ledger.ok).toBe(true);
+    expect(ledger.retained).toBe(2);
+    expect(ledger.removed).toEqual([]);
+    expect(formatBaselineLedger(ledger)).toContain("BASELINE LEDGER PASS");
+  });
+
+  // SEED: the guard the task names — the baseline application silently deletes a NEW finding.
+  it("FAILS when a finding entered the baseline diff and did not come out", () => {
+    const before = [finding("A"), finding("B")];
+    const after = [{ ...before[0]!, baselineStatus: "new" as const }];
+    const ledger = baselineLedger(before, after, { M9: before });
+    expect(ledger.ok).toBe(false);
+    expect(ledger.removed.map((r) => r.id)).toEqual(["B"]);
+    expect(formatBaselineLedger(ledger)).toContain("DELETED  B (produced by M9)");
+  });
+
+  // SEED: the baseline diff invents/duplicates a row that never entered.
+  it("FAILS when a row exits the baseline diff that did not enter it", () => {
+    const before = [finding("A")];
+    const after = [{ ...before[0]! }, finding("INVENTED")];
+    const ledger = baselineLedger(before, after);
+    expect(ledger.ok).toBe(false);
+    expect(ledger.gained).toEqual(["INVENTED"]);
   });
 });

@@ -2313,3 +2313,33 @@ Answer key: `P-RLS-USING-TRUE-REGULATED` in `src/scan/calibration/rls-static-sem
 (detection). The escalation itself is asserted against the committed artifacts by
 `src/data-class-escalation.test.ts` — detection and escalation are separate assertions on purpose,
 because the #1060 failure was precisely a working detector whose finding never reached the join.
+
+## `long-line/` — isGeneratedSource real-source-vs-minified (#1136)
+
+`isGeneratedSource` (`src/detectors/load-sources.ts`, #1088/#1065) excludes a file from every
+loadSources-based detector (M5-slop, M6, M7 code-tier, M8-intent, M9) if it matches
+`.min.[cm]?jsx?` or trips a content check. Pre-#1136, that content check was "any single line over
+1000 characters" — which correctly caught minified bundles but also caught real, hand-authored
+source that merely carried ONE long string literal (MEASURED against inbox-zero's
+`apps/web/utils/ai/assistant/tools/rules/update-rule-tool.ts`, pinned commit 2b78f2b3: 605 lines,
+one 1081-char prompt-string line, 5.7% of the file's bytes — dropped its one M6 "JSON deep-equal"
+indicator finding along with the rest of the file). #1136 made the check relative to the file: an
+outlier line over 1000 chars must still exist, AND lines over 500 chars must make up at least 30%
+of the file's total bytes — a minified/generated file's BULK is long lines, not an aside.
+
+Two fixtures prove both directions, isolated in their own directory so they don't interact with any
+other corpus's answer key:
+
+| id | file | shape | must be |
+|---|---|---|---|
+| P-M6-LONGLINE-JSONEQ | `long-line/ai-tool-description.ts` | 109 lines of ordinary hand-rolled code (rule CRUD helpers) plus ONE long LLM tool-description string literal (1176 chars, 21% of the file's bytes) — mirrors inbox-zero's `update-rule-tool.ts` shape exactly, including a hand-rolled `JSON.stringify(a) !== JSON.stringify(b)` deep-equal check | IN SCOPE — `isGeneratedSource` returns `false`; produces the `M6 — Indicator: JSON deep-equal` finding at `long-line/ai-tool-description.ts:57` |
+| N-GENERATED-LONGLINE-CONTENT | `long-line/legacy-widget-bundle.js` | 3 SVG-icon-path-data lines each ~1066 chars (75% of the file's bytes) — mirrors carbon's `onshape/config.tsx`/`paperless-parts/config.tsx` shape, the case #1088 added this check for. Filename deliberately does NOT match `.min.[cm]?jsx?`, so this exercises the content check alone, not the filename check. Also carries a `JSON.stringify` comparison that must NOT surface, because the whole file must stay excluded | EXCLUDED — `isGeneratedSource` returns `true`; contributes zero findings |
+
+MEASURED 2026-07-26 (this PR), via `loadSources` + `detectHandrolledFindings` directly over
+`targets/calibration/long-line/`: loaded paths = `["ai-tool-description.ts"]` only, findings =
+`["M6 — Indicator: JSON deep-equal @ ai-tool-description.ts:57"]` — the positive fires, the
+negative contributes nothing. `src/detectors/load-sources.test.ts` pins the same two shapes as unit
+tests (verified to fail first against the pre-#1136 heuristic, then pass against the fix). The
+committed dry-run artifact (`dry-run/findings.json`) is the standing regression gate: if this
+heuristic regresses, `P-M6-LONGLINE-JSONEQ`'s finding silently disappears from the artifact and
+`dry-run-drift` goes red.

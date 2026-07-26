@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -280,36 +280,33 @@ describe("secretScanScopeFinding (#1078)", () => {
   });
 });
 
-// #1078: TruffleHog ships the provider's own rotation procedure and the commit provenance with
-// every result, and Harvey discarded both on a Critical finding whose entire remediation IS
-// rotation. Fixture CAPTURED VERBATIM from `trufflehog git --no-verification --results=unverified
-// --json file://<fixture>` on trufflehog 3.96.0, 2026-07-26 (Verified flipped to true so it
-// reaches the grading path; the real run's fake token could not verify).
+// #1078/#1146: TruffleHog ships the provider's own rotation procedure and the commit provenance
+// with every result, and Harvey discarded both on a Critical finding whose entire remediation IS
+// rotation. The record is loaded from a COMMITTED CAPTURE — real `trufflehog git --no-verification
+// --results=unverified --json` output on trufflehog 3.96.0 (see
+// __fixtures__/trufflehog/PROVENANCE.md for version, command, and the dropped fields), not a
+// hand-built literal (conservation invariant 3, #1130). Every field the parser reads —
+// ExtraData.rotation_guide, SourceMetadata.Data.Git.email/timestamp/commit/line, DecoderName —
+// comes from the tool.
+const capturedTruffleHog = JSON.parse(
+  readFileSync(new URL("./__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json", import.meta.url), "utf8"),
+) as TruffleHogResult[];
+
 describe("TruffleHog rotation guidance and commit provenance reach the finding (#1078)", () => {
-  const captured: TruffleHogResult = {
-    DetectorName: "Github",
-    DecoderName: "PLAIN",
-    Verified: true,
-    Redacted: "",
-    ExtraData: { rotation_guide: "https://howtorotate.com/docs/tutorials/github/", version: "2" },
-    SourceMetadata: {
-      Data: {
-        Git: {
-          commit: "1f475839d1a0156ec7afffc637ed841c070286a3",
-          file: "lib/leaked-token.js",
-          email: "C <c@h.test>",
-          timestamp: "2026-07-26 04:39:34 +0000",
-          line: 1,
-        },
-      },
-    },
-  };
+  // The ONE field not from the tool: `Verified` is flipped true so the record reaches the grading
+  // path (parseTruffleHogFindings drops unverified hits). An offline capture cannot produce
+  // Verified:true — verification is a live provider call against a real, revocable secret — so the
+  // override is disclosed here rather than baked into the committed artifact (which stays honestly
+  // Verified:false). The impossibility is recorded as a falsifiable REASON block in
+  // __fixtures__/trufflehog/PROVENANCE.md, whose falsifier fires once a live-verified capture is
+  // committed and this override can be dropped.
+  const captured: TruffleHogResult = { ...capturedTruffleHog[0]!, Verified: true };
 
   it("appends the provider rotation guide to the fix and the author/date to the evidence", () => {
     const f = parseTruffleHogFindings([captured], "git-history")[0];
     expect(f?.fix).toContain("https://howtorotate.com/docs/tutorials/github/");
-    expect(f?.evidence).toContain("C <c@h.test>");
-    expect(f?.evidence).toContain("2026-07-26 04:39:34 +0000");
+    expect(f?.evidence).toContain("Harvey Calibration <calibration@harvey.test>");
+    expect(f?.evidence).toContain("2026-07-26 21:43:32 +0000");
   });
 
   it("reports a non-PLAIN decoder — a base64-buried secret is a different finding and a different search", () => {
