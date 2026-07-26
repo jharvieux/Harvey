@@ -98,6 +98,9 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Self-hosted GoTrue email-link poisoning": ["640", "A07"],
   "Self-hosted GoTrue OIDC issuer bypass": ["287", "A07"],
   "Missing rate limit on auth endpoint": ["307", "A07"],
+  // #1046: a limiter that resets per serverless instance does not restrict attempts — the same
+  // weakness as having none, which is why it shares CWE-307 with the check above.
+  "In-memory rate limiter (per-instance, resets on cold start)": ["307", "A07"],
   // Unverified inbound data authenticity.
   "Inbound webhook with no signature verification": ["345", "A08"],
   "Unsigned/unverified webhook handler": ["345", "A08"],

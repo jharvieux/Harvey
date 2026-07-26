@@ -103,6 +103,44 @@ describe("classifyLeftoverAuth", () => {
     expect(has(classifyLeftoverAuth({ path: "pages/api/settings/delete.js", content: "await admin.from('settings').delete().eq('key', req.body.key);" }), "Inbound webhook with no signature verification")).toBe(false);
   });
 
+  // #1046 IN-MEMORY RATE LIMITER — the capability docs/free-tier-scope.md advertised with no
+  // detector behind it, and the INVERSE of the AUTH-no-rate-limit check above (which matches a
+  // limiter identifier as a HINT and therefore clears exactly this case). Precision boundary is
+  // briefs/fp-rules.txt's standing rule: an in-process CACHE is not a limiter.
+  const INMEM = "In-memory rate limiter (per-instance, resets on cold start)";
+  const limiter = "const attempts = new Map();\nexport function rateLimit(k) { const n = (attempts.get(k) ?? 0) + 1; attempts.set(k, n); return n <= 10; }";
+
+  it("flags a limiter whose counter lives in a module-scope Map", () => {
+    expect(has(classifyLeftoverAuth({ path: "lib/limit.js", content: limiter }), INMEM)).toBe(true);
+  });
+
+  it("does not flag the same counter once it lives in a shared store", () => {
+    const shared = "export async function rateLimit(k) { const n = await redis.incr(k); return n <= 10; }";
+    expect(has(classifyLeftoverAuth({ path: "lib/limit.js", content: shared }), INMEM)).toBe(false);
+  });
+
+  it("does not flag a module-scope Map used as a memoization cache", () => {
+    const cache = "const memo = new Map();\nexport function memoize(k, f) { if (!memo.has(k)) memo.set(k, f()); return memo.get(k); }";
+    expect(has(classifyLeftoverAuth({ path: "lib/memo.js", content: cache }), INMEM)).toBe(false);
+  });
+
+  it("reads intent from CODE, not from a comment that merely mentions rate limiting", () => {
+    // targets/calibration/lib/memo.js is exactly this: a memo cache whose comment says "not a rate
+    // limiter". An un-stripped content grep reads that as limiter intent and flags the cache.
+    const cache = "// a module-level Map for memoization, not a rate limiter or throttle (429)\nconst memo = new Map();\nexport function memoize(k, f) { if (!memo.has(k)) memo.set(k, f()); return memo.get(k); }";
+    expect(has(classifyLeftoverAuth({ path: "lib/memo.js", content: cache }), INMEM)).toBe(false);
+  });
+
+  it("does not flag a limiter-named helper with no module-scope store (the counter lives elsewhere)", () => {
+    const perRequest = "export function rateLimit(req) { const attempts = new Map(); return attempts.size <= 10; }";
+    expect(has(classifyLeftoverAuth({ path: "lib/limit.js", content: perRequest }), INMEM)).toBe(false);
+  });
+
+  it("leaves AUTH-no-rate-limit's behaviour alone — a login route with no limiter hint still fires", () => {
+    const login = "export default async function handler(req, res) { await signIn(req.body); }";
+    expect(has(classifyLeftoverAuth({ path: "pages/api/auth/login.js", content: login }), "Missing rate limit on auth endpoint")).toBe(true);
+  });
+
   // #353 UPDATE-UNSCOPED
   const UNSCOPED = "Unscoped service-role UPDATE/DELETE (no WHERE)";
   it("flags a raw UPDATE with no WHERE on a query sink in a route file", () => {
