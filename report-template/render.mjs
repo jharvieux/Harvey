@@ -359,7 +359,7 @@ function fixSection(h) {
     ${downgradeTable}`;
 }
 
-function buildHtml(data) {
+export function buildHtml(data) {
   const all = data.findings.map((x) => ({ ...x, _bftb: bftb(x) }));
   const f = all.filter((x) => x.confidence !== "N/A" && !x.reviewFlagOnly); // live findings
   const na = all.filter((x) => x.confidence === "N/A"); // checked & ruled out (applicability gate)
