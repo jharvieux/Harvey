@@ -979,6 +979,38 @@ describe("M10 captures its classification findings (#436)", () => {
     expect(m10?.status).toBe("partial");
     expect(m10?.reason).toMatch(/not-collected, not clean/);
   });
+
+  // #1043: the schema tier's reason used to name only the row-sampling gap, so a reader saw a longer
+  // sensitive-column list and a "partial — rows not sampled" note, and reasonably concluded the
+  // protection claim had been honoured. It has to name the protection gap too.
+  it("schema tier's reason names the PII-protection gap, not only the row-sampling one", () => {
+    const m10 = runAudit(AUDIT_RUNNERS, ctx(capture)).recorded.find((r) => r.module === "M10");
+    expect(m10?.reason).toMatch(/protection was not verified/i);
+    expect(m10?.reason).toMatch(/M10-PROT-00/);
+  });
+});
+
+// #1049: the data map is an INPUT to every other module's severity, so the probe has to hand it back
+// as well as the findings. A run that captured findings but no map would escalate nothing and say
+// nothing about why.
+describe("M10 surfaces its data map for the severity join (#1049)", () => {
+  const dataMap = { patients: { columns: [], infotypes: ["MRN"], categories: ["PHI"], severityScore: 6, severity: "High" as const } };
+  const capturing = (): Partial<RunContext> => ({
+    captureDir: "/cap",
+    readFindings: () => [],
+    readArtifact: (p: string) => (p.endsWith("M10-datamap.json") ? dataMap : undefined),
+  });
+
+  it("passes --data-map-out to pii-classify and returns the parsed map", () => {
+    const argvSeen: string[][] = [];
+    const result = runAudit(AUDIT_RUNNERS, ctx({ ...capturing(), exec: (_c, argv) => (argvSeen.push(argv), { ok: true, output: cleanOutput(argv) }) }));
+    expect(argvSeen.some((argv) => argv.includes("pii-classify") && argv.includes("--data-map-out"))).toBe(true);
+    expect(result.dataMap).toEqual(dataMap);
+  });
+
+  it("returns no map when the classifier wrote none, so the assembler records the gap instead of guessing", () => {
+    expect(runAudit(AUDIT_RUNNERS, ctx({ captureDir: "/cap", readFindings: () => [], readArtifact: () => undefined })).dataMap).toBeUndefined();
+  });
 });
 
 // #1040: quick-scan was the ONE emitter probe invoked without --findings-out, so every mechanical

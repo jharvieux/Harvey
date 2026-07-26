@@ -65,6 +65,7 @@ const OWNERS: Record<string, string> = {
   "src/detectors/boundary-model.ts": "M9", // #916 — framework-agnostic boundary model + not-assessed rows
   "src/detectors/remix-adapter.ts": "M9", // #917 — Remix / React Router 7 adapter
   "src/detectors/tanstack-adapter.ts": "M9", // #918 — TanStack Start adapter
+  "src/pii-protection-review.ts": "M10", // #1043 — per-column protection verdict on the connected tier, plus its not-assessed row
 };
 
 function walk(dir: string, out: string[] = []): string[] {

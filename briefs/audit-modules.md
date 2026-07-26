@@ -242,9 +242,19 @@ A full audit is ten modules (M1–M10). Each lists what it finds, the method, th
 - **Status:** **prototype built** (`tools/pii-classify.mjs`, name-based dictionary + self-test). Validated on ATC:
   **94 PII-bearing columns across 40 tables** (email, DOB, passport, contacts). It also surfaced its own FP class
   (`email_category` ≠ email; `awaiting_dob_reprompt` is a boolean; "health" matched `vendor_health` infra) — so
-  hits carry a **confidence** label and ambiguous names ("name") default to low/review. Production version adds an
-  LLM semantic pass (catches obfuscated fields) + the severity-weighting wiring.
+  hits carry a **confidence** label and ambiguous names ("name") default to low/review. The opt-in LLM semantic
+  pass (catches obfuscated fields) landed in #855; the severity-weighting wiring landed in #1049.
 - **Report:** a data map (table → categories) in context; feeds the severity of every exposure finding.
+- **Data-aware severity, landed #1049:** `pnpm pii-classify --data-map-out <path>` writes the table→data-class
+  map; the orchestrator's M10 probe hands it to the assembler, which raises any finding whose location or title
+  names a classified table to that table's data severity (never lowers it) and records `dataClass`
+  {table, categories, infotypes, escalatedFrom, reason} on the finding so the escalation is legible rather than
+  a silently higher number. No map captured ⇒ an `M10-ESCALATION-00` not-assessed row, never silence.
+- **Protection verdict (connected tier), landed #1043:** the live tier gathers per-table RLS state,
+  anon/authenticated SELECT grants and pgsodium masking rules, and emits a per-column protection verdict
+  (`M10-PII-nn`). Every run carries `M10-PROT-00` saying whether protection was verified and what the check
+  cannot see (application-layer encryption, RLS *policy* quality, non-`public` schemas, review-flagged columns);
+  on the schema tier it states plainly that protection was NOT assessed.
 - **Prisma support (#758, landed 2026-07-23):** a target whose schema lives in `schema.prisma`
   (not `supabase/migrations/*.sql`) now classifies too —
   `pnpm pii-classify --schema <schema.prisma path>` (repo root or `prisma/schema.prisma`, both
