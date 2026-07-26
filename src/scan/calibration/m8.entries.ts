@@ -16,8 +16,11 @@
 //
 // #427 parity: a second real M8 shape follows — the #373 stub-check (survives-implementation-
 // deletion) pair M8-P-DELETION-SURVIVING / M8-N-DELETION-KILLED, whose gate is
-// src/stub-check.test.ts (an EXECUTED transpile-and-run, not a recorded verdict). Two positives
-// across the mutation and deletion shapes make the census fail on a partial M8 regression.
+// src/stub-check.test.ts (an EXECUTED transpile-and-run, not a recorded verdict). #1100 adds a
+// THIRD shape, M8-P-VACUOUS-STRYKER (the testFiles/coveredBy/killedBy join), gated by
+// src/mutation-scan.test.ts alongside the mutation pair. Three positives spread across the
+// mutation, deletion, and vacuous-test-join shapes make the census fail on a partial M8
+// regression in any one of them.
 
 import type { CorpusEntry } from "./types.js";
 
@@ -63,5 +66,23 @@ export const m8Entries: CorpusEntry[] = [
     location: "discount.ts",
     match: ["applydiscount"],
     note: "test-quality/discount.ts, covered by discount.tautological.test.ts — the boundary that pins deletion-survival to STRUCTURAL deadness, not mere weakness. Stryker leaves survivors on it (M8-P-TAUTOLOGICAL), yet its single assertion DOES check applyDiscount's return value, so stubbing the body to `return undefined` turns the suite red (proven by execution in src/stub-check.test.ts's contrast case). It must clear the stub-survival list even though it is a weak test.",
+  },
+
+  // #1100: a THIRD real M8 shape — the testFiles/coveredBy/killedBy join (a vacuous-test
+  // detector). Distinct from M8-P-TAUTOLOGICAL (leaves survivors on UNTESTED branches) and
+  // M8-P-DELETION-SURVIVING (stub-check's deletion-survival, proven by execution): this one is a
+  // test that DOES execute mutated code (real Stryker coveredBy) but kills zero mutants across
+  // the whole run — "calls the subject, asserts nothing" surfaced from the mutation side rather
+  // than the stub-check side. Its gate is src/mutation-scan.test.ts's "vacuousTestFiles /
+  // vacuousTestFindings (#1100) — live Stryker capture" block (a recorded verbatim capture, same
+  // convention as M8-P-TAUTOLOGICAL/M8-N-STRONG above), not buildCoverageMatrix.
+  {
+    module: "M8",
+    id: "M8-P-VACUOUS-STRYKER",
+    kind: "positive",
+    cls: "Vacuous test (executes code via real Stryker coverage, kills zero mutants)",
+    location: "vacuous.ts",
+    expectedTier: "high",
+    note: "test-quality/vacuous.ts, covered only by vacuous.smoke.test.ts, which calls gradeScore(85) then asserts expect(true).toBe(true) — never inspecting the return value. Live Stryker 9.6.1 run (its own stryker.vacuous.config.json, kept separate from the discount.ts/authz.ts pair's config so that recorded result stays reproducible): 0/12 mutants Killed (0.0% mutation score) — the covering test appears in coveredBy for all 10 Survived mutants but in killedBy for none of them. vacuousTestFiles/vacuousTestFindings (src/mutation-scan.ts) flags vacuous.smoke.test.ts and emits an M8-06 finding.",
   },
 ];

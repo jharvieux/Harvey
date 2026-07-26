@@ -31,6 +31,8 @@ import {
   testQualityFromArtifact,
   toReportRows,
   TS7_TSCONFIG_BYPASS_FILENAME,
+  vacuousTestFiles,
+  vacuousTestFindings,
   verifyMutationScope,
   withTs7TsconfigBypass,
   workspaceTestSuiteFinding,
@@ -387,6 +389,44 @@ describe("survivingMutantFindings (#435)", () => {
   });
 });
 
+// #1100: MEASURED against a live `npx stryker run` capture (a scratch fixture with a module-level
+// `const LIMIT = 10 * 2`) — a static mutant reads coveredBy: [] even when it IS killed, because
+// perTest coverage analysis cannot attribute a once-per-suite mutant to any one test. It is weaker
+// evidence than an ordinary per-test survivor, so a boundary-concentrated file whose survivors are
+// MOSTLY static downgrades confidence to "Review" instead of "Confirmed".
+describe("survivingMutantFindings — STATIC confidence downgrade (#1100)", () => {
+  // Same shape as discount.ts's concentration (3 ConditionalExpression + 1 EqualityOperator
+  // boundary survivors, 2 other) but every boundary survivor is static.
+  const mostlyStaticReport: StrykerReport = {
+    schemaVersion: "1",
+    files: {
+      "static-heavy.ts": {
+        mutants: [
+          mutant({ id: "s1", mutatorName: "ConditionalExpression", status: "Survived", static: true }),
+          mutant({ id: "s2", mutatorName: "ConditionalExpression", status: "Survived", static: true }),
+          mutant({ id: "s3", mutatorName: "ConditionalExpression", status: "Survived", static: true }),
+          mutant({ id: "s4", mutatorName: "EqualityOperator", status: "Survived", static: false }),
+          mutant({ id: "s5", mutatorName: "StringLiteral", status: "Survived", static: false }),
+          mutant({ id: "s6", mutatorName: "ArithmeticOperator", status: "Survived", static: false }),
+        ],
+      },
+    },
+  };
+
+  it("downgrades confidence to Review when a majority of boundary survivors are static", () => {
+    const findings = survivingMutantFindings(summarizeMutationReport(mostlyStaticReport));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ confidence: "Review", location: "static-heavy.ts" });
+    expect(findings[0]?.evidence).toContain("3/4 of the boundary survivors are STATIC");
+  });
+
+  it("keeps confidence Confirmed when static survivors are a minority (discount.ts's real shape has none)", () => {
+    // discount.ts's captured survivors are all per-test (static: false) — the real corpus shape.
+    const findings = survivingMutantFindings(summarizeMutationReport(m8Report));
+    expect(findings[0]).toMatchObject({ confidence: "Confirmed", location: "discount.ts" });
+  });
+});
+
 // #1076: ModuleMutationSummary already counted noCoverage per module; nothing turned it into a
 // Finding. A module the suite never even EXECUTED is a stronger signal than a surviving mutant
 // (survivingMutantFindings above) — this is the gap MEASURED at 50.8% on the committed ATC capture.
@@ -444,6 +484,90 @@ describe("noCoverageFindings (#1076)", () => {
     };
     const [finding] = noCoverageFindings(summarizeMutationReport(whollyUntested));
     expect(finding?.severity).toBe("High");
+  });
+});
+
+// #1100: a REAL Stryker 9.6.1 JSON capture (`npx stryker run stryker.vacuous.config.json` from
+// targets/calibration/test-quality/, coverageAnalysis: "perTest") of the planted M8-P-VACUOUS-
+// STRYKER fixture — vacuous.ts's gradeScore(), covered ONLY by vacuous.smoke.test.ts's single test,
+// which calls gradeScore(85) and then asserts expect(true).toBe(true): the call executes real
+// branches (coveredBy is non-empty) but the assertion never depends on the return value, so the
+// live run scored 0% (10 Survived + 2 NoCoverage of 12, 0 Killed) — the answer key for the
+// testFiles/coveredBy/killedBy join. See targets/calibration/GROUND-TRUTH.md "M8 (#1100)" and
+// src/scan/calibration/m8.entries.ts.
+const vacuousReport: StrykerReport = {
+  schemaVersion: "1",
+  testFiles: {
+    "vacuous.smoke.test.ts": { tests: [{ id: "0", name: "gradeScore (vacuous smoke test) runs without throwing" }] },
+  },
+  files: {
+    "vacuous.ts": {
+      mutants: [
+        mutant({ id: "5", mutatorName: "StringLiteral", status: "NoCoverage" }),
+        mutant({ id: "11", mutatorName: "StringLiteral", status: "NoCoverage" }),
+        mutant({ id: "1", mutatorName: "ConditionalExpression", status: "Survived", coveredBy: ["0"] }),
+        mutant({ id: "0", mutatorName: "BlockStatement", status: "Survived", coveredBy: ["0"] }),
+        mutant({ id: "2", mutatorName: "ConditionalExpression", status: "Survived", coveredBy: ["0"] }),
+        mutant({ id: "3", mutatorName: "EqualityOperator", status: "Survived", coveredBy: ["0"] }),
+        mutant({ id: "4", mutatorName: "EqualityOperator", status: "Survived", coveredBy: ["0"] }),
+        mutant({ id: "6", mutatorName: "ConditionalExpression", status: "Survived", coveredBy: ["0"] }),
+        mutant({ id: "7", mutatorName: "ConditionalExpression", status: "Survived", coveredBy: ["0"] }),
+        mutant({ id: "8", mutatorName: "EqualityOperator", status: "Survived", coveredBy: ["0"] }),
+        mutant({ id: "9", mutatorName: "EqualityOperator", status: "Survived", coveredBy: ["0"] }),
+        mutant({ id: "10", mutatorName: "StringLiteral", status: "Survived", coveredBy: ["0"] }),
+      ],
+    },
+  },
+};
+
+describe("vacuousTestFiles / vacuousTestFindings (#1100) — live Stryker capture", () => {
+  it("flags vacuous.smoke.test.ts: it covers 10 mutants but kills none of them", () => {
+    const files = vacuousTestFiles(vacuousReport);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatchObject({
+      path: "vacuous.smoke.test.ts",
+      vacuousTests: [{ id: "0", name: "gradeScore (vacuous smoke test) runs without throwing" }],
+      executedMutantCount: 10,
+    });
+  });
+
+  it("emits an M8-06 finding naming the test(s) and the executed-but-unkilled count", () => {
+    const findings = vacuousTestFindings(vacuousReport);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      id: "M8-06-01",
+      category: "Test quality",
+      taxonomy: "M8 — Vacuous test (executes code, kills zero mutants)",
+      location: "vacuous.smoke.test.ts",
+      severity: "Medium",
+      confidence: "Confirmed",
+    });
+    expect(findings[0]?.evidence).toContain("10 mutant(s)");
+    expect(findings[0]?.evidence).toContain("gradeScore (vacuous smoke test) runs without throwing");
+  });
+
+  it("returns nothing when the report carries no testFiles (an older Stryker run, or a hand-assembled report)", () => {
+    expect(vacuousTestFiles(m8Report)).toEqual([]);
+  });
+
+  it("clears a test file where at least one covering test kills something (discount.tautological.test.ts's real shape)", () => {
+    // m8Report predates #1100 and has no testFiles — build a minimal one reusing its real
+    // coveredBy/killedBy shape (test "4" DOES kill several discount.ts mutants).
+    const withKills: StrykerReport = {
+      ...m8Report,
+      testFiles: { "discount.tautological.test.ts": { tests: [{ id: "4", name: "gives members a discount on a big order" }] } },
+      files: { "discount.ts": { mutants: [mutant({ id: "d1", status: "Survived", coveredBy: ["4"] }), mutant({ id: "d2", status: "Killed", coveredBy: ["4"], killedBy: ["4"] })] } },
+    };
+    expect(vacuousTestFiles(withKills)).toEqual([]);
+  });
+
+  it("clears a test file that never ran against mutated code at all — that gap is NoCoverage's, not this one", () => {
+    const neverRan: StrykerReport = {
+      schemaVersion: "1",
+      testFiles: { "unrelated.test.ts": { tests: [{ id: "9", name: "some other test" }] } },
+      files: { "file.ts": { mutants: [mutant({ id: "f1", status: "NoCoverage" })] } },
+    };
+    expect(vacuousTestFiles(neverRan)).toEqual([]);
   });
 });
 

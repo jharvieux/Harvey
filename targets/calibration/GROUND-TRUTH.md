@@ -1431,6 +1431,58 @@ happened to pass, since the weak test is weak in its *assertions*, not broken as
 running the target's own tests through the root suite was never the intent, and a future,
 deliberately-failing weak-test fixture would break `pnpm verify` on an unrelated branch).
 
+### M8 (#1100) — testFiles/coveredBy/killedBy join (vacuous-test detector) + STATIC downgrade
+
+`StrykerMutant.coveredBy`/`killedBy` always parsed as opaque test-id strings, and `StrykerReport`
+never parsed `testFiles` (upstream's `TestFileDefinitionDictionary`) at all — nothing resolved a
+test id to a file/name, so a test that executes code but kills nothing was structurally
+unreachable. `StrykerMutant.static` (upstream: "loaded once during initialization" — a
+module-level mutant Stryker can only run once for the whole suite, not per covering test) was
+also unparsed.
+
+**New fixture:** `test-quality/vacuous.ts` — `gradeScore(score)`, covered ONLY by
+`vacuous.smoke.test.ts`, which calls `gradeScore(85)` then asserts `expect(true).toBe(true)` — a
+constant tautology that never depends on the call's actual return value. This is the planted
+VACUOUS test (M8-P-VACUOUS-STRYKER), distinct from the M8-P-DELETION-SURVIVING stub-check pair
+above: that one is scored by deletion-survival execution; this one by real Stryker mutation
+testing (the `coveredBy`/`killedBy` join).
+
+Scored via its OWN config, `test-quality/stryker.vacuous.config.json` (`mutate: ["vacuous.ts"]`),
+deliberately separate from `stryker.config.json` so the discount.ts/authz.ts pair's recorded live
+result above stays reproducible.
+
+**M8 live result (2026-07-26, live: Stryker 9.6.1, `@stryker-mutator/vitest-runner` 9.6.1, vitest
+3.2.6, no Docker):** `npx stryker run stryker.vacuous.config.json` against
+`targets/calibration/test-quality/`:
+
+- **`vacuous.ts`: 12 mutants — 0 Killed, 10 Survived, 2 NoCoverage → mutation score 0.0%.** The
+  covering test (`vacuous.smoke.test.ts`, test id `"0"`) appears in `coveredBy` for all 10
+  Survived mutants (it genuinely executes `gradeScore`'s reachable branches) but in `killedBy`
+  for NONE of them — every mutation of the comparison/branch logic still passes because the
+  assertion never inspects the return value. **M8-P-VACUOUS-STRYKER: caught —
+  `vacuousTestFiles`/`vacuousTestFindings` (`src/mutation-scan.ts`) flags `vacuous.smoke.test.ts`
+  as a vacuous test file (10 mutants executed, 0 killed), emitting an `M8-06-*` finding.**
+- `testFiles` in the raw report resolves test id `"0"` to `vacuous.smoke.test.ts` and its test
+  name — the join `vacuousTestFiles` needs. Recorded verbatim (trimmed to the `StrykerReport`
+  shape) as `vacuousReport` in `src/mutation-scan.test.ts`'s "vacuousTestFiles /
+  vacuousTestFindings (#1100) — live Stryker capture" block.
+
+**STATIC field:** MEASURED against a live capture of a scratch fixture (a top-level `const LIMIT
+= 10 * 2`, not committed here — its own module-level arithmetic mutant read `static: true`,
+`coveredBy: []`, and was still killed) — confirms upstream's documented semantics: a static
+mutant cannot be attributed to any one test by perTest coverage analysis, so it is weaker
+evidence regardless of its final status. Neither `discount.ts`/`authz.ts` nor `vacuous.ts`
+naturally produce a static mutant (both fixtures are plain functions, no module-level computed
+state), so the STATIC confidence-downgrade path (`survivingMutantFindings` → `"Review"` when a
+boundary-concentrated file's survivors are mostly static) is unit-tested against a synthetic-but-
+schema-verified literal in `src/mutation-scan.test.ts` ("STATIC confidence downgrade") rather than
+a new calibration fixture — planting one purely to force a `static: true` mutant into this corpus
+would add a third isolated Stryker config for no additional real-world signal.
+
+Answer key: `src/scan/calibration/m8.entries.ts` (`M8-P-VACUOUS-STRYKER`). Gate: `pnpm verify`
+(offline) — the real Stryker JSON capture above is recorded verbatim into
+`src/mutation-scan.test.ts`, same convention as the discount.ts/authz.ts pair.
+
 ---
 
 ## Batch B7 (#71) — auth / access-control heuristics
