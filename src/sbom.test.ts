@@ -8,33 +8,39 @@ import { buildSbom, collectDependencies, parsePackageLock, parsePnpmLock, parseY
 const bomOf = (dir: string): any => buildSbom(dir, { targetName: "t", timestamp: "2026-07-23T00:00:00.000Z" }).bom;
 
 describe("lockfile parsing", () => {
-  it("reads resolved versions and the dev flag from package-lock v2/v3", () => {
+  it("reads resolved versions, the dev flag, and (#1079) the license and integrity hash from package-lock v2/v3", () => {
     const text = JSON.stringify({
       packages: {
         "": { version: "1.0.0" }, // the root project is not a component of itself
-        "node_modules/axios": { version: "1.7.2" },
+        "node_modules/axios": { version: "1.7.2", license: "MIT", integrity: "sha512-AAAA" },
         "node_modules/vitest": { version: "3.2.6", dev: true },
         "node_modules/@next/env": { version: "14.2.35" },
         "node_modules/foo/node_modules/axios": { version: "0.21.1" }, // a nested duplicate is its own component
       },
     });
-    expect(parsePackageLock(text)).toEqual([
-      { name: "axios", version: "1.7.2" },
-      { name: "vitest", version: "3.2.6", dev: true },
-      { name: "@next/env", version: "14.2.35" },
-      { name: "axios", version: "0.21.1" },
-    ]);
+    expect(parsePackageLock(text)).toEqual({
+      components: [
+        { name: "axios", version: "1.7.2", license: "MIT", integrity: "sha512-AAAA" },
+        { name: "vitest", version: "3.2.6", dev: true },
+        { name: "@next/env", version: "14.2.35" },
+        { name: "axios", version: "0.21.1" },
+      ],
+      unmatched: 0,
+    });
   });
 
   it("falls back to the v1 nested `dependencies` tree", () => {
     const text = JSON.stringify({ dependencies: { axios: { version: "1.7.2", dependencies: { follow: { version: "1.15.4" } } } } });
-    expect(parsePackageLock(text)).toEqual([
-      { name: "axios", version: "1.7.2" },
-      { name: "follow", version: "1.15.4" },
-    ]);
+    expect(parsePackageLock(text)).toEqual({
+      components: [
+        { name: "axios", version: "1.7.2" },
+        { name: "follow", version: "1.15.4" },
+      ],
+      unmatched: 0,
+    });
   });
 
-  it("reads every pnpm key shape across lockfile versions", () => {
+  it("reads every pnpm key shape across lockfile versions, and the resolution integrity", () => {
     const text = [
       "lockfileVersion: '9.0'",
       "packages:",
@@ -48,22 +54,55 @@ describe("lockfile parsing", () => {
       "snapshots:",
       "  'should-not-be-read@9.9.9':",
     ].join("\n");
-    expect(parsePnpmLock(text)).toEqual([
-      { name: "@babel/core", version: "7.29.7" },
-      { name: "braces", version: "2.3.2" },
-      { name: "minimist", version: "1.2.0" },
-      { name: "react", version: "18.2.0" },
-    ]);
+    expect(parsePnpmLock(text)).toEqual({
+      components: [
+        { name: "@babel/core", version: "7.29.7", integrity: "sha512-x==" },
+        { name: "braces", version: "2.3.2" },
+        { name: "minimist", version: "1.2.0" },
+        { name: "react", version: "18.2.0" },
+      ],
+      unmatched: 0,
+    });
   });
 
   it("reads both yarn v1 and Berry entries", () => {
     const v1 = ['braces@^2.3.1:', '  version "2.3.2"', '', '"@babel/core@^7.0.0":', '  version "7.29.7"'].join("\n");
-    expect(parseYarnLock(v1)).toEqual([
-      { name: "braces", version: "2.3.2" },
-      { name: "@babel/core", version: "7.29.7" },
-    ]);
-    const berry = ['"braces@npm:^2.3.1":', "  version: 2.3.2"].join("\n");
-    expect(parseYarnLock(berry)).toEqual([{ name: "braces", version: "2.3.2" }]);
+    expect(parseYarnLock(v1)).toEqual({
+      components: [
+        { name: "braces", version: "2.3.2" },
+        { name: "@babel/core", version: "7.29.7" },
+      ],
+      unmatched: 0,
+    });
+    const berry = ['"braces@npm:^2.3.1":', "  version: 2.3.2", "  checksum: 10c0/abc"].join("\n");
+    expect(parseYarnLock(berry)).toEqual({ components: [{ name: "braces", version: "2.3.2", integrity: "10c0/abc" }], unmatched: 0 });
+  });
+});
+
+// #1079: completeness used to be `components.length > 0`, so a parser that recovered 1 of 900
+// entries still reported "complete" — the exact partial-presented-as-whole shape the module header
+// names as THE risk with an SBOM, addressed only for the empty-parse case.
+describe("a parser that skips entries reports them (#1079)", () => {
+  it("counts package-lock entries with no version, and never counts a workspace link", () => {
+    const text = JSON.stringify({
+      packages: {
+        "": { version: "1.0.0" },
+        "node_modules/axios": { version: "1.7.2" },
+        "node_modules/mystery": {}, // present in the tree, unresolvable — the shortfall
+        "node_modules/local-pkg": { resolved: "packages/local", link: true }, // a symlink, not an artifact
+      },
+    });
+    expect(parsePackageLock(text)).toMatchObject({ components: [{ name: "axios" }], unmatched: 1 });
+  });
+
+  it("counts a pnpm package key the version regex cannot resolve", () => {
+    const text = ["packages:", "", "  '@babel/core@7.29.7':", "  'weird-entry-without-a-version':"].join("\n");
+    expect(parsePnpmLock(text).unmatched).toBe(1);
+  });
+
+  it("counts a yarn header that never reaches a version line", () => {
+    const text = ['braces@^2.3.1:', '  version "2.3.2"', '', '"truncated@^1.0.0":'].join("\n");
+    expect(parseYarnLock(text)).toMatchObject({ components: [{ name: "braces" }], unmatched: 1 });
   });
 });
 
@@ -89,6 +128,34 @@ describe("CycloneDX document", () => {
   it("marks dev-only dependencies out of the shipped artifact", () => {
     writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ packages: { "node_modules/vitest": { version: "3.2.6", dev: true } } }));
     expect(bomOf(dir).components[0].scope).toBe("optional");
+  });
+
+  // #1079: the two fields an enterprise buyer's checklist actually looks for, both already in the
+  // lockfile Harvey parses. The SRI hash is base64; CycloneDX wants hex, and a digest emitted in
+  // the wrong encoding fails verification more confusingly than an absent one.
+  it("emits CycloneDX licenses and hashes, converting SRI base64 to hex", () => {
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2", license: "MIT", integrity: "sha512-3q2+7w==" } } }),
+    );
+    const c = bomOf(dir).components[0];
+    expect(c.licenses).toEqual([{ license: { id: "MIT" } }]);
+    expect(c.hashes).toEqual([{ alg: "SHA-512", content: Buffer.from("3q2+7w==", "base64").toString("hex") }]);
+  });
+
+  it("uses CycloneDX `expression` for a compound license — an expression in the id field fails schema validation", () => {
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ packages: { "node_modules/x": { version: "1.0.0", license: "(MIT OR Apache-2.0)" } } }));
+    expect(bomOf(dir).components[0].licenses).toEqual([{ expression: "(MIT OR Apache-2.0)" }]);
+  });
+
+  it("states license/hash coverage rather than letting a half-populated field read as the whole picture", () => {
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({ packages: { "node_modules/a": { version: "1.0.0", license: "MIT" }, "node_modules/b": { version: "2.0.0" } } }),
+    );
+    const props: { name: string; value: string }[] = bomOf(dir).metadata.properties;
+    expect(props.find((p) => p.name === "harvey:license-coverage")?.value).toContain("1/2");
+    expect(props.find((p) => p.name === "harvey:hash-coverage")?.value).toContain("0/2");
   });
 });
 
@@ -122,6 +189,16 @@ describe("completeness is always stated", () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { axios: "^1.7.2" } }));
     const { warning } = buildSbom(dir);
     expect(warning).toContain("package-lock.json is present but Harvey could not extract components");
+    expect(bomOf(dir).compositions[0].aggregate).toBe("incomplete");
+  });
+
+  it("a lockfile Harvey only partly resolved is INCOMPLETE, however many components it did recover", () => {
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2" }, "node_modules/mystery": {} } }),
+    );
+    const { warning } = buildSbom(dir);
+    expect(warning).toContain("1 of 2 entries could not be resolved");
     expect(bomOf(dir).compositions[0].aggregate).toBe("incomplete");
   });
 

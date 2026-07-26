@@ -59,7 +59,9 @@ describe("runMechanicalScan skipNetworkChecks", () => {
   it("still runs the live npm-registry checks by default", async () => {
     await runMechanicalScan({ dir });
     expect(checkSlopsquat).toHaveBeenCalledWith(["react"]);
-    expect(checkLicenseCompliance).toHaveBeenCalledWith({ react: "18.2.0" });
+    // #1079: the lockfile-derived license map is passed in so the registry is only queried for
+    // names it does not answer — an empty map here because this fixture has no lockfile.
+    expect(checkLicenseCompliance).toHaveBeenCalledWith({ react: "18.2.0" }, fetch, {});
   });
 });
 

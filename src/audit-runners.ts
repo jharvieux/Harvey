@@ -10,7 +10,7 @@
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
 import { findFreshPass, type PassArtifact, ranFromPass } from "./audit-pass-artifact.js";
-import type { ModuleRunner, ProbeOutcome, RunContext } from "./audit-runner.js";
+import { type Examined, type ModuleRunner, type ProbeOutcome, type ProbeReport, type ProbeResult, type RunContext, TYPED_PROBES } from "./audit-runner.js";
 import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
 import type { Finding } from "./findings.js";
 import { testQualityFromArtifact } from "./mutation-scan.js";
@@ -40,7 +40,20 @@ const trimOut = (output: string): string => output.trim().slice(0, 200);
 // surfaced on the row too, so an unconsumed artifact is never silent either way.
 const passLabel = (artifact: PassArtifact): string => `${artifact.pass} pass (${artifact.generatedAt}${artifact.summary ? `: ${artifact.summary}` : ""})`;
 
-const foldPassInto = (outcome: ProbeOutcome, note: string, passFindings: Finding[]): ProbeOutcome => {
+// #1096: both fold helpers preserve the typed shape for a migrated probe (Examined | NotAssessed)
+// and the legacy shape for an unmigrated one. A NotAssessed folded with a fresh pass becomes an
+// Examined over ONE recorded artifact — that artifact is literally what the probe examined, and
+// counting it says so instead of inventing a file count the probe never had.
+function foldPassInto(outcome: ProbeResult, note: string, passFindings: Finding[]): ProbeResult;
+function foldPassInto(outcome: ProbeReport, note: string, passFindings: Finding[]): ProbeReport;
+function foldPassInto(outcome: ProbeReport, note: string, passFindings: Finding[]): ProbeReport {
+  if ("kind" in outcome) {
+    if (outcome.kind === "not-assessed") {
+      return { kind: "examined", detail: "recorded pass artifact", scope: "recorded pass artifact", unitsExamined: 1, reason: `${outcome.reason} ${note}.`, findings: passFindings, ...(outcome.instance ? { instance: outcome.instance } : {}) };
+    }
+    const merged = { ...outcome, findings: [...outcome.findings, ...passFindings] };
+    return merged.reason ? { ...merged, reason: `${merged.reason} ${note}.` } : { ...merged, detail: `${merged.detail} + ${note}` };
+  }
   if (outcome.status === "requires-live-run") {
     return {
       status: "partial",
@@ -53,13 +66,20 @@ const foldPassInto = (outcome: ProbeOutcome, note: string, passFindings: Finding
   const findings = [...(outcome.findings ?? []), ...passFindings];
   const merged = { ...outcome, ...(findings.length ? { findings } : {}) };
   return merged.status === "ran" ? { ...merged, detail: `${merged.detail} + ${note}` } : { ...merged, reason: `${merged.reason} ${note}.` };
-};
+}
 
-const rejectedPassNote = (outcome: ProbeOutcome, reason: string): ProbeOutcome =>
-  outcome.status === "ran" ? { ...outcome, detail: withRejectedPass(outcome.detail, reason) } : { ...outcome, reason: withRejectedPass(outcome.reason, reason) };
+function rejectedPassNote(outcome: ProbeResult, reason: string): ProbeResult;
+function rejectedPassNote(outcome: ProbeReport, reason: string): ProbeReport;
+function rejectedPassNote(outcome: ProbeReport, reason: string): ProbeReport {
+  if ("kind" in outcome) {
+    if (outcome.kind === "not-assessed") return { ...outcome, reason: withRejectedPass(outcome.reason, reason) };
+    return outcome.reason ? { ...outcome, reason: withRejectedPass(outcome.reason, reason) } : { ...outcome, detail: withRejectedPass(outcome.detail, reason) };
+  }
+  return outcome.status === "ran" ? { ...outcome, detail: withRejectedPass(outcome.detail, reason) } : { ...outcome, reason: withRejectedPass(outcome.reason, reason) };
+}
 
 const foldRecordedPass = (runner: ModuleRunner): ModuleRunner => ({
-  module: runner.module,
+  ...runner,
   run: (ctx) => {
     const pass = findFreshPass(ctx, runner.module);
     const result = runner.run(ctx);
@@ -115,7 +135,7 @@ const hasNodeModules = (ctx: RunContext): boolean => ctx.exists(join(ctx.targetD
 // app (the common single-app target) it runs once against ctx.targetDir, untagged — behaviour is
 // exactly as before. With >1, it runs per app dir and tags each outcome with the app's name, so the
 // ledger records one row per (module × app) and no second app is silently folded into the first.
-const perApp = (base: (ctx: RunContext) => ProbeOutcome) => (ctx: RunContext): ProbeOutcome | ProbeOutcome[] => {
+const perApp = <T extends { instance?: string }>(base: (ctx: RunContext) => T) => (ctx: RunContext): T | T[] => {
   const apps = ctx.apps;
   if (!apps || apps.length <= 1) return base(ctx);
   return apps.map((app) => ({ ...base({ ...ctx, targetDir: app.path }), instance: app.name }));
@@ -485,12 +505,16 @@ const handrolledFindings = (findings: Finding[]): Finding[] => findings.filter((
 // (#350), not its exit code, so an empty/non-source target still reads requires-live-run honestly.
 const m6: ModuleRunner = {
   module: "M6",
+  typed: true,
   run: (ctx) => {
     // #416: a fresh verdict artifact is the recorded reviewed judgment #351 said a packet is not. It
     // is the one thing that clears M6's never-run alarm — checked before the packet path so a real
     // verdict reads `ran` regardless of whether the paid tier is flagged this run.
     const pass = findFreshPass(ctx, "M6");
-    if (pass.fresh) return ranFromPass(pass.artifact, "pnpm simplify-scan (packet)");
+    if (pass.fresh) {
+      const ran = ranFromPass(pass.artifact, "pnpm simplify-scan (packet)");
+      return { kind: "examined", detail: ran.detail, findings: ran.findings ?? [], unitsExamined: 1, scope: "recorded M6 verdict artifact" };
+    }
 
     const indicatorOutPath = captureOut(ctx, "M6");
     const indicatorCommand = `pnpm detect-static ${ctx.targetDir}`;
@@ -501,13 +525,20 @@ const m6: ModuleRunner = {
     if (!ctx.env.llm) {
       if (indicatorScanned) {
         return {
-          status: "partial",
+          kind: "examined",
           detail: indicatorCommand,
+          unitsExamined: indicatorScanned,
+          scope: "product source files",
           reason: withRejectedPass("free indicator layer ran (M6 — Indicator: … taxonomy, #267); paid LLM tier not in scope, so no triage verdict was recorded — the paid M6 triage decides which indicators are genuine reinventions and names the replacement (#397)", pass.reason),
-          ...(indicatorFindings.length ? { findings: indicatorFindings } : {}),
+          findings: indicatorFindings,
         };
       }
-      return { status: "requires-live-run", reason: withRejectedPass("paid LLM tier not in scope, and detect-static could not confirm the free indicator layer ran either (scanned 0 source files or failed) — M6's packet needs a reviewer to produce a verdict (#267). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass (#420)", pass.reason) };
+      return {
+        kind: "not-assessed",
+        reason: withRejectedPass("paid LLM tier not in scope, and detect-static could not confirm the free indicator layer ran either (scanned 0 source files or failed) — M6's packet needs a reviewer to produce a verdict (#267). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass (#420)", pass.reason),
+        provenance: "MEASURED",
+        falsifier: `${indicatorCommand} — a non-zero product-source count on that line makes the indicator half of this reason false`,
+      };
     }
     const { ok, output, command } = runCli(ctx, "simplify-scan", [ctx.targetDir]);
     // #683 (sibling of #682): when the paid simplify-scan sub-step is blocked, the free indicator
@@ -519,19 +550,26 @@ const m6: ModuleRunner = {
       const why = `${command} exited non-zero: ${trimOut(output)}`;
       return indicatorScanned
         ? {
-            status: "partial",
+            kind: "examined",
             subStatus: "sub-step-blocked",
             detail: indicatorCommand,
+            unitsExamined: indicatorScanned,
+            scope: "product source files",
             reason: withRejectedPass(`simplify-scan sub-step blocked (${why}); the free indicator layer still ran, so its findings are kept rather than dropped (#683)`, pass.reason),
-            ...(indicatorFindings.length ? { findings: indicatorFindings } : {}),
+            findings: indicatorFindings,
           }
-        : { status: "requires-live-run", reason: `simplify-scan blocked and the free indicator layer could not scan either — ${why}` };
+        : { kind: "not-assessed", reason: `simplify-scan blocked and the free indicator layer could not scan either — ${why}`, provenance: "MEASURED", falsifier: `${command} && ${indicatorCommand}` };
     }
+    // The packet path: when the indicator layer also scanned, the file count is the honest unit;
+    // when it did not, the one thing this pass demonstrably examined is the packet simplify-scan
+    // built, and the scope says exactly that rather than borrowing a count it never had.
     return {
-      status: "partial",
+      kind: "examined",
       detail: command,
+      unitsExamined: indicatorScanned ?? 1,
+      scope: indicatorScanned ? "product source files" : "review packet (the free indicator layer reported no product-source count on this run)",
       reason: withRejectedPass("review packet assembled, but M6's verdict is a human/LLM pass with no recorded output — a packet is not a verdict, so this does not clear M6's never-run status (#351; artifact path #416). No M6 findings are collected into this deliverable — the verdict is a human/LLM pass over the packet, so absence here is not-collected, not clean (#420)", pass.reason),
-      ...(indicatorFindings.length ? { findings: indicatorFindings } : {}),
+      findings: indicatorFindings,
     };
   },
 };
@@ -566,6 +604,7 @@ const perfCodeFindings = (findings: Finding[]): Finding[] => findings.filter((f)
 
 const m7: ModuleRunner = {
   module: "M7",
+  typed: true,
   run: (ctx) => {
     const lh = findFreshPass(ctx, "M7");
     const cwv = lh.fresh
@@ -575,7 +614,7 @@ const m7: ModuleRunner = {
     // Only a fresh pass changes a row (merging its findings, upgrading a not-run to partial because
     // something demonstrably ran). Without one, behaviour is exactly as before — except that a
     // present-but-rejected artifact is now named on the row instead of ignored.
-    const withCwv = (outcome: ProbeOutcome): ProbeOutcome =>
+    const withCwv = (outcome: ProbeResult): ProbeResult =>
       cwv ? foldPassInto(outcome, cwv.note, cwv.findings) : rejectedCwv ? rejectedPassNote(outcome, rejectedCwv) : outcome;
     // #1062: the code tier is captured like every other emitter. It ran with no --out since capture
     // was wired, so its findings were empty BY CONSTRUCTION and the M7 row asserted the tier ran
@@ -584,21 +623,28 @@ const m7: ModuleRunner = {
     // M9 runs per APP, so a code-tier finding outside an enumerated package was lost outright
     // (MEASURED 2026-07-25: root-scope detect-static reported 2, the deliverable carried 1).
     const codeOutPath = captureOut(ctx, "M7");
+    const codeCommand = `pnpm detect-static ${ctx.targetDir}`;
     const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(codeOutPath ? ["--out", codeOutPath] : [])]);
-    if (!ok) return withCwv({ status: "requires-live-run", reason: `pnpm detect-static exited non-zero: ${trimOut(output)}` });
-    if (!productFilesScanned(output)) return withCwv({ status: "requires-live-run", reason: `detect-static scanned 0 product source files under ${ctx.targetDir} — no code tier to run (empty or non-source target) (#350/#1065)` });
+    if (!ok) return withCwv({ kind: "not-assessed", reason: `pnpm detect-static exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: codeCommand });
+    const scanned = productFilesScanned(output);
+    if (!scanned) {
+      return withCwv({ kind: "not-assessed", reason: `detect-static scanned 0 product source files under ${ctx.targetDir} — no code tier to run (empty or non-source target) (#350/#1065)`, provenance: "MEASURED", falsifier: codeCommand });
+    }
     const codeFindings = perfCodeFindings(readCaptured(ctx, codeOutPath));
     // The code tier runs ONCE, at target root — so its findings ride on exactly one row. Below, that
     // is the first Supabase project's row, for the same reason the CWV pass rides on the first only.
-    const withCode = (outcome: ProbeOutcome): ProbeOutcome =>
-      codeFindings.length && outcome.status !== "requires-live-run" ? { ...outcome, findings: [...(outcome.findings ?? []), ...codeFindings] } : outcome;
-    if (!ctx.env.connected) return withCode(withCwv({ status: "partial", detail: "pnpm detect-static (code tier)", reason: "code tier only — no DB creds for the advisors (pnpm perf-scan)" }));
+    const withCode = (outcome: ProbeResult): ProbeResult =>
+      codeFindings.length && outcome.kind === "examined" ? { ...outcome, findings: [...outcome.findings, ...codeFindings] } : outcome;
+    // Every row below is the code tier's — same command, same file count — so the examined evidence
+    // is written once here and the branches vary only the reason and the advisor findings.
+    const codeTier = (over: Partial<Examined>): Examined => ({ kind: "examined", detail: "pnpm detect-static (code tier)", unitsExamined: scanned, scope: "product source files", findings: [], ...over });
+    if (!ctx.env.connected) return withCode(withCwv(codeTier({ reason: "code tier only — no DB creds for the advisors (pnpm perf-scan)" })));
     // #434: perf-scan needs a project ref as its positional arg (SUPABASE_ACCESS_TOKEN travels via
     // the inherited process env — perf-scan reads that itself). --connected is intent, not a reachable
     // project; without a ref threaded through run-audit there is nothing to call, so this stays
     // partial with that reason instead of shelling out to a usage error.
     const refs = supabaseRefs(ctx);
-    if (!refs.length) return withCode(withCwv({ status: "partial", detail: "pnpm detect-static (code tier)", reason: "connected tier flagged but no Supabase project ref was given (run-audit --supabase <ref>) — perf-scan needs a project ref to reach the advisors API (#434)" }));
+    if (!refs.length) return withCode(withCwv(codeTier({ reason: "connected tier flagged but no Supabase project ref was given (run-audit --supabase <ref>) — perf-scan needs a project ref to reach the advisors API (#434)" })));
     // #506: the advisor tier is per-DB — run it once per enumerated Supabase project so a monorepo's
     // second DB is a distinct row, never silently omitted. The code tier ran once (above) and is
     // noted in each row's detail. Instances are tagged only when there's more than one project, so a
@@ -607,19 +653,18 @@ const m7: ModuleRunner = {
     const multi = refs.length > 1;
     // #1042: the CWV note/findings ride on the FIRST project's row only — the Lighthouse pass covers
     // the app, not each enumerated database, so repeating it would multiply one measurement.
-    return refs.map((ref, i): ProbeOutcome => {
+    return refs.map((ref, i): ProbeResult => {
       const instance = multi ? { instance: ref } : {};
       const advisorsOut = ctx.captureDir ? join(ctx.captureDir, `M7-${refSlug(ref)}.json`) : undefined;
       const advisors = ctx.exec("pnpm", ["perf-scan", ref, ...(advisorsOut ? ["--out", advisorsOut] : [])]);
-      const fold = (outcome: ProbeOutcome): ProbeOutcome => (i === 0 ? withCode(withCwv(outcome)) : outcome);
-      if (!advisors.ok) return fold({ status: "partial", detail: "pnpm detect-static (code tier)", reason: `advisors failed for ${ref}: ${trimOut(advisors.output)}`, ...instance });
+      const fold = (outcome: ProbeResult): ProbeResult => (i === 0 ? withCode(withCwv(outcome)) : outcome);
+      if (!advisors.ok) return fold(codeTier({ reason: `advisors failed for ${ref}: ${trimOut(advisors.output)}`, ...instance }));
       // #527: code + advisors both ran; without a recorded Lighthouse pass the CWV tier did not, so
       // this is `partial` with that reason, never a bare `ran`. With one (#1042), the reason names
       // what ran instead of asserting a tier did not. The advisor findings flow in either way.
       const detail = `pnpm detect-static (code) + pnpm perf-scan ${ref} (advisors)`;
-      const findings = readCaptured(ctx, advisorsOut);
       const reason = cwv ? "code + DB advisor tiers ran; the Lighthouse/CWV tier came from a recorded pass (#527/#1042)" : M7_LIGHTHOUSE_NOT_RUN;
-      return fold(findings.length ? { status: "partial", detail, reason, findings, ...instance } : { status: "partial", detail, reason, ...instance });
+      return fold(codeTier({ detail, reason, findings: readCaptured(ctx, advisorsOut), ...instance }));
     });
   },
 };
@@ -718,20 +763,26 @@ const m8: ModuleRunner = {
 // detect-static prints the count to stdout AND writes a bare Finding[] to --out, so status and
 // capture (#312) coexist in real runs. #1065: it is the PRODUCT SOURCE count — the total includes
 // package.json, which every target has, so this guard was unreachable until 2026-07-25.
-const m9Run = (ctx: RunContext): ProbeOutcome => {
+// #1096: migrated to the typed result. Its "ran with zero findings" row now carries the product
+// source count that makes the zero checkable — the exact number whose absence let #1062/#1065 read
+// as clean scans.
+const m9Run = (ctx: RunContext): ProbeResult => {
   const outPath = captureOut(ctx, "M9");
   const command = `pnpm detect-static ${ctx.targetDir}`;
   const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
-  if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
+  if (!ok) return { kind: "not-assessed", reason: `${command} exited non-zero: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
   const scanned = productFilesScanned(output);
-  if (scanned === undefined) return { status: "requires-live-run", reason: `could not read detect-static output to confirm files were scanned: ${trimOut(output)}` };
-  if (scanned === 0) return { status: "requires-live-run", reason: `detect-static scanned 0 product source files under ${ctx.targetDir} — nothing to analyze (empty or non-source target) (#350/#1065)` };
-  const findings = readCaptured(ctx, outPath);
-  return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
+  if (scanned === undefined) {
+    return { kind: "not-assessed", reason: `could not read detect-static output to confirm files were scanned: ${trimOut(output)}`, provenance: "MEASURED", falsifier: `${command} — the reason holds only while stdout carries no "loaded N source files (M product source)" line` };
+  }
+  if (scanned === 0) {
+    return { kind: "not-assessed", reason: `detect-static scanned 0 product source files under ${ctx.targetDir} — nothing to analyze (empty or non-source target) (#350/#1065)`, provenance: "MEASURED", falsifier: command };
+  }
+  return { kind: "examined", detail: command, findings: readCaptured(ctx, outPath), unitsExamined: scanned, scope: "product source files" };
 };
 // #506: App-Router boundary analysis is per-app — on a monorepo, run detect-static once per app so
 // each app's rendering surface is its own row.
-const m9: ModuleRunner = { module: "M9", run: perApp(m9Run) };
+const m9: ModuleRunner = { module: "M9", typed: true, run: perApp(m9Run) };
 
 // M10 classifies live columns, or parses migration SQL when there is no DB (#250) — two tiers, so
 // a schema-only pass is partial rather than a skip.
@@ -871,3 +922,17 @@ const m10: ModuleRunner = {
 // remaining five go through foldRecordedPass, which merges a recorded pass's findings and names it
 // on the row without ever asserting `ran`. Every module record-pass accepts now has a consumer.
 export const AUDIT_RUNNERS: ModuleRunner[] = [m1, m2, m3, foldRecordedPass(m4), foldRecordedPass(m5), m6, m7, foldRecordedPass(m8), foldRecordedPass(m9), foldRecordedPass(m10)];
+
+// #1096: the declared migration ledger (TYPED_PROBES/UNTYPED_PROBES) and the real registry must
+// say the same thing. Checked at load, because the two drifting apart is precisely how a
+// half-migration becomes invisible: the list would claim M9 is typed while the runner quietly
+// wasn't, or a wrapper would drop the flag and take the runtime check off with it.
+{
+  const marked = AUDIT_RUNNERS.filter((r) => r.typed).map((r) => r.module).sort();
+  const declared = [...TYPED_PROBES].sort();
+  if (marked.join() !== declared.join()) {
+    throw new Error(
+      `The typed-probe migration ledger disagrees with the registry: TYPED_PROBES declares [${declared.join(", ")}] but the runners marked typed are [${marked.join(", ")}] (#1096). Move the module in both places, or a wrapper has dropped the flag.`,
+    );
+  }
+}
