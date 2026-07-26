@@ -27,13 +27,11 @@ export function coverageLedger(recorded: ModuleCoverage[], env?: EngagementEnv):
   }));
 }
 
-// Drops byte-identical duplicates (same id AND same content) — the shared-CLI capture case, where
-// quality-scan is captured under both M4 and M5, and detect-static is captured under M6, M7, M8 and
-// M9, yields the same Finding[] twice. #1062 corrects what this comment used to assert: M6/M7/M8
-// each filter that shared array to their OWN taxonomy prefix, so their rows carry a byte-identical
-// SUBSET of M9's unfiltered capture, which is what this collapses on a single-target run. (And it
-// was flatly false for M7 until #1062 — the M7 probe passed no --out at all, so it contributed
-// nothing to collapse. Falsifier: grep the m7 runner in src/audit-runners.ts for `captureOut`.)
+// Drops byte-identical duplicates (same id AND same content). The two shared-CLI seams that once
+// produced them now partition their captures instead: M4/M5 over quality-scan via ownRows (#1101),
+// and M6/M7/M8/M9 over detect-static via #1084 (M6/M7/M8 filter their own taxonomy prefix at target
+// root, M9 collects the COMPLEMENT — everything they don't own). So neither seam captures a finding
+// twice for this to collapse; it remains as a defensive net for any residual byte-identical repeat.
 // A same-id-but-different-content collision is deliberately left in place so validateFindings flags
 // it loudly rather than letting one variant silently win.
 export function dedupeFindings(findings: Finding[]): Finding[] {

@@ -728,8 +728,9 @@ const M7_LIGHTHOUSE_NOT_RUN =
 // the recorded pass IS the named missing tier — with a fresh Lighthouse pass M7_LIGHTHOUSE_NOT_RUN
 // becomes a false claim and has to be REPLACED, not appended to.
 // M7-taxonomy findings out of a mixed detect-static Finding[] (the same pass also emits M6/M8/M9
-// classes) — the M6/M8 probes filter their own capture the same way, so each row carries its own
-// module's findings and M9's unfiltered sweep is not double-counted under M7.
+// classes) — the M6/M8 probes filter their own capture the same way, and since #1084 M9 collects
+// only the complement of M6/M7/M8, so each row carries its own module's findings and M7's are not
+// re-collected under M9 (the monorepo double-count that #1084 closed).
 const M7_TAXONOMY_PREFIX = "M7 — ";
 const perfCodeFindings = (findings: Finding[]): Finding[] => findings.filter((f) => f.taxonomy.startsWith(M7_TAXONOMY_PREFIX));
 
@@ -922,6 +923,24 @@ const m8: ModuleRunner = {
 // #1096: migrated to the typed result. Its "ran with zero findings" row now carries the product
 // source count that makes the zero checkable — the exact number whose absence let #1062/#1065 read
 // as clean scans.
+//
+// #1084: detect-static emits a MIXED Finding[] — M6 indicators, M7 code tier, M8 test-intent, M9
+// boundaries, plus classes no other probe filters for (M1-SFC-00, …). M6/M7/M8 each capture their
+// own taxonomy prefix at TARGET ROOT; M9 is the designated collector for everything they don't. It
+// used to capture the whole array unfiltered, which on a single-app target was a byte-identical
+// superset the deliverable's dedupe collapsed. But M9 runs PER APP on a monorepo (#506) and the
+// assembler namespaces a per-app row's ids (`M7C-01@apps/web`, #620), so a root-scope M6/M7/M8
+// finding and its per-app twin were no longer byte-identical, dedupe could not collapse them, and
+// the same issue was delivered twice under two ids and two locations. So M9 takes the COMPLEMENT of
+// the three owned prefixes — its own boundary findings PLUS every unowned class, and nothing
+// M6/M7/M8 already own. Like ownRows for M4/M5 (#1101) this is a TOTAL partition, not a positive
+// M9-prefix filter: a class matching none of the four still lands in the deliverable via M9, so the
+// double-count is removed without silently dropping an unowned class (the failure mode the issue's
+// option 1 warned about).
+const M9_OWNED_BY_OTHER_PROBE = [M6_TAXONOMY_PREFIX, M7_TAXONOMY_PREFIX, M8_TAXONOMY_PREFIX];
+const m9CollectorFindings = (findings: Finding[]): Finding[] =>
+  findings.filter((f) => !M9_OWNED_BY_OTHER_PROBE.some((prefix) => f.taxonomy.startsWith(prefix)));
+
 const m9Run = (ctx: RunContext): ProbeResult => {
   const outPath = captureOut(ctx, "M9");
   const command = `pnpm detect-static ${ctx.targetDir}`;
@@ -934,7 +953,7 @@ const m9Run = (ctx: RunContext): ProbeResult => {
   if (scanned === 0) {
     return { kind: "not-assessed", reason: `detect-static scanned 0 product source files under ${ctx.targetDir} — nothing to analyze (empty or non-source target) (#350/#1065)`, provenance: "MEASURED", falsifier: command };
   }
-  return { kind: "examined", detail: command, findings: readCaptured(ctx, outPath), unitsExamined: scanned, scope: "product source files" };
+  return { kind: "examined", detail: command, findings: m9CollectorFindings(readCaptured(ctx, outPath)), unitsExamined: scanned, scope: "product source files" };
 };
 // #506: App-Router boundary analysis is per-app — on a monorepo, run detect-static once per app so
 // each app's rendering surface is its own row.

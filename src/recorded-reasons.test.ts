@@ -22,8 +22,11 @@ const FALSIFIER = 'FALSIFIER: grep -Eq "svelte" src/detectors/load-sources.ts';
 const OWNER = "OWNER: operator";
 const DECISION = "DECISION: docs/design/infrastructure-out-of-scope.md (#886)";
 
+const FALSIFIER_TIER = "FALSIFIER-TIER: lighthouse";
+
 const EMPIRICAL = [CLAIM, EMPIRICAL_KIND, PROVENANCE, FALSIFIER];
 const DECISIONAL = [CLAIM, DECISIONAL_KIND, PROVENANCE, OWNER, DECISION];
+const LIVE_EMPIRICAL = [CLAIM, EMPIRICAL_KIND, PROVENANCE, FALSIFIER, FALSIFIER_TIER];
 
 const block = (lines: string[], prefix = "// ") => lines.map((l) => prefix + l).join("\n");
 
@@ -96,6 +99,18 @@ describe("validateRecordedReason — the empirical/decisional split is structura
   it("requires the kind to be declared at all", () => {
     expect(validateRecordedReason(one([CLAIM, PROVENANCE, FALSIFIER])).join()).toContain("KIND: must be");
   });
+
+  it("accepts a live-only empirical reason whose FALSIFIER-TIER names a registered tier (#1072)", () => {
+    expect(validateRecordedReason(one(LIVE_EMPIRICAL))).toEqual([]);
+  });
+
+  it("rejects a FALSIFIER-TIER outside the registered set — a typo would make the falsifier silently always-skipped", () => {
+    expect(validateRecordedReason(one([CLAIM, EMPIRICAL_KIND, PROVENANCE, FALSIFIER, "FALSIFIER-TIER: not-a-tier"])).join()).toContain("not a registered live tier");
+  });
+
+  it("REFUSES FALSIFIER-TIER on a decisional reason — it qualifies a FALSIFIER the reason must not carry", () => {
+    expect(validateRecordedReason(one([...DECISIONAL, FALSIFIER_TIER])).join()).toContain("FALSIFIER-TIER: refused on a decisional reason");
+  });
 });
 
 describe("revalidateReasons — seeded proof that the gate fires on a reason whose blocker is gone", () => {
@@ -119,6 +134,20 @@ describe("revalidateReasons — seeded proof that the gate fires on a reason who
       throw new Error("a decisional reason must not be re-tested by command");
     });
     expect(rows).toEqual([]);
+  });
+
+  it("SKIPS a live-only falsifier when its tier is unavailable — disclosed and counted, never run (#1072)", () => {
+    const rows = revalidateReasons([one(LIVE_EMPIRICAL)], () => {
+      throw new Error("a live-only falsifier must not run when its tier is unavailable");
+    });
+    expect(statuses(rows)).toEqual(["SKIPPED-LIVE"]);
+    expect(rows[0]?.detail).toContain("lighthouse");
+  });
+
+  it("runs a live-only falsifier once its tier is declared available, and reads its exit like any other", () => {
+    const available = new Set(["lighthouse"]);
+    expect(statuses(revalidateReasons([one(LIVE_EMPIRICAL)], () => ({ code: 1, output: "" }), available))).toEqual(["holds"]);
+    expect(statuses(revalidateReasons([one(LIVE_EMPIRICAL)], () => ({ code: 0, output: "" }), available))).toEqual(["STALE"]);
   });
 });
 

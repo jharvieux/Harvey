@@ -1,0 +1,101 @@
+[
+  {
+    "RuleID": "harvey-test-idp-marker",
+    "Description": "Test/example SAML IdP marker (ENTITY_ID or *.example.com) — internal correlation only",
+    "File": ".github/workflows/saml-test.yml",
+    "StartLine": 2,
+    "Commit": "",
+    "Match": "ENTITY_ID",
+    "Secret": "ENTITY_ID"
+  },
+  {
+    "RuleID": "private-key",
+    "Description": "Identified a Private Key, which may compromise cryptographic security and sensitive data encryption.",
+    "File": ".github/workflows/saml-test.yml",
+    "StartLine": 4,
+    "Commit": "",
+    "Match": "-----BEGIN PRIVATE KEY-----\n    MIIFAKEfake2222222222222222222222222222222222222222222222222222\n    -----END PRIVATE KEY-----",
+    "Secret": "-----BEGIN PRIVATE KEY-----\n    MIIFAKEfake2222222222222222222222222222222222222222222222222222\n    -----END PRIVATE KEY-----"
+  },
+  {
+    "RuleID": "harvey-test-idp-marker",
+    "Description": "Test/example SAML IdP marker (ENTITY_ID or *.example.com) — internal correlation only",
+    "File": "certs/idp-key.pem",
+    "StartLine": 1,
+    "Commit": "",
+    "Match": "ENTITY_ID",
+    "Secret": "ENTITY_ID"
+  },
+  {
+    "RuleID": "private-key",
+    "Description": "Identified a Private Key, which may compromise cryptographic security and sensitive data encryption.",
+    "File": "certs/idp-key.pem",
+    "StartLine": 2,
+    "Commit": "",
+    "Match": "-----BEGIN PRIVATE KEY-----\nMIIFAKEfake1111111111111111111111111111111111111111111111111111\n-----END PRIVATE KEY-----",
+    "Secret": "-----BEGIN PRIVATE KEY-----\nMIIFAKEfake1111111111111111111111111111111111111111111111111111\n-----END PRIVATE KEY-----"
+  },
+  {
+    "RuleID": "private-key",
+    "Description": "Identified a Private Key, which may compromise cryptographic security and sensitive data encryption.",
+    "File": "certs/key.pem",
+    "StartLine": 1,
+    "Commit": "",
+    "Match": "-----BEGIN PRIVATE KEY-----\nMIIFAKEfake0000000000000000000000000000000000000000000000000000\n-----END PRIVATE KEY-----",
+    "Secret": "-----BEGIN PRIVATE KEY-----\nMIIFAKEfake0000000000000000000000000000000000000000000000000000\n-----END PRIVATE KEY-----"
+  },
+  {
+    "RuleID": "supabase-service-role-jwt",
+    "Description": "Supabase service_role JWT (decoded role claim)",
+    "File": "lib/admin.ts",
+    "StartLine": 1,
+    "Commit": "",
+    "Match": "\"role\":\"service_role\"",
+    "Secret": "\"role\":\"service_role\""
+  },
+  {
+    "RuleID": "generic-api-key",
+    "Description": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations.",
+    "File": "lib/config.ts",
+    "StartLine": 1,
+    "Commit": "",
+    "Match": "OPENAI_API_KEY = \"Z9Qm2vXcW8rNpKdLhGfYsAe4Uo1Bx6Vt0Zi7Ny5Mw3Qr8Kp2\"",
+    "Secret": "Z9Qm2vXcW8rNpKdLhGfYsAe4Uo1Bx6Vt0Zi7Ny5Mw3Qr8Kp2"
+  },
+  {
+    "RuleID": "stripe-access-token",
+    "Description": "Found a Stripe Access Token, posing a risk to payment processing services and sensitive financial data.",
+    "File": "lib/pay.ts",
+    "StartLine": 1,
+    "Commit": "",
+    "Match": "sk_test_51Qm2vXcW8rNpKdLhGfYsAe4Uo1Bx6Vt0Zi7Ny5Mw3Qr8Kp2Ld6Hj\"",
+    "Secret": "sk_test_51Qm2vXcW8rNpKdLhGfYsAe4Uo1Bx6Vt0Zi7Ny5Mw3Qr8Kp2Ld6Hj"
+  },
+  {
+    "RuleID": "harvey-db-uri-credentials",
+    "Description": "Database connection URI with an inline password",
+    "File": "supabase/migrations/001.sql",
+    "StartLine": 1,
+    "Commit": "",
+    "Match": "postgres://appuser:S3cr3tP4ssZ9Qm2vXc@db.example.supabase.co",
+    "Secret": "postgres://appuser:S3cr3tP4ssZ9Qm2vXc@db.example.supabase.co"
+  },
+  {
+    "RuleID": "supabase-demo-key-marker",
+    "Description": "Supabase local-dev demo key marker (decoded iss claim) — internal correlation only",
+    "File": "supabase/seed.sql",
+    "StartLine": 1,
+    "Commit": "",
+    "Match": "\"iss\":\"supabase-demo\"",
+    "Secret": "\"iss\":\"supabase-demo\""
+  },
+  {
+    "RuleID": "supabase-service-role-jwt",
+    "Description": "Supabase service_role JWT (decoded role claim)",
+    "File": "supabase/seed.sql",
+    "StartLine": 1,
+    "Commit": "",
+    "Match": "\"role\":\"service_role\"",
+    "Secret": "\"role\":\"service_role\""
+  }
+]
