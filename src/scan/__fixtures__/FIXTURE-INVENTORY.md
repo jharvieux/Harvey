@@ -51,8 +51,8 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
 | 2 | `src/scan/__fixtures__/supabase/auth-config-response-schema-2026-07-26.json` | Supabase Management API `AuthConfigResponse` schema (vendor) | **CAPTURED** | Sibling `PROVENANCE.md` (`curl …/api/v1-json \| jq '.components.schemas.AuthConfigResponse'`, 2026-07-26). Vendor schema, not a live project body (that gap is itself a recorded REASON block in the provenance). Consumer: `src/scan/supabase-config.test.ts`. |
 | 3 | `src/__fixtures__/lighthouse-opportunity-audit.json` | Lighthouse 13.4.0 | **CAPTURED** | Inline `_note`: "REAL Lighthouse 13.4.0 capture (live run, 2026-07-25) … chrome-launcher + onlyCategories:['performance'] … Trimmed of headings/sortedBy/debugData". Provenance is inline, not a sibling `PROVENANCE.md`. Consumer: `src/lighthouse.test.ts`. |
 | 4 | `src/__fixtures__/lighthouse-report-errored.json` | Lighthouse 13.4.0 | **CAPTURED** | Inline `_note`: "REAL Lighthouse 13.4.0 capture (live run, 2026-07-25) … the NO_FCP failure mode". Provenance inline. Consumer: `src/lighthouse.test.ts`. |
-| 5 | `src/__fixtures__/lighthouse-report.json` | Lighthouse 13.x | **HAND-WRITTEN** | No `_note`/provenance. 5 audits with round synthetic values (`performance.score` 0.42, FCP 2100, LCP 4800, TBT 720, CLS 0.24, SI 5200). A real LHR is hundreds of audits / ~0.5–1 MB. This is the **primary** `LighthouseResult` fixture and has **no live backstop** (Lighthouse runs in no `pnpm verify`/CI gate). #1063 shape; its own two siblings (rows 3–4) are captured, so it is an inconsistency as much as a defect. |
-| 6 | `src/__fixtures__/vitals-report.json` | `vitals` 0.2.0 (python) | **HAND-WRITTEN** | Self-declared: `"_note": "Synthetic vitals 0.2.0 report fixture, shaped to the REAL schema captured live for issue #94 … Paths and values below are synthetic"`. Field names/nesting shaped from a #94 capture; values invented. `vitals` is a python tool, not a repo dependency, and runs in no automated gate — **no live backstop**. |
+| 5 | `src/__fixtures__/lighthouse-report.json` | Lighthouse 13.4.0 | **CAPTURED** (#1130, 2026-07-26) | Was HAND-WRITTEN (round synthetic values, no provenance) — the primary `LighthouseResult` fixture and the highest-risk #1063 row. RE-CAPTURED: real Lighthouse 13.4.0 live run against a deliberately-poor served page (LCP 4650.9089ms, TBT 3149ms, CLS 0.5953202217614142, score 0.32 — non-round), same chrome-launcher + onlyCategories:['performance'] invocation as its two captured siblings; the bundled Playwright chromium yielded NO_FCP (#488/#556) so the system Google Chrome was used. Inline `_note` records provenance (matching siblings). Trimmed to the fields `LighthouseResult` reads; records dropped, never edited. Consumer: `src/lighthouse.test.ts`. |
+| 6 | `src/__fixtures__/vitals-report.json` | `vitals` 0.2.0 (Claude Code plugin) | **HAND-WRITTEN** (re-capture split to the #1130 remainder) | Self-declared synthetic; field names/nesting shaped from a #94 capture, values invented. **Correction (#1130, MEASURED 2026-07-26): the earlier "not installed" note has decayed.** `vitals` is NOT a PyPI package but the Claude Code plugin `vitals_cli.py`; version 0.2.0 (the pinned `EXPECTED_VITALS_VERSION`) IS installed at `~/.claude/plugins/cache/vitals/vitals/0.2.0/scripts/vitals_cli.py` (`vitals_cli.py version` → `Vitals v0.2.0`), and a real `report --json` run emits the full 11-key schema. The real blocker is NOT tool availability: this fixture is also the M3 **calibration corpus** plant (`m3.entries.ts`, scored via `buildCoverageMatrix` in `src/hotspot-scan.test.ts`), so a faithful re-capture must reproduce every planted entry (M3-P-HOTSPOT top-K, M3-N-CHURN-TRIVIAL not-top-K, truck_factor 1 vs 3, the a/b coupling edge) from a purpose-seeded git repo AND reproduce the AI-provenance sub-signal (M3-P-AIPROV / M3-N-AIPROV-*) from a seeded `.vitals` provenance DB — a fresh run has `provenance: {"has_data": false}` and would fail the AIPROV corpus entries. That is a corpus-reconstruction task on par with the inline-literal rows below, not a drop-in capture — split to the #1130 remainder. No automated live backstop. |
 
 ## B. Inline literals feeding parse functions ("inline literals count")
 
@@ -69,25 +69,41 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
 
 ## What this inventory concludes
 
-- **2 of the 6 standalone files and 0 of the inline-literal classes are HAND-WRITTEN with NO live
-  backstop**: `lighthouse-report.json` (#5) and `vitals-report.json` (#6). These are the exact
-  #1063 shape and the highest-risk rows.
+- **As of #1130 (2026-07-26), `lighthouse-report.json` (#5) is RE-CAPTURED** (real Lighthouse 13.4.0),
+  leaving `vitals-report.json` (#6) as the one remaining HAND-WRITTEN standalone file with no live
+  backstop — and its re-capture is blocked not by tool availability (vitals 0.2.0 IS installed) but by
+  the corpus-reconstruction it requires (see row 6), so it is split to the #1130 remainder.
 - The inline-literal fixtures for semgrep/gitleaks/knip DO have a live real-binary backstop (a schema
   drift would fail a gate elsewhere), which lowers — but does not erase — their risk: the literal
   itself can still encode a field the tool never emits, it just can't leave the tool *entirely* dead.
 - TruffleHog's verified-secret path, jscpd, Stryker and the PostgREST class have **no automated live
   backstop**; their only tie to reality is a comment or a manual/live-stack run.
 
-## Re-capture status (criterion 2) and what remains
+## Re-capture status (criterion 2) and the drift check (criterion 3)
 
-Re-captured in the PR that added this file: **none of the code fixtures were re-captured here** — the
-two highest-risk rows cannot be captured in the sweep-executor environment (row 5 needs headless
-Chrome + a served page; row 6 needs the `vitals` python tool, which is not installed and is not a
-repo dependency), and the inline-literal rows (7–14) require restructuring their unit tests to
-consume committed artifacts, which is a per-tool change too large for one reviewable PR. The osv
-capture (row 1) was re-verified (version + CVSS-vector-string schema) and found non-drifted.
+**Landed in #1130:**
 
-The remaining re-capture work (criterion 2) and the periodic schema-drift check (criterion 3) are
-tracked as the #1130 remainder issue. osv-scanner is the natural first tool for the drift check: it
-is fully offline-capturable and version-pinned, so a re-run-and-diff against row 1 needs no live
-service.
+- **Row 5 (`lighthouse-report.json`) RE-CAPTURED** — real Lighthouse 13.4.0 run (Chrome IS launchable
+  here; the prior "not available in sweep-executor env" note had decayed). `src/lighthouse.test.ts`
+  updated to the real non-round values.
+- **Criterion 3 — the osv-scanner schema-drift check** (`src/cli/osv-fixture-drift.ts` +
+  `src/scan/osv-fixture-contract.ts`, tested with negative controls in
+  `src/scan/osv-fixture-contract.test.ts`). It asserts the installed osv-scanner is the pinned 2.3.8,
+  re-runs it against `targets/calibration/package-lock.json`, and checks the FRESH output still
+  satisfies the schema contract the committed fixture (row 1) and `parseOsvFindings` depend on — the
+  #1063 invariant that `severity[].score` is a CVSS vector string, not a bare number. A byte diff is
+  not usable (osv.dev advisories churn); the check diffs the SHAPE. The contract + its negative
+  controls are under `pnpm verify`; the binary-running CLI is not (like dry-run-drift), and its
+  **cadence wiring (an npm-script alias + a conservation.yml / dry-run-drift step) is split to the
+  #1130 remainder** because both touch operator-owned paths (`package.json`, `.github/workflows`).
+
+**Split to the #1130 remainder:**
+
+- **Row 6 (`vitals-report.json`)** — the tool IS installed (correction above), but a faithful
+  re-capture requires reproducing the M3 calibration corpus from a seeded git repo + a seeded
+  `.vitals` provenance DB (see row 6). Corpus-reconstruction scale, not a drop-in capture.
+- **Inline-literal rows (7–14)** — restructuring each tool's unit tests to consume committed
+  artifacts; per-tool, and some (TruffleHog verified path, PostgREST) need a live provider / the M2
+  two-tenant stack, so those get a `REASON:` block where an offline capture is impossible.
+- The two #1109 ledger carryovers (producerless `suppressed`/`capped`/`not-applicable` columns; a
+  second ledger across `applyBaseline` #457).

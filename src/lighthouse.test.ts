@@ -10,8 +10,10 @@ import {
   type LighthouseResult,
 } from "./lighthouse.js";
 
-// A real-schema (trimmed) Lighthouse result: poor LCP (4.8s), poor TBT (720ms), needs-improvement
-// CLS (0.24), performance score 0.42. Mirrors what the lighthouse Node API returns as `.lhr`.
+// REAL Lighthouse 13.4.0 capture (live run, 2026-07-26, #1130) — poor LCP (4.7s), poor TBT
+// (3,150ms), poor CLS (0.595), performance score 0.32. Replaced the prior hand-written synthetic
+// fixture (the highest-risk #1063 row in FIXTURE-INVENTORY.md); see the fixture's own _note for
+// how it was captured. Every value below is byte-for-byte as Lighthouse emitted it.
 const poor: LighthouseResult = JSON.parse(
   readFileSync(new URL("./__fixtures__/lighthouse-report.json", import.meta.url), "utf8"),
 ) as LighthouseResult;
@@ -53,13 +55,23 @@ describe("parseLighthouseFindings", () => {
     expect(findings.map((f) => f.id)).toEqual(["M7L-01", "M7L-02", "M7L-03", "M7L-04"]);
   });
 
-  it("scores a Poor-bucket metric as Perf and a needs-improvement one as Low", () => {
+  it("scores every Poor-bucket metric of the real capture as Perf", () => {
     const findings = parseLighthouseFindings([{ route: "/dashboard", result: poor }]);
     const byTax = (t: string) => findings.find((f) => f.taxonomy.startsWith(t));
-    expect(byTax("M7 — LCP")?.severity).toBe("Perf"); // 4.8s ≥ 4.0s poorMin
-    expect(byTax("M7 — TBT")?.severity).toBe("Perf"); // 720ms ≥ 600ms poorMin
-    expect(byTax("M7 — CLS")?.severity).toBe("Low"); // 0.24 > 0.1 good but < 0.25 poorMin
-    expect(byTax("M7 — Lighthouse performance score")?.severity).toBe("Perf"); // 0.42 < 0.5 poor
+    expect(byTax("M7 — LCP")?.severity).toBe("Perf"); // 4.7s ≥ 4.0s poorMin
+    expect(byTax("M7 — TBT")?.severity).toBe("Perf"); // 3,150ms ≥ 600ms poorMin
+    expect(byTax("M7 — CLS")?.severity).toBe("Perf"); // 0.595 ≥ 0.25 poorMin
+    expect(byTax("M7 — Lighthouse performance score")?.severity).toBe("Perf"); // 0.32 < 0.5 poor
+  });
+
+  it("scores a needs-improvement metric (past Good, short of Poor) as Low", () => {
+    const needsImprovement: LighthouseResult = {
+      categories: { performance: { score: 0.7 } }, // < 0.9 good, ≥ 0.5 poor -> Low
+      audits: { "cumulative-layout-shift": { numericValue: 0.15 } }, // > 0.1 good, < 0.25 poorMin -> Low
+    };
+    const findings = parseLighthouseFindings([{ route: "/", result: needsImprovement }]);
+    expect(findings.find((f) => f.taxonomy.startsWith("M7 — CLS"))?.severity).toBe("Low");
+    expect(findings.find((f) => f.taxonomy.startsWith("M7 — Lighthouse performance score"))?.severity).toBe("Low");
   });
 
   it("produces no findings when every metric is within Google's Good thresholds", () => {
