@@ -105,7 +105,10 @@ const LEVEL_BFTB: Record<AdvisorLevel, { value: number; ease: number; safety: nu
   INFO: { value: 2, ease: 3, safety: 4 },
 };
 
-function profileFor(lint: AdvisorLint): LintProfile {
+// #1083 — exported so src/scan/supabase-advisors.ts can route a PERFORMANCE-category lint (Splinter
+// returns SECURITY and PERFORMANCE lints together on the local/connected tier) through the SAME
+// curated impact/fix text as the hosted M7 advisor pull, instead of a second, drifting copy.
+export function profileFor(lint: AdvisorLint): LintProfile {
   const curated = LINT_PROFILES[lint.name];
   if (curated) return curated;
   return {

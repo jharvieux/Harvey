@@ -54,6 +54,10 @@ interface SimplifyPacket {
   files: { path: string; source: string; hotspotRank?: number }[];
   hotspotRanked: boolean;
   manifests: { path: string; text: string }[];
+  // #1083 — total source files under the target BEFORE --hotspots scoping (scopePacketFiles),
+  // so renderPacket can disclose IN THE ARTIFACT when this packet is a subset. Previously this
+  // was only logged to stderr (src/cli/simplify-scan.ts), which does not travel with --out.
+  totalSourceFiles: number;
 }
 
 // hotspots: M3 hotspot ranking (repo-relative paths, hottest first — the same newline list M8's
@@ -71,6 +75,7 @@ export function buildPacket(
   filePaths: string[],
   hotspots: string[] = [],
   manifestPaths: string[] = [],
+  totalSourceFiles: number = filePaths.length,
 ): SimplifyPacket {
   const rankOf = new Map(hotspots.map((h, i) => [h, i + 1]));
   const files = filePaths.map((p) => {
@@ -82,7 +87,7 @@ export function buildPacket(
     files.sort((a, b) => (a.hotspotRank ?? Infinity) - (b.hotspotRank ?? Infinity));
   }
   const manifests = manifestPaths.map((p) => ({ path: relative(targetDir, p), text: readFileSync(p, "utf8") }));
-  return { brief: extractM6Brief(briefText), target: targetDir, files, hotspotRanked: rankOf.size > 0, manifests };
+  return { brief: extractM6Brief(briefText), target: targetDir, files, hotspotRanked: rankOf.size > 0, manifests, totalSourceFiles };
 }
 
 export function renderPacket(packet: SimplifyPacket): string {
@@ -99,9 +104,16 @@ export function renderPacket(packet: SimplifyPacket): string {
     ? packet.manifests.map((m) => `### ${m.path}\n\n\`\`\`json\n${m.text}\n\`\`\``).join("\n\n")
     : "No package.json was found under the scanned target. Treat every \"already in the dependency " +
       "tree\" claim as unverifiable and do not assert one.";
+  // #1083 — this must be IN the artifact: the CLI's stderr scope line does not travel with --out,
+  // so a reviewer/downstream consumer reading only packet.md never saw that most of the tree was
+  // excluded, and the resulting verdict flowed into M6's record with no in-artifact caveat.
+  const scopeNote = packet.totalSourceFiles > packet.files.length
+    ? `\n**SCOPED REVIEW**: this packet covers ${packet.files.length} of ${packet.totalSourceFiles} source file(s) under the target (scoped to M3 hotspots, #621). The other ${packet.totalSourceFiles - packet.files.length} file(s) are NOT included here and are UNREVIEWED by this pass.\n`
+    : "";
   return `# M6 — simplification / reuse review pass
 
 Target: ${packet.target}
+${scopeNote}
 
 You are ONE OF TWO independent reviewers (docs/design/m6-simplification-eval.md §3.5, #813) —
 M6's paid verdict is never asserted from a single pass. Do not consult, or attempt to infer,
