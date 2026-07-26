@@ -11,6 +11,8 @@
 // measured in docs/design/conservation-of-findings.md and is what `--seed-loss` is measured against.
 
 import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -33,9 +35,29 @@ function hasBinary(name: string): boolean {
 // FALSIFIER: grep -Eq "semgrep|trufflehog|gitleaks|osv-scanner" .github/workflows/ci.yml
 // TOUCHES: .github/workflows/ci.yml
 const MECHANICAL_BINARIES_PRESENT = ["semgrep", "trufflehog", "gitleaks", "osv-scanner"].every(hasBinary);
-if (!MECHANICAL_BINARIES_PRESENT) {
+
+// M3's plant is a truck-factor-1 row, which only vitals' FULL tier produces — without the plugin
+// hotspot-scan drops to the reduced churn×complexity tier (#807) and the M3 assertion below fails
+// for a missing toolchain rather than a real conservation break. Mirrors resolveVitals() in
+// src/cli/hotspot-scan.ts (PATH first, then the #507 plugin install locations); that CLI stays the
+// source of truth for where vitals lives.
+function vitalsAvailable(): boolean {
+  if (hasBinary("vitals_cli.py")) return true;
+  const plugins = resolve(homedir(), ".claude/plugins");
+  if (existsSync(resolve(plugins, "marketplaces/vitals/scripts/vitals_cli.py"))) return true;
+  const cache = resolve(plugins, "cache/vitals");
+  return existsSync(cache) && readdirSync(cache).some((v) => existsSync(resolve(cache, v, "vitals/scripts/vitals_cli.py")));
+}
+
+// REASON: this end-to-end block cannot run under the CI `verify` job — beyond the mechanical tier it asserts M3's plant, and M3's truck-factor-1 signal comes from the `vitals` plugin, which is a Claude Code plugin rather than a package `pnpm install` brings in
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-07-26 (ran `HOME=<empty dir> pnpm exec tsx src/cli/hotspot-scan.ts targets/calibration`: "M3 REDUCED TIER", 0 rows, no Knowledge-risk findings; with the plugin resolvable, 2× truck-factor-1)
+// FALSIFIER: grep -q vitals .github/workflows/ci.yml
+// TOUCHES: .github/workflows/ci.yml .github/workflows/conservation.yml
+const VITALS_PRESENT = vitalsAvailable();
+if (!MECHANICAL_BINARIES_PRESENT || !VITALS_PRESENT) {
   console.warn(
-    "⚠ conservation gate end-to-end block SKIPPED — semgrep/trufflehog/gitleaks/osv-scanner are not all on PATH, so the ten-module run cannot be driven here. The gate itself is `pnpm exec tsx src/cli/validate-conservation.ts`; its logic is still covered by src/audit-conservation.test.ts.",
+    `⚠ conservation gate end-to-end block SKIPPED — ${!MECHANICAL_BINARIES_PRESENT ? "semgrep/trufflehog/gitleaks/osv-scanner are not all on PATH, so the ten-module run cannot be driven here" : "the `vitals` plugin is not installed, so M3 runs in its reduced tier (#807) and cannot produce its planted truck-factor-1 row"}. The gate itself is \`pnpm exec tsx src/cli/validate-conservation.ts\`; its logic is still covered by src/audit-conservation.test.ts, and .github/workflows/conservation.yml runs it with the full toolchain.`,
   );
 }
 
@@ -50,7 +72,7 @@ function runGate(args: string[]): { code: number; output: string } {
   }
 }
 
-describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("validate-conservation CLI — end-to-end against targets/calibration", () => {
+describe.skipIf(!MECHANICAL_BINARIES_PRESENT || !VITALS_PRESENT)("validate-conservation CLI — end-to-end against targets/calibration", () => {
   // 240s: a full ten-module run of the real orchestrator as a child process.
   it("FAILS on a seeded loss and only on it — every unseeded module still delivers its plant", () => {
     const { code, output } = runGate(["--seed-loss", "M7"]);

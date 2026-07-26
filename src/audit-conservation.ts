@@ -46,6 +46,12 @@ export const CALIBRATION_PLANTS: ModulePlant[] = [
   { module: "M1", plant: "an RLS SELECT policy with a USING (true) tautology on public.documents", taxonomy: "M1 — Multi-tenant security", location: "documents_select_all" },
   // M3's signal is git-derived, so its "plant" is the fixture's own authorship history rather than
   // anything written into a file — the only shape a hotspot ranking can be planted in.
+  // It asserts M3's FULL tier: knowledge-risk (truck-factor) comes from the `vitals` plugin, and the
+  // reduced tier (#807, vitals absent) computes a churn×complexity ranking with no knowledge-risk at
+  // all. So a run without vitals reports GONE M3 — correctly, since M3 really did not run in full.
+  // That is a toolchain prerequisite to install, never a plant to weaken: the runner installs vitals
+  // at a pinned commit (.github/workflows/conservation.yml). #1112 tracks the OTHER way this row can
+  // redden without a defect — vitals reads truck-factor only from files churning in a 90-day window.
   { module: "M3", plant: "a truck-factor-1 file (one author in the fixture's git history) in the hotspot ranking", taxonomy: "Knowledge risk (truck-factor-1)", location: "targets/calibration" },
   { module: "M4", plant: "a copy-pasted report builder duplicated across dup/report-a.ts and dup/report-b.ts", taxonomy: "M4 — Duplication", location: "dup/report-a.ts" },
   { module: "M5", plant: "a module nothing imports (dead/never-imported.ts)", taxonomy: "M5 — Slop / dead code", location: "dead/never-imported.ts" },

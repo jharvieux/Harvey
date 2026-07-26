@@ -88,6 +88,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { assembleEngagementDocument, coverageLedger } from "../audit-report.js";
+import { conservationLedger, formatLedger } from "../conservation-ledger.js";
 import { buildExecutionPlan, formatExecutionPlan } from "../audit-plan.js";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type EngagementEnv, formatAuditCoverage } from "../audit-coverage.js";
 import { applyBaseline } from "../audit-diff.js";
@@ -247,7 +248,7 @@ if (supabaseRefsArg.length > 1) console.log(`Supabase projects enumerated (M7 ad
 if (Object.keys(schemaHints).length) console.log(`Per-app schema hints (M10, #538): ${Object.entries(schemaHints).map(([app, path]) => `${app}=${path}`).join(", ")}`);
 console.log("");
 
-const { recorded, failures, findings, hotspots, dataMap, testQuality } = runAudit(AUDIT_RUNNERS, ctx);
+const { recorded, failures, findings, findingsByModule, hotspots, dataMap, testQuality } = runAudit(AUDIT_RUNNERS, ctx);
 // #975 — declare CWEs across the assembled deliverable (mechanical rows arrive enriched; captured
 // artifact/config-tier rows get theirs here) so --findings-out and --sarif-out both carry them.
 enrichFindingsCwe(findings);
@@ -279,6 +280,18 @@ let exportFindings: Finding[] = findings;
 if (findingsOut || sarifOut) {
   const meta: ReportMeta = metaPath ? (JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta) : placeholderMeta(targetDir);
   let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots, dataMap, testQuality);
+
+  // #1096 invariant (1): every finding the probes produced is delivered, or the pipeline says why.
+  // Asserted here, on the real engagement path, because that is where a loss reaches a client — the
+  // #1040/#1050/#1061/#1062 breaks all shipped through this function and every one of them exited 0.
+  // The baseline diff below runs AFTER, and legitimately carries rows in from a prior engagement, so
+  // it is outside the ledger's seam (docs/design/conservation-of-findings.md).
+  const ledger = conservationLedger(findings, doc.findings, findingsByModule);
+  console.log(`\n${formatLedger(ledger)}`);
+  if (!ledger.ok) {
+    console.error("\nRefusing to export: findings were produced and dropped between the probes and the deliverable.");
+    process.exit(1);
+  }
 
   // #457: diff against a prior engagement so the deliverable leads with progress. The baseline is a
   // full findings.json from a previous audit of the SAME client; we diff by finding identity
