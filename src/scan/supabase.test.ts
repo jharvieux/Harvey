@@ -92,6 +92,26 @@ describe("runSupabaseScan", () => {
     expect(findings.every((f) => f.mechanical)).toBe(true);
   });
 
+  // #1098 — the check read `otp_expiry`, the CLI config.toml key, which /config/auth never emits, so
+  // the finding could not reach a real engagement no matter how green the unit test was. This asserts
+  // the whole hosted seam on the API's own spelling, and that the config.toml spelling yields nothing.
+  it("raises the long-OTP finding from the API's mailer_otp_exp, not the config.toml otp_expiry", async () => {
+    const hosted = async (authConfig: unknown) =>
+      runSupabaseScan({
+        projectRef: "abc123",
+        managementApiToken: "t",
+        fetchImpl: mockFetch({ advisors: { lints: [] }, authConfig, tables: [], extensions: [], buckets: [], policies: [] }),
+      });
+
+    const fromApiShape = await hosted({ mailer_otp_exp: 86400, external_email_enabled: true });
+    const otp = fromApiShape.find((f) => f.taxonomy === "Auth config: long OTP expiry")!;
+    expect(otp.severity).toBe("Low");
+    expect(otp.evidence).toContain("mailer_otp_exp=86400");
+
+    const fromTomlShape = await hosted({ otp_expiry: 86400, external_email_enabled: true });
+    expect(fromTomlShape.map((f) => f.taxonomy)).not.toContain("Auth config: long OTP expiry");
+  });
+
   it("runs the connected-tier checks (realtime, exposed schema, pg_graphql) on a hosted scan", async () => {
     const fetchImpl = mockFetch({
       advisors: { lints: [] },

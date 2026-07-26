@@ -63,25 +63,35 @@ export function checkAutoExposedTables(tables: TableInfo[]): Finding[] {
     );
 }
 
-// Field names below follow the Supabase Management API GET /v1/projects/{ref}/config/auth
-// response (GoTrueConfig). The provider-enablement flags (external_email_enabled /
-// external_phone_enabled) plus password_hibp_enabled / mailer_autoconfirm were confirmed against
-// the published OpenAPI spec (https://api.supabase.com/api/v1-json, 2026-07-19); the same two
-// enablement signals appear as external.email / external.phone in the anon-key GoTrue
-// /auth/v1/settings response (verified live 2026-07-19).
-export interface AuthConfig {
-  mailer_autoconfirm?: boolean; // true = signups are auto-confirmed without email verification
-  password_hibp_enabled?: boolean; // leaked-password (HaveIBeenPwned) protection
-  otp_expiry?: number; // seconds
-  uri_allow_list?: string; // comma-separated redirect/OAuth allowlist
-  rate_limit_email_sent?: number;
+// Every field the scan reads off the Supabase Management API GET /v1/projects/{ref}/config/auth
+// response, mapped to the JSON type that response declares for it. #1098: this list is the single
+// source of truth — the AuthConfig type below is derived from it, and supabase-config.test.ts
+// checks every entry against the captured AuthConfigResponse schema
+// (src/scan/__fixtures__/supabase/, see its PROVENANCE.md). A key that only exists in the CLI's
+// config.toml now fails the build instead of quietly never firing, which is how `otp_expiry` — the
+// config.toml spelling of mailer_otp_exp — survived as a dead check.
+export const AUTH_CONFIG_FIELDS = {
+  mailer_autoconfirm: "boolean", // true = signups are auto-confirmed without email verification
+  password_hibp_enabled: "boolean", // leaked-password (HaveIBeenPwned) protection
+  mailer_otp_exp: "integer", // email OTP lifetime, seconds
+  sms_otp_exp: "integer", // SMS OTP lifetime, seconds
+  uri_allow_list: "string", // comma-separated redirect/OAuth allowlist
+  rate_limit_email_sent: "integer",
   // #671 — which auth methods this project has enabled. An auth-config advisor that only protects a
   // specific method (leaked-password → password; email confirmation → email; OTP expiry → OTP) is a
   // not-applicable false positive on a project that doesn't use that method (ATC was OAuth-only, so
-  // leaked-password protection had no password sign-up to protect).
-  external_email_enabled?: boolean; // email provider (password sign-in + email magic-link/OTP)
-  external_phone_enabled?: boolean; // phone provider (SMS OTP)
-}
+  // leaked-password protection had no password sign-up to protect). The same two enablement signals
+  // appear as external.email / external.phone in the anon-key GoTrue /auth/v1/settings response
+  // (verified live 2026-07-19).
+  external_email_enabled: "boolean", // email provider (password sign-in + email magic-link/OTP)
+  external_phone_enabled: "boolean", // phone provider (SMS OTP)
+} as const;
+
+type JsonType = { boolean: boolean; integer: number; string: string };
+
+// Every field is optional: a response that drops one (or a source-tier caller that only knows some)
+// must leave the corresponding check unrun rather than read undefined as a value.
+export type AuthConfig = { [K in keyof typeof AUTH_CONFIG_FIELDS]?: JsonType[(typeof AUTH_CONFIG_FIELDS)[K]] };
 
 // #671 — tri-state enablement of an auth method: true = confirmed enabled, false = confirmed
 // disabled, undefined = could not confirm (a source-tier heuristic with no evidence, or a live
@@ -127,6 +137,15 @@ export function gateOnAuthMethod(input: AuthAdvisorInput, methodLabel: string, s
 
 const OTP_EXPIRY_WARN_SECONDS = 3600; // 1 hour — flag anything longer as worth a second look
 
+// #1098 — the API carries the two OTP lifetimes as separate fields, so each is gated on the
+// provider that actually issues it: a long email-OTP window is not a finding on a phone-only
+// project, and vice versa. (The advisor path's auth_otp_long_expiry lint reports one blended fact,
+// so it still gates on eitherEnabled — see supabase-advisors.ts.)
+const OTP_CHANNELS = [
+  { key: "mailer_otp_exp", id: "SB-AUTH-OTP-EXPIRY-EMAIL", label: "email", method: "email" },
+  { key: "sms_otp_exp", id: "SB-AUTH-OTP-EXPIRY-SMS", label: "SMS", method: "phone" },
+] as const;
+
 // #671 — authMethods gates the password/email/OTP-specific advisors below on whether that method is
 // actually in use. Defaults to what the config itself carries (external_email_enabled /
 // external_phone_enabled); the source tier passes an inferred value instead. The wildcard-redirect
@@ -168,20 +187,22 @@ export function checkAuthConfig(config: AuthConfig, authMethods: AuthMethods = d
     );
   }
 
-  if (typeof config.otp_expiry === "number" && config.otp_expiry > OTP_EXPIRY_WARN_SECONDS) {
+  for (const channel of OTP_CHANNELS) {
+    const seconds = config[channel.key];
+    if (typeof seconds !== "number" || seconds <= OTP_EXPIRY_WARN_SECONDS) continue;
     findings.push(
       mechanicalFinding(gateOnAuthMethod({
-        id: "SB-AUTH-OTP-EXPIRY",
-        title: `OTP expiry is ${config.otp_expiry}s — longer than the ${OTP_EXPIRY_WARN_SECONDS}s baseline`,
+        id: channel.id,
+        title: `OTP expiry for ${channel.label} is ${seconds}s — longer than the ${OTP_EXPIRY_WARN_SECONDS}s baseline`,
         severity: "Low",
         category: "Supabase config",
         taxonomy: "Auth config: long OTP expiry",
         location: "Auth config",
-        evidence: `otp_expiry=${config.otp_expiry}.`,
+        evidence: `${channel.key}=${seconds}.`,
         impact: "A longer-lived OTP widens the window for interception/replay.",
         fix: "Shorten OTP expiry unless there's a specific UX reason for the longer window.",
         precisionTier: "review",
-      }, "email or SMS OTP", eitherEnabled(authMethods.email, authMethods.phone))),
+      }, `${channel.label} OTP`, authMethods[channel.method])),
     );
   }
 
