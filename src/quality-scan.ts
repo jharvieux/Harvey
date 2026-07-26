@@ -182,15 +182,21 @@ function elevateForSecurityPath(severity: Finding["severity"]): Finding["severit
 
 // #232 excluded self-file clones on the assumption they were internally-repetitive DATA (SVG
 // icon-path tables, enum/lookup literal blocks) that "extract into a shared module" doesn't apply
-// to. #1080 RETRACTS that assumption as measured-false: run against a real 2755-file production
+// to. #1080 RETRACTED that assumption as measured-false: run against a real 2755-file production
 // target (2026-07-25, `pnpm exec tsx` ad hoc jscpd invocation, not a stored fixture), self-file
 // clones were dominated by copy-pasted test setup/mock chains (327/431 clusters, 76%; 3178/4372
 // duplicated lines, 73%) and repeated JSX render blocks (32/431, 7%) — both genuinely extractable
 // (a shared test helper, a row-renderer component), not data. No SVG-icon-table or enum-literal
-// cluster appeared in the sample. Still excluded from the SCORED findings below (a self-match
-// pair has no cross-file "which copy is canonical" story the way a true clone does, and the
-// measurement is one target, not a corpus) but see selfFileCloneDisclosureFinding (M4-SELF-00) — this is
-// disclosed as a probably-actionable band pending a scoring-policy decision, not dismissed as noise.
+// cluster appeared in the sample.
+//
+// #1095 (operator ruling 2026-07-26) finishes the retraction: self-file clones now earn SCORED
+// findings on the same terms as cross-file ones — same MIN_SIGNIFICANT_LINES floor, same severity
+// ladder, same security-path elevation. The residual objection #1080 recorded ("no cross-file
+// 'which copy is canonical' story") was withdrawn: someone who edits the first copy they find and
+// misses the second is the #1081 failure mode, and it is HARDER to spot in one file, not easier.
+// The remaining honest concern was volume, and volume is answered by a threshold plus #935's
+// disclosed presentation rollup — never by demoting the band (CLAUDE.md: there is no security
+// report; all ten modules carry equal weight).
 function isCrossFileClone(dup: JscpdDuplicate): boolean {
   return dup.firstFile.name !== dup.secondFile.name;
 }
@@ -216,15 +222,22 @@ function isSelfFileClone(dup: JscpdDuplicate): boolean {
 // (subThresholdDisclosureFinding) so it is visible in the report instead of silently absorbed.
 const MIN_SIGNIFICANT_LINES = 10;
 
+// #1095: the line floor is now the ONLY gate — a same-file clone above it is scored exactly like a
+// cross-file one. MIN_SIGNIFICANT_LINES is the volume threshold the ruling asked for.
 function isSignificantClone(dup: JscpdDuplicate): boolean {
-  return isCrossFileClone(dup) && dup.lines >= MIN_SIGNIFICANT_LINES;
+  return dup.lines >= MIN_SIGNIFICANT_LINES;
 }
 
-// #365: cross-file clones jscpd DID see (they cleared its minTokens/minLines gate) but that fall
-// under MIN_SIGNIFICANT_LINES. Self-file repetition stays excluded entirely (#232 — not
-// extractable duplication at any size).
+// #365: clones jscpd DID see (they cleared its minTokens/minLines gate) but that fall under
+// MIN_SIGNIFICANT_LINES. The cross-file and self-file sub-threshold bands are disclosed SEPARATELY
+// (M4-00 / M4-SELF-00) because their fix text differs — one helper module vs. one in-file helper —
+// and because #1080's measurement of what the self-file band actually contains is band-specific.
 function isSubThresholdClone(dup: JscpdDuplicate): boolean {
   return isCrossFileClone(dup) && dup.lines < MIN_SIGNIFICANT_LINES;
+}
+
+function isSubThresholdSelfClone(dup: JscpdDuplicate): boolean {
+  return isSelfFileClone(dup) && dup.lines < MIN_SIGNIFICANT_LINES;
 }
 
 function subThresholdDisclosureFinding(smallClones: JscpdDuplicate[]): Finding {
@@ -256,9 +269,10 @@ function subThresholdDisclosureFinding(smallClones: JscpdDuplicate[]): Finding {
   };
 }
 
-// #1080: the self-file band #232 excludes entirely (see isCrossFileClone's header — the "it's just
-// data" assumption is retracted, measured-false). Disclosed as one aggregate, same shape as
-// subThresholdDisclosureFinding, so a large self-file band is visible rather than silently absorbed.
+// #1080/#1095: the SUB-THRESHOLD self-file band. Since #1095 the self-file band above
+// MIN_SIGNIFICANT_LINES is scored like any other clone, so what remains here is the same
+// below-the-floor tail M4-00 discloses for cross-file clones — kept as its own row because the fix
+// text and the measured content differ.
 function selfFileCloneDisclosureFinding(selfClones: JscpdDuplicate[]): Finding {
   const worst = [...selfClones].sort((a, b) => b.lines - a.lines);
   const totalLines = selfClones.reduce((sum, d) => sum + d.lines, 0);
@@ -270,16 +284,16 @@ function selfFileCloneDisclosureFinding(selfClones: JscpdDuplicate[]): Finding {
     // Deliberately NOT in the "M4-01"/"M4-02"/… sequential space jscpdToFindings assigns to
     // individual clone findings below — a report with that many significant clusters would collide.
     id: "M4-SELF-00",
-    title: `${selfClones.length} self-file clone(s) excluded from the M4 duplication score`,
+    title: `${selfClones.length} small self-file clone(s) below the M4 significance floor`,
     severity: "Info",
     confidence: "Confirmed",
     category: "Maintainability",
     taxonomy: "M4 — Duplication",
     location: "(repo-wide)",
     status: "Open",
-    evidence: `jscpd found ${selfClones.length} clone(s) where both copies sit in the SAME file (${totalLines} lines total), e.g. ${examples}. Excluded from the findings above and from the headline duplication percentage — the M4 fix text ("extract into a shared module") only applies across files.`,
+    evidence: `jscpd found ${selfClones.length} clone(s) of 5-${MIN_SIGNIFICANT_LINES - 1} duplicated lines where both copies sit in the SAME file (${totalLines} lines total), e.g. ${examples}. Same-file clones AT OR ABOVE the ${MIN_SIGNIFICANT_LINES}-line floor are scored individually above (#1095) and counted in the headline percentage; this row is the below-floor tail.`,
     impact:
-      "MEASURED 2026-07-25 (#1080) on a 2755-file production target: self-file clones were dominated by copy-pasted test setup/mock chains (76% of clusters, 73% of duplicated lines) and repeated JSX render blocks (7%), not primarily inert data (SVG icon tables, enum literals) as the original #232 exclusion assumed — that assumption is retracted as measured-false. Most of this band is genuinely extractable (a shared test helper, a row-renderer component); it stays out of the SCORED findings above pending a scoring-policy decision, not because it's confirmed noise.",
+      "MEASURED 2026-07-25 (#1080) on a 2755-file production target: self-file clones were dominated by copy-pasted test setup/mock chains (76% of clusters, 73% of duplicated lines) and repeated JSX render blocks (7%), not primarily inert data (SVG icon tables, enum literals) as the original #232 exclusion assumed — that assumption is retracted as measured-false. Individually below the floor for their own finding, but the same in-file discovery problem applies: a second copy 300 lines down in a file you believe you have read is easy to miss when the first copy gets edited.",
     fix: "No per-item action from this aggregate. Sample the evidence pairs above — a large count concentrated in test files usually means one setup helper/fixture should exist; concentrated in JSX usually means one row/row-renderer component should be extracted.",
     value: 1,
     ease: 3,
@@ -307,24 +321,38 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
       dup.fragment.length > FRAGMENT_PREVIEW_LEN
         ? `${dup.fragment.slice(0, FRAGMENT_PREVIEW_LEN)}…`
         : dup.fragment;
-    const baseImpact = `${dup.lines} duplicated lines (${dup.tokens} tokens) — a fix in one copy is a fix missed in the other.`;
+    // #1095: same-file clones are scored on the same terms; only the wording differs, because
+    // "extract into a shared module" is the wrong instruction for two copies inside one file and
+    // because the in-file case needs its discovery problem said out loud.
+    const selfFile = isSelfFileClone(dup);
+    const baseImpact = selfFile
+      ? `${dup.lines} duplicated lines (${dup.tokens} tokens) repeated WITHIN one file — a fix in one copy is a fix missed in the other, and the second copy has no filename to jog the memory of whoever edits the first.`
+      : `${dup.lines} duplicated lines (${dup.tokens} tokens) — a fix in one copy is a fix missed in the other.`;
 
     return {
       id: `M4-${String(i + 1).padStart(2, "0")}`,
-      title: securityPath
-        ? `Duplicated code in security-relevant path: ${dup.firstFile.name} ↔ ${dup.secondFile.name}`
-        : `Duplicated code: ${dup.firstFile.name} ↔ ${dup.secondFile.name}`,
+      title: selfFile
+        ? securityPath
+          ? `Duplicated code within one security-relevant file: ${dup.firstFile.name}`
+          : `Duplicated code within one file: ${dup.firstFile.name}`
+        : securityPath
+          ? `Duplicated code in security-relevant path: ${dup.firstFile.name} ↔ ${dup.secondFile.name}`
+          : `Duplicated code: ${dup.firstFile.name} ↔ ${dup.secondFile.name}`,
       severity,
       confidence: "Confirmed",
       category: "Maintainability",
       taxonomy: "M4 — Duplication",
-      location: `${dup.firstFile.name}:${dup.firstFile.start}-${dup.firstFile.end} ↔ ${dup.secondFile.name}:${dup.secondFile.start}-${dup.secondFile.end}`,
+      location: selfFile
+        ? `${dup.firstFile.name}:${dup.firstFile.start}-${dup.firstFile.end} ↔ :${dup.secondFile.start}-${dup.secondFile.end}`
+        : `${dup.firstFile.name}:${dup.firstFile.start}-${dup.firstFile.end} ↔ ${dup.secondFile.name}:${dup.secondFile.start}-${dup.secondFile.end}`,
       status: "Open",
       evidence: fragment.replace(/\n/g, " / "),
       impact: securityPath
         ? `${baseImpact} This duplicated block sits in an auth/guard/security path — if one copy is patched for a security issue, confirm the other copy(ies) were too (cross-check against the M1 authorization review).`
         : baseImpact,
-      fix: "Extract the shared logic into one function/module and have both call sites use it.",
+      fix: selfFile
+        ? "Extract the repeated block into one function (or a shared test helper/fixture, or a sub-component for a repeated render block) and call it at both sites."
+        : "Extract the shared logic into one function/module and have both call sites use it.",
       value: severity === "Medium" ? 4 : severity === "Low" ? 3 : 2,
       ease: 4,
       safety: 4,
@@ -338,15 +366,15 @@ export function jscpdToFindings(report: JscpdReport): Finding[] {
   const smallClones = report.duplicates.filter(isSubThresholdClone);
   if (smallClones.length > 0) findings.push(subThresholdDisclosureFinding(smallClones));
 
-  // #1080: the dropped self-file band, disclosed the same way (M4-SELF-00).
-  const selfClones = report.duplicates.filter(isSelfFileClone);
+  // #1080/#1095: the sub-threshold self-file tail, disclosed the same way (M4-SELF-00).
+  const selfClones = report.duplicates.filter(isSubThresholdSelfClone);
   if (selfClones.length > 0) findings.push(selfFileCloneDisclosureFinding(selfClones));
 
   return findings;
 }
 
-// #232: jscpd's own statistics.total counts every raw clone it found, including the self-file
-// and sub-threshold clusters jscpdToFindings now excludes — recompute so the reported percentage
+// #232: jscpd's own statistics.total counts every raw clone it found, including the sub-threshold
+// clusters jscpdToFindings still excludes — recompute so the reported percentage
 // matches what the findings above actually claim. Reimplements jscpd's own
 // Statistic.calculatePercentage (round(cloned/total*10000)/100, verified against
 // @jscpd/core's source) rather than guessing a formula.
@@ -359,8 +387,9 @@ export function duplicationSummary(
   // #365: not part of the headline percentage (that stands behind the significant findings), but
   // surfaced so the small-clone band is visible wherever the summary is printed.
   const subThresholdCloneCount = report.duplicates.filter(isSubThresholdClone).length;
-  // #1080: same idea for the self-file band — never part of the percentage, always surfaced.
-  const selfFileCloneCount = report.duplicates.filter(isSelfFileClone).length;
+  // #1080/#1095: the self-file tail below the floor. Self-file clones AT OR ABOVE the floor are in
+  // the percentage now, exactly like cross-file ones — this counts only what M4-SELF-00 discloses.
+  const selfFileCloneCount = report.duplicates.filter(isSubThresholdSelfClone).length;
   return { percentage, duplicatedLines, totalLines, subThresholdCloneCount, selfFileCloneCount };
 }
 

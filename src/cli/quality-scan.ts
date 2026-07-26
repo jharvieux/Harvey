@@ -567,7 +567,7 @@ const dup = duplicationSummary(jscpdReport);
 console.error(
   // #1109: `${dup.duplicatedLines}/${dup.totalLines} lines` is M4's unit of examination — the audit
   // orchestrator reads the total off stderr to say how much source jscpd actually compared.
-  `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s), ${dup.subThresholdCloneCount} sub-threshold small clone(s) disclosed in M4-00 (#365), ${dup.selfFileCloneCount} self-file clone(s) disclosed in M4-SELF-00 (#1080), ${divergedFindings.length} diverged security-path clone pair(s) (#360, review tier)` +
+  `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s), ${dup.subThresholdCloneCount} sub-threshold small clone(s) disclosed in M4-00 (#365), ${dup.selfFileCloneCount} sub-threshold self-file clone(s) disclosed in M4-SELF-00 (#1080/#1095), ${divergedFindings.length} diverged security-path clone pair(s) (#360, review tier)` +
     (jscpdGaps.length ? `, whole-repo scan incomplete (#544, see M4-99)` : "") +
     (jscpdScopeDisclosure ? `, ${jscpdGlobMatches.reduce((sum, m) => sum + m.count, 0)} file(s) excluded by ignore globs disclosed in M4-SCOPE-00 (#1080)` : "") +
     (divergedScopeDisclosure ? `, diverged-clone pass covered ${narrowFiles.length}/${eligibleFileCount} eligible files (#1080, see M4-97)` : "") +

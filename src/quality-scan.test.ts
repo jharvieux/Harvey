@@ -54,8 +54,9 @@ const jscpdReport: JscpdReport = {
       firstFile: { name: "src/big1.ts", start: 5, end: 65 },
       secondFile: { name: "src/big2.ts", start: 10, end: 70 },
     },
-    // #232: same file both sides — jscpd flagging icons.tsx's own repeated SVG path literals
-    // against itself, not cross-file logic duplication a client could extract.
+    // Same file both sides. #232 assumed this shape was inert repeated DATA and excluded the whole
+    // band; #1080 measured that false and #1095 restored it to the scored findings — at 40 lines it
+    // clears MIN_SIGNIFICANT_LINES and is scored exactly like a cross-file clone.
     {
       format: "typescript",
       lines: 40,
@@ -81,12 +82,14 @@ describe("jscpdToFindings", () => {
   it("sorts worst clone clusters first regardless of report order", () => {
     const findings = jscpdToFindings(jscpdReport);
     expect(findings[0]?.location).toContain("big1.ts");
-    expect(findings[1]?.location).toContain("a.ts");
+    expect(findings[1]?.location).toContain("icons.tsx"); // 40 lines, self-file — ranked on size like any other clone (#1095)
+    expect(findings[2]?.location).toContain("a.ts");
   });
 
   it("scales severity with duplicated line count", () => {
-    const [big, small] = jscpdToFindings(jscpdReport);
+    const [big, self, small] = jscpdToFindings(jscpdReport);
     expect(big?.severity).toBe("Medium"); // 60 lines >= 50
+    expect(self?.severity).toBe("Low"); // 40 lines: >= 15, < 50 — the SAME ladder cross-file clones use (#1095)
     expect(small?.severity).toBe("Info"); // 11 lines < 15
   });
 
@@ -98,7 +101,7 @@ describe("jscpdToFindings", () => {
 
   it("assigns unique sequential M4 ids, with the #365/#1080 meta rows trailing and never colliding with the sequential ids", () => {
     const findings = jscpdToFindings(jscpdReport);
-    expect(findings.map((f) => f.id)).toEqual(["M4-01", "M4-02", "M4-00", "M4-SELF-00"]);
+    expect(findings.map((f) => f.id)).toEqual(["M4-01", "M4-02", "M4-03", "M4-00"]);
   });
 
   it("tags every clone at the high precision tier (issue #72 calibration)", () => {
@@ -106,9 +109,17 @@ describe("jscpdToFindings", () => {
     expect(findings.every((f) => f.precisionTier === "high")).toBe(true);
   });
 
-  it("excludes same-file clones — self-repeated data, not extractable cross-file logic (#232)", () => {
-    const findings = jscpdToFindings(jscpdReport);
-    expect(findings.some((f) => f.location.includes("icons.tsx"))).toBe(false);
+  // #1095 (operator ruling 2026-07-26): #232's exclusion of this band was measured false by #1080.
+  // A second copy inside the SAME file is the #1081 failure mode with weaker discovery cues than
+  // the cross-file case, so it earns a scored finding on identical terms.
+  it("scores a same-file clone above the floor, with in-file fix text and a collapsed location (#1095)", () => {
+    const self = jscpdToFindings(jscpdReport).find((f) => f.location.includes("icons.tsx"));
+    expect(self).toBeDefined();
+    expect(self!.location).toBe("src/icons.tsx:1-40 ↔ :50-90"); // path stated once, not repeated
+    expect(self!.title).toBe("Duplicated code within one file: src/icons.tsx");
+    expect(self!.fix).toContain("call it at both sites");
+    expect(self!.fix).not.toContain("shared logic into one function/module");
+    expect(self!.impact).toContain("no filename to jog the memory");
   });
 
   it("emits no INDIVIDUAL finding for clusters under the significant-lines gate — e.g. a shared import header (#232)", () => {
@@ -374,7 +385,7 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
       ...wholeRepoDivergedCloneFindings(wideFiles),
     ];
     const m4Entries = m4m5Entries.filter((e) => e.module === "M4");
-    expect(m4Entries.length).toBeGreaterThanOrEqual(9); // guards against the corpus silently shrinking
+    expect(m4Entries.length).toBeGreaterThanOrEqual(14); // guards against the corpus silently shrinking
     const matrix = buildCoverageMatrix(findings, m4Entries);
     const failed = matrix.rows.filter((r) => !r.pass).map((r) => `${r.id}: ${r.detail}`);
     expect(failed).toEqual([]);
@@ -385,18 +396,23 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
     expect(sec?.severity).toBe("Medium");
     expect(sec?.impact).toContain("M1 authorization review");
 
-    // Same for #360/#399: exactly TWO diverged families exist in the security-path fixture set —
-    // the require-tenant guards (v1, path-scoped) and the customer/order stores (v2, content-
-    // scoped) — and nothing else may pair (the session-check clones are a consistent Type-2
-    // rename; api-key-check.ts is structurally distinct). Trailing hyphen distinguishes this
-    // narrow-pass id family ("M4-DIV-NN") from the wide-pass one ("M4-DIVW-NN") below — both
-    // start with the bare substring "M4-DIV".
+    // Same for #360/#399/#1095: exactly THREE diverged families exist in the security-path fixture
+    // set — the require-tenant guards (v1, path-scoped), the customer/order stores (v2, content-
+    // scoped) and the two workspace-guard copies inside ONE file (#1095) — and nothing else may
+    // pair (the session-check clones are a consistent Type-2 rename; api-key-check.ts is
+    // structurally distinct). Trailing hyphen distinguishes this narrow-pass id family
+    // ("M4-DIV-NN") from the wide-pass one ("M4-DIVW-NN") below — both start with "M4-DIV".
     const diverged = findings.filter((f) => f.id.startsWith("M4-DIV-"));
-    expect(diverged).toHaveLength(2);
+    expect(diverged).toHaveLength(3);
     const tenantGuard = diverged.find((f) => f.location.includes("require-tenant-api.ts"));
     expect(tenantGuard?.location).toContain("require-tenant-admin.ts");
     const tenantStore = diverged.find((f) => f.location.includes("customer.store.ts"));
     expect(tenantStore?.location).toContain("order.store.ts");
+    // #1095: the same-file family. Both copies are in workspace-guard.ts, so the location names
+    // that path twice — the pair the pass could not see at all before this change.
+    const sameFile = diverged.find((f) => f.location.includes("workspace-guard.ts"));
+    expect(sameFile?.severity).toBe("High");
+    expect(sameFile?.location.match(/workspace-guard\.ts/g)).toHaveLength(2);
 
     // #809: exactly ONE whole-repo family — the export-config pair — and notification-format.ts
     // (structurally distinct, similar size) stays unpaired.
@@ -410,17 +426,18 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
 });
 
 describe("duplicationSummary", () => {
-  it("recomputes the percentage from only significant clusters, excluding self-file and sub-threshold noise (#232)", () => {
-    // Only the 11-line and 60-line cross-file clusters count; the self-file (40) and tiny (6)
-    // ones are excluded. round(10000 * 71/320) / 100 = 22.19 — jscpd's own percentage formula.
+  it("recomputes the percentage from every significant cluster, cross-file or self-file, excluding only the sub-threshold band (#232/#1095)", () => {
+    // The 60-, 40- and 11-line clusters count — the self-file 40-liner among them, since #1095
+    // scores it; only the 6-line header is excluded. round(10000 * 111/320) / 100 = 34.69.
     const summary = duplicationSummary(jscpdReport);
-    expect(summary.duplicatedLines).toBe(71);
-    expect(summary.percentage).toBe(22.19);
+    expect(summary.duplicatedLines).toBe(111);
+    expect(summary.percentage).toBe(34.69);
   });
 
   it("counts the dropped small-clone band separately without polluting the headline percentage (#365)", () => {
     const summary = duplicationSummary(jscpdReport);
-    expect(summary.subThresholdCloneCount).toBe(1); // the c.ts/d.ts import header; the self-file clone is not counted
+    expect(summary.subThresholdCloneCount).toBe(1); // the c.ts/d.ts import header
+    expect(summary.selfFileCloneCount).toBe(0); // the self-file 40-liner is scored now, not disclosed as a dropped band
   });
 });
 
