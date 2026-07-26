@@ -1058,3 +1058,5 @@ were each gated exact/unambiguous; version-match ≠ exploitable, so the paid re
 `colima start` → `supabase start -x vector,analytics` + `supabase db reset` in `targets/calibration`.
 Seeded logins fail (gotrue) → mint JWTs from `JWT_SECRET`. To run the real advisor against the target:
 `psql "$DB_URL" -f splinter.sql` (github.com/supabase/splinter). Scanner binaries all installed.
+
+<!-- #1107 live probe: markdown-only change; delete this branch. -->
