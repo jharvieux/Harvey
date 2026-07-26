@@ -54,6 +54,12 @@ jobs:
   conservation:
     name: plant → deliverable, and the produced/delivered arithmetic
     runs-on: ubuntu-latest
+    # issues: write so a scheduled failure can find-or-update its tracking issue (#1142, mirroring
+    # #1138). contents: read is restated because a job-level block replaces (not extends) the
+    # top-level one.
+    permissions:
+      contents: read
+      issues: write
     timeout-minutes: 20
     steps:
       # The M3 probe reads the target's authorship history and the M1 secrets tier reads git history,
@@ -138,4 +144,26 @@ jobs:
           if pnpm exec tsx src/cli/validate-conservation.ts --seed-unaccounted; then
             echo "::error::--seed-unaccounted removed a finding from the assembled deliverable with no disposition and the conservation ledger still exited 0. The arithmetic is not being asserted (#1096)."
             exit 1
+          fi
+
+      # Scheduled runs go red on a branch nobody watches (#1128/#1138's precedent, applied here by
+      # #1142). On a scheduled failure, find-or-update ONE tracking issue by the marker label:
+      # comment on the open one if it exists, otherwise create it. Never fires on PR/push — those
+      # failures are already visible on the PR.
+      - name: Open or update the conservation tracking issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MARKER: ci-conservation-alert
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create "$MARKER" --color B60205 \
+            --description "Auto-opened when the scheduled conservation CI run fails" 2>/dev/null || true
+          body="The scheduled \`conservation\` run failed (run: $RUN_URL). Either a planted finding didn't survive probe → deliverable, the produced/delivered arithmetic came up unaccounted, or a negative control stopped failing — see the job log for which step. This is a scanner or pipeline bug (or the gate itself broke); there is no baseline here to move. Close this issue once green."
+          existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "conservation scheduled run failing" --label "$MARKER" --body "$body"
           fi
