@@ -9553,6 +9553,30 @@
     ]
   },
   {
+    "id": "AUTH-inmemory-rate-limit-lib-rate-limiter-memory-js",
+    "title": "lib/rate-limiter-memory.js rate-limits with process-local state, which does not limit on a serverless host",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Leftover auth",
+    "taxonomy": "In-memory rate limiter (per-instance, resets on cold start)",
+    "location": "lib/rate-limiter-memory.js",
+    "status": "Open",
+    "evidence": "Rate-limit intent plus a module-scope Map/Set/object counter store, and no shared-store (Redis/KV/DB) hint anywhere in lib/rate-limiter-memory.js.",
+    "impact": "Each serverless instance keeps its own counter and every cold start resets it, so the real budget is the limit times the number of live instances — and an attacker who paces requests never hits it at all.",
+    "fix": "Move the counter to a store shared across instances (Redis/Upstash, Vercel KV, or a database row with an atomic increment).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-307: Improper Restriction of Excessive Authentication Attempts"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
+  },
+  {
     "id": "AUTH-mw-matcher-excludes-api-middleware-ts",
     "title": "middleware.ts — middleware matcher excludes /api routes",
     "severity": "High",
