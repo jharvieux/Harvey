@@ -33,7 +33,7 @@
 //                 boundary does. The plant-and-assert above can miss it (it watches ten rows); the
 //                 conservation ledger's arithmetic cannot.
 
-import { execFileSync } from "node:child_process";
+import { probeExec } from "../probe-exec.js";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -60,15 +60,9 @@ const captureDir = mkdtempSync(join(tmpdir(), "harvey-conservation-"));
 const ctx: RunContext = {
   targetDir,
   env: { connected: false, dynamic: false, llm: false },
-  exec: (command, argv, opts) => {
-    try {
-      const output = execFileSync(command, argv, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}) });
-      return { ok: true, output };
-    } catch (err) {
-      const e = err as { stdout?: string; stderr?: string; message?: string };
-      return { ok: false, output: e.stderr || e.stdout || e.message || "" };
-    }
-  },
+  // #1109: shared with run-audit rather than copied. A gate that shells out differently from the
+  // orchestrator it is gating measures the copy, not the thing.
+  exec: probeExec,
   exists: existsSync,
   captureDir,
   readFindings: (p) => (existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as Finding[]) : []),

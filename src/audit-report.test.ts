@@ -152,8 +152,15 @@ const toolOutput = (argv: string[]): string => {
   if (cmd.includes("quality-scan")) return "[]";
   if (cmd.includes("detect-static")) return "loaded 42 source files (30 product source, 2 config, 10 test/story) from /target";
   if (cmd.includes("hotspot-scan.ts")) return "M3 hotspot table — /target (5 rows, worst first)";
+  // #1109: the unit counts M1 and M10 now read off a clean run's stdout.
+  if (cmd.includes("quick-scan")) return "  4,778 lines of application code across 400 file(s)";
+  if (cmd.includes("pii-classify")) return "Scanned 120 columns. PII-bearing columns: 9 across 4 tables.";
   return "";
 };
+
+// #1109: M4's jscpd line total and M5's knip scope count are stderr-side.
+const toolStderr = (argv: string[]): string =>
+  argv.join(" ").includes("quality-scan") ? "M4 duplication: 1.2% (60/5000 lines) — 3 clone cluster(s)\nM5 dead code across 2 scope(s): 1 unused file(s)" : "";
 
 // #420: the bare-Finding[] emitters (M4/M5/M9) are read via readFindings; the object-artifact
 // emitters (M3 = { findings }, M8 no-suite = { finding, moduleRecord }) are read via readArtifact.
@@ -168,7 +175,7 @@ const artifactFor = (p: string): unknown => {
 // that rejected the assembled deliverable for duplicate ids.
 const qualityScanRows = [finding("M4-01"), finding("M5-01")];
 const capturingCtx = ctx({
-  exec: (_c, argv) => ({ ok: true, output: toolOutput(argv) }),
+  exec: (_c, argv) => ({ ok: true, output: toolOutput(argv), stderr: toolStderr(argv) }),
   captureDir: "/cap",
   readFindings: (p) => (["M4", "M5"].includes(basename(p, ".json")) ? qualityScanRows : [finding(basename(p, ".json"))]),
   readArtifact: artifactFor,

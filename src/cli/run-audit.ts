@@ -83,7 +83,6 @@
 //
 // Exit 1 on any coverage gap, never-run module, or crashed runner.
 
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
@@ -96,6 +95,7 @@ import { EXECUTION_LOG_PATH, readExecutionLog, recordExecutions } from "../audit
 import { formatFailures, runAudit, type RunContext } from "../audit-runner.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
 import { discoverSchemaFiles } from "../dynamic-validate.js";
+import { probeExec } from "../probe-exec.js";
 import { discoverTargets } from "../pentest/targets.js";
 import { isGitRepoRoot } from "../scan/secrets.js";
 import { enrichFindingsCwe } from "../cwe-map.js";
@@ -198,23 +198,7 @@ const captureDir = findingsOut || sarifOut ? mkdtempSync(join(tmpdir(), "harvey-
 const ctx: RunContext = {
   targetDir,
   env,
-  exec: (command, argv, opts) => {
-    try {
-      const output = execFileSync(command, argv, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        // #520: overlay a per-child env (e.g. a per-project SUPABASE_DB_URL for M10's live tier) onto
-        // the inherited environment; absent ⇒ inherit unchanged.
-        ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}),
-      });
-      return { ok: true, output };
-    } catch (err) {
-      // A tool that exits non-zero or is not installed is a real outcome the probe must judge, not
-      // an orchestrator crash — hand it back and let the module's probe describe it.
-      const e = err as { stdout?: string; stderr?: string; message?: string };
-      return { ok: false, output: e.stderr || e.stdout || e.message || "" };
-    }
-  },
+  exec: probeExec,
   exists: existsSync,
   captureDir,
   readFindings: (p) => {

@@ -57,12 +57,18 @@ describe("the typed-result migration is disclosed, not half-done in silence", ()
     expect(covered).toEqual([...AUDIT_MODULES].sort());
   });
 
+  // #1109 emptied UNTYPED_PROBES, so this loop no longer runs against anything today. It is kept
+  // because the list is the landing slot for an ELEVENTH module's probe: a new module added to
+  // AUDIT_MODULES without a typed probe has to be written down with a blocker, not left blank.
   it("gives every un-migrated module a reason naming what blocks it", () => {
     for (const u of UNTYPED_PROBES) expect(u.reason.length).toBeGreaterThan(40);
   });
 
-  it("has migrated a real tranche — an empty TYPED_PROBES would make the contract decorative", () => {
-    expect(TYPED_PROBES.length).toBeGreaterThan(0);
+  // #1109: all ten. This is the assertion that fails the day a probe is reverted to the legacy shape
+  // — the registry cross-check below would still pass if the module were moved to UNTYPED_PROBES.
+  it("has migrated every module of M1–M10 — no probe is left on the untyped shape", () => {
+    expect([...TYPED_PROBES].sort()).toEqual([...AUDIT_MODULES].sort());
+    expect(UNTYPED_PROBES).toEqual([]);
   });
 
   // SEEDED: the hole the migration union opens. `run` accepts both shapes so unmigrated probes keep
