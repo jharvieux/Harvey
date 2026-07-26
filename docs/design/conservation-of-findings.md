@@ -183,19 +183,31 @@ a byte-identical duplicate, the drop surfaces here as unaccounted instead of bei
 same code that made it. One implementation grading its own homework is not evidence.
 
 **The columns that are zero, and why they exist anyway.** `suppressed`, `capped` and
-`not-applicable` have no producer in the pipeline today, and are printed as explicit zeros rather
-than omitted: the slot is where the next transform declares itself, and a reader can see that
-nothing is hiding in it. Today the only legitimate disposition is `deduped` — the shared-CLI double
-capture (`quality-scan` under M4+M5, `detect-static` under M6/M7/M8/M9) that the assembler collapses.
+`not-applicable` are printed as explicit zeros rather than omitted: the slot is where the next
+transform declares itself, and a reader can see that nothing is hiding in it. As of #1146 they have
+a real producer — a transform that legitimately drops a finding passes a `DeclaredDrop`
+(`{id, disposition, reason, by}`); the drop is accounted into its column **only if** it maps to a
+finding that was produced and is genuinely absent, and a disposition credited against a
+still-delivered or never-produced finding is a fail-loud `misdeclaredDispositions` violation. No
+transform declares one today, so the columns still read zero on a real run — but the slot is now a
+live, validated channel, not a dead literal. The one standing disposition remains `deduped` — the
+shared-CLI double capture (`quality-scan` under M4+M5, `detect-static` under M6/M7/M8/M9) the
+assembler collapses.
 
 **Gains are checked too.** A report that grows rows from nowhere is as wrong as one that loses them.
 A delivered finding no probe produced must be on the declared `SYNTHESIZERS` list — today exactly
 one entry, `M10-ESCALATION-00` (the #1049 not-assessed row the assembler adds when there is no data
 map). Anything else fails, as does an id delivered more times than it was produced.
 
-**Seam boundary, stated rather than assumed.** The ledger covers probes → `assembleEngagementDocument`.
-The baseline diff (#457, `applyBaseline`) runs *after* it and legitimately carries resolved rows in
-from a prior engagement, so it sits outside this ledger.
+**Seam boundary — now covered by a second ledger (#1146).** The primary ledger covers probes →
+`assembleEngagementDocument`. The baseline diff (#457, `applyBaseline`) runs *after* it and
+legitimately carries resolved rows in from a prior engagement. That seam used to sit outside any
+ledger — a bug in baseline application could delete a brand-new finding and the run still exited 0.
+A second ledger, `baselineLedger(before, after)`, now spans it: it asserts `entered == retained +
+exited` matched by finding id (which `applyBaseline` preserves), so a NEW finding removed during
+baseline application (`removed > 0`) or an invented row (`gained > 0`) fails loud and refuses the
+export. It runs in `run-audit` after `applyBaseline` and on every `validate-conservation` gate run
+against an empty baseline.
 
 ### Proving it can fail
 
@@ -324,7 +336,12 @@ ever touched the real tool.
 
 **Status:** the motivating case is CLOSED (#1102): the fixture is a captured osv-scanner 2.3.8
 report with `src/scan/__fixtures__/osv/PROVENANCE.md` recording version, command, capture date, and
-exactly what was elided. 19 of 35 rows had been mis-rated. The remaining work is the *general* form
-— an inventory of every external-tool fixture in the repo held to this rule, plus a periodic
-re-capture-and-diff check for schema drift — and it is independent of (1)/(2), so it is scheduled
-separately rather than folded in here (#1109).
+exactly what was elided. 19 of 35 rows had been mis-rated. The *general* form advanced under
+#1130/#1146: `src/scan/__fixtures__/FIXTURE-INVENTORY.md` inventories every external-tool fixture
+CAPTURED vs HAND-WRITTEN, and the lighthouse, vitals, trufflehog(git), jscpd, knip and Stryker
+fixtures were re-captured from real runs (the old vitals fixture encoded a `churn_label` the tool
+never emits — the #1063 shape again). The periodic re-capture-and-diff check now exists for its
+first tool: `src/cli/osv-fixture-drift.ts` (npm `osv-fixture-drift`) re-runs osv-scanner 2.3.8 and
+fails loud on a version or schema-contract drift, wired into `conservation.yml` (#1147/#1152).
+Remaining: the semgrep and gitleaks fixtures (#1150), the two live-only paths recorded as reasons
+(trufflehog-verified, PostgREST), and extending the drift check to the other tools (#1130).
