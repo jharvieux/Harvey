@@ -46,6 +46,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { callChainNames, parse, type NextId, type SourceInput } from "./common.js";
+import { SOURCE_FILE } from "./load-sources.js";
 
 // One shared, deliberately hedged pair — the tier split lives in these two strings as much as in
 // the detectors. Neither may ever name a concrete replacement.
@@ -1696,7 +1697,7 @@ export function detectHandrolledFindings(files: SourceInput[]): Finding[] {
   const retryGateOpen = depGatePresent(files, RETRY_DEPS);
   const findings: Finding[] = [];
   for (const f of files) {
-    if (!/\.(ts|tsx|jsx|mjs)$/.test(f.path)) continue;
+    if (!SOURCE_FILE.test(f.path)) continue; // #1065: the loader's own filter, imported so the two can never drift apart
     const sf = parse(f.path, f.text);
     findings.push(
       ...detectJsonStringifyEquality(sf, f.path, nextId),

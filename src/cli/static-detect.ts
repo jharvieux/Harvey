@@ -18,14 +18,14 @@
 // for the M8 test-intent pass (#372) — its subject matter is the test files themselves.
 
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { Finding } from "../findings.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { scanAssetWeight } from "../detectors/asset-weight.js";
 import { parseBundleAnalyzerStats, parseBundleStats, parseViteBundleStats } from "../detectors/bundle-stats.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { detectHookDepFindings } from "../detectors/hook-deps.js";
-import { loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
+import { CONFIG_FILE, loadSources, NON_PRODUCT } from "../detectors/load-sources.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
 import { detectTestIntentFindings } from "../detectors/test-intent.js";
@@ -34,6 +34,7 @@ import { detectOrm, detectTargetFramework, isViteTooling, nonNextWorkspaces } fr
 import { scanPrismaAppPerf } from "../scan/prisma-app-perf.js";
 import { scanPrismaSchemaPerf } from "../scan/prisma-schema-perf.js";
 import { resolveScanScope } from "../scan/scan-scope.js";
+import { checkUnreadSourceExtensions } from "../scan/ext-coverage.js";
 import { checkUnassessedSfcFiles } from "../scan/sfc-coverage.js";
 
 const args = process.argv.slice(2);
@@ -53,7 +54,13 @@ try {
   // Product-code detectors skip test/story/fixture files; the M8 test-intent pass reads the
   // full set (test files are its subject; non-test files feed its cross-file resolution).
   const sources = allSources.filter((f) => !NON_PRODUCT.test(f.path));
-  console.log(`loaded ${allSources.length} source files (${sources.length} product-code) from ${targetDir}`);
+  // #1065: the orchestrator's anti-silent-skip guard reads the PRODUCT SOURCE count, not the total
+  // — package.json and next.config.js are loaded on every target (for `paths` alias resolution),
+  // so a total-file guard can never reach 0 and never fired.
+  const productSources = sources.filter((f) => !CONFIG_FILE.test(basename(f.path)));
+  console.log(
+    `loaded ${allSources.length} source files (${productSources.length} product source, ${sources.length - productSources.length} config, ${allSources.length - sources.length} test/story) from ${targetDir}`,
+  );
 
   // M9 assumes a Next.js App Router shape; on a Vite/SPA target it is N/A (see detectAppRouterFindings).
   // M7's client-JS tiers and bundle reader also branch on it (#577).
@@ -114,9 +121,16 @@ try {
     // pattern and a `where` filter with no covering index — schema.prisma alone can't see either.
     ...(orm === "prisma" ? [...scanPrismaSchemaPerf(scanDir), ...scanPrismaAppPerf(scanDir)] : []),
     // #919 — .svelte/.vue/.astro source is invisible to every detector call above (all load
-    // sources via loadSources, .ts/.tsx/.jsx/.mjs only); disclose it rather than let a SvelteKit/
+    // sources via loadSources, JS/TS only); disclose it rather than let a SvelteKit/
     // Nuxt/Astro target's M5/M6/M7/M9 rows read as a clean scan of a codebase barely read.
     ...checkUnassessedSfcFiles(scanDir),
+    // #1065 — the extension half of the same doctrine: what the loader DID read vs. what is there
+    // to read. Independent of the loader's own filter, so a future narrowing fires this row instead
+    // of silently shrinking the scan.
+    ...checkUnreadSourceExtensions(
+      scanDir,
+      allSources.map((f) => f.path),
+    ),
   ];
   if (buildDirs.length === 0) {
     console.log(

@@ -11,8 +11,9 @@ const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "co
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 
 // Recursive file-tree walk shared by the detectors that scan their own tree rather than the
-// shared loadSources() pass (pages/api and job paths are commonly plain .js, which
-// loadSources() excludes). Was copy-pasted verbatim across bola-owner.ts, job-tenant-scope.ts,
+// shared loadSources() pass. Their original reason — "loadSources() excludes plain .js" — stopped
+// being true on 2026-07-25 (#1065 widened it); they keep their own walk because they run inside
+// runMechanicalScan, which has no SourceInput[] to hand them. Was copy-pasted verbatim across bola-owner.ts, job-tenant-scope.ts,
 // and leftover-auth.ts — extracted here so a fix/hardening lands once, not three times (#766).
 export function walkSourceFiles(dir: string, root: string = dir, out: SourceInput[] = []): SourceInput[] {
   for (const entry of readdirSync(dir)) {

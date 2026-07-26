@@ -17,7 +17,7 @@ const cleanOutput = (argv: string[]): string => {
   const cmd = argv.join(" ");
   if (cmd.includes("quality-scan")) return "[]"; // Finding[] with no M5-00 → knip ran clean
   if (cmd.includes("mutation-scan")) return JSON.stringify({ summary: { overall: {} }, reportRows: [] });
-  if (cmd.includes("detect-static")) return "loaded 42 source files (30 product-code) from /target\n\n3 findings across 2 classes:";
+  if (cmd.includes("detect-static")) return "loaded 42 source files (30 product source, 2 config, 10 test/story) from /target\n\n3 findings across 2 classes:";
   if (cmd.includes("hotspot-scan.ts")) return "M3 hotspot table — /target (5 rows, worst first)";
   if (cmd.includes("pentest.ts")) return JSON.stringify({ findings: [] });
   return "";
@@ -554,14 +554,29 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
   });
 
   it("M9 — an empty directory (detect-static: loaded 0 source files, exit 0) is NOT recorded ran", () => {
-    const emptyDir = { exec: () => ({ ok: true, output: "loaded 0 source files (0 product-code) from /empty\n\n0 findings across 0 classes:" }) };
+    const emptyDir = { exec: () => ({ ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty\n\n0 findings across 0 classes:" }) };
     const m9 = status(AUDIT_RUNNERS, emptyDir, "M9");
     expect(m9?.status).not.toBe("ran");
-    expect(m9?.reason).toMatch(/0 source files/);
+    expect(m9?.reason).toMatch(/0 product source files/);
   });
 
   it("M9 records ran only when the tool reports a non-zero file count", () => {
     expect(status(AUDIT_RUNNERS, {}, "M9")?.status).toBe("ran");
+  });
+
+  // #1065: the guard above was unreachable. loadSources reads package.json and next.config.js on
+  // every target, so a run that opened nothing BUT those still printed a non-zero total and read
+  // `ran`. That is exactly what a plain-JavaScript app produced. Only the PRODUCT SOURCE count is
+  // evidence code was read — for M9 and for M6/M7, which share the same output.
+  it("M9/M6/M7 — config files alone are not a scan, however many the tool loaded", () => {
+    const configOnly = { exec: () => ({ ok: true, output: "loaded 2 source files (0 product source, 2 config, 0 test/story) from /target\n\n0 findings across 0 classes:" }) };
+    for (const module of ["M9", "M7"] as const) {
+      const row = status(AUDIT_RUNNERS, configOnly, module);
+      expect(row?.status).toBe("requires-live-run");
+      expect(row?.reason).toMatch(/0 product source files/);
+    }
+    // M6's indicator tier degrades to its own not-run reason rather than crediting the layer.
+    expect(status(AUDIT_RUNNERS, configOnly, "M6")?.status).not.toBe("partial");
   });
 });
 
@@ -609,7 +624,7 @@ describe("a blocked M8 mutation sub-step keeps the test-intent tier's findings (
     const bothDown = ctx({
       exec: (_c, argv) => {
         if (argv.includes("mutation-scan")) return { ok: false, output: "crash" };
-        if (argv.includes("detect-static")) return { ok: true, output: "loaded 0 source files (0 product-code) from /empty" };
+        if (argv.includes("detect-static")) return { ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty" };
         return { ok: true, output: cleanOutput(argv) };
       },
     });
@@ -683,7 +698,7 @@ describe("M6 credits its free indicator layer without a --llm flag (#397)", () =
   });
 
   it("stays requires-live-run when detect-static could not confirm a scan (0 files, no llm)", () => {
-    const emptyDir = { exec: () => ({ ok: true, output: "loaded 0 source files (0 product-code) from /empty\n\n0 findings across 0 classes:" }) };
+    const emptyDir = { exec: () => ({ ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty\n\n0 findings across 0 classes:" }) };
     const m6 = status(AUDIT_RUNNERS, emptyDir, "M6");
     expect(m6?.status).toBe("requires-live-run");
     expect(m6?.reason).toMatch(/could not confirm the free indicator layer ran/i);
@@ -765,7 +780,7 @@ describe("a blocked M6 simplify-scan keeps the indicator tier's findings (#683)"
       ...llmEnv,
       exec: (_c, argv) => {
         if (argv.includes("simplify-scan")) return { ok: false, output: "crash" };
-        if (argv.includes("detect-static")) return { ok: true, output: "loaded 0 source files (0 product-code) from /empty" };
+        if (argv.includes("detect-static")) return { ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /empty" };
         return { ok: true, output: cleanOutput(argv) };
       },
     });
@@ -935,11 +950,11 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     // does. A probe that could not run its own tiers becomes partial — something ran — not `ran`.
     it("a recorded pass lifts a not-run module to partial, never to ran", () => {
       const noSource = withPass("M9", { pass: "captured", findings: [{ id: "M9-PASS-1" }] }, {
-        exec: (_c: string, argv: string[]) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files from /target" } : { ok: true, output: cleanOutput(argv) }),
+        exec: (_c: string, argv: string[]) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files (0 product source, 0 config, 0 test/story) from /target" } : { ok: true, output: cleanOutput(argv) }),
       });
       const m9 = status(AUDIT_RUNNERS, noSource, "M9");
       expect(m9?.status).toBe("partial");
-      expect(m9?.reason).toMatch(/scanned 0 source files/);
+      expect(m9?.reason).toMatch(/scanned 0 product source files/);
       expect(m9?.reason).toMatch(/not by itself evidence the module ran in full/);
     });
 
