@@ -138,6 +138,25 @@ const parseFindings = (output: string): { id?: string }[] | undefined => {
   }
 };
 
+// #1101: quality-scan is ONE CLI emitting BOTH M4-* and M5-* rows, and M4 and M5 each invoke it
+// independently — so each probe capturing the whole array delivered every quality-scan finding
+// twice. That survived only while the two invocations agreed byte-for-byte; knip's issue order is
+// not stable run-to-run (MEASURED 2026-07-26: 8 identical `pnpm quality-scan targets/calibration`
+// runs produced 3 distinct orderings), so when they disagreed the same positional id arrived with
+// two different bodies, dedupeFindings could not collapse them, and validateFindings rejected the
+// assembled deliverable. It also credited each module's ledger with the other's findings (MEASURED
+// 2026-07-26: the conservation gate attributed all 41 quality-scan rows to M5 alone, and the same
+// 41 to M4). That mis-attribution did NOT mask a seeded M5 loss — `--seed-loss M5` still failed
+// loud on the unfixed code, checked before this was written — but a per-module produced-count that
+// counts another module's rows is the wrong number for a gate that exists to compare them.
+// Each probe takes only its own module's rows.
+//
+// The split is a TOTAL partition rather than two prefix tests, so a quality-scan row matching
+// neither prefix lands in the deliverable instead of being silently dropped by both probes — M5
+// owns the knip rows (all `M5-*`), M4 owns the rest of the CLI's output.
+const ownRows = (findings: { id?: string }[], module: "M4" | "M5"): Finding[] =>
+  findings.filter((f) => (f.id?.startsWith("M5-") ?? false) === (module === "M5")) as Finding[];
+
 // mutation-scan emits a machine-readable moduleRecord ({ status:"partial", note }) and exits 0
 // whenever the mutation tier fell short of a full run: no test suite (#224), a failed Stryker dry
 // run (#503), a degraded scaffold rung (#513), or a scoped run that covered less than the
@@ -386,8 +405,9 @@ const m4Run = (ctx: RunContext): ProbeOutcome => {
   if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
   const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
   if (!findings) return { status: "requires-live-run", reason: `could not read quality-scan output to confirm jscpd ran: ${trimOut(output)}` };
-  if (findings.some((f) => (f as { id?: string }).id === "M4-99")) return { status: "partial", detail: command, reason: "jscpd did not complete on every workspace — quality-scan emitted the M4-99 disclosure finding, so duplication coverage is incomplete for this pass (#505)", findings: findings as Finding[] };
-  return findings.length ? { status: "ran", detail: command, findings: findings as Finding[] } : { status: "ran", detail: command };
+  const own = ownRows(findings, "M4");
+  if (findings.some((f) => (f as { id?: string }).id === "M4-99")) return { status: "partial", detail: command, reason: "jscpd did not complete on every workspace — quality-scan emitted the M4-99 disclosure finding, so duplication coverage is incomplete for this pass (#505)", findings: own };
+  return own.length ? { status: "ran", detail: command, findings: own } : { status: "ran", detail: command };
 };
 const m4: ModuleRunner = { module: "M4", run: perApp(m4Run) };
 
@@ -418,7 +438,8 @@ const m5Run = (ctx: RunContext): ProbeOutcome => {
   const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
   if (!findings) return { status: "requires-live-run", reason: `could not read quality-scan output to confirm knip ran: ${trimOut(output)}` };
   const emitted = (id: string): boolean => findings.some((f) => (f as { id?: string }).id === id);
-  const captured = outPath && findings.length ? { findings: findings as Finding[] } : {};
+  const own = ownRows(findings, "M5");
+  const captured = outPath && own.length ? { findings: own } : {};
   if (emitted("M5-00")) return { status: "partial", detail: command, reason: "knip did not run — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage was skipped this pass (M4 duplication still ran) (#223/#350)" };
   if (emitted("M5-98")) {
     return {
