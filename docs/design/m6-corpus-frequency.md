@@ -24,7 +24,13 @@ These are **shape-presence counts by stated signature** on six pinned repos:
   shape is, not whether a detector would fire.
 
 Scope caveats (all inherited from the product loader so counts match what the detectors would
-see): `loadSources` reads `.ts/.tsx/.jsx/.mjs` only (plain `.js` is not loaded); test/story/
+see): at measurement time `loadSources` read `.ts/.tsx/.jsx/.mjs` only, so plain `.js` was NOT
+loaded — **that is no longer true of the loader**. #1065 widened it to the whole JS/TS family
+(`.ts/.tsx/.jsx/.js/.mjs/.cjs/.mts/.cts`, `SOURCE_FILE` in `src/detectors/load-sources.ts`),
+because omitting `.js` meant a plain-JavaScript app was read as effectively empty. The counts below
+were measured under the OLD filter and have not been re-measured since; a re-run would see more
+files on any corpus entry containing `.js` sources, so treat them as a dated floor, not a current
+figure. Test/story/
 fixture files are excluded via `NON_PRODUCT`; vendored subtrees (e.g. mvp-boilerplate's
 `monero/`) are **not** excluded, unlike M4's #232 denominator fix.
 

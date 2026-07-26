@@ -16,6 +16,10 @@ Each of #311/#356/#351 deliberately *refused* to bank `ran` off the tier flag, b
 intent, not evidence. This convention gives those passes a way to leave **evidence**: a dated
 results artifact the probe can check.
 
+Those four are the modules whose status an artifact can *decide*. Since **#1042 all ten modules
+CONSUME a recorded pass** — the other six merge its findings and name it on their row without
+claiming `ran`. See "How the probe uses it" below for the split.
+
 ## The artifact
 
 Each pass writes one JSON file named `<module>.pass.json` (e.g. `M1.pass.json`) into the
@@ -57,8 +61,25 @@ If an artifact is **present but rejected** (stale, wrong target, malformed), the
 silently ignore it — it falls back to its honest not-run status and appends the rejection reason, so
 a stale pass fails loud rather than reading as a clean gap.
 
-A fresh artifact yields `ran`, its `pass`/`generatedAt` in the ledger detail, and its `findings`
+A fresh artifact **always** puts its `pass`/`generatedAt` in the ledger detail and its `findings`
 (if any) into the engagement document — the same way a captured CLI's findings are collected (#312).
+What it does to the module's **status** differs by module (#1042):
+
+| Modules | What a fresh artifact does to the status |
+|---|---|
+| **M1, M2, M3, M6** (the four above) | Yields **`ran`** — the artifact *is* the module's missing tier. |
+| **M7** | **Replaces** the `M7_LIGHTHOUSE_NOT_RUN` claim, which a recorded Lighthouse pass falsifies outright, and upgrades a `requires-live-run` to `partial`. Never `ran`. |
+| **M4, M5, M8, M9, M10** | Findings merged, the pass **named on the row**, and a `requires-live-run` upgraded to `partial` because something demonstrably ran. Never `ran`. |
+
+The six that do not read `ran` cover **one tier** of their module, and the orchestrator has no
+evidence about the others — asserting `ran` there would break the #229 derive-don't-assert rule.
+
+Before #1042 only M1/M2/M3/M6 called `findFreshPass` at all, while `record-pass` validated
+`--module` against the full M1–M10 list and told the operator that module would derive `ran` from
+the artifact. A recorded M7 Lighthouse pass was therefore accepted, written, and then silently
+dropped: MEASURED 2026-07-25 on `targets/calibration`, the recorded finding was absent from
+`--findings-out` and the M7 row still asserted Lighthouse "not run" — a confident negative claim
+contradicted by evidence sitting in the directory `run-audit` had just read.
 
 ## What this is not
 
