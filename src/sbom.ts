@@ -269,6 +269,18 @@ export function lockfileLicenses(dir: string): Record<string, string> {
   return out;
 }
 
+// #1099: the resolved-tree VERSION map, same parse and keying as lockfileLicenses above — lets
+// checkLicenseCompliance's registry fallback ask the npm packument for the version actually
+// installed (`versions[<v>].license`) rather than always reading the top-level, latest-publish
+// license snapshot.
+export function lockfileVersions(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const c of collectDependencies(dir).components) {
+    if (c.version) out[c.name] = c.version;
+  }
+  return out;
+}
+
 // purl (package-URL) for an npm component. The scope's leading "@" is percent-encoded; the "/"
 // separating namespace from name is not. Every other character valid in an npm name is URL-safe.
 function purl(c: SbomComponent): string {

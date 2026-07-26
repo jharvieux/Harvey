@@ -336,21 +336,35 @@ export function classifyLicense(raw: string | undefined): LicenseClass {
   return classes.includes("copyleft") ? "copyleft" : classes.includes("permissive") ? "permissive" : "unknown";
 }
 
-// npm registry packument shape (subset used here) — `license` is the modern field; `licenses`
-// (plural, an array) is the pre-npm5 format some older packages still carry.
-interface NpmPackument {
+// npm registry packument shape (subset used here) — `license`/`licenses` at the TOP LEVEL are a
+// denormalized snapshot of the LATEST publish, not necessarily the version actually installed;
+// `versions[<v>]` carries each release's own metadata. (#1099)
+interface NpmPackageMeta {
   license?: string | { type?: string };
   licenses?: { type?: string }[];
 }
+interface NpmPackument extends NpmPackageMeta {
+  versions?: Record<string, NpmPackageMeta>;
+}
 
-function extractLicenseId(pkg: NpmPackument): string | undefined {
-  if (typeof pkg.license === "string") return pkg.license;
-  if (pkg.license && typeof pkg.license.type === "string") return pkg.license.type;
-  if (Array.isArray(pkg.licenses)) {
-    const ids = pkg.licenses.map((l) => l.type).filter((t): t is string => typeof t === "string");
+function extractLicenseFrom(meta: NpmPackageMeta): string | undefined {
+  if (typeof meta.license === "string") return meta.license;
+  if (meta.license && typeof meta.license.type === "string") return meta.license.type;
+  if (Array.isArray(meta.licenses)) {
+    const ids = meta.licenses.map((l) => l.type).filter((t): t is string => typeof t === "string");
     if (ids.length > 0) return ids.join(" OR "); // pre-npm5 array = a choice of alternatives
   }
   return undefined;
+}
+
+// #1099: prefer the INSTALLED version's own license (`versions[<v>]`) when the caller knows which
+// version resolved — the top-level `license` is the latest publish's, which can differ from (and,
+// for a package whose license changed between releases, actively mislead about) the version a
+// project actually depends on. Falls back to the top-level snapshot when no version is known or
+// the packument has no per-version entry for it (some registries/mirrors omit `versions`).
+function extractLicenseId(pkg: NpmPackument, version?: string): string | undefined {
+  const versioned = version !== undefined ? pkg.versions?.[version] : undefined;
+  return (versioned && extractLicenseFrom(versioned)) ?? extractLicenseFrom(pkg);
 }
 
 // License lookup. `lockfileLicenses` (#1079) is the resolved-tree license map from
@@ -372,6 +386,10 @@ export async function checkLicenseCompliance(
   deps: DependencyMap,
   fetchImpl: typeof fetch = fetch,
   lockfileLicenses: Readonly<Record<string, string>> = {},
+  // #1099: the resolved-tree version map, same source/keying as `lockfileLicenses` (src/sbom.ts's
+  // lockfile parse) — lets the registry fallback below ask for the INSTALLED version's license
+  // (`versions[<v>]`) instead of always reading the top-level (latest-publish) snapshot.
+  lockfileVersions: Readonly<Record<string, string>> = {},
 ): Promise<Finding[]> {
   const findings: Finding[] = [];
   const indeterminate: string[] = [];
@@ -394,7 +412,7 @@ export async function checkLicenseCompliance(
         reasons.add(`registry unreachable (${err instanceof Error ? err.message : String(err)})`);
         continue;
       }
-      licenseId = extractLicenseId(body);
+      licenseId = extractLicenseId(body, lockfileVersions[name]);
       source = "the npm registry";
     }
     const cls = classifyLicense(licenseId);

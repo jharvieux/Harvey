@@ -178,7 +178,10 @@ export function parseTruffleHogFindings(results: TruffleHogResult[], scope: stri
         category: "Secret exposure",
         taxonomy: "Committed credential",
         location: `[${scope}] ${location(r)}`,
-        evidence: `TruffleHog verified detector "${r.DetectorName ?? "unknown"}" against the live provider: ${r.Redacted ?? "(redacted)"}.${truffleHogProvenance(r)}`,
+        // #1099: real trufflehog v3 emits `"Redacted": ""` for most detectors (only populated
+        // where a detector implements redaction) — `?? "(redacted)"` never falls back on an empty
+        // string, so a Critical finding's evidence rendered with a dangling "...provider: .".
+        evidence: `TruffleHog verified detector "${r.DetectorName ?? "unknown"}" against the live provider: ${r.Redacted || "(redacted)"}.${truffleHogProvenance(r)}`,
         impact: "A verified, live credential is exposed; anyone with repo/bundle access can use it directly.",
         fix:
           "Rotate the credential immediately, then remove it from source (and git history if committed)." +

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildSbom, collectDependencies, parsePackageLock, parsePnpmLock, parseYarnLock } from "./sbom.js";
+import { buildSbom, collectDependencies, lockfileLicenses, lockfileVersions, parsePackageLock, parsePnpmLock, parseYarnLock } from "./sbom.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the BOM is emitted as plain JSON; tests read it as a consumer would.
 const bomOf = (dir: string): any => buildSbom(dir, { targetName: "t", timestamp: "2026-07-23T00:00:00.000Z" }).bom;
@@ -156,6 +156,27 @@ describe("CycloneDX document", () => {
     const props: { name: string; value: string }[] = bomOf(dir).metadata.properties;
     expect(props.find((p) => p.name === "harvey:license-coverage")?.value).toContain("1/2");
     expect(props.find((p) => p.name === "harvey:hash-coverage")?.value).toContain("0/2");
+  });
+});
+
+// #1099: lockfileVersions is checkLicenseCompliance's other half of #1079's lockfileLicenses — the
+// resolved-tree VERSION map, so a registry fallback can ask for the version actually installed
+// (`versions[<v>].license`) instead of always reading the npm packument's top-level, latest-publish
+// license snapshot.
+describe("lockfileLicenses / lockfileVersions (#1079/#1099)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "sbom-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("keys both maps by name, from the same resolved-tree parse", () => {
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2", license: "MIT" }, "node_modules/@next/env": { version: "14.2.35" } } }),
+    );
+    expect(lockfileLicenses(dir)).toEqual({ axios: "MIT" });
+    expect(lockfileVersions(dir)).toEqual({ axios: "1.7.2", "@next/env": "14.2.35" });
   });
 });
 

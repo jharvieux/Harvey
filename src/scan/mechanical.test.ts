@@ -59,9 +59,14 @@ describe("runMechanicalScan skipNetworkChecks", () => {
   it("still runs the live npm-registry checks by default", async () => {
     await runMechanicalScan({ dir });
     expect(checkSlopsquat).toHaveBeenCalledWith(["react"]);
-    // #1079: the lockfile-derived license map is passed in so the registry is only queried for
-    // names it does not answer — an empty map here because this fixture has no lockfile.
-    expect(checkLicenseCompliance).toHaveBeenCalledWith({ react: "18.2.0" }, fetch, {});
+    // #1079/#1099: the lockfile-derived license and resolved-version maps are passed in so the
+    // registry is only queried for names it does not answer, and (#1099) reads the INSTALLED
+    // version's license rather than the packument's top-level snapshot. This fixture has no
+    // lockfile, so collectDependencies degrades to the manifest fallback: no `license` field
+    // (empty map), but the declared version string still populates the version map — a RANGE in
+    // general, which harmlessly fails to match any `versions[<v>]` key and falls through to the
+    // top-level snapshot exactly as before #1099.
+    expect(checkLicenseCompliance).toHaveBeenCalledWith({ react: "18.2.0" }, fetch, {}, { react: "18.2.0" });
   });
 });
 
