@@ -48,4 +48,18 @@ describe("detectCounterRaceFindings", () => {
     expect(race).toHaveLength(1);
     expect(race[0]?.precisionTier).toBe("review");
   });
+
+  // #1081: the dedup key (one finding per file+table) is correct — this only checks the collapsed
+  // count and every dropped update site's location survive into the finding.
+  it("dedupes repeated read-modify-write sites on the SAME table but discloses the collapsed count", () => {
+    const text = `
+      const { data: current } = await admin.from("counters").select("value").eq("name", name).single();
+      await admin.from("counters").update({ value: (current?.value ?? 0) + 1 }).eq("name", name);
+      await admin.from("counters").update({ value: (current?.value ?? 0) + 2 }).eq("name", name);
+    `;
+    const race = run(text).filter((f) => f.taxonomy === RACE);
+    expect(race).toHaveLength(1);
+    expect(race[0]?.evidence).toContain("2 call site(s)");
+    expect(race[0]?.impact).toContain("Every one of the 2 sites");
+  });
 });

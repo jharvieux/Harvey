@@ -476,6 +476,26 @@ describe("data-fetching waterfalls (MED, best-effort)", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("waterfall/negative-dependent"));
     expect(taxonomies(findings)).not.toContain("M9 — Data-fetching waterfall");
   });
+
+  // #1081: the detector used to `break` after the first independent pair, so a third (or later)
+  // independent await in the same function vanished with no count. One finding per function is
+  // still correct (Promise.all-ing the whole function covers every pair) — this checks the dropped
+  // pair count and its location now survive into evidence instead of disappearing silently.
+  it("discloses additional independent pairs beyond the first instead of dropping them silently", () => {
+    const text = `
+      export default async function DashboardPage() {
+        const { data: teams } = await supabase.from("teams").select("id");
+        const { data: projects } = await supabase.from("projects").select("id");
+        const { data: invoices } = await supabase.from("invoices").select("id");
+        return <div>{teams?.length} {projects?.length} {invoices?.length}</div>;
+      }
+    `;
+    const findings = detectAppRouterFindings([{ path: "app/dashboard/page.tsx", text }]);
+    const hits = findings.filter((f) => f.taxonomy === "M9 — Data-fetching waterfall");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence).toContain("first of 2 independent sequential pairs");
+    expect(hits[0]?.evidence).toContain("invoices");
+  });
 });
 
 describe("accidental dynamic rendering (MED, best-effort)", () => {

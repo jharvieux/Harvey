@@ -89,6 +89,25 @@ export const importInbound = inngest.createFunction({ id: "import-inbound" }, { 
     expect(run(twoSitesSameTable)).toHaveLength(1);
   });
 
+  // #1081: the dedup key (one finding per file+table) is correct — this only checks the collapsed
+  // count and every dropped call site's location survive into the finding, instead of only the
+  // first site's location the way the finding used to read.
+  it("discloses the collapsed occurrence count and every call site's location for a repeated unscoped table", () => {
+    const twoSitesSameTable = `import { admin } from "../../lib/supabaseAdmin";
+export const importInbound = inngest.createFunction({ id: "import-inbound" }, { event: "gmail/received" }, async ({ event }) => {
+  const { data } = await admin.from("gmail_inbound_messages").select("*");
+  await admin.from("gmail_inbound_messages").delete();
+  return data;
+});
+`;
+    const findings = run(twoSitesSameTable);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.evidence).toContain("2 call site(s)");
+    expect(findings[0]?.evidence).toContain("src/inngest/import-inbound.ts:3");
+    expect(findings[0]?.evidence).toContain("src/inngest/import-inbound.ts:4");
+    expect(findings[0]?.impact).toContain("Every one of the 2 call sites");
+  });
+
   it("flags each unscoped site separately when they hit DIFFERENT tables", () => {
     const twoTables = `import { admin } from "../../lib/supabaseAdmin";
 export const importInbound = inngest.createFunction({ id: "import-inbound" }, { event: "gmail/received" }, async ({ event }) => {
