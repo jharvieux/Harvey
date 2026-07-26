@@ -38,6 +38,7 @@ import {
   parseSemgrepFindings,
   partitionMarkerSuppressed,
   runSemgrep,
+  semgrepErrorFinding,
   semgrepScopeFinding,
   semgrepSuppressionFinding,
   semgrepUnavailableFinding,
@@ -242,6 +243,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...parseSemgrepFindings({ results: reported }));
       findings.push(...semgrepSuppressionFinding(suppressed, scanDir));
       findings.push(...semgrepScopeFinding(scanDir, semgrep.result));
+      // #1077: a file semgrep errored on (syntax error) still counts as "scanned", so the SCOPE
+      // diff above can't catch it — and paths.skipped is a distinct silence again. Named here so
+      // neither reads as a clean file.
+      findings.push(...semgrepErrorFinding(scanDir, semgrep.result));
     }
     findings.push(...checkMissingCsp(scanDir));
     findings.push(...checkHostingConfigHeaders(scanDir));

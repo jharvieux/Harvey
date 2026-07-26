@@ -171,6 +171,32 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     expect(parsed.scope).toMatchObject({ scoped: false, verified: true });
     expect(parsed.moduleRecord).toBeUndefined();
   });
+
+  // #1076: report.config.mutate is the EFFECTIVE scope Stryker actually ran with, sitting in the
+  // JSON already loaded — previously only an external JSON stryker.conf FILE was read, so a target
+  // using e.g. stryker.conf.mjs (or, as here, no on-disk config file the CLI can find at all) read
+  // "not statically readable" no matter what. No stryker.config.json exists in this fixture; the
+  // report's own `config.mutate` is the only scope source available.
+  it("reads report.config.mutate as the scope source when no on-disk Stryker config is found", () => {
+    const repo = fixtureRepo({
+      "src/add.test.ts": REAL_SPEC,
+      "src/add.ts": "export const add = (a: number, b: number) => a + b;\n",
+      "src/mul.ts": "export const mul = (a: number, b: number) => a * b;\n",
+    });
+    const reportPath = join(repo, "report-with-config.json");
+    writeFileSync(reportPath, JSON.stringify({
+      schemaVersion: "1",
+      files: { "src/add.ts": { mutants: [killed] } },
+      config: { mutate: ["src/**/*.ts", "!**/*.test.ts"], testRunner: "vitest" },
+    }));
+    const { status, out } = runCli(repo, ["--report", reportPath]);
+    expect(status).toBe(0);
+    const parsed = JSON.parse(out) as { scope: { scoped: boolean; verified: boolean; missing: string[] }; rawReport: { config?: unknown } };
+    expect(parsed.scope).toMatchObject({ scoped: true, verified: true, missing: ["src/mul.ts"] });
+    // #1076: the raw parsed report travels with the artifact so a future fixture capture can be
+    // pulled straight from a real --out, instead of the raw Stryker JSON being discarded after parse.
+    expect(parsed.rawReport.config).toEqual({ mutate: ["src/**/*.ts", "!**/*.test.ts"], testRunner: "vitest" });
+  });
 });
 
 // #600: --stub-check used to write the stub directly into the target and restore it via

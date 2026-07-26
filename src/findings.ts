@@ -157,6 +157,11 @@ export interface Finding {
   // is a deliberate no-clean-CWE (a quality/perf/coverage signal, recorded with a reason in cwe-map).
   cwe?: string[];
   owasp?: string[];
+  // #1077: the rule's own remediation links (semgrep `metadata.references`, plus its `source` rule
+  // page where present) — populated from the detector's own declaration, same provenance rule as
+  // cwe/owasp above. Absent ⇒ the source declared none (e.g. every one of Harvey's own harvey-*
+  // custom rules today) and the fix stays the generic placeholder.
+  references?: string[];
   // #515: cross-module hotspot enrichment. Set at assembly time when a finding's location sits on
   // an M3-ranked hotspot (high churn × complexity × coupling). onHotspot up-ranks it in the report's
   // cross-module ordering; hotspotRank is the file's 1-based position in the top-K (1 = hottest).
@@ -222,6 +227,12 @@ export interface TestQualitySurvivor {
 
 export interface TestQuality {
   mutationScore: number;
+  // #1076: Stryker's OTHER published headline metric — detected/(detected+survived), i.e. the score
+  // over only the mutants a test actually reached. Absent ⇒ the run's artifact predates the metric,
+  // never invented as 0/equal-to-mutationScore. Recomputed from the committed ATC capture: 58.1%
+  // here vs. 27.8% for mutationScore — "your tests are bad" and "your tests are decent but reach
+  // half the code" are different findings, and Stryker's own report shows both.
+  mutationScoreBasedOnCoveredCode?: number;
   coveredScope: string[];
   // True only when the scope check VERIFIED the run covered the configured mutate globs in full
   // (#504). An unverifiable scope reads false — "unproven" is not "whole repo".
@@ -344,6 +355,9 @@ function validateTestQuality(tq: unknown, errors: string[]): void {
     return;
   }
   if (typeof tq.mutationScore !== "number") errors.push("testQuality.mutationScore: expected number");
+  if (tq.mutationScoreBasedOnCoveredCode !== undefined && typeof tq.mutationScoreBasedOnCoveredCode !== "number") {
+    errors.push("testQuality.mutationScoreBasedOnCoveredCode: expected number");
+  }
   if (typeof tq.wholeRepo !== "boolean") errors.push("testQuality.wholeRepo: expected boolean");
   if (typeof tq.scopeNote !== "string") errors.push("testQuality.scopeNote: expected string");
   if (!Array.isArray(tq.coveredScope)) errors.push("testQuality.coveredScope: expected an array");
@@ -478,7 +492,7 @@ export function validateFindings(data: unknown): ValidationResult {
     if (f.lowConfidenceMatch !== undefined && typeof f.lowConfidenceMatch !== "string") {
       errors.push(`${at}.lowConfidenceMatch: expected string`);
     }
-    for (const k of ["cwe", "owasp"] as const) {
+    for (const k of ["cwe", "owasp", "references"] as const) {
       const v = f[k];
       if (v !== undefined && (!Array.isArray(v) || v.some((id) => typeof id !== "string"))) {
         errors.push(`${at}.${k}: expected an array of strings`);

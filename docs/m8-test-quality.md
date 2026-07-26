@@ -121,13 +121,22 @@ calibration acceptance criterion, done #262).
 `pnpm mutation-scan` writes/prints `{ summary, reportRows }`:
 
 - **`summary.overall`** — mutation score across every file (`src/mutation-scan.ts`'s
-  `mutationScore()`): `(Killed + Timeout) / valid` where `valid` excludes `Ignored`,
-  `CompileError`, and `Pending` mutants. `NoCoverage`, `Survived`, and `RuntimeError` all count
-  *against* the score — each is a mutant the suite failed to prove itself against. This mirrors
-  Stryker's own published mutation-score metric; if a specific Stryker version's dashboard number
-  disagrees by a fraction of a percent, trust Stryker's own report — this wrapper's score is for
-  the audit's independent shaping, not a re-implementation guaranteed bit-for-bit identical to
-  Stryker's internal calculation.
+  `mutationScore()`): `(Killed + Timeout) / valid` where `valid` excludes `Ignored`, `Pending`
+  (never actually run), `CompileError`, and `RuntimeError` (ran, but the outcome reflects a
+  build/runtime failure rather than test quality). `NoCoverage` and `Survived` count *against* the
+  score — each is a mutant the suite had the opportunity to kill and did not. This mirrors
+  Stryker's own published mutation-score metric (`mutation-testing-elements/packages/metrics/src/
+  calculateMetrics.ts`, MEASURED 2026-07-25 — #1076 corrected this paragraph, which previously
+  claimed the mirror while the code counted `RuntimeError` as valid-but-undetected); if a specific
+  Stryker version's dashboard number disagrees by a fraction of a percent, trust Stryker's own
+  report — this wrapper's score is for the audit's independent shaping, not a re-implementation
+  guaranteed bit-for-bit identical to Stryker's internal calculation.
+- **`summary.overall.mutationScoreBasedOnCoveredCode`** (#1076) — Stryker's OTHER published
+  headline metric: `detected / (detected + survived)`, i.e. the score over only the mutants a test
+  actually reached (excludes `NoCoverage` from the denominator, unlike the primary score above).
+  On the committed ATC capture these two numbers are 27.8% vs. 58.1% — "your tests are bad" and
+  "your tests are decent but only reach half the code" are different findings, and a report
+  showing only the first collapses them into one number.
 - **`summary.byModule`** — one row per directory (the generic proxy for "module" a whole-repo
   scan can use without client-specific config), sorted **worst score first** so the weakest test
   coverage surfaces immediately.
@@ -142,6 +151,13 @@ calibration acceptance criterion, done #262).
 - **`summary.survivingMutants`** — every `Survived`/`NoCoverage` mutant, with `file`, `line`,
   `column`, `mutatorName`, `replacement` (what the mutant changed the code to), and a `hotspot`
   boolean. Sorted hotspot-flagged first, then file/line.
+- **`noCoverageFindings()` (#1076, `M8-05-*`)** — a module already counted (`byModule[].noCoverage`)
+  is turned into its own finding when a MAJORITY of its mutants were never executed at all (≥50%
+  no-coverage ratio, ≥5 mutants so a tiny file isn't noise) — a stronger, more urgent signal than a
+  surviving mutant (`M8-02-*`, "denial/boundary path untested" below): that code ran and the suite
+  failed to kill the mutant; this code never ran. MEASURED on the committed ATC capture: 50.8% of
+  all mutants had no coverage, and before this the deliverable never stated that fact anywhere in
+  its findings — only in a summary line nothing downstream read.
 
 ### Ranked "tests that give false confidence" list
 
