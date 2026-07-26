@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   coveredScopeLine,
@@ -53,6 +55,13 @@ function mutant(overrides: Partial<StrykerMutant> & { status: StrykerMutant["sta
     location: { start: { line: 1, column: 1 }, end: { line: 1, column: 10 } },
     ...overrides,
   };
+}
+
+// Real committed Stryker 9.6.1 report captures (see __fixtures__/stryker/PROVENANCE.md).
+function loadStrykerCapture(name: string): StrykerReport {
+  return JSON.parse(
+    readFileSync(fileURLToPath(new URL(`./scan/__fixtures__/stryker/${name}`, import.meta.url)), "utf8"),
+  ) as StrykerReport;
 }
 
 describe("mutationScore", () => {
@@ -269,55 +278,14 @@ describe("resolveJsonReporterPath (#820)", () => {
   });
 });
 
-// M8 calibration corpus (#72 §M8) — a REAL Stryker 9.6.1 JSON capture (trimmed to the
-// StrykerReport shape; dropped fields unused by this module: testFiles, config, framework,
-// projectRoot) from `npx stryker run` against targets/calibration/test-quality/
-// (stryker.config.json, coverageAnalysis: "perTest", vitest test runner). Closes the
-// docs/m8-test-quality.md "Deferred: live timed run" gap — unlike `report` above, this is not
-// shaped from the documented schema, it's an actual run's output. See
-// src/scan/calibration/m8.entries.ts (M8-P-TAUTOLOGICAL / M8-N-STRONG) and
+// M8 calibration corpus (#72 §M8) — a REAL Stryker 9.6.1 JSON capture, committed byte-faithful
+// (config/framework/projectRoot dropped — machine-specific, unread) with a sibling PROVENANCE.md,
+// from `npx stryker run` against targets/calibration/test-quality/ (stryker.config.json,
+// coverageAnalysis: "perTest", vitest test runner). Was TRANSCRIBED-FROM-RUN (rebuilt through the
+// mutant() helper); #1150 points the test at the raw report so it can be re-captured and diffed.
+// See src/scan/calibration/m8.entries.ts (M8-P-TAUTOLOGICAL / M8-N-STRONG) and
 // targets/calibration/GROUND-TRUTH.md "M8 (#72)" for the full answer key + live result.
-const m8Report: StrykerReport = {
-  schemaVersion: "1.0",
-  thresholds: { high: 80, low: 60 },
-  files: {
-    "discount.ts": {
-      language: "typescript",
-      mutants: [
-        mutant({ id: "15", mutatorName: "StringLiteral", status: "NoCoverage", replacement: '""', location: { start: { line: 4, column: 34 }, end: { line: 4, column: 62 } } }),
-        mutant({ id: "24", mutatorName: "ArithmeticOperator", status: "NoCoverage", replacement: "total / 0.9", location: { start: { line: 7, column: 10 }, end: { line: 7, column: 21 } } }),
-        mutant({ id: "10", mutatorName: "BlockStatement", status: "Killed", replacement: "{}", location: { start: { line: 3, column: 73 }, end: { line: 8, column: 2 } } }),
-        mutant({ id: "11", mutatorName: "ConditionalExpression", status: "Killed", replacement: "true", location: { start: { line: 4, column: 7 }, end: { line: 4, column: 16 } } }),
-        mutant({ id: "12", mutatorName: "ConditionalExpression", status: "Survived", replacement: "false", location: { start: { line: 4, column: 7 }, end: { line: 4, column: 16 } } }),
-        mutant({ id: "13", mutatorName: "EqualityOperator", status: "Survived", replacement: "total <= 0", location: { start: { line: 4, column: 7 }, end: { line: 4, column: 16 } } }),
-        mutant({ id: "14", mutatorName: "EqualityOperator", status: "Killed", replacement: "total >= 0", location: { start: { line: 4, column: 7 }, end: { line: 4, column: 16 } } }),
-        mutant({ id: "16", mutatorName: "BooleanLiteral", status: "Killed", replacement: "isMember", location: { start: { line: 5, column: 7 }, end: { line: 5, column: 16 } } }),
-        mutant({ id: "17", mutatorName: "ConditionalExpression", status: "Killed", replacement: "true", location: { start: { line: 5, column: 7 }, end: { line: 5, column: 16 } } }),
-        mutant({ id: "18", mutatorName: "ConditionalExpression", status: "Survived", replacement: "false", location: { start: { line: 5, column: 7 }, end: { line: 5, column: 16 } } }),
-        mutant({ id: "19", mutatorName: "ConditionalExpression", status: "Survived", replacement: "true", location: { start: { line: 6, column: 7 }, end: { line: 6, column: 19 } } }),
-        mutant({ id: "20", mutatorName: "ConditionalExpression", status: "Killed", replacement: "false", location: { start: { line: 6, column: 7 }, end: { line: 6, column: 19 } } }),
-        mutant({ id: "21", mutatorName: "EqualityOperator", status: "Killed", replacement: "total > 100", location: { start: { line: 6, column: 7 }, end: { line: 6, column: 19 } } }),
-        mutant({ id: "22", mutatorName: "EqualityOperator", status: "Killed", replacement: "total < 100", location: { start: { line: 6, column: 7 }, end: { line: 6, column: 19 } } }),
-        mutant({ id: "23", mutatorName: "ArithmeticOperator", status: "Killed", replacement: "total / 0.8", location: { start: { line: 6, column: 28 }, end: { line: 6, column: 39 } } }),
-      ],
-    },
-    "authz.ts": {
-      language: "typescript",
-      mutants: [
-        mutant({ id: "1", mutatorName: "ConditionalExpression", status: "Killed", replacement: "true", location: { start: { line: 7, column: 7 }, end: { line: 7, column: 23 } } }),
-        mutant({ id: "0", mutatorName: "BlockStatement", status: "Killed", replacement: "{}", location: { start: { line: 6, column: 64 }, end: { line: 9, column: 2 } } }),
-        mutant({ id: "2", mutatorName: "ConditionalExpression", status: "Killed", replacement: "false", location: { start: { line: 7, column: 7 }, end: { line: 7, column: 23 } } }),
-        mutant({ id: "3", mutatorName: "EqualityOperator", status: "Killed", replacement: 'role !== "admin"', location: { start: { line: 7, column: 7 }, end: { line: 7, column: 23 } } }),
-        mutant({ id: "4", mutatorName: "StringLiteral", status: "Killed", replacement: '""', location: { start: { line: 7, column: 16 }, end: { line: 7, column: 23 } } }),
-        mutant({ id: "5", mutatorName: "BooleanLiteral", status: "Killed", replacement: "false", location: { start: { line: 7, column: 32 }, end: { line: 7, column: 36 } } }),
-        mutant({ id: "6", mutatorName: "ConditionalExpression", status: "Killed", replacement: "true", location: { start: { line: 8, column: 10 }, end: { line: 8, column: 27 } } }),
-        mutant({ id: "7", mutatorName: "ConditionalExpression", status: "Killed", replacement: "false", location: { start: { line: 8, column: 10 }, end: { line: 8, column: 27 } } }),
-        mutant({ id: "8", mutatorName: "EqualityOperator", status: "Killed", replacement: 'action !== "read"', location: { start: { line: 8, column: 10 }, end: { line: 8, column: 27 } } }),
-        mutant({ id: "9", mutatorName: "StringLiteral", status: "Killed", replacement: '""', location: { start: { line: 8, column: 21 }, end: { line: 8, column: 27 } } }),
-      ],
-    },
-  },
-};
+const m8Report = loadStrykerCapture("stryker-9.6.1-m8-calibration.json");
 
 describe("M8 calibration corpus — live Stryker capture (#72 §M8)", () => {
   it("leaves surviving mutants on discount.ts (M8-P-TAUTOLOGICAL: the weak test's false confidence)", () => {
@@ -488,37 +456,14 @@ describe("noCoverageFindings (#1076)", () => {
 });
 
 // #1100: a REAL Stryker 9.6.1 JSON capture (`npx stryker run stryker.vacuous.config.json` from
-// targets/calibration/test-quality/, coverageAnalysis: "perTest") of the planted M8-P-VACUOUS-
-// STRYKER fixture — vacuous.ts's gradeScore(), covered ONLY by vacuous.smoke.test.ts's single test,
-// which calls gradeScore(85) and then asserts expect(true).toBe(true): the call executes real
-// branches (coveredBy is non-empty) but the assertion never depends on the return value, so the
-// live run scored 0% (10 Survived + 2 NoCoverage of 12, 0 Killed) — the answer key for the
-// testFiles/coveredBy/killedBy join. See targets/calibration/GROUND-TRUTH.md "M8 (#1100)" and
-// src/scan/calibration/m8.entries.ts.
-const vacuousReport: StrykerReport = {
-  schemaVersion: "1",
-  testFiles: {
-    "vacuous.smoke.test.ts": { tests: [{ id: "0", name: "gradeScore (vacuous smoke test) runs without throwing" }] },
-  },
-  files: {
-    "vacuous.ts": {
-      mutants: [
-        mutant({ id: "5", mutatorName: "StringLiteral", status: "NoCoverage" }),
-        mutant({ id: "11", mutatorName: "StringLiteral", status: "NoCoverage" }),
-        mutant({ id: "1", mutatorName: "ConditionalExpression", status: "Survived", coveredBy: ["0"] }),
-        mutant({ id: "0", mutatorName: "BlockStatement", status: "Survived", coveredBy: ["0"] }),
-        mutant({ id: "2", mutatorName: "ConditionalExpression", status: "Survived", coveredBy: ["0"] }),
-        mutant({ id: "3", mutatorName: "EqualityOperator", status: "Survived", coveredBy: ["0"] }),
-        mutant({ id: "4", mutatorName: "EqualityOperator", status: "Survived", coveredBy: ["0"] }),
-        mutant({ id: "6", mutatorName: "ConditionalExpression", status: "Survived", coveredBy: ["0"] }),
-        mutant({ id: "7", mutatorName: "ConditionalExpression", status: "Survived", coveredBy: ["0"] }),
-        mutant({ id: "8", mutatorName: "EqualityOperator", status: "Survived", coveredBy: ["0"] }),
-        mutant({ id: "9", mutatorName: "EqualityOperator", status: "Survived", coveredBy: ["0"] }),
-        mutant({ id: "10", mutatorName: "StringLiteral", status: "Survived", coveredBy: ["0"] }),
-      ],
-    },
-  },
-};
+// targets/calibration/test-quality/, coverageAnalysis: "perTest"), committed byte-faithful with a
+// sibling PROVENANCE.md, of the planted M8-P-VACUOUS-STRYKER fixture — vacuous.ts's gradeScore(),
+// covered ONLY by vacuous.smoke.test.ts's single test, which calls gradeScore(85) and then asserts
+// expect(true).toBe(true): the call executes real branches (coveredBy is non-empty) but the
+// assertion never depends on the return value, so the live run scored 0% (10 Survived + 2
+// NoCoverage of 12, 0 Killed) — the answer key for the testFiles/coveredBy/killedBy join. See
+// targets/calibration/GROUND-TRUTH.md "M8 (#1100)" and src/scan/calibration/m8.entries.ts.
+const vacuousReport = loadStrykerCapture("stryker-9.6.1-m8-vacuous.json");
 
 describe("vacuousTestFiles / vacuousTestFindings (#1100) — live Stryker capture", () => {
   it("flags vacuous.smoke.test.ts: it covers 10 mutants but kills none of them", () => {
