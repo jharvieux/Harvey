@@ -14,6 +14,8 @@ The productized audit service extracted from `jharvieux/atc` (ATC issue 1527, no
 
 **This is a COMPLETE codebase-health audit, not a security scan.** All ten modules (M1–M10) carry **equal weight** in the deliverable — none is the "lead," none is secondary, and none may be prioritized over the others when executing. Running a security-only (or any ad-hoc) subset — or scoping any single module's run to only its security-relevant portion — is a defect; it has happened, don't repeat it. Every engagement accounts for all ten modules against every enumerated target. Authoritative scope: `briefs/audit-modules.md`.
 
+**The bias survives the run — guard the JUDGMENT, not just the scope.** Everything above governs which modules *execute*. The recurring failure is one layer down: executing all ten and then **narrating, ranking, or deciding** through a security lens. It has now happened three times with the full set running correctly each time — findings synthesis (2026-07-12), GTM framing (2026-07-21), and an M4 scoping call (2026-07-26) argued down with "a lot of low-stakes rows in a security-weighted report". **There is no security report.** The tell is dismissive vocabulary attached to a non-M1 finding: *low-stakes*, *maintainability-only*, *just a nit*, *cosmetic*, *noise*. When volume genuinely is the objection, the answer is a threshold or a disclosed rollup (#935's shape) — never demoting a module's band. An M4 duplicate and an M8 untested branch are the deliverable, not garnish on it.
+
 ### The ten modules and how to run each
 
 The per-module run table (exact command, tier/prereq), the free/connected/dynamic/paid-LLM tier
