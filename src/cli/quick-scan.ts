@@ -45,6 +45,12 @@ import { toSarif } from "../sarif.js";
 // What a quick-scan SARIF export does and does not cover. Stated in the export itself because a
 // SARIF file outlives the terminal session that produced it: an importer who sees only results has
 // no way to know nine of the ten modules were never attempted.
+//
+// The upgrade path this text points at was BROKEN when written: until #1061, `run-audit --sarif-out`
+// without --findings-out captured no findings at all, so this string sent a reader from an honest
+// partial export to a near-empty one. It captures on --sarif-out alone now, so the sentence is true.
+// Falsifier: `run-audit targets/calibration --sarif-out a.sarif` and check the printed result count
+// against the same run with --findings-out (src/cli/run-audit.test.ts asserts they match).
 const QUICK_SCAN_SARIF_SCOPE =
   "This is a free quick-scan (M1 mechanical tier only), not a Harvey audit. It covers dependency, " +
   "secret, and dangerous-config hygiene plus static indicators. The other nine audit modules " +

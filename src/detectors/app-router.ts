@@ -122,8 +122,11 @@ function normalizeRepoPath(p: string): string {
   return out.join("/");
 }
 
+// #1065: .js/.jsx/.mjs/.cjs are candidates too — on a plain-JavaScript app every cross-file
+// resolution (server→client leak, server-only guard) failed here before the extension was listed.
+const MODULE_EXTS = [".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs"];
 function candidatePaths(base: string): string[] {
-  return [base, `${base}.tsx`, `${base}.ts`, `${base}/index.tsx`, `${base}/index.ts`];
+  return [base, ...MODULE_EXTS.map((e) => `${base}${e}`), ...MODULE_EXTS.map((e) => `${base}/index${e}`)];
 }
 
 // A tsconfig/jsconfig `compilerOptions.paths` alias reduced to its literal specifier prefix
@@ -311,7 +314,7 @@ function detectServerClientLeak(sources: Map<string, ts.SourceFile>, nextId: Nex
 
 // --- Missing `server-only` guard [HIGH] ------------------------------------
 
-const SERVER_ONLY_EXEMPT_PATTERN = /(^|\/)(route\.tsx?|middleware\.ts)$/;
+const SERVER_ONLY_EXEMPT_PATTERN = /(^|\/)(route\.[cm]?[jt]sx?|middleware\.[cm]?[jt]sx?)$/;
 
 function hasServerOnlyImport(sf: ts.SourceFile): boolean {
   return sf.statements.some((s) => ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier) && s.moduleSpecifier.text === "server-only");
@@ -705,7 +708,7 @@ function detectUnsafeCacheConfig(sources: Map<string, ts.SourceFile>, nextId: Ne
     // different caching surface (route segment config / Cache-Control) and,
     // on the ATC dogfood, were 225 of 230 hits here — almost all admin or
     // mutation endpoints that were never cache candidates (#181).
-    if (!/\/(page|layout)\.tsx?$/.test(path)) continue;
+    if (!/\/(page|layout)\.[cm]?[jt]sx?$/.test(path)) continue;
     const text = sf.text;
     if (!(/\.from\(\s*["'`]/.test(text) && /\.select\(/.test(text))) continue;
     if (CACHE_SIGNAL_PATTERN.test(text)) continue;
@@ -771,7 +774,7 @@ const PER_USER_KEY_TOKEN = /user|owner|tenant|account|org|member|customer|worksp
 const CACHE_CONTROL_HEADER = /["'`]cache-control["'`]\s*[:,]\s*["'`]([^"'`]+)["'`]/gi;
 const SHARED_CACHE_VALUE = /\b(public|s-maxage)\b/i;
 const PRIVATE_CACHE_VALUE = /\b(private|no-store|no-cache)\b/i;
-const RESPONSE_BUILDING_FILE = /(^|\/)(route\.tsx?|middleware\.tsx?)$/;
+const RESPONSE_BUILDING_FILE = /(^|\/)(route\.[cm]?[jt]sx?|middleware\.[cm]?[jt]sx?)$/;
 
 function unstableCacheCalls(sf: ts.SourceFile): ts.CallExpression[] {
   const out: ts.CallExpression[] = [];
@@ -1080,14 +1083,14 @@ function detectAccidentalDynamicRendering(sources: Map<string, ts.SourceFile>, n
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     if (leadingDirective(sf) === "use client") continue;
-    if (!/\/(page|layout)\.tsx?$/.test(path)) continue;
+    if (!/\/(page|layout)\.[cm]?[jt]sx?$/.test(path)) continue;
 
     const dynamicCall = findDynamicApiCall(sf);
     if (dynamicCall) {
       const fnName = (dynamicCall.expression as ts.Identifier).text;
       findings.push(
         makeFinding(nextId, {
-          title: `\`${fnName}()\` read in ${path.endsWith("layout.tsx") ? "a layout" : "a page"} — forces dynamic rendering`,
+          title: `\`${fnName}()\` read in ${/\/layout\.[cm]?[jt]sx?$/.test(path) ? "a layout" : "a page"} — forces dynamic rendering`,
           severity: "Medium",
           confidence: "Review",
           category: "Performance",
@@ -1453,7 +1456,7 @@ function detectSpaRootErrorBoundary(files: SourceInput[], nextId: NextId, scope:
 // Uncapped retry/fan-out (the third brief item) needs loop-bound + call-count reasoning past a
 // precise mechanical rule and stays semantic/paid-tier — the two shapes above cover the
 // mechanically-decidable core so the surface is no longer a silent gap.
-const ROUTE_HANDLER_FILE = /(^|\/)(route\.tsx?|middleware\.ts)$|(^|\/)pages\/api\//;
+const ROUTE_HANDLER_FILE = /(^|\/)(route\.[cm]?[jt]sx?|middleware\.[cm]?[jt]sx?)$|(^|\/)pages\/api\//;
 
 function declaresEdgeRuntime(sf: ts.SourceFile): boolean {
   for (const stmt of sf.statements) {
@@ -1578,7 +1581,7 @@ function detectUnboundedRouteOrEdge(sources: Map<string, ts.SourceFile>, nextId:
 // Separately, a page that reads a dynamic API and fetches data with NO `<Suspense>` boundary
 // forgoes streaming/PPR: the whole route blocks on the dynamic work instead of streaming a static
 // shell first.
-const ROUTE_SEGMENT_FILE = /\/(page|layout|route)\.tsx?$/;
+const ROUTE_SEGMENT_FILE = /\/(page|layout|route)\.[cm]?[jt]sx?$/;
 
 interface SegmentConfig {
   dynamic?: string;
@@ -1702,7 +1705,7 @@ function detectMissingSuspenseBoundary(sources: Map<string, ts.SourceFile>, next
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
     if (leadingDirective(sf) === "use client") continue;
-    if (!/\/(page|layout)\.tsx?$/.test(path)) continue;
+    if (!/\/(page|layout)\.[cm]?[jt]sx?$/.test(path)) continue;
     // Only meaningful when a dynamic read AND real async data-fetching coexist with no boundary —
     // that's the case where a static shell could stream while the dynamic data resolves.
     if (!readsDynamicApi(sf) || !hasAsyncDataFetch(sf) || fileHasSuspense(sf)) continue;

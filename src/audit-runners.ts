@@ -165,10 +165,22 @@ const mutationVerdict = (
   }
 };
 
-// detect-static (M7 code + M9) prints "loaded N source files ..." on stdout. The file count, not the
-// exit code, is the evidence a scan happened — the tool exits 0 over an empty directory (#350).
+// detect-static (M7 code + M9) prints "loaded N source files (M product source, …)" on stdout. The
+// file count, not the exit code, is the evidence a scan happened — the tool exits 0 over an empty
+// directory (#350).
+//
+// #1065: the TOTAL is not that evidence. package.json and next.config.js are loaded on every target
+// (the M9 pass needs them to resolve `paths` aliases), so the total can never be 0 and the
+// "nothing scanned" guard below could never fire — it read `loaded 2 source files` as a real scan
+// on a 13-file app whose every route was invisible. The PRODUCT SOURCE count is the one that means
+// code was read. M8's test-intent tier is the exception: test files are its subject matter, so it
+// reads the full set and asks for the total.
 const filesScanned = (output: string): number | undefined => {
   const m = output.match(/loaded (\d+) source files/);
+  return m ? Number(m[1]) : undefined;
+};
+const productFilesScanned = (output: string): number | undefined => {
+  const m = output.match(/\((\d+) product source[,)]/);
   return m ? Number(m[1]) : undefined;
 };
 
@@ -236,7 +248,7 @@ const m1: ModuleRunner = {
           "mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). The MECHANICAL tier's findings ARE collected into this deliverable (#1040); what is missing is the semantic/live tier's output, so absence of THOSE is not-collected, not clean (#420)",
           pass.reason,
         ) +
-        (outPath ? "" : " This run captured no findings (coverage-only, no --findings-out), so the mechanical tier's findings are not collected here either — absence is not-collected, not clean (#420).") +
+        (outPath ? "" : " This run captured no findings (coverage-only, no --findings-out/--sarif-out), so the mechanical tier's findings are not collected here either — absence is not-collected, not clean (#420).") +
         gitHistoryGapNote(ctx),
       ...(mechanical.length ? { findings: mechanical } : {}),
     };
@@ -462,7 +474,7 @@ const m6: ModuleRunner = {
     const indicatorOutPath = captureOut(ctx, "M6");
     const indicatorCommand = `pnpm detect-static ${ctx.targetDir}`;
     const indicatorRun = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(indicatorOutPath ? ["--out", indicatorOutPath] : [])]);
-    const indicatorScanned = indicatorRun.ok ? filesScanned(indicatorRun.output) : undefined;
+    const indicatorScanned = indicatorRun.ok ? productFilesScanned(indicatorRun.output) : undefined;
     const indicatorFindings = indicatorScanned ? handrolledFindings(readCaptured(ctx, indicatorOutPath)) : [];
 
     if (!ctx.env.llm) {
@@ -525,6 +537,12 @@ const M7_LIGHTHOUSE_NOT_RUN =
 // #1042: M7 reads its own pass artifact rather than going through foldRecordedPass, because for M7
 // the recorded pass IS the named missing tier — with a fresh Lighthouse pass M7_LIGHTHOUSE_NOT_RUN
 // becomes a false claim and has to be REPLACED, not appended to.
+// M7-taxonomy findings out of a mixed detect-static Finding[] (the same pass also emits M6/M8/M9
+// classes) — the M6/M8 probes filter their own capture the same way, so each row carries its own
+// module's findings and M9's unfiltered sweep is not double-counted under M7.
+const M7_TAXONOMY_PREFIX = "M7 — ";
+const perfCodeFindings = (findings: Finding[]): Finding[] => findings.filter((f) => f.taxonomy.startsWith(M7_TAXONOMY_PREFIX));
+
 const m7: ModuleRunner = {
   module: "M7",
   run: (ctx) => {
@@ -538,16 +556,28 @@ const m7: ModuleRunner = {
     // present-but-rejected artifact is now named on the row instead of ignored.
     const withCwv = (outcome: ProbeOutcome): ProbeOutcome =>
       cwv ? foldPassInto(outcome, cwv.note, cwv.findings) : rejectedCwv ? rejectedPassNote(outcome, rejectedCwv) : outcome;
-    const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir]);
+    // #1062: the code tier is captured like every other emitter. It ran with no --out since capture
+    // was wired, so its findings were empty BY CONSTRUCTION and the M7 row asserted the tier ran
+    // while carrying zero evidence. On a single-app target M9's unfiltered per-app sweep incidentally
+    // re-collected them under the M9 row, which is why this read as fine on inspection; on a monorepo
+    // M9 runs per APP, so a code-tier finding outside an enumerated package was lost outright
+    // (MEASURED 2026-07-25: root-scope detect-static reported 2, the deliverable carried 1).
+    const codeOutPath = captureOut(ctx, "M7");
+    const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(codeOutPath ? ["--out", codeOutPath] : [])]);
     if (!ok) return withCwv({ status: "requires-live-run", reason: `pnpm detect-static exited non-zero: ${trimOut(output)}` });
-    if (!filesScanned(output)) return withCwv({ status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — no code tier to run (empty or non-source target) (#350)` });
-    if (!ctx.env.connected) return withCwv({ status: "partial", detail: "pnpm detect-static (code tier)", reason: "code tier only — no DB creds for the advisors (pnpm perf-scan)" });
+    if (!productFilesScanned(output)) return withCwv({ status: "requires-live-run", reason: `detect-static scanned 0 product source files under ${ctx.targetDir} — no code tier to run (empty or non-source target) (#350/#1065)` });
+    const codeFindings = perfCodeFindings(readCaptured(ctx, codeOutPath));
+    // The code tier runs ONCE, at target root — so its findings ride on exactly one row. Below, that
+    // is the first Supabase project's row, for the same reason the CWV pass rides on the first only.
+    const withCode = (outcome: ProbeOutcome): ProbeOutcome =>
+      codeFindings.length && outcome.status !== "requires-live-run" ? { ...outcome, findings: [...(outcome.findings ?? []), ...codeFindings] } : outcome;
+    if (!ctx.env.connected) return withCode(withCwv({ status: "partial", detail: "pnpm detect-static (code tier)", reason: "code tier only — no DB creds for the advisors (pnpm perf-scan)" }));
     // #434: perf-scan needs a project ref as its positional arg (SUPABASE_ACCESS_TOKEN travels via
     // the inherited process env — perf-scan reads that itself). --connected is intent, not a reachable
     // project; without a ref threaded through run-audit there is nothing to call, so this stays
     // partial with that reason instead of shelling out to a usage error.
     const refs = supabaseRefs(ctx);
-    if (!refs.length) return withCwv({ status: "partial", detail: "pnpm detect-static (code tier)", reason: "connected tier flagged but no Supabase project ref was given (run-audit --supabase <ref>) — perf-scan needs a project ref to reach the advisors API (#434)" });
+    if (!refs.length) return withCode(withCwv({ status: "partial", detail: "pnpm detect-static (code tier)", reason: "connected tier flagged but no Supabase project ref was given (run-audit --supabase <ref>) — perf-scan needs a project ref to reach the advisors API (#434)" }));
     // #506: the advisor tier is per-DB — run it once per enumerated Supabase project so a monorepo's
     // second DB is a distinct row, never silently omitted. The code tier ran once (above) and is
     // noted in each row's detail. Instances are tagged only when there's more than one project, so a
@@ -560,7 +590,7 @@ const m7: ModuleRunner = {
       const instance = multi ? { instance: ref } : {};
       const advisorsOut = ctx.captureDir ? join(ctx.captureDir, `M7-${refSlug(ref)}.json`) : undefined;
       const advisors = ctx.exec("pnpm", ["perf-scan", ref, ...(advisorsOut ? ["--out", advisorsOut] : [])]);
-      const fold = (outcome: ProbeOutcome): ProbeOutcome => (i === 0 ? withCwv(outcome) : outcome);
+      const fold = (outcome: ProbeOutcome): ProbeOutcome => (i === 0 ? withCode(withCwv(outcome)) : outcome);
       if (!advisors.ok) return fold({ status: "partial", detail: "pnpm detect-static (code tier)", reason: `advisors failed for ${ref}: ${trimOut(advisors.output)}`, ...instance });
       // #527: code + advisors both ran; without a recorded Lighthouse pass the CWV tier did not, so
       // this is `partial` with that reason, never a bare `ran`. With one (#1042), the reason names
@@ -665,15 +695,16 @@ const m8: ModuleRunner = {
 // M9 (#350): detect-static exits 0 over an empty directory ("loaded 0 source files"). Exit code is
 // not evidence of a scan; the file count the tool printed is. Zero files scanned is not `ran`.
 // detect-static prints the count to stdout AND writes a bare Finding[] to --out, so status and
-// capture (#312) coexist in real runs.
+// capture (#312) coexist in real runs. #1065: it is the PRODUCT SOURCE count — the total includes
+// package.json, which every target has, so this guard was unreachable until 2026-07-25.
 const m9Run = (ctx: RunContext): ProbeOutcome => {
   const outPath = captureOut(ctx, "M9");
   const command = `pnpm detect-static ${ctx.targetDir}`;
   const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
   if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-  const scanned = filesScanned(output);
+  const scanned = productFilesScanned(output);
   if (scanned === undefined) return { status: "requires-live-run", reason: `could not read detect-static output to confirm files were scanned: ${trimOut(output)}` };
-  if (scanned === 0) return { status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — nothing to analyze (empty or non-source target) (#350)` };
+  if (scanned === 0) return { status: "requires-live-run", reason: `detect-static scanned 0 product source files under ${ctx.targetDir} — nothing to analyze (empty or non-source target) (#350/#1065)` };
   const findings = readCaptured(ctx, outPath);
   return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
 };
@@ -705,7 +736,7 @@ const readDataMap = (ctx: RunContext, path: string | undefined): { dataMap: Data
 };
 
 const M10_NOT_COLLECTED =
-  "this run captured no findings (coverage-only, no --findings-out), so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (#436/#420)";
+  "this run captured no findings (coverage-only, no --findings-out/--sarif-out), so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (#436/#420)";
 
 // #529: pii-classify --schema accepts ANY directory of *.sql or a single .sql file, so M10's
 // schema tier is not limited to supabase/migrations. Probe the conventional schema locations in

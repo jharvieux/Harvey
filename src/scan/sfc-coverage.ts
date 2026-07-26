@@ -1,6 +1,6 @@
 // #919 — single-file-component source (.svelte/.vue/.astro) is invisible to every static/AST pass
 // AND was, until this file, uncounted too. MEASURED 2026-07-24 (read the code): the shared source
-// loader (src/detectors/load-sources.ts, SOURCE_FILE = /\.(ts|tsx|jsx|mjs)$/) never loads these
+// loader (src/detectors/load-sources.ts, SOURCE_FILE) never loads these
 // formats, so every consumer downstream of it — the M5 slop/dead-code detectors, M6 hand-rolled
 // indicators, M7 code-tier performance, M9 App Router boundaries, and the TypeScript-side M1 AST
 // detectors — reports status on a SvelteKit/Nuxt/Astro target having read almost none of its
@@ -12,23 +12,30 @@
 // deferred #920 enabler). Kept a separate file rather than folding into language-coverage.ts: a
 // concurrent M9-framework-porting batch (#916) may also touch that file, and this concern
 // (counting a different FILE TYPE, not a different LANGUAGE) is unrelated to it.
+//
+// REASON: the shared source loader reads only .ts/.tsx/.jsx/.mjs, so no static/AST pass in Harvey sees a .svelte/.vue/.astro component — this file counts and discloses what is unread rather than parsing it (#920 is the parse layer)
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-07-25 (ran the falsifier below; it exits 1)
+// FALSIFIER: grep -Eq "svelte|vue|astro" src/detectors/load-sources.ts
+// TOUCHES: src/detectors/load-sources.ts
 
 import { readdirSync, statSync } from "node:fs";
 import { extname, join, relative, sep } from "node:path";
+import { SOURCE_FILE as ANALYSED_FILE } from "../detectors/load-sources.js";
 import type { Finding } from "../findings.js";
 
-// Extension → display name. Anything else (including the .ts/.tsx/.jsx/.mjs load-sources.ts DOES
-// load) is ignored here.
+// Extension → display name. Anything else (including the JS/TS-family extensions load-sources.ts
+// DOES load) is ignored here.
 const SFC_LANGUAGES: Record<string, string> = {
   ".svelte": "Svelte",
   ".vue": "Vue",
   ".astro": "Astro",
 };
 
-// Mirrors detectors/load-sources.ts's own SOURCE_FILE — the "analysed" side of the ratio this
-// disclosure states, so the proportion is measured against what that loader actually reads, not a
-// separately-invented file-type list.
-const ANALYSED_FILE = /\.(ts|tsx|jsx|mjs)$/;
+// #1065: this used to be a hand-copied duplicate of load-sources.ts's SOURCE_FILE, and it drifted —
+// both omitted `.js`, so a barely-read plain-JavaScript repo reported a high analysed-proportion
+// (the `.js` files were neither analysed nor in the denominator). Import the loader's own regex so
+// the ratio can never again be measured against a stale copy of what it reads.
 const EXCLUDED_DIR = /^(node_modules|\.git|\.next|dist|build|coverage|out|vendor)$/;
 
 interface SfcHits {
@@ -83,7 +90,7 @@ export function checkUnassessedSfcFiles(dir: string): Finding[] {
       taxonomy: "Coverage — single-file-component (.svelte/.vue/.astro) source not analysed",
       location: "(repo-wide)",
       status: "Open",
-      evidence: `Source files in formats no Harvey static/AST pass reads were found in the target: ${summary}.${proportion}. The shared source loader (src/detectors/load-sources.ts) and every detector module's own file-extension filter recognise only .ts/.tsx/.jsx/.mjs — none parse Svelte/Vue/Astro single-file components.`,
+      evidence: `Source files in formats no Harvey static/AST pass reads were found in the target: ${summary}.${proportion}. The shared source loader (src/detectors/load-sources.ts) and every detector module's own file-extension filter recognise only JavaScript/TypeScript source — none parse Svelte/Vue/Astro single-file components.`,
       impact:
         "On a SvelteKit/Nuxt/Astro app whose logic lives mostly in these files, M5 (dead code), M6 (hand-rolled indicators), M7 (code-tier performance), M9 (App Router boundaries), and the TypeScript-side M1 tenant-scope/BOLA detectors report status having read almost none of the actual codebase. Recorded here so that absence reads as 'not assessed', not 'assessed and clean' — the same failure #871/#903 exist to prevent for other coverage gaps.",
       fix: "Review these files by hand for the same classes Harvey's static passes check in .ts/.tsx (dead code, duplication, perf anti-patterns, auth/tenant scoping) until SFC parsing support lands (tracked separately, #920).",

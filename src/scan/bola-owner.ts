@@ -5,8 +5,9 @@
 // Server Action side of the same class lives in src/detectors/app-router.ts
 // (detectClientSuppliedOwnerId); the dataflow helpers are shared (src/detectors/owner-id.ts).
 // This pass runs in runMechanicalScan so the class is scored by the live calibration gate, and
-// walks its own tree because pages/api handlers are commonly plain .js, which the shared
-// loadSources() excludes (the counter-race precedent).
+// walks its own tree (the counter-race precedent) because runMechanicalScan hands it no
+// SourceInput[]. Its original reason — "loadSources() excludes plain .js" — stopped being true on
+// 2026-07-25 (#1065).
 //
 // Gates — each is a deliberate precision boundary:
 //   - a pages/api file whose DEFAULT-EXPORTED handler is analyzable in this file;

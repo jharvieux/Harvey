@@ -179,7 +179,14 @@ pipeline proved 2 findings live.)
 - **M10** corroborated the PII sensitivity (`profiles → EMAIL/NAME/PHOTO`) behind F-02/F-03/F-04.
 - **Missed outright: 5** — F-03 (IDOR), F-05 (SSRF), F-07 (mass assignment), F-10 (wildcard CORS),
   F-11 (CSRF/rate-limit). Four of these five are rules that **exist in Harvey but stayed dark on
-  App Router request shapes** (see below); F-11 has no detector at all.
+  App Router request shapes** (see below); **F-11 is the same story, not the exception this line
+  used to claim.** *(Corrected 2026-07-25, #1033 sweep: it read "F-11 has no detector at all",
+  which is false — `harvey-csrf-missing` (`src/scan/rules/semgrep/headers.yml`) and the rate-limit
+  detectors in `src/scan/leftover-auth.ts` both exist. Neither REACHES F-11's shape: the CSRF rule
+  matches only a `'use server'` Server Action, and the rate-limit ones only an auth endpoint, while
+  F-11 sits on plain App Router route handlers. Falsify the corrected sentence by re-running the
+  recall pass over this target, or `grep -n "pattern-inside" src/scan/rules/semgrep/headers.yml`
+  to see the Server-Action scope.)*
 
 **Every mechanical detector that does NOT depend on request-taint fired** (secrets, RLS-off migration,
 XSS sink, crypto primitives, vulnerable dependencies). **Every rule that depends on tracing tainted
