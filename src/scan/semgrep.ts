@@ -32,6 +32,9 @@ export interface SemgrepResult {
   check_id: string;
   path: string;
   start?: { line?: number };
+  // #1093: partitionGuardTokenSuppressed reads [start.line, end.line] to re-scan the whole matched
+  // function span, so it needs the match's end, not just its start.
+  end?: { line?: number };
   extra?: {
     message?: string;
     severity?: string; // ERROR | WARNING | INFO
@@ -288,10 +291,42 @@ export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: stri
   return { result: JSON.parse(run.out) as SemgrepOutput };
 }
 
+// A bare rule id (e.g. "harvey-route-noauth") matched against a JSON check_id, which carries a
+// path-derived namespace prefix (e.g. "src.scan.rules.semgrep.harvey-route-noauth") — exact match,
+// or the bare id as the final dotted segment.
+function ruleIdMatches(checkId: string, bareId: string): boolean {
+  return checkId === bareId || checkId.endsWith(`.${bareId}`);
+}
+
 // semgrep's own nosem semantics: a `nosem`/`nosemgrep` marker at the end of the matched line, or on
 // the line immediately above it. `--disable-nosem` reports those matches but does NOT flag them in
 // the OSS JSON (extra.is_ignored is absent — MEASURED 2026-07-25), so re-derive the marker here.
-const NOSEM_MARKER = /\bnosem(?:grep)?\b/i;
+// #1093: a bare marker suppresses every rule matching that line, but semgrep's own
+// `// nosemgrep: rule-id-a, rule-id-b` form scopes the suppression to ONLY the named rule(s) —
+// Harvey's re-derivation used to ignore that scoping and withhold ANY finding on a marked line,
+// moving an unrelated rule's match into the suppressed bucket instead of reporting it. Every
+// withheld match is still counted in SEM-SUPPRESS-00, so nothing was silently hidden — this only
+// fixes which bucket a withheld match lands in.
+const NOSEM_MARKER = /\bnosem(?:grep)?\b(?:\s*:\s*(?<ids>.*))?/i;
+
+// True when `idsText` (the text after `nosemgrep:`) names `checkId`, comma/whitespace-separated —
+// an empty/unparseable list (a bare trailing colon) is treated as unscoped, matching semgrep's own
+// "malformed scope suppresses everything" leniency.
+function nosemScopeMatches(checkId: string, idsText: string): boolean {
+  const ids = idsText
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return ids.length === 0 || ids.some((id) => ruleIdMatches(checkId, id));
+}
+
+function markerSuppresses(line: string | undefined, checkId: string): boolean {
+  if (!line) return false;
+  const m = NOSEM_MARKER.exec(line);
+  if (!m) return false;
+  const ids = m.groups?.ids?.trim();
+  return ids ? nosemScopeMatches(checkId, ids) : true;
+}
 
 export function partitionMarkerSuppressed(output: SemgrepOutput): { reported: SemgrepResult[]; suppressed: SemgrepResult[] } {
   const reported: SemgrepResult[] = [];
@@ -312,10 +347,109 @@ export function partitionMarkerSuppressed(output: SemgrepOutput): { reported: Se
       }
       lines.set(r.path, src);
     }
-    const marked = NOSEM_MARKER.test(src[line - 1] ?? "") || NOSEM_MARKER.test(src[line - 2] ?? "");
+    const marked = markerSuppresses(src[line - 1], r.check_id) || markerSuppresses(src[line - 2], r.check_id);
     (marked ? suppressed : reported).push(r);
   }
   return { reported, suppressed };
+}
+
+// #1093 (part 1): comment/string-aware code stripper. Replaces the CONTENTS of `//` line comments,
+// `/* */` block comments (including multi-line — the LINE_PREFIX regex the two rules below used to
+// carry, #1066, had no cross-line "am I inside a block comment" state, so a block comment whose
+// interior lines didn't start with `*` still reached a guard-shaped token, MEASURED 2026-07-26) and
+// string/template literals with spaces (newlines preserved), so a token search over the result can
+// never mistake a guard-shaped word inside a comment or string for a real call.
+export function stripCommentsAndStrings(text: string): string {
+  let out = "";
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const two = text.slice(i, i + 2);
+    if (two === "//") {
+      while (i < n && text[i] !== "\n") {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    if (two === "/*") {
+      out += "  ";
+      i += 2;
+      while (i < n && text.slice(i, i + 2) !== "*/") {
+        out += text[i] === "\n" ? "\n" : " ";
+        i++;
+      }
+      if (i < n) {
+        out += "  ";
+        i += 2;
+      }
+      continue;
+    }
+    const c = text[i];
+    if (c === '"' || c === "'" || c === "`") {
+      out += " ";
+      i++;
+      while (i < n && text[i] !== c) {
+        if (text[i] === "\\" && i + 1 < n) {
+          out += text[i] === "\n" ? "\n" : " ";
+          out += text[i + 1] === "\n" ? "\n" : " ";
+          i += 2;
+          continue;
+        }
+        out += text[i] === "\n" ? "\n" : " ";
+        i++;
+      }
+      if (i < n) {
+        out += " ";
+        i++;
+      }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+// #1093 (part 1): the guard/role-check text searches auth.yml's harvey-route-noauth and
+// harvey-authed-no-role-check used to run AS a semgrep `pattern-not-regex`, LINE_PREFIX-anchored so
+// it couldn't see comments/strings on the matched line — but LINE_PREFIX has no memory of an
+// unclosed block comment from a PRIOR line, so both rules went dark on a multi-line block comment
+// wrapping a fake guard call (P-NOAUTH-BLOCK-COMMENT-GUARD). Both rules now match unconditionally
+// in the YAML (see auth.yml) and this re-derives the same check itself, over the WHOLE matched
+// function span (comment/string-stripped by the state machine above, not a per-line regex) — the
+// same "re-derive it ourselves" shape partitionMarkerSuppressed already uses for nosem.
+const ROUTE_NOAUTH_GUARD_RE =
+  /\b((assert|require|ensure|authenticate|authorize|guard)[a-z0-9_]*|(?=[a-z0-9_]*(check|verify|with))[a-z0-9_]*(admin|permission|auth|session|tenant|role|access|user|login|signature|jwt|webhook|hmac|token)[a-z0-9_]*|constantTimeEqual|timingSafeEqual|getUser|getSession|getServerSession|getCurrentUser|getAuthUser|getAuthenticatedUser|auth)\s*\(/i;
+const AUTHED_NO_ROLE_CHECK_GUARD_RE =
+  /(is_?admin|hasrole|requirerole|checkrole|assertrole|assertadmin|requireadmin|ensureadmin|\bauthorize|\.role\b|permission|forbidden|\b403\b)/i;
+
+const GUARD_TOKEN_RULES: { ruleId: string; tokenRe: RegExp }[] = [
+  { ruleId: "harvey-route-noauth", tokenRe: ROUTE_NOAUTH_GUARD_RE },
+  { ruleId: "harvey-authed-no-role-check", tokenRe: AUTHED_NO_ROLE_CHECK_GUARD_RE },
+];
+
+function isGuardedByToken(r: SemgrepResult, tokenRe: RegExp): boolean {
+  const startLine = r.start?.line;
+  const endLine = r.end?.line ?? startLine;
+  if (startLine === undefined || endLine === undefined) return false;
+  let span: string;
+  try {
+    span = readFileSync(r.path, "utf8").split("\n").slice(startLine - 1, endLine).join("\n");
+  } catch {
+    return false;
+  }
+  return tokenRe.test(stripCommentsAndStrings(span));
+}
+
+export function partitionGuardTokenSuppressed(output: SemgrepOutput): { reported: SemgrepResult[]; guarded: SemgrepResult[] } {
+  const reported: SemgrepResult[] = [];
+  const guarded: SemgrepResult[] = [];
+  for (const r of output.results ?? []) {
+    const rule = GUARD_TOKEN_RULES.find((g) => ruleIdMatches(r.check_id, g.ruleId));
+    (rule && isGuardedByToken(r, rule.tokenRe) ? guarded : reported).push(r);
+  }
+  return { reported, guarded };
 }
 
 // The disclosure half of --disable-nosem: the marker still removes the match from the finding list,

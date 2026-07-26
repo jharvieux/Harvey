@@ -239,6 +239,26 @@ describe("checkLicenseCompliance", () => {
     expect(findings[0]?.evidence).toContain("the npm registry");
   });
 
+  // #1099: the top-level `license` field on a packument is a denormalized snapshot of the LATEST
+  // publish, not necessarily the installed version's — a package that relicensed between releases
+  // (permissive -> copyleft here) must be read from `versions[<v>]` for the version actually
+  // installed, not the latest.
+  it("reads the INSTALLED version's license from versions[<v>], not the top-level (latest) snapshot", async () => {
+    const fetchImpl = packument({
+      license: "GPL-3.0", // the latest publish relicensed to copyleft
+      versions: { "1.0.0": { license: "MIT" } }, // the version actually installed is still MIT
+    });
+    const findings = await checkLicenseCompliance({ "relicensed-lib": "1.0.0" }, fetchImpl, {}, { "relicensed-lib": "1.0.0" });
+    expect(findings).toEqual([]); // MIT (the installed version) never flags, unlike the latest GPL-3.0
+  });
+
+  it("falls back to the top-level snapshot when the packument has no versions[<v>] entry for the installed version", async () => {
+    const fetchImpl = packument({ license: "GPL-3.0", versions: { "2.0.0": { license: "MIT" } } });
+    const findings = await checkLicenseCompliance({ "gpl-lib": "1.0.0" }, fetchImpl, {}, { "gpl-lib": "1.0.0" });
+    expect(findings[0]?.id).toBe("SUP-LICENSE-COPYLEFT-gpl-lib");
+    expect(findings[0]?.evidence).toContain("GPL-3.0");
+  });
+
   it("discloses SUP-LICENSE-00 naming the indeterminate packages on a network error (#1067)", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("getaddrinfo ENOTFOUND registry.npmjs.org");

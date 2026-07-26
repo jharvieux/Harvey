@@ -58,7 +58,7 @@ const CASES: Case[] = [
   { name: "composite timestamp-random id", dir: "composite-id", taxonomy: "M6 — Indicator: composite timestamp-random id", posCount: 1 },
   { name: "non-crypto string hash", dir: "string-hash", taxonomy: "M6 — Indicator: non-crypto string hash", posCount: 1 },
   { name: "month/day-name array", dir: "name-arrays", taxonomy: "M6 — Indicator: month/day-name array", posCount: 2 },
-  { name: "JWT decode by hand", dir: "jwt-decode", taxonomy: "M6 — Indicator: JWT decode by hand", posCount: 1 },
+  { name: "JWT decode by hand", dir: "jwt-decode", taxonomy: "M6 — Indicator: JWT decode by hand", posCount: 2 },
   { name: "hand-rolled ErrorBoundary", dir: "error-boundary", taxonomy: "M6 — Indicator: hand-rolled ErrorBoundary", posCount: 1 },
   { name: "markdown-to-HTML by regex", dir: "markdown-html", taxonomy: "M6 — Indicator: markdown-to-HTML by regex", posCount: 3 },
   { name: "thousands-separator regex", dir: "thousands", taxonomy: "M6 — Indicator: thousands-separator regex", posCount: 1 },

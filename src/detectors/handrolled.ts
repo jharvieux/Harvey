@@ -1028,12 +1028,50 @@ function isBase64Decode(node: ts.Node): boolean {
   );
 }
 
+// One-hop local resolution (#1087): the split-and-the-decode are commonly two separate statements
+// — `const payload = token.split(".")[1]; ... JSON.parse(Buffer.from(payload, ...))` — rather than
+// one expression. For each identifier referenced inside the JSON.parse argument, follow it to its
+// `const`/`let`/`var` initializer in the enclosing function (or file) scope, same idea as the
+// dataflow helpers in owner-id.ts. One hop only: an initializer that is itself another identifier
+// is not chased further.
+function resolveLocalInitializer(id: ts.Identifier, scope: ts.Node): ts.Expression | undefined {
+  let found: ts.Expression | undefined;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === id.text && n.initializer) {
+      found = n.initializer;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(scope);
+  return found;
+}
+
+function hasSplitDotIndexNearby(arg: ts.Node, scope: ts.Node): boolean {
+  if (subtreeHas(arg, isSplitDotIndex)) return true;
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isIdentifier(n)) {
+      const init = resolveLocalInitializer(n, scope);
+      if (init && subtreeHas(init, isSplitDotIndex)) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(arg);
+  return found;
+}
+
 function detectJwtDecodeByHand(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   const visit = (node: ts.Node) => {
     if (isJsonCall(node, "parse") && node.arguments.length >= 1) {
       const arg = node.arguments[0] as ts.Node;
-      if (subtreeHas(arg, isSplitDotIndex) && subtreeHas(arg, isBase64Decode)) {
+      if (hasSplitDotIndexNearby(arg, enclosingScope(node)) && subtreeHas(arg, isBase64Decode)) {
         const f = makeIndicator(nextId, sf, path, node, {
           title: "Looks hand-rolled: token payload decoded by hand — may be worth investigating",
           taxonomy: "M6 — Indicator: JWT decode by hand",

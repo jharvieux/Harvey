@@ -1,0 +1,7 @@
+// Exercises the one-hop resolution's negative side (#1087): the base64 decode is present and its
+// source is a local identifier, but that identifier's initializer splits on "," (a CSV field), not
+// "." (a token segment) — isSplitDotIndex must not match, so the pair never fires.
+export function loadManifestEntry(raw: string): unknown {
+  const parts = raw.split(",")[1] ?? "";
+  return JSON.parse(Buffer.from(parts, "base64url").toString("utf8"));
+}
