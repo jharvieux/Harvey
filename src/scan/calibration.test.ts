@@ -887,7 +887,8 @@ describe("#221 authz corpus (live detectAppRouterFindings output over the commit
 });
 
 describe("#848 M9 per-check corpus (live detectAppRouterFindings over the committed __fixtures__)", () => {
-  // Each of the nine non-owner-id M9 checks bound to its detector's own committed fixtures. Fixtures
+  // Each non-owner-id M9 check bound to its detector's own committed fixtures (nine at #848, the
+  // remaining four #846/#843 checks plus the #1051 cache-bleed check added by #1047). Fixtures
   // are loaded from src/detectors/__fixtures__/<dir>/<kind> and path-prefixed to the entry's
   // globally-unique `m9-corpus/<check>/<kind>` location, then scored with the SAME scoreEntry the
   // rest of the corpus uses — so the answer key can't drift from what the scanner emits, and no
@@ -917,6 +918,11 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     { check: "dynamic", dir: "dynamic-rendering", neg: "negative" },
     { check: "ssr", dir: "ssr-browser-api", neg: "negative-typeof" },
     { check: "spa", dir: "spa-error-boundary", neg: "negative-has-boundary", framework: "vite" },
+    { check: "segment", dir: "route-segment-config", neg: "negative" },
+    { check: "segment-conflict", dir: "route-segment-conflict", neg: "negative" },
+    { check: "suspense", dir: "missing-suspense", neg: "negative" },
+    { check: "unbounded", dir: "unbounded-route", neg: "negative" },
+    { check: "cache-bleed", dir: "cache-bleed", neg: "negative" },
   ];
 
   it("catches each check's planted positive at review tier and clears its boundary negative", () => {

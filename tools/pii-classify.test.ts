@@ -14,6 +14,7 @@ import {
   createAnthropicSemanticClassifier,
   dataMapToFindings,
   DEFAULT_SEMANTIC_MODEL,
+  gatherProtectionFacts,
   resolveSemanticClassifier,
 } from "./pii-classify.mjs";
 
@@ -658,6 +659,79 @@ describe("pii-classify --schema CLI — a schema.prisma target (#758)", () => {
     }
   });
 });
+
+// #1043/#1049 — the two outputs the orchestrator now depends on, driven through the real CLI so a
+// wiring regression (a flag renamed, a writer dropped) fails here rather than silently producing a
+// deliverable with un-escalated severities and no protection verdict.
+describe("pii-classify --schema CLI — protection disclosure + data map (#1043/#1049)", () => {
+  it("emits the M10-PROT-00 not-assessed row and the --data-map-out artifact", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pii-cli-"));
+    const schemaPath = join(dir, "schema.sql");
+    writeFileSync(schemaPath, "create table patients (\n  id uuid primary key,\n  email text,\n  medical_record_number text\n);\n");
+    try {
+      execFileSync("node_modules/.bin/tsx", [CLI, "--schema", schemaPath, "--out", join(dir, "out.json"), "--data-map-out", join(dir, "map.json")], { cwd: REPO_ROOT, encoding: "utf8" });
+      const findings = JSON.parse(readFileSync(join(dir, "out.json"), "utf8"));
+      // The claim sold on the connected tier is a protection VERDICT. On the schema tier there is
+      // none — and the deliverable has to say so, because a longer sensitive-column list with no
+      // stated limitation reads as "checked and protected".
+      const scope = findings.find((f: { id: string }) => f.id === "M10-PROT-00");
+      expect(scope.title).toContain("NOT verified");
+      expect(validateFindings({ meta: FINDINGS_META, findings }).ok).toBe(true);
+
+      const map = JSON.parse(readFileSync(join(dir, "map.json"), "utf8"));
+      expect(map.patients.severity).toBe("High");
+      expect(map.patients.categories).toContain("PHI");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// #1043 — the connected tier's protection inputs, against an injected `sql`. Without this the live
+// path is exercised only in its failure mode, which is how "PII protection verified in production"
+// became a claim nothing tested.
+describe("gatherProtectionFacts — catalog rows → ExposureFacts (#1043)", () => {
+  const rows: Record<string, Record<string, unknown>[]> = {
+    relrowsecurity: [
+      { table_name: "patients", rls_enabled: false }, // granted + RLS off → anon-reachable
+      { table_name: "billing", rls_enabled: true }, // granted but RLS on → not auto-exposed
+      { table_name: "internal_jobs", rls_enabled: false }, // RLS off but no client grant → unreachable
+    ],
+    role_table_grants: [{ table_name: "patients" }, { table_name: "billing" }],
+  };
+  const sqlWith = (masking: Record<string, unknown>[], maskedCols: Record<string, unknown>[]) =>
+    ((strings: TemplateStringsArray) => {
+      const q = strings.join("");
+      if (q.includes("relrowsecurity")) return Promise.resolve(rows.relrowsecurity!);
+      if (q.includes("role_table_grants")) return Promise.resolve(rows.role_table_grants!);
+      if (q.includes("'masking_rule'")) return Promise.resolve(masking);
+      if (q.includes("pgsodium.masking_rule")) return Promise.resolve(maskedCols);
+      throw new Error(`unexpected query: ${q}`);
+    }) as never;
+
+  it("counts a table anon-reachable only when RLS is off AND a client role can SELECT it", async () => {
+    const { facts } = await gatherProtectionFacts(sqlWith([], []));
+    expect(facts.autoExposedTables).toEqual(["public.patients"]);
+  });
+
+  it("credits encryption at rest from pgsodium's masking rules when the view is readable", async () => {
+    const masking = [{ column_name: "relname" }, { column_name: "attname" }];
+    const { encrypted, detail } = await gatherProtectionFacts(sqlWith(masking, [{ table_name: "patients", column_name: "ssn" }]));
+    expect(encrypted.has("patients.ssn")).toBe(true);
+    expect(detail).toMatch(/listed 1 encrypted column/);
+  });
+
+  it("credits NOTHING as encrypted — and says so — when the masking view is absent or unreadable", async () => {
+    const { encrypted, detail } = await gatherProtectionFacts(sqlWith([], []));
+    expect(encrypted.size).toBe(0);
+    expect(detail).toMatch(/no readable pgsodium.masking_rule view/);
+  });
+});
+
+const FINDINGS_META = {
+  client: "c", subtitle: "s", date: "d", commit: "abc", auditor: "a", confidential: true, overallHealth: 5,
+  tenantIsolation: "t", authModel: "m", headline: "h", scope: "s", methodology: "m", outOfScope: "o",
+};
 
 describe("dataMapToFindings — report-schema Finding[] emitter (#436)", () => {
   const columns = [

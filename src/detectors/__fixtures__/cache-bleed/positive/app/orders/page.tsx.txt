@@ -1,0 +1,27 @@
+import { unstable_cache } from "next/cache";
+import { getServerSession } from "next-auth";
+import { supabase } from "../../lib/db";
+
+// Per-user read behind a GLOBAL cache key: the first caller's orders are cached under
+// "orders" and served to every other user for the whole revalidate window.
+const getMyOrders = unstable_cache(
+  async (userId: string) => {
+    const { data } = await supabase.from("orders").select("id, total").eq("user_id", userId);
+    return data;
+  },
+  ["orders"],
+  { revalidate: 3600, tags: ["orders"] },
+);
+
+export default async function OrdersPage() {
+  const session = await getServerSession();
+  const orders = await getMyOrders(session!.user.id);
+
+  return (
+    <ul>
+      {orders?.map((order) => (
+        <li key={order.id}>{order.total}</li>
+      ))}
+    </ul>
+  );
+}

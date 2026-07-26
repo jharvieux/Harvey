@@ -1,0 +1,23 @@
+import { getServerSession } from "next-auth";
+import { supabase } from "../../lib/db";
+
+// A `"use cache"` scope is keyed on its ARGUMENTS — resolving the session inside it is invisible
+// to the key, so one entry is shared across every user.
+async function myTeams() {
+  "use cache";
+  const session = await getServerSession();
+  const { data } = await supabase.from("teams").select("id, name").eq("owner_id", session!.user.id);
+  return data;
+}
+
+export default async function DashboardPage() {
+  const teams = await myTeams();
+
+  return (
+    <ul>
+      {teams?.map((team) => (
+        <li key={team.id}>{team.name}</li>
+      ))}
+    </ul>
+  );
+}

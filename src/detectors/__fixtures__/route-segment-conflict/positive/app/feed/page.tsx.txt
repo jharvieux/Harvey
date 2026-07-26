@@ -1,0 +1,8 @@
+// force-dynamic never caches, so the revalidate window below is dead config — the route does not
+// behave the way the two settings read together.
+export const dynamic = "force-dynamic";
+export const revalidate = 3600;
+
+export default function FeedPage() {
+  return <div>Feed</div>;
+}

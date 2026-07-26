@@ -36,3 +36,10 @@ export function classifyMigrationSql(sql: string): {
   unknownType: ColumnInfo[];
 };
 export function classifyPrismaSchema(schema: string): { columns: ColumnInfo[]; dataMap: Record<string, TableDataMapEntry> };
+export function gatherProtectionFacts(
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => Promise<Record<string, unknown>[]>,
+): Promise<{
+  facts: { exposedSchemas: string[]; autoExposedTables: string[] };
+  encrypted: Set<string>;
+  detail: string;
+}>;

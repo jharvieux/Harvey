@@ -1,0 +1,11 @@
+import { getServerSession } from "next-auth";
+import { NextResponse } from "next/server";
+import { supabase } from "../../../lib/db";
+
+// Authenticated response, correctly marked uncacheable by any shared cache.
+export async function GET() {
+  const session = await getServerSession();
+  const { data } = await supabase.from("invoices").select("id, amount").eq("user_id", session!.user.id);
+
+  return NextResponse.json(data, { headers: { "Cache-Control": "private, no-store" } });
+}
