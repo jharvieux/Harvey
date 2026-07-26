@@ -98,6 +98,7 @@ import {
   scaffoldStrykerConfig,
   scopedRunModuleRecord,
   noCoverageFindings,
+  stubCheckBaselineModuleRecord,
   summarizeLineCoverage,
   summarizeMutationReport,
   survivingMutantFindings,
@@ -612,12 +613,40 @@ if (stubCheck) {
       }
     };
 
-    const runs = runStubCheck(sources, runner);
-    const findings = stubSurvivalFindings(runs);
-    const checkedFiles = new Set(runs.map((r) => r.file)).size;
-    console.error(`M8 stub-check: ${runs.length} exported function(s) stubbed across ${checkedFiles} covered file(s); ${findings.length} suite(s) survive deletion`);
-    if (runs.length === 0) {
-      console.error("⚠ no covered source files found (no test file imports or sits beside a source file) — nothing was checked; this is NOT a clean result");
+    // #1067: the baseline. `suitePassed` is true ONLY on exit 0, so every other outcome — a wrong
+    // --test-cmd, deps missing from the scratch copy, an already-red suite, OOM — became `false`,
+    // which stubSurvivalFindings reads as "the test caught the deletion". Without proof that the
+    // suite passes UNMUTATED, wholesale execution failure is indistinguishable from a perfect test
+    // suite, and this CLI printed the strongest possible test-quality result having measured
+    // nothing. Stryker's own ladder already has this rung (dryRunFailureModuleRecord, #503); the
+    // stub-check tier did not.
+    const baseline = ((): { passed: boolean; detail: string } => {
+      try {
+        execFileSync(testBin, testBaseArgs, { cwd: copyDir, stdio: ["ignore", "ignore", "pipe"], env: suiteEnv });
+        return { passed: true, detail: "" };
+      } catch (err) {
+        const e = err as { stderr?: Buffer; message?: string };
+        const tail = e.stderr?.toString().trim().split("\n").slice(-4).join(" | ");
+        return { passed: false, detail: tail || (e.message ?? "non-zero exit, no output") };
+      }
+    })();
+
+    if (!baseline.passed) {
+      console.error(`✗ M8 stub-check: the target suite FAILED its own UNMUTATED run under \`${[testBin, ...testBaseArgs].join(" ")}\` — nothing was measured. ${baseline.detail}`);
+      stubJson = JSON.stringify({ runs: [], findings: [], baselineFailed: true, moduleRecord: stubCheckBaselineModuleRecord([testBin, ...testBaseArgs].join(" "), baseline.detail) }, null, 2);
+    } else {
+      const runs = runStubCheck(sources, runner);
+      const findings = stubSurvivalFindings(runs);
+      const checkedFiles = new Set(runs.map((r) => r.file)).size;
+      console.error(`M8 stub-check: ${runs.length} exported function(s) stubbed across ${checkedFiles} covered file(s); ${findings.length} suite(s) survive deletion`);
+      if (runs.length === 0) {
+        console.error("⚠ no covered source files found (no test file imports or sits beside a source file) — nothing was checked; this is NOT a clean result");
+      }
+      // Recorded because it is the shape a broken invocation used to wear: with the baseline green
+      // it means every deletion was caught, but the number belongs in the artifact either way.
+      const allRunsFailed = runs.length > 0 && runs.every((r) => !r.suitePassed);
+      if (allRunsFailed) console.error(`M8 stub-check: every one of the ${runs.length} stubbed run(s) failed its covering tests — the suite is green unmutated, so this reads as full deletion coverage.`);
+      stubJson = JSON.stringify({ runs, findings, baselineFailed: false, allRunsFailed }, null, 2);
     }
 
     // #600 acceptance: prove the live checkout is still exactly what it was — fail loud (not a
@@ -626,8 +655,6 @@ if (stubCheck) {
       const now = readFileSync(join(targetDir, ...s.path.split("/")), "utf8");
       if (now !== s.text) throw new Error(`#600 invariant violated: ${s.path} in ${targetDir} changed during stub-check — the target checkout is no longer pristine`);
     }
-
-    stubJson = JSON.stringify({ runs, findings }, null, 2);
   } finally {
     // Best-effort: a killed process can't run this either, but that only leaks a scratch temp
     // dir — never the client's checkout, which this branch never wrote to.

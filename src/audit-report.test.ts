@@ -163,10 +163,14 @@ const artifactFor = (p: string): unknown => {
   if (m === "M8") return { finding: finding("M8"), moduleRecord: { status: "partial", note: "No automated test suite found — mutation scan could not run." } };
   return undefined;
 };
+// #1101: M4 and M5 are two probes over ONE CLI, so both captures hold the SAME array of M4-* and
+// M5-* rows. A fixture handing each probe a private single row could not see the double-delivery
+// that rejected the assembled deliverable for duplicate ids.
+const qualityScanRows = [finding("M4-01"), finding("M5-01")];
 const capturingCtx = ctx({
   exec: (_c, argv) => ({ ok: true, output: toolOutput(argv) }),
   captureDir: "/cap",
-  readFindings: (p) => [finding(basename(p, ".json"))],
+  readFindings: (p) => (["M4", "M5"].includes(basename(p, ".json")) ? qualityScanRows : [finding(basename(p, ".json"))]),
   readArtifact: artifactFor,
 });
 
@@ -178,7 +182,8 @@ describe("runAudit findings capture (#312/#420)", () => {
     // come from a live/human pass this run cannot observe. M6's free indicator layer CAN collect
     // (#397), filtered to the `M6 — Indicator: …` taxonomy — this fixture's generic "tx" taxonomy
     // doesn't match, so it collects nothing here too, but for a different (mock-fidelity) reason.
-    expect(captured.findings.map((f) => f.id).sort()).toEqual(["M1", "M10", "M3", "M4", "M5", "M8", "M9"]);
+    // Each quality-scan row appears ONCE despite both probes reading it (#1101).
+    expect(captured.findings.map((f) => f.id).sort()).toEqual(["M1", "M10", "M3", "M4-01", "M5-01", "M8", "M9"]);
   });
 
   it("captures M8's zero-coverage finding out of its object artifact, as a partial (not ran)", () => {

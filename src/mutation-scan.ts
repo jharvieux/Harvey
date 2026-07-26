@@ -736,6 +736,16 @@ export function dryRunFailureModuleRecord(detail: string, env: readonly Detected
   };
 }
 
+// #1067: the stub-check tier's equivalent of the rung above. A stub run counts as "the test caught
+// the deletion" on ANY non-zero exit, so a suite that cannot run at all scored as a flawless one —
+// and this branch, alone among the CLI's degraded rungs, wrote no moduleRecord to contradict it.
+export function stubCheckBaselineModuleRecord(testCmd: string, detail: string): { status: "partial"; note: string } {
+  return {
+    status: "partial",
+    note: `M8 stub-check did not run: the target suite FAILED its own UNMUTATED baseline under \`${testCmd}\` — ${detail}. No deletion-survival result is reported, because a suite that cannot pass unmutated fails every stubbed run for the same reason and would score as perfect deletion coverage.`,
+  };
+}
+
 // #504: nothing prevented a mutation run over PART of the configured mutate scope (a --mutate
 // subset, an alternate scoped config, or a replayed scoped report) from being treated as the
 // module's measurement — a subset score looks exactly like a whole-suite number. The ATC run

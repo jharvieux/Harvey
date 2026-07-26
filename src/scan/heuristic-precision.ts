@@ -88,7 +88,12 @@ export interface HeuristicRow {
 }
 
 function scoreHeuristicEntry(entry: HeuristicEntry): HeuristicRow {
-  const findings = runDetectors(entry);
+  // #1067: a coverage disclosure (confidence "N/A" — M1-WRAPPER-00 and the rest of the -00
+  // family) asserts that something was NOT assessed. It is the opposite of a detection claim, so
+  // scoring it as a false positive on a negative fixture would penalise the detector precisely
+  // for refusing to stay silent. Same principle as validate-calibration, which only counts a
+  // FREE-COUNT finding as an FP.
+  const findings = runDetectors(entry).filter((f) => f.confidence !== "N/A");
   const relevant = entry.taxonomy === undefined ? findings : findings.filter((f) => f.taxonomy === entry.taxonomy);
   const fired = relevant.length;
   const pass = entry.kind === "positive" ? fired > 0 : fired === 0;

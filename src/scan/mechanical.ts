@@ -55,7 +55,7 @@ import {
   inferAuthMethodsFromSource,
   type TenancyOverride,
 } from "./supabase-static.js";
-import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
+import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, type DependencyMap } from "./supply-chain.js";
 import { checkWebExtensionManifest } from "./webext-manifest.js";
 
 interface PackageJson {
@@ -303,7 +303,12 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkUnpinnedDependencies(allDeps));
       findings.push(...checkNonRegistryDependencies(allDeps));
       findings.push(...checkInstallScripts(pkg.scripts ?? {}));
-      if (!skipNetworkChecks) {
+      if (skipNetworkChecks) {
+        // #1067 — a deliberately skipped tier is still an unassessed tier. The committed dry-run
+        // artifact has to SAY these two never ran, or its silence reads as two clean verdicts.
+        findings.push(slopsquatCoverageFinding(Object.keys(allDeps), NETWORK_SKIPPED_REASON));
+        findings.push(licenseCoverageFinding(Object.keys(allDeps), NETWORK_SKIPPED_REASON));
+      } else {
         findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
         // #456 — license compliance (SPDX + copyleft/unknown flags).
         findings.push(...(await checkLicenseCompliance(allDeps)));

@@ -601,7 +601,15 @@ export function knipToFindings(
   const findings: Finding[] = [];
   let n = 0;
 
-  for (const file of report.files) {
+  // #1101: M5 ids are positional, and knip's own file/issue order is not stable run-to-run
+  // (MEASURED 2026-07-26: 8 identical `pnpm quality-scan targets/calibration` runs produced 3
+  // distinct orderings). Unsorted, "M5-22" names a different finding on each run — churn in the
+  // client's deliverable and spurious drift in the committed artifacts. Sorting by path makes the
+  // id a stable handle on the finding rather than on the position knip happened to emit it in.
+  const sortedFiles = [...report.files].sort();
+  const sortedIssues = [...report.issues].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+
+  for (const file of sortedFiles) {
     n += 1;
     const lines = fileLineCounts[file];
     const securityPath = touchesSecurityPath(file);
@@ -638,7 +646,7 @@ export function knipToFindings(
     });
   }
 
-  for (const issue of report.issues) {
+  for (const issue of sortedIssues) {
     const securityPath = touchesSecurityPath(issue.file);
     // #1080: knip's CODEOWNERS enrichment on this row (present only when the target ships a
     // CODEOWNERS file) — appended to every finding built from this issue below rather than its own

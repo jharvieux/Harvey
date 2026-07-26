@@ -507,17 +507,24 @@ export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestP
   return findings;
 }
 
-// OSV-Scanner --format json shape (subset used here).
+// OSV-Scanner --format json shape (subset used here). Verified against a captured
+// osv-scanner 2.3.8 report — src/scan/__fixtures__/osv/, see its PROVENANCE.md.
 export interface OsvScanResult {
   results?: {
     source?: { path?: string };
     packages?: {
       package?: { name?: string; version?: string; ecosystem?: string };
+      // osv-scanner clusters aliased advisories and pre-computes each cluster's numeric CVSS
+      // base score. This is the ONLY numeric severity anywhere in the report — but it is a
+      // group MAXIMUM, so it over-rates the lesser advisories in a multi-id group.
+      groups?: { ids?: string[]; max_severity?: string }[];
       vulnerabilities?: {
         id?: string;
         summary?: string;
         aliases?: string[];
+        // OSV mandates `score` be a CVSS VECTOR STRING ("CVSS:3.1/AV:N/..."), never a number.
         severity?: { type?: string; score?: string }[];
+        database_specific?: { severity?: string };
       }[];
     }[];
   }[];
@@ -539,15 +546,42 @@ const CURATED_ADVISORY_IDS = new Set([
   "GHSA-mq59-m269-xvcx", // CVE-2026-27978 Server Actions null-origin CSRF
 ]);
 
-function severityFromCvss(score: string | undefined): Severity {
-  const n = score ? Number(score.split("/")[0]) : NaN;
-  if (!Number.isNaN(n)) {
-    if (n >= 9) return "Critical";
-    if (n >= 7) return "High";
-    if (n >= 4) return "Medium";
-    return "Low";
+const OSV_SEVERITY_LABELS: Record<string, Severity> = {
+  CRITICAL: "Critical",
+  HIGH: "High",
+  MODERATE: "Medium", // GitHub's label for the CVSS "Medium" band
+  MEDIUM: "Medium",
+  LOW: "Low",
+};
+
+function severityFromScore(n: number): Severity {
+  if (n >= 9) return "Critical";
+  if (n >= 7) return "High";
+  if (n >= 4) return "Medium";
+  return "Low";
+}
+
+// #1063: this used to read `severity[].score`, which OSV mandates be a CVSS VECTOR STRING —
+// `Number("CVSS:3.1")` is NaN, so EVERY dependency CVE fell through to the Medium default.
+// MEASURED 2026-07-26 by regenerating dry-run/findings.json: all 35 DEP-OSV rows were Medium; the
+// fix re-spread them to 1 Critical / 15 High / 16 Medium / 3 Low — 19 of 35 had been misrated.
+// The two fields osv-scanner actually emits in a
+// machine-readable severity form are used instead, per-vulnerability label first because a
+// group's `max_severity` is the maximum over every aliased id in that group.
+// `basis` is undefined when the advisory carried neither — the caller must say so rather than
+// let an unrated advisory look like a rated Medium, which is the defect this fixed.
+function resolveOsvSeverity(
+  label: string | undefined,
+  groupMaxSeverity: string | undefined,
+): { severity: Severity; basis?: string } {
+  const upper = label?.toUpperCase();
+  const mapped = upper ? OSV_SEVERITY_LABELS[upper] : undefined;
+  if (mapped) return { severity: mapped, basis: `the advisory's own ${upper} rating` };
+  const n = Number(groupMaxSeverity);
+  if (groupMaxSeverity && !Number.isNaN(n)) {
+    return { severity: severityFromScore(n), basis: `osv-scanner's CVSS base score ${groupMaxSeverity} for this advisory group` };
   }
-  return "Medium";
+  return { severity: "Medium" };
 }
 
 // #512: when osv-scanner cannot run at all (binary missing, crash with no report), the CVE pass
@@ -585,17 +619,21 @@ export function parseOsvFindings(result: OsvScanResult): Finding[] {
         // Same underlying CVE as an already-curated checkNextVersionCVEs finding — drop the
         // OSV duplicate rather than double-reporting the same vuln under two ids.
         if (curated) continue;
-        const cvssScore = vuln.severity?.find((s) => s.type === "CVSS_V3")?.score ?? vuln.severity?.[0]?.score;
+        const group = pkg.groups?.find((g) => g.ids?.includes(id));
+        const { severity, basis } = resolveOsvSeverity(vuln.database_specific?.severity, group?.max_severity);
+        const rating = basis
+          ? ` Rated ${severity} from ${basis}.`
+          : ` This advisory carried NO machine-readable severity (no database_specific.severity, no group max_severity), so ${severity} is Harvey's default, not the advisory's rating — treat the rating as unknown and check ${id} by hand.`;
         findings.push(
           mechanicalFinding({
             id: `DEP-OSV-${id}`,
             title: `${name}@${version}: ${vuln.summary ?? id}`,
-            severity: severityFromCvss(cvssScore),
+            severity,
             category: "Dependency CVE",
             taxonomy: "Known-vulnerable dependency",
             location: `${src.source?.path ?? "lockfile"} (${name}@${version})`,
             dependency: name,
-            evidence: `OSV-Scanner matched ${id}${vuln.aliases?.length ? ` (aliases: ${vuln.aliases.join(", ")})` : ""} against ${name}@${version}.`,
+            evidence: `OSV-Scanner matched ${id}${vuln.aliases?.length ? ` (aliases: ${vuln.aliases.join(", ")})` : ""} against ${name}@${version}.${rating}`,
             impact: vuln.summary ?? "Known vulnerability in a resolved dependency version.",
             fix: `Upgrade ${name} past the vulnerable range (see ${id}).`,
             precisionTier: "review",
