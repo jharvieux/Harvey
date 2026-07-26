@@ -43,7 +43,7 @@ An ad-hoc security-only subset is a coverage failure, not a scan.
 
 ## Git and PRs
 
-- **Base branch: `main`.** It is protected — every change lands via a PR into `main` with the required `verify` check green, then squash-merge and delete the branch.
+- **Base branch: `main`.** It is protected — every change lands via a PR into `main` with BOTH required checks green (`verify`, and since #1107 `regenerate dry-run findings + diff committed artifact` — the `dry-run-drift` gate), then squash-merge and delete the branch.
 - Branch names: `feature/<short-name>` or `docs/<short-name>`.
 - Commit messages: imperative mood, ≤72-char summary, reference the issue (`#5: seed probe kit`).
 - Never force-push `main`, never bypass branch protection, never disable CI checks.
@@ -58,7 +58,7 @@ Run it before every push. If it fails, fix and re-verify before pushing. If a fa
 
 Other checks, run on demand: `pnpm check:duplication` (jscpd), `pnpm validate:findings <file>`.
 
-**Regenerate the committed dry-run artifacts after any change to a detector, semgrep rule, finding schema, or calibration fixture.** Run `pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out dry-run` and commit BOTH `dry-run/findings.json` AND `dry-run/pii-data-map.json`. The `dry-run-drift` CI gate diffs both, but it is non-required (it will not block a merge), so regenerate proactively rather than relying on it. Regenerate on a machine with the mechanical-tier binaries installed (semgrep/trufflehog/osv-scanner/gitleaks) — a run missing semgrep/trufflehog/gitleaks fails, and a run missing osv-scanner produces a DEP-OSV-00 disclosure finding that does not belong in the committed artifact. The dry-run harness deliberately skips the two live npm-registry checks (`checkLicenseCompliance`/`checkSlopsquat`, via `skipNetworkChecks`) so `findings.json` stays network-independent and deterministic; real engagement scans still run both.
+**Regenerate the committed dry-run artifacts after any change to a detector, semgrep rule, finding schema, or calibration fixture.** Run `pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out dry-run` and commit BOTH `dry-run/findings.json` AND `dry-run/pii-data-map.json`. The `dry-run-drift` CI gate diffs both, and since #1107 (operator ruling 2026-07-26) it is a **required** status check on `main` — context `regenerate dry-run findings + diff committed artifact` — so a missing regeneration now blocks the merge instead of nagging. It reports on EVERY PR (no `paths:` filter, because a path-filtered required check deadlocks every PR outside its filter) and short-circuits to a green no-op when the change set touches neither the harness, `src/scan/**`, `targets/calibration/**`, nor the committed artifacts. Still regenerate proactively: the gate tells you the artifact drifted, it does not produce the corrected one. Regenerate on a machine with the mechanical-tier binaries installed (semgrep/trufflehog/osv-scanner/gitleaks) — a run missing semgrep/trufflehog/gitleaks fails, and a run missing osv-scanner produces a DEP-OSV-00 disclosure finding that does not belong in the committed artifact. The dry-run harness deliberately skips the two live npm-registry checks (`checkLicenseCompliance`/`checkSlopsquat`, via `skipNetworkChecks`) so `findings.json` stays network-independent and deterministic; real engagement scans still run both.
 
 ## Session log
 

@@ -16,6 +16,19 @@
 # On failure: regenerate locally (`pnpm exec tsx src/cli/dry-run.ts`) and commit the corrected
 # findings.json/pii-data-map.json — see this file's own header comment for why that's tool-driven,
 # not a hand-edit.
+#
+# REQUIRED STATUS CHECK on `main` since #1107 (operator ruling 2026-07-26). This is the only gate
+# that inspects the DELIVERABLE rather than the code that produces it, and on PR #1104 it was the
+# only check that caught a client-facing information disclosure (an absolute scan-scope path leaked
+# into a finding's `evidence`) while the required `verify` passed.
+#
+# Being required is why this workflow has NO `paths:` filter on `pull_request` any more. GitHub
+# waits forever for a required context that never reports, so a path-filtered required check
+# deadlocks every PR outside its filter — three docs-only PRs in the 2026-07-26 sweep (#1108,
+# #1111, #1113) would have been permanently unmergeable. The filter therefore moved INSIDE the job
+# (the `filter` step below): the job always runs and always reports, and only the expensive work is
+# conditional. Same tiering shape as ci.yml's changes/verify split (#1025/#1031), collapsed into
+# one job because there is exactly one heavy step group and one status context to keep stable.
 
 name: dry-run-drift
 
@@ -24,16 +37,13 @@ on:
     - cron: "0 7 * * 1" # Mondays 07:00 UTC
   workflow_dispatch:
   pull_request:
-    paths:
-      - "src/cli/dry-run.ts"
-      - "src/scan/**"
-      - "targets/calibration/**"
-      - "dry-run/findings.json"
-      - "dry-run/pii-data-map.json"
-      - ".github/workflows/dry-run-drift.yml"
 
 # A scheduled drift check has no reason to run twice concurrently, and a re-dispatch means the
-# newer run is the interesting one.
+# newer run is the interesting one. Safe on a required check: a cancellation here is only ever
+# caused by a NEWER run on the same `github.ref` — for a PR that is `refs/pull/N/merge`, so the
+# superseding run reports against the newer head commit, which is the commit branch protection
+# actually evaluates. A `cancelled` conclusion is therefore never the latest result for the head
+# SHA, and cannot strand a merge. (Same posture ci.yml already takes for the required `verify`.)
 concurrency:
   group: dry-run-drift-${{ github.ref }}
   cancel-in-progress: true
@@ -47,18 +57,54 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # fetch-depth: 0 so the filter step can diff against the PR base. It does not affect what the
+      # scan sees: dry-run.ts copies the target into a scratch dir and `git init`s a fresh repo
+      # there (buildScratchTarget), so this checkout's history depth never reaches the scanners.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        name: Does this change set touch the artifact or anything that produces it?
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD)
+          echo "Changed files:"
+          echo "$files"
+          relevant=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              src/cli/dry-run.ts) relevant=true ;;
+              src/scan/*) relevant=true ;;
+              targets/calibration/*) relevant=true ;;
+              dry-run/findings.json|dry-run/pii-data-map.json) relevant=true ;;
+              .github/workflows/dry-run-drift.yml) relevant=true ;;
+            esac
+          done <<< "$files"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          if [ "$relevant" = "false" ]; then
+            echo "No change to the dry-run harness, its rules, its fixture or its committed artifact — the artifact cannot have drifted from this PR. Nothing to regenerate."
+          fi
+
       - uses: pnpm/action-setup@v4
+        if: steps.filter.outputs.relevant == 'true'
       - uses: actions/setup-node@v4
+        if: steps.filter.outputs.relevant == 'true'
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: steps.filter.outputs.relevant == 'true'
 
       # Same pins as corpus-drift.yml's install step — each scanner degrades to "found nothing"
       # without its binary rather than failing loudly, which here would look like a clean diff
       # instead of the drift it actually is.
       - name: Install mechanical-tier scanner binaries
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           pipx install semgrep
@@ -72,9 +118,11 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Regenerate dry-run findings
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out /tmp/dry-run-regen
 
       - name: Diff regenerated findings.json against the committed artifact
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           if ! diff -u dry-run/findings.json /tmp/dry-run-regen/findings.json; then
             echo "::error::dry-run/findings.json has drifted from the scanner's real output — regenerate it (pnpm exec tsx src/cli/dry-run.ts) and commit the result. timing.json is excluded by design (#302)."
@@ -82,6 +130,7 @@ jobs:
           fi
 
       - name: Diff regenerated pii-data-map.json against the committed artifact
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           if ! diff -u dry-run/pii-data-map.json /tmp/dry-run-regen/pii-data-map.json; then
             echo "::error::dry-run/pii-data-map.json has drifted from the scanner's real output — regenerate it (pnpm exec tsx src/cli/dry-run.ts) and commit the result. timing.json is excluded by design (#302)."
