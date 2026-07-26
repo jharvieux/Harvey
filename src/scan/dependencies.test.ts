@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   assertDisclosedDivergence,
@@ -373,41 +374,60 @@ describe("jsonwebtoken CVE-2022-23540 severity disclosure (#255)", () => {
   });
 });
 
-describe("parseOsvFindings", () => {
-  it("drops an OSV hit whose alias matches an already-curated advisory (dedup)", () => {
-    const result: OsvScanResult = {
-      results: [
-        {
-          source: { path: "pnpm-lock.yaml" },
-          packages: [
-            {
-              package: { name: "next", version: "15.1.0" },
-              vulnerabilities: [{ id: "CVE-2025-29927", aliases: ["GHSA-f82v-jwr5-mffw"], summary: "middleware bypass" }],
-            },
-          ],
-        },
-      ],
-    };
-    expect(parseOsvFindings(result)).toEqual([]);
+// #1063: every one of these reads a CAPTURED osv-scanner 2.3.8 report, not a hand-written one.
+// The bug this replaces existed because the old fixture used `score: "7.5"` — a bare number
+// osv-scanner never emits — invented from Harvey's own TypeScript type. The type was wrong, the
+// fixture was derived from the wrong type, and the test confirmed the fixture, so every
+// dependency CVE shipped as Medium for as long as the test stayed green.
+// Capture command and what was elided: src/scan/__fixtures__/osv/PROVENANCE.md.
+const capturedOsvReport = JSON.parse(
+  readFileSync(new URL("./__fixtures__/osv/osv-scanner-2.3.8-report.json", import.meta.url), "utf8"),
+) as OsvScanResult;
+
+const capturedVulns = capturedOsvReport.results?.[0]?.packages?.flatMap((p) => p.vulnerabilities ?? []) ?? [];
+
+describe("parseOsvFindings over a captured osv-scanner report", () => {
+  it("keeps the fixture honest: osv-scanner's severity score is a CVSS VECTOR, never a number", () => {
+    const scores = capturedVulns.flatMap((v) => (v.severity ?? []).map((s) => s.score));
+    expect(scores.length).toBeGreaterThan(0);
+    for (const score of scores) {
+      expect(score).toMatch(/^CVSS:\d/);
+      expect(Number(score?.split("/")[0])).toBeNaN();
+    }
+  });
+
+  it("rates each advisory from its own severity band instead of collapsing to Medium (#1063)", () => {
+    const byId = new Map(parseOsvFindings(capturedOsvReport).map((f) => [f.id, f.severity]));
+    expect(byId.get("DEP-OSV-GHSA-jf85-cpcp-j695")).toBe("Critical"); // lodash, CRITICAL
+    expect(byId.get("DEP-OSV-GHSA-5c6j-r48x-rmvq")).toBe("High"); // serialize-javascript, HIGH
+    expect(byId.get("DEP-OSV-GHSA-89xv-2m56-2m9x")).toBe("High"); // next, HIGH, CVSS_V4 only
+    expect(byId.get("DEP-OSV-GHSA-952p-6rrq-rcjv")).toBe("Medium"); // micromatch, MODERATE
+    expect(byId.get("DEP-OSV-GHSA-848j-6mx2-7j84")).toBe("Low"); // elliptic, LOW
+  });
+
+  it("drops the hit whose id matches an already-curated advisory (dedup)", () => {
+    const ids = parseOsvFindings(capturedOsvReport).map((f) => f.id);
+    // GHSA-c4j6-fc7j-m34r (CVE-2026-44578) is in the captured report AND in CURATED_ADVISORY_IDS.
+    expect(ids).not.toContain("DEP-OSV-GHSA-c4j6-fc7j-m34r");
+    expect(ids.length).toBe(capturedVulns.length - 1);
+  });
+
+  it("names what the rating came from, so a reader can tell a real rating from a default", () => {
+    const critical = parseOsvFindings(capturedOsvReport).find((f) => f.id === "DEP-OSV-GHSA-jf85-cpcp-j695");
+    expect(critical?.evidence).toContain("Rated Critical from the advisory's own CRITICAL rating");
   });
 
   it("tags a generic transitive-dep CVE as review precision", () => {
-    const result: OsvScanResult = {
-      results: [
-        {
-          source: { path: "pnpm-lock.yaml" },
-          packages: [
-            {
-              package: { name: "lodash", version: "4.17.15" },
-              vulnerabilities: [{ id: "GHSA-xxxx-yyyy-zzzz", summary: "prototype pollution", severity: [{ type: "CVSS_V3", score: "7.5" }] }],
-            },
-          ],
-        },
-      ],
+    expect(parseOsvFindings(capturedOsvReport).every((f) => f.precisionTier === "review")).toBe(true);
+  });
+
+  it("discloses an unrated advisory rather than passing the Medium default off as a rating", () => {
+    const unrated: OsvScanResult = {
+      results: [{ source: { path: "package-lock.json" }, packages: [{ package: { name: "acme", version: "1.0.0" }, vulnerabilities: [{ id: "GHSA-none-none-none", summary: "unrated" }] }] }],
     };
-    const findings = parseOsvFindings(result);
-    expect(findings[0]?.precisionTier).toBe("review");
-    expect(findings[0]?.severity).toBe("High");
+    const finding = parseOsvFindings(unrated)[0];
+    expect(finding?.severity).toBe("Medium");
+    expect(finding?.evidence).toContain("carried NO machine-readable severity");
   });
 
   it("degrades gracefully to no findings for a target with no lockfile (mechanical.ts's runOsvScanner returns {})", () => {
@@ -428,7 +448,7 @@ describe("curated + OSV dedup (issue #73)", () => {
             {
               package: { name: "next", version: "14.2.35" },
               vulnerabilities: [
-                { id: "GHSA-c4j6-fc7j-m34r", summary: "WebSocket-upgrade SSRF", severity: [{ type: "CVSS_V3", score: "8.6" }] },
+                { id: "GHSA-c4j6-fc7j-m34r", summary: "WebSocket-upgrade SSRF", severity: [{ type: "CVSS_V3", score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N" }], database_specific: { severity: "HIGH" } },
               ],
             },
           ],
@@ -450,9 +470,9 @@ describe("curated + OSV dedup (issue #73)", () => {
               package: { name: "next", version: "14.2.35" },
               vulnerabilities: [
                 // Curated advisory: deduped away by parseOsvFindings.
-                { id: "GHSA-c4j6-fc7j-m34r", summary: "WebSocket-upgrade SSRF", severity: [{ type: "CVSS_V3", score: "8.6" }] },
+                { id: "GHSA-c4j6-fc7j-m34r", summary: "WebSocket-upgrade SSRF", severity: [{ type: "CVSS_V3", score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N" }], database_specific: { severity: "HIGH" } },
                 // Unrelated CVE on the same package: not curated, must survive.
-                { id: "GHSA-aaaa-bbbb-cccc", summary: "unrelated prototype pollution", severity: [{ type: "CVSS_V3", score: "6.1" }] },
+                { id: "GHSA-aaaa-bbbb-cccc", summary: "unrelated prototype pollution", severity: [{ type: "CVSS_V3", score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N" }], database_specific: { severity: "MODERATE" } },
               ],
             },
           ],

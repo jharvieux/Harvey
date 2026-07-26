@@ -8,6 +8,7 @@ export declare const DRAFT_NOTICE: string;
 export declare const DRAFT_TERMS: [string, string][];
 
 export declare function esc(s: unknown): string;
+export declare function tenantIsolationPill(coverage: CoverageRow[] | undefined): string;
 export declare function testQualityAction(row: TestQualityRow): string;
 export declare function testQualitySection(tq: TestQuality): string;
 export declare function testQualityBlock(data: FindingsDocument): string;

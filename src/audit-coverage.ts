@@ -36,15 +36,19 @@ export type AuditModule = (typeof AUDIT_MODULES)[number];
 // a live DB each loses a layer, so each records "partial", not a skip.
 type ModuleNeed = "source" | "connected" | "dynamic" | "llm";
 
-// `freeTier`: contributes to the free quick-scan (vs paid-only). Per-module split:
-// docs/free-tier-scope.md.
+// `freeTier`: contributes to the free source-only scan (vs paid-only). docs/free-tier-scope.md is
+// the source of truth, and since #1071 that is enforced rather than asserted — audit-coverage.test.ts
+// derives the split from that document's "What the free scan delivers" table and fails on any
+// disagreement. It had drifted: M3/M5/M6 were marked paid-only here while the doc AND the site
+// advertise all three as free. The field had no reader at the time, so nothing surfaced it; the
+// parity test is now that reader, so a wrong value cannot sit here waiting to be adopted as truth.
 export const MODULES: Record<AuditModule, { name: string; needs: ModuleNeed; freeTier: boolean }> = {
   M1: { name: "Multi-tenant security", needs: "source", freeTier: true },
   M2: { name: "Local pen-test (dynamic)", needs: "dynamic", freeTier: false },
-  M3: { name: "Hotspot analysis", needs: "source", freeTier: false },
+  M3: { name: "Hotspot analysis", needs: "source", freeTier: true },
   M4: { name: "Duplication", needs: "source", freeTier: true },
-  M5: { name: "Slop / dead code", needs: "source", freeTier: false },
-  M6: { name: "Simplification / maintainability", needs: "llm", freeTier: false },
+  M5: { name: "Slop / dead code", needs: "source", freeTier: true },
+  M6: { name: "Simplification / maintainability", needs: "llm", freeTier: true },
   M7: { name: "Performance", needs: "source", freeTier: true },
   M8: { name: "Test quality", needs: "source", freeTier: true },
   M9: { name: "App Router boundary/rendering", needs: "source", freeTier: true },
