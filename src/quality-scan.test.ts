@@ -491,6 +491,30 @@ describe("knipToFindings", () => {
   });
 });
 
+// #1050: knip's unused-dependency verdicts come from the resolved import graph, so a scope whose
+// own config and plugins could not be loaded (#696/#810) never saw the config files that reference
+// build-time deps. Those rows must be review candidates, not a confident "delete this".
+describe("knipToFindings — unused dependencies (#1050)", () => {
+  const depReport: KnipReport = {
+    files: [],
+    issues: [{ file: "package.json", exports: [], types: [], dependencies: [{ name: "left-pad", line: 6 }], devDependencies: [{ name: "rimraf", line: 10 }] }],
+  };
+
+  it("reports prod and dev unused deps as separate findings, confirmed when the scope resolved", () => {
+    const findings = knipToFindings(depReport);
+    expect(findings).toHaveLength(2);
+    expect(findings.every((f) => f.confidence === "Confirmed" && f.precisionTier === "high")).toBe(true);
+    expect(findings.find((f) => f.title.includes("Unused dependencies"))?.evidence).toContain("left-pad");
+    expect(findings.find((f) => f.title.includes("Unused devDependencies"))?.evidence).toContain("rimraf");
+  });
+
+  it("drops to review tier for a scope whose config/plugins could not be resolved", () => {
+    const findings = knipToFindings(depReport, {}, new Set(), new Set(["package.json"]));
+    expect(findings.every((f) => f.confidence === "Review" && f.precisionTier === "review")).toBe(true);
+    expect(findings[0]?.fix).toContain("Install the target's dependencies");
+  });
+});
+
 // #226: dead code in auth/guard/security paths is a stronger signal than routine slop — the
 // atc cross-tenant Critical was preceded by exactly this shape (a guard helper written and never
 // wired in). Not shaped from a captured knip run; hand-built to cover the elevation paths.

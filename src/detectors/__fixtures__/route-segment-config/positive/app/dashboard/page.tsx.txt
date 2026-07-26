@@ -1,0 +1,17 @@
+import { cookies } from "next/headers";
+import { getServerSession } from "next-auth";
+
+// force-static renders once at build and serves the same HTML to everyone — on a route that
+// reads the session cookie that is a cross-user isolation bug, not a caching choice.
+export const dynamic = "force-static";
+
+export default async function DashboardPage() {
+  const token = cookies().get("session");
+  const session = await getServerSession();
+
+  return (
+    <div>
+      {session?.user?.name} / {token?.value}
+    </div>
+  );
+}

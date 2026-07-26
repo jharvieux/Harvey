@@ -421,6 +421,9 @@ const knipUncertainScopes: ScanGap[] = [];
 const knipReducedScopes: ScanGap[] = [];
 // #696: files whose scope had Harvey-inferred entries — their unused-FILE findings are review tier.
 const inferredEntryFiles = new Set<string>();
+// #1050: the same scopes' package.json paths — their unused-DEPENDENCY findings are review tier for
+// the same reason (config-only usages are invisible when the config could not be resolved).
+const unresolvedDepScopes = new Set<string>();
 
 // #544: one whole-repo jscpd pass — paths already come back relative to targetDir, so no
 // per-workspace re-anchoring is needed. See the header for why duplication is measured whole-repo.
@@ -457,7 +460,10 @@ for (const scope of scopes) {
     for (const issue of report.issues) issue.file = prefixed(workspaceRel, issue.file);
     // #696: record the (now target-relative) files whose entries Harvey inferred, so their file
     // findings are review-tier after mergeKnipReports flattens per-scope reports into one.
-    if (entriesInferred) for (const f of report.files) inferredEntryFiles.add(f);
+    if (entriesInferred) {
+      for (const f of report.files) inferredEntryFiles.add(f);
+      for (const issue of report.issues) unresolvedDepScopes.add(issue.file);
+    }
     knipReports.push(report);
   } catch (err) {
     const reason = gapReason(err);
@@ -498,7 +504,7 @@ const findings: Finding[] = [
   ...jscpdToFindings(jscpdReport),
   ...divergedFindings,
   ...wholeRepoDivergedFindings,
-  ...(knipReport ? knipToFindings(knipReport, fileLineCounts, inferredEntryFiles) : []),
+  ...(knipReport ? knipToFindings(knipReport, fileLineCounts, inferredEntryFiles, unresolvedDepScopes) : []),
 ];
 // #505: a gap disclosure coexists with real findings from the scopes that DID complete — unlike
 // the old whole-repo-or-nothing shape, a monorepo run can be a genuine partial (2 of 3 workspaces
@@ -521,7 +527,8 @@ console.error(
 );
 if (knipReport) {
   console.error(
-    `M5 dead code: ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports` +
+    `M5 dead code: ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports, ` +
+      `${knipReport.issues.reduce((sum, i) => sum + (i.dependencies?.length ?? 0) + (i.devDependencies?.length ?? 0), 0)} unused dependenc(ies) (#1050)` +
       (knipGaps.length ? `, ${knipGaps.length}/${scopes.length} scope(s) incomplete (#505, see M5-00)` : "") +
       (knipReducedScopes.length ? `, ${knipReducedScopes.length}/${scopes.length} scope(s) ran in reduced no-deps mode (#810, see M5-98)` : "") +
       (knipUncertainScopes.length ? `, ${knipUncertainScopes.length}/${scopes.length} scope(s) flagged as uncertain (#580, see M5-99)` : ""),

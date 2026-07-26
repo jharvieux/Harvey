@@ -1,0 +1,20 @@
+import { NextResponse } from "next/server";
+import { unstable_cache } from "next/cache";
+import { supabase } from "../../../lib/db";
+
+// Genuinely anonymous content: no session, nothing per-user, so a shared cache key and a
+// public `Cache-Control` are both correct.
+const getPlans = unstable_cache(
+  async () => {
+    const { data } = await supabase.from("plans").select("id, price");
+    return data;
+  },
+  ["plans"],
+  { revalidate: 3600, tags: ["plans"] },
+);
+
+export async function GET() {
+  const plans = await getPlans();
+
+  return NextResponse.json(plans, { headers: { "Cache-Control": "public, s-maxage=3600" } });
+}

@@ -127,11 +127,34 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
 
   // Each probe must gather its OWN evidence. These drive the real probes against a fake environment
   // and assert the prereq actually gates the outcome.
-  it("M5 refuses to run without the target's installed deps, naming the prereq", () => {
-    const noDeps = ctx({ exists: (p) => !p.endsWith("node_modules") });
+  // #1035: a deps-free target is a REDUCED tier, not an unrunnable one — #810 built the fallback
+  // and this probe used to refuse to reach it. The distinction it was protecting survives as a
+  // status: quality-scan is invoked, M5 records partial, and file-level dead code stays review-tier.
+  it("M5 without the target's installed deps still invokes quality-scan and records partial, not requires-live-run", () => {
+    const invoked: string[] = [];
+    const noDeps = ctx({
+      exists: (p) => !p.endsWith("node_modules"),
+      exec: (_c, argv) => {
+        if (argv.includes("quality-scan")) invoked.push(argv.join(" "));
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    });
     const m5 = runAudit(AUDIT_RUNNERS, noDeps).recorded.find((r) => r.module === "M5");
-    expect(m5?.status).toBe("requires-live-run");
-    expect(m5?.reason).toMatch(/no node_modules/);
+    expect(invoked.length).toBeGreaterThan(0);
+    expect(m5?.status).toBe("partial");
+    expect(m5?.reason).toMatch(/review-tier, not confirmed/);
+  });
+
+  // The #810 reduced tier discloses itself with an M5-98 row; the orchestrator must surface THAT
+  // reason rather than a generic partial, so a reader knows plugins were disabled.
+  it("M5 reports the #810 reduced tier when quality-scan emitted M5-98", () => {
+    const reduced = ctx({
+      exists: (p) => !p.endsWith("node_modules"),
+      exec: (_c, argv) => (argv.includes("quality-scan") ? { ok: true, output: JSON.stringify([{ id: "M5-98" }]) } : { ok: true, output: cleanOutput(argv) }),
+    });
+    const m5 = runAudit(AUDIT_RUNNERS, reduced).recorded.find((r) => r.module === "M5");
+    expect(m5?.status).toBe("partial");
+    expect(m5?.reason).toMatch(/reduced \(no-dependencies\) tier/);
   });
 
   it("M5 runs once the target's deps are present — the prereq gates it, not a flag", () => {
@@ -879,6 +902,53 @@ describe("probes derive ran from a fresh pass artifact, never a flag (#416)", ()
     expect(bare.find((r) => r.module === "M2")?.status).toBe("requires-live-run");
     expect(bare.find((r) => r.module === "M6")?.status).toBe("partial");
   });
+
+  // #1042: record-pass accepted all ten modules while only four probes read the artifact, so a
+  // recorded M7 Lighthouse pass was written and then silently dropped — no findings in the
+  // deliverable, and an M7 row still asserting the tier "not run" while the evidence sat on disk.
+  // The intent under test: a recorded pass for ANY module either reaches the deliverable or is
+  // visibly rejected — never a silent drop.
+  describe("every module record-pass accepts has a consumer (#1042)", () => {
+    it("M7 merges a recorded Lighthouse pass's findings and stops asserting the CWV tier did not run", () => {
+      const lighthouse = withPass("M7", { pass: "lighthouse", findings: [{ id: "M7L-01" }] });
+      const { recorded, findings } = runAudit(AUDIT_RUNNERS, lighthouse);
+      const m7 = recorded.find((r) => r.module === "M7");
+      expect(findings.some((f) => (f as { id?: string }).id === "M7L-01")).toBe(true);
+      expect(m7?.reason).not.toMatch(/Core Web Vitals were not measured/);
+      expect(m7?.reason).toMatch(/Core Web Vitals WERE measured/);
+    });
+
+    // The status must NOT become `ran`: a Lighthouse pass is one of M7's three tiers.
+    it("M7 stays partial on a recorded pass — one tier is not the whole module", () => {
+      expect(status(AUDIT_RUNNERS, withPass("M7", { pass: "lighthouse" }), "M7")?.status).toBe("partial");
+    });
+
+    it.each(["M4", "M5", "M8", "M9", "M10"] as const)("%s merges a recorded pass's findings and names it on the row", (module) => {
+      const recordedPass = withPass(module, { pass: "captured", findings: [{ id: `${module}-PASS-1` }] });
+      const { recorded, findings } = runAudit(AUDIT_RUNNERS, recordedPass);
+      const row = recorded.find((r) => r.module === module);
+      expect(findings.some((f) => (f as { id?: string }).id === `${module}-PASS-1`)).toBe(true);
+      expect(`${row?.detail ?? ""} ${row?.reason ?? ""}`).toMatch(/recorded captured pass/);
+    });
+
+    // The pass contributes findings; it never UPGRADES the status to `ran` the way M1/M2/M3/M6's
+    // does. A probe that could not run its own tiers becomes partial — something ran — not `ran`.
+    it("a recorded pass lifts a not-run module to partial, never to ran", () => {
+      const noSource = withPass("M9", { pass: "captured", findings: [{ id: "M9-PASS-1" }] }, {
+        exec: (_c: string, argv: string[]) => (argv.includes("detect-static") ? { ok: true, output: "loaded 0 source files from /target" } : { ok: true, output: cleanOutput(argv) }),
+      });
+      const m9 = status(AUDIT_RUNNERS, noSource, "M9");
+      expect(m9?.status).toBe("partial");
+      expect(m9?.reason).toMatch(/scanned 0 source files/);
+      expect(m9?.reason).toMatch(/not by itself evidence the module ran in full/);
+    });
+
+    it("a rejected artifact for a newly-wired module is named on the row, not ignored", () => {
+      const stale = withPass("M9", { generatedAt: iso(400 * DAY) });
+      const m9 = status(AUDIT_RUNNERS, stale, "M9");
+      expect(`${m9?.detail ?? ""} ${m9?.reason ?? ""}`).toMatch(/rejected: pass artifact for M9 is stale/);
+    });
+  });
 });
 
 // #436: pii-classify emits report-schema Finding[] to --out, so a capturing run collects M10
@@ -943,6 +1013,50 @@ describe("M10 surfaces its data map for the severity join (#1049)", () => {
   });
 });
 
+// #1040: quick-scan was the ONE emitter probe invoked without --findings-out, so every mechanical
+// M1 finding the scan produced — including live-credential and CVE Criticals — was discarded before
+// the deliverable was assembled. The intent under test is that the mechanical tier's output reaches
+// --findings-out, and that the two classes the shared detect-static pass also emits are not taken
+// twice (their ids are a per-run counter — two different findings under one id would make the
+// document invalid).
+describe("M1 collects the mechanical tier's findings into the deliverable (#1040)", () => {
+  const critical = { id: "SEC-GL-source-2", taxonomy: "Committed credential", severity: "Critical" } as unknown as Finding;
+  const indicator = { id: "3", taxonomy: "M6 — Indicator: cookie parsing", severity: "Info" } as unknown as Finding;
+  const sfc = { id: "M1-SFC-00", taxonomy: "M1 — Multi-tenant security", severity: "Info" } as unknown as Finding;
+  const capturing = () =>
+    ctx({
+      captureDir: "/cap",
+      readFindings: (p: string) => (p.endsWith("M1.json") ? [critical, indicator, sfc] : []),
+      exec: (_c, argv) => {
+        if (argv.join(" ").includes("quick-scan")) expect(argv).toContain("--findings-out");
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    });
+
+  it("a known mechanical Critical is present in the assembled findings", () => {
+    const { findings } = runAudit(AUDIT_RUNNERS, capturing());
+    expect(findings.map((f) => f.id)).toContain("SEC-GL-source-2");
+  });
+
+  it("does not re-collect the classes the shared detect-static pass already contributes", () => {
+    const { findings } = runAudit(AUDIT_RUNNERS, capturing());
+    expect(findings.filter((f) => f.taxonomy.startsWith("M6 — Indicator: ")).map((f) => f.id)).not.toContain("3");
+    expect(findings.filter((f) => f.id === "M1-SFC-00")).toHaveLength(0);
+  });
+
+  it("no longer claims the mechanical tier's findings are uncollected", () => {
+    const m1 = runAudit(AUDIT_RUNNERS, capturing()).recorded.find((r) => r.module === "M1");
+    expect(m1?.status).toBe("partial");
+    expect(m1?.reason).not.toMatch(/No M1 security findings are collected/);
+    expect(m1?.reason).toMatch(/MECHANICAL tier's findings ARE collected/);
+  });
+
+  it("a coverage-only run says so instead of implying the mechanical tier was collected", () => {
+    const m1 = runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M1");
+    expect(m1?.reason).toMatch(/coverage-only, no --findings-out/);
+  });
+});
+
 // #528/#537: the mechanical scan emits SEC-TH-GH-00 when the git-history secrets tier could not run
 // (non-git archive/subdirectory delivery) — quick-scan derives that from isGitRepoRoot(targetDir).
 // #528 originally surfaced the gap only by reading a captured raw-findings feed (capture-only). #537
@@ -1002,11 +1116,11 @@ describe("monorepo per-instance fan-out (#506)", () => {
     expect(seen).toEqual(expect.arrayContaining(["/target/apps/main", "/target/apps/rag"]));
   });
 
-  it("an app missing node_modules is an explicit requires-live-run row for THAT app, never absent (M5)", () => {
+  it("an app missing node_modules is an explicit reduced-tier row for THAT app, never absent (M5, #1035)", () => {
     const rec = runAudit(AUDIT_RUNNERS, ctx({ apps, exists: (p) => p !== "/target/apps/rag/node_modules" })).recorded;
     const m5 = rec.filter((r) => r.module === "M5");
     expect(m5).toHaveLength(2);
-    expect(m5.find((r) => r.instance === "apps/rag")?.status).toBe("requires-live-run");
+    expect(m5.find((r) => r.instance === "apps/rag")?.status).toBe("partial");
     expect(m5.find((r) => r.instance === "apps/rag")?.reason).toMatch(/no node_modules/);
     expect(m5.find((r) => r.instance === "apps/main")?.status).toBe("ran");
   });

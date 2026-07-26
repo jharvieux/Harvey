@@ -1,0 +1,12 @@
+import { getServerSession } from "next-auth";
+import { NextResponse } from "next/server";
+import { supabase } from "../../../lib/db";
+
+// An authenticated response handed to the shared CDN cache: the next requester of this URL
+// gets the previous user's invoices.
+export async function GET() {
+  const session = await getServerSession();
+  const { data } = await supabase.from("invoices").select("id, amount").eq("user_id", session!.user.id);
+
+  return NextResponse.json(data, { headers: { "Cache-Control": "public, s-maxage=600" } });
+}
