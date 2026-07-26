@@ -8,7 +8,7 @@
 // The same fixtures exercise #252's suite-absent threshold end-to-end through the CLI: a harness
 // with a single placeholder spec emits M8-00; a harness with one MEANINGFUL spec does not.
 
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -42,45 +42,53 @@ function fixtureRepo(testFiles: Record<string, string>): string {
   return repo;
 }
 
-function runCli(repo: string, extraArgs: string[]): { status: number; out: string } {
-  const outPath = join(repo, "m8-out.json");
-  try {
-    execFileSync("node_modules/.bin/tsx", [CLI, repo, ...extraArgs, "--out", outPath], {
+// #1134: awaited spawn, not execFileSync. execFileSync blocks the vitest worker's event loop for the
+// call's duration, and a blocked worker cannot service the birpc ack for a task update it already
+// sent — vitest hardcodes a 60s window for that ack (see vitest.config.ts's HEAVY_CLI_TESTS comment,
+// and #1120/#1133 which found run-audit.test.ts's beforeAll actually over that line). Measured
+// single-call windows in this file are well under a second on this hardware, but the standing
+// constraint is "no single blocking window may approach 60s" for every heavy CLI test, not only the
+// one already found over it. This also folds in the three near-identical `runCliOn` copies that used
+// to live in the describe blocks below (#623/#932/#655) — same body, different local name.
+function runCli(target: string, extraArgs: string[], extraEnv: Record<string, string> = {}): Promise<{ status: number; out: string }> {
+  const outPath = join(target, "m8-out.json");
+  return new Promise((resolve) => {
+    const child = spawn("node_modules/.bin/tsx", [CLI, target, ...extraArgs, "--out", outPath], {
       cwd: REPO_ROOT,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: "ignore",
       // A PATH with node but no stryker anywhere — the exact CI condition of issue #470.
-      env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
+      env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, ...extraEnv },
     });
-    return { status: 0, out: readFileSync(outPath, "utf8") };
-  } catch (err) {
-    const e = err as { status?: number };
-    return { status: e.status ?? 1, out: "" };
-  }
+    child.on("error", () => resolve({ status: 1, out: "" }));
+    child.on("close", (code) => {
+      const status = code ?? 1;
+      resolve({ status, out: status === 0 && existsSync(outPath) ? readFileSync(outPath, "utf8") : "" });
+    });
+  });
 }
 
 const REAL_SPEC = `import { it, expect } from "vitest";\nimport { add } from "./add";\nit("adds", () => { expect(add(1, 2)).toBe(3); });\nit("throws on NaN", () => { expect(() => add(NaN, 1)).toThrow(); });\n`;
 
 describe("mutation-scan --detect-only (#470/#252, child process, no stryker on PATH)", () => {
-  it("exits 0 with an empty findings array when a meaningful suite is present — never invoking Stryker", () => {
+  it("exits 0 with an empty findings array when a meaningful suite is present — never invoking Stryker", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC });
-    const { status, out } = runCli(repo, ["--detect-only"]);
+    const { status, out } = await runCli(repo, ["--detect-only"]);
     expect(status).toBe(0);
     expect(JSON.parse(out)).toEqual([]);
   });
 
-  it("emits the M8-00 zero-coverage finding when the harness's only spec is a placeholder (#252)", () => {
+  it("emits the M8-00 zero-coverage finding when the harness's only spec is a placeholder (#252)", async () => {
     const repo = fixtureRepo({ "src/smoke.test.ts": `it("works", () => { expect(true).toBe(true); });\n` });
-    const { status, out } = runCli(repo, ["--detect-only"]);
+    const { status, out } = await runCli(repo, ["--detect-only"]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { finding: Finding };
     expect(parsed.finding.id).toBe("M8-00");
     expect(parsed.finding.evidence).toContain("placeholder");
   });
 
-  it("emits M8-00 when a harness is configured but zero test files exist (#252)", () => {
+  it("emits M8-00 when a harness is configured but zero test files exist (#252)", async () => {
     const repo = fixtureRepo({});
-    const { status, out } = runCli(repo, ["--detect-only"]);
+    const { status, out } = await runCli(repo, ["--detect-only"]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { finding: Finding };
     expect(parsed.finding.id).toBe("M8-00");
@@ -92,9 +100,9 @@ describe("mutation-scan --detect-only (#470/#252, child process, no stryker on P
   // Stryker packages) degrades to the machine-readable partial verdict instead of the old ENOENT
   // crash. --detect-only remains the corpus-drift protection: it alone yields the bare [] shape
   // and never enters the mutation rung.
-  it("negative control: WITHOUT --detect-only the same repo enters the mutation rung and degrades loudly, not to []", () => {
+  it("negative control: WITHOUT --detect-only the same repo enters the mutation rung and degrades loudly, not to []", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC });
-    const { status, out } = runCli(repo, []);
+    const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { moduleRecord?: { status: string; note: string } };
     expect(parsed.moduleRecord?.status).toBe("partial");
@@ -105,7 +113,7 @@ describe("mutation-scan --detect-only (#470/#252, child process, no stryker on P
 // #513: a suite-bearing target with no Stryker config gets the scaffold path, whose every degrade
 // is a loud, machine-readable ladder statement — never a crash, never a silent skip.
 describe("mutation-scan scaffold degradation ladder (#513, child process)", () => {
-  it("no recognized test runner (ava-only harness): degrades naming the detection gap and the ladder", () => {
+  it("no recognized test runner (ava-only harness): degrades naming the detection gap and the ladder", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-m8-cli-"));
     dirs.push(repo);
     writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "fixture", scripts: { test: "ava" }, devDependencies: { ava: "^6.0.0" } }));
@@ -113,7 +121,7 @@ describe("mutation-scan scaffold degradation ladder (#513, child process)", () =
     // scaffold rung, not suite absence.
     writeFileSync(join(repo, "app.test.js"), `const test = require("ava");\ntest("adds", (t) => { t.is(1 + 2, 3); });\n`);
     writeFileSync(join(repo, "cli.test.js"), `const test = require("ava");\ntest("rejects", (t) => { t.throws(() => { throw new Error("x"); }); });\n`);
-    const { status, out } = runCli(repo, []);
+    const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { moduleRecord?: { status: string; note: string } };
     expect(parsed.moduleRecord?.status).toBe("partial");
@@ -122,9 +130,9 @@ describe("mutation-scan scaffold degradation ladder (#513, child process)", () =
     expect(parsed.moduleRecord?.note).toMatch(/--stub-check/);
   });
 
-  it("recognized runner but no Stryker packages and no --install: degrades naming the exact unlock command", () => {
+  it("recognized runner but no Stryker packages and no --install: degrades naming the exact unlock command", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC });
-    const { status, out } = runCli(repo, []);
+    const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { moduleRecord?: { note: string } };
     expect(parsed.moduleRecord?.note).toMatch(/vitest suite but no Stryker install/);
@@ -151,9 +159,9 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     return { repo, reportPath };
   }
 
-  it("a report covering a subset of the configured mutate scope emits the partial moduleRecord alongside its summary", () => {
+  it("a report covering a subset of the configured mutate scope emits the partial moduleRecord alongside its summary", async () => {
     const { repo, reportPath } = scopedFixture(["src/add.ts"]);
-    const { status, out } = runCli(repo, ["--report", reportPath]);
+    const { status, out } = await runCli(repo, ["--report", reportPath]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { summary: unknown; scope: { scoped: boolean; missing: string[] }; moduleRecord?: { status: string; note: string } };
     expect(parsed.summary).toBeTruthy();
@@ -163,9 +171,9 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
     expect(parsed.moduleRecord?.note).toMatch(/never ran \(#504\)/);
   });
 
-  it("a report covering the full configured mutate scope carries no moduleRecord — a real full run still reads ran", () => {
+  it("a report covering the full configured mutate scope carries no moduleRecord — a real full run still reads ran", async () => {
     const { repo, reportPath } = scopedFixture(["src/add.ts", "src/mul.ts"]);
-    const { status, out } = runCli(repo, ["--report", reportPath]);
+    const { status, out } = await runCli(repo, ["--report", reportPath]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { scope: { scoped: boolean; verified: boolean }; moduleRecord?: unknown };
     expect(parsed.scope).toMatchObject({ scoped: false, verified: true });
@@ -177,7 +185,7 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
   // using e.g. stryker.conf.mjs (or, as here, no on-disk config file the CLI can find at all) read
   // "not statically readable" no matter what. No stryker.config.json exists in this fixture; the
   // report's own `config.mutate` is the only scope source available.
-  it("reads report.config.mutate as the scope source when no on-disk Stryker config is found", () => {
+  it("reads report.config.mutate as the scope source when no on-disk Stryker config is found", async () => {
     const repo = fixtureRepo({
       "src/add.test.ts": REAL_SPEC,
       "src/add.ts": "export const add = (a: number, b: number) => a + b;\n",
@@ -189,7 +197,7 @@ describe("mutation-scan --report scope verification (#504, child process)", () =
       files: { "src/add.ts": { mutants: [killed] } },
       config: { mutate: ["src/**/*.ts", "!**/*.test.ts"], testRunner: "vitest" },
     }));
-    const { status, out } = runCli(repo, ["--report", reportPath]);
+    const { status, out } = await runCli(repo, ["--report", reportPath]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { scope: { scoped: boolean; verified: boolean; missing: string[] }; rawReport: { config?: unknown } };
     expect(parsed.scope).toMatchObject({ scoped: true, verified: true, missing: ["src/mul.ts"] });
@@ -209,12 +217,12 @@ describe("mutation-scan --stub-check crash safety (#600)", () => {
   const SUBJECT = `export function add(a: number, b: number): number {\n  return a + b;\n}\n`;
   const COVERING_TEST = `import { it, expect } from "vitest";\nimport { add } from "./add";\nit("adds", () => { expect(add(1, 2)).toBe(3); });\n`;
 
-  it("a normal (non-killed) run leaves the target checkout byte-identical, having actually run the stub against a copy", () => {
+  it("a normal (non-killed) run leaves the target checkout byte-identical, having actually run the stub against a copy", async () => {
     const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
     // "true" always exits 0 — the covering "suite" trivially "survives" the stub, proving the
     // stub-write-and-test cycle executed for real (not skipped) without depending on npm/vitest
     // actually being installed in the fixture.
-    const { status, out } = runCli(repo, ["--stub-check", "--test-cmd", "true"]);
+    const { status, out } = await runCli(repo, ["--stub-check", "--test-cmd", "true"]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { runs: unknown[]; findings: unknown[] };
     expect(parsed.runs).toHaveLength(1);
@@ -225,9 +233,9 @@ describe("mutation-scan --stub-check crash safety (#600)", () => {
   // #1067: `false` always exits non-zero — a suite that cannot run at all. Every stubbed run then
   // "fails", which stubSurvivalFindings reads as "the test caught the deletion", so the CLI used
   // to print the strongest possible test-quality result (0 survivals) having measured nothing.
-  it("records a partial instead of a perfect score when the suite fails its own unmutated baseline", () => {
+  it("records a partial instead of a perfect score when the suite fails its own unmutated baseline", async () => {
     const repo = fixtureRepo({ "src/add.ts": SUBJECT, "src/add.test.ts": COVERING_TEST });
-    const { status, out } = runCli(repo, ["--stub-check", "--test-cmd", "false"]);
+    const { status, out } = await runCli(repo, ["--stub-check", "--test-cmd", "false"]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { runs: unknown[]; findings: unknown[]; baselineFailed: boolean; moduleRecord?: { status: string; note: string } };
     expect(parsed.baselineFailed).toBe(true);
@@ -265,7 +273,7 @@ describe("mutation-scan --stub-check crash safety (#600)", () => {
 describe("mutation-scan --stub-check no shell injection from target test-file paths (#765)", () => {
   const SUBJECT = `export function add(a: number, b: number): number {\n  return a + b;\n}\n`;
 
-  it("a covering-test path containing shell metacharacters is passed as a literal argv element, never shell-executed", () => {
+  it("a covering-test path containing shell metacharacters is passed as a literal argv element, never shell-executed", async () => {
     const marker = join(mkdtempSync(join(tmpdir(), "harvey-inject-marker-")), "INJECTED");
     dirs.push(dirname(marker));
     const record = join(mkdtempSync(join(tmpdir(), "harvey-inject-record-")), "argv.txt");
@@ -287,18 +295,13 @@ describe("mutation-scan --stub-check no shell injection from target test-file pa
     const evilName = `evil;touch $MARKER.test.ts`;
     writeFileSync(join(repo, "src", evilName), `import { it, expect } from "vitest";\nimport { add } from "./add";\nit("adds", () => { expect(add(1, 2)).toBe(3); });\n`);
 
-    const outPath = join(repo, "m8-out.json");
-    execFileSync("node_modules/.bin/tsx", [CLI, repo, "--stub-check", "--test-cmd", `node ${recorder}`, "--out", outPath], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, MARKER: marker, RECORD: record },
-    });
+    const { status, out } = await runCli(repo, ["--stub-check", "--test-cmd", `node ${recorder}`], { MARKER: marker, RECORD: record });
+    expect(status).toBe(0);
 
     // The injected command must NOT have run.
     expect(existsSync(`${marker}.test.ts`)).toBe(false);
     // The real runner ran and read the survival verdict.
-    const parsed = JSON.parse(readFileSync(outPath, "utf8")) as { runs: unknown[]; findings: unknown[] };
+    const parsed = JSON.parse(out) as { runs: unknown[]; findings: unknown[] };
     expect(parsed.runs).toHaveLength(1);
     expect(parsed.findings).toHaveLength(1);
     // The metacharacter-laden path arrived as ONE literal argument, not tokenized by a shell.
@@ -330,25 +333,9 @@ describe("mutation-scan monorepo root-workspace suite (#623, child process)", ()
     return { root, app };
   }
 
-  function runCliOn(target: string, extraArgs: string[]): { status: number; out: string } {
-    const outPath = join(target, "m8-out.json");
-    try {
-      execFileSync("node_modules/.bin/tsx", [CLI, target, ...extraArgs, "--out", outPath], {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
-      });
-      return { status: 0, out: readFileSync(outPath, "utf8") };
-    } catch (err) {
-      const e = err as { status?: number };
-      return { status: e.status ?? 1, out: "" };
-    }
-  }
-
-  it("emits the M8-04 measurement-gap finding for an app whose tests live at the monorepo root — NOT M8-00", () => {
+  it("emits the M8-04 measurement-gap finding for an app whose tests live at the monorepo root — NOT M8-00", async () => {
     const { app } = monorepo();
-    const { status, out } = runCliOn(app, ["--detect-only"]);
+    const { status, out } = await runCli(app, ["--detect-only"]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
     expect(parsed.finding.id).toBe("M8-04");
@@ -357,13 +344,13 @@ describe("mutation-scan monorepo root-workspace suite (#623, child process)", ()
     expect(parsed.moduleRecord.note).toMatch(/#623/);
   });
 
-  it("negative control: a standalone app with no test suite and no workspace root still gets M8-00", () => {
+  it("negative control: a standalone app with no test suite and no workspace root still gets M8-00", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-m8-standalone-"));
     dirs.push(repo);
     mkdirSync(join(repo, ".git"), { recursive: true });
     writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "solo", dependencies: {} }));
     writeFileSync(join(repo, "index.ts"), `export const x = () => 1;\n`);
-    const { status, out } = runCliOn(repo, ["--detect-only"]);
+    const { status, out } = await runCli(repo, ["--detect-only"]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { finding: Finding };
     expect(parsed.finding.id).toBe("M8-00");
@@ -388,25 +375,9 @@ describe("mutation-scan monorepo root invoked directly, tests live in workspaces
     return root;
   }
 
-  function runCliOn(target: string, extraArgs: string[]): { status: number; out: string } {
-    const outPath = join(target, "m8-out.json");
-    try {
-      execFileSync("node_modules/.bin/tsx", [CLI, target, ...extraArgs, "--out", outPath], {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
-      });
-      return { status: 0, out: readFileSync(outPath, "utf8") };
-    } catch (err) {
-      const e = err as { status?: number };
-      return { status: e.status ?? 1, out: "" };
-    }
-  }
-
-  it("emits the M8-04 measurement-gap finding for a root whose workspaces carry the test scripts — NOT the false M8-00", () => {
+  it("emits the M8-04 measurement-gap finding for a root whose workspaces carry the test scripts — NOT the false M8-00", async () => {
     const root = monorepoRoot();
-    const { status, out } = runCliOn(root, ["--detect-only"]);
+    const { status, out } = await runCli(root, ["--detect-only"]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
     expect(parsed.finding.id).toBe("M8-04");
@@ -422,23 +393,7 @@ describe("mutation-scan monorepo root invoked directly, tests live in workspaces
 // exercise a distinct degrade rung of that attempt — proving it is really invoked, not skipped —
 // while a live Stryker run itself stays out of scope for a unit/CLI test (see #655's task note).
 describe("mutation-scan monorepo root-scoped run attempt (#655, child process)", () => {
-  function runCliOn(target: string, extraArgs: string[]): { status: number; out: string } {
-    const outPath = join(target, "m8-out.json");
-    try {
-      execFileSync("node_modules/.bin/tsx", [CLI, target, ...extraArgs, "--out", outPath], {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
-      });
-      return { status: 0, out: readFileSync(outPath, "utf8") };
-    } catch (err) {
-      const e = err as { status?: number };
-      return { status: e.status ?? 1, out: "" };
-    }
-  }
-
-  it("degrades naming 'no recognized source directory' when the app has none of the scaffold's known dirs to scope to", () => {
+  it("degrades naming 'no recognized source directory' when the app has none of the scaffold's known dirs to scope to", async () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-monorepo-nosrc-"));
     dirs.push(root);
     mkdirSync(join(root, ".git"), { recursive: true });
@@ -452,7 +407,7 @@ describe("mutation-scan monorepo root-scoped run attempt (#655, child process)",
     writeFileSync(join(app, "package.json"), JSON.stringify({ name: "@app/main", dependencies: {} }));
     writeFileSync(join(app, "index.ts"), `export const main = () => 1;\n`); // no src/lib/app/etc dir to scope to
 
-    const { status, out } = runCliOn(app, []); // no --detect-only: the attempt must fire
+    const { status, out } = await runCli(app, []); // no --detect-only: the attempt must fire
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
     expect(parsed.finding.id).toBe("M8-04");
@@ -461,7 +416,7 @@ describe("mutation-scan monorepo root-scoped run attempt (#655, child process)",
     expect(parsed.moduleRecord.note).toMatch(/no recognized source directory/);
   });
 
-  it("degrades naming the missing Stryker packages + --install when the app HAS a scopable source dir", () => {
+  it("degrades naming the missing Stryker packages + --install when the app HAS a scopable source dir", async () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-monorepo-withsrc-"));
     dirs.push(root);
     mkdirSync(join(root, ".git"), { recursive: true });
@@ -475,7 +430,7 @@ describe("mutation-scan monorepo root-scoped run attempt (#655, child process)",
     writeFileSync(join(app, "package.json"), JSON.stringify({ name: "@app/main", dependencies: {} }));
     writeFileSync(join(app, "src", "index.ts"), `export const main = () => 1;\n`);
 
-    const { status, out } = runCliOn(app, []); // no --detect-only, no --install
+    const { status, out } = await runCli(app, []); // no --detect-only, no --install
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
     expect(parsed.finding.id).toBe("M8-04");
@@ -485,7 +440,7 @@ describe("mutation-scan monorepo root-scoped run attempt (#655, child process)",
     expect(parsed.moduleRecord.note).toMatch(/--install/);
   });
 
-  it("--detect-only takes precedence over #655 — never attempts the root-scoped run, unchanged #623 disclosure", () => {
+  it("--detect-only takes precedence over #655 — never attempts the root-scoped run, unchanged #623 disclosure", async () => {
     const root = mkdtempSync(join(tmpdir(), "harvey-m8-monorepo-detectonly-"));
     dirs.push(root);
     mkdirSync(join(root, ".git"), { recursive: true });
@@ -499,7 +454,7 @@ describe("mutation-scan monorepo root-scoped run attempt (#655, child process)",
     writeFileSync(join(app, "package.json"), JSON.stringify({ name: "@app/main", dependencies: {} }));
     writeFileSync(join(app, "src", "index.ts"), `export const main = () => 1;\n`);
 
-    const { status, out } = runCliOn(app, ["--detect-only"]);
+    const { status, out } = await runCli(app, ["--detect-only"]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { finding: Finding; moduleRecord: { status: string; note: string } };
     expect(parsed.finding.id).toBe("M8-04");
@@ -528,21 +483,21 @@ process.exit(0);
     chmodSync(join(binDir, "stryker"), 0o755);
   }
 
-  it("reads a custom jsonReporter.fileName off the target's own Stryker config, without --report", () => {
+  it("reads a custom jsonReporter.fileName off the target's own Stryker config, without --report", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
     writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest", jsonReporter: { fileName: "out/custom-mutation-report.json" } }));
     writeFakeStrykerReporterBinary(repo, "out/custom-mutation-report.json");
-    const { status, out } = runCli(repo, []);
+    const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } } };
     expect(parsed.summary?.overall.totalMutants).toBe(1);
   });
 
-  it("falls back to a glob search when the report isn't at the configured/default path (a Stryker version writing elsewhere)", () => {
+  it("falls back to a glob search when the report isn't at the configured/default path (a Stryker version writing elsewhere)", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
     writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" })); // no jsonReporter — the wrapper's documented default applies
     writeFakeStrykerReporterBinary(repo, "dist/mutation.json"); // NOT reports/mutation/mutation.json
-    const { status, out } = runCli(repo, []);
+    const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } } };
     expect(parsed.summary?.overall.totalMutants).toBe(1);
@@ -581,34 +536,34 @@ process.exit(0);
     chmodSync(join(binDir, runner), 0o755);
   }
 
-  it("auto-pulls line coverage from a local vitest binary and merges it onto the same module row as mutation score", () => {
+  it("auto-pulls line coverage from a local vitest binary and merges it onto the same module row as mutation score", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
     writeFakeCoverageBinary(repo, "vitest", "succeed");
     const reportPath = minimalReport(repo);
-    const { status, out } = runCli(repo, ["--report", reportPath]);
+    const { status, out } = await runCli(repo, ["--report", reportPath]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { lineCoverage: { status: string }; reportRows: { module: string; lineCoverage?: number }[] };
     expect(parsed.lineCoverage).toEqual({ status: "ran" });
     expect(parsed.reportRows.find((r) => r.module === "src")?.lineCoverage).toBe(80);
   });
 
-  it("discloses partial with a reason when the coverage tool produces no summary — never a silent blank column", () => {
+  it("discloses partial with a reason when the coverage tool produces no summary — never a silent blank column", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
     writeFakeCoverageBinary(repo, "vitest", "produces-nothing");
     const reportPath = minimalReport(repo);
-    const { status, out } = runCli(repo, ["--report", reportPath]);
+    const { status, out } = await runCli(repo, ["--report", reportPath]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { lineCoverage: { status: string; reason?: string } };
     expect(parsed.lineCoverage.status).toBe("partial");
     expect(parsed.lineCoverage.reason).toMatch(/coverage-summary\.json/);
   });
 
-  it("discloses partial when no recognized test runner is detected to invoke a coverage tool for", () => {
+  it("discloses partial when no recognized test runner is detected to invoke a coverage tool for", async () => {
     const repo = mkdtempSync(join(tmpdir(), "harvey-m8-cli-"));
     dirs.push(repo);
     writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "fixture", scripts: { test: "ava" }, devDependencies: { ava: "^6.0.0" } }));
     const reportPath = minimalReport(repo);
-    const { status, out } = runCli(repo, ["--report", reportPath]);
+    const { status, out } = await runCli(repo, ["--report", reportPath]);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { lineCoverage: { status: string; reason?: string } };
     expect(parsed.lineCoverage.status).toBe("partial");
@@ -646,13 +601,13 @@ describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)",
     chmodSync(binPath, 0o755);
   }
 
-  it("proactively patches the Stryker config for a detected TS7 target — the run completes instead of crashing", () => {
+  it("proactively patches the Stryker config for a detected TS7 target — the run completes instead of crashing", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC_TS7, "src/add.ts": "export const add = (a: number, b: number) => a + b;\n" });
     writeFakeTypeScript7(repo);
     writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
     writeFakeStrykerBinary(repo, "succeed-if-bypassed");
 
-    const { status, out } = runCli(repo, []);
+    const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { summary?: { overall: { totalMutants: number } }; moduleRecord?: unknown };
     // The fake binary only writes a report when it was HANDED the bypassed config — so a real
@@ -661,13 +616,13 @@ describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)",
     expect(parsed.moduleRecord).toBeUndefined(); // a normal full run, not a degraded verdict
   });
 
-  it("a TS7 target with a non-JSON Stryker config degrades immediately, naming the incompatibility, without ever invoking Stryker", () => {
+  it("a TS7 target with a non-JSON Stryker config degrades immediately, naming the incompatibility, without ever invoking Stryker", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC_TS7 });
     writeFakeTypeScript7(repo);
     writeFileSync(join(repo, "stryker.config.mjs"), `export default { testRunner: "vitest" };\n`);
     // No stryker binary anywhere: if the CLI ever attempted an invocation this would ENOENT-crash
     // instead of degrading, proving the degrade fires BEFORE any invocation attempt.
-    const { status, out } = runCli(repo, []);
+    const { status, out } = await runCli(repo, []);
     expect(status).toBe(0);
     const parsed = JSON.parse(out) as { moduleRecord?: { status: string; note: string } };
     expect(parsed.moduleRecord?.status).toBe("partial");
@@ -676,14 +631,14 @@ describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)",
     expect(parsed.moduleRecord?.note).toMatch(/not JSON/);
   });
 
-  it("reactive safety net: an undetected TS7 install still degrades precisely when Stryker crashes with the known signature — never a bare hard failure", () => {
+  it("reactive safety net: an undetected TS7 install still degrades precisely when Stryker crashes with the known signature — never a bare hard failure", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC_TS7 });
     // Deliberately NO node_modules/typescript here, simulating the proactive check missing an
     // unusually-hoisted install — Stryker itself still hits the incompatibility and crashes.
     writeFileSync(join(repo, "stryker.config.json"), JSON.stringify({ testRunner: "vitest", coverageAnalysis: "perTest" }));
     writeFakeStrykerBinary(repo, "always-crash-ts7");
 
-    const { status, out } = runCli(repo, []);
+    const { status, out } = await runCli(repo, []);
     expect(status).toBe(0); // not the pre-#773 hard exit-1 "mutation report not found" crash
     const parsed = JSON.parse(out) as { moduleRecord?: { status: string; note: string } };
     expect(parsed.moduleRecord?.status).toBe("partial");
@@ -699,22 +654,22 @@ describe("mutation-scan TS7 tsconfig-preprocessor bypass (#773, child process)",
 // .env symlink, dub's EE LICENSE.md symlink, cal.diy's same class). A dangling symlink has nothing
 // to read, so the correct behavior is to skip it and keep walking, not crash.
 describe("mutation-scan tree walk survives a dangling symlink (#944, child process)", () => {
-  it("--detect-only does not crash on a committed dangling symlink, and still finds the real test file", () => {
+  it("--detect-only does not crash on a committed dangling symlink, and still finds the real test file", async () => {
     const repo = fixtureRepo({ "src/add.test.ts": REAL_SPEC });
     // A dangling symlink: the link exists, its target does not — exactly a gitignored .env symlink
     // in a fresh checkout, or an EE-only file symlink outside this build's scope.
     symlinkSync(join(repo, "does-not-exist.env"), join(repo, ".env"));
-    const { status, out } = runCli(repo, ["--detect-only"]);
+    const { status, out } = await runCli(repo, ["--detect-only"]);
     expect(status).toBe(0); // pre-#944 this was a child-process crash (non-zero exit, no output)
     expect(JSON.parse(out)).toEqual([]); // meaningful suite present — same as the no-symlink case
   });
 
-  it("still walks a RESOLVABLE symlinked directory (regression guard on the fix itself) — the ONLY test file lives behind the link", () => {
+  it("still walks a RESOLVABLE symlinked directory (regression guard on the fix itself) — the ONLY test file lives behind the link", async () => {
     const repo = fixtureRepo({}); // no direct test files at all
     mkdirSync(join(repo, "real-dir"), { recursive: true });
     writeFileSync(join(repo, "real-dir", "extra.test.ts"), REAL_SPEC);
     symlinkSync("real-dir", join(repo, "linked-dir"));
-    const { status, out } = runCli(repo, ["--detect-only"]);
+    const { status, out } = await runCli(repo, ["--detect-only"]);
     expect(status).toBe(0);
     // If the symlinked dir weren't walked, this repo would have ZERO test files and emit M8-00
     // (#252) instead of the meaningful-suite empty-array shape.

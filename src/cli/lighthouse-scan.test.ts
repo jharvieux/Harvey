@@ -6,7 +6,7 @@
 // offline test gets to the actual failure, mirroring the pentest --mode=coverage child-process test),
 // not just a unit test of the wrapper in isolation.
 
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -21,12 +21,28 @@ const CLI = join(REPO_ROOT, "src", "cli", "lighthouse-scan.ts");
 // passes reliably in isolation. Raised once here rather than annotating every `it()`.
 vi.setConfig({ testTimeout: 30_000 });
 
+// #1134: awaited spawn, not execFileSync. execFileSync blocks the vitest worker's event loop for the
+// call's duration, and a blocked worker cannot service the birpc ack for a task update it already
+// sent — vitest hardcodes a 60s window for that ack (see vitest.config.ts's HEAVY_CLI_TESTS comment,
+// and #1120/#1133 which found run-audit.test.ts's beforeAll actually over that line). Measured calls
+// in this file are ~1s each on this hardware, well under the ceiling either way, but the standing
+// constraint is "no single blocking window may approach 60s" for every heavy CLI test.
+function run(args: string[], env: Record<string, string>): Promise<{ stdout: string }> {
+  return new Promise((res, rej) => {
+    const child = spawn("node_modules/.bin/tsx", args, { cwd: REPO_ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    child.stdout.on("data", (d: Buffer) => (stdout += d));
+    child.on("error", rej);
+    child.on("close", (code) => (code === 0 ? res({ stdout }) : rej(new Error(`lighthouse-scan ${args.join(" ")} exited ${code}`))));
+  });
+}
+
 describe("lighthouse-scan: a bad LIGHTHOUSE_CHROME_PATH degrades to M7L-00 (#556)", () => {
   let workDir: string;
   beforeEach(() => (workDir = mkdtempSync(join(tmpdir(), "harvey-lh-"))));
   afterEach(() => rmSync(workDir, { recursive: true, force: true }));
 
-  it("exits 0 and records the fail-loud disclosure instead of an uncaught ENOENT exit", () => {
+  it("exits 0 and records the fail-loud disclosure instead of an uncaught ENOENT exit", async () => {
     const outPath = join(workDir, "findings.json");
     // --url skips build/serve entirely, so launchChrome() is reached (and fails) before anything
     // network-dependent runs — the bad chromePath is the only thing under test here.
@@ -35,12 +51,8 @@ describe("lighthouse-scan: a bad LIGHTHOUSE_CHROME_PATH degrades to M7L-00 (#556
       HOME: process.env.HOME ?? "",
       LIGHTHOUSE_CHROME_PATH: join(workDir, "not-a-real-chrome-binary"),
     };
-    execFileSync("node_modules/.bin/tsx", [CLI, "--url", "http://localhost:1", "--out", outPath], {
-      cwd: REPO_ROOT,
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }); // throws if the child exits non-zero — the pre-fix behavior for this env
+    // rejects if the child exits non-zero — the pre-fix behavior for this env
+    await run([CLI, "--url", "http://localhost:1", "--out", outPath], env);
 
     const findings = JSON.parse(readFileSync(outPath, "utf8"));
     expect(findings).toHaveLength(1);
@@ -62,27 +74,24 @@ describe("lighthouse-scan: a bad LIGHTHOUSE_CHROME_PATH degrades to M7L-00 (#556
 // system/network dependency in the test itself) via the LIGHTHOUSE_PRINT_CHROME_ORDER dry-run
 // seam — the fastest way to pin the fallback chain the header comment documents.
 describe("lighthouse-scan: browser-candidate resolution order (#818)", () => {
-  function printOrder(env: Record<string, string>): string {
-    return execFileSync("node_modules/.bin/tsx", [CLI], {
-      cwd: REPO_ROOT,
-      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", LIGHTHOUSE_PRINT_CHROME_ORDER: "1", ...env },
-      encoding: "utf8",
-    }).trim();
+  async function printOrder(env: Record<string, string>): Promise<string> {
+    const { stdout } = await run([CLI], { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", LIGHTHOUSE_PRINT_CHROME_ORDER: "1", ...env });
+    return stdout.trim();
   }
 
-  it("tries the bundled Playwright chromium before system Chrome by default", () => {
-    expect(printOrder({})).toBe("bundled-playwright,system,provisioned");
+  it("tries the bundled Playwright chromium before system Chrome by default", async () => {
+    expect(await printOrder({})).toBe("bundled-playwright,system,provisioned");
   });
 
-  it("an explicit LIGHTHOUSE_CHROME_PATH override short-circuits every other candidate", () => {
-    expect(printOrder({ LIGHTHOUSE_CHROME_PATH: "/some/chrome" })).toBe("override");
+  it("an explicit LIGHTHOUSE_CHROME_PATH override short-circuits every other candidate", async () => {
+    expect(await printOrder({ LIGHTHOUSE_CHROME_PATH: "/some/chrome" })).toBe("override");
   });
 
-  it("LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM skips straight to system Chrome", () => {
-    expect(printOrder({ LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM: "1" })).toBe("system,provisioned");
+  it("LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM skips straight to system Chrome", async () => {
+    expect(await printOrder({ LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM: "1" })).toBe("system,provisioned");
   });
 
-  it("both skip flags leave only network-dependent provisioning as a candidate", () => {
-    expect(printOrder({ LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM: "1", LIGHTHOUSE_SKIP_SYSTEM_CHROME: "1" })).toBe("provisioned");
+  it("both skip flags leave only network-dependent provisioning as a candidate", async () => {
+    expect(await printOrder({ LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM: "1", LIGHTHOUSE_SKIP_SYSTEM_CHROME: "1" })).toBe("provisioned");
   });
 });
