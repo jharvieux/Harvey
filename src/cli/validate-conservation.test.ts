@@ -113,5 +113,25 @@ describe.skipIf(!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !
       expect(output).toMatch(new RegExp(`PASS\\s+${module}\\s+produced=[1-9]`));
     }
     expect(output).not.toContain("GATE FAIL — M1");
+    // #1146: the baseline ledger runs on every gate invocation (empty baseline), so an unseeded run
+    // proves it is wired and passing on the real deliverable.
+    expect(output).toContain("BASELINE LEDGER PASS");
+  }, 240000);
+
+  // #1146, the 4b seam: a finding dropped during baseline application produces a ledger row and a
+  // non-zero exit — the guard against silently deleting a NEW finding after assembly.
+  it("FAILS when the baseline diff drops a finding (--seed-baseline-loss)", () => {
+    const { code, output } = runGate(["--seed-baseline-loss"]);
+    expect(code).toBe(1);
+    expect(output).toContain("BASELINE LEDGER FAIL");
+    expect(output).toMatch(/DELETED\s+\S+/);
+  }, 240000);
+
+  // #1146, the 4a seam: a disposition column credited against a finding that still ships fails —
+  // the producer path for suppressed/capped/not-applicable cannot close the arithmetic on a fiction.
+  it("FAILS when a disposition is declared against a still-delivered finding (--seed-misdeclared)", () => {
+    const { code, output } = runGate(["--seed-misdeclared"]);
+    expect(code).toBe(1);
+    expect(output).toContain("did not actually go missing");
   }, 240000);
 });
