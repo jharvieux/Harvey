@@ -97,6 +97,7 @@ import {
   SCAFFOLD_SOURCE_DIRS,
   scaffoldStrykerConfig,
   scopedRunModuleRecord,
+  noCoverageFindings,
   summarizeLineCoverage,
   summarizeMutationReport,
   survivingMutantFindings,
@@ -856,7 +857,11 @@ const hotspotFiles = hotspotsPath
 
 const summary = summarizeMutationReport(report, hotspotFiles);
 
-console.error(`M8 mutation score: ${summary.overall.mutationScore}% (${summary.overall.killed + summary.overall.timeout}/${summary.overall.totalMutants - summary.overall.ignored - summary.overall.compileErrors} valid mutants killed)`);
+console.error(`M8 mutation score: ${summary.overall.mutationScore}% (${summary.overall.killed + summary.overall.timeout}/${summary.overall.totalMutants - summary.overall.ignored - summary.overall.compileErrors - summary.overall.runtimeErrors} valid mutants killed)`);
+// #1076: Stryker's OTHER published score — detected/(detected+survived), i.e. over only the code
+// the suite actually reached. Printed alongside so "your tests are bad" and "your tests are decent
+// but reach half the code" don't collapse into one number.
+console.error(`M8 mutation score (based on covered code only, excluding NoCoverage): ${summary.overall.mutationScoreBasedOnCoveredCode}%`);
 // #319: never print the score without its scope — a high percentage over a scoped `mutate` set is
 // "the covered files are tested well", not "the repo is tested".
 console.error(`  ${coveredScopeLine(summary)}`);
@@ -882,13 +887,23 @@ function readMutateGlobs(cfgPath: string | undefined): string[] | undefined {
   }
 }
 
+// #1076: the report's own `config` (the EFFECTIVE resolved config Stryker ran with, MEASURED
+// 2026-07-25 against the mutation-testing-report-schema) sits in the JSON already loaded — read
+// first, so a target using a non-JSON stryker.conf.mjs/.js (previously "not statically readable" no
+// matter what) still gets its real scope. readMutateGlobs above (an external JSON config file) is
+// the fallback for a report that omitted `config` (an older Stryker, or a hand-assembled report).
+function configMutateGlobs(cfg: Record<string, unknown> | undefined): string[] | undefined {
+  const mutate = cfg?.mutate;
+  return Array.isArray(mutate) && mutate.every((g) => typeof g === "string") ? (mutate as string[]) : undefined;
+}
+
 const SOURCE_PATH = /\.([cm]?[jt]s|[jt]sx)$/;
 const toTargetRelative = (file: string): string => (isAbsolute(file) ? relative(targetDir, file) : file).split(sep).join("/");
 
 const referenceConfigPath = defaultConfigPath ?? effectiveConfigPath;
 const scope = verifyMutationScope(
   Object.keys(report.files).map(toTargetRelative),
-  readMutateGlobs(referenceConfigPath),
+  configMutateGlobs(report.config) ?? readMutateGlobs(referenceConfigPath),
   walkRelPaths(targetDir).filter((p) => SOURCE_PATH.test(p)),
 );
 console.error(`M8 mutate scope (#504): ${scope.note}`);
@@ -906,7 +921,9 @@ if (lineCoverage.status === "partial") {
 
 // #435: findings from the denial/boundary-concentration mapper — a real Stryker run's survivors
 // contribute report-schema findings the same way the no-test-suite branch's M8-00 already does.
-const findings = survivingMutantFindings(summary);
+// #1076: noCoverageFindings adds the "never executed at all" signal ModuleMutationSummary already
+// counted but nothing turned into a Finding.
+const findings = [...survivingMutantFindings(summary), ...noCoverageFindings(summary)];
 const output = {
   summary,
   reportRows: toReportRows(summary, lineCoverage.byModule),
@@ -918,6 +935,12 @@ const output = {
   // #504: a scoped run carries the machine-readable partial verdict alongside its summary, so the
   // M8 probe records partial-with-scope instead of banking the subset score as `ran`.
   ...(scope.scoped ? { moduleRecord: scopedRunModuleRecord(scope) } : {}),
+  // #1076: the raw Stryker report, retained alongside the transformed summary — previously
+  // discarded after JSON.parse (src/mutation-scan.ts's own header note: "No raw Stryker report is
+  // retained anywhere in the repo... Retaining one would make these verifiable"). Every future
+  // fixture/regression capture can now be pulled straight from a real --out artifact instead of
+  // reconstructed by hand.
+  rawReport: report,
 };
 if (scope.scoped) console.error(`⚠ M8 coverage: partial (scoped mutation run, #504) — this score is a subset measurement, not the module's result.`);
 const json = JSON.stringify(output, null, 2);

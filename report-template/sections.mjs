@@ -108,6 +108,9 @@ export function testQualitySection(tq) {
       coverage and a low mutation score has tests that execute the code without asserting on it.</div>
     <div class="tq">
       <div class="tq-score">${esc(String(tq.mutationScore))}<span class="tq-unit">% mutation</span></div>
+      ${tq.mutationScoreBasedOnCoveredCode !== undefined
+        ? `<div class="tq-score" style="font-size:0.6em"><span title="Stryker's other headline metric: detected / (detected + survived) — the score over only the code the suite actually reached, excluding never-executed mutants.">${esc(String(tq.mutationScoreBasedOnCoveredCode))}<span class="tq-unit">% of COVERED code</span></span></div>`
+        : ""}
       <div class="tq-body">
         <div><b>Covered scope</b> ${scopeText}</div>
         <div style="margin-top:4px;font-size:11px;color:var(--muted)">${caveat}</div>
