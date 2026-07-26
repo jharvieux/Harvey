@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-js/master/packages/api/schema/stryker-schema.json",
+  "_comment": "M8 calibration fixture (#1100) — a SEPARATE config from stryker.config.json's discount.ts/authz.ts pair, deliberately, so that pair's recorded live result (targets/calibration/GROUND-TRUTH.md) stays reproducible. Scores vacuous.ts alone, covered by vacuous.smoke.test.ts's assertion-free test — the answer key for vacuousTestFindings (#1100).",
+  "mutate": ["vacuous.ts"],
+  "testRunner": "vitest",
+  "coverageAnalysis": "perTest",
+  "reporters": ["json", "clear-text", "progress"],
+  "jsonReporter": {
+    "fileName": "reports/mutation-vacuous/mutation.json"
+  },
+  "tempDirName": "stryker-tmp-vacuous"
+}
