@@ -3,7 +3,7 @@
 // (calibration.test.ts, cli/validate-calibration.ts). Kept in their own module so an entry
 // file can import the types without a cycle through calibration.ts.
 
-import type { PrecisionTier } from "../../findings.js";
+import type { PrecisionTier, Severity } from "../../findings.js";
 
 type CorpusKind = "positive" | "negative";
 
@@ -41,6 +41,16 @@ export interface CorpusEntry {
   match?: string[];
   // Positives: the tier we expect the detection at. Negatives: omit.
   expectedTier?: ExpectedTier;
+  // Positives: the exact Severity the DELIVERED finding must carry (#1157). Presence is NOT
+  // detection (that is expectedTier) — it is a scored assertion that a caught finding is RATED
+  // right, so a real Critical shipped as Medium fails the gate the way a miss does (#1063/#1060).
+  // Ground truth, not "whatever the code emits": set it from the advisory's CVSS band / the data
+  // class, so the gate catches a live mis-rating, not merely a regression from a wrong baseline.
+  // Only checked when the positive was caught; a not-caught positive already fails on the miss.
+  // Omit where the expected severity is unstable or an entry legitimately matches findings of
+  // several severities (e.g. a two-CVE cluster) — a silent omission there is fine, a wrong
+  // assertion is not.
+  expectedSeverity?: Severity;
   note: string;
 }
 
