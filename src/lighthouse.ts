@@ -15,10 +15,40 @@
 import type { Finding, Severity } from "./findings.js";
 import type { TargetFramework } from "./scan/framework-detect.js";
 
+// An opportunity audit's named offending resource (details.items — #1074). Lighthouse's own shape
+// carries many more fields per audit (headings, sortedBy, debugData); only the ones the M7L
+// opportunity finding reads are modelled. Verified real (Lighthouse 13.4.0, live capture 2026-07-25,
+// unused-css-rules audit — see src/__fixtures__/lighthouse-opportunity-audit.json).
+interface LighthouseAuditItem {
+  url?: string;
+  wastedBytes?: number;
+  wastedMs?: number;
+}
+
+interface LighthouseAuditDetails {
+  type?: string;
+  items?: LighthouseAuditItem[];
+  overallSavingsMs?: number;
+  overallSavingsBytes?: number;
+}
+
 interface LighthouseAudit {
   score?: number | null;
   numericValue?: number;
   displayValue?: string;
+  // Required on every real LHR audit (node_modules/lighthouse/types/lhr/audit-result.d.ts:57).
+  // "error" means the audit failed with no numericValue — a metric in that state was NOT measured
+  // and must never be read as passing (#1074). Verified real values (Lighthouse 13.4.0, live
+  // capture 2026-07-25): "numeric" (an ordinary measured metric), "metricSavings" (an opportunity
+  // audit), "error" (the audit threw — see src/__fixtures__/lighthouse-report-errored.json).
+  scoreDisplayMode?: string;
+  // Present alongside scoreDisplayMode "error" (verified real, same 2026-07-25 capture).
+  errorMessage?: string;
+  // The opportunity/remediation layer (#1074) — Lighthouse's ~50 performance audits carry the
+  // specific offending resources and a quantified saving here; Harvey previously read only
+  // score/numericValue/displayValue for the 3 tracked metrics and dropped this entirely.
+  details?: LighthouseAuditDetails;
+  metricSavings?: Record<string, number>;
 }
 
 // The subset of the Lighthouse result object (LHR) this transform reads. The real object is large;
@@ -30,6 +60,12 @@ export interface LighthouseResult {
   categories?: { performance?: { score?: number | null } };
   audits?: Record<string, LighthouseAudit>;
   runtimeError?: { code?: string; message?: string };
+  // Non-optional on the real LHR (node_modules/lighthouse/types/lhr/lhr.d.ts:42) — Lighthouse's own
+  // caveats about THIS run (redirect, extension interference, throttling disabled, unresponsive
+  // page). Optional here only for back-compat with a hand-built LighthouseResult that omits it.
+  // Verified real (Lighthouse 13.4.0, 2026-07-25): [] on a clean run, populated with the
+  // human-readable warning on a degraded one (e.g. NO_FCP).
+  runWarnings?: string[];
 }
 
 export interface LighthousePageResult {
@@ -110,6 +146,17 @@ function pageList(pages: { label: string; text: string }[]): string {
   return shown.map((p) => `${p.label} (${p.text})`).join(", ") + (rest > 0 ? `, +${rest} more` : "");
 }
 
+// #1074: Lighthouse's own caveats about a run (redirect, extension interference, throttling
+// disabled, unresponsive page) for the specific pages a finding is about — appended to that
+// finding's evidence rather than discarded, so a "Confirmed" finding doesn't hide a caveat
+// Lighthouse itself raised about the same run it was measured from.
+function runWarningsNote(pages: LighthousePageResult[], labels: string[]): string {
+  const warned = pages.filter((p) => labels.includes(pageLabel(p)) && (p.result.runWarnings?.length ?? 0) > 0);
+  if (warned.length === 0) return "";
+  const notes = warned.map((p) => `${pageLabel(p)}: ${p.result.runWarnings!.join("; ")}`).join(" | ");
+  return ` Lighthouse's own run warnings for this page — ${notes}.`;
+}
+
 function metricFinding(profile: MetricProfile, pages: LighthousePageResult[]): Finding | undefined {
   const failing = pages
     .map((p) => ({ label: pageLabel(p), value: p.result.audits?.[profile.auditId]?.numericValue }))
@@ -134,12 +181,121 @@ function metricFinding(profile: MetricProfile, pages: LighthousePageResult[]): F
     evidence:
       `Lighthouse lab ${profile.label}, worst-first: ` +
       pageList(failing.map((p) => ({ label: p.label, text: profile.format(p.value) }))) +
-      `. Measured this run under simulated throttling — corroborate with field RUM or repeat runs before acting.`,
+      `. Measured this run under simulated throttling — corroborate with field RUM or repeat runs before acting.` +
+      runWarningsNote(pages, failing.map((p) => p.label)),
     impact: profile.impact,
     fix: profile.fix,
     value: profile.value,
     ease: profile.ease,
     safety: profile.safety,
+  };
+}
+
+// #1074: an audit whose scoreDisplayMode is "error" measured NOTHING (no numericValue) — the
+// previous metricFinding filter (`typeof p.value === "number"`) had no else branch, so an errored
+// audit was silently indistinguishable from "no page failed this metric", i.e. a clean pass. This
+// surfaces it as its own disclosure so an unmeasured metric can never read as passing.
+//
+// Verified: under the current CLI (src/cli/lighthouse-scan.ts), an errored LCP/TBT/CLS audit also
+// nulls categories.performance.score (Lighthouse's core/scoring.js: a weighted audit's null score
+// nulls the whole category's arithmetic mean — confirmed live, Lighthouse 13.4.0, 2026-07-25), which
+// lighthouseRunErrorReason already catches, so auditRoute() throws before this page ever reaches
+// parseLighthouseFindings. This function still guards the audit level because parseLighthouseFindings
+// is an independently-tested, exported pure function — it must not depend on an upstream caller's
+// invariant to avoid a false clean, and a future caller (or a change to that upstream guard) could
+// reach this state directly.
+function metricNotMeasuredFinding(profile: MetricProfile, pages: LighthousePageResult[]): Finding | undefined {
+  const errored = pages
+    .map((p) => ({ label: pageLabel(p), audit: p.result.audits?.[profile.auditId] }))
+    .filter((p): p is { label: string; audit: LighthouseAudit } => p.audit?.scoreDisplayMode === "error");
+  if (errored.length === 0) return undefined;
+
+  const n = errored.length;
+  const detail = errored.map((e) => `${e.label}${e.audit.errorMessage ? ` (${e.audit.errorMessage})` : ""}`).join(", ");
+
+  return {
+    id: "M7L-00",
+    status: "Open",
+    category: "Performance",
+    title: `${profile.label} NOT measured on ${n} page${n === 1 ? "" : "s"} — the Lighthouse audit errored`,
+    severity: "Info",
+    confidence: "N/A",
+    taxonomy: `M7 — ${profile.label} not measured (Lighthouse audit error)`,
+    location: errored[0]!.label,
+    evidence: `Lighthouse's ${profile.auditId} audit reported scoreDisplayMode "error" (no numericValue) rather than a measurement: ${detail}. This is NOT the same as passing Google's "Good" threshold — the metric was not measured at all on this run.`,
+    impact: `An errored audit gives no signal on ${profile.label}. Reading it as "within Good" (the prior behavior) is a false clean, not the absence of a problem.`,
+    fix: "Re-run Lighthouse for this page and investigate why the audit errored (see the error message, and any run warnings, above) before concluding the metric is fine.",
+    value: 2,
+    ease: 2,
+    safety: 5,
+  };
+}
+
+// #1074: Lighthouse's opportunity/remediation layer (audits[].details.items, .overallSavingsMs/
+// Bytes) names the SPECIFIC offending resources for the ~50 performance audits beyond the 3 tracked
+// metrics — Harvey previously read none of it, so every M7L fix was the same constant prose
+// regardless of what Lighthouse actually found. One finding per audit id, grouped worst-first across
+// pages by savings, naming the resources Lighthouse itself flagged.
+interface OpportunityProfile {
+  auditId: string;
+  label: string;
+  impact: string;
+}
+
+const OPPORTUNITIES: OpportunityProfile[] = [
+  { auditId: "render-blocking-resources", label: "Render-blocking resources", impact: "Scripts/stylesheets that block first paint until they finish loading." },
+  { auditId: "unused-css-rules", label: "Unused CSS", impact: "CSS shipped but never applied on this page — extra bytes parsed before paint." },
+  { auditId: "unused-javascript", label: "Unused JavaScript", impact: "JS shipped but never executed on this page — extra bytes parsed/compiled for nothing." },
+  { auditId: "server-response-time", label: "Server response time (TTFB)", impact: "A slow initial server response delays everything that depends on the document." },
+  { auditId: "modern-image-formats", label: "Legacy image formats", impact: "Images served in older formats are larger than a modern format (WebP/AVIF) would be." },
+  { auditId: "unminified-javascript", label: "Unminified JavaScript", impact: "Unminified JS ships extra bytes with no functional benefit." },
+  { auditId: "duplicated-javascript", label: "Duplicated JavaScript modules", impact: "The same module bundled more than once wastes bytes and parse time." },
+];
+
+function opportunitySavings(details: LighthouseAuditDetails): number {
+  return details.overallSavingsBytes ?? details.overallSavingsMs ?? 0;
+}
+
+function opportunityFinding(profile: OpportunityProfile, pages: LighthousePageResult[]): Finding | undefined {
+  const hits = pages
+    .map((p) => ({ label: pageLabel(p), details: p.result.audits?.[profile.auditId]?.details }))
+    .filter(
+      (p): p is { label: string; details: LighthouseAuditDetails } =>
+        !!p.details?.items?.length && ((p.details.overallSavingsMs ?? 0) > 0 || (p.details.overallSavingsBytes ?? 0) > 0),
+    )
+    .sort((a, b) => opportunitySavings(b.details) - opportunitySavings(a.details));
+  if (hits.length === 0) return undefined;
+
+  const worst = hits[0]!;
+  const resources = worst.details
+    .items!.slice(0, 5)
+    .map((item) => {
+      const size = item.wastedBytes ? `${Math.round(item.wastedBytes / 1024)} KiB` : item.wastedMs ? `${Math.round(item.wastedMs)} ms` : undefined;
+      return `${item.url ?? "(unnamed resource)"}${size ? ` (${size})` : ""}`;
+    })
+    .join(", ");
+  const savings = worst.details.overallSavingsBytes
+    ? `${Math.round(worst.details.overallSavingsBytes / 1024)} KiB`
+    : worst.details.overallSavingsMs
+      ? `${Math.round(worst.details.overallSavingsMs)} ms`
+      : "unspecified";
+  const n = hits.length;
+
+  return {
+    id: "M7L-00",
+    status: "Open",
+    category: "Performance",
+    title: `${profile.label}: ${n} page${n === 1 ? "" : "s"} (worst: ${worst.label}, ~${savings} potential savings)`,
+    severity: "Low",
+    confidence: "Confirmed",
+    taxonomy: `M7 — Lighthouse opportunity: ${profile.label}`,
+    location: worst.label,
+    evidence: `Lighthouse's ${profile.auditId} audit on ${worst.label} named the specific offending resource(s): ${resources}.`,
+    impact: profile.impact,
+    fix: `Address the specific resource(s) Lighthouse named above (${resources}) — not generic "${profile.label.toLowerCase()}" guidance.`,
+    value: 3,
+    ease: 3,
+    safety: 4,
   };
 }
 
@@ -166,7 +322,8 @@ function perfScoreFinding(pages: LighthousePageResult[]): Finding | undefined {
     evidence:
       `Lighthouse performance score (0–1), worst-first: ` +
       pageList(failing.map((p) => ({ label: p.label, text: p.score.toFixed(2) }))) +
-      `. A weighted roll-up of the lab metrics; measured this run under simulated throttling.`,
+      `. A weighted roll-up of the lab metrics; measured this run under simulated throttling.` +
+      runWarningsNote(pages, failing.map((p) => p.label)),
     impact: "The overall Lighthouse performance score is a weighted roll-up of the lab metrics (LCP/TBT/CLS/FCP/SI). Below 0.9 is 'needs improvement'; below 0.5 is 'poor'.",
     fix: "Address the individual metric findings (LCP/TBT/CLS) that drive the score — the score has no separate fix of its own.",
     value: 3,
@@ -180,11 +337,43 @@ function perfScoreFinding(pages: LighthousePageResult[]): Finding | undefined {
 // DB-advisor pass (src/perf-scan.ts) and the bundle-stats pass, so the §3b Performance table reads
 // "5 pages with poor LCP, worst /dashboard 4.8s", not one row per (page × metric). Ids M7L-01…,
 // score last. A metric no page fails produces no finding (clean = absent, per the report shape).
+// #1074: each metric also gets its own metricNotMeasuredFinding, so an errored audit is disclosed
+// rather than silently read as clean; opportunity findings (Lighthouse's named offending resources)
+// are appended after the metric/score findings.
 export function parseLighthouseFindings(pages: LighthousePageResult[]): Finding[] {
-  const findings = [...METRICS.map((m) => metricFinding(m, pages)), perfScoreFinding(pages)].filter(
-    (f): f is Finding => f !== undefined,
-  );
+  const findings = [
+    ...METRICS.flatMap((m) => [metricFinding(m, pages), metricNotMeasuredFinding(m, pages)]),
+    perfScoreFinding(pages),
+    ...OPPORTUNITIES.map((o) => opportunityFinding(o, pages)),
+  ].filter((f): f is Finding => f !== undefined);
   return findings.map((f, i) => ({ ...f, id: `M7L-${String(i + 1).padStart(2, "0")}` }));
+}
+
+// #1074: src/cli/lighthouse-scan.ts invokes Lighthouse with onlyCategories: ["performance"] — the
+// accessibility, best-practices, and SEO categories never run at all, and LighthouseResult could not
+// have held them anyway (only `categories.performance` is modelled). `grep -r
+// accessibility|a11y|axe-core src/ briefs/` finds no other module covering this, so it is a total
+// gap — disclosed here rather than silently, mirroring INFRA-SCOPE-00 (src/scan/infra-scope.ts) /
+// M1-LANG-00 (src/scan/language-coverage.ts). One constant row per run — src/cli/lighthouse-scan.ts
+// appends it whenever the Lighthouse tier actually ran (the unavailable-tier disclosure already
+// covers the case where it didn't run at all).
+export function lighthouseScopeDisclosureFinding(): Finding {
+  return {
+    id: "M7-SCOPE-00",
+    status: "Open",
+    category: "Performance",
+    title: "Lighthouse pass scoped to Performance only — accessibility/best-practices/SEO not assessed",
+    severity: "Info",
+    confidence: "N/A",
+    taxonomy: "M7 — Lighthouse categories out of scope",
+    location: "target app",
+    evidence: `This Lighthouse pass runs with onlyCategories: ["performance"] — the accessibility, best-practices, and SEO categories do not run at all. best-practices in particular includes csp-xss, is-on-https, deprecations, and errors-in-console — checks directly relevant to M1 that this audit does not get from Lighthouse.`,
+    impact: "Accessibility, best-practices, and SEO are a total gap in M7's Lighthouse tier. No other Harvey module runs an accessibility/axe-core pass, so this is not covered elsewhere in the report.",
+    fix: "Widen onlyCategories to include accessibility/best-practices/seo (adds runtime per page), or run a dedicated a11y pass (axe-core, or Lighthouse CI with the full category set) alongside this tier.",
+    value: 2,
+    ease: 3,
+    safety: 5,
+  };
 }
 
 // A Lighthouse run can return a result object that measured NOTHING — a runtimeError like NO_FCP
