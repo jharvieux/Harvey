@@ -141,14 +141,21 @@ restructured to load the committed capture.
 **Split to the #1146 chunk-3 remainder issue (each needs a purpose-built target corpus that
 reproduces the specific per-branch assertions, or a tool this environment does not install):**
 
-- **Row 7 (semgrep)** — `parseSemgrepFindings` literals span many distinct rule scenarios
-  (service-role-in-client, workflow shell-injection routing, registry-rule cwe/owasp threading,
-  references composition, bare-string normalization). Reproducing each from a real `semgrep` run is
-  a per-rule target reconstruction, not a single drop-in capture.
-- **Row 9 (gitleaks 8.30.1, MEASURED — inventory's unversioned cell)** — `parseGitleaksFindings`
-  literals encode many correlation scenarios (demo-marker co-location, allowlist suppression,
-  doc-context reclassification) against Harvey's *custom* gitleaks ruleset; reproducing them needs a
-  planted-secret corpus run under the custom config.
+- **Row 7 (semgrep) — RE-CAPTURED (#1156, closes #1150 row 7).** Real `semgrep 1.164.0` output over a
+  purpose-built corpus lives at `__fixtures__/semgrep/semgrep-1.164.0-corpus.json` (+ `PROVENANCE.md`,
+  + reproducible `build-corpus.mjs`); `semgrep.test.ts`'s `parseSemgrepFindings` block loads it. Two
+  invented shapes were CORRECTED against the real run: the old `#455` no-cwe literal put no cwe on
+  `harvey-service-role-in-client`, but every harvey rule now ships cwe; the old `#976` bare-string-cwe
+  literal used a fabricated `tainted-sql-string` rule — the real bare-string carrier is
+  `bypass-tls-verification`. Two shapes no rule emits (no-cwe result, bare-string `references`) remain
+  as labelled synthetic negative-controls (REASON in the PROVENANCE).
+- **Row 9 (gitleaks 8.30.1) — RE-CAPTURED (#1156, closes #1150 row 9).** Real `gitleaks 8.30.1` output
+  over a planted-secret corpus, under Harvey's custom config, lives at
+  `__fixtures__/gitleaks/gitleaks-8.30.1-corpus.json` (+ `PROVENANCE.md`, + `build-corpus.mjs`);
+  `secrets.test.ts`'s `parseGitleaksFindings` block loads it. The capture VERIFIED the old literals
+  faithful (real RuleIDs, real `Match` values, and — load-bearing — the #210 demo co-location really
+  does report both rules on one `File:StartLine`). The `#1078` allowlist block keeps DEFANGED literals
+  by decision (a live-shaped key would trip push protection; decisional REASON in the PROVENANCE).
 - **Row 10 (TruffleHog git-history scoring)** — `scoreGitHistoryResults` inputs are minimal scoring
   literals; one is an inherently synthetic negative-control (a benign file trufflehog would never
   flag). Its positive case could later reference the row-8 capture.
