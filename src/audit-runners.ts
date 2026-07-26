@@ -9,7 +9,7 @@
 
 import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
-import { findFreshPass, ranFromPass } from "./audit-pass-artifact.js";
+import { findFreshPass, type PassArtifact, ranFromPass } from "./audit-pass-artifact.js";
 import type { ModuleRunner, ProbeOutcome, RunContext } from "./audit-runner.js";
 import type { Finding } from "./findings.js";
 
@@ -19,6 +19,62 @@ const withRejectedPass = (base: string, reason: string | undefined): string =>
   reason ? `${base} A pass artifact was found but rejected: ${reason}` : base;
 
 const trimOut = (output: string): string => output.trim().slice(0, 200);
+
+// ---- #1042: the CONSUME side for the six modules record-pass accepts but no probe ever read ----
+//
+// `record-pass` validates --module against the full M1–M10 list and tells the operator "that module
+// derives `ran` from this artifact", but findFreshPass was called for M1/M2/M3/M6 only. A recorded
+// M7 Lighthouse pass was therefore accepted, written, and then silently dropped: MEASURED
+// 2026-07-25 on targets/calibration, the recorded M7L-01 finding was absent from --findings-out and
+// the M7 row still asserted Lighthouse "not run" — a confident negative claim contradicted by
+// evidence sitting in the directory run-audit had just read. Operator ruling: wire the consume side
+// for all ten rather than make record-pass reject the six.
+//
+// What a recorded pass does for these six: its findings are folded into the row and the pass is
+// named there. What it does NOT do is read `ran` — it covers ONE tier (Lighthouse for M7, a captured
+// tool run for the rest) and the orchestrator has no evidence about the others, which is the #229
+// derive-don't-assert rule. A requires-live-run does become a partial, because something demonstrably
+// ran and produced output. A present-but-rejected artifact (stale, wrong target, malformed) is
+// surfaced on the row too, so an unconsumed artifact is never silent either way.
+const passLabel = (artifact: PassArtifact): string => `${artifact.pass} pass (${artifact.generatedAt}${artifact.summary ? `: ${artifact.summary}` : ""})`;
+
+const foldPassInto = (outcome: ProbeOutcome, note: string, passFindings: Finding[]): ProbeOutcome => {
+  if (outcome.status === "requires-live-run") {
+    return {
+      status: "partial",
+      detail: "recorded pass artifact",
+      reason: `${outcome.reason} ${note}.`,
+      ...(passFindings.length ? { findings: passFindings } : {}),
+      ...(outcome.instance ? { instance: outcome.instance } : {}),
+    };
+  }
+  const findings = [...(outcome.findings ?? []), ...passFindings];
+  const merged = { ...outcome, ...(findings.length ? { findings } : {}) };
+  return merged.status === "ran" ? { ...merged, detail: `${merged.detail} + ${note}` } : { ...merged, reason: `${merged.reason} ${note}.` };
+};
+
+const rejectedPassNote = (outcome: ProbeOutcome, reason: string): ProbeOutcome =>
+  outcome.status === "ran" ? { ...outcome, detail: withRejectedPass(outcome.detail, reason) } : { ...outcome, reason: withRejectedPass(outcome.reason, reason) };
+
+const foldRecordedPass = (runner: ModuleRunner): ModuleRunner => ({
+  module: runner.module,
+  run: (ctx) => {
+    const pass = findFreshPass(ctx, runner.module);
+    const result = runner.run(ctx);
+    if (!pass.fresh && !pass.reason) return result;
+    const outcomes = Array.isArray(result) ? result : [result];
+    // Folded into the FIRST outcome only: on a per-app fan-out the pass covers the MODULE, not each
+    // app, so repeating it per instance would multiply one recorded finding across every row.
+    const first = pass.fresh
+      ? foldPassInto(
+          outcomes[0]!,
+          `A recorded ${passLabel(pass.artifact)} contributed ${(pass.artifact.findings ?? []).length} finding(s) to this row; it covers one tier of this module, so it is not by itself evidence the module ran in full (#1042)`,
+          pass.artifact.findings ?? [],
+        )
+      : rejectedPassNote(outcomes[0]!, pass.reason!);
+    return [first, ...outcomes.slice(1)];
+  },
+});
 
 // #312 findings capture. When the run context is capturing, a module whose CLI emits findings to
 // --out writes them to <captureDir>/<module>.json and reads them back onto the outcome so run-audit
@@ -452,37 +508,53 @@ const M7_LIGHTHOUSE_NOT_RUN =
 // linted nothing would read as `ran` rather than an honest partial is unverified — same open
 // question as M3/M5/M8/M9's exit-code-as-evidence pattern (#350). It fails honestly today; that a
 // success stays honest is not yet measured.
+// #1042: M7 reads its own pass artifact rather than going through foldRecordedPass, because for M7
+// the recorded pass IS the named missing tier — with a fresh Lighthouse pass M7_LIGHTHOUSE_NOT_RUN
+// becomes a false claim and has to be REPLACED, not appended to.
 const m7: ModuleRunner = {
   module: "M7",
   run: (ctx) => {
+    const lh = findFreshPass(ctx, "M7");
+    const cwv = lh.fresh
+      ? { note: `Core Web Vitals WERE measured — a recorded ${passLabel(lh.artifact)} supplied ${(lh.artifact.findings ?? []).length} finding(s), merged into this deliverable (#1042)`, findings: lh.artifact.findings ?? [] }
+      : undefined;
+    const rejectedCwv = lh.fresh ? undefined : lh.reason;
+    // Only a fresh pass changes a row (merging its findings, upgrading a not-run to partial because
+    // something demonstrably ran). Without one, behaviour is exactly as before — except that a
+    // present-but-rejected artifact is now named on the row instead of ignored.
+    const withCwv = (outcome: ProbeOutcome): ProbeOutcome =>
+      cwv ? foldPassInto(outcome, cwv.note, cwv.findings) : rejectedCwv ? rejectedPassNote(outcome, rejectedCwv) : outcome;
     const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir]);
-    if (!ok) return { status: "requires-live-run", reason: `pnpm detect-static exited non-zero: ${trimOut(output)}` };
-    if (!filesScanned(output)) return { status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — no code tier to run (empty or non-source target) (#350)` };
-    if (!ctx.env.connected) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: "code tier only — no DB creds for the advisors (pnpm perf-scan)" };
+    if (!ok) return withCwv({ status: "requires-live-run", reason: `pnpm detect-static exited non-zero: ${trimOut(output)}` });
+    if (!filesScanned(output)) return withCwv({ status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — no code tier to run (empty or non-source target) (#350)` });
+    if (!ctx.env.connected) return withCwv({ status: "partial", detail: "pnpm detect-static (code tier)", reason: "code tier only — no DB creds for the advisors (pnpm perf-scan)" });
     // #434: perf-scan needs a project ref as its positional arg (SUPABASE_ACCESS_TOKEN travels via
     // the inherited process env — perf-scan reads that itself). --connected is intent, not a reachable
     // project; without a ref threaded through run-audit there is nothing to call, so this stays
     // partial with that reason instead of shelling out to a usage error.
     const refs = supabaseRefs(ctx);
-    if (!refs.length) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: "connected tier flagged but no Supabase project ref was given (run-audit --supabase <ref>) — perf-scan needs a project ref to reach the advisors API (#434)" };
+    if (!refs.length) return withCwv({ status: "partial", detail: "pnpm detect-static (code tier)", reason: "connected tier flagged but no Supabase project ref was given (run-audit --supabase <ref>) — perf-scan needs a project ref to reach the advisors API (#434)" });
     // #506: the advisor tier is per-DB — run it once per enumerated Supabase project so a monorepo's
     // second DB is a distinct row, never silently omitted. The code tier ran once (above) and is
     // noted in each row's detail. Instances are tagged only when there's more than one project, so a
     // single-project engagement is one untagged row exactly as before (#434).
     // #420: perf-scan writes a bare Finding[] to --out, so the advisor-tier findings are captured.
     const multi = refs.length > 1;
-    return refs.map((ref): ProbeOutcome => {
+    // #1042: the CWV note/findings ride on the FIRST project's row only — the Lighthouse pass covers
+    // the app, not each enumerated database, so repeating it would multiply one measurement.
+    return refs.map((ref, i): ProbeOutcome => {
       const instance = multi ? { instance: ref } : {};
       const advisorsOut = ctx.captureDir ? join(ctx.captureDir, `M7-${refSlug(ref)}.json`) : undefined;
       const advisors = ctx.exec("pnpm", ["perf-scan", ref, ...(advisorsOut ? ["--out", advisorsOut] : [])]);
-      if (!advisors.ok) return { status: "partial", detail: "pnpm detect-static (code tier)", reason: `advisors failed for ${ref}: ${trimOut(advisors.output)}`, ...instance };
-      // #527: code + advisors both ran, but the Lighthouse/CWV tier did not — so this is `partial`
-      // with that reason, never a bare `ran`. The advisor findings still flow into the deliverable.
+      const fold = (outcome: ProbeOutcome): ProbeOutcome => (i === 0 ? withCwv(outcome) : outcome);
+      if (!advisors.ok) return fold({ status: "partial", detail: "pnpm detect-static (code tier)", reason: `advisors failed for ${ref}: ${trimOut(advisors.output)}`, ...instance });
+      // #527: code + advisors both ran; without a recorded Lighthouse pass the CWV tier did not, so
+      // this is `partial` with that reason, never a bare `ran`. With one (#1042), the reason names
+      // what ran instead of asserting a tier did not. The advisor findings flow in either way.
       const detail = `pnpm detect-static (code) + pnpm perf-scan ${ref} (advisors)`;
       const findings = readCaptured(ctx, advisorsOut);
-      return findings.length
-        ? { status: "partial", detail, reason: M7_LIGHTHOUSE_NOT_RUN, findings, ...instance }
-        : { status: "partial", detail, reason: M7_LIGHTHOUSE_NOT_RUN, ...instance };
+      const reason = cwv ? "code + DB advisor tiers ran; the Lighthouse/CWV tier came from a recorded pass (#527/#1042)" : M7_LIGHTHOUSE_NOT_RUN;
+      return fold(findings.length ? { status: "partial", detail, reason, findings, ...instance } : { status: "partial", detail, reason, ...instance });
     });
   },
 };
@@ -701,4 +773,9 @@ const m10: ModuleRunner = {
 
 // Exported as the complete set so assertRegistryComplete has something to check — and so a new
 // module added to AUDIT_MODULES without a probe fails the registry test rather than shipping silent.
-export const AUDIT_RUNNERS: ModuleRunner[] = [m1, m2, m3, m4, m5, m6, m7, m8, m9, m10];
+//
+// #1042: M1/M2/M3/M6 read their pass artifact inside the probe (a fresh one is their whole missing
+// tier, so it derives `ran`); M7 reads its own too (the pass replaces a named not-run claim). The
+// remaining five go through foldRecordedPass, which merges a recorded pass's findings and names it
+// on the row without ever asserting `ran`. Every module record-pass accepts now has a consumer.
+export const AUDIT_RUNNERS: ModuleRunner[] = [m1, m2, m3, foldRecordedPass(m4), foldRecordedPass(m5), m6, m7, foldRecordedPass(m8), foldRecordedPass(m9), foldRecordedPass(m10)];
