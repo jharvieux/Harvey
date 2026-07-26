@@ -798,6 +798,36 @@ describe("M3 derives ran from a real vitals parse, never a no-op exit (#314)", (
     const { hotspots } = runAudit(AUDIT_RUNNERS, withM3Artifact);
     expect(hotspots).toEqual(["core/checkout.ts", "core/pay.ts"]);
   });
+
+  // #1075: vitals ran (installed, real report) but in "complexity-only" mode — the target has no git
+  // history, so every hotspot's risk_score is 0.0 and the ranking is filesystem-walk order, not a
+  // churn×complexity ranking. The CLI's "M3 UNRANKED" banner (src/cli/hotspot-scan.ts) is the tell.
+  it("records partial (not a clean ran) when the CLI reports 'M3 UNRANKED' — complexity-only mode", () => {
+    const unranked = {
+      exec: () => ({
+        ok: true,
+        output: 'M3 hotspot table — /target (3 rows, worst first)\n  ⚠ M3 UNRANKED: vitals ran in "complexity-only" mode — the target has no git history.',
+      }),
+    };
+    const m3 = status(AUDIT_RUNNERS, unranked, "M3");
+    expect(m3?.status).toBe("partial");
+    expect(m3?.reason).toMatch(/complexity-only/);
+  });
+
+  // The CLI withholds topK entirely when unranked (src/cli/hotspot-scan.ts sets `top = []`), so even
+  // if a stale artifact carried one, this run must not hand a ranking to cross-module enrichment.
+  it("never surfaces a hotspot ranking for an unranked run — cross-module enrichment stays off", () => {
+    const unranked = ctx({
+      exec: () => ({
+        ok: true,
+        output: "M3 hotspot table — /target (3 rows, worst first)\n  ⚠ M3 UNRANKED: every row scored risk_score 0.0.",
+      }),
+      captureDir: "/cap",
+      readArtifact: (p: string) => (p.endsWith("M3.json") ? { topK: [], findings: [] } : undefined),
+    });
+    const { hotspots } = runAudit(AUDIT_RUNNERS, unranked);
+    expect(hotspots).toBeUndefined();
+  });
 });
 
 // #416: the out-of-orchestrator passes (M1 semantic/live, M2 dynamic, M3 vitals, M6 verdict) leave
