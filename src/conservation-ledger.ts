@@ -22,8 +22,10 @@
 // one implementation grading its own homework is not.
 //
 // Scope of the seam: probes → assembleEngagementDocument. The baseline diff (#457, applyBaseline)
-// runs AFTER this and legitimately adds resolved rows carried over from a prior engagement, so it
-// sits outside this ledger. Stated rather than assumed: see docs/design/conservation-of-findings.md.
+// runs AFTER this and legitimately tags (never drops) the current set while carrying resolved rows
+// in from a prior engagement, so it sits outside THIS ledger. It is not unmeasured, though: its own
+// arithmetic is `baselineLedger` below, asserted across applyBaseline on the same discipline (#1146).
+// Stated rather than assumed: see docs/design/conservation-of-findings.md.
 
 import type { AuditModule } from "./audit-coverage.js";
 import type { Finding } from "./findings.js";
@@ -40,6 +42,26 @@ const SYNTHESIZERS: { id: string; by: string }[] = [{ id: "M10-ESCALATION-00", b
 /** Why a produced finding is not in the deliverable. `unaccounted` is the failure. */
 type Disposition = "delivered" | "deduped" | "suppressed" | "capped" | "not-applicable" | "unaccounted";
 
+// A finding a pipeline transform DELIBERATELY dropped between produce and assemble, naming the column
+// it belongs in and the code that dropped it. This is the producer for the suppressed/capped/
+// not-applicable columns: without it the arithmetic has no way to tell a legitimate suppression from
+// the #1040 silent loss, so a legitimate drop would surface as `unaccounted` and a false failure.
+//
+// There is NO such transform in the produce→assemble seam today, so run-audit passes none and the
+// three columns read zero. But the slot is now LIVE and VALIDATED, not a hardcoded literal: a
+// declared drop must correspond to a finding that was PRODUCED and is ABSENT from the deliverable —
+// claiming to have suppressed a finding that still ships, or one no probe produced, is itself a
+// LEDGER FAIL (`misdeclaredDispositions`). The nearest real cap is #935's >N-per-shape rollup, which
+// runs at RENDER (report-template/rollup.mjs), downstream of this seam, and carries its own
+// conservation test; if that rollup is ever moved into assembly it declares its withheld rows here.
+export interface DeclaredDrop {
+  id: string;
+  disposition: "suppressed" | "capped" | "not-applicable";
+  reason: string;
+  /** The pipeline code that performed the drop — so a nonzero column names who filled it. */
+  by: string;
+}
+
 interface LedgerRow {
   id: string;
   disposition: Disposition;
@@ -52,9 +74,9 @@ interface LedgerRow {
 interface ConservationLedger {
   produced: number;
   delivered: number;
-  /** The columns of the equation. suppressed/capped/notApplicable have no producer in the pipeline
-   * today and are printed as zeros on purpose: the slot is where a future transform declares itself,
-   * and a nonzero one that no code fills would mean this ledger is guessing. */
+  /** The columns of the equation. suppressed/capped/notApplicable are fed by DeclaredDrop entries
+   * (see the type) — no transform declares any today, so they read zero, but a nonzero one now can
+   * only come from a declared drop this ledger verified was really produced and really absent. */
   deliveredFromProduced: number;
   deduped: number;
   suppressed: number;
@@ -64,6 +86,9 @@ interface ConservationLedger {
   /** Delivered rows no probe produced: declared synthesizers, plus any undeclared gain (a failure). */
   synthesized: number;
   undeclaredGains: string[];
+  /** Declared drops that did not correspond to a real loss — a finding claimed suppressed/capped/
+   * not-applicable that still ships, or that no probe produced. A bookkeeping lie is a failure. */
+  misdeclaredDispositions: string[];
   /** Every non-delivered produced finding, with its reason. Delivered rows are not listed. */
   rows: LedgerRow[];
   ok: boolean;
@@ -85,9 +110,13 @@ const attribute = (byModule: Partial<Record<AuditModule, Finding[]>>): Map<strin
  * @param produced  every finding the probes emitted, before assembly — runAudit's `findings`.
  * @param delivered the assembled document's findings.
  * @param byModule  runAudit's per-probe attribution, so a loss names the module that produced it.
+ * @param declared  drops a transform DELIBERATELY made (suppressed/capped/not-applicable), each
+ *                  verified real — the producer for those three columns. Empty in the pipeline today.
  */
-export function conservationLedger(produced: Finding[], delivered: Finding[], byModule: Partial<Record<AuditModule, Finding[]>> = {}): ConservationLedger {
+export function conservationLedger(produced: Finding[], delivered: Finding[], byModule: Partial<Record<AuditModule, Finding[]>> = {}, declared: DeclaredDrop[] = []): ConservationLedger {
   const owners = attribute(byModule);
+  const declaredById = new Map<string, DeclaredDrop>();
+  for (const d of declared) declaredById.set(d.id, d);
   const deliveredById = new Map<string, number>();
   for (const f of delivered) deliveredById.set(f.id, (deliveredById.get(f.id) ?? 0) + 1);
 
@@ -105,8 +134,12 @@ export function conservationLedger(produced: Finding[], delivered: Finding[], by
 
   const rows: LedgerRow[] = [];
   const overDelivered: string[] = [];
+  const lostById = new Map<string, number>();
   let deliveredFromProduced = 0;
   let deduped = 0;
+  let suppressed = 0;
+  let capped = 0;
+  let notApplicable = 0;
   let unaccounted = 0;
 
   for (const [id, count] of countById) {
@@ -124,28 +157,45 @@ export function conservationLedger(produced: Finding[], delivered: Finding[], by
     if (arrived > distinct) overDelivered.push(id);
     const lost = distinct - Math.min(arrived, distinct);
     if (lost > 0) {
-      unaccounted += lost;
-      rows.push({ id, disposition: "unaccounted", reason: "", modules });
+      lostById.set(id, lost);
+      // A transform that declared this drop owns it — the loss lands in the named column with the
+      // stated reason. Otherwise nobody said why, and that is the #1040 failure.
+      const drop = declaredById.get(id);
+      if (drop) {
+        if (drop.disposition === "suppressed") suppressed += lost;
+        else if (drop.disposition === "capped") capped += lost;
+        else notApplicable += lost;
+        rows.push({ id, disposition: drop.disposition, reason: `${drop.reason} — dropped by ${drop.by}`, modules });
+      } else {
+        unaccounted += lost;
+        rows.push({ id, disposition: "unaccounted", reason: "", modules });
+      }
     }
   }
 
-  const declared = new Set(SYNTHESIZERS.map((s) => s.id));
+  // A declared drop whose finding did NOT actually go missing — it still ships, or no probe produced
+  // it — is a bookkeeping lie: it would credit a column against nothing and let the arithmetic close
+  // on a fiction. Fail loud rather than trust the declaration.
+  const misdeclaredDispositions = declared.filter((d) => (lostById.get(d.id) ?? 0) === 0).map((d) => d.id);
+
+  const synthesizerIds = new Set(SYNTHESIZERS.map((s) => s.id));
   const gains = delivered.filter((f) => !countById.has(f.id));
-  const undeclaredGains = [...gains.filter((f) => !declared.has(f.id)).map((f) => f.id), ...overDelivered];
+  const undeclaredGains = [...gains.filter((f) => !synthesizerIds.has(f.id)).map((f) => f.id), ...overDelivered];
 
   return {
     produced: produced.length,
     delivered: delivered.length,
     deliveredFromProduced,
     deduped,
-    suppressed: 0,
-    capped: 0,
-    notApplicable: 0,
+    suppressed,
+    capped,
+    notApplicable,
     unaccounted,
     synthesized: delivered.length - deliveredFromProduced,
     undeclaredGains,
+    misdeclaredDispositions,
     rows,
-    ok: unaccounted === 0 && undeclaredGains.length === 0,
+    ok: unaccounted === 0 && undeclaredGains.length === 0 && misdeclaredDispositions.length === 0,
   };
 }
 
@@ -171,6 +221,82 @@ export function formatLedger(ledger: ConservationLedger): string {
       `LEDGER FAIL — ${ledger.undeclaredGains.length} finding(s) are in the deliverable that NO probe produced and no synthesizer declares: ${ledger.undeclaredGains.join(", ")}. A report that grows rows from nowhere is as wrong as one that loses them; declare the synthesizer in src/conservation-ledger.ts (today: ${SYNTHESIZERS.map((s) => `${s.id} by ${s.by}`).join("; ")}) or find where the row came from.`,
     );
   }
+  if (ledger.misdeclaredDispositions.length) {
+    lines.push(
+      "",
+      `LEDGER FAIL — ${ledger.misdeclaredDispositions.length} finding(s) were declared suppressed/capped/not-applicable but did not actually go missing (they still ship, or no probe produced them): ${ledger.misdeclaredDispositions.join(", ")}. A disposition column may only be credited against a finding that was produced and is absent from the deliverable.`,
+    );
+  }
   if (ledger.ok) lines.push("", "LEDGER PASS — every produced finding is delivered or accounted for, and every delivered finding was produced or declared.");
+  return lines.join("\n");
+}
+
+// #1146 invariant across the baseline seam. The ledger above stops at assembleEngagementDocument;
+// applyBaseline (#457, src/audit-diff.ts) runs AFTER it and was unmeasured — a finding could be
+// dropped there with no ledger row. This closes that gap with the same arithmetic, one seam later:
+//
+//   entered == retained + removed        (findings that went into applyBaseline)
+//   exited  == retained + gained         (findings that came out)
+//
+// applyBaseline TAGS the current set (baselineStatus) and never drops or adds a member of it — the
+// resolved rows it surfaces come from the PRIOR engagement and live in doc.baseline, not
+// doc.findings. So the honest invariant today is removed == 0 AND gained == 0: any finding that
+// entered and did not exit was silently deleted by a baseline-application bug (the NEW finding the
+// task guards), and any row that exited without entering was invented. Matching is by finding id,
+// which applyBaseline preserves (it spreads `{ ...current, baselineStatus }`). If a future baseline
+// design legitimately withholds accepted/persistent findings, it must ACCOUNT each removal — declare
+// it, don't drop it — exactly as the disposition columns above require.
+interface BaselineLedger {
+  entered: number;
+  exited: number;
+  retained: number;
+  /** Findings that entered applyBaseline and did not exit — a silent deletion. Empty is the pass. */
+  removed: { id: string; modules: AuditModule[] }[];
+  /** Ids that exited applyBaseline without entering — a row invented by the baseline diff. */
+  gained: string[];
+  ok: boolean;
+}
+
+export function baselineLedger(before: Finding[], after: Finding[], byModule: Partial<Record<AuditModule, Finding[]>> = {}): BaselineLedger {
+  const owners = attribute(byModule);
+  const enteredById = new Map<string, number>();
+  for (const f of before) enteredById.set(f.id, (enteredById.get(f.id) ?? 0) + 1);
+  const exitedById = new Map<string, number>();
+  for (const f of after) exitedById.set(f.id, (exitedById.get(f.id) ?? 0) + 1);
+
+  let retained = 0;
+  const removed: { id: string; modules: AuditModule[] }[] = [];
+  for (const [id, n] of enteredById) {
+    const out = exitedById.get(id) ?? 0;
+    retained += Math.min(n, out);
+    for (let i = out; i < n; i++) removed.push({ id, modules: owners.get(id) ?? [] });
+  }
+  const gained: string[] = [];
+  for (const [id, out] of exitedById) {
+    const inn = enteredById.get(id) ?? 0;
+    for (let i = inn; i < out; i++) gained.push(id);
+  }
+
+  return { entered: before.length, exited: after.length, retained, removed, gained, ok: removed.length === 0 && gained.length === 0 };
+}
+
+export function formatBaselineLedger(ledger: BaselineLedger): string {
+  const lines = [
+    "Baseline ledger — across applyBaseline (#457/#1146)",
+    "",
+    `  entered ${ledger.entered} = retained ${ledger.retained} + removed ${ledger.removed.length}`,
+    `  exited  ${ledger.exited} = retained ${ledger.retained} + gained ${ledger.gained.length}`,
+  ];
+  if (ledger.removed.length) {
+    lines.push(
+      "",
+      `BASELINE LEDGER FAIL — ${ledger.removed.length} finding(s) entered the baseline diff and did not come out: the baseline application silently deleted them. A resolved/persistent tag must never drop a current finding.`,
+      ...ledger.removed.map((r) => `  DELETED  ${r.id}${r.modules.length ? ` (produced by ${r.modules.join(", ")})` : " (no module attribution supplied)"}`),
+    );
+  }
+  if (ledger.gained.length) {
+    lines.push("", `BASELINE LEDGER FAIL — ${ledger.gained.length} row(s) came out of the baseline diff that did not go in: ${ledger.gained.join(", ")}. The baseline diff tags the current set; it may not invent or duplicate a member of it.`);
+  }
+  if (ledger.ok) lines.push("", "BASELINE LEDGER PASS — the baseline diff tagged the current set and neither dropped nor invented a finding.");
   return lines.join("\n");
 }

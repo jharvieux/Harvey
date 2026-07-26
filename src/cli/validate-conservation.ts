@@ -32,6 +32,11 @@
 //                 deliverable with no disposition — what an undeclared filter at a consumer
 //                 boundary does. The plant-and-assert above can miss it (it watches ten rows); the
 //                 conservation ledger's arithmetic cannot.
+// --seed-baseline-loss  SEED THE #1146 BASELINE VIOLATION: after applyBaseline tags the current set,
+//                 drop one finding from the result — a baseline-application bug silently deleting a
+//                 NEW finding. The baseline ledger across applyBaseline must fail naming it.
+// --seed-misdeclared  SEED THE #1146 DISPOSITION VIOLATION: declare a finding `suppressed` that is
+//                 in fact still delivered. A disposition column credited against a fiction must fail.
 
 import { probeExec } from "../probe-exec.js";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
@@ -39,8 +44,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkConservation, formatConservation } from "../audit-conservation.js";
-import { conservationLedger, formatLedger } from "../conservation-ledger.js";
+import { baselineLedger, conservationLedger, type DeclaredDrop, formatBaselineLedger, formatLedger } from "../conservation-ledger.js";
 import { assembleEngagementDocument } from "../audit-report.js";
+import { applyBaseline } from "../audit-diff.js";
 import type { AuditModule } from "../audit-coverage.js";
 import { formatFailures, runAudit, type RunContext } from "../audit-runner.js";
 import { AUDIT_RUNNERS } from "../audit-runners.js";
@@ -107,8 +113,31 @@ if (args.includes("--seed-unaccounted") && doc.findings.length) {
   doc.findings = rest;
   console.log(`⚠ SEEDED UNACCOUNTED LOSS: dropped ${victim!.id} from the assembled deliverable with no disposition — the ledger must fail naming it.`);
 }
-const ledger = conservationLedger(findings, doc.findings, findingsByModule);
+// #1146: a disposition declared against a finding that is STILL delivered — a column credited
+// against a fiction. The ledger's misdeclared check must fail on it.
+const declared: DeclaredDrop[] = [];
+if (args.includes("--seed-misdeclared") && doc.findings.length) {
+  const victim = doc.findings[0]!;
+  declared.push({ id: victim.id, disposition: "suppressed", reason: "seeded false suppression", by: "validate-conservation --seed-misdeclared" });
+  console.log(`⚠ SEEDED MISDECLARED DISPOSITION: declared ${victim.id} suppressed while it is still in the deliverable — the ledger must fail naming it.`);
+}
+const ledger = conservationLedger(findings, doc.findings, findingsByModule, declared);
 console.log(`${formatLedger(ledger)}\n`);
+
+// #1146: the baseline seam (#457). applyBaseline runs AFTER assembly and was unmeasured — ledger it
+// on an EMPTY baseline (every finding tagged `new`, nothing dropped) so the arithmetic is exercised
+// on the real deliverable every run. --seed-baseline-loss drops one finding after the tag to prove
+// a baseline-application bug that deletes a NEW finding fails loud.
+const preBaseline = doc.findings;
+const baselined = applyBaseline({ ...doc, findings: [...doc.findings] }, []);
+let baselinedFindings = baselined.findings;
+if (args.includes("--seed-baseline-loss") && baselinedFindings.length) {
+  const [victim, ...rest] = baselinedFindings;
+  baselinedFindings = rest;
+  console.log(`⚠ SEEDED BASELINE LOSS: dropped ${victim!.id} while applying the baseline — the baseline ledger must fail naming it.`);
+}
+const bLedger = baselineLedger(preBaseline, baselinedFindings, findingsByModule);
+console.log(`${formatBaselineLedger(bLedger)}\n`);
 // An assembled document that fails the report schema is not a deliverable, so "it reached the
 // deliverable" would be a claim about a file that could never ship.
 const { ok: schemaOk, errors } = validateFindings(doc);
@@ -120,7 +149,7 @@ if (!schemaOk) {
 
 const report = checkConservation({ findingsByModule, recorded: run.recorded, delivered: doc.findings, required });
 
-if (args.includes("--json")) console.log(JSON.stringify({ ledger, plants: report }, null, 2));
+if (args.includes("--json")) console.log(JSON.stringify({ ledger, baselineLedger: bLedger, plants: report }, null, 2));
 else console.log(formatConservation(report));
 
-process.exit(report.ok && ledger.ok ? 0 : 1);
+process.exit(report.ok && ledger.ok && bLedger.ok ? 0 : 1);

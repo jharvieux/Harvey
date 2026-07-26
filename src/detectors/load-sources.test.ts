@@ -56,6 +56,24 @@ describe("loadSources extension coverage (#1065)", () => {
     expect(loadSources(dir).map((f) => f.path)).toEqual(["app/route.js"]);
   });
 
+  it("#1136: does NOT drop real source that merely carries one long string literal", () => {
+    // Mirrors the false exclusion measured against inbox-zero's update-rule-tool.ts (605 lines,
+    // one 1081-char line, that line is 5.7% of the file's bytes): many ordinary short lines plus
+    // one long outlier is real source, not a minified/generated bundle.
+    const normalLines = Array.from({ length: 300 }, (_, i) => `export const line${i} = ${i};`).join("\n");
+    const longStringLiteral = `export const TOOL_DESCRIPTION = "${"x".repeat(1200)}";`;
+    const dir = makeTarget({ "lib/ai-tool.ts": `${normalLines}\n${longStringLiteral}\n` });
+    expect(loadSources(dir).map((f) => f.path)).toEqual(["lib/ai-tool.ts"]);
+  });
+
+  it("#1136: still excludes a file whose bulk (not an aside) is packed onto long lines", () => {
+    // Mirrors carbon's onshape/config.tsx and paperless-parts/config.tsx (SVG icon-path-data
+    // tables): most of the file's bytes sit on long lines, not one outlier amid ordinary code.
+    const longLines = Array.from({ length: 8 }, (_, i) => `export const path${i} = "M${"1".repeat(1100)}Z";`).join("\n");
+    const dir = makeTarget({ "components/icons.tsx": `${longLines}\n` });
+    expect(loadSources(dir).map((f) => f.path)).toEqual([]);
+  });
+
   it("still recognises test files as non-product when they are plain .js", () => {
     const dir = makeTarget({
       "lib/util.js": "export const u = 1;\n",
