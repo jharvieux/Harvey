@@ -565,6 +565,8 @@ if (knipReducedScopes.length) findings.push(knipReducedTierFinding(knipReducedSc
 
 const dup = duplicationSummary(jscpdReport);
 console.error(
+  // #1109: `${dup.duplicatedLines}/${dup.totalLines} lines` is M4's unit of examination — the audit
+  // orchestrator reads the total off stderr to say how much source jscpd actually compared.
   `M4 duplication: ${dup.percentage}% (${dup.duplicatedLines}/${dup.totalLines} lines) — ${jscpdReport.duplicates.length} clone cluster(s), ${dup.subThresholdCloneCount} sub-threshold small clone(s) disclosed in M4-00 (#365), ${dup.selfFileCloneCount} self-file clone(s) disclosed in M4-SELF-00 (#1080), ${divergedFindings.length} diverged security-path clone pair(s) (#360, review tier)` +
     (jscpdGaps.length ? `, whole-repo scan incomplete (#544, see M4-99)` : "") +
     (jscpdScopeDisclosure ? `, ${jscpdGlobMatches.reduce((sum, m) => sum + m.count, 0)} file(s) excluded by ignore globs disclosed in M4-SCOPE-00 (#1080)` : "") +
@@ -573,7 +575,9 @@ console.error(
 );
 if (knipReport) {
   console.error(
-    `M5 dead code: ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports, ` +
+    // #1109: the scope count leads the line because it is M5's unit of examination — the audit
+    // orchestrator reads it off stderr to say what knip actually looked at (src/audit-runners.ts).
+    `M5 dead code across ${scopes.length} scope(s): ${knipReport.files.length} unused file(s), ${knipReport.issues.filter((i) => i.exports.length + i.types.length > 0).length} file(s) with unused exports, ` +
       `${knipReport.issues.reduce((sum, i) => sum + (i.dependencies?.length ?? 0) + (i.devDependencies?.length ?? 0), 0)} unused dependenc(ies) (#1050)` +
       (knipGaps.length ? `, ${knipGaps.length}/${scopes.length} scope(s) incomplete (#505, see M5-00)` : "") +
       (knipReducedScopes.length ? `, ${knipReducedScopes.length}/${scopes.length} scope(s) ran in reduced no-deps mode (#810, see M5-98)` : "") +
