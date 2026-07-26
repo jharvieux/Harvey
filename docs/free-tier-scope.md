@@ -42,7 +42,7 @@ That is the ceiling, and it is where real authorization bypasses live: middlewar
 
 ## Explicitly reserved for paid
 
-- **Connected (read-only DB):** live confirmation vs production — Supabase security/performance advisors, migration-vs-prod drift, default privileges, pg_cron, realtime exposure, exposed schemas, the M7 DB advisor, the M10 protection-adequacy judgment. *"Is prod actually in this state."*
+- **Connected (read-only DB):** live confirmation vs production — Supabase security/performance advisors, default privileges, pg_cron, realtime exposure, exposed schemas, the M7 DB advisor, the M10 protection-adequacy judgment. *"Is prod actually in this state."*
 - **Dynamic (pen-test, M2):** proving a cross-tenant read returns another tenant's rows, no-rate-limit, service-seam bypass. Needs a running/staging instance. *"We proved it's exploitable."*
 - **Cross-file authorization (the semantic pass):** the dataflow the mechanical tier structurally cannot follow — see the ceiling section above. *"We read the route end to end, not one function at a time."*
 - **Webhook replay protection (the semantic pass):** the free tier flags an inbound webhook that never verifies a signature — a positive fact about missing code. Proving a *replay* guard's ABSENCE is the opposite shape: a rule flagging every HMAC webhook without a recognised nonce would fire on handlers that dedupe through an idempotency key, provider-side dedupe, or a database unique constraint. Measured as an LLM-tier class and recorded as an intended mechanical gap, gated so the corpus fails loud if a mechanical rule ever starts firing on it (`src/scan/calibration/b17-race-unscoped.entries.ts`). *"We read the handler and its callees and can tell a real replay defence from none."*

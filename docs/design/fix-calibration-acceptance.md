@@ -91,9 +91,8 @@ Still not autonomous, and genuinely out of reach for a mechanical assembly:
   implementer is an LLM/operator pass, not deterministic code — so "every planted class yields a green
   result the pipeline produced itself" is not met.
 - ~~**Semgrep/M1 detector-after resolver.**~~ **CLOSED by #1012** — see the update below.
-- **Plant classes 1/2/5 as before/after fix fixtures.** The scan corpus plants classes 3/4 cleanly; 1
-  (zero-row-update `error: null`), 2 (unchecked Supabase mutation), 5 (`void`-prefixed async) are not
-  enumerated as fix-pipeline before/after fixtures with a known mechanical fix.
+- ~~**Plant classes 1/2/5 as before/after fix fixtures.**~~ **CLOSED by #1058/#1021** — the detectors
+  landed and the fixtures with them; see the 2026-07-25 correction at the end of this document.
 
 ## Update (2026-07-24, #1012/#1009) — the semgrep-detected §8 classes now run the same full gate
 
@@ -125,8 +124,11 @@ what §8 needs is that the gate reports what the detector says.
   parse are each `notRun` **with the reason**. Semgrep exits 0 on a syntax error with zero results,
   which read naively is indistinguishable from a clean file; `runSemgrepOnFile` surfaces it as a failure.
 
-**Blocker re-measured, 2026-07-24:** §8 classes 1 (zero-row update returning `error: null`), 2
-(unchecked Supabase mutation) and 5 (`void`-prefixed async) have **no detector anywhere in `src/`** —
-no `harvey-*` semgrep rule, no AST engine (verified by `resolvesToDetector` returning false for all
-three, locked as a test). Planting before/after fix fixtures for them would produce `notRun` rows, not
-green ones: the detector has to exist first. That ordering is the remainder, not a fixture chore.
+**Blocker CLEARED, re-measured 2026-07-25 (#1033 sweep).** The 2026-07-24 text here said §8 classes 1
+(zero-row update returning `error: null`), 2 (unchecked Supabase mutation) and 5 (`void`-prefixed
+async) had "no detector anywhere in `src/`" and that the detector had to be built before the fixtures.
+That was true when written and stopped being true the same week: **#1058 landed
+`harvey-zero-row-update`, `harvey-unchecked-mutation` and `harvey-void-async`** in
+`src/scan/rules/semgrep/silent-failure.yml`, and `src/fix/calibration-acceptance.test.ts` now runs the
+**full §8 gate** for all three (`pages/api/payout-claim.js`, `subscribe.js`, `receipt.js`) — they reach
+GREEN, not `notRun`. Re-check with `grep -c "id: harvey" src/scan/rules/semgrep/silent-failure.yml`.

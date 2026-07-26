@@ -15,6 +15,14 @@ not a capability figure, and it was re-verified on 2026-07-24 before this gate w
   is the right yardstick for the **SCA** engine (the #879 gate reports that figure), scored via `osv-scanner` over the
   pinned vulnerable dependency — not for source detection. See `secbench-recall-measurement.md`.
 
+<!--
+REASON: SecBench is scored as Harvey's SCA yardstick, not its source-detection yardstick — a product-scope ruling about which corpus measures which engine, not a claim that library-internal sinks are unreachable in principle
+KIND: decisional
+PROVENANCE: MEASURED 2026-07-24 (the #946 ruling, recorded here and in secbench-recall-measurement.md)
+OWNER: operator
+DECISION: #946; docs/design/secbench-recall-measurement.md
+-->
+
 This gate scores the **same source detectors** against an **app-layer** answer key — the request→sink
 fixtures in `targets/calibration`, where the detectors *do* have a request source — and gets the number
 SecBench structurally cannot.

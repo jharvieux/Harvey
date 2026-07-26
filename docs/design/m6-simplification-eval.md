@@ -73,8 +73,15 @@ LLM review pass) against a target directory.
 > correction is narrower and still true: (a) those detectors emit shape-PRESENCE indicators, never
 > the verdict this eval is about, and (b) M6 has no `*.entries.ts` in the calibration corpus —
 > `ls src/scan/calibration/*.entries.ts` shows M1/M3/M4/M5/M7/M8/M9/M10 files and no M6 one — so
-> nothing about M6 is scored by `buildCoverageMatrix` regardless. Falsify with
-> `pnpm detector-census` and that `ls`.
+> nothing about M6 is scored by `buildCoverageMatrix` regardless.
+
+<!--
+REASON: M6 has no *.entries.ts in the calibration corpus, so nothing about M6 is scored by buildCoverageMatrix — the indicator detectors in src/detectors/handrolled.ts emit shape PRESENCE, never the verdict this eval is about
+KIND: empirical
+PROVENANCE: MEASURED 2026-07-25 (ran the falsifier below; it exits 1)
+FALSIFIER: grep -rlq "M6" src/scan/calibration/
+TOUCHES: src/scan/calibration src/scan/calibration.ts
+-->
 
 **The eval, concretely:**
 

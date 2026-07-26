@@ -12,6 +12,12 @@
 // deferred #920 enabler). Kept a separate file rather than folding into language-coverage.ts: a
 // concurrent M9-framework-porting batch (#916) may also touch that file, and this concern
 // (counting a different FILE TYPE, not a different LANGUAGE) is unrelated to it.
+//
+// REASON: the shared source loader reads only .ts/.tsx/.jsx/.mjs, so no static/AST pass in Harvey sees a .svelte/.vue/.astro component — this file counts and discloses what is unread rather than parsing it (#920 is the parse layer)
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-07-25 (ran the falsifier below; it exits 1)
+// FALSIFIER: grep -Eq "svelte|vue|astro" src/detectors/load-sources.ts
+// TOUCHES: src/detectors/load-sources.ts
 
 import { readdirSync, statSync } from "node:fs";
 import { extname, join, relative, sep } from "node:path";

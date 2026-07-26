@@ -353,7 +353,7 @@ Recorded-output fixtures for the Layer-1 unit gates (no binaries), colocated wit
 | **M7** advisors | deterministic on a live schema | **real precision measure, connected tier** (N/A static) | "validated precision on DB performance advisories (connected)" |
 | **M8** Stryker | deterministic mutant fact; "bad test" is a proxy | **real recall measure at the mutant level**; does NOT validate the qualitative intent-review half | "validated mutation-level recall; qualitative review is a documented method" |
 | **M3** vitals | churn/complexity/coupling deterministic; **rank is an ordering, not a boolean** | **regression/ordering check on facts** (truck-factor, coupling) + top-K stability — NOT a precision % | "regression-gated hotspot signals + reproducible ranking" — **never** "M3 precision = X%" |
-| **M6** simplify | LLM judgment, no detector | **rubric agreement rate** (LLM-judge eval), not a gate | "measured against a labeled rubric set" — **never** a precision number |
+| **M6** simplify | LLM judgment for the VERDICT; the indicator layer *is* mechanical (`src/detectors/handrolled.ts`) — see the recorded reason in `m6-simplification-eval.md` §3 rather than restating it here | **rubric agreement rate** (LLM-judge eval), not a gate | "measured against a labeled rubric set" — **never** a precision number |
 
 **The discipline line (do not cross it):**
 - A jscpd clone, a knip dead export, an advisor lint, a survived mutant, and a PII name-match are **true/false facts** — precision/recall is meaningful and the gate is a real measure.
