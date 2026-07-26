@@ -50,8 +50,17 @@ export const CALIBRATION_PLANTS: ModulePlant[] = [
   // reduced tier (#807, vitals absent) computes a churn×complexity ranking with no knowledge-risk at
   // all. So a run without vitals reports GONE M3 — correctly, since M3 really did not run in full.
   // That is a toolchain prerequisite to install, never a plant to weaken: the runner installs vitals
-  // at a pinned commit (.github/workflows/conservation.yml). #1112 tracks the OTHER way this row can
-  // redden without a defect — vitals reads truck-factor only from files churning in a 90-day window.
+  // at a pinned commit (.github/workflows/conservation.yml).
+  //
+  // #1112 asked whether this plant DECAYS — it does, but on a two-year clock, not the 90-day churn
+  // window the issue was filed on. MEASURED 2026-07-26 against a throwaway repo with a fully
+  // backdated history: at 200 days (churn window exhausted, hotspot table 0 rows) both truck-factor
+  // rows still fire, because vitals falls back to all tracked source files when nothing clears the
+  // churn gate (vitals_cli.py:131); at 800 days they are gone, because the authorship log is scoped
+  // `--since=2.years.ago` (git_analysis.py:260). So the decay is real and slow, and the failure it
+  // would cause is now DIAGNOSABLE rather than silent: with no truck-factor row, M3 emits
+  // M3-KNOWLEDGE-00 (src/hotspot-scan.ts) naming which of "analysed N files, none sole-authored" and
+  // "no authorship history to analyse" happened.
   { module: "M3", plant: "a truck-factor-1 file (one author in the fixture's git history) in the hotspot ranking", taxonomy: "Knowledge risk (truck-factor-1)", location: "targets/calibration" },
   { module: "M4", plant: "a copy-pasted report builder duplicated across dup/report-a.ts and dup/report-b.ts", taxonomy: "M4 — Duplication", location: "dup/report-a.ts" },
   { module: "M5", plant: "a module nothing imports (dead/never-imported.ts)", taxonomy: "M5 — Slop / dead code", location: "dead/never-imported.ts" },

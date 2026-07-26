@@ -334,9 +334,57 @@ export function toFactFindings(report: VitalsReport): Finding[] {
     });
   }
 
+  findings.push(...knowledgeRiskNotAssessed(report));
   findings.push(...trendFindings(report));
 
   return findings;
+}
+
+// #1112 — an empty truck-factor list has TWO causes and they read identically: the authorship
+// analysis ran and found no sole-authored file (a measured clean result), or it had nothing to
+// analyse. The second is what a decayed fixture looks like, and the standing instruction on a
+// conservation `GONE M3` row is "that is a scanner or pipeline bug, never something to rebaseline"
+// — so a reader hitting the second case with that instruction in front of them either burns a
+// session or weakens the assertion. This row makes the two distinguishable in one read.
+//
+// The decay horizon is TWO YEARS, not the 90-day churn window #1112 was filed on. MEASURED
+// 2026-07-26 against a throwaway repo whose entire history was backdated: at 200 days (churn window
+// fully exhausted, hotspot table 0 rows) both truck-factor-1 rows STILL fire; at 800 days they are
+// gone. Two things in vitals 0.2.0 (commit 9c580c8) explain it — `vitals_cli.py:131` falls back to
+// `source_files[:50]` when no file cleared the churn gate, so knowledge analysis is never starved by
+// churn alone, and `git_analysis.py:260` scopes the authorship log to `--since=2.years.ago`, which
+// is the window that actually empties it.
+export function knowledgeRiskNotAssessed(report: VitalsReport): Finding[] {
+  if (truckFactorOneFiles(report).length > 0) return [];
+  const analysed = report.knowledge_risk.length;
+  const measured = analysed > 0;
+  return [
+    {
+      id: "M3-KNOWLEDGE-00",
+      title: measured
+        ? `No truck-factor-1 file — authorship analysed across ${analysed} file${analysed === 1 ? "" : "s"}`
+        : "Knowledge risk (truck-factor) NOT assessed — no authorship history to analyse",
+      severity: "Info",
+      confidence: measured ? "Confirmed" : "N/A",
+      category: "Maintainability",
+      taxonomy: "M3 — Knowledge risk coverage",
+      location: "(repository-wide)",
+      status: "Open",
+      evidence: measured
+        ? `vitals returned authorship for ${analysed} file(s) and every one has more than one substantive author, so no truck-factor-1 row was emitted. The signal ran; this is a measured result, not a gap.`
+        : "vitals returned NO authorship rows at all, so no file could be judged sole-authored. Causes, in the order worth checking: (a) no commit in the trailing TWO YEARS touches an analysed source file — vitals scopes the authorship log to `--since=2.years.ago` (git_analysis.py:260), which is what empties this list, NOT the 90-day churn window (vitals_cli.py:131 falls back to all tracked source files when nothing clears the churn gate); (b) the target has no git history, so vitals ran complexity-only; (c) the `vitals` plugin is absent and this is the reduced M3 tier, which computes no knowledge-risk signal at all (#807).",
+      impact: measured
+        ? "None — recorded so an empty truck-factor list is never read as an unrun signal."
+        : "Truck-factor is unassessed for this target: no file is named as a single point of knowledge failure, and that silence is NOT evidence the knowledge is well distributed. A conservation run reading `GONE M3` off this state is looking at an input gap, not a detector regression.",
+      fix: measured
+        ? "No action."
+        : "Confirm which cause applies before treating an absent truck-factor row as a defect: `git -C <target> log --since=2.years.ago --oneline | head` distinguishes (a) from (b), and the M3 tier line in the coverage ledger distinguishes (c).",
+      value: 1,
+      ease: 5,
+      safety: 5,
+      mechanical: true,
+    },
+  ];
 }
 
 // #1075: vitals' day-over-day file_health trend (vitals_cli.py:254-290) against its own previous

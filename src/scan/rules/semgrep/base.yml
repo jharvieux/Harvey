@@ -159,6 +159,47 @@ rules:
       - pattern: cookies()
       - pattern: headers()
       - pattern: $SP.get(...)
+    pattern-sanitizers:
+      # #1057: (a2) PROJECTION guard — the guarded value is a PROJECTION of the tainted string
+      # (`new URL(x).hostname`) while the sink receives `x` itself, so a by-side-effect sanitizer
+      # on the guarded variable is inert. Anchored on the PROJECTION site instead, with the
+      # membership test on the projected variable required lexically in the same scope.
+      #
+      # What makes it sound is a property of the ONE-ARGUMENT WHATWG constructor specifically:
+      # `new URL(x)` is defined only when `x` is an ABSOLUTE URL, and `.hostname` is then exactly
+      # the host a WHATWG-compliant consumer (browser following Location, Node's http client,
+      # undici) reaches when handed `x`. Every neighbouring shape breaks that property and is
+      # excluded syntactically, each with a calibration positive that must still fire:
+      #   - a hand-rolled projection (split/replace/regex) is NOT the WHATWG host — the userinfo
+      #     form `https://good.host@evil.tld/` reads as `good.host` to a naive extractor and as
+      #     `evil.tld` to the browser (P-REDIRECT-HOST-USERINFO);
+      #   - `new URL(x, base)` resolves a RELATIVE x against base, so the check passes on the
+      #     base's host while x itself carries none — hence the single-argument pattern;
+      #   - a guard the sink can be reached WITHOUT (`//evil.tld` throwing into a null-host
+      #     branch, or an absolute-looking pre-test) leaves the value live
+      #     (P-REDIRECT-HOST-RELATIVE, P-REDIRECT-HOST-BACKSLASH);
+      #   - AFFIX membership is unsound the same way an unanchored regex is —
+      #     `"evilapi.trusted.example".endsWith("trusted.example")` is true
+      #     (P-REDIRECT-HOST-AFFIX), the #1027 class-1 refusal restated on the projection;
+      #   - a failure branch that does not return (P-REDIRECT-HOST-NO-RETURN).
+      # Only `.hostname`/`.host` qualify: a `.pathname`/`.protocol` allowlist says nothing about
+      # where the value goes. The allowlist's own contents are trusted, exactly as in the shipped
+      # `.includes`/`.has` arms.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $HOST = new URL($X).hostname
+              - pattern: $HOST = new URL($X).host
+          - pattern-either:
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.includes($HOST)) { ... return; }
+                  ...
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.has($HOST)) { ... return; }
+                  ...
+          - focus-metavariable: $X
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -515,6 +556,26 @@ rules:
               metavariable: $SP
               regex: ^(?!(https?|axios)$).*$
       - pattern: await $REQ.json()
+    pattern-sanitizers:
+      # #1057: (a2) PROJECTION guard — see harvey-open-redirect for the soundness argument and the
+      # excluded neighbouring shapes. Measured as 10 of this rule's FPs on the BenchProctor
+      # 2026.07.22 JS/Express slice, and the reason extending the plain (a2) block here was inert:
+      # the guard sits on `new URL(x).hostname`, never on the value the fetch receives.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $HOST = new URL($X).hostname
+              - pattern: $HOST = new URL($X).host
+          - pattern-either:
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.includes($HOST)) { ... return; }
+                  ...
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.has($HOST)) { ... return; }
+                  ...
+          - focus-metavariable: $X
     pattern-sinks:
       - patterns:
           - pattern-either:
