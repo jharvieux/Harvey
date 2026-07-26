@@ -90,17 +90,22 @@ describe("conservation gate — seeded violations", () => {
     expect(checkConservation(input).rows.find((r) => r.module === "M7")?.verdict).toBe("not-produced");
   });
 
-  it("--require promotes an unexercised module to the full standard — the falsifier path (#1033)", () => {
-    const held = checkConservation({ ...healthy(), required: ["M2"] });
+  it("M2's UNEXERCISED reason expired — it is now planted and delivers offline (#1155)", () => {
+    // M2 used to be the one UNEXERCISED module, falsifier `--require M2`. #1155 planted the offline
+    // half of the M2 delivery path (the #416 dynamic-pass-artifact consume→assemble seam), so M2
+    // now produces + delivers its plant in a healthy run with no --require, and UNEXERCISED is empty.
+    expect(UNEXERCISED).toHaveLength(0);
+    expect(checkConservation(healthy()).rows.find((r) => r.module === "M2")?.verdict).toBe("delivered");
+
+    // --require stays wired for a future UNEXERCISED module; on an already-planted module it is a
+    // harmless no-op (still held to the plant signature), and a required module that produces
+    // nothing still fails not-produced — the property that makes an UNEXERCISED excuse falsifiable.
+    expect(checkConservation({ ...healthy(), required: ["M2"] }).ok).toBe(true);
+    const empty = healthy();
+    empty.findingsByModule.M2 = [];
+    empty.delivered = empty.delivered.filter((f) => f.id !== "M2-plant");
+    const held = checkConservation({ ...empty, required: ["M2"] });
     expect(held.ok).toBe(false);
     expect(held.rows.find((r) => r.module === "M2")?.verdict).toBe("not-produced");
-
-    // …and exits clean the day that module DOES deliver, which is what makes the recorded reason
-    // falsifiable rather than permanent.
-    const input = healthy();
-    const m2 = planted({ taxonomy: "M2 — Pen-test", location: "http://localhost:3000/api/x" }, "M2-live");
-    input.findingsByModule.M2 = [m2];
-    input.delivered.push(m2);
-    expect(checkConservation({ ...input, required: ["M2"] }).ok).toBe(true);
   });
 });
