@@ -63,6 +63,35 @@ export function selectPrismaMigrateCommand(layout: PrismaLayout): string[] {
   return layout.migrationsDir ? ["migrate", "deploy"] : ["db", "push", "--skip-generate"];
 }
 
+// #1163 — the resolved prisma CLI major version, parsed from `prisma --version` ("prisma : 7.9.0").
+// Null when the line is absent (an unexpected --version format ⇒ treat as pre-v7, the unchanged path).
+export function prismaCliMajor(versionOutput: string): number | null {
+  const m = versionOutput.match(/^\s*prisma\s*:\s*(\d+)\.\d+\.\d+/im);
+  return m ? Number(m[1]) : null;
+}
+
+// #1163 — Prisma 7 rejects a `url = env(...)`/`directUrl = ...` line in schema.prisma (error P1012),
+// wanting the connection URL out of the schema. Strip those assignment lines so an existing
+// Prisma-5/6-style schema validates under a v7 CLI. Only datasource assignments carry `<key> = …`;
+// model fields never do, so the blanket line match is safe.
+export function stripSchemaDatasourceUrl(schema: string): string {
+  return schema.replace(/^[ \t]*(?:url|directUrl)[ \t]*=.*$/gim, "");
+}
+
+// #1163 — the minimal Prisma-7 config that supplies the datasource URL out-of-schema from the env var
+// Harvey already sets (DATABASE_URL → its own Postgres container). A plain object (no `prisma/config`
+// import) so the config loads before the target's deps are installed. Covers both `db push` and
+// `migrate deploy` (which, unlike push, has no --url flag under v7).
+export function prismaV7ConfigSource(schemaPath: string): string {
+  return `export default { schema: ${JSON.stringify(schemaPath)}, datasource: { url: process.env.DATABASE_URL } };\n`;
+}
+
+// #1163 — rewrite the apply argv for a v7+ CLI: drop --skip-generate (removed in v7) and point the CLI
+// at the synthesized config (which carries the stripped schema path + the out-of-schema URL).
+export function prismaV7ApplyArgs(migrateCommand: string[], configPath: string): string[] {
+  return [...migrateCommand.filter((a) => a !== "--skip-generate"), "--config", configPath];
+}
+
 interface PrismaStandUpVerdict {
   canStandUp: boolean; // can we stand up the DB at all? false ⇒ no schema.prisma, nothing to provision
   coverage: Coverage; // full = DB + app-route probes; none = DB stood up but no runnable app to probe (Prisma has no PostgREST fallback)
