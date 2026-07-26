@@ -648,7 +648,10 @@ export function parseOsvFindings(result: OsvScanResult): Finding[] {
         findings.push(
           mechanicalFinding({
             id: `DEP-OSV-${id}`,
-            title: `${name}@${version} vulnerable to ${id}${fixedVersions.length > 0 ? ` (fixed in ${fixedVersions.join(" / ")})` : ""}`,
+            // The summary stays in the title — it is the one line that says what the vuln IS. The
+            // #1079 defect was that it was ALSO the impact; the fix is to give impact real content
+            // (osvImpact below), not to strip the title down to an advisory id.
+            title: `${name}@${version}: ${vuln.summary ?? id}${fixedVersions.length > 0 ? ` (fixed in ${fixedVersions.join(" / ")})` : ""}`,
             severity: severityFromCvss(cvssScore),
             category: "Dependency CVE",
             taxonomy: "Known-vulnerable dependency",
