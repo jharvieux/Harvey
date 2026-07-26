@@ -111,10 +111,12 @@ function findingCard(f) {
       <span class="badge" style="background:${CONF[f.confidence] ?? "#94a3b8"};color:${readableOn(CONF[f.confidence] ?? "#94a3b8")}">${esc(f.confidence ?? "—")}</span>
       ${baselineBadge(f)}
       ${f.onHotspot ? `<span class="badge" style="background:#7c3aed" title="On an M3 churn×complexity hotspot — higher remediation priority">🔥 Hotspot${f.hotspotRank ? ` #${f.hotspotRank}` : ""}</span>` : ""}
+      ${f.dataClass?.escalatedFrom ? `<span class="badge" style="background:#be123c" title="${esc(f.dataClass.reason)}">↑ ${esc(f.dataClass.escalatedFrom)} · ${esc(f.dataClass.categories.join("/"))}</span>` : ""}
     </div>
     <div class="finding-meta">${esc(f.category)} · ${esc(f.taxonomy)} · <code>${esc(f.location)}</code> · <span class="status">${esc(f.status)}</span>
       · <span class="vesc">V${f.value}·E${f.ease}·S${f.safety}</span></div>
     ${cweOwaspLine(f)}
+    ${f.dataClass ? `<div class="kv"><b>Data class</b> ${esc(f.dataClass.reason)}</div>` : ""}
     <div class="kv"><b>Evidence</b> ${esc(f.evidence)}</div>
     <div class="kv"><b>Impact</b> ${esc(f.impact)}</div>
     <div class="kv"><b>Fix</b> ${esc(f.fix)}</div>

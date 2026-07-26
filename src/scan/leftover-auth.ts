@@ -38,6 +38,42 @@ const ROUTE_FILE = /(^|\/)(route\.(ts|tsx|js)|pages\/api\/.*\.(ts|tsx|js))$/;
 const AUTH_SENSITIVE_ROUTE = /(^|\/)(login|signin|sign-in|signup|sign-up|register|otp|reset-password|forgot-password)(\/|$|\.)/i;
 const RATE_LIMIT_HINT = /(rateLimit|ratelimit|Ratelimit|limiter\.)/;
 
+// #1046 — the INVERSE of the check above, and the case it actively clears. AUTH-no-rate-limit fires
+// on the ABSENCE of a limiter hint, so a limiter backed by a process-local Map matches the hint and
+// is passed as safe. On a serverless host that limiter does not limit: every cold start begins with
+// an empty counter and concurrent instances each keep their own, so the attacker's effective budget
+// is (limit × instances) and resets whenever the platform recycles. Free-tier-advertised capability
+// (docs/free-tier-scope.md) that had no detector at all until this.
+//
+// briefs/fp-rules.txt already carries the precision rule this must obey — "IN-PROCESS CACHES ARE NOT
+// LIMITERS … only flag when the structure is acting as a RATE LIMIT / QUOTA / THROTTLE (name or
+// usage reads like rate/limit/attempt/bucket/quota/hits AND it gates request admission)". So all
+// four of these must hold:
+//   1. the store is a MODULE-SCOPE mutable container (const/let/var/globalThis = new Map/Set/WeakMap
+//      or an object/array literal) — request-scoped state is re-created per call, a different bug,
+//   2. an identifier reads like a limiter counter (rate/limit/attempt/throttle/quota/bucket/hits),
+//   3. it GATES ADMISSION — a 429, or a comparison of the counter against a numeric budget,
+//   4. no shared-store hint anywhere (Redis/Upstash/KV/Memcached/Dynamo/Durable Objects/a SQL or
+//      Supabase/Prisma call) — a limiter already talking to a shared backend is the CORRECT shape.
+// (2) and (3) are read from CODE ONLY: this is a grep layer, and targets/calibration/lib/memo.js is
+// a memo cache whose own comment says "not a rate limiter", which un-stripped content reads as intent.
+const RATE_LIMIT_IDENTIFIER = /(rate.?limit|ratelimit|throttle|attempts?\b|quota|token.?bucket|\bhits\b)/i;
+const ADMISSION_GATE = /(\b429\b|too.?many.?requests|[<>]=?\s*\d+|\d+\s*[<>]=?)/i;
+const PROCESS_LOCAL_STORE = /^\s*(?:(?:export\s+)?(?:const|let|var)\s+[\w$]+|globalThis\.[\w$]+)\s*=\s*(?:new\s+(?:Map|Set|WeakMap)\s*\(|\{\s*\}|\[\s*\])/m;
+const SHARED_STORE_HINT = /(redis|upstash|@vercel\/kv|\bkv\.|memcach|dynamo|durable ?object|cloudflare|\.rpc\(|supabase|prisma|\bsql`|\bpool\.query|\bdb\.query)/i;
+
+// Comments and the inside of `//`-style URLs are prose, not behaviour. Line comments are stripped
+// only when not preceded by `:` so a "https://…" literal survives.
+function stripComments(content: string): string {
+  return content.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+function usesProcessLocalRateLimiter(content: string): boolean {
+  if (!PROCESS_LOCAL_STORE.test(content) || SHARED_STORE_HINT.test(content)) return false;
+  const code = stripComments(content);
+  return RATE_LIMIT_IDENTIFIER.test(code) && ADMISSION_GATE.test(code);
+}
+
 // #576 — client-trust-boundary: a role/privilege decision made in CLIENT code, gating what the
 // browser renders/navigates to or an action it takes. Client code is fully attacker-controlled — a
 // role read from Web Storage (user-editable) or from a user object, compared to a privilege literal
@@ -231,6 +267,23 @@ export function classifyLeftoverAuth(file: SourceFile): Finding[] {
         evidence: `Route path matches /login|signup|otp|reset-password/ and no rate-limiter call pattern was found in the file.`,
         impact: "An attacker can brute-force credentials/OTP codes with unlimited attempts.",
         fix: "Add a rate limiter (e.g. Upstash Ratelimit, a token-bucket middleware) in front of this route.",
+        precisionTier: "review",
+      }),
+    );
+  }
+  if (usesProcessLocalRateLimiter(file.content)) {
+    findings.push(
+      mechanicalFinding({
+        id: `AUTH-inmemory-rate-limit-${slug(file.path)}`,
+        title: `${file.path} rate-limits with process-local state, which does not limit on a serverless host`,
+        severity: "Medium",
+        category: "Leftover auth",
+        taxonomy: "In-memory rate limiter (per-instance, resets on cold start)",
+        location: file.path,
+        evidence: `Rate-limit intent plus a module-scope Map/Set/object counter store, and no shared-store (Redis/KV/DB) hint anywhere in ${file.path}.`,
+        impact:
+          "Each serverless instance keeps its own counter and every cold start resets it, so the real budget is the limit times the number of live instances — and an attacker who paces requests never hits it at all.",
+        fix: "Move the counter to a store shared across instances (Redis/Upstash, Vercel KV, or a database row with an atomic increment).",
         precisionTier: "review",
       }),
     );

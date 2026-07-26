@@ -151,7 +151,7 @@ describe("a real mutation run reaches the rendered report (#1045)", () => {
   it("carries M8's per-module rows into the assembled document and out to the page", () => {
     const { recorded, testQuality } = runAudit(AUDIT_RUNNERS, ctx);
     expect(testQuality?.rows).toHaveLength(1);
-    const assembled = assembleEngagementDocument(recorded, ctx.env, [], meta(), undefined, testQuality);
+    const assembled = assembleEngagementDocument(recorded, ctx.env, [], meta(), undefined, undefined, testQuality);
     expect(validateFindings(assembled).ok).toBe(true);
     const html = testQualityBlock(assembled);
     expect(html).toContain("62.5<span");

@@ -68,6 +68,36 @@ describe("assembleEngagementDocument (#312)", () => {
   it("maps a partial's reason through to the ledger row", () => {
     expect(coverageLedger(recorded, env).find((r) => r.module === "M7")?.status).toBe("partial");
   });
+
+  // #1049: the escalation join, applied to every module's findings at assembly time.
+  it("escalates a finding on an M10-classified table and states why", () => {
+    const dataMap = {
+      patients: { columns: [{ column: "mrn", infotype: "MRN", category: "PHI", confidence: "high" }], infotypes: ["MRN"], categories: ["PHI"], severityScore: 6, severity: "High" as const },
+    };
+    const f = { ...finding("F-rls"), severity: "Medium" as const, location: "supabase/migrations/1.sql:3 (public.patients.p_all)" };
+    const doc = assembleEngagementDocument(recorded, env, [f], meta, undefined, dataMap);
+    expect(doc.findings.find((x) => x.id === "F-rls")?.severity).toBe("High");
+    expect(doc.findings.find((x) => x.id === "F-rls")?.dataClass?.escalatedFrom).toBe("Medium");
+    expect(doc.findings.some((x) => x.id === "M10-ESCALATION-00")).toBe(false);
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+
+  // The coverage-guard half: no data map ⇒ every severity is un-escalated, and that has to be SAID.
+  // An un-escalated severity is indistinguishable from one checked against the map and left alone.
+  it("records M10-ESCALATION-00 with M10's own reason when no data map was captured", () => {
+    const noM10: ModuleCoverage[] = recorded.map((r) => (r.module === "M10" ? { module: "M10" as const, status: "requires-live-run" as const, reason: "no live DB and no schema found — nothing to classify" } : r));
+    const doc = assembleEngagementDocument(noM10, env, [finding("F-1")], meta);
+    const row = doc.findings.find((f) => f.id === "M10-ESCALATION-00");
+    expect(row?.evidence).toContain("nothing to classify");
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+
+  // An M10 run that classified NOTHING sensitive is a real answer, not a missing one — the join ran
+  // and legitimately escalated nobody, so it must not claim it could not run.
+  it("does not record the not-assessed row when M10 ran and classified no regulated data", () => {
+    const doc = assembleEngagementDocument(recorded, env, [finding("F-1")], meta, undefined, {});
+    expect(doc.findings.some((f) => f.id === "M10-ESCALATION-00")).toBe(false);
+  });
 });
 
 // #682: a module marked `partial` because a sub-step was BLOCKED still contributes the findings its

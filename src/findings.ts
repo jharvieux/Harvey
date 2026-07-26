@@ -54,6 +54,21 @@ export interface DependencyReachability {
   justification: string;
 }
 
+// #1049: why a finding's severity is what it is, when M10's data map moved it. Set at assembly time
+// (src/data-class-escalation.ts) on any finding whose location/title names a table M10 classified as
+// holding PII/PHI/PCI. `escalatedFrom` is present ONLY when the severity was actually raised — a
+// match that did not escalate still carries the classes, so the reader sees the data context either
+// way. The join only ever raises: a benign table is never evidence a finding is less serious.
+export interface DataClassMatch {
+  table: string;
+  categories: string[]; // PII / SENSITIVE_PII / PHI / PCI / SECRET
+  infotypes: string[]; // EMAIL, DOB, US_SSN, …
+  escalatedFrom?: Severity;
+  // Shown verbatim in the deliverable — a higher severity the client cannot trace back to a table
+  // and a data class is an assertion, not a finding.
+  reason: string;
+}
+
 export interface CoverageRow {
   module: string; // "M1".."M10"
   name: string;
@@ -150,6 +165,10 @@ export interface Finding {
   // M3 ranking was available this run.
   onHotspot?: boolean;
   hotspotRank?: number;
+  // #1049: M10's data-aware severity join. Set at assembly time by escalateFindingsByDataClass;
+  // absent ⇒ the finding names no classified table, or no data map was available (in which case the
+  // run carries an M10-ESCALATION-00 not-assessed row instead of silence).
+  dataClass?: DataClassMatch;
 }
 
 // Engagement baseline diff summary (#457), attached to the deliverable when a --baseline is
@@ -462,6 +481,23 @@ export function validateFindings(data: unknown): ValidationResult {
     }
     if (f.hotspotRank !== undefined && (typeof f.hotspotRank !== "number" || !Number.isInteger(f.hotspotRank) || f.hotspotRank < 1)) {
       errors.push(`${at}.hotspotRank: expected a positive integer (1-based hotspot rank)`);
+    }
+    if (f.dataClass !== undefined) {
+      const dc = f.dataClass;
+      if (!isRecord(dc)) {
+        errors.push(`${at}.dataClass: expected an object`);
+      } else {
+        if (typeof dc.table !== "string" || dc.table === "") errors.push(`${at}.dataClass.table: expected non-empty string`);
+        for (const k of ["categories", "infotypes"] as const) {
+          if (!Array.isArray(dc[k]) || (dc[k] as unknown[]).some((v) => typeof v !== "string")) errors.push(`${at}.dataClass.${k}: expected an array of strings`);
+        }
+        // The escalation's justification is the whole point of the field — an escalated severity
+        // with no stated reason is the silent re-scoring #1049 exists to prevent.
+        if (typeof dc.reason !== "string" || dc.reason.trim() === "") errors.push(`${at}.dataClass.reason: required — an escalation without a stated reason is a silent re-scoring`);
+        if (dc.escalatedFrom !== undefined && !SEVERITIES.includes(dc.escalatedFrom as Severity)) {
+          errors.push(`${at}.dataClass.escalatedFrom: "${String(dc.escalatedFrom)}" not one of ${SEVERITIES.join("/")}`);
+        }
+      }
     }
   });
 

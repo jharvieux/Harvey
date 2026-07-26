@@ -73,7 +73,7 @@ function rerunSemgrep(finding: Finding, ruleId: string, targetDir: string): Dete
   const abs = isAbsolute(file) ? file : join(targetDir, file);
   if (!existsSync(abs)) return notRun(`semgrep rule ${ruleId} could not be re-run: ${file} does not exist under ${targetDir}`);
 
-  const { result, failure } = runSemgrepOnFile(abs);
+  const { result, failure } = runSemgrepOnFile(abs, targetDir);
   if (failure !== undefined) return notRun(`semgrep rule ${ruleId} could not be re-run: ${failure}`);
 
   const hits = (result.results ?? []).filter((r) => (r.check_id.split(".").pop() ?? "") === ruleId);

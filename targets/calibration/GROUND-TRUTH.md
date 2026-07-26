@@ -1975,3 +1975,137 @@ and were already seeded before #221 in earlier batches, not new here: trusting a
 security-relevant value is `P-CLIENT-PAYMENT-AMOUNT`/`P-CLIENT-PRIV-HEADER` (Batch B14 above); a
 permission check present only in the UI is `P-CLIENT-RENDER-AUTHZ`/`P-MW-SOLE-AUTHZ` (Batch B15
 above) — both got a matching LLM-prompt lens added to `docs/scan-extras.txt`'s HIGH section (#328).
+
+## Batch B21 (#1021) — D-091 silent side-effect failure (zero-row update / unchecked mutation / void async)
+
+The three classes the fix pipeline's §8 acceptance list names (`docs/design/fix-implementation.md`)
+that had **no detector anywhere in `src/`** — not a semgrep rule, not an AST pass. #1009's remainder
+recorded them as unplanted *fixtures*; re-measured on 2026-07-25 the blocker was upstream, so a
+planted before/after fix fixture would have scored `notRun`, never green. Build order was therefore
+detector → corpus → fix fixture.
+
+All three land in `src/scan/rules/semgrep/silent-failure.yml` as WARNING + MEDIUM, so all three
+positives score at **review**. They are reliability heuristics whose shape is "this chain is missing
+a call", which cannot separate an oversight from a deliberate choice without reading intent — that
+belongs nowhere near the free count.
+
+### B21 positives — planted bugs (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-ZERO-ROW-UPDATE | `pages/api/payout-claim.js` | `harvey-zero-row-update` — `.update({status:"sending"}).eq("id", …).eq("status","pending")` with no `.select()` on the chain. Supabase returns `{ error: null }` for "matched 0 rows" exactly as for a successful write, so a lost race reads as a won one (D-091 #7) | review |
+| P-UNCHECKED-MUTATION | `pages/api/subscribe.js` | `harvey-unchecked-mutation` — an awaited `insert(...)` in statement position; the `{ error }` tuple is discarded and the handler returns 200 regardless. Supabase JS v2 does not throw on a DB error (D-091 #3) | review |
+| P-VOID-ASYNC | `pages/api/receipt.js` | `harvey-void-async` — `void writeReceiptAudit(...)` in a serverless handler; the host can freeze or terminate the process the moment the 202 is sent, so the audit write may never land (D-091 #8) | review |
+
+### B21 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why it clears |
+|---|---|---|
+| N-ZERO-ROW-SELECTED | `pages/api/payout-claim-safe.js` | the same compare-and-swap chained with `.select("id")` and asserting `data.length === 1` — `pattern-not-inside: $Z.select(...)` clears it. This is also the exact edit the §8 fix gate applies |
+| N-ZERO-ROW-TENANT-SCOPE | `pages/api/rename-workspace.js` | D-091's literal sketch shape (`update(...)` + two `.eq()` + no `.select()`) but both filters compare against VARIABLES — tenant scoping, not a CAS. The rule requires one filter against a string literal, which is what stops it flagging routine multi-tenant writes. Its `{ error }` is checked, so `harvey-unchecked-mutation` is clear too |
+| N-CHECKED-MUTATION | `pages/api/subscribe-safe.js` | `{ error }` destructured and returned on — `pattern-not-inside: $A = $B` clears any destructured/assigned result |
+| N-AWAITED-ASYNC | `pages/api/receipt-safe.js` | the same background work `await`ed; the rule matches only the `void` operator applied to a call |
+
+### B21 adjacency
+
+`harvey-unchecked-mutation` subtracts the CAS shape with an explicit `pattern-not`, so
+`pages/api/payout-claim.js` draws `harvey-zero-row-update` **only** — one code defect, one finding
+(the same discipline as B13's adjacency notes).
+
+`harvey-void-async` carries a `paths:` filter (`*api*`/`*inngest*`/`*worker*`). That surfaced a
+latent defect in the fix pipeline's single-file detector re-run, fixed in the same change: semgrep
+matches a rule's `paths:` against the path RELATIVE TO THE SCANNING ROOT, so pointing it straight at
+the file collapsed that to a bare basename and every path-filtered rule reported a false CLEAN.
+`runSemgrepOnFile` now roots the scan at the target dir, narrows with `--include`, and fails loud if
+`paths.scanned` does not contain the file.
+
+Answer key: `src/scan/calibration/b21-silent-failure.entries.ts`. All three classes also run the
+full fix-pipeline §8 gate in `src/fix/calibration-acceptance.test.ts`.
+
+## (a2) validator-guard forms — the #1027 batch, and the four measured NOT-MODELED decisions
+
+#989 shipped the (a2) validator-guard sanitizer for two guard forms (anchored positive-class regex,
+enum `.includes`) on 11 taint rules, and left the rest of the census unmodeled. #1027 re-measured
+the remainder and modeled the two forms that pay, refusing the rest **with a measurement rather than
+a preference**. Every number below is from a run on 2026-07-25 against the pinned BenchProctor
+release `2026.07.22` JS/Express quicktest slice (6,200 cases, 3,100 vuln / 3,100 safe) — the same
+corpus #989 used, so before/after is comparable.
+
+### What decided it: where the false positives actually are
+
+Enumerating all 460 FPs the shipped rules produce on that slice and classifying each safe twin by
+the guard form it uses:
+
+| guard form present in the FP file | FPs |
+|---|---:|
+| **no guard at all** | 358 |
+| negated `.includes` allowlist | 56 |
+| zod/schema `.success` | 25 |
+| bare `.test()` regex | 14 |
+| `.endsWith`/`.startsWith` suffix | 5 |
+| `Set.has` | 2 |
+
+78% of the FP population is not guard-shaped at all, so no guard model can reach it. That is the
+honest ceiling on this whole line of work, and it is why the two forms below were chosen and the
+four after them were refused.
+
+### Modeled (shipped)
+
+| form | fixtures |
+|---|---|
+| **zod/valibot schema guard** — `safeParse` + early return on `!success`, sink reads `$P.data` | `N-CMD-ZOD-GUARD`, `N-CMD-ZOD-ENUM-GUARD` clear; `P-CMD-ZOD-BARE-STRING`, `P-CMD-ZOD-UNANCHORED` must still fire |
+| **`Set.has` allowlist** — exact-match membership, same semantics as the shipped `.includes` arm | `N-CMD-SET-GUARD` clears; `P-CMD-SET-GUARD-NO-RETURN` must still fire |
+
+The schema form carries one constraint the bare-regex form does not: **a schema can be well-formed
+and still accept everything.** `z.string().safeParse(x).data === x`, so "a schema was used" is not a
+sanitizer — the schema must carry an anchored positive-class `.regex(...)` or an `.enum([...])`.
+`P-CMD-ZOD-BARE-STRING` is that constraint's alarm.
+
+The three positives were verified to FAIL FIRST: with the schema-shape requirement removed,
+`P-CMD-ZOD-BARE-STRING` and `P-CMD-ZOD-UNANCHORED` both go silent; with the anchoring
+`metavariable-regex` removed, `P-CMD-ZOD-UNANCHORED` goes silent; with the `Set.has` arm reduced to
+a bare test expression instead of the whole guard statement, `P-CMD-SET-GUARD-NO-RETURN` goes
+silent. They are a working alarm, not decoration.
+
+`harvey-log-injection` also gained the whole (a2) block. #989 applied it to 11 taint rules and
+skipped this one; re-measured, it carries the largest modelable-guard FP population of everything
+that was skipped (43 of its FPs are guard-shaped safe twins).
+
+### Measured result — per class, before vs after, on the REAL shipped rules
+
+| Category | J before | J after | safe twins cleared | **real vulns lost** |
+|---|---:|---:|---:|---:|
+| loginjection | +18% | **+68%** | 25 | **0** |
+| sensinlogs | +24% | **+60%** | 18 | **0** |
+| genericcmdi | +30% | **+44%** | 7 | **0** |
+| cmdi | +38% | **+46%** | 4 | **0** |
+| pathtraver | +16% | **+20%** | 2 | **0** |
+| **whole slice (6,200)** | **+17.3%** | **+19.1%** | **56** | **0** |
+
+TPR is byte-identical before and after (995/3,100 both runs) — the sanitizer only ever removed
+findings on safe twins. Zero new false positives.
+
+### NOT modeled — four decisions, each with its measurement and its falsifier
+
+1. **Suffix/affix guards (`.endsWith`/`.startsWith`).** MEASURED: only 5 FPs are reachable, and 10
+   of the 79 affix guards in the slice sit in VULNERABLE cases, not safe twins. A suffix allowlist
+   is also semantically unsound in the same way an unanchored regex is —
+   `"evil-example.com".endsWith("example.com")` is true. Modeling it would trade a real recall risk
+   for 5 FPs. *Falsifier:* re-run the FP census; if the affix FP population grows past the regex
+   arm's, re-open with an adversarial `evil-example.com` positive built FIRST.
+2. **Numeric-range guards.** MEASURED: 110 in the slice, all in `no_brute_force_limit`, `intoverflow`
+   and `sqli`-safe — categories where Harvey's FPR is already 0%. Zero addressable FPs. *Falsifier:*
+   the same FP census, on a corpus where a numeric-range guard sits on a flagged safe twin.
+3. **Positive-polarity `.includes` (`if (allowed.includes(x)) { …sink…; return; }`).** MEASURED: all
+   179 occurrences are in VULNERABLE cases (authzfailure / idor / authzincorrect / privescalation) —
+   the (b) authorization-intent population. Modeling it can only lose recall; it has no FP to clear.
+   *Falsifier:* find a flagged SAFE twin using this shape.
+4. **Projection guards** (`new URL(data).hostname` allowlisted while the sink receives `data`).
+   MEASURED: 31 `harvey-open-redirect` FPs plus 10 `harvey-ssrf-fetch` FPs are exactly this shape —
+   the largest single modelable population left, and the reason extending the plain (a2) block to
+   `harvey-ssrf-fetch` would have been inert. Not modeled here because the naive version is UNSOUND:
+   allowlisting `new URL(x).hostname` does not make `x` safe (`https://good.host@evil.tld/`,
+   userinfo/path/fragment tricks). Needs its own adversarial positives before any suppression ships
+   — split to its own issue.
+
+Answer key for the new fixtures: `src/scan/calibration/b3-injection.entries.ts` (#1027 block).

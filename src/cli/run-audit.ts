@@ -238,7 +238,7 @@ if (supabaseRefsArg.length > 1) console.log(`Supabase projects enumerated (M7 ad
 if (Object.keys(schemaHints).length) console.log(`Per-app schema hints (M10, #538): ${Object.entries(schemaHints).map(([app, path]) => `${app}=${path}`).join(", ")}`);
 console.log("");
 
-const { recorded, failures, findings, hotspots, testQuality } = runAudit(AUDIT_RUNNERS, ctx);
+const { recorded, failures, findings, hotspots, dataMap, testQuality } = runAudit(AUDIT_RUNNERS, ctx);
 // #975 — declare CWEs across the assembled deliverable (mechanical rows arrive enriched; captured
 // artifact/config-tier rows get theirs here) so --findings-out and --sarif-out both carry them.
 enrichFindingsCwe(findings);
@@ -265,7 +265,7 @@ let exportFindings: Finding[] = findings;
 
 if (findingsOut) {
   const meta: ReportMeta = metaPath ? (JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta) : placeholderMeta(targetDir);
-  let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots, testQuality);
+  let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots, dataMap, testQuality);
 
   // #457: diff against a prior engagement so the deliverable leads with progress. The baseline is a
   // full findings.json from a previous audit of the SAME client; we diff by finding identity

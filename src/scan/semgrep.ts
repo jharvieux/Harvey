@@ -55,6 +55,10 @@ export interface SemgrepOutput {
   // never evaluated that file — load-bearing for the fix pipeline's re-run (#1012), which must not
   // read "no match" off a file semgrep could not parse.
   errors?: { type?: string; message?: string; path?: string }[];
+  // Absolute paths semgrep actually analysed. #1021 — the single-file re-run narrows a rooted scan
+  // with --include, and a narrowing that matched nothing is indistinguishable from a clean file
+  // unless this is read.
+  paths?: { scanned?: string[] };
 }
 
 const SEVERITY_FROM_SEMGREP: Record<string, Severity> = { ERROR: "High", WARNING: "Medium", INFO: "Low" };
@@ -246,10 +250,19 @@ export function harveyRuleIds(): Set<string> {
 // Run the custom rules against a single file. A per-path semgrep error (unparseable source, missing
 // scanning root) is returned as `failure`, NOT as an empty result set: semgrep exits 0 having scanned
 // nothing, and "no match on a file the rules never evaluated" must never be read as "clean".
-export function runSemgrepOnFile(absFile: string): { result: SemgrepOutput; failure?: string } {
+//
+// #1021: the scan is ROOTED at the target dir and narrowed to the one file with --include, rather
+// than pointed straight at the file. A rule's own `paths:` filter is matched against the path
+// RELATIVE TO THE SCANNING ROOT, so with the file itself as the root that path collapses to a bare
+// basename and every path-filtered rule (auth.yml's harvey-authed-no-role-check, silent-failure.yml's
+// harvey-void-async) silently matched nothing — a false clean, which computeGreen would have read as
+// a fixed bug. `paths.scanned` is then checked so the narrowing itself can't reintroduce the same
+// silence: a file the run never reached is a failure, not a clean detector.
+export function runSemgrepOnFile(absFile: string, root: string): { result: SemgrepOutput; failure?: string } {
+  const rel = relative(root, absFile);
   let out: string;
   try {
-    out = execFileSync("semgrep", ["--config", CUSTOM_RULES, "--exclude", "node_modules", "--json", "--quiet", absFile], {
+    out = execFileSync("semgrep", ["--config", CUSTOM_RULES, "--include", rel, "--exclude", "node_modules", "--json", "--quiet", root], {
       encoding: "utf8",
       maxBuffer: 1024 * 1024 * 128,
     });
@@ -261,6 +274,9 @@ export function runSemgrepOnFile(absFile: string): { result: SemgrepOutput; fail
   const result = JSON.parse(out) as SemgrepOutput;
   const pathError = (result.errors ?? []).find((e) => e.path === absFile);
   if (pathError) return { result, failure: `semgrep could not scan the file: ${pathError.message ?? pathError.type ?? "unknown error"}` };
+  if (!(result.paths?.scanned ?? []).includes(absFile)) {
+    return { result, failure: `semgrep did not scan ${rel} under ${root} (ignored by .gitignore/.semgrepignore, or an unrecognised extension)` };
+  }
   return { result };
 }
 

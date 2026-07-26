@@ -76,6 +76,12 @@ const NO_OWASP_CWES: Record<string, string> = {
   "CWE-489": "Active Debug Code — not in any Top-10-2021 category's mapped-CWE list",
   "CWE-1321": "Prototype Pollution — post-2021 CWE, not in the Top-10-2021 mapping",
   "CWE-1333": "Inefficient Regular Expression Complexity (ReDoS) — DoS is not a Top-10-2021 category",
+  // #1021, MEASURED 2026-07-25 against MITRE's own CWE-252 page (cwe.mitre.org/data/definitions/252.html):
+  // its Memberships list carries "OWASP Top Ten 2004 Category A7 — Improper Error Handling" and
+  // "OWASP Top Ten 2025 Category A10:2025 — Mishandling of Exceptional Conditions", and NO 2021
+  // category (no CWE-1344 child). Falsifier: re-read that page's Memberships section — if a
+  // 2021 category appears, move CWE-252 into OFFICIAL_CWE_TO_OWASP_2021 instead.
+  "CWE-252": "Unchecked Return Value — MITRE's memberships place it under OWASP 2004 A7 and 2025 A10, not any Top-10-2021 category",
 };
 
 const RULES_DIR = join(dirname(fileURLToPath(import.meta.url)));

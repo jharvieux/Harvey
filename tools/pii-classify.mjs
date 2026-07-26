@@ -39,6 +39,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { parseClassifiableColumns } from "../src/migration-sql-parse.js";
+import { piiProtectionFindings, piiProtectionScope } from "../src/pii-protection-review.js";
 import { parsePrismaSchema } from "../src/prisma-schema-parse.js";
 
 const RULES = [
@@ -609,19 +610,38 @@ export function dataMapToFindings(dataMap, { tier }) {
   });
 }
 
-// --out <path> (#436): write the report-schema Finding[] the orchestrator's M10 probe captures
-// (run-audit --findings-out). No --out → console summary only, exactly as before.
-function writeFindingsOut(dataMap, tier) {
-  const i = process.argv.indexOf("--out");
-  if (i < 0) return;
-  const outPath = process.argv[i + 1];
-  if (!outPath || outPath.startsWith("--")) {
-    console.error("--out requires a file path");
+function flagPath(flag) {
+  const i = process.argv.indexOf(flag);
+  if (i < 0) return null;
+  const value = process.argv[i + 1];
+  if (!value || value.startsWith("--")) {
+    console.error(`${flag} requires a file path`);
     process.exit(1);
   }
-  const findings = dataMapToFindings(dataMap, { tier });
+  return value;
+}
+
+// --out <path> (#436): write the report-schema Finding[] the orchestrator's M10 probe captures
+// (run-audit --findings-out). No --out → console summary only, exactly as before.
+// `extra` (#1043) carries the protection verdict rows, which are per-COLUMN judgments rather than
+// per-table classifications and so are not derivable from the data map alone.
+function writeFindingsOut(dataMap, tier, extra) {
+  const outPath = flagPath("--out");
+  if (!outPath) return;
+  const findings = [...dataMapToFindings(dataMap, { tier }), ...extra];
   writeFileSync(outPath, `${JSON.stringify(findings, null, 2)}\n`);
   console.log(`\n${findings.length} report-schema finding(s) → ${outPath}`);
+}
+
+// --data-map-out <path> (#1049): the table→data-class map itself, which the orchestrator feeds to
+// the assembler so EVERY module's severities are weighted by the sensitivity of the data they
+// touch. Written separately from --out because it is an input to other modules' findings, not a
+// finding: the per-table classification findings are a projection of it, not a substitute for it.
+function writeDataMapOut(dataMap) {
+  const outPath = flagPath("--data-map-out");
+  if (!outPath) return;
+  writeFileSync(outPath, `${JSON.stringify(dataMap, null, 2)}\n`);
+  console.log(`Data map (${Object.keys(dataMap).length} classified table(s)) → ${outPath}`);
 }
 
 // Each case is [column, expectedCategory (null = no match), expectedConfidence, sqlType,
@@ -776,13 +796,82 @@ function report(cols, dataMap, { tier = "schema", unknownType = [], semanticMode
   return dataMap;
 }
 
+// #1043 — the connected tier's PROTECTION inputs, the facts src/pii-protection-review.ts needs to
+// turn "this column holds PII" into "this column holds PII and anyone with the anon key can read
+// it". Three read-only catalog reads; no data value is ever selected, so the privacy-safe property
+// of M10 is unchanged.
+//
+// exposedSchemas stays empty on this path BY CONSTRUCTION, not by omission: the live inventory only
+// ever reads the `public` schema (SCOPE_NOTE.live), and `public` is PostgREST's default exposure, so
+// no additional exposed schema is observable from what was inventoried. Table-level exposure carries
+// the whole signal here.
+//
+// Exported so the catalog-rows → ExposureFacts transformation is testable against an injected `sql`
+// without a database: the connected tier is the one Harvey sells this check on, and #357's "only
+// ever exercised in its failure path" is exactly how an unverified claim survives.
+/** @param {(strings: TemplateStringsArray, ...values: unknown[]) => Promise<Record<string, unknown>[]>} sql */
+export async function gatherProtectionFacts(sql) {
+  const tables =
+    await sql`SELECT c.relname AS table_name, c.relrowsecurity AS rls_enabled FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')`;
+  const grants =
+    await sql`SELECT DISTINCT table_name FROM information_schema.role_table_grants WHERE table_schema = 'public' AND grantee IN ('anon', 'authenticated') AND privilege_type = 'SELECT'`;
+  // pgsodium's transparent-column-encryption view is the only encryption-at-rest signal a catalog
+  // read can see. Its columns are checked before it is selected from, rather than assumed: the view
+  // shape varies by pgsodium version, and an absent/unreadable view must degrade to "no encryption
+  // observed" (disclosed in M10-PROT-00) instead of failing the whole classification run.
+  const maskingCols =
+    await sql`SELECT column_name FROM information_schema.columns WHERE table_schema = 'pgsodium' AND table_name = 'masking_rule'`;
+  const maskingReadable = ["relname", "attname"].every((c) => maskingCols.some((r) => r.column_name === c));
+  const masked = maskingReadable ? await sql`SELECT relname AS table_name, attname AS column_name FROM pgsodium.masking_rule` : [];
+
+  const clientReadable = new Set(grants.map((g) => g.table_name));
+  const autoExposedTables = tables.filter((t) => !t.rls_enabled && clientReadable.has(t.table_name)).map((t) => `public.${t.table_name}`);
+  return {
+    facts: { exposedSchemas: [], autoExposedTables },
+    encrypted: new Set(masked.map((m) => `${m.table_name}.${m.column_name}`)),
+    detail: `Read ${tables.length} public table(s): ${clientReadable.size} carry an anon/authenticated SELECT grant and ${autoExposedTables.length} of those also have RLS disabled (anon-reachable). Encryption at rest: ${maskingReadable ? `pgsodium.masking_rule listed ${masked.length} encrypted column(s)` : "no readable pgsodium.masking_rule view, so no column was credited as encrypted at rest"}.`,
+  };
+}
+
+// #1043 — turns the classification into a per-column protection VERDICT, or states that no verdict
+// was made. Review-flagged columns (free-text / JSON containers) are excluded: they are candidates
+// for inspection, not asserted classifications, and asserting "unprotected PII" over one would
+// price a maybe as a fact. Their exclusion is stated in the M10-PROT-00 row.
+function protectionReview(dataMap, protection, tier) {
+  if (!protection) {
+    const reason =
+      tier === "schema"
+        ? "this run classified a static schema (--schema), which carries no RLS state, no grants and no encryption configuration"
+        : "no protection facts were gathered on this run";
+    console.log(`\nPII protection: NOT verified — ${reason} (#1043).`);
+    return [piiProtectionScope({ assessed: false, reason })];
+  }
+  const columns = Object.entries(dataMap).flatMap(([table, t]) =>
+    t.columns
+      .filter((c) => !REVIEW_FLAG_INFOTYPES.has(c.infotype))
+      .map((c) => ({
+        schema: "public",
+        table,
+        column: c.column,
+        category: c.category,
+        infotype: c.infotype,
+        encrypted: protection.encrypted.has(`${table}.${c.column}`),
+      })),
+  );
+  const findings = piiProtectionFindings(columns, protection.facts);
+  console.log(`\nPII protection verified against the live database (#1043): ${columns.length} asserted column(s) checked, ${findings.length} unprotected.`);
+  for (const f of findings) console.log(`  ${f.location}`);
+  return [piiProtectionScope({ assessed: true, detail: protection.detail, columnsChecked: columns.length, unprotected: findings.length }), ...findings];
+}
+
 // #855: the shared classify → report → emit tail for both CLI tiers. The semantic pass slots in
 // here (behind resolveSemanticClassifier's double gate) so live and schema runs get it identically.
-async function classifyReportAndEmit(cols, { tier, unknownType = [] }) {
+async function classifyReportAndEmit(cols, { tier, unknownType = [], protection = null }) {
   const semantic = resolveSemanticClassifier({ allColumns: cols });
   const dataMap = await classifyWithFallback(cols, semantic ?? undefined);
   report(cols, dataMap, { tier, unknownType, semanticModel: semantic?.model ?? null });
-  writeFindingsOut(dataMap, tier);
+  writeFindingsOut(dataMap, tier, protectionReview(dataMap, protection, tier));
+  writeDataMapOut(dataMap);
 }
 
 async function inventory() {
@@ -790,8 +879,9 @@ async function inventory() {
   const sql = postgres(process.env.SUPABASE_DB_URL, { max: 1, idle_timeout: 5 });
   const cols =
     await sql`SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, ordinal_position`;
+  const protection = await gatherProtectionFacts(sql);
   await sql.end();
-  await classifyReportAndEmit(cols, { tier: "live" });
+  await classifyReportAndEmit(cols, { tier: "live", protection });
 }
 
 /**

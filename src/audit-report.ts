@@ -10,6 +10,7 @@
 // them into the same silence (#349).
 
 import { buildAuditCoverage, type EngagementEnv, type ModuleCoverage } from "./audit-coverage.js";
+import { type DataClassMap, dataClassJoinNotAssessed, escalateFindingsByDataClass } from "./data-class-escalation.js";
 import type { CoverageRow, Finding, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
 import { enrichFindingsWithHotspots } from "./hotspot-scan.js";
 
@@ -45,11 +46,27 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
 // #515: when the run captured an M3 hotspot ranking, tag every module's findings on a ranked hotspot
 // (onHotspot/hotspotRank) so the report up-ranks them across modules — one mechanism, every module.
 // Absent hotspots ⇒ findings pass through untagged, unchanged.
+//
+// #1049: the same shape for M10's data map — every module's severity is weighted by the sensitivity
+// of the data it touches. `dataMap` undefined means M10 classified NOTHING (no schema, no DB), which
+// is different from an empty map (M10 classified and found no regulated data): the first cannot run
+// the join and gets a not-assessed row, the second ran it and legitimately escalated nothing.
+//
 // #1045: M8's §3b test-quality table travels with the document the same way the ledger does — the
 // mutation tier's per-module measurement is a client-facing deliverable section, and an assembler
 // that dropped it left the scanner computing numbers with nowhere to go.
-export function assembleEngagementDocument(recorded: ModuleCoverage[], env: EngagementEnv, findings: Finding[], meta: ReportMeta, hotspots?: string[], testQuality?: TestQuality): FindingsDocument {
+export function assembleEngagementDocument(recorded: ModuleCoverage[], env: EngagementEnv, findings: Finding[], meta: ReportMeta, hotspots?: string[], dataMap?: DataClassMap, testQuality?: TestQuality): FindingsDocument {
   const deduped = dedupeFindings(findings);
   const enriched = hotspots?.length ? enrichFindingsWithHotspots(deduped, hotspots) : deduped;
-  return { meta, coverage: coverageLedger(recorded, env), findings: enriched, ...(testQuality ? { testQuality } : {}) };
+  const weighted = dataMap
+    ? escalateFindingsByDataClass(enriched, dataMap)
+    : [...enriched, dataClassJoinNotAssessed(m10NotRunReason(recorded))];
+  return { meta, coverage: coverageLedger(recorded, env), findings: weighted, ...(testQuality ? { testQuality } : {}) };
+}
+
+// The M10 rows' own words for why nothing was classified — quoted into M10-ESCALATION-00 so the
+// not-assessed row names the actual cause instead of restating that it is absent.
+function m10NotRunReason(recorded: ModuleCoverage[]): string {
+  const reasons = recorded.filter((r) => r.module === "M10" && r.reason).map((r) => `${r.instance ? `${r.instance}: ` : ""}${r.reason}`);
+  return reasons.length ? reasons.join(" | ") : "M10 emitted no data-map artifact this run (no --findings-out capture, or the classifier wrote none).";
 }

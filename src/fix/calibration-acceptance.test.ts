@@ -11,8 +11,12 @@
 //     proof the acceptance requires: it fires on the unfixed source and is clean after the fix.
 //   • The SAME full gate for the §8 classes detected by a harvey-* semgrep rule (open redirect,
 //     raw error egress, SQLi) — #1012's semgrep resolver, which retired their disclosed `notRun`.
+//   • The same gate again for §8 classes 1/2/5 (zero-row update, unchecked mutation, void-prefixed
+//     async), which had no detector at all until #1021 added src/scan/rules/semgrep/silent-failure.yml
+//     and the §B21 corpus fixtures they score against.
 //   • What is STILL disclosed rather than scored: a semgrep REGISTRY-pack rule (needs a network
-//     fetch to replay), and §8 classes 1/2/5, which no detector in src/ implements at all.
+//     fetch to replay). The diff-GENERATING implementer is still absent — every fixed source below
+//     is a hand-authored mechanical edit, not one the pipeline produced (tracked separately).
 //   • Clause 2: an out-of-scope planted bug downgraded to recommend-only through intake/screening.
 //
 // Companion record: docs/design/fix-calibration-acceptance.md.
@@ -184,16 +188,105 @@ describe("fix §8 acceptance — still-disclosed gaps, never faked green (#1009 
     expect(r.green).toBe(false);
     expect(resolvesToDetector(registryRule)).toBe(false);
   }, SEMGREP_TIMEOUT_MS);
+});
 
-  it("§8 classes 1, 2 and 5 have no detector at all, so no fixture can score them — the honest remainder", () => {
-    // Zero-row update returning `error: null` (D-091 #7), unchecked Supabase mutations (D-091 #3) and
-    // `void`-prefixed async (D-091 #8) are named in §8, but nothing in src/ detects them: no semgrep
-    // rule, no AST engine. Planting before/after fixtures would produce notRun rows, not green ones —
-    // the detector has to exist first. Tracked as #1009's remainder.
-    for (const taxonomy of ["harvey-zero-row-update", "harvey-unchecked-mutation", "harvey-void-async"]) {
-      expect(resolvesToDetector(taxonomy)).toBe(false);
+// #1021: §8 classes 1, 2 and 5 (D-091 #7 zero-row update, #3 unchecked mutation, #8 void-prefixed
+// async) had NO detector anywhere in src/ — no semgrep rule, no AST engine — so a planted before/after
+// fixture would have produced notRun rows, not green ones. src/scan/rules/semgrep/silent-failure.yml
+// supplies all three, targets/calibration plants a positive and a safe negative for each
+// (GROUND-TRUTH.md §B21), and they now run the SAME full §8 gate as the classes above.
+const CLASS1_FILE = "pages/api/payout-claim.js"; // class 1: CAS update with no .select() (harvey-zero-row-update)
+const CLASS2_FILE = "pages/api/subscribe.js"; // class 2: awaited insert whose { error } is discarded (harvey-unchecked-mutation)
+const CLASS5_FILE = "pages/api/receipt.js"; // class 5: void-prefixed async in a handler (harvey-void-async)
+
+describe.skipIf(!SEMGREP_PRESENT)("fix §8 acceptance — the FULL gate for §8 classes 1, 2 and 5 (#1021)", () => {
+  it("class 1 (zero-row update) reaches GREEN: the CAS chains .select() and the handler asserts the row count", () => {
+    const src = readCalibration(CLASS1_FILE);
+    const fixed = src
+      .replace('  await admin\n    .from("payouts")', '  const { data, error } = await admin\n    .from("payouts")')
+      .replace(
+        '    .eq("status", "pending");',
+        '    .eq("status", "pending")\n    .select("id");\n\n  if (error) return res.status(500).json({ error: "claim failed" });\n  if (data.length !== 1) return res.status(409).json({ error: "already claimed" });',
+      );
+    expect(fixed).not.toEqual(src);
+    const finding = m5Finding({ id: "CAL-ZERO-ROW", taxonomy: "harvey-zero-row-update", location: `${CLASS1_FILE}:7` });
+    const r = runFixAcceptance(finding, { file: CLASS1_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    expect(r.execution.outcome).toBe("diff-verified");
+    expect(r.execution.railViolations).toEqual([]);
+    expect(r.detectorAfter.notRun).toBeUndefined();
+    expect(r.detectorAfter.fired).toBe(false);
+    expect(r.green).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("class 2 (unchecked mutation) reaches GREEN once { error } is destructured and returned on", () => {
+    const src = readCalibration(CLASS2_FILE);
+    const fixed = src.replace(
+      "  await admin.from(",
+      '  const { error } = await admin.from(',
+    ).replace(
+      "\n\n  return res.status(200).json({ subscribed: true });",
+      '\n\n  if (error) return res.status(500).json({ error: "subscribe failed" });\n\n  return res.status(200).json({ subscribed: true });',
+    );
+    expect(fixed).not.toEqual(src);
+    const finding = m5Finding({ id: "CAL-UNCHECKED", taxonomy: "harvey-unchecked-mutation", location: `${CLASS2_FILE}:7` });
+    const r = runFixAcceptance(finding, { file: CLASS2_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    expect(r.execution.outcome).toBe("diff-verified");
+    expect(r.execution.railViolations).toEqual([]);
+    expect(r.detectorAfter.notRun).toBeUndefined();
+    expect(r.detectorAfter.fired).toBe(false);
+    expect(r.green).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("class 5 (void-prefixed async) reaches GREEN once the background work is awaited", () => {
+    const src = readCalibration(CLASS5_FILE);
+    const fixed = src.replace("  void writeReceiptAudit(req.body.orderId);", "  await writeReceiptAudit(req.body.orderId);");
+    expect(fixed).not.toEqual(src);
+    const finding = m5Finding({ id: "CAL-VOID", taxonomy: "harvey-void-async", location: `${CLASS5_FILE}:12` });
+    const r = runFixAcceptance(finding, { file: CLASS5_FILE, original: src, fixed }, { allowlist: ["pages/**"] });
+    expect(r.execution.outcome).toBe("diff-verified");
+    expect(r.execution.railViolations).toEqual([]);
+    expect(r.detectorAfter.notRun).toBeUndefined();
+    expect(r.detectorAfter.fired).toBe(false);
+    expect(r.green).toBe(true);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("none of the three goes green on a cosmetic edit — each detector still fires on the unfixed shape", () => {
+    // The green results above are only worth something if the detectors discriminate. A comment-only
+    // edit applies clean and clears the rails, so the ONLY thing that can refuse it is detector-after.
+    const cases: [string, string, string][] = [
+      [CLASS1_FILE, "harvey-zero-row-update", "export default async function handler(req, res) {"],
+      [CLASS2_FILE, "harvey-unchecked-mutation", "export default async function handler(req, res) {"],
+      [CLASS5_FILE, "harvey-void-async", "export default async function handler(req, res) {"],
+    ];
+    for (const [file, taxonomy, anchor] of cases) {
+      const src = readCalibration(file);
+      const noop = src.replace(anchor, `${anchor} // touched`);
+      expect(noop, file).not.toEqual(src);
+      const r = runFixAcceptance(m5Finding({ id: `CAL-NOOP-${taxonomy}`, taxonomy, location: `${file}:7` }), { file, original: src, fixed: noop }, { allowlist: ["pages/**"] });
+      expect(r.execution.outcome, file).toBe("diff-verified");
+      expect(r.detectorAfter.fired, file).toBe(true);
+      expect(r.green, file).toBe(false);
     }
-  });
+  }, SEMGREP_TIMEOUT_MS * 3);
+
+  it("each rule stays silent on its committed safe negative — the corpus pair, checked live", () => {
+    // GROUND-TRUTH §B21's negatives, re-run through the same resolver. N-ZERO-ROW-TENANT-SCOPE is the
+    // load-bearing one: it has D-091's literal sketch shape (update + two .eq(), no .select()) but
+    // scopes by tenant rather than guarding a literal state, so flagging it would make the rule fire
+    // on routine multi-tenant writes.
+    const negatives: [string, string][] = [
+      ["pages/api/payout-claim-safe.js", "harvey-zero-row-update"],
+      ["pages/api/rename-workspace.js", "harvey-zero-row-update"],
+      ["pages/api/subscribe-safe.js", "harvey-unchecked-mutation"],
+      ["pages/api/receipt-safe.js", "harvey-void-async"],
+    ];
+    for (const [file, taxonomy] of negatives) {
+      const c = track(materialize({ [file]: readCalibration(file) }));
+      const run = rerunDetector(m5Finding({ id: `CAL-NEG-${file}`, taxonomy, location: `${file}:1` }), c.dir);
+      expect(run.notRun, file).toBeUndefined();
+      expect(run.fired, file).toBe(false);
+    }
+  }, SEMGREP_TIMEOUT_MS * 4);
 });
 
 describe("fix §8 acceptance — clause 2: an out-of-scope planted bug downgrades to recommend-only", () => {
