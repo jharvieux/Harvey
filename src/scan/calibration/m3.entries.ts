@@ -1,8 +1,10 @@
 // M3 batch (#72, spec §M3) — hotspot analysis (vitals: churn×complexity, truck-factor, coupling).
-// The adapter's schema (src/hotspot-scan.ts) is now VERIFIED against a live
-// `vitals 0.2.0 report --json` capture (issue #94). Everything below scores against a
-// REAL-schema synthetic fixture (`src/__fixtures__/vitals-report.json`, used by
-// hotspot-scan.test.ts) — synthetic paths/values, real field shape.
+// Everything below scores against `src/__fixtures__/vitals-report.json` (used by
+// hotspot-scan.test.ts), which since #1146 is a REAL `vitals 0.2.0 report --json` capture — no
+// longer a hand-written fixture. It is produced by src/__fixtures__/vitals-recapture/seed.py, which
+// builds a throwaway git repo + `.vitals` provenance DB whose history makes the tool emit every
+// planted relationship below (see the fixture's `_note` and the sibling PROVENANCE.md). The values
+// in these entries follow the capture, not the reverse.
 //
 // Per the locked product decision + spec discipline: a hotspot RANK is an ordering over a
 // continuous score, not a true/false finding — there is no M3 precision number, and these entries
@@ -59,7 +61,7 @@ export const m3Entries: CorpusEntry[] = [
     kind: "negative",
     cls: "Multi-author file — must NOT be flagged truck-factor-1",
     location: "core/reporting.ts",
-    note: "core/reporting.ts is committed by 3 distinct seeded authors in the real-schema vitals fixture (knowledge_risk truck_factor: 3) — toFactFindings emits nothing for it, so it must clear the negative check.",
+    note: "core/reporting.ts is committed by 3 distinct seeded authors, no one of whom holds >50% of its commits, so vitals computes truck_factor 2 for it. vitals' knowledge_risk list only carries truck_factor ≤ 1 files (vitals_cli.py), so reporting.ts is absent from it entirely — truckFactorOneFiles never names it and toFactFindings emits nothing for it, clearing the negative check. (The pre-#1146 hand-written fixture claimed truck_factor 3, which real vitals never produces for 3 equal authors — top-2 cover 66% → truck_factor 2.)",
   },
   {
     module: "M3",
