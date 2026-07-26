@@ -16,6 +16,7 @@
 //      fails loud on its own.
 
 import { AUDIT_MODULES, type AuditModule, type EngagementEnv, type ModuleCoverage, type ModuleSubStatus, MODULES } from "./audit-coverage.js";
+import type { DataClassMap } from "./data-class-escalation.js";
 import type { Finding } from "./findings.js";
 
 // What a probe reports about its OWN execution. It is deliberately not ModuleCoverage: a probe may
@@ -30,9 +31,11 @@ import type { Finding } from "./findings.js";
 // #682: `subStatus: "sub-step-blocked"` on a partial says a sub-step was BLOCKED while a sibling
 // sub-step ran and surfaced `findings` — so a blocked Stryker run never discards the test-intent
 // tier's findings by degrading to requires-live-run (which carries none).
+// `dataMap` (#1049): M10's table→PII/PHI/PCI classification, surfaced so the assembler can weight
+// EVERY module's severities by the sensitivity of the data they touch. Only the M10 probe sets it.
 export type ProbeOutcome =
-  | { status: "ran"; detail: string; findings?: Finding[]; instance?: string; hotspots?: string[] }
-  | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string; hotspots?: string[]; subStatus?: ModuleSubStatus }
+  | { status: "ran"; detail: string; findings?: Finding[]; instance?: string; hotspots?: string[]; dataMap?: DataClassMap }
+  | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string; hotspots?: string[]; dataMap?: DataClassMap; subStatus?: ModuleSubStatus }
   | { status: "requires-live-run"; reason: string; instance?: string };
 
 // The seam that keeps this engine testable and offline: probes reach the outside world only through
@@ -143,6 +146,10 @@ interface AuditRunResult {
   // #515: M3's top-K hotspot ranking, when the M3 probe captured one. Fed to the assembler so every
   // module's findings get the shared hotspot enrichment. Absent ⇒ M3 produced no ranking this run.
   hotspots?: string[];
+  // #1049: M10's table→data-class map, when the M10 probe captured one. Fed to the assembler so
+  // every module's severities are weighted by data sensitivity. Absent ⇒ M10 classified nothing this
+  // run, and the assembler records that the join could not run rather than leaving it unstated.
+  dataMap?: DataClassMap;
 }
 
 // A registry missing a module is the #229 defect at the source — an audit that never even tries M5
@@ -172,6 +179,10 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
   const failures: ModuleFailure[] = [];
   const findings: Finding[] = [];
   let hotspots: string[] | undefined;
+  // #1049: merged across a monorepo's per-app M10 rows — one engagement, one table→data-class view.
+  // Two apps declaring the same table name collapse to the later app's classification; the join is a
+  // severity weight, and both entries classify the same name, so the merge cannot invent sensitivity.
+  let dataMap: DataClassMap | undefined;
 
   // Iterate AUDIT_MODULES, not `runners`: the ledger's shape is owned by the module enumeration,
   // so a registry can never shorten the audit by reordering or under-listing itself.
@@ -216,10 +227,11 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
         );
       }
       if (outcome.status !== "requires-live-run" && outcome.hotspots?.length) hotspots = outcome.hotspots;
+      if (outcome.status !== "requires-live-run" && outcome.dataMap) dataMap = { ...dataMap, ...outcome.dataMap };
     }
   }
 
-  return { recorded, failures, findings, ...(hotspots ? { hotspots } : {}) };
+  return { recorded, failures, findings, ...(hotspots ? { hotspots } : {}), ...(dataMap ? { dataMap } : {}) };
 }
 
 export function formatFailures(failures: ModuleFailure[]): string {

@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { AuditModule } from "./audit-coverage.js";
 import { findFreshPass, ranFromPass } from "./audit-pass-artifact.js";
 import type { ModuleRunner, ProbeOutcome, RunContext } from "./audit-runner.js";
+import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
 import type { Finding } from "./findings.js";
 
 // #416: fold a rejected-pass reason (wrong target, stale, malformed) into a probe's not-run reason,
@@ -548,6 +549,17 @@ const m9: ModuleRunner = { module: "M9", run: perApp(m9Run) };
 //
 // #357 (untestable in CI): the `connected` branch needs real DB creds and has only ever been
 // exercised in its failure path here.
+// #1049: the data map itself — the table→PII/PHI/PCI classification every other module's severity is
+// weighted by. pii-classify writes it to --data-map-out; a run that captured no map leaves the
+// assembler to record M10-ESCALATION-00 rather than escalate nothing silently.
+const dataMapOut = (ctx: RunContext, instanceName?: string): string | undefined =>
+  ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-datamap-${refSlug(instanceName)}.json` : "M10-datamap.json") : undefined;
+
+const readDataMap = (ctx: RunContext, path: string | undefined): { dataMap: DataClassMap } | Record<string, never> => {
+  const raw = path && ctx.readArtifact ? ctx.readArtifact(path) : undefined;
+  return isDataClassMap(raw) ? { dataMap: raw } : {};
+};
+
 const M10_NOT_COLLECTED =
   "this run captured no findings (coverage-only, no --findings-out), so no M10 findings are collected into this deliverable — absence here is not-collected, not clean (#436/#420)";
 
@@ -594,12 +606,18 @@ const m10Schema = (ctx: RunContext, appPath: string, instanceName?: string): Pro
     return { status: "requires-live-run", reason: `no live DB and no schema found — nothing to classify. Probed: ${probed.join(", ")}. pii-classify --schema accepts a migrations dir (supabase/prisma/drizzle) or a schema.sql file (#529)`, ...instance };
   }
   const detail = `pnpm pii-classify --schema ${schemas.join(" ")}`;
-  const schemaOnly = "schema tier only — no live DB, so row-level data was not sampled";
-  const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", ...schemas, ...(outPath ? ["--out", outPath] : [])]);
+  // #1043: the schema tier classifies PRESENCE only. Whether a sensitive column is PROTECTED needs
+  // RLS state, anon/authenticated grants and encryption facts that exist only on a live connection —
+  // so say so here, because "M10: partial, rows not sampled" reads as though protection was covered.
+  const schemaOnly =
+    "schema tier only — no live DB, so row-level data was not sampled AND PII protection was not verified (RLS state, anon/authenticated grants and encryption-at-rest are live-only facts); see the M10-PROT-00 row";
+  const mapPath = dataMapOut(ctx, instanceName);
+  const { ok, output } = ctx.exec("pnpm", ["pii-classify", "--schema", ...schemas, ...(outPath ? ["--out", outPath] : []), ...(mapPath ? ["--data-map-out", mapPath] : [])]);
   if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify --schema exited non-zero: ${trimOut(output)}`, ...instance };
   if (!outPath) return { status: "partial", detail, reason: `${schemaOnly}. And ${M10_NOT_COLLECTED}`, ...instance };
   const findings = readCaptured(ctx, outPath);
-  return findings.length ? { status: "partial", detail, reason: schemaOnly, findings, ...instance } : { status: "partial", detail, reason: schemaOnly, ...instance };
+  const dataMap = readDataMap(ctx, mapPath);
+  return findings.length ? { status: "partial", detail, reason: schemaOnly, findings, ...dataMap, ...instance } : { status: "partial", detail, reason: schemaOnly, ...dataMap, ...instance };
 };
 
 // The env-bound live tier: with no per-DB URL threaded, pii-classify reads SUPABASE_DB_URL from the
@@ -610,11 +628,13 @@ const m10Live = (ctx: RunContext, instanceName?: string, dbUrl?: string): ProbeO
   const instance = instanceName ? { instance: instanceName } : {};
   const outPath = ctx.captureDir ? join(ctx.captureDir, instanceName ? `M10-${refSlug(instanceName)}.json` : "M10.json") : undefined;
   const execOpts = dbUrl ? { env: { SUPABASE_DB_URL: dbUrl } } : undefined;
-  const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : [])], execOpts);
+  const mapPath = dataMapOut(ctx, instanceName);
+  const { ok, output } = ctx.exec("pnpm", ["pii-classify", ...(outPath ? ["--out", outPath] : []), ...(mapPath ? ["--data-map-out", mapPath] : [])], execOpts);
   if (!ok) return { status: "requires-live-run", reason: `pnpm pii-classify exited non-zero: ${trimOut(output)}`, ...instance };
   if (!outPath) return { status: "partial", detail: "pnpm pii-classify (live)", reason: `live classification ran, but ${M10_NOT_COLLECTED}`, ...instance };
   const findings = readCaptured(ctx, outPath);
-  return findings.length ? { status: "ran", detail: "pnpm pii-classify (live)", findings, ...instance } : { status: "ran", detail: "pnpm pii-classify (live)", ...instance };
+  const dataMap = readDataMap(ctx, mapPath);
+  return findings.length ? { status: "ran", detail: "pnpm pii-classify (live)", findings, ...dataMap, ...instance } : { status: "ran", detail: "pnpm pii-classify (live)", ...dataMap, ...instance };
 };
 
 const m10: ModuleRunner = {
