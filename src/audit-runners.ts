@@ -133,32 +133,54 @@ const gitHistoryGapNote = (ctx: RunContext): string => {
   return " Coverage note: the git-history secret scan (TruffleHog) did not run — this target is not a git repository root (archive/subdirectory delivery), so committed-secret history was not assessed (SEC-TH-GH-00, #528/#537).";
 };
 
+// #1040: the mechanical tier's own findings — semgrep `harvey-*` rules, gitleaks/trufflehog
+// secrets, dependency CVEs — RAN and were then thrown away: quick-scan was the one emitter probe
+// invoked without --findings-out (MEASURED 2026-07-25 on targets/calibration: quick-scan produced
+// 386 findings, 47 of them Critical; the assembled deliverable carried 0 of them — after the fix it
+// carries 449). Falsifier: `pnpm exec tsx src/cli/run-audit.ts targets/calibration --findings-out
+// ra.json` and look for SEC-GL-source-2 / DEP-CVE-2025-29927 in ra.json.
+//
+// Two classes are deliberately NOT taken from this capture: they run inside BOTH runMechanicalScan
+// and detect-static (detectHandrolledFindings, checkUnassessedSfcFiles), and the M6/M9 probes
+// already capture the detect-static side. Taking them twice would double-count — and the indicator
+// ids are a per-run sequential counter, so the two passes emit the SAME id for DIFFERENT findings
+// and validateFindings would refuse to write the deliverable at all.
 const m1: ModuleRunner = {
   module: "M1",
   run: (ctx) => {
-    const { ok, output } = ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir]);
+    const outPath = captureOut(ctx, "M1");
+    const { ok, output } = ctx.exec("pnpm", ["quick-scan", "--dir", ctx.targetDir, ...(outPath ? ["--findings-out", outPath] : [])]);
     if (!ok) return { status: "requires-live-run", reason: `pnpm quick-scan exited non-zero: ${trimOut(output)}` };
+    const mechanical = readCaptured(ctx, outPath).filter((f) => !f.taxonomy.startsWith(M6_TAXONOMY_PREFIX) && f.id !== "M1-SFC-00");
     // #416: a fresh semantic/live pass artifact is the evidence #311 said `ran` needs. With it, the
     // flagship LLM/live work is proven (and its triage findings flow into the deliverable); without
     // it, M1 stays honestly partial on the mechanical tier alone.
     const pass = findFreshPass(ctx, "M1");
     if (pass.fresh) {
       const ran = ranFromPass(pass.artifact, "pnpm quick-scan (mechanical tier)");
+      const findings = [...mechanical, ...(ran.findings ?? [])];
       // #502: the M3→M1 hotspot focus is a designed dependency; an un-focused semantic pass silently
       // degrades the flagship review to un-prioritized. Surface it in the ledger detail either way so
       // a missing focus is visible rather than assumed.
-      if (pass.artifact.pass === "semantic") {
-        const focusNote = pass.artifact.hotspotFocus
-          ? " [hotspot-focused: M3 → M1 (#502)]"
-          : " [WARNING: no M3 hotspot focus — the semantic pass was NOT hotspot-prioritized; run M3 first and feed `pnpm scan-focus` into /vuln-scan (#502)]";
-        return { ...ran, detail: `${ran.detail}${focusNote}` };
-      }
-      return ran;
+      const focusNote =
+        pass.artifact.pass !== "semantic"
+          ? ""
+          : pass.artifact.hotspotFocus
+            ? " [hotspot-focused: M3 → M1 (#502)]"
+            : " [WARNING: no M3 hotspot focus — the semantic pass was NOT hotspot-prioritized; run M3 first and feed `pnpm scan-focus` into /vuln-scan (#502)]";
+      return { ...ran, detail: `${ran.detail}${focusNote}`, ...(findings.length ? { findings } : {}) };
     }
     return {
       status: "partial",
       detail: "pnpm quick-scan (mechanical tier)",
-      reason: withRejectedPass("mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). No M1 security findings are collected into this deliverable — the flagship findings are produced by that paid-LLM pass and src/cli/scan.ts, not the mechanical quick-scan, so absence here is not-collected, not clean (#420)", pass.reason) + gitHistoryGapNote(ctx),
+      reason:
+        withRejectedPass(
+          "mechanical tier only — the semantic (LLM /vuln-scan → /triage) and live (pnpm detect-deeper) layers are operator passes the orchestrator cannot observe; it has no artifact proving they ran, so it will not assert `ran` from the tier flags (#311; artifact path #416). The MECHANICAL tier's findings ARE collected into this deliverable (#1040); what is missing is the semantic/live tier's output, so absence of THOSE is not-collected, not clean (#420)",
+          pass.reason,
+        ) +
+        (outPath ? "" : " This run captured no findings (coverage-only, no --findings-out), so the mechanical tier's findings are not collected here either — absence is not-collected, not clean (#420).") +
+        gitHistoryGapNote(ctx),
+      ...(mechanical.length ? { findings: mechanical } : {}),
     };
   },
 };

@@ -911,6 +911,50 @@ describe("M10 captures its classification findings (#436)", () => {
   });
 });
 
+// #1040: quick-scan was the ONE emitter probe invoked without --findings-out, so every mechanical
+// M1 finding the scan produced — including live-credential and CVE Criticals — was discarded before
+// the deliverable was assembled. The intent under test is that the mechanical tier's output reaches
+// --findings-out, and that the two classes the shared detect-static pass also emits are not taken
+// twice (their ids are a per-run counter — two different findings under one id would make the
+// document invalid).
+describe("M1 collects the mechanical tier's findings into the deliverable (#1040)", () => {
+  const critical = { id: "SEC-GL-source-2", taxonomy: "Committed credential", severity: "Critical" } as unknown as Finding;
+  const indicator = { id: "3", taxonomy: "M6 — Indicator: cookie parsing", severity: "Info" } as unknown as Finding;
+  const sfc = { id: "M1-SFC-00", taxonomy: "M1 — Multi-tenant security", severity: "Info" } as unknown as Finding;
+  const capturing = () =>
+    ctx({
+      captureDir: "/cap",
+      readFindings: (p: string) => (p.endsWith("M1.json") ? [critical, indicator, sfc] : []),
+      exec: (_c, argv) => {
+        if (argv.join(" ").includes("quick-scan")) expect(argv).toContain("--findings-out");
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    });
+
+  it("a known mechanical Critical is present in the assembled findings", () => {
+    const { findings } = runAudit(AUDIT_RUNNERS, capturing());
+    expect(findings.map((f) => f.id)).toContain("SEC-GL-source-2");
+  });
+
+  it("does not re-collect the classes the shared detect-static pass already contributes", () => {
+    const { findings } = runAudit(AUDIT_RUNNERS, capturing());
+    expect(findings.filter((f) => f.taxonomy.startsWith("M6 — Indicator: ")).map((f) => f.id)).not.toContain("3");
+    expect(findings.filter((f) => f.id === "M1-SFC-00")).toHaveLength(0);
+  });
+
+  it("no longer claims the mechanical tier's findings are uncollected", () => {
+    const m1 = runAudit(AUDIT_RUNNERS, capturing()).recorded.find((r) => r.module === "M1");
+    expect(m1?.status).toBe("partial");
+    expect(m1?.reason).not.toMatch(/No M1 security findings are collected/);
+    expect(m1?.reason).toMatch(/MECHANICAL tier's findings ARE collected/);
+  });
+
+  it("a coverage-only run says so instead of implying the mechanical tier was collected", () => {
+    const m1 = runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M1");
+    expect(m1?.reason).toMatch(/coverage-only, no --findings-out/);
+  });
+});
+
 // #528/#537: the mechanical scan emits SEC-TH-GH-00 when the git-history secrets tier could not run
 // (non-git archive/subdirectory delivery) — quick-scan derives that from isGitRepoRoot(targetDir).
 // #528 originally surfaced the gap only by reading a captured raw-findings feed (capture-only). #537
