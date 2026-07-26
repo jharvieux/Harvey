@@ -422,5 +422,34 @@
     "phi": false,
     "pci": false,
     "secret": false
+  },
+  "patient_billing": {
+    "columns": [
+      {
+        "column": "member_ssn",
+        "infotype": "US_SSN",
+        "category": "SENSITIVE_PII",
+        "confidence": "high"
+      },
+      {
+        "column": "card_number",
+        "infotype": "CARD",
+        "category": "PCI",
+        "confidence": "high"
+      }
+    ],
+    "infotypes": [
+      "US_SSN",
+      "CARD"
+    ],
+    "categories": [
+      "SENSITIVE_PII",
+      "PCI"
+    ],
+    "severityScore": 10,
+    "severity": "Critical",
+    "phi": false,
+    "pci": true,
+    "secret": false
   }
 }

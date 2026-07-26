@@ -55,6 +55,18 @@ describe("parseTruffleHogFindings", () => {
     expect(findings[0]?.mechanical).toBe(true);
   });
 
+  // #1099: real trufflehog v3 emits `"Redacted": ""` for most detectors (populated only where a
+  // detector implements redaction), and `"" ?? "(redacted)"` is `""` — the fallback never fired,
+  // so the evidence string rendered with a dangling "...against the live provider: .".
+  it("falls back to '(redacted)' when trufflehog reports an EMPTY Redacted string, not just a missing one", () => {
+    const results: TruffleHogResult[] = [
+      { DetectorName: "Generic", Verified: true, Redacted: "", SourceMetadata: { Data: { Filesystem: { file: "lib/pay.ts", line: 12 } } } },
+    ];
+    const [finding] = parseTruffleHogFindings(results, "source");
+    expect(finding?.evidence).toContain("against the live provider: (redacted).");
+    expect(finding?.evidence).not.toContain("provider: .");
+  });
+
   it("prefixes location with the scan scope so source/history/bundle hits aren't confused", () => {
     const results: TruffleHogResult[] = [
       { DetectorName: "Supabase", Verified: true, SourceMetadata: { Data: { Git: { file: "seed.ts", line: 5, commit: "abcdef0123456789" } } } },

@@ -259,10 +259,16 @@ if (!report.provenance) {
   console.log("  AI-provenance: no data — no .vitals provenance DB in the target (vitals capture hooks not installed, or no AI edits logged)");
 }
 // #1075 point 3: vitals itself caps these two lists before Harvey ever sees them (vitals_cli.py:
-// `coupling_data[:5]`, `knowledge_files = code_files[:50]`) — stated so "N found" is never read as
-// the full census, mirroring coveredScopeLine's honesty pattern (src/mutation-scan.ts).
+// `coupling_data[:5]`, `knowledge_files = code_files[:50] if code_files else source_files[:50]`) —
+// stated so "N found" is never read as the full census, mirroring coveredScopeLine's honesty
+// pattern (src/mutation-scan.ts). #1112 corrects the second half: this line used to say "the first
+// 50 CHURNING source files", which is false when nothing cleared the churn gate — vitals then
+// analyses the first 50 TRACKED source files instead. MEASURED 2026-07-26 on a fully backdated
+// throwaway repo: 0 hotspot rows, 2 truck-factor rows.
 if (!reduced) {
-  console.log("  NOTE: vitals caps co-change coupling at the top 5 pairs and truck-factor/knowledge-risk analysis at the first 50 churning source files — the counts above are capped inputs, not a full census.");
+  console.log(
+    "  NOTE: vitals caps co-change coupling at the top 5 pairs, and truck-factor/knowledge-risk at the first 50 source files — the churning ones, or, when nothing is churning, the first 50 tracked. The counts above are capped inputs, not a full census.",
+  );
 }
 
 let crossReferenced: ReturnType<typeof crossReferenceHotspots> | undefined;
