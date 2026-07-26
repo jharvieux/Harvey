@@ -9,8 +9,11 @@ import {
   CI_PIPELINE_CATEGORY,
   CORS_BARE_WILDCARD_TAXONOMY,
   parseSemgrepFindings,
+  partitionMarkerSuppressed,
   POSTMESSAGE_WILDCARD_TAXONOMY,
   runSemgrep,
+  semgrepScopeFinding,
+  semgrepSuppressionFinding,
   semgrepUnavailableFinding,
   type SemgrepOutput,
 } from "./semgrep.js";
@@ -300,5 +303,87 @@ describe("semgrepUnavailableFinding (#950)", () => {
     expect(finding.confidence).toBe("N/A");
     expect(finding.evidence).toContain("semgrep not found on PATH");
     expect(finding.impact).toContain("not a finding of zero footguns");
+  });
+});
+
+// #1066: `--disable-nosem` makes semgrep report the matches a `nosem` marker would have hidden,
+// but the OSS JSON does not say WHICH ones they were, so Harvey re-derives the marker. The point
+// of the exercise is the count — a suppression the deliverable never mentions is one the audited
+// party made on the auditor's behalf.
+describe("partitionMarkerSuppressed (#1066)", () => {
+  const withSource = (lines: string[]): { dir: string; file: string } => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-nosem-"));
+    const file = join(dir, "Bio.tsx");
+    writeFileSync(file, lines.join("\n"));
+    return { dir, file };
+  };
+
+  it("routes a match to `suppressed` when the marker is on the matched line or the line above", () => {
+    const { dir, file } = withSource([
+      "export function A({ bio }) {",
+      "  // nosemgrep",
+      "  return <div dangerouslySetInnerHTML={{ __html: bio }} />;",
+      "}",
+      "export function B({ bio }) {",
+      "  return <div dangerouslySetInnerHTML={{ __html: bio }} />; // nosem",
+      "}",
+      "export function C({ bio }) {",
+      "  return <div dangerouslySetInnerHTML={{ __html: bio }} />;",
+      "}",
+    ]);
+    try {
+      const { reported, suppressed } = partitionMarkerSuppressed({
+        results: [
+          { check_id: "harvey-x", path: file, start: { line: 3 } },
+          { check_id: "harvey-x", path: file, start: { line: 6 } },
+          { check_id: "harvey-x", path: file, start: { line: 9 } },
+        ],
+      });
+      expect(suppressed.map((r) => r.start?.line)).toEqual([3, 6]);
+      expect(reported.map((r) => r.start?.line)).toEqual([9]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names every suppressed location and its rule in SEM-SUPPRESS-00, and stays silent when there are none", () => {
+    expect(semgrepSuppressionFinding([], "/target")).toEqual([]);
+    const [finding] = semgrepSuppressionFinding(
+      [{ check_id: "harvey-dangerously-set-inner-html", path: "/target/app/Bio.tsx", start: { line: 12 } }],
+      "/target",
+    );
+    expect(finding?.id).toBe("SEM-SUPPRESS-00");
+    expect(finding?.confidence).toBe("N/A");
+    expect(finding?.title).toContain("1 semgrep finding suppressed");
+    expect(finding?.evidence).toContain("app/Bio.tsx:12 (harvey-dangerously-set-inner-html)");
+  });
+});
+
+// #1066: derived from paths.scanned, not from the flags we passed — so a semgrep default ignore, a
+// target-shipped .semgrepignore, or the [INTERNAL] override disappearing all read the same way.
+describe("semgrepScopeFinding (#1066)", () => {
+  it("counts and names JS/TS files semgrep never analysed, and stays silent when it analysed them all", () => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-scope-"));
+    try {
+      mkdirSync(join(dir, "vendor"), { recursive: true });
+      mkdirSync(join(dir, "node_modules"), { recursive: true });
+      writeFileSync(join(dir, "app.ts"), "export const a = 1;\n");
+      writeFileSync(join(dir, "vendor", "lib.js"), "module.exports = 1;\n");
+      writeFileSync(join(dir, "node_modules", "dep.js"), "module.exports = 1;\n");
+      writeFileSync(join(dir, "README.md"), "not source\n");
+
+      const [finding] = semgrepScopeFinding(dir, { paths: { scanned: [join(dir, "app.ts")] } });
+      expect(finding?.id).toBe("SEM-SCOPE-00");
+      expect(finding?.title).toContain("1 JS/TS source file");
+      expect(finding?.evidence).toContain("vendor/lib.js");
+      // node_modules is excluded by argv on purpose (osv-scanner owns dependencies), and a .md
+      // file is not something the semgrep rules could have analysed — neither is a coverage gap.
+      expect(finding?.evidence).not.toContain("node_modules");
+      expect(finding?.evidence).not.toContain("README.md");
+
+      expect(semgrepScopeFinding(dir, { paths: { scanned: [join(dir, "app.ts"), join(dir, "vendor", "lib.js")] } })).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
