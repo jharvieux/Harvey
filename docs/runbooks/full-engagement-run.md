@@ -192,8 +192,32 @@ non-Supabase API, another language, a staging URL — use the external runner in
 `dynamic-validate`:
 
 ```bash
-pnpm exec tsx src/cli/pentest.ts --mode=external --app-url <origin> [--openapi <spec.json>]
+pnpm exec tsx src/cli/pentest.ts --mode=external \
+  --app-url <origin> \
+  --openapi <spec.json> \            # or --routes <routes.json>; at least one must yield a route
+  --victim-token <jwt> --attacker-token <jwt> \
+  --victim-id <scope-value> --attacker-id <scope-value> \
+  [--admin-token <jwt>] [--victim-object-id <id>]... [--id-key <name>]... [--scope-key <name>]... \
+  [--allow-destructive] [--allow-non-local] [--out <file>]
 ```
+
+**Every flag above the optional block is REQUIRED — the run throws before it sends a single request
+if any is missing.** Two real identities are genuinely needed: a BOLA cannot be proven with one.
+
+- `--victim-token` / `--attacker-token` — a live bearer token for each of two real accounts on the
+  target. The attacker is the identity that must NOT be able to reach the victim's objects.
+- `--victim-id` / `--attacker-id` — each identity's **owning-scope value as it appears in the
+  target's RESPONSES** (crAPI: the user's email; a tenant app: the tenant uuid), not an internal row
+  id. This is what the leak-confirmation predicate matches on, so a value that never appears in a
+  response body makes every verdict unprovable.
+- `--openapi` **or** `--routes` — the run needs at least one route. `--openapi` ingests a spec;
+  `--routes` takes a hand-written `DiscoveredRoute[]` JSON file for a target with no spec. Supplying
+  both merges them.
+- `--admin-token` is genuinely optional: pass it to add a third, privileged identity so BFLA-ADMIN
+  has a real admin to compare against; omit it and that class simply reports not-applicable.
+- `--victim-object-id` seeds the foreign ids directly when the victim's own collection routes do not
+  expose them; `--id-key` / `--scope-key` name the target's own identity/ownership fields (crAPI's
+  `carId`, VAmPI's `username`) so the confirmation predicate can see them. All three are repeatable.
 
 It adapts an OpenAPI spec into routes (templated params keep their domain names; per-path `servers`
 become per-route origins, so a multi-service topology works), and it obtains the victim object ids
