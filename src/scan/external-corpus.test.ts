@@ -214,12 +214,12 @@ describe("scoreExternalBaseline", () => {
     // under one key. knip's dead-code finding and detect-static's style findings must land in
     // separate buckets even though they share the "M5 " taxonomy prefix.
     const findings = [
-      finding("M5 — Slop / dead code", "Low"), // knip: 1 of subscription-payments' measured 8
+      finding("M5 — Slop / dead code", "Low"), // knip: 1 of subscription-payments' measured 10 (#1128)
       finding("M5 — Else after return", "Low"), // detect-static slop
       finding("M5 — Single-call wrapper", "Low"), // detect-static slop
     ];
     const rows = scoreExternalBaseline(target("subscription-payments"), findings);
-    expect(rows.find((r) => r.module === "M5-knip")).toMatchObject({ expected: 8, actual: 1, pass: false });
+    expect(rows.find((r) => r.module === "M5-knip")).toMatchObject({ expected: 10, actual: 1, pass: false });
     expect(rows.find((r) => r.module === "M5-slop")).toMatchObject({ expected: 14, actual: 2, pass: false });
   });
 });
