@@ -8,6 +8,22 @@ is still open — update it here, not there.
 
 ## Known gaps in what the guard actually proves
 
+**2026-07-26 (#1064, invariants 4+5) — the guard proved a module was ACCOUNTED FOR, never that its
+findings REACHED THE DELIVERABLE.** Everything in the #1040/#1045/#1050/#1043/#1061/#1062 class
+lived in that gap: the detector worked, the finding was dropped at a producer→consumer seam, the
+ledger read clean and the run exited 0 with `COVERAGE PASS`. Closed by a second gate alongside this
+one — `pnpm exec tsx src/cli/validate-conservation.ts` runs the real ten-module orchestrator against
+`targets/calibration`, assembles the real deliverable, and asserts per module that its **planted**
+finding was both produced by that module's own probe and present in the assembled document. Zero
+findings for a planted defect is a FAIL (zero is legitimate in the field, never on the fixture), and
+the produced/delivered split is deliberate: M9 captures `detect-static` unfiltered, so a deliverable-
+only check would still see M7's rows after M7's capture broke entirely — which is how #1062 hid.
+M2 is the one module with no plant (it needs a stood-up stack) and is recorded in `UNEXERCISED` with
+a #1033 falsifier rather than dropped. Full record, including the deferred invariants (1)–(3) that
+await an operator ruling: `docs/design/conservation-of-findings.md`.
+**Still open here:** the CLI needs the mechanical binaries, so it is not part of `pnpm verify`; a
+workflow to run it on a schedule is an operator action (`.github/workflows/` is supervised).
+
 **2026-07-25 (#1065) — the zero-files guard was UNREACHABLE for nine months, and the tally it fed
 was a false clean.** `#350`'s "a scan of zero files records `partial`/`requires-live-run`, never
 `ran`" (below) was true of the code and false in effect: the shared source loader counts
