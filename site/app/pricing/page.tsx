@@ -49,7 +49,7 @@ const pricingFaq = {
       name: "What is the difference between the Connected and Full tiers?",
       acceptedAnswer: {
         "@type": "Answer",
-        text: "Connected is the complete review of all ten modules with real verdicts, plus a read of your live database (RLS, Supabase advisors, prod-vs-migration drift, PII in production). Full adds the labor-intensive dynamic work: Harvey stands up a copy of your stack and proves findings live with a pen-test, and runs full mutation testing. Only the Full tier carries pen-test language.",
+        text: "Connected is the complete review of all ten modules with real verdicts, plus a read of your live database (RLS, Supabase advisors, PII in production). Full adds the labor-intensive dynamic work: Harvey stands up a copy of your stack and proves findings live with a pen-test, and runs full mutation testing. Only the Full tier carries pen-test language.",
       },
     },
     {
@@ -120,7 +120,7 @@ export default function Pricing() {
                 </li>
                 <li>
                   <Check />
-                  Live database: RLS, Supabase advisors, drift
+                  Live database: RLS, Supabase advisors
                 </li>
                 <li>
                   <Check />
@@ -309,12 +309,6 @@ export default function Pricing() {
                   </tr>
                   <tr>
                     <td className="cap">Live database + Supabase advisors</td>
-                    <td className="dot"><span className="off">—</span></td>
-                    <td className="dot"><span className="on">●</span></td>
-                    <td className="dot feat"><span className="on">●</span></td>
-                  </tr>
-                  <tr>
-                    <td className="cap">Drift between prod and your migrations</td>
                     <td className="dot"><span className="off">—</span></td>
                     <td className="dot"><span className="on">●</span></td>
                     <td className="dot feat"><span className="on">●</span></td>

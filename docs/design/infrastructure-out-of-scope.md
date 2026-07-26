@@ -8,6 +8,15 @@ module list is reviewed.
 Harvey does **not** analyse infrastructure code: Dockerfiles, docker-compose, Terraform/OpenTofu,
 Kubernetes and Helm manifests. No M1–M10 module reads them, and none is planned.
 
+<!--
+REASON: infrastructure/IaC/container code is out of Harvey's scope — this is a product ruling about where the differentiator lies, not a statement that scanning it is technically impossible
+KIND: decisional
+PROVENANCE: MEASURED 2026-07-23 (the ruling recorded in this document when it landed in #903/#886)
+OWNER: operator
+DECISION: docs/design/infrastructure-out-of-scope.md (#886); revisit condition in "What would change this" below
+-->
+
+
 ## Why not
 
 IaC and container scanning is consolidated ASPM territory — Trivy, Checkov, Aikido, Cycode,

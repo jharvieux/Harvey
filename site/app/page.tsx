@@ -592,12 +592,6 @@ export default function Home() {
                     <td className="dot feat"><span className="on">●</span></td>
                   </tr>
                   <tr>
-                    <td className="cap">Drift between prod and your migrations</td>
-                    <td className="dot"><span className="off">—</span></td>
-                    <td className="dot"><span className="on">●</span></td>
-                    <td className="dot feat"><span className="on">●</span></td>
-                  </tr>
-                  <tr>
                     <td className="cap">PII protection verified in production</td>
                     <td className="dot"><span className="off">—</span></td>
                     <td className="dot"><span className="on">●</span></td>
@@ -664,7 +658,7 @@ export default function Home() {
               </div>
               <ul>
                 <li><Check />All ten modules, reviewed with real verdicts</li>
-                <li><Check />Live database: RLS, Supabase advisors, drift</li>
+                <li><Check />Live database: RLS, Supabase advisors</li>
                 <li><Check />PII protection verified in production</li>
                 <li><Check />Read-only access — nothing stood up</li>
               </ul>

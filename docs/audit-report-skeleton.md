@@ -11,6 +11,14 @@
 - Client, scope (repos/branches/commit SHA reviewed), dates, auditor.
 - **Liability language (required):** point-in-time advisory; not a guarantee of completeness; not a
   substitute for a full penetration test; liability capped at fees paid. _(LLC + this paragraph = bounded risk.)_
+  - Rendered since #1048 as the **Limitations & liability** section at the end of the report body
+    (with a cover-page badge when unapproved). The section is never gated on the wording being
+    present: without counsel-approved text in the findings document's `legalTerms.text`, the
+    renderer emits its own **DRAFT** wording under a "not reviewed by counsel — do not deliver
+    as-is" banner. The draft is placeholder scaffolding, NOT counsel-approved text — #11 (entity +
+    standard engagement/liability terms) and #743 (trust pages, legal review) track the approval.
+  - The "what was not assessed" paragraph is DERIVED from the coverage ledger, not hand-typed, so
+    it cannot go stale when a tier is added or dropped.
 
 ## 1. Executive summary (1 page — the part the buyer reads)
 

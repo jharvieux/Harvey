@@ -61,7 +61,8 @@
 // --sarif-out (#867): the same findings AND the derived coverage ledger as SARIF 2.1.0, for
 // GitHub code scanning / an ASPM the client already runs. The ledger rides as warning-level
 // toolExecutionNotifications so a module that did not run cannot vanish into "no results" — see
-// the decision recorded at the top of src/sarif.ts.
+// the decision recorded at the top of src/sarif.ts. It is a standalone deliverable: given alone it
+// turns findings capture on by itself (#1061), no --findings-out required.
 //
 // --sbom-out (#887): a CycloneDX 1.5 SBOM of the target's dependencies, for the buyer's
 // procurement/questionnaire process. It is an inventory, not an assessment — its completeness is
@@ -181,9 +182,17 @@ const env: EngagementEnv = {
   llm: args.includes("--llm"),
 };
 
-// Capture is only wired when an engagement document is requested — a coverage-only run keeps its
-// prior behaviour and never asks the module CLIs for their --out artifacts.
-const captureDir = findingsOut ? mkdtempSync(join(tmpdir(), "harvey-audit-")) : undefined;
+// Capture is wired for EVERY export that consumes findings — #1061: gating it on --findings-out
+// alone made a standalone `--sarif-out` run export an almost-empty SARIF while the coverage ledger
+// rode along intact, so the file read as an honest, complete export of a scan that found nothing
+// (MEASURED 2026-07-25 on targets/calibration: 15 results vs 503, all 51 Critical dropped, both
+// runs exit 0 with COVERAGE PASS). SARIF is a legitimate standalone deliverable, so it captures
+// rather than demanding --findings-out. --sbom-out is NOT in this list: buildSbom reads the
+// target's lockfile and never touches findings. --out writes the coverage ledger only.
+// Falsifier: run with --sarif-out alone and with both flags, and diff the printed result counts.
+// A coverage-only run (no findings-consuming export) keeps its prior behaviour and never asks the
+// module CLIs for their --out artifacts.
+const captureDir = findingsOut || sarifOut ? mkdtempSync(join(tmpdir(), "harvey-audit-")) : undefined;
 
 const ctx: RunContext = {
   targetDir,
@@ -238,7 +247,7 @@ if (supabaseRefsArg.length > 1) console.log(`Supabase projects enumerated (M7 ad
 if (Object.keys(schemaHints).length) console.log(`Per-app schema hints (M10, #538): ${Object.entries(schemaHints).map(([app, path]) => `${app}=${path}`).join(", ")}`);
 console.log("");
 
-const { recorded, failures, findings, hotspots, dataMap } = runAudit(AUDIT_RUNNERS, ctx);
+const { recorded, failures, findings, hotspots, dataMap, testQuality } = runAudit(AUDIT_RUNNERS, ctx);
 // #975 — declare CWEs across the assembled deliverable (mechanical rows arrive enriched; captured
 // artifact/config-tier rows get theirs here) so --findings-out and --sarif-out both carry them.
 enrichFindingsCwe(findings);
@@ -259,13 +268,17 @@ if (outPath) {
 // coverage ledger, so a never-run module is visible in the deliverable rather than reading as
 // "no findings". Meta is engagement metadata run-audit cannot derive: take it from --meta, else
 // scaffold a placeholder and say loudly that it must be filled before the report ships.
-// The findings the SARIF export ships: the assembled document's when one was built (so the
-// baseline diff's tags ride along), else the raw captured set.
+// #1061: the document is assembled for EITHER export, and both ship its findings — the dedupe of
+// byte-identical shared-CLI captures, the hotspot/data-class weighting and the M10 not-assessed row
+// are properties of the finding set, not of the JSON file. Shipping the raw captured set to SARIF
+// instead made the two exports of one run disagree (MEASURED 2026-07-25 on targets/calibration:
+// 527 raw vs 503 assembled). Only --findings-out writes a file and validates against the report
+// schema; a sarif-only run assembles and exports without one.
 let exportFindings: Finding[] = findings;
 
-if (findingsOut) {
+if (findingsOut || sarifOut) {
   const meta: ReportMeta = metaPath ? (JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta) : placeholderMeta(targetDir);
-  let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots, dataMap);
+  let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots, dataMap, testQuality);
 
   // #457: diff against a prior engagement so the deliverable leads with progress. The baseline is a
   // full findings.json from a previous audit of the SAME client; we diff by finding identity
@@ -281,15 +294,26 @@ if (findingsOut) {
     console.log(`\nBaseline diff vs ${baselinePath}: ${doc.baseline?.counts.resolved} resolved, ${doc.baseline?.counts.persistent} persistent, ${doc.baseline?.counts.new} new`);
   }
 
+  // An assembled document that fails the report schema is not a deliverable in ANY format, so this
+  // stops both exports — a SARIF built from a set that could not be validated would carry the same
+  // defect with none of the noise.
   const { ok, errors } = validateFindings(doc);
   if (!ok) {
-    console.error(`\nAssembled findings document is invalid — refusing to write ${findingsOut}:`);
+    console.error("\nAssembled findings document is invalid — refusing to export it:");
     for (const e of errors) console.error(`  ✗ ${e}`);
     process.exit(1);
   }
-  writeFileSync(findingsOut, `${JSON.stringify(doc, null, 2)}\n`);
-  console.log(`\nEngagement findings (${doc.findings.length} finding(s) + coverage ledger) → ${findingsOut}`);
-  if (!metaPath) console.error("⚠ no --meta given: the deliverable carries a PLACEHOLDER meta — fill client/health/headline/scope before rendering the report.");
+  // The §3b test-quality table (#1045) rides on the findings document only — the SARIF schema has
+  // nowhere to put it — so its reporting stays inside this branch.
+  if (findingsOut) {
+    writeFileSync(findingsOut, `${JSON.stringify(doc, null, 2)}\n`);
+    console.log(`\nEngagement findings (${doc.findings.length} finding(s) + coverage ledger) → ${findingsOut}`);
+    // #1045: absence of the §3b table is stated, never silent — a report with no test-quality section
+    // reads as "nothing to report" rather than "the mutation tier produced no measurement".
+    if (doc.testQuality) console.log(`M8 test-quality table: ${doc.testQuality.rows.length} module row(s), ${doc.testQuality.mutationScore}% overall mutation score`);
+    else console.error("⚠ no M8 test-quality table in this deliverable — the mutation tier produced no measurement this run; the M8 coverage row states why (#1045).");
+    if (!metaPath) console.error("⚠ no --meta given: the deliverable carries a PLACEHOLDER meta — fill client/health/headline/scope before rendering the report.");
+  }
   exportFindings = doc.findings;
 }
 
@@ -304,7 +328,13 @@ if (sarifOut) {
   const sarif = toSarif(exportFindings, { coverage: ledger }, { baseUri: targetDir });
   writeFileSync(sarifOut, `${JSON.stringify(sarif, null, 2)}\n`);
   const gaps = ledger.filter((r) => r.status !== "ran").length;
-  console.log(`\nSARIF 2.1.0 (${exportFindings.length} result(s), ${gaps} coverage notification(s)) → ${sarifOut}`);
+  // #1061: the result count is printed AGAINST the count the probes captured, so the next time an
+  // export silently drops findings the two numbers disagree in the terminal instead of the SARIF
+  // quietly shipping short. A zero is called out loudly for the same reason — an empty SARIF is
+  // indistinguishable from a clean scan once the file leaves this machine.
+  const results = (sarif as { runs: { results: unknown[] }[] }).runs[0]!.results.length;
+  console.log(`\nSARIF 2.1.0 (${results} result(s) assembled from ${findings.length} captured finding(s), ${gaps} coverage notification(s)) → ${sarifOut}`);
+  if (results === 0) console.error("⚠ the SARIF carries ZERO results — an importer will read that as a clean scan. Check the coverage notifications in the file before handing it over.");
 }
 
 // #887: the CycloneDX inventory. Separate from the findings entirely — an SBOM asserts what is
