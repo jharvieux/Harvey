@@ -116,6 +116,16 @@ jobs:
       - name: Conservation gate (must PASS)
         run: pnpm exec tsx src/cli/validate-conservation.ts
 
+      # #1105: the vitest wiring test for this gate (src/cli/validate-conservation.test.ts) is
+      # opt-in behind HARVEY_CONSERVATION_E2E — inside `pnpm verify`'s shared worker pool its
+      # ~30-50s synchronous child-process run intermittently starved vitest's worker RPC channel
+      # ("Timeout calling onTaskUpdate", exit 1 with zero failing tests). Run it here instead,
+      # alone, with the toolchain already on PATH from the steps above.
+      - name: Conservation gate — vitest wiring test (isolated from pnpm verify)
+        env:
+          HARVEY_CONSERVATION_E2E: "1"
+        run: pnpm exec vitest run src/cli/validate-conservation.test.ts
+
       - name: Negative control — a seeded producer loss must FAIL the gate
         run: |
           if pnpm exec tsx src/cli/validate-conservation.ts --seed-loss M7; then
