@@ -1,8 +1,9 @@
 # Conservation of findings — the contract
 
-Design record for #1064 and #1096. Invariants **(1), (4) and (5)** are built and enforced; **(2)**
-is built and migrated for three of ten probes, with the split declared in code; **(3)** is a rule,
-recorded below, whose motivating case (#1063) is closed.
+Design record for #1064, #1096 and #1109. Invariants **(1), (2), (4) and (5)** are built and
+enforced — (2) is migrated for **all ten** probes since #1109; **(3)** is a rule, recorded below,
+whose motivating case (#1063) is closed and whose general form (a repo-wide fixture inventory) is
+still open.
 
 ## The defect this closes
 
@@ -209,7 +210,7 @@ undeclared filter at a consumer boundary does. Measured 2026-07-26 on `targets/c
 The second row is the argument for having both gates. The plant-and-assert saw nothing wrong,
 because the finding that vanished was not one of the ten it watches.
 
-## Invariant 2 — the typed non-empty result (#1096, three of ten probes)
+## Invariant 2 — the typed non-empty result (#1096, completed for all ten in #1109)
 
 The state `ProbeOutcome` permitted for its whole life:
 
@@ -244,15 +245,56 @@ names zero files read is no longer expressible; one that names 388 is a claim th
 
 ### The migration, declared rather than implied
 
-**Migrated (3):** M6, M7, M9 — the three `detect-static` consumers, chosen because the tool prints a
-real product-source-file count that can legitimately be zero, which is what gives the invariant
-teeth rather than a rubber-stamp `unitsExamined: 1`.
+**Migrated: all ten.** #1096 took M6/M7/M9 — the three `detect-static` consumers, chosen because the
+tool prints a real product-source-file count that can legitimately be zero, which is what gives the
+invariant teeth rather than a rubber-stamp `unitsExamined: 1`. #1109 took the remaining seven, and
+`UNTYPED_PROBES` is now empty. It is kept, not deleted: it is the landing slot for an eleventh
+module's probe, which must be written down with a blocker rather than silently rejoining the legacy
+shape.
 
-**Not migrated (7):** M1, M2, M3, M4, M5, M8, M10. Each carries its blocker in `UNTYPED_PROBES`
-(`src/audit-runner.ts`) — mostly "the tool's unit count is on stderr, which `ctx.exec` discards on
-success" (M4/M5) or "the probe's branch ladder wants its own pass" (M8).
+Each probe's unit, and where it comes from:
 
-Two mechanisms keep the half-migration from becoming invisible:
+| Module | `unitsExamined` | Read from |
+| --- | --- | --- |
+| M1 | application source files | quick-scan's codebase-size line, **stdout** |
+| M2 | recorded M2 dynamic pass artifacts (1) | the pass artifact itself; not-run otherwise |
+| M3 | ranked source files | hotspot-scan's table header, **stdout** |
+| M4 | source lines compared by jscpd | quality-scan's M4 summary, **stderr** |
+| M5 | workspace scopes analysed by knip | quality-scan's M5 summary, **stderr** |
+| M6 | product source files (or the review packet) | detect-static, **stdout** |
+| M7 | product source files | detect-static, **stdout** |
+| M8 | source files, tests included (else mutants) | detect-static, **stdout**; Stryker's `summary.overall.totalMutants` |
+| M9 | product source files | detect-static, **stdout** |
+| M10 | database columns | pii-classify's "Scanned N columns", **stdout** |
+
+**The recorded blockers were mostly wrong, and were re-tested rather than repeated (#1109).** Four
+of the seven were `ASSUMED` written in a confident register — the repo's signature defect:
+
+- **M1** — "quick-scan prints no unit count this probe can read." **False.** MEASURED 2026-07-26:
+  `pnpm quick-scan --dir targets/calibration` prints `4,778 lines of application code across 400
+  file(s)` on stdout (the #1044 size line), which the probe was already capturing.
+- **M3** — "a one-line read this tranche did not take." **True as written, and it was one line.**
+- **M2** — "NotAssessed-only, belongs with the M2 live-run work." **Half false.** The not-run
+  branches are `NotAssessed`, but the #416 pass-artifact branch is a real `Examined` over the one
+  artifact the probe demonstrably read. It did not need the live-run work.
+- **M4/M5** — "the count is on stderr, which `ctx.exec` discards on success." **True of the code,
+  and the wrong conclusion.** The recorded fix was to change quality-scan's `--out` schema; the
+  actual fix was to stop discarding stderr. `RunContext.exec` now returns it alongside stdout
+  (`spawnSync`, not `execFileSync`, which returns stdout only), kept as a separate field because
+  M4/M5's non-capturing path parses stdout as a bare `Finding[]`.
+- **M8** — "the densest branch set of the ten, wants its own pass." **True about the ladder, wrong
+  that it blocked the migration**: the test-intent tier runs on every rung, so its file count is one
+  unit that all four verdicts share.
+- **M10** — "two shapes rather than one." **True and irrelevant**: both shapes shell out to
+  pii-classify, which prints the same column count.
+
+**One real defect surfaced while proving it end-to-end.** `RunContext.exec` had two copy-pasted
+implementations — `src/cli/run-audit.ts` and `src/cli/validate-conservation.ts`. The moment one
+learned to keep stderr, the gate ran the same probes over the same fixture with a *different* view
+of the outside world and failed M4/M5. There is now one implementation (`src/probe-exec.ts`) that
+both import. A gate that shells out differently from the orchestrator it gates is measuring the copy.
+
+Two mechanisms keep a future half-migration from becoming invisible:
 
 - every module of M1–M10 must be in `TYPED_PROBES` or `UNTYPED_PROBES`, checked at module load —
   the same rule `CALIBRATION_PLANTS`/`UNEXERCISED` follow;
@@ -260,6 +302,11 @@ Two mechanisms keep the half-migration from becoming invisible:
   `typed: true`), and a runner that declares itself typed and returns a legacy outcome fails loud in
   `runAudit`. Without that the union would be a hole: a wrapper could quietly hand the legacy shape
   back and the compile-time guarantee would still read as kept.
+
+**What the migration changed in the ledger, beyond the counts.** Two rows that used to read
+`partial` now read not-assessed, because that is what they always were: M5 when knip ran on *no*
+scope (the M5-00 rung), and any probe whose tool exited 0 having examined nothing. A `partial` with
+no unit count is indistinguishable from coverage; that was the whole point.
 
 ## Invariant 3 — captured fixtures only, for every external tool
 

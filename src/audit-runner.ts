@@ -98,17 +98,13 @@ const isTyped = (r: ProbeReport): r is ProbeResult => "kind" in r;
 // for the same reason CALIBRATION_PLANTS/UNEXERCISED are: a half-migration nobody wrote down is
 // indistinguishable from a finished one, and "which probes are typed?" would become a grep instead
 // of a fact. Moving a module from UNTYPED to TYPED is the whole of the remaining work.
-export const TYPED_PROBES: AuditModule[] = ["M6", "M7", "M9"];
+// #1109 completed the migration: all ten probes return Examined | NotAssessed. UNTYPED_PROBES stays
+// (empty, and asserted empty-or-explained by the exhaustiveness check below) because it is the slot a
+// NEW module's probe lands in — an eleventh module added to AUDIT_MODULES without a typed probe has
+// to be written down here rather than quietly rejoining the untyped shape.
+export const TYPED_PROBES: AuditModule[] = ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10"];
 
-export const UNTYPED_PROBES: { module: AuditModule; reason: string }[] = [
-  { module: "M1", reason: "quick-scan prints no unit count this probe can read — the mechanical tier's scanned-file total is internal to runMechanicalScan. Needs a counted number out of quick-scan first." },
-  { module: "M2", reason: "the probe never runs a tool under the orchestrator (it reads a pass artifact or reports the stack is unreachable), so its migration is NotAssessed-only and lands with the M2 live-run work." },
-  { module: "M3", reason: "hotspot-scan's object artifact carries the ranked file list; unitsExamined is the ranked-file count, a one-line read this tranche did not take." },
-  { module: "M4", reason: "quality-scan reports its jscpd line total on STDERR, which ctx.exec discards on success — the count is unreachable to the probe until quality-scan puts it in the --out artifact." },
-  { module: "M5", reason: "same as M4: knip's scanned-scope count is stderr-only." },
-  { module: "M8", reason: "mutation-scan's artifact has a mutant/test total, but the probe's four-rung verdict ladder (#754/#503/#513/#504) is the densest branch set of the ten and wants its own pass." },
-  { module: "M10", reason: "pii-classify's data map has a table count — a small migration, but it fans out per app AND per DB URL, so it is a two-shape change rather than one." },
-];
+export const UNTYPED_PROBES: { module: AuditModule; reason: string }[] = [];
 
 {
   const covered = new Set<AuditModule>([...TYPED_PROBES, ...UNTYPED_PROBES.map((u) => u.module)]);
@@ -162,7 +158,11 @@ export interface RunContext {
   // own runner decides what its output means. `opts.env` (#520) overlays extra variables onto the
   // child's inherited environment, so the M10 live tier can point pii-classify at a different
   // SUPABASE_DB_URL per enumerated project; absent ⇒ the child inherits the parent env unchanged.
-  exec: (command: string, args: string[], opts?: { env?: Record<string, string> }) => { ok: boolean; output: string };
+  // `stderr` (#1109): the child's error stream, kept SEPARATE from `output` because several probes
+  // parse stdout as JSON. It is where quality-scan reports the jscpd/knip scope counts M4 and M5
+  // need to state what they examined — the real runner always supplies it; a test double that does
+  // not is telling those probes their tool printed no scope summary, which they report as such.
+  exec: (command: string, args: string[], opts?: { env?: Record<string, string> }) => { ok: boolean; output: string; stderr?: string };
   // Prereq probing (target node_modules, a test suite, migrations). Injected for the same reason.
   exists: (path: string) => boolean;
   // #312 findings assembly. When both are set, an emitter probe writes its Finding[] to a file in
