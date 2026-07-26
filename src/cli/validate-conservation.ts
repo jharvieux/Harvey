@@ -24,6 +24,10 @@
 //                 module whose rows another probe re-collects (M9 captures detect-static unfiltered,
 //                 so M7's rows survive in the deliverable while M7 itself produced nothing: the
 //                 #1062 shape).
+// --seed-unaccounted  SEED THE OTHER VIOLATION (#1096): drop one finding out of the ASSEMBLED
+//                 deliverable with no disposition — what an undeclared filter at a consumer
+//                 boundary does. The plant-and-assert above can miss it (it watches ten rows); the
+//                 conservation ledger's arithmetic cannot.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
@@ -31,6 +35,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkConservation, formatConservation } from "../audit-conservation.js";
+import { conservationLedger, formatLedger } from "../conservation-ledger.js";
 import { assembleEngagementDocument } from "../audit-report.js";
 import type { AuditModule } from "../audit-coverage.js";
 import { formatFailures, runAudit, type RunContext } from "../audit-runner.js";
@@ -95,6 +100,17 @@ for (const module of seedLoss) {
 }
 
 const doc = assembleEngagementDocument(run.recorded, ctx.env, findings, meta, run.hotspots, run.dataMap, run.testQuality);
+// #1096 invariant (1): the arithmetic, before the schema check — a document that lost findings is
+// wrong whether or not it validates, and the plant-and-assert below only watches ten rows.
+// --seed-unaccounted drops one delivered finding with no disposition, which is what an undeclared
+// filter at a consumer boundary looks like; the ledger must fail on it.
+if (args.includes("--seed-unaccounted") && doc.findings.length) {
+  const [victim, ...rest] = doc.findings;
+  doc.findings = rest;
+  console.log(`⚠ SEEDED UNACCOUNTED LOSS: dropped ${victim!.id} from the assembled deliverable with no disposition — the ledger must fail naming it.`);
+}
+const ledger = conservationLedger(findings, doc.findings, findingsByModule);
+console.log(`${formatLedger(ledger)}\n`);
 // An assembled document that fails the report schema is not a deliverable, so "it reached the
 // deliverable" would be a claim about a file that could never ship.
 const { ok: schemaOk, errors } = validateFindings(doc);
@@ -106,7 +122,7 @@ if (!schemaOk) {
 
 const report = checkConservation({ findingsByModule, recorded: run.recorded, delivered: doc.findings, required });
 
-if (args.includes("--json")) console.log(JSON.stringify(report, null, 2));
+if (args.includes("--json")) console.log(JSON.stringify({ ledger, plants: report }, null, 2));
 else console.log(formatConservation(report));
 
-process.exit(report.ok ? 0 : 1);
+process.exit(report.ok && ledger.ok ? 0 : 1);

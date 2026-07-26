@@ -1386,7 +1386,7 @@ describe("M7 collects the code tier's findings into the deliverable (#1062)", ()
   it("does not claim M9's classes from the shared detect-static pass under the M7 row", () => {
     const m7Outcome = AUDIT_RUNNERS.find((r) => r.module === "M7")!.run(capturing());
     const outcome = Array.isArray(m7Outcome) ? m7Outcome[0]! : m7Outcome;
-    const collected = outcome.status === "requires-live-run" ? [] : (outcome.findings ?? []);
+    const collected = "kind" in outcome && outcome.kind === "examined" ? outcome.findings : [];
     expect(collected.map((f) => f.id)).toEqual(["M7C-01"]);
   });
 
