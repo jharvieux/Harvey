@@ -741,6 +741,187 @@ function detectUnsafeCacheConfig(sources: Map<string, ts.SourceFile>, nextId: Ne
   return findings;
 }
 
+// --- Cross-user cache bleed [HIGH] (#1051) ----------------------------------
+//
+// briefs/audit-modules.md requires M9 to flag BOTH cache failure modes: a missing cache config AND
+// a cache configuration that lets one user's rendered content bleed to another. Only the first was
+// implemented — and detectUnsafeCacheConfig above treats ANY cache signal as evidence of
+// correctness (CACHE_SIGNAL_PATTERN → `continue`) and any auth read as evidence the route is
+// per-request. So the bleed case was suppressed by the very directive that causes it and the scan
+// reported clean. This check is the other half; the two are complementary, not alternatives.
+//
+// Three statically adjudicable shapes:
+//   (a) `unstable_cache(cb, keyParts, opts)` whose cached work is per-user — it takes a user/tenant
+//       identifier, or reads the caller's session inside the cached function — while the cache
+//       IDENTITY (key parts + `tags`) carries no per-user component. One global entry: whoever
+//       populates it first has their rows served to every other user.
+//   (b) a `"use cache"` scope that resolves the caller's identity INSIDE itself. That scope is keyed
+//       on its ARGUMENTS, so the identity arriving as a parameter is the CORRECT shape (and is not
+//       flagged); an auth read within the cached body is invisible to the key, and bleeds.
+//   (c) an auth-gated Route Handler / middleware returning `Cache-Control: public` or `s-maxage`
+//       with no `private`/`no-store` — the shared CDN caches an authenticated response.
+// Unlike the three Supabase-shaped data-layer checks this one keys on the auth + cache signals
+// rather than `.from().select()`, so it runs on any data layer.
+
+// A parameter name that declares the cached result varies per identity (`userId`, `tenantId`, `org`).
+const PER_USER_PARAM = /^(user|owner|tenant|account|org|organisation|organization|customer|workspace|member|profile|viewer)(_?id)?$/i;
+// Deliberately loose: this runs over the cache KEY, where a match is evidence of CORRECT per-user
+// scoping. Matching too readily suppresses a finding, which is the safe direction for precision.
+const PER_USER_KEY_TOKEN = /user|owner|tenant|account|org|member|customer|workspace|profile|viewer|session/i;
+const CACHE_CONTROL_HEADER = /["'`]cache-control["'`]\s*[:,]\s*["'`]([^"'`]+)["'`]/gi;
+const SHARED_CACHE_VALUE = /\b(public|s-maxage)\b/i;
+const PRIVATE_CACHE_VALUE = /\b(private|no-store|no-cache)\b/i;
+const RESPONSE_BUILDING_FILE = /(^|\/)(route\.tsx?|middleware\.tsx?)$/;
+
+function unstableCacheCalls(sf: ts.SourceFile): ts.CallExpression[] {
+  const out: ts.CallExpression[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
+      if (name === "unstable_cache") out.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+function hasUseCacheDirective(stmts: readonly ts.Statement[]): boolean {
+  const first = stmts[0];
+  return !!first && ts.isExpressionStatement(first) && ts.isStringLiteral(first.expression) && first.expression.text === "use cache";
+}
+
+// Scopes rendered by the Next `"use cache"` directive — the whole module, or an individual function.
+function useCacheScopes(sf: ts.SourceFile): ts.Node[] {
+  if (hasUseCacheDirective(sf.statements)) return [sf];
+  const out: ts.Node[] = [];
+  const visit = (node: ts.Node) => {
+    const body =
+      ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node) ? node.body : undefined;
+    if (body && ts.isBlock(body) && hasUseCacheDirective(body.statements)) out.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+// Why this cached callback's result differs per user, or undefined if nothing says it does.
+function perUserCachedWork(cb: ts.FunctionExpression | ts.ArrowFunction, sf: ts.SourceFile): string | undefined {
+  const param = cb.parameters.map((p) => p.name).find((n): n is ts.Identifier => ts.isIdentifier(n) && PER_USER_PARAM.test(n.text));
+  if (param) return `takes the per-user argument \`${param.text}\``;
+  if (AUTH_PATTERN.test(cb.getText(sf))) return "reads the caller's session inside the cached function";
+  return undefined;
+}
+
+function detectCrossUserCacheBleed(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  const opaque: string[] = [];
+
+  for (const [path, sf] of sources) {
+    if (leadingDirective(sf) === "use client") continue;
+
+    for (const call of unstableCacheCalls(sf)) {
+      const cb = call.arguments[0];
+      if (!cb || !(ts.isArrowFunction(cb) || ts.isFunctionExpression(cb))) {
+        if (cb) opaque.push(loc(path, sf, call));
+        continue;
+      }
+      const why = perUserCachedWork(cb, sf);
+      if (!why) continue;
+      const identity = call.arguments
+        .slice(1)
+        .map((a) => a.getText(sf))
+        .join(" ");
+      if (PER_USER_KEY_TOKEN.test(identity)) continue;
+
+      findings.push(
+        makeFinding(nextId, {
+          title: `Per-user data cached under a shared cache key`,
+          severity: "High",
+          confidence: "Review",
+          category: "Security",
+          taxonomy: "M9 — Cross-user cache bleed",
+          location: loc(path, sf, call),
+          evidence: `This \`unstable_cache(...)\` ${why}, but its cache key/tags (${identity || "none supplied"}) contain no per-user component — every caller reads and writes the same entry.`,
+          impact: "One user's rows are served to every other user from the Data Cache: whoever populates the entry first defines what everyone sees, for the whole revalidate window. Cross-user data disclosure, not a stale-content bug.",
+          fix: "Put the identity in the cache key AND the tags — `unstable_cache(fn, [\"orders\", userId], { tags: [`orders-${userId}`] })` — or don't cache a per-user read at all.",
+          value: 5,
+          ease: 4,
+          safety: 4,
+        }),
+      );
+    }
+
+    for (const scope of useCacheScopes(sf)) {
+      if (!AUTH_PATTERN.test(scope.getText(sf))) continue;
+      findings.push(
+        makeFinding(nextId, {
+          title: `\`"use cache"\` scope reads the caller's session`,
+          severity: "High",
+          confidence: "Review",
+          category: "Security",
+          taxonomy: "M9 — Cross-user cache bleed",
+          location: loc(path, sf, scope),
+          evidence: `This \`"use cache"\` scope resolves the caller's identity inside the cached function. A cached scope is keyed on its ARGUMENTS, so an identity read within it is invisible to the key — one entry is shared across users.`,
+          impact: "The first caller's authenticated result is cached and replayed to every other user for the cache lifetime — cross-user data disclosure.",
+          fix: "Resolve the session OUTSIDE the cached scope and pass the identity in as an argument (so it becomes part of the key), or drop `\"use cache\"` from this function.",
+          value: 5,
+          ease: 4,
+          safety: 4,
+        }),
+      );
+    }
+
+    if (!RESPONSE_BUILDING_FILE.test(path)) continue;
+    if (!AUTH_PATTERN.test(sf.text) && !readsDynamicApi(sf)) continue;
+    for (const m of sf.text.matchAll(CACHE_CONTROL_HEADER)) {
+      const value = m[1] ?? "";
+      if (!SHARED_CACHE_VALUE.test(value) || PRIVATE_CACHE_VALUE.test(value)) continue;
+      findings.push(
+        makeFinding(nextId, {
+          title: `Authenticated response sent with a shared \`Cache-Control\``,
+          severity: "High",
+          confidence: "Review",
+          category: "Security",
+          taxonomy: "M9 — Cross-user cache bleed",
+          location: path,
+          evidence: `${path} resolves the caller's session (or reads cookies/headers) and returns \`Cache-Control: ${value}\` — a shared-cache directive with no \`private\`/\`no-store\`.`,
+          impact: "The CDN and any intermediary caches store one user's authenticated response and serve it to the next requester of the same URL — the textbook cross-user cache bleed.",
+          fix: "Send `Cache-Control: private, no-store` (or `no-cache`) on any authenticated response; keep `public`/`s-maxage` for genuinely anonymous ones.",
+          value: 5,
+          ease: 5,
+          safety: 5,
+        }),
+      );
+    }
+  }
+
+  // The one shape this check cannot adjudicate: `unstable_cache(importedFn, …)`, where the cached
+  // work lives in another module and neither its session reads nor its per-user parameters are
+  // visible here. Disclosed rather than dropped, so its absence isn't read as "assessed and clean".
+  if (opaque.length) {
+    findings.push({
+      id: nextId(),
+      title: `M9 not assessed — cross-user cache bleed on ${opaque.length} \`unstable_cache\` call(s) with a non-inline callback`,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Security",
+      taxonomy: "M9 — Cross-user cache bleed — not assessed",
+      location: opaque.join(", "),
+      status: "Open",
+      evidence: `These \`unstable_cache(...)\` calls pass a callback the file does not define inline, so whether the cached work is per-user is not decidable from this file. ASSUMED-undecidable at file scope; falsifiable by re-running this detector once it resolves imported callbacks across modules.`,
+      impact: "These cache sites were NOT assessed for cross-user bleed. Recorded explicitly so the absence reads as 'not assessed here', not 'assessed and clean' — the fail-loud coverage guard.",
+      fix: "None — informational. Check by hand that each cached function's key includes the identity its result depends on.",
+      value: 1,
+      ease: 5,
+      safety: 5,
+      precisionTier: "high",
+    });
+  }
+  return findings;
+}
+
 // --- Data-fetching waterfalls [MED] — best-effort ---------------------------
 
 // All local binding names introduced by a declaration (handles plain
@@ -1616,6 +1797,7 @@ const NEXT_CHECKS: readonly M9Check[] = [
   "missing-server-only",
   "accidental-dynamic",
   "cache-config",
+  "cache-bleed",
   "route-segment-config",
   "missing-suspense",
   "unbounded-route",
@@ -1664,6 +1846,9 @@ function runBoundaryPass(adapter: BoundaryAdapter, files: SourceInput[], nextId:
       ? detectServerActionAuthAndValidation(sources, nextId, ownerId.subsumedNoAuthActions, mutations, adapter.mutationNoun)
       : []),
     ...ownerId.findings,
+    // Not ORM-gated with the three data-layer checks above: it keys on the auth + cache signals,
+    // not on Supabase call shapes, so it stays live on a Prisma/Drizzle/raw-SQL target.
+    ...(S.has("cache-bleed") ? detectCrossUserCacheBleed(sources, nextId) : []),
     ...(S.has("accidental-dynamic") ? detectAccidentalDynamicRendering(sources, nextId) : []),
     ...(S.has("ssr-browser-api") ? detectSsrBrowserApiMisuse(sources, nextId) : []),
     ...(S.has("unbounded-route") ? detectUnboundedRouteOrEdge(sources, nextId) : []),
