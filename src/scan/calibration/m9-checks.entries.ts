@@ -1,7 +1,9 @@
 // #848 — M9 per-check calibration corpus. Before this, only the client-supplied-owner-id class
-// (m9-authz.entries.ts) had scored corpus entries; the other nine M9 checks were pinned solely by
+// (m9-authz.entries.ts) had scored corpus entries; the other M9 checks were pinned solely by
 // the synthetic fixtures in src/detectors/app-router.test.ts, so no scored corpus stood behind the
-// bulk of the module and "measure, don't recall" could not produce an M9 recall number.
+// bulk of the module and "measure, don't recall" could not produce an M9 recall number. #848 seeded
+// nine pairs; #1047 seeded the four checks #846/#843 landed afterwards plus the #1051 cache-bleed
+// check, so every M9 check the detector can emit is now scored.
 //
 // These entries bind ONE positive + ONE negative per check to the SAME committed fixtures the
 // detector's own suite uses (src/detectors/__fixtures__/<check>/{positive,negative}) — so the
@@ -190,5 +192,108 @@ export const m9CheckEntries: CorpusEntry[] = [
     location: "m9-corpus/spa/negative",
     match: ["SPA missing root error boundary"],
     note: "spa-error-boundary/negative-has-boundary (framework 'vite'): the SPA imports react-error-boundary around the root — nothing fires.",
+  },
+
+  // #1047 — the four checks #846/#843 added after #848 seeded the nine above. They were pinned only
+  // by inline-source assertions in app-router.test.ts, so a regression in any of them was invisible
+  // to the corpus gate while docs/m9-app-router.md claimed full coverage. Each now has the same
+  // committed-fixture-backed pos/neg pair as the rest.
+  {
+    id: "M9C-SEGMENT-POS",
+    kind: "positive",
+    cls: "force-static route segment config on a route that reads per-request/auth data",
+    module: "M9",
+    location: "m9-corpus/segment/positive",
+    match: ["Unsafe route segment config"],
+    expectedTier: "review",
+    note: "route-segment-config/positive: `export const dynamic = 'force-static'` on a page that reads the session cookie — the personalized render is frozen into the static cache. Detected by detectRouteSegmentConfig.",
+  },
+  {
+    id: "M9C-SEGMENT-NEG",
+    kind: "negative",
+    cls: "force-static on a genuinely public page with no per-request data",
+    module: "M9",
+    location: "m9-corpus/segment/negative",
+    match: ["Unsafe route segment config"],
+    note: "route-segment-config/negative: the same directive on a static About page — the correct use of force-static, so nothing fires.",
+  },
+  {
+    id: "M9C-SEGMENT-CONFLICT-POS",
+    kind: "positive",
+    cls: "route segment config whose two halves cancel (force-dynamic + positive revalidate)",
+    module: "M9",
+    location: "m9-corpus/segment-conflict/positive",
+    match: ["Conflicting route segment config"],
+    expectedTier: "review",
+    note: "route-segment-conflict/positive: `force-dynamic` never caches, so `revalidate = 3600` is dead config — the route does not render the way the config reads. Detected by detectRouteSegmentConfig.",
+  },
+  {
+    id: "M9C-SEGMENT-CONFLICT-NEG",
+    kind: "negative",
+    cls: "coherent revalidate-only config",
+    module: "M9",
+    location: "m9-corpus/segment-conflict/negative",
+    match: ["Conflicting route segment config"],
+    note: "route-segment-conflict/negative: `revalidate = 60` alone, with no `dynamic` export to contradict it — nothing fires.",
+  },
+  {
+    id: "M9C-SUSPENSE-POS",
+    kind: "positive",
+    cls: "dynamic read plus async data fetch with no Suspense/streaming boundary",
+    module: "M9",
+    location: "m9-corpus/suspense/positive",
+    match: ["Missing Suspense boundary"],
+    expectedTier: "review",
+    note: "missing-suspense/positive: the page reads cookies() and awaits a fetch with no <Suspense> anywhere — the whole route blocks instead of streaming a shell. Detected by detectMissingSuspenseBoundary.",
+  },
+  {
+    id: "M9C-SUSPENSE-NEG",
+    kind: "negative",
+    cls: "the same route with the dynamic subtree wrapped in a boundary",
+    module: "M9",
+    location: "m9-corpus/suspense/negative",
+    match: ["Missing Suspense boundary"],
+    note: "missing-suspense/negative: the identical page once its subtree sits inside <Suspense fallback={null}> — nothing fires.",
+  },
+  {
+    id: "M9C-UNBOUNDED-POS",
+    kind: "positive",
+    cls: "route handler loop with no break/return/throw",
+    module: "M9",
+    location: "m9-corpus/unbounded/positive",
+    match: ["Unbounded/self-calling route or edge fn"],
+    expectedTier: "review",
+    note: "unbounded-route/positive: `while (true)` with no escape in app/api/sync/route.ts — the request never completes. Detected by detectUnboundedRouteOrEdge.",
+  },
+  {
+    id: "M9C-UNBOUNDED-NEG",
+    kind: "negative",
+    cls: "the same loop shape bounded by an explicit break",
+    module: "M9",
+    location: "m9-corpus/unbounded/negative",
+    match: ["Unbounded/self-calling route or edge fn"],
+    note: "unbounded-route/negative: `while (true)` with `if (n > 10) break` — the FP boundary for this check, nothing fires.",
+  },
+
+  // #1051 — the second cache failure mode briefs/audit-modules.md requires (a present-but-shared
+  // cache directive over per-user data), which the missing-config check above actively suppressed.
+  {
+    id: "M9C-CACHE-BLEED-POS",
+    kind: "positive",
+    cls: "per-user data served from a shared cache entry (cross-user cache bleed)",
+    module: "M9",
+    location: "m9-corpus/cache-bleed/positive",
+    match: ["Cross-user cache bleed"],
+    expectedTier: "review",
+    note: "cache-bleed/positive: three shapes — unstable_cache over a per-user read with a global key, a `use cache` scope that resolves the session inside itself, and an authenticated route handler returning `Cache-Control: public, s-maxage`. Detected by detectCrossUserCacheBleed.",
+  },
+  {
+    id: "M9C-CACHE-BLEED-NEG",
+    kind: "negative",
+    cls: "per-user caching done correctly (identity in the key) plus a genuinely public cached read",
+    module: "M9",
+    location: "m9-corpus/cache-bleed/negative",
+    match: ["Cross-user cache bleed"],
+    note: "cache-bleed/negative: the identity in both the key parts and the tag, a `use cache` function taking the identity as an argument, a `private, no-store` authenticated response, and an anonymous public endpoint — the precision boundary for this check.",
   },
 ];

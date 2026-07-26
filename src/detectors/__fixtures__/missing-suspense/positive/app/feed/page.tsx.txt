@@ -1,0 +1,14 @@
+import { cookies } from "next/headers";
+
+// A dynamic read plus real async data-fetching with no boundary: the whole route blocks on the
+// slow work instead of streaming a static shell first.
+export default async function FeedPage() {
+  const token = cookies().get("t");
+  const data = await fetch("https://api.example.com/feed");
+
+  return (
+    <div>
+      {token?.value} {data.status}
+    </div>
+  );
+}

@@ -1,0 +1,8 @@
+// A route handler whose loop has no break/return/throw — the request never completes and the
+// function burns its whole execution budget.
+export async function GET() {
+  let n = 0;
+  while (true) {
+    n += 1;
+  }
+}

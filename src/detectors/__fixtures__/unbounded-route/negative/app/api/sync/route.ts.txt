@@ -1,0 +1,9 @@
+// The same loop shape, bounded by an explicit break — the FP boundary for this check.
+export async function GET() {
+  let n = 0;
+  while (true) {
+    n += 1;
+    if (n > 10) break;
+  }
+  return Response.json({ n });
+}

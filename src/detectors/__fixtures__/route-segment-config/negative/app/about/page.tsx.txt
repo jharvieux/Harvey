@@ -1,0 +1,6 @@
+// force-static on a genuinely public, per-request-data-free page — the correct use of it.
+export const dynamic = "force-static";
+
+export default function AboutPage() {
+  return <div>About us</div>;
+}
