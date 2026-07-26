@@ -4,11 +4,29 @@
 //
 //   1. §3b Test quality & intent (M8)   — #1045
 //   2. §0 Limitations & liability        — #1048
+//   3. The cover's tenant-isolation pill  — #1067
 //
 // Plain .mjs (not src/*.ts) because render.mjs consumes it directly at render time; TS callers get
 // types from sections.d.mts.
 
 export const esc = (s) => String(s ?? "").replace(/[&<>]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[m]);
+
+// ---------------------------------------------------------------------------
+// The cover's tenant-isolation pill — #1067
+// ---------------------------------------------------------------------------
+
+// The word "verified" used to be hardcoded HTML on the cover, so the report's most prominent
+// security statement claimed verification on engagements where M2 — the dynamic pen-test that IS
+// the verification — never ran, flatly contradicting the "Partial audit" banner a few lines below
+// it, and winning, because it is the more visually dominant of the two. Same doctrine #509 applied
+// to completenessBanner: the claim is DERIVED from the ledger, never asserted. No ledger at all
+// (a hand-authored legacy doc) means no basis for the claim, so it is not made.
+export function tenantIsolationPill(coverage) {
+  const m2 = (coverage ?? []).find((r) => r.module === "M2");
+  if (m2?.status === "ran") return '<span class="pill">verified</span>';
+  const why = m2 ? `M2 ${m2.status}` : "M2 absent from the coverage ledger";
+  return `<span class="pill pill-unverified">NOT verified this engagement — ${esc(why)}; see Module coverage</span>`;
+}
 
 // ---------------------------------------------------------------------------
 // §3b Test quality & intent (M8) — #1045

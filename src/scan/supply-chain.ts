@@ -64,6 +64,60 @@ export function checkTyposquat(depNames: string[]): Finding[] {
 
 const NPM_REGISTRY = "https://registry.npmjs.org";
 
+// #1067: both live-registry checks used to `console.warn(...); continue;` per package — a message
+// on the OPERATOR'S TERMINAL, not in the deliverable. Offline, behind a proxy, or rate-limited,
+// every package goes indeterminate and both checks return `[]`, which in the report is
+// indistinguishable from "checked, nothing wrong". These two rows are the established
+// DEP-OSV-00 / SEM-00 / M5-00 contract applied to the tier that was missing it, and the same rows
+// ship when the checks are deliberately skipped — a skipped tier is still an unassessed tier.
+const NAME_SAMPLE = 20;
+
+function registryCoverageFinding(id: string, label: string, taxonomy: string, impact: string, names: readonly string[], reason: string): Finding {
+  const sample = names.length <= NAME_SAMPLE ? names.join(", ") : `${names.slice(0, NAME_SAMPLE).join(", ")} … and ${names.length - NAME_SAMPLE} more`;
+  return {
+    id,
+    title: `${label} did not run for ${names.length} dependenc${names.length === 1 ? "y" : "ies"}`,
+    severity: "Info",
+    confidence: "N/A",
+    category: "Supply chain",
+    taxonomy,
+    location: "package.json",
+    status: "Open",
+    evidence: `${reason} Not assessed: ${sample}.`,
+    impact,
+    fix: `Re-run the scan from a machine with direct access to ${NPM_REGISTRY} (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.`,
+    value: 1,
+    ease: 4,
+    safety: 5,
+    mechanical: true,
+  };
+}
+
+export function slopsquatCoverageFinding(names: readonly string[], reason: string): Finding {
+  return registryCoverageFinding(
+    "SUP-SLOPSQUAT-00",
+    "Hallucinated-dependency (slopsquat) existence check",
+    "Coverage — npm-registry existence check not assessed",
+    "The registry 404 is the only deterministic proof that a dependency name was never published. Without it, a hallucinated package name in this manifest would draw no finding — a disclosed coverage gap, NOT a finding that every dependency exists.",
+    names,
+    reason,
+  );
+}
+
+export function licenseCoverageFinding(names: readonly string[], reason: string): Finding {
+  return registryCoverageFinding(
+    "SUP-LICENSE-00",
+    "Dependency license-compliance check",
+    "Coverage — dependency license not assessed",
+    "License classification reads the registry's own `license` field; without it no copyleft or unlicensed dependency can be identified. The absence of license findings for these packages is a disclosed coverage gap, NOT a clean license bill.",
+    names,
+    reason,
+  );
+}
+
+export const NETWORK_SKIPPED_REASON =
+  "The two live npm-registry checks were deliberately skipped for this pass (skipNetworkChecks), so no registry lookup was made at all.";
+
 // Live npm-registry existence cross-check (P-SLOPSQUAT): an AI coding assistant can hallucinate
 // a plausible-looking package name that was never published. A 404 from the registry is
 // deterministic ground truth for "this name doesn't exist" — not a heuristic corpus match — so
@@ -74,12 +128,15 @@ const NPM_REGISTRY = "https://registry.npmjs.org";
 // duplicated here.
 export async function checkSlopsquat(depNames: string[], fetchImpl: typeof fetch = fetch): Promise<Finding[]> {
   const findings: Finding[] = [];
+  const indeterminate: string[] = [];
+  const reasons = new Set<string>();
   for (const name of depNames) {
     let res: Response;
     try {
       res = await fetchImpl(`${NPM_REGISTRY}/${encodeURIComponent(name)}`, { method: "HEAD" });
     } catch (err) {
-      console.warn(`checkSlopsquat: "${name}" indeterminate — npm registry unreachable (${err instanceof Error ? err.message : String(err)})`);
+      indeterminate.push(name);
+      reasons.add(`registry unreachable (${err instanceof Error ? err.message : String(err)})`);
       continue;
     }
     if (res.status === 404) {
@@ -100,8 +157,12 @@ export async function checkSlopsquat(depNames: string[], fetchImpl: typeof fetch
       continue;
     }
     if (!res.ok) {
-      console.warn(`checkSlopsquat: "${name}" indeterminate — npm registry returned ${res.status}`);
+      indeterminate.push(name);
+      reasons.add(`registry returned HTTP ${res.status}`);
     }
+  }
+  if (indeterminate.length > 0) {
+    findings.push(slopsquatCoverageFinding(indeterminate, `The npm-registry existence check could not reach a verdict: ${[...reasons].join("; ")}.`));
   }
   return findings;
 }
@@ -293,8 +354,9 @@ function extractLicenseId(pkg: NpmPackument): string | undefined {
 }
 
 // Live npm-registry license lookup, same trust boundary as checkSlopsquat above: a name-only
-// request (no code egress), degrading silently (no finding, no throw) on network failure or a
-// non-OK status — indeterminate is not the same as "no license". `licenseTier` on each returned
+// request (no code egress). A network failure or non-OK status leaves that package's license
+// indeterminate — which is not the same as "no license", and since #1067 is not the same as
+// silence either: the indeterminate names are counted into SUP-LICENSE-00. `licenseTier` on each returned
 // finding is "high" for a copyleft match (the SPDX id itself is deterministic, self-declared
 // registry data) and "review" for an unknown/missing/UNLICENSED license (the registry's `license`
 // field can be simply absent from otherwise-fine metadata, so it needs a human look before
@@ -302,17 +364,21 @@ function extractLicenseId(pkg: NpmPackument): string | undefined {
 // conflict is a legal judgment, not a security verdict.
 export async function checkLicenseCompliance(deps: DependencyMap, fetchImpl: typeof fetch = fetch): Promise<Finding[]> {
   const findings: Finding[] = [];
+  const indeterminate: string[] = [];
+  const reasons = new Set<string>();
   for (const name of Object.keys(deps)) {
     let body: NpmPackument;
     try {
       const res = await fetchImpl(`${NPM_REGISTRY}/${encodeURIComponent(name)}`);
       if (!res.ok) {
-        console.warn(`checkLicenseCompliance: "${name}" indeterminate — npm registry returned ${res.status}`);
+        indeterminate.push(name);
+        reasons.add(`registry returned HTTP ${res.status}`);
         continue;
       }
       body = (await res.json()) as NpmPackument;
     } catch (err) {
-      console.warn(`checkLicenseCompliance: "${name}" indeterminate — npm registry unreachable (${err instanceof Error ? err.message : String(err)})`);
+      indeterminate.push(name);
+      reasons.add(`registry unreachable (${err instanceof Error ? err.message : String(err)})`);
       continue;
     }
     const licenseId = extractLicenseId(body);
@@ -351,6 +417,9 @@ export async function checkLicenseCompliance(deps: DependencyMap, fetchImpl: typ
         precisionTier: "high",
       }),
     );
+  }
+  if (indeterminate.length > 0) {
+    findings.push(licenseCoverageFinding(indeterminate, `The dependency license lookup could not reach a verdict: ${[...reasons].join("; ")}.`));
   }
   return findings;
 }

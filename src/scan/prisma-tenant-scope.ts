@@ -177,42 +177,75 @@ export const NON_SHIPPING_FILE = /\.(test|spec)([.-]|$)|\.stories\./i;
 //   - an in-tree Prisma client extension using the `$extends(...).$allOperations` idiom those
 //     wrappers are built on, vendored rather than imported (prisma-rls's own shape, see
 //     extension-scoping-negative).
-// This is a coarser gate than per-call-site precision — a target that depends on the wrapper but
-// doesn't route every query through it would go silent too — but it is the same trade-off #896
-// already made for the libraries themselves, and it is what the issue asked for measured.
+// This is a coarser gate than per-call-site precision: a target that depends on the wrapper but
+// doesn't route every query through it has its unscoped call sites withheld too. #1067 made that
+// cost visible instead of silent — the gate no longer returns an empty result, it returns
+// M1-WRAPPER-00 naming the signal that fired and counting exactly what was withheld, so the
+// deliverable never shows a wrapper-using target as an assessed-and-clean one.
 const TENANT_SCOPING_WRAPPER_DEPS = ["prisma-rls", "@zenstackhq/runtime", "zenstack"];
 
-function hasTenantScopingWrapperDependency(pkgText: string | undefined): boolean {
-  if (!pkgText) return false;
+function wrapperDependencies(pkgText: string | undefined): string[] {
+  if (!pkgText) return [];
   let pkg: unknown;
   try {
     pkg = JSON.parse(pkgText);
   } catch {
-    return false;
+    return [];
   }
-  if (typeof pkg !== "object" || pkg === null) return false;
+  if (typeof pkg !== "object" || pkg === null) return [];
   const p = pkg as Record<string, Record<string, unknown> | undefined>;
-  const deps = { ...p.dependencies, ...p.devDependencies, ...p.peerDependencies };
-  return TENANT_SCOPING_WRAPPER_DEPS.some((d) => d in deps);
+  const sections = { dependencies: p.dependencies, devDependencies: p.devDependencies, peerDependencies: p.peerDependencies };
+  const hits: string[] = [];
+  for (const [section, deps] of Object.entries(sections)) {
+    for (const d of TENANT_SCOPING_WRAPPER_DEPS) if (deps && d in deps) hits.push(`${d} (${section})`);
+  }
+  return hits;
 }
 
 const EXTENDS_CALL = /\$extends\s*\(/;
 const ALL_OPERATIONS = /\$allOperations\b/;
 
-function hasInTreeExtensionWrapper(files: SourceInput[]): boolean {
-  return files.some((f) => SOURCE_EXT.test(f.path) && EXTENDS_CALL.test(f.text) && ALL_OPERATIONS.test(f.text));
+// Which signals fired, in the deliverable's words. Empty means the detector reports normally.
+function tenantScopingWrapperSignals(files: SourceInput[]): string[] {
+  const signals = wrapperDependencies(files.find((f) => f.path === "package.json")?.text).map((d) => `package.json declares ${d}`);
+  for (const f of files) {
+    if (SOURCE_EXT.test(f.path) && EXTENDS_CALL.test(f.text) && ALL_OPERATIONS.test(f.text)) {
+      signals.push(`${f.path} vendors the $extends(...).$allOperations wrapper idiom in-tree`);
+    }
+  }
+  return signals;
 }
 
-function hasTenantScopingWrapper(files: SourceInput[]): boolean {
-  const pkgText = files.find((f) => f.path === "package.json")?.text;
-  return hasTenantScopingWrapperDependency(pkgText) || hasInTreeExtensionWrapper(files);
+// #1067: the wrapper gate used to `return []`, which is indistinguishable in every deliverable
+// from "assessed, nothing found". This states what was gated off and how many call sites it cost.
+function wrapperDisclosure(signals: string[], withheld: Finding[]): Finding {
+  const locations = withheld.length > 0 ? ` Withheld: ${withheld.map((f) => f.location).join("; ")}.` : "";
+  return {
+    id: "M1-WRAPPER-00",
+    title: `Prisma tenant-scope detector gated off by a tenant-scoping wrapper (${withheld.length} call site${withheld.length === 1 ? "" : "s"} withheld)`,
+    severity: "Info",
+    confidence: "N/A",
+    category: "Multi-tenant isolation",
+    taxonomy: "Coverage — Prisma tenant-scope not assessed (wrapper-gated)",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: `Recognised tenant-scoping wrapper signals: ${signals.join("; ")}. Because such a wrapper injects the tenant predicate at runtime, an unscoped-looking \`prisma.<model>.<verb>({ where: { id } })\` is indistinguishable at the AST from a genuinely unscoped one, so the whole detector is gated off for this target. It matched ${withheld.length} call site${withheld.length === 1 ? "" : "s"} that were withheld as a result.${locations}`,
+    impact:
+      "Prisma tenant-scope coverage for this target is NOT ASSESSED, not clean. The signal can be a devDependency or a vendored extension the production query path never uses — in which case the withheld call sites are real cross-tenant BOLA exposure that no other mechanical detector covers (a Prisma app has no database-level RLS).",
+    fix: "Confirm every Prisma query in this codebase actually routes through the enhanced/wrapped client. Review the withheld call sites above by hand — each must be reached only via the wrapper, or must carry its own tenant/owner predicate.",
+    value: 1,
+    ease: 4,
+    safety: 5,
+    mechanical: true,
+  };
 }
 
 export function detectPrismaTenantScopeFindings(files: SourceInput[]): Finding[] {
-  if (hasTenantScopingWrapper(files)) return [];
-  return files
+  const matches = files
     .filter((f) => SOURCE_EXT.test(f.path) && !NON_SHIPPING_PATH.test(f.path) && !NON_SHIPPING_FILE.test(f.path))
     .flatMap((f) => detectFile(f.path, parse(f.path, f.text)));
+  const signals = tenantScopingWrapperSignals(files);
+  return signals.length > 0 ? [wrapperDisclosure(signals, matches)] : matches;
 }
 
 export function scanPrismaTenantScope(projectDir: string): Finding[] {
