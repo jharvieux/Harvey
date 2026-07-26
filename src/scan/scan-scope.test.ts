@@ -158,3 +158,34 @@ describe("relativizeScanScope", () => {
     expect(relativizeScanScope("package.json (next)")).toBe("package.json (next)");
   });
 });
+
+// #1104 — SEC-GL-ALLOW-00 shipped an absolute mkdtemp path inside `evidence`, and every guard the
+// repo had watched `location` only: the CLI seams relativize f.location, and this file's tests
+// covered relativizeScanScope in isolation. The result was a committed artifact no other machine
+// could reproduce (dry-run-drift red forever) AND, worse, a client-facing report disclosing the
+// auditor's temp-dir layout. Assert it over EVERY row of the committed artifact rather than the one
+// row CI happened to diff, so the next finding that puts a path in prose is caught by the same test.
+//
+// Only machine-rooted prefixes count. A regex literal in evidence (`/.../g`) and a URL path
+// (`/api/*`) are legitimate leading-slash text and must not trip this.
+const MACHINE_ABSOLUTE_PATH = /(?:^|[\s(["'])(?:[A-Za-z]:[/\\]|\/(?:Users|home|var|private|tmp|opt|mnt|root)\/)|harvey-scan-scope-/;
+
+describe("committed dry-run artifact carries no machine-local absolute path (#1104)", () => {
+  const findings = JSON.parse(readFileSync(new URL("../../dry-run/findings.json", import.meta.url), "utf8")) as Record<
+    string,
+    unknown
+  >[];
+
+  it("has findings to check — an empty artifact would make this test vacuous", () => {
+    expect(findings.length).toBeGreaterThan(100);
+  });
+
+  it("leaks no scan-scope or user-home path through any finding's prose", () => {
+    const leaks = findings.flatMap((f) =>
+      ["location", "evidence", "impact", "fix", "title"]
+        .filter((k) => typeof f[k] === "string" && MACHINE_ABSOLUTE_PATH.test(f[k] as string))
+        .map((k) => `${String(f.id)}.${k}: ${String(f[k]).slice(0, 120)}`),
+    );
+    expect(leaks).toEqual([]);
+  });
+});

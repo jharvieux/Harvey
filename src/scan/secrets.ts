@@ -13,7 +13,15 @@
 // TruffleHog verified hits and the gitleaks "supabase-service-role-jwt" rule are ~100%
 // precision (live-verified / decoded-claim ground truth) → precisionTier "high". Every other
 // gitleaks rule (default ruleset + our regex-only custom rules) is unverified pattern-match →
-// "review". The anon key and .env.example are allowlisted in the gitleaks config, not here.
+// "review".
+//
+// #1078 — allowlisting moved OUT of the gitleaks config and into this file, except for
+// node_modules. The config's allowlist was `regexTarget = "line"`, so any line mentioning the anon
+// key or a pk_ publishable key had EVERY rule suppressed on it; MEASURED 2026-07-26 (gitleaks
+// 8.30.1) that deleted a real `sk_live_` Stripe secret sharing the line, reported nowhere. Public-
+// by-design keys are now recognized by their own decoded identity and sample/template paths are
+// dropped here, both COUNTED into SEC-GL-ALLOW-00. `scanSecrets` also emits SEC-SCOPE-00 stating
+// the sweep's actual scope (verified-only, working-tree pattern pass) on every run.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -21,6 +29,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
+import { relativizeScanScope } from "./scan-scope.js";
 
 const GITLEAKS_CONFIG = new URL("./rules/gitleaks-supabase.toml", import.meta.url).pathname;
 // Rules whose match alone is ~100%-precision (no live verification needed): the decoded
@@ -106,10 +115,18 @@ export interface TruffleHogResult {
   DetectorName?: string;
   Verified?: boolean;
   Redacted?: string;
+  // #1078: MEASURED trufflehog 3.96.0 — every result carries these and Harvey dropped them.
+  // ExtraData holds the provider's own rotation_guide URL, which on a Critical finding whose
+  // entire remediation IS rotation is the single most useful field the tool produces. DecoderName
+  // says how the secret was found ("PLAIN", "BASE64", …) — a base64-buried credential is a
+  // materially different finding from a plaintext one. The Git metadata's email/timestamp answer
+  // the incident-response question: whose credential, and how long has it been exposed.
+  DecoderName?: string;
+  ExtraData?: Record<string, string>;
   SourceMetadata?: {
     Data?: {
       Filesystem?: { file?: string; line?: number };
-      Git?: { file?: string; line?: number; commit?: string };
+      Git?: { file?: string; line?: number; commit?: string; email?: string; timestamp?: string; repository?: string };
     };
   };
 }
@@ -132,25 +149,43 @@ function location(r: TruffleHogResult): string {
   return "unknown location";
 }
 
+// #1078: the commit author and the commit date are the incident-response facts on a history
+// secret — whose credential, and how long has it been exposed. A non-PLAIN decoder is reported
+// too: a base64-buried credential is a different finding (and a different search) from a
+// plaintext one. All three come straight out of the tool and were previously discarded.
+function truffleHogProvenance(r: TruffleHogResult): string {
+  const git = r.SourceMetadata?.Data?.Git;
+  const parts: string[] = [];
+  if (git?.email) parts.push(`committed by ${git.email}`);
+  if (git?.timestamp) parts.push(`on ${git.timestamp}`);
+  if (r.DecoderName && r.DecoderName !== "PLAIN") parts.push(`found via the ${r.DecoderName} decoder (the secret is encoded, not plaintext)`);
+  return parts.length > 0 ? ` Exposure provenance: ${parts.join(", ")}.` : "";
+}
+
 // scope labels the pass this batch of results came from (source / git-history / built bundle)
 // so the Finding location makes clear where the secret actually lives.
 export function parseTruffleHogFindings(results: TruffleHogResult[], scope: string): Finding[] {
   return results
     .filter((r) => r.Verified)
-    .map((r, i) =>
-      mechanicalFinding({
+    .map((r, i) => {
+      // #1078: TruffleHog ships a per-provider rotation procedure with the result. Harvey's
+      // generic "rotate the credential" sentence was replacing the exact instructions.
+      const rotationGuide = r.ExtraData?.rotation_guide;
+      return mechanicalFinding({
         id: `SEC-TH-${scope}-${i + 1}`,
         title: `Verified secret: ${r.DetectorName ?? "unknown detector"}`,
         severity: "Critical",
         category: "Secret exposure",
         taxonomy: "Committed credential",
         location: `[${scope}] ${location(r)}`,
-        evidence: `TruffleHog verified detector "${r.DetectorName ?? "unknown"}" against the live provider: ${r.Redacted ?? "(redacted)"}.`,
+        evidence: `TruffleHog verified detector "${r.DetectorName ?? "unknown"}" against the live provider: ${r.Redacted ?? "(redacted)"}.${truffleHogProvenance(r)}`,
         impact: "A verified, live credential is exposed; anyone with repo/bundle access can use it directly.",
-        fix: "Rotate the credential immediately, then remove it from source (and git history if committed).",
+        fix:
+          "Rotate the credential immediately, then remove it from source (and git history if committed)." +
+          (rotationGuide ? ` Provider-specific rotation procedure: ${rotationGuide}` : ""),
         precisionTier: "high",
-      }),
-    );
+      });
+    });
 }
 
 // Known-public/test-credential recognizer (#225, generalizing #210 + #211). gitleaks decodes JWT
@@ -171,6 +206,92 @@ function gitleaksSortKey(r: GitleaksResult): string {
   return `${r.File} ${String(r.StartLine ?? 0).padStart(10, "0")} ${r.RuleID} ${r.Match ?? r.Secret ?? ""}`;
 }
 
+// #1078 — the two suppressions that used to happen inside the gitleaks config, where they left no
+// trace. Both now happen here so they can be COUNTED and disclosed (SEC-GL-ALLOW-00):
+//
+//   "public-key"  — the match IS a credential that is public by design: a Stripe publishable key,
+//                   or a Supabase JWT whose DECODED role claim is "anon". Keying on the decoded
+//                   claim (not on what else shares the line) is what makes this safe: the
+//                   service_role sibling is structurally identical and must never be cleared.
+//   "sample-path" — the match sits in .env.example / *.sample / *.template. Overwhelmingly a
+//                   placeholder, but a real value committed to a template file is a well-known
+//                   leak class, so the count is stated and the reviewer is told to confirm.
+//
+// node_modules stays allowlisted in the gitleaks config itself — a dependency tree's own fixtures
+// are not the audited party's code and counting them would bury the two categories above.
+const PUBLISHABLE_KEY_RE = /\bpk_(?:live|test)_[A-Za-z0-9]{8,}/;
+const SAMPLE_PATH_RE = /(^|\/)\.env\.example$|\.sample$|\.template$/;
+
+function isPublicAnonJwt(raw: string): boolean {
+  const [, payload] = raw.split(".");
+  if (!payload) return false;
+  try {
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { role?: unknown };
+    return claims.role === "anon";
+  } catch {
+    return false;
+  }
+}
+
+interface GitleaksSuppression {
+  file: string;
+  line?: number;
+  rule: string;
+  reason: "public-key" | "sample-path";
+}
+
+export function gitleaksSuppression(r: GitleaksResult): GitleaksSuppression | undefined {
+  const raw = r.Match ?? r.Secret ?? "";
+  const reason: GitleaksSuppression["reason"] | undefined =
+    PUBLISHABLE_KEY_RE.test(raw) || isPublicAnonJwt(raw)
+      ? "public-key"
+      : SAMPLE_PATH_RE.test(r.File)
+        ? "sample-path"
+        : undefined;
+  return reason ? { file: r.File, line: r.StartLine, rule: r.RuleID, reason } : undefined;
+}
+
+// One row for both categories across every gitleaks pass, mirroring SEC-TH-00/SEC-GL-00: the point
+// is that the number is never zero-by-omission. Returns undefined when nothing was suppressed.
+export function gitleaksAllowlistDisclosure(suppressed: GitleaksSuppression[]): Finding | undefined {
+  if (suppressed.length === 0) return undefined;
+  const sample = suppressed.filter((s) => s.reason === "sample-path");
+  const publicKeys = suppressed.filter((s) => s.reason === "public-key");
+  // gitleaks reports File as an absolute path under the mkdtemp scan-scope copy. Every other
+  // finding's path reaches the report target-relative (relativizeScanScope, #285) because the
+  // path lives in `location`, which the CLI seams relativize — this row puts paths in `evidence`,
+  // which they do not, so it relativizes here. Two defects if it doesn't (#1104): the committed
+  // dry-run artifact can never match another machine's run, and a client-facing report discloses
+  // the auditor's temp-dir layout (on macOS, the operator's user folder hash).
+  const where = (rows: GitleaksSuppression[]): string =>
+    [...new Set(rows.map((s) => `${relativizeScanScope(s.file)}${s.line ? `:${s.line}` : ""} (${s.rule})`))].sort().join(", ");
+  const parts = [
+    sample.length > 0
+      ? `${sample.length} credential-shaped match(es) in sample/template files were NOT graded — confirm they are placeholders, not real values committed to a template: ${where(sample)}.`
+      : "",
+    publicKeys.length > 0
+      ? `${publicKeys.length} match(es) were recognized as public-by-design credentials (Stripe publishable key, or a Supabase JWT whose decoded role claim is "anon") and not graded: ${where(publicKeys)}.`
+      : "",
+  ].filter(Boolean);
+  return {
+    id: "SEC-GL-ALLOW-00",
+    title: "Secret matches suppressed by allowlist (not graded)",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Secret exposure",
+    taxonomy: "Committed credential — suppressed by allowlist",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence: parts.join(" "),
+    impact:
+      "These matches were deliberately not graded. They are listed because a suppression that leaves no trace reads as a clean result: a real credential committed to a .template/.sample file is a known leak class, and only the sample-path category needs your confirmation.",
+    fix: "Confirm each sample/template match is an obviously-fake placeholder. If any is a real value, rotate it and replace it with a placeholder plus a rotate-me instruction.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
+}
+
 export function parseGitleaksFindings(results: GitleaksResult[], scope: string): Finding[] {
   const demoKeyLocations = new Set(
     results.filter((r) => r.RuleID === "supabase-demo-key-marker").map((r) => `${r.File}:${r.StartLine ?? 0}`),
@@ -180,6 +301,7 @@ export function parseGitleaksFindings(results: GitleaksResult[], scope: string):
   return results
     .filter((r) => !CORRELATION_MARKER_RULES.has(r.RuleID))
     .filter((r) => !demoKeyLocations.has(`${r.File}:${r.StartLine ?? 0}`))
+    .filter((r) => gitleaksSuppression(r) === undefined)
     .sort((a, b) => gitleaksSortKey(a).localeCompare(gitleaksSortKey(b)))
     .map((r, i) => {
       const testIdpPrivateKey = r.RuleID === "private-key" && CI_WORKFLOW_PATH.test(r.File) && testIdpFiles.has(r.File);
@@ -284,6 +406,36 @@ export function truffleHogUnavailableFinding(reason: string): Finding {
     evidence: `TruffleHog failed to run: ${reason}`,
     impact: "Verified-secret coverage for this engagement (source tree, git history, and built bundle) is incomplete — a disclosed coverage gap, not a finding of zero secrets.",
     fix: "Install TruffleHog on the scanning machine (see this file's header) and re-run the scan.",
+    value: 1,
+    ease: 3,
+    safety: 5,
+  };
+}
+
+// #1078 — the scope of the secret sweep, stated to the client. Neither the report nor the tooling
+// said it before, so the section read as an exhaustive credential sweep when it is a VERIFIED-
+// credential sweep plus a working-tree pattern pass. Unconditional: an unstated limitation is the
+// #345 clean-bill-of-health trap, and this one is always true.
+//
+// MEASURED 2026-07-26 (trufflehog 3.96.0, gitleaks 8.30.1) on a throwaway repo with a fake GitHub
+// PAT added in one commit and removed in the next: `trufflehog git --no-verification
+// --results=unverified` recovers it; `trufflehog git --only-verified` — Harvey's production flags —
+// recovers nothing, and `gitleaks detect --no-git` never walks history at all.
+export function secretScanScopeFinding(): Finding {
+  return {
+    id: "SEC-SCOPE-00",
+    title: "Secret-scan scope: verified credentials only, and history is not pattern-scanned",
+    severity: "Info",
+    confidence: "N/A",
+    category: "Secret exposure",
+    taxonomy: "Committed credential — scope of assessment",
+    location: "(repo-wide)",
+    status: "Open",
+    evidence:
+      "TruffleHog runs with --only-verified on all three passes (source tree, git history, built bundle): a credential it detects but cannot verify against the live provider is not reported. gitleaks runs alongside with --no-git, so its pattern pass covers the WORKING TREE only and never walks git history.",
+    impact:
+      "A credential that exists only in git history AND cannot be verified — already rotated or expired, an internal/custom provider TruffleHog has no verifier for, or any provider unreachable from the scanning host — falls between the two tools and is not covered. Working-tree secrets are covered by both tools; this gap is specific to history.",
+    fix: "To close it for this engagement, run `trufflehog git --results=unverified --json file://<repo>` against the client repository from a host with outbound network access and triage the unverified hits by hand.",
     value: 1,
     ease: 3,
     safety: 5,
@@ -423,6 +575,15 @@ export function scanSecrets(sourceDir: string, historyDir: string, bundleDir?: s
   // tool below, instead of one near-duplicate row per pass.
   let truffleHogFailure: string | undefined;
   let gitleaksFailure: string | undefined;
+  // #1078: allowlist drops are pooled across passes so the report carries ONE counted row rather
+  // than one per pass — and, critically, so the count exists at all.
+  const suppressed: GitleaksSuppression[] = [];
+  const collectSuppressions = (results: GitleaksResult[]): void => {
+    for (const r of results) {
+      const s = gitleaksSuppression(r);
+      if (s) suppressed.push(s);
+    }
+  };
 
   const fsScan = runTruffleHogFilesystem(sourceDir);
   if (fsScan.failure) truffleHogFailure = fsScan.failure;
@@ -442,7 +603,10 @@ export function scanSecrets(sourceDir: string, historyDir: string, bundleDir?: s
 
   const glScan = runGitleaks(sourceDir);
   if (glScan.failure) gitleaksFailure = glScan.failure;
-  else findings.push(...parseGitleaksFindings(glScan.results, "source"));
+  else {
+    collectSuppressions(glScan.results);
+    findings.push(...parseGitleaksFindings(glScan.results, "source"));
+  }
 
   if (bundleDir) {
     if (!truffleHogFailure) {
@@ -453,9 +617,16 @@ export function scanSecrets(sourceDir: string, historyDir: string, bundleDir?: s
     if (!gitleaksFailure) {
       const bundleGl = runGitleaks(bundleDir);
       if (bundleGl.failure) gitleaksFailure = bundleGl.failure;
-      else findings.push(...parseGitleaksFindings(bundleGl.results, "bundle"));
+      else {
+        collectSuppressions(bundleGl.results);
+        findings.push(...parseGitleaksFindings(bundleGl.results, "bundle"));
+      }
     }
   }
+
+  const allowlistRow = gitleaksAllowlistDisclosure(suppressed);
+  if (allowlistRow) findings.push(allowlistRow);
+  findings.push(secretScanScopeFinding());
 
   if (truffleHogFailure) findings.push(truffleHogUnavailableFinding(truffleHogFailure));
   if (gitleaksFailure) findings.push(gitleaksUnavailableFinding(gitleaksFailure));

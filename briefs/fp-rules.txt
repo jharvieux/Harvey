@@ -72,13 +72,20 @@
 - THE SUPABASE ANON / PUBLISHABLE KEY IS PUBLIC BY DESIGN — NEVER A FINDING. It
   ships in browser code and grants only what RLS allows. anon and service_role
   JWTs are structurally identical, so distinguish by the DECODED `role` claim:
-  `role: anon` → benign, `role: service_role` → Critical. Suppress any hit on a
-  `NEXT_PUBLIC_SUPABASE_ANON_KEY` line (gitleaks allowlist regexTarget=line).
+  `role: anon` → benign, `role: service_role` → Critical. Suppress the anon key BY
+  ITS OWN VALUE, never by what else shares the line: the gitleaks allowlist is
+  regexTarget=match, and the residual `jwt` hit on the raw token is cleared by the
+  decoded role claim in secrets.ts. A line-level suppression (what this brief used
+  to prescribe) deletes a real secret that merely sits on the same line — MEASURED
+  2026-07-26, a live-shaped `sk_live_` next to `pk_test_` was reported nowhere (#1078).
 
-- PLACEHOLDER SECRETS IN SAMPLE FILES ARE NOT FINDINGS. `.env.example`, `*.sample`,
-  `*.template`, and documented fixtures hold docs, not credentials (`your_key_here`,
-  `changeme`, empty `PASSWORD=`). Path-allowlist them; require live verification
-  (TruffleHog `--only-verified`) before counting a real-looking value elsewhere.
+- PLACEHOLDER SECRETS IN SAMPLE FILES ARE NOT FINDINGS, BUT THE COUNT IS STATED.
+  `.env.example`, `*.sample`, `*.template`, and documented fixtures hold docs, not
+  credentials (`your_key_here`, `changeme`, empty `PASSWORD=`). Do not grade them;
+  require live verification (TruffleHog `--only-verified`) before counting a
+  real-looking value elsewhere. Report how many were skipped and where
+  (SEC-GL-ALLOW-00) — a real value committed to a template file is a known leak
+  class, and a suppression that leaves no trace reads as a clean result.
 
 - A SECRET IS NOT A FINDING ON VARIABLE NAME ALONE. A value is only a credential
   if it matches a provider key pattern or passes entropy+verification. A variable
