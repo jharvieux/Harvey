@@ -29,10 +29,18 @@ interface KnipExportIssue {
   line: number;
 }
 
+// #1050: knip's per-file issue record also carries the unused-dependency verdicts it derives from
+// package.json (MEASURED against knip 5.88.1 on a two-unused-dep fixture, 2026-07-25: the reporter
+// emits `dependencies` and `devDependencies` as [{ name, line, col, pos }] on the package.json
+// entry). They were absent from this type, so they were dropped at the type boundary and M5
+// under-reported a scope brief `briefs/audit-modules.md` names explicitly — with no disclosure, so
+// the absence read as a clean result. Optional because a merged/legacy report may predate them.
 export interface KnipIssue {
   file: string;
   exports: KnipExportIssue[];
   types: KnipExportIssue[];
+  dependencies?: KnipExportIssue[];
+  devDependencies?: KnipExportIssue[];
 }
 
 export interface KnipReport {
@@ -440,6 +448,9 @@ export function knipToFindings(
   report: KnipReport,
   fileLineCounts: Record<string, number> = {},
   inferredEntryFiles: Set<string> = new Set(),
+  // #1050: the package.json paths whose scope ran without resolving the target's own config and
+  // plugins. Their unused-dependency verdicts are review tier — see the dependency block below.
+  unresolvedDepScopes: Set<string> = new Set(),
 ): Finding[] {
   const findings: Finding[] = [];
   let n = 0;
@@ -536,6 +547,47 @@ export function knipToFindings(
         ease: 4,
         safety: 4,
         precisionTier: "review",
+      });
+    }
+
+    // #1050: unused DEPENDENCIES — split prod from dev because they are different problems. An
+    // unused runtime dependency is installed into the shipped tree, so it is supply-chain surface
+    // (one more package whose maintainer, transitive tree and CVEs you carry for nothing), not just
+    // tidiness; an unused devDependency is install/build weight and CI time.
+    const depClasses = [
+      { entries: issue.dependencies, dev: false },
+      { entries: issue.devDependencies, dev: true },
+    ];
+    for (const { entries, dev } of depClasses) {
+      if (!entries?.length) continue;
+      const names = entries.map((d) => d.name);
+      const label = dev ? "devDependencies" : "dependencies";
+      // knip decides "unused" from the resolved import graph. A scope whose own config/plugins
+      // could not be loaded (#696 inferred entries, #810's plugins-disabled retry) never saw the
+      // config files that reference build-time deps, so those rows are review candidates, not
+      // confirmed — the same honesty the file findings already apply.
+      const unresolved = unresolvedDepScopes.has(issue.file);
+      n += 1;
+      findings.push({
+        id: `M5-${String(n).padStart(2, "0")}`,
+        title: `Unused ${label} declared in ${issue.file}`,
+        severity: "Low",
+        confidence: unresolved ? "Review" : "Confirmed",
+        category: "Maintainability",
+        taxonomy: "M5 — Slop / dead code",
+        location: issue.file,
+        status: "Open",
+        evidence: `knip: ${label} declared but never imported: ${names.join(", ")}.${unresolved ? " Entry/plugin resolution was incomplete for this scope, so config-only usages may be invisible." : ""}`,
+        impact: dev
+          ? `${names.length} declared devDependenc${names.length === 1 ? "y" : "ies"} nothing imports — install time, lockfile churn and CI minutes spent on packages the build doesn't use.`
+          : `${names.length} declared runtime dependenc${names.length === 1 ? "y" : "ies"} nothing imports — each ships into the installed tree with its own transitive packages and CVE exposure, for no functionality. Unused runtime deps are supply-chain surface, not just tidiness.`,
+        fix: unresolved
+          ? `Install the target's dependencies so knip can resolve its config and plugins, re-run \`pnpm quality-scan\`, then remove whichever of ${names.join(", ")} is still reported.`
+          : `Remove ${names.join(", ")} from ${label} in ${issue.file} (check for config-file-only or CLI-only usage first — knip sees imports, not shell scripts).`,
+        value: dev ? 1 : 2,
+        ease: 5,
+        safety: 4,
+        precisionTier: unresolved ? "review" : "high",
       });
     }
   }
