@@ -50,7 +50,34 @@ const DECISIONAL_REASON = [
   "DECISION: docs/design/infrastructure-out-of-scope.md",
 ].join("\n");
 
+// A live-only falsifier planted with `true` would go STALE if run — so it running offline would fail
+// the gate. It must not: skipped-with-a-reason offline, executed only under --live (#1072).
+const LIVE_TIER_REASON = [
+  "// REASON: only a live Lighthouse pass can re-test this (planted; its falsifier would succeed if run)",
+  "// KIND: empirical",
+  "// PROVENANCE: MEASURED 2026-07-26",
+  "// FALSIFIER: true",
+  "// FALSIFIER-TIER: lighthouse",
+].join("\n");
+
 describe("validate-reasons CLI", () => {
+  it("skips a live-only falsifier offline — disclosed, not run, not a failure — and runs it under --live (#1072)", () => {
+    const dir = plant({ "live-tier.ts": LIVE_TIER_REASON });
+    const offline = gate(dir, "--revalidate");
+    expect(offline.code).toBe(0);
+    expect(offline.out).toContain("SKIPPED-LIVE");
+    expect(offline.out).toContain("live-only skipped");
+    const live = gate(dir, "--revalidate", "--live");
+    expect(live.code).toBe(1);
+    expect(live.out).toContain("STALE");
+  });
+
+  it("refuses an unknown --tier rather than silently enabling nothing", () => {
+    const { code, out } = gate(plant({ "live-tier.ts": LIVE_TIER_REASON }), "--revalidate", "--tier", "made-up");
+    expect(code).toBe(1);
+    expect(out).toContain("unknown --tier");
+  });
+
   it("fails loud on a planted reason whose falsifier now succeeds, and leaves the still-true one alone", () => {
     const { code, out } = gate(plant({ "stale.ts": STALE_REASON, "live.ts": LIVE_REASON }), "--revalidate");
     expect(code).toBe(1);
@@ -68,7 +95,7 @@ describe("validate-reasons CLI", () => {
   it("excludes decisional reasons from the re-validation pass instead of re-testing a human ruling", () => {
     const { code, out } = gate(plant({ "d.md": DECISIONAL_REASON }), "--revalidate");
     expect(code).toBe(0);
-    expect(out).toContain("Re-validated 0 empirical falsifier(s); 1 decisional reason(s) excluded by kind");
+    expect(out).toContain("Re-validated 0 empirical falsifier(s); 0 live-only skipped; 1 decisional reason(s) excluded by kind");
   });
 
   it("fails structurally — with no command run — on an empirical reason carrying no falsifier", () => {

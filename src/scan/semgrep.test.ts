@@ -19,7 +19,25 @@ import {
   semgrepUnavailableFinding,
   stripCommentsAndStrings,
   type SemgrepOutput,
+  type SemgrepResult,
 } from "./semgrep.js";
+
+// Real `semgrep 1.164.0` output, captured from a purpose-built corpus — NOT hand-written. See
+// __fixtures__/semgrep/PROVENANCE.md for the exact command, the builder, and the fields dropped.
+// The old inline `SemgrepOutput` literals fed to parseSemgrepFindings were the #1063 fiction class in
+// Harvey's core detector; two invented shapes (a no-cwe harvey rule, a fabricated bare-string-cwe
+// rule) were corrected against this capture (#1156, closes #1150 row 7).
+const CORPUS: SemgrepOutput = JSON.parse(
+  readFileSync(new URL("./__fixtures__/semgrep/semgrep-1.164.0-corpus.json", import.meta.url), "utf8"),
+) as SemgrepOutput;
+
+// The captured record whose rule id ends with `suffix` — throws (never silently skips) if the
+// re-capture ever drops the rule a test relies on.
+function captured(suffix: string): SemgrepResult {
+  const r = (CORPUS.results ?? []).find((x) => x.check_id.endsWith(suffix));
+  if (!r) throw new Error(`no captured semgrep record for rule ending "${suffix}" — re-run build-corpus.mjs`);
+  return r;
+}
 
 // #950: semgrep absent from PATH must degrade to a disclosed coverage gap, not an uncaught
 // ENOENT crash (mirrors the osv-scanner pattern, #512). Only "semgrep" is faked here — every
@@ -39,209 +57,107 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+// Every case below feeds parseSemgrepFindings a REAL captured record (see CORPUS above), except the
+// two labelled synthetic negative-controls whose shapes no real rule emits (PROVENANCE.md).
 describe("parseSemgrepFindings", () => {
-  it("tags ERROR+HIGH-confidence non-audit rules as high precision", () => {
-    const output: SemgrepOutput = {
-      results: [
-        {
-          check_id: "harvey-service-role-in-client",
-          path: "app/components/Foo.tsx",
-          start: { line: 4 },
-          extra: { message: "leak", severity: "ERROR", metadata: { confidence: "HIGH", harveySeverity: "Critical" } },
-        },
-      ],
-    };
-    const findings = parseSemgrepFindings(output);
+  it("tags a real ERROR+HIGH non-audit rule (harvey-service-role-in-client) as high precision", () => {
+    const findings = parseSemgrepFindings({ results: [captured("harvey-service-role-in-client")] });
     expect(findings[0]?.precisionTier).toBe("high");
-    expect(findings[0]?.severity).toBe("Critical");
+    expect(findings[0]?.severity).toBe("Critical"); // harveySeverity override, as the real rule ships it
   });
 
-  it("routes .audit. rules to review even at ERROR+HIGH — audit rules are excluded from the trusted count", () => {
-    const output: SemgrepOutput = {
-      results: [
-        {
-          check_id: "p/owasp-top-ten.audit.some-rule",
-          path: "app/x.ts",
-          extra: { message: "m", severity: "ERROR", metadata: { confidence: "HIGH" } },
-        },
-      ],
-    };
-    expect(parseSemgrepFindings(output)[0]?.precisionTier).toBe("review");
+  it("routes a real .audit. rule to review even at ERROR+HIGH (code-string-concat) — audit rules are excluded from the trusted count", () => {
+    const audit = captured("audit.code-string-concat.code-string-concat");
+    expect(audit.extra?.severity).toBe("ERROR"); // guard: the routing is only meaningful because this really is ERROR+HIGH
+    expect(audit.extra?.metadata?.confidence).toBe("HIGH");
+    expect(parseSemgrepFindings({ results: [audit] })[0]?.precisionTier).toBe("review");
   });
 
-  it("routes WARNING/MEDIUM rules (e.g. open-redirect) to review", () => {
-    const output: SemgrepOutput = {
-      results: [
-        {
-          check_id: "harvey-open-redirect",
-          path: "app/api/go/route.ts",
-          extra: { message: "redirect", severity: "WARNING", metadata: { confidence: "MEDIUM", harveySeverity: "Medium" } },
-        },
-      ],
-    };
-    const findings = parseSemgrepFindings(output);
+  it("routes a real WARNING/MEDIUM rule (harvey-open-redirect) to review", () => {
+    const findings = parseSemgrepFindings({ results: [captured("harvey-open-redirect")] });
     expect(findings[0]?.precisionTier).toBe("review");
     expect(findings[0]?.severity).toBe("Medium");
   });
 
-  it("#455: threads cwe/owasp from a rule's metadata onto the finding", () => {
-    const output: SemgrepOutput = {
-      results: [
-        {
-          check_id: "python.django.security.injection.sql.sql-injection-using-db-cursor-execute",
-          path: "app.py",
-          extra: {
-            message: "sqli",
-            severity: "ERROR",
-            metadata: {
-              confidence: "HIGH",
-              cwe: ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"],
-              owasp: ["A03:2021 - Injection"],
-            },
-          },
-        },
-      ],
-    };
-    const findings = parseSemgrepFindings(output);
-    expect(findings[0]?.cwe).toEqual(["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"]);
-    expect(findings[0]?.owasp).toEqual(["A03:2021 - Injection"]);
+  it("#455: threads a real registry rule's cwe/owasp arrays onto the finding (cors-misconfiguration)", () => {
+    const findings = parseSemgrepFindings({ results: [captured("cors-misconfiguration.cors-misconfiguration")] });
+    expect(findings[0]?.cwe).toEqual(["CWE-346: Origin Validation Error"]);
+    expect(findings[0]?.owasp).toEqual(["A07:2021 - Identification and Authentication Failures", "A07:2025 - Authentication Failures"]);
   });
 
+  // Synthetic negative-control: MEASURED 2026-07-26, every rule across the six packs Harvey loads
+  // ships cwe, so a no-cwe match cannot be captured (PROVENANCE.md). The parser must still add
+  // neither field when the metadata omits it — the shape a future cwe-less rule would produce.
   it("#455: a finding whose rule carries no cwe/owasp metadata gets neither field — never invented", () => {
     const output: SemgrepOutput = {
-      results: [
-        {
-          check_id: "harvey-service-role-in-client",
-          path: "app/components/Foo.tsx",
-          extra: { message: "leak", severity: "ERROR", metadata: { confidence: "HIGH" } },
-        },
-      ],
+      results: [{ check_id: "harvey-no-cwe-synthetic", path: "app/x.ts", extra: { message: "m", severity: "ERROR", metadata: { confidence: "HIGH" } } }],
     };
     const findings = parseSemgrepFindings(output);
     expect(findings[0]?.cwe).toBeUndefined();
     expect(findings[0]?.owasp).toBeUndefined();
   });
 
-  it("#996: routes a workflow-file finding to the CI/CD pipeline category with the routing reason on the finding", () => {
-    const output: SemgrepOutput = {
-      results: [
-        {
-          check_id: "yaml.github-actions.security.run-shell-injection.run-shell-injection",
-          path: ".github/workflows/release.yml",
-          start: { line: 38 },
-          extra: { message: "shell injection", severity: "ERROR", metadata: { confidence: "HIGH" } },
-        },
-      ],
-    };
-    const f = parseSemgrepFindings(output)[0];
+  it("#996: routes a real workflow-file finding (run-shell-injection) to the CI/CD pipeline category with the routing reason", () => {
+    const shell = captured("run-shell-injection.run-shell-injection");
+    expect(shell.path).toContain(".github/workflows/"); // guard: the routing keys on this path
+    const f = parseSemgrepFindings({ results: [shell] })[0];
     expect(f?.category).toBe(CI_PIPELINE_CATEGORY);
-    expect(f?.severity).toBe("High"); // severity kept — the section is non-grading, the finding is not softened
-    expect(f?.precisionTier).toBe("high"); // still reaches the free report
+    expect(f?.severity).toBe("High"); // ERROR kept — the section is non-grading, the finding is not softened
+    expect(f?.precisionTier).toBe("high"); // ERROR+HIGH still reaches the free report
     expect(f?.impact).toContain("outside the app-hygiene grade");
   });
 
-  it("#996: a non-workflow finding keeps the app category untouched", () => {
-    const output: SemgrepOutput = {
-      results: [
-        {
-          check_id: "harvey-permissive-cors",
-          path: "app/api/route.ts",
-          extra: { message: "cors", severity: "ERROR", metadata: { confidence: "HIGH", harveySeverity: "High" } },
-        },
-      ],
-    };
-    expect(parseSemgrepFindings(output)[0]?.category).toBe("Next.js/web footgun");
+  it("#996: a real non-workflow finding (harvey-permissive-cors) keeps the app category untouched", () => {
+    expect(parseSemgrepFindings({ results: [captured("harvey-permissive-cors")] })[0]?.category).toBe("Next.js/web footgun");
   });
 
-  it("#996: metadata.harveyTaxonomy overrides the path-prefixed check_id as the finding's taxonomy", () => {
-    const output: SemgrepOutput = {
-      results: [
-        {
-          check_id: "src.scan.rules.semgrep.harvey-permissive-cors-bare",
-          path: "app/api/public/route.ts",
-          extra: {
-            message: "bare wildcard",
-            severity: "ERROR",
-            metadata: { confidence: "HIGH", harveySeverity: "Low", harveyTaxonomy: CORS_BARE_WILDCARD_TAXONOMY },
-          },
-        },
-      ],
-    };
-    const f = parseSemgrepFindings(output)[0];
+  it("#996: a real rule's metadata.harveyTaxonomy overrides the path-prefixed check_id (harvey-permissive-cors-bare)", () => {
+    const bare = captured("harvey-permissive-cors-bare");
+    expect(bare.extra?.metadata?.harveyTaxonomy).toBe(CORS_BARE_WILDCARD_TAXONOMY); // guard: the real rule still declares it
+    const f = parseSemgrepFindings({ results: [bare] })[0];
     expect(f?.taxonomy).toBe(CORS_BARE_WILDCARD_TAXONOMY);
     expect(f?.severity).toBe("Low");
     expect(f?.precisionTier).toBe("high");
   });
 
-  it("#976: normalizes a registry rule's bare-STRING cwe/owasp to an array (a string reached .cwe.map and threw)", () => {
-    const output: SemgrepOutput = {
-      results: [
-        {
-          check_id: "javascript.express.security.injection.tainted-sql-string",
-          path: "app/api/route.ts",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a registry rule can ship cwe/owasp as a bare string, which the JSON type does not force to a list
-          extra: { message: "sqli", severity: "ERROR", metadata: { cwe: "CWE-89: SQL Injection", owasp: "A03:2021 - Injection" } as any },
-        },
-      ],
-    };
-    const findings = parseSemgrepFindings(output);
-    expect(findings[0]?.cwe).toEqual(["CWE-89: SQL Injection"]);
-    expect(findings[0]?.owasp).toEqual(["A03:2021 - Injection"]);
+  it("#976: normalizes a real registry rule's bare-STRING cwe/owasp to an array (bypass-tls-verification ships both as strings)", () => {
+    const tls = captured("bypass-tls-verification.bypass-tls-verification");
+    expect(typeof tls.extra?.metadata?.cwe).toBe("string"); // guard: this is the real bare-string carrier a string once reached .cwe.map() from (#976)
+    const findings = parseSemgrepFindings({ results: [tls] });
+    expect(findings[0]?.cwe).toEqual(["CWE-319: Cleartext Transmission of Sensitive Information"]);
+    expect(findings[0]?.owasp).toEqual(["A03:2017 - Sensitive Data Exposure"]);
   });
 
-  // #1077: MEASURED 2026-07-25 (semgrep 1.164.0) — all 915 rules across the six registry packs
-  // Harvey loads carry metadata.references. Dropping it left 224/386 (58%) of a real deliverable's
-  // findings carrying the identical generic placeholder one line after the rule's own guidance was
-  // discarded (semgrep.ts:112 in the pre-fix code).
-  it("#1077: composes the fix from the rule's own references + source, instead of the generic placeholder", () => {
-    const output: SemgrepOutput = {
-      results: [
-        {
-          check_id: "package_managers.npm.npm-missing-minimum-release-age",
-          path: "package.json",
-          extra: {
-            message: "missing minimumReleaseAge",
-            severity: "ERROR",
-            metadata: {
-              confidence: "HIGH",
-              references: ["https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing/", "https://github.com/npm/cli/pull/8965"],
-              source: "https://semgrep.dev/r/package_managers.npm.npm-missing-minimum-release-age",
-              likelihood: "LOW",
-              impact: "HIGH",
-            },
-          },
-        },
-      ],
-    };
-    const [finding] = parseSemgrepFindings(output);
-    expect(finding?.references).toEqual(["https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing/", "https://github.com/npm/cli/pull/8965"]);
-    expect(finding?.fix).toContain("https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing/");
+  // #1077: dropping metadata.references left a real deliverable's findings carrying the identical
+  // generic placeholder one line after the rule's own guidance was discarded. npm-missing-minimum-
+  // release-age is a real registry rule that ships references + source.
+  it("#1077: composes the fix from a real rule's own references + source, instead of the generic placeholder", () => {
+    const [finding] = parseSemgrepFindings({ results: [captured("npm-missing-minimum-release-age.npm-missing-minimum-release-age")] });
+    expect(finding?.references).toEqual([
+      "https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing-config-and-script-security-now-generally-available/",
+      "https://github.com/npm/cli/pull/8965",
+    ]);
+    expect(finding?.fix).toContain("https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing-config-and-script-security-now-generally-available/");
     expect(finding?.fix).toContain("https://semgrep.dev/r/package_managers.npm.npm-missing-minimum-release-age");
     expect(finding?.fix).not.toBe("Review the matched code path against the rule's remediation guidance.");
   });
 
-  it("#1077: a rule with no references/source (every harvey-* custom rule today) keeps the generic placeholder fix, and no references field", () => {
-    const output: SemgrepOutput = {
-      results: [
-        {
-          check_id: "harvey-dangerously-set-inner-html",
-          path: "app/Bio.tsx",
-          extra: { message: "xss", severity: "ERROR", metadata: { confidence: "HIGH" } },
-        },
-      ],
-    };
-    const [finding] = parseSemgrepFindings(output);
+  it("#1077: a real rule with no references/source (harvey-open-redirect, like every harvey-* rule today) keeps the generic placeholder fix", () => {
+    const [finding] = parseSemgrepFindings({ results: [captured("harvey-open-redirect")] });
     expect(finding?.references).toBeUndefined();
     expect(finding?.fix).toBe("Review the matched code path against the rule's remediation guidance.");
   });
 
+  // Synthetic negative-control: no rule across the six packs emits a bare-STRING references value
+  // (bare-string cwe/owasp DO occur — see the #976 case above — bare-string references does not,
+  // MEASURED 2026-07-26, PROVENANCE.md). The parser must still normalize it, same as cwe/owasp.
   it("#1077: a bare-STRING references value normalizes to an array, same as cwe/owasp (#976)", () => {
     const output: SemgrepOutput = {
       results: [
         {
-          check_id: "some.rule",
+          check_id: "some.rule.synthetic-bare-references",
           path: "app/x.ts",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- proving the runtime shape a registry rule can ship, not the declared type
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- proving the runtime shape the JSON type admits, which no captured rule exercises
           extra: { message: "m", severity: "ERROR", metadata: { references: "https://example.com/one-link" } as any },
         },
       ],
@@ -249,6 +165,46 @@ describe("parseSemgrepFindings", () => {
     const [finding] = parseSemgrepFindings(output);
     expect(finding?.references).toEqual(["https://example.com/one-link"]);
     expect(finding?.fix).toContain("https://example.com/one-link");
+  });
+});
+
+// #1166: semgrep 1.164 emits its new 4-level taxonomy (MEASURED live: MEDIUM appears in the JSON;
+// CRITICAL/HIGH are the same taxonomy's upper bands). A registry rule with no harveySeverity override
+// must deliver at the mapped band, not fall through to the old Medium default — a Critical shipping
+// Medium was the bug. An unrecognised severity string fails loud instead of vanishing into a default.
+describe("#1166: semgrep new-taxonomy severity strings map correctly, unknowns fail loud", () => {
+  const registryResult = (severity: string): SemgrepOutput => ({
+    results: [{ check_id: "registry.some-rule", path: "app/x.ts", extra: { message: "m", severity } }],
+  });
+
+  it("maps a CRITICAL registry rule (no override) to Critical, not Medium", () => {
+    expect(parseSemgrepFindings(registryResult("CRITICAL"))[0]?.severity).toBe("Critical");
+  });
+
+  it("maps a HIGH registry rule (no override) to High, not Medium", () => {
+    expect(parseSemgrepFindings(registryResult("HIGH"))[0]?.severity).toBe("High");
+  });
+
+  it("maps MEDIUM to Medium and LOW to Low", () => {
+    expect(parseSemgrepFindings(registryResult("MEDIUM"))[0]?.severity).toBe("Medium");
+    expect(parseSemgrepFindings(registryResult("LOW"))[0]?.severity).toBe("Low");
+  });
+
+  it("still maps the legacy ERROR/WARNING/INFO taxonomy", () => {
+    expect(parseSemgrepFindings(registryResult("ERROR"))[0]?.severity).toBe("High");
+    expect(parseSemgrepFindings(registryResult("WARNING"))[0]?.severity).toBe("Medium");
+    expect(parseSemgrepFindings(registryResult("INFO"))[0]?.severity).toBe("Low");
+  });
+
+  it("negative control: an unmapped severity string throws rather than defaulting to Medium", () => {
+    expect(() => parseSemgrepFindings(registryResult("SEVERE"))).toThrow(/Unmapped semgrep severity "SEVERE"/);
+  });
+
+  it("a harveySeverity override still wins over the semgrep severity", () => {
+    const output: SemgrepOutput = {
+      results: [{ check_id: "harvey-x", path: "app/x.ts", extra: { message: "m", severity: "MEDIUM", metadata: { harveySeverity: "Critical" } } }],
+    };
+    expect(parseSemgrepFindings(output)[0]?.severity).toBe("Critical");
   });
 });
 

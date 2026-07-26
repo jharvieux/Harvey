@@ -14,11 +14,13 @@
 //   2. DELIVERED — did that finding survive into the ASSEMBLED deliverable? A produced-but-absent
 //      row is the conservation break itself (invariant 4).
 //
-// The two are separate on purpose. Asking only about the deliverable is not enough: on a
-// single-target run M9's probe captures detect-static UNFILTERED, so it re-collects M6/M7/M8 rows,
-// and an M7 capture that broke entirely would still show M7 taxonomies in the document. That is
-// precisely how #1062 hid — hence question 1 reads findingsByModule (the per-probe attribution),
-// not the merged set.
+// The two are separate on purpose. Asking only about the deliverable is not enough: it cannot tell
+// a finding M7's OWN probe produced from one another probe (or a synthesizer) contributed under the
+// same taxonomy. That is how #1062 hid — until #1084 M9 captured detect-static UNFILTERED, so on a
+// single-target run it re-collected M6/M7/M8 rows and an M7 capture that broke entirely still showed
+// M7 taxonomies in the document. #1084 makes M9 collect only the complement of M6/M7/M8, so that
+// specific masking is gone; but the principle stands independent of it — question 1 reads
+// findingsByModule (the per-probe attribution), not the merged set.
 //
 // A module that genuinely cannot be exercised offline is recorded in UNEXERCISED with a tagged
 // reason and a falsifier, never quietly dropped: a gate that silently omits a module is the very

@@ -42,10 +42,10 @@ function hasBinary(name: string): boolean {
   }
 }
 
-// REASON: this end-to-end block cannot run under the CI `verify` job — it drives the mechanical tier (semgrep/trufflehog/gitleaks/osv-scanner) as child processes and that job deliberately installs none of them, which is why dry-run-drift and corpus-drift are separate workflows too
+// REASON: this end-to-end block cannot run under the CI `verify` job — it needs HARVEY_CONSERVATION_E2E=1 plus the mechanical tier and the vitals plugin, and no verify-gated ci.yml job sets that env var or runs this file (heavy-cli installs the binaries but its include list excludes this file); it is exercised by .github/workflows/conservation.yml instead
 // KIND: empirical
-// PROVENANCE: MEASURED 2026-07-26 (read .github/workflows/ci.yml: the `build` job runs `pnpm install --frozen-lockfile` then `pnpm verify`, with no binary-install step; the dry-run-drift workflow installs them explicitly)
-// FALSIFIER: grep -Eq "semgrep|trufflehog|gitleaks|osv-scanner" .github/workflows/ci.yml
+// PROVENANCE: MEASURED 2026-07-26 (#1072: the old falsifier grepped ci.yml for the scanner binary names as a proxy for "verify installs them"; #1120's heavy-cli job now installs them for a DIFFERENT set of files, so that grep went stale while the claim held. Re-read ci.yml + vitest.config.ts: the block gates on HARVEY_CONSERVATION_E2E, which only conservation.yml:135 sets)
+// FALSIFIER: grep -q HARVEY_CONSERVATION_E2E .github/workflows/ci.yml
 // TOUCHES: .github/workflows/ci.yml
 const MECHANICAL_BINARIES_PRESENT = ["semgrep", "trufflehog", "gitleaks", "osv-scanner"].every(hasBinary);
 
@@ -104,9 +104,14 @@ describe.skipIf(!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !
     const { code, output } = runGate(["--seed-loss", "M7"]);
     expect(code).toBe(1);
     expect(output).toContain("GATE FAIL — M7 produced NOTHING");
-    // The deliverable still carries an M7 row (M9 captures detect-static unfiltered), so a check
-    // that only read the document would pass here. That it does not is the whole point (#1062).
-    expect(output).toMatch(/GONE\s+M7\s+produced=0\s+delivered=[1-9]/);
+    // The gate reads each module's OWN probe attribution (findingsByModule), not the merged
+    // document — that is why it catches this loss. Before #1084 M9 captured detect-static UNFILTERED
+    // and re-delivered M7's rows, so a seeded M7 loss stayed visible in the deliverable (delivered≥1)
+    // while M7 produced nothing — the #1062 masking, which the gate still caught via produced=0.
+    // #1084 makes M9 collect only the complement of M6/M7/M8, so nothing re-delivers M7's discarded
+    // rows and the loss is now visible in the document too (delivered=0). The gate fails on produced=0
+    // either way — the produced/delivered split is what's asserted, not the delivered count.
+    expect(output).toMatch(/GONE\s+M7\s+produced=0\s+delivered=0/);
     // The other direction, in the same run: a gate that fails on everything proves nothing, so the
     // eight unseeded plants must all have travelled probe → deliverable intact.
     for (const module of ["M1", "M3", "M4", "M5", "M6", "M8", "M9", "M10"]) {

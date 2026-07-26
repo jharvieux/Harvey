@@ -114,6 +114,34 @@ describe("scoreEntry", () => {
     expect(row.detail).toContain("connected");
   });
 
+  // #1157 — severity correctness. The gate must fail on a caught-but-MIS-RATED positive the way it
+  // fails on a miss (#1063 shipped every CVE Medium; #1060 never escalated). These are the planted
+  // wrong-severity negative controls proving the check FIRES, plus the it-passes-when-right control.
+  it("passes severity when a caught positive delivers its answer-keyed severity (#1157)", () => {
+    const e = entry({ id: "P-CVE", kind: "positive", cls: "cve", location: "package.json", match: ["minimist"], expectedTier: "high", expectedSeverity: "Critical", note: "" });
+    const row = scoreEntry(e, [finding({ location: "package.json (minimist)", title: "minimist proto pollution", severity: "Critical", precisionTier: "high" })]);
+    expect(row.pass).toBe(true);
+    expect(row.severityMismatch).toBe(false);
+    expect(row.deliveredSeverities).toEqual(["Critical"]);
+  });
+
+  it("FLAGS a caught positive delivered at the wrong severity (#1157 negative control)", () => {
+    const e = entry({ id: "P-CVE", kind: "positive", cls: "cve", location: "package.json", match: ["minimist"], expectedTier: "high", expectedSeverity: "Critical", note: "" });
+    // The exact #1063 shape: a real Critical CVE shipped as Medium. Detection passes (it was caught);
+    // the severity assertion must fail.
+    const row = scoreEntry(e, [finding({ location: "package.json (minimist)", title: "minimist proto pollution", severity: "Medium", precisionTier: "high" })]);
+    expect(row.pass).toBe(true); // still caught — detection is fine
+    expect(row.severityMismatch).toBe(true); // ...but the rating is wrong
+    expect(row.detail).toContain("MISRATED");
+  });
+
+  it("does not score severity for an entry without an answer-keyed severity, or for a miss (#1157)", () => {
+    const unannotated = entry({ id: "P-X", kind: "positive", cls: "x", location: "search.js", match: ["sql"], expectedTier: "high", note: "" });
+    expect(scoreEntry(unannotated, [finding({ location: "search.js:1", taxonomy: "SQL injection", severity: "Low", precisionTier: "high" })]).severityMismatch).toBe(false);
+    const missed = entry({ id: "P-Y", kind: "positive", cls: "y", location: "nowhere.js", match: ["nope"], expectedTier: "high", expectedSeverity: "Critical", note: "" });
+    expect(scoreEntry(missed, []).severityMismatch).toBe(false); // a miss fails on detection, not severity
+  });
+
   it("fails loud when a relevant finding reaches the scorer with no precisionTier (#327)", () => {
     // The latent bug: a detector finding with no tier scored as "no tier at all" — a positive
     // registered as an outright miss and an untiered FP was invisible to precision, both silently.

@@ -12,7 +12,7 @@
 //     real targets/calibration with the installed binaries.
 
 import { detectionMetrics, type DetectionMetrics } from "./detection-metrics.js";
-import type { Finding, PrecisionTier } from "../findings.js";
+import type { Finding, PrecisionTier, Severity } from "../findings.js";
 import { baseEntries } from "./calibration/base.entries.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b3InjectionEntries } from "./calibration/b3-injection.entries.js";
@@ -165,6 +165,13 @@ export interface MatrixRow {
   reviewFlagged: boolean; // a relevant finding at review tier exists
   pass: boolean;
   detail: string;
+  // #1157: severity-correctness scoring. `expectedSeverity` echoes the entry's answer key;
+  // `deliveredSeverities` is the distinct set the caught findings actually carried; `severityMismatch`
+  // is true only for a CAUGHT positive whose expectedSeverity is set and NO relevant finding delivered
+  // it. A miss never sets it (the miss already fails); a negative/connected/none row never does.
+  expectedSeverity?: CorpusEntry["expectedSeverity"];
+  deliveredSeverities?: Severity[];
+  severityMismatch: boolean;
 }
 
 // Scoring:
@@ -177,9 +184,11 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
   const highFlagged = relevant.some((f) => f.precisionTier === "high");
   const reviewFlagged = relevant.some((f) => f.precisionTier === "review");
   const caughtTier = topTier(relevant);
+  // A caught-and-clean severity default for every non-scored path; the positive branch overrides it.
+  const noSev = { expectedSeverity: entry.expectedSeverity, severityMismatch: false };
 
   if (entry.expectedTier === "connected") {
-    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass: true, detail: "N/A — connected tier (live DB), not evaluated statically" };
+    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass: true, detail: "N/A — connected tier (live DB), not evaluated statically", ...noSev };
   }
 
   // "none": no mechanical rule by design (a measured LLM-tier class). The intended gap holds only
@@ -190,15 +199,22 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
     const detail = held
       ? "intended gap — no mechanical rule by design (measured LLM-tier); nothing fired"
       : `REGRESSION: a mechanical rule now reaches this by-design gap — re-tier this entry. Fired: ${relevant.map((f) => f.taxonomy).join(", ")}`;
-    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass: held, detail };
+    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass: held, detail, ...noSev };
   }
 
   if (entry.kind === "positive") {
     const pass = caughtTier !== undefined;
+    // #1157: a caught positive with an answer-keyed severity must DELIVER that severity. Scored only
+    // when caught — a miss already fails on the tier. `some(===)` not "all", because an entry may
+    // legitimately match a sibling finding of another severity; the assertion is that the expected
+    // rating is present, which is exactly the #1063 "everything defaulted to Medium" failure mode.
+    const deliveredSeverities = [...new Set(relevant.map((f) => f.severity))];
+    const severityMismatch = pass && entry.expectedSeverity !== undefined && !relevant.some((f) => f.severity === entry.expectedSeverity);
+    const sevDetail = entry.expectedSeverity === undefined ? "" : severityMismatch ? ` — SEVERITY MISRATED: expected ${entry.expectedSeverity}, delivered ${deliveredSeverities.join("/") || "none"}` : ` [severity ${entry.expectedSeverity} ✓]`;
     const detail = pass
-      ? `caught at ${caughtTier}${entry.expectedTier && entry.expectedTier !== caughtTier ? ` (expected ${entry.expectedTier})` : ""}`
+      ? `caught at ${caughtTier}${entry.expectedTier && entry.expectedTier !== caughtTier ? ` (expected ${entry.expectedTier})` : ""}${sevDetail}`
       : "NOT caught by any rule";
-    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail };
+    return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail, expectedSeverity: entry.expectedSeverity, deliveredSeverities, severityMismatch };
   }
 
   // negative
@@ -208,7 +224,7 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
     : reviewFlagged
       ? "cleared from the count (review-tier hit only, triaged out)"
       : "cleared — not flagged";
-  return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail };
+  return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail, ...noSev };
 }
 
 export interface CoverageMatrix {
