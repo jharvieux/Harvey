@@ -37,7 +37,7 @@ export interface SemgrepResult {
   end?: { line?: number };
   extra?: {
     message?: string;
-    severity?: string; // ERROR | WARNING | INFO
+    severity?: string; // legacy ERROR|WARNING|INFO or new CRITICAL|HIGH|MEDIUM|LOW (#1166)
     // cwe/owasp (#455): carried by both the registry p/owasp-top-ten pack and, where added, our
     // harvey-* custom rules — see each rule's `metadata:` block in ./rules/semgrep/*.yml. A registry
     // rule may declare `cwe`/`owasp` as a bare STRING rather than a list, so the type admits both and
@@ -83,7 +83,34 @@ export interface SemgrepOutput {
   paths?: { scanned?: string[]; skipped?: { path?: string; reason?: string }[] };
 }
 
-const SEVERITY_FROM_SEMGREP: Record<string, Severity> = { ERROR: "High", WARNING: "Medium", INFO: "Low" };
+// #1166: semgrep 1.164 emits its NEW 4-level taxonomy (CRITICAL/HIGH/MEDIUM/LOW) alongside the
+// legacy 3-level one (ERROR/WARNING/INFO) — MEASURED 2026-07-26 (semgrep 1.164.0): a live six-pack
+// scan produced MEDIUM as an `extra.severity` string (e.g. npm-missing-minimum-release-age). Mapping
+// only the legacy three meant a HIGH/CRITICAL registry rule with no harveySeverity override fell to
+// the old `?? "Medium"` default — a real Critical shipped Medium (the #1063 mis-rating class at the
+// semgrep→Finding severity seam). Both taxonomies are mapped; an unrecognised string FAILS LOUD
+// (severityFromSemgrep throws) rather than vanishing into a silent default.
+const SEVERITY_FROM_SEMGREP: Record<string, Severity> = {
+  ERROR: "High",
+  WARNING: "Medium",
+  INFO: "Low",
+  CRITICAL: "Critical",
+  HIGH: "High",
+  MEDIUM: "Medium",
+  LOW: "Low",
+};
+
+function severityFromSemgrep(raw: string | undefined): Severity {
+  const key = raw ?? "WARNING";
+  const mapped = SEVERITY_FROM_SEMGREP[key];
+  if (mapped === undefined) {
+    throw new Error(
+      `Unmapped semgrep severity "${key}" — semgrep may have changed its severity taxonomy; ` +
+        `add it to SEVERITY_FROM_SEMGREP (src/scan/semgrep.ts, #1166) rather than let it default to Medium.`,
+    );
+  }
+  return mapped;
+}
 
 // #996: canonical taxonomies for the two demoted-to-informational rules. Each is declared as
 // metadata.harveyTaxonomy on its rule (base.yml harvey-permissive-cors-bare, xss.yml
@@ -131,7 +158,7 @@ function composeFix(references: string[] | undefined, source: string | undefined
 export function parseSemgrepFindings(output: SemgrepOutput): Finding[] {
   return (output.results ?? []).map((r, i) => {
     const meta = r.extra?.metadata;
-    const severity = (meta?.harveySeverity as Severity | undefined) ?? SEVERITY_FROM_SEMGREP[r.extra?.severity ?? "WARNING"] ?? "Medium";
+    const severity = (meta?.harveySeverity as Severity | undefined) ?? severityFromSemgrep(r.extra?.severity);
     const high = r.extra?.severity === "ERROR" && meta?.confidence === "HIGH" && !isAuditRule(r.check_id);
     const message = r.extra?.message?.trim().split("\n")[0] ?? "Semgrep match";
     // #996: a workflow-file finding is a fact about the CI pipeline, not the app — its own
