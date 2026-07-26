@@ -59,13 +59,13 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
 | # | Tool / pinned version | Location | Status | Live backstop |
 |---|----------------------|----------|--------|---------------|
 | 7 | semgrep | `src/scan/semgrep.test.ts` — `SemgrepOutput` literals fed to `parseSemgrepFindings` | **HAND-WRITTEN** | YES — real `semgrep` runs in `validate-calibration` / the dry-run harness against `targets/calibration`. |
-| 8 | TruffleHog 3.x (comments cite 3.96.0) | `src/scan/secrets.test.ts` — `TruffleHogResult[]` fed to `parseTruffleHogFindings` | **HAND-WRITTEN** | PARTIAL — dry-run runs real `trufflehog`, but the **verified-secret** path (`Verified:true`) needs live providers, so the verified branch has no offline backstop. Field shapes were MEASURED against trufflehog 3.96.0/v3 per code comments (#1078/#1099). |
+| 8 | TruffleHog 3.96.0 | `src/scan/secrets.test.ts` — `TruffleHogResult[]` fed to `parseTruffleHogFindings` | **CAPTURED** (#1146, 2026-07-26) — the #1078 rotation/provenance test now loads `__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json` (real `trufflehog git --no-verification --results=unverified --json` output; sibling `PROVENANCE.md`). The **verified-secret** path is a recorded REASON (verification is live-only); the grading-path tests override the single `Verified` field, disclosed at the test site. Other `parseTruffleHogFindings` literals in this file (the drop-unverified and #1099 empty-Redacted cases) remain minimal hand-built inputs exercising specific parse branches. | PARTIAL — dry-run runs real `trufflehog`; the verified branch has no offline backstop (recorded REASON, falsifier fires when a live-verified capture is committed). |
 | 9 | gitleaks | `src/scan/secrets.test.ts` + `src/scan/calibration.test.ts` — `GitleaksResult[]` fed to `parseGitleaksFindings` | **HAND-WRITTEN** (calibration corpora self-describe as "recorded gitleaks output mirroring the live `pnpm validate:calibration` run") | YES — real `gitleaks` runs in `validate-calibration` / dry-run. |
 | 10 | TruffleHog (git-history) | `src/scan/git-history-secret-gate.test.ts` — `TruffleHogGitResult[]` fed to `scoreGitHistoryResults` | **HAND-WRITTEN** ("pure scoring against recorded trufflehog output") | PARTIAL — as row 8. |
 | 11 | jscpd 4.0.5 | `src/quality-scan.test.ts` — `JscpdReport` literal fed to `jscpdToFindings` | **TRANSCRIBED-FROM-RUN** ("shaped from real `jscpd --reporters json` output, captured against a throwaway two-file clone") | ON-DEMAND only — real jscpd runs via `check:duplication` / an M4 audit, neither in `pnpm verify`/CI. |
 | 12 | knip 5.61.0 | `src/quality-scan.test.ts` — `KnipReport` literals fed to `knipToFindings` | **HAND-WRITTEN** | YES — `pnpm knip` runs inside `pnpm verify` (against Harvey's own repo, not the fixture). |
 | 13 | Stryker 9.6.1 | `src/mutation-scan.test.ts` — `report` (schemaVersion "1") is **HAND-WRITTEN** ("not captured from a live Stryker run … deferred"); `m8Report` + the vacuous-run report are **TRANSCRIBED-FROM-RUN** ("REAL Stryker 9.6.1 JSON capture, trimmed" — inline, rebuilt via the `mutant()` helper that injects defaults) | mixed (see cell) | NONE automated — mutation testing runs in no `pnpm verify`/CI gate. |
-| 14 | PostgREST / GoTrue HTTP responses | ~20 `src/pentest/*.test.ts`, `src/dynamic-validate.test.ts`, `src/scan/supabase*.test.ts` — inline response-body/error literals | **HAND-WRITTEN** | LIVE-STACK only — real responses come from the M2 two-tenant stack, which is not a CI gate. Large class; not individually enumerated here. |
+| 14 | PostgREST / GoTrue HTTP responses | ~20 `src/pentest/*.test.ts`, `src/dynamic-validate.test.ts`, `src/scan/supabase*.test.ts` — inline response-body/error literals | **REASON (live-only)** (#1146) — offline capture is impossible; the block is recorded below. | LIVE-STACK only — real responses come from the M2 two-tenant stack, which is not a CI gate. Large class; not individually enumerated here. |
 
 ## What this inventory concludes
 
@@ -107,3 +107,46 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
   two-tenant stack, so those get a `REASON:` block where an offline capture is impossible.
 - The two #1109 ledger carryovers (producerless `suppressed`/`capped`/`not-applicable` columns; a
   second ledger across `applyBaseline` #457).
+
+## Inline-literal re-capture status (#1146, chunk 3 of the #1130 remainder)
+
+**Landed (this chunk):**
+
+- **Row 8 (TruffleHog, unverified path)** RE-CAPTURED — `__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json`
+  from a real `trufflehog git --no-verification --results=unverified --json` run (trufflehog 3.96.0,
+  2026-07-26), sibling `PROVENANCE.md`. `src/scan/secrets.test.ts`'s #1078 test loads it.
+- **Row 8 (TruffleHog, VERIFIED path)** and **Row 14 (PostgREST/GoTrue)** are recorded as live-only
+  REASON blocks (the TruffleHog one in `__fixtures__/trufflehog/PROVENANCE.md`; the PostgREST one
+  below), because an offline capture is genuinely impossible — not a fabricated fixture.
+
+REASON: PostgREST / GoTrue HTTP response and error literals cannot be captured offline — a faithful response body/status requires the live M2 two-tenant Supabase stack (PostgREST + GoTrue + Postgres with the two-tenant RLS seed) issuing the real request; there is no pinned binary that emits these bodies without the running stack.
+KIND: empirical
+PROVENANCE: MEASURED 2026-07-26
+FALSIFIER: test -f src/pentest/__fixtures__/postgrest-gotrue-live-responses.json
+
+The PostgREST falsifier exits 0 once the M2 stack is brought up and its real responses are captured
+and committed at that path, at which point the ~20 inline response literals across
+`src/pentest/*.test.ts`, `src/dynamic-validate.test.ts` and `src/scan/supabase*.test.ts` can be
+restructured to load the committed capture.
+
+**Split to the #1146 chunk-3 remainder issue (each needs a purpose-built target corpus that
+reproduces the specific per-branch assertions, or a tool this environment does not install):**
+
+- **Row 7 (semgrep)** — `parseSemgrepFindings` literals span many distinct rule scenarios
+  (service-role-in-client, workflow shell-injection routing, registry-rule cwe/owasp threading,
+  references composition, bare-string normalization). Reproducing each from a real `semgrep` run is
+  a per-rule target reconstruction, not a single drop-in capture.
+- **Row 9 (gitleaks 8.30.1, MEASURED — inventory's unversioned cell)** — `parseGitleaksFindings`
+  literals encode many correlation scenarios (demo-marker co-location, allowlist suppression,
+  doc-context reclassification) against Harvey's *custom* gitleaks ruleset; reproducing them needs a
+  planted-secret corpus run under the custom config.
+- **Row 10 (TruffleHog git-history scoring)** — `scoreGitHistoryResults` inputs are minimal scoring
+  literals; one is an inherently synthetic negative-control (a benign file trufflehog would never
+  flag). Its positive case could later reference the row-8 capture.
+- **Row 11 (jscpd 4.2.5, MEASURED — inventory says 4.0.5)** and **Row 12 (knip 5.88.1, MEASURED —
+  inventory says 5.61.0)** — the base `jscpdReport`/`knipReport` literals are engineered to hit
+  specific threshold bands; a real capture is feasible but requires purpose-built clone/dead-code
+  source and updating the downstream assertions to the tool's real counts.
+- **Row 13 (Stryker 9.6.1)** — `@stryker-mutator/*` is NOT installed in this environment; a real
+  capture requires installing it (touches the supervised `package.json`/lockfile) plus a mutation
+  target and a ~15-min run.
