@@ -454,6 +454,8 @@ rules:
       # positive that must still fire: the regex must be ANCHORED (^…$ — an unanchored allowlist
       # matches a prefix and is a broken safeguard) and its class POSITIVE (a negated [^…] class is
       # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
+      # #1066: the FLAG group is [isuvy], not [a-z] -- /m makes ^ and $ match at line breaks, so
+      # /^[a-z0-9]+$/m.test("abc\n' OR 1=1 --") is TRUE and the anchoring guard above is void.
       - by-side-effect: true
         patterns:
           - pattern-either:
@@ -462,7 +464,7 @@ rules:
                       if (!$RE.test($X)) { ... return; }
                   - metavariable-regex:
                       metavariable: $RE
-                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
               # #1027: a Set-backed allowlist is the same exact-match membership test as
@@ -493,7 +495,7 @@ rules:
                       ...
                   - metavariable-regex:
                       metavariable: $RE
-                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
                   ...

@@ -205,6 +205,22 @@ export function checkPublicDirSensitive(dir: string): Finding[] {
 // #950: mirrors the osv-scanner pattern (#512, src/scan/dependencies.ts) — a missing/crashing
 // semgrep binary must degrade to a disclosed coverage gap, never an uncaught ENOENT that hard-
 // exits the whole quick-scan CLI. `failure` set ⇒ the caller substitutes semgrepUnavailableFinding.
+//
+// #1066 — the two scope flags are an AUDIT-INTEGRITY requirement, not a tuning knob. Without them
+// the audited party controls what Harvey sees (MEASURED 2026-07-25, semgrep 1.164.0):
+//   --disable-nosem                 a bare `// nosemgrep` above a sink removed the finding while
+//                                   the file still appeared in paths.scanned — scanned-and-clean.
+//                                   Harvey re-applies the marker itself (partitionMarkerSuppressed)
+//                                   so every suppressed match is COUNTED in SEM-SUPPRESS-00.
+//   --x-ignore-semgrepignore-files  a committed .semgrepignore travels into the scan copy with the
+//                                   rest of the git-tracked files (scan-scope.ts) and applied;
+//                                   semgrep's BUILT-IN default set also dropped tests/, test/,
+//                                   vendor/, dist/, build/ — 5 of 8 probed directories, vendor/
+//                                   being real shipped code. With the flag: 8 of 8 scanned.
+// The flag is marked [INTERNAL] by semgrep, so a version that drops it would otherwise take the
+// whole footgun scan down; fall back to a run without it. That degradation is not silent — the
+// files it re-drops then show up in SEM-SCOPE-00, which is derived from paths.scanned, not from
+// which flags we passed.
 export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: string } {
   const args = [
     "--config", "p/typescript",
@@ -215,19 +231,130 @@ export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: stri
     "--config", "p/security-audit",
     "--config", CUSTOM_RULES,
     "--exclude", "node_modules",
+    "--disable-nosem",
     "--json",
     "--quiet",
     dir,
   ];
-  let out: string;
-  try {
-    out = execFileSync("semgrep", args, { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 });
-  } catch (err) {
-    const e = err as { stdout?: string; code?: string; message?: string };
-    if (typeof e.stdout === "string" && e.stdout.length > 0) out = e.stdout;
-    else return { result: {}, failure: e.code === "ENOENT" ? "semgrep not found on PATH" : (e.message ?? "semgrep failed with no output") };
+  const attempt = (argv: string[]): { out: string } | { failure: string; enoent: boolean } => {
+    try {
+      return { out: execFileSync("semgrep", argv, { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 }) };
+    } catch (err) {
+      const e = err as { stdout?: string; code?: string; message?: string };
+      if (typeof e.stdout === "string" && e.stdout.length > 0) return { out: e.stdout };
+      const enoent = e.code === "ENOENT";
+      return { failure: enoent ? "semgrep not found on PATH" : (e.message ?? "semgrep failed with no output"), enoent };
+    }
+  };
+  let run = attempt(["--x-ignore-semgrepignore-files", ...args]);
+  if ("failure" in run && !run.enoent) run = attempt(args);
+  if ("failure" in run) return { result: {}, failure: run.failure };
+  return { result: JSON.parse(run.out) as SemgrepOutput };
+}
+
+// semgrep's own nosem semantics: a `nosem`/`nosemgrep` marker at the end of the matched line, or on
+// the line immediately above it. `--disable-nosem` reports those matches but does NOT flag them in
+// the OSS JSON (extra.is_ignored is absent — MEASURED 2026-07-25), so re-derive the marker here.
+const NOSEM_MARKER = /\bnosem(?:grep)?\b/i;
+
+export function partitionMarkerSuppressed(output: SemgrepOutput): { reported: SemgrepResult[]; suppressed: SemgrepResult[] } {
+  const reported: SemgrepResult[] = [];
+  const suppressed: SemgrepResult[] = [];
+  const lines = new Map<string, string[]>();
+  for (const r of output.results ?? []) {
+    const line = r.start?.line;
+    if (line === undefined) {
+      reported.push(r);
+      continue;
+    }
+    let src = lines.get(r.path);
+    if (src === undefined) {
+      try {
+        src = readFileSync(r.path, "utf8").split("\n");
+      } catch {
+        src = [];
+      }
+      lines.set(r.path, src);
+    }
+    const marked = NOSEM_MARKER.test(src[line - 1] ?? "") || NOSEM_MARKER.test(src[line - 2] ?? "");
+    (marked ? suppressed : reported).push(r);
   }
-  return { result: JSON.parse(out) as SemgrepOutput };
+  return { reported, suppressed };
+}
+
+// The disclosure half of --disable-nosem: the marker still removes the match from the finding list,
+// but the deliverable now STATES that it happened and names every one (docs/design/
+// mechanical-toolchain.md §2, which #1066 rewrote — it used to RECOMMEND nosemgrep as an FP
+// control). An in-repo marker the report never mentions is a suppression the client is paying not
+// to hear about.
+export function semgrepSuppressionFinding(suppressed: SemgrepResult[], dir: string): Finding[] {
+  if (suppressed.length === 0) return [];
+  const at = suppressed.map((r) => `${relative(dir, r.path)}${r.start?.line ? `:${r.start.line}` : ""} (${r.check_id})`);
+  return [
+    {
+      id: "SEM-SUPPRESS-00",
+      title: `${suppressed.length} semgrep finding${suppressed.length === 1 ? "" : "s"} suppressed by in-repo nosemgrep markers`,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Coverage",
+      taxonomy: "Coverage — findings suppressed by an in-repo marker",
+      location: "(repo-wide)",
+      status: "Open",
+      evidence: `Semgrep matched at these locations, and each was withheld from the finding list by a \`nosem\`/\`nosemgrep\` marker committed in the codebase: ${at.join("; ")}.`,
+      impact:
+        "Each marker is a decision made inside the audited codebase, not by this audit, to keep a match out of the report. Some are legitimate false-positive suppressions; a marker can equally hide a real defect. Counted and named here so the number is never zero-by-silence.",
+      fix: "Review each location against the named rule and confirm the suppression is still justified; remove any marker that is hiding a live defect.",
+      value: 1,
+      ease: 4,
+      safety: 5,
+      mechanical: true,
+    },
+  ];
+}
+
+// Files semgrep did not analyse, derived from paths.scanned rather than from the flags we passed —
+// so a semgrep default, a target-shipped ignore file, or the [INTERNAL] flag above disappearing all
+// surface the same way instead of reading as "scanned and clean".
+const SEMGREP_ANALYSABLE = /\.(js|jsx|mjs|cjs|ts|tsx)$/;
+const SCOPE_SKIP_DIR = /^(node_modules|\.git)$/;
+
+function analysableFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (!SCOPE_SKIP_DIR.test(entry.name)) out.push(...analysableFiles(join(dir, entry.name)));
+    } else if (SEMGREP_ANALYSABLE.test(entry.name)) {
+      out.push(join(dir, entry.name));
+    }
+  }
+  return out;
+}
+
+export function semgrepScopeFinding(dir: string, output: SemgrepOutput): Finding[] {
+  const scanned = new Set(output.paths?.scanned ?? []);
+  const unscanned = analysableFiles(dir).filter((f) => !scanned.has(f)).map((f) => relative(dir, f));
+  if (unscanned.length === 0) return [];
+  const shown = unscanned.slice(0, 25);
+  return [
+    {
+      id: "SEM-SCOPE-00",
+      title: `${unscanned.length} JS/TS source file${unscanned.length === 1 ? "" : "s"} semgrep did not scan`,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Coverage",
+      taxonomy: "Coverage — source files semgrep did not scan",
+      location: "(repo-wide)",
+      status: "Open",
+      evidence: `These files are in the scanned tree and carry a JS/TS extension the semgrep rules can analyse, but semgrep did not list them in paths.scanned: ${shown.join(", ")}${unscanned.length > shown.length ? `, and ${unscanned.length - shown.length} more` : ""}.`,
+      impact:
+        "No semgrep rule ran against this code, so the absence of footgun findings in these files means nothing was looked for — not that nothing is there. Recorded so the gap reads as 'not assessed' rather than clean.",
+      fix: "Re-run the scan on a machine whose semgrep accepts --x-ignore-semgrepignore-files, or review these files by hand for the classes the semgrep rules cover.",
+      value: 1,
+      ease: 4,
+      safety: 5,
+      mechanical: true,
+    },
+  ];
 }
 
 // #1012 — the fix pipeline's detector re-run replays ONE finding's rule against ONE fixed file

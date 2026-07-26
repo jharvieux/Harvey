@@ -330,6 +330,18 @@ const m3: ModuleRunner = {
           ...(hotspots?.length ? { hotspots } : {}),
         };
       }
+      // #1075: vitals ran (installed, real report) but in "complexity-only" mode (no git history in
+      // the target) — every hotspot's risk_score is 0.0, so the ranking is filesystem-walk order,
+      // not a churn×complexity ranking. `hotspots` is always [] here (the CLI withholds topK when
+      // unranked — see src/cli/hotspot-scan.ts), so this never reaches cross-module enrichment.
+      if (/M3 UNRANKED/.test(output)) {
+        return {
+          status: "partial",
+          detail: command,
+          reason: 'vitals ran in "complexity-only" mode (no git history in the target) — every file scores risk_score 0.0, so the hotspot table is NOT a churn×complexity ranking and was excluded from cross-module enrichment/cross-reference.',
+          ...(findings.length ? { findings } : {}),
+        };
+      }
       return {
         status: "ran",
         detail: command,

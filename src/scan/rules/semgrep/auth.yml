@@ -37,6 +37,26 @@
 # negative here — same class of gap, just not the one evidenced on ATC; see #126 for the
 # `--auth-guards` per-engagement allowlist as a possible follow-up mitigation.
 #
+# #1066 — because those two guards are TEXT matches over the matched function's source, they used to
+# see COMMENTS and STRING LITERALS too: `// TODO: requireAdmin() before shipping` on an
+# unauthenticated DELETE route removed the harvey-route-noauth finding, and `// FIXME: no permission
+# gate here yet` removed harvey-authed-no-role-check. The marker of KNOWN-MISSING auth was exactly
+# what silenced the detector — an integrity hole the audited party controls. Both regexes now start
+# with LINE_PREFIX below: the match must begin at a LINE START and reach the token through code
+# only, so a `//` line comment, a block-comment continuation line, or a string/template literal
+# blocks it and the token inside is unreachable. Adversarial positives that must still fire:
+# P-NOAUTH-COMMENT-GUARD, P-ROLE-COMMENT-GUARD.
+#
+#   LINE_PREFIX = (?m)^(?![ \t]*\*)(?:[^\n/"'`]|/(?![/*])|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`[^`\n]*`)*?
+#
+# NOT \A-anchored, and that is load-bearing: MEASURED 2026-07-25 (semgrep 1.164.0) — semgrep runs a
+# pattern-not-regex over the whole FILE and keeps only matches falling INSIDE the matched range, so
+# an \A-anchored regex starts at file offset 0, lands outside every range, and suppresses NOTHING.
+# The first attempt at this fix did exactly that and turned every correctly-guarded route into a
+# review-tier false positive; the dry-run artifact grew by 400+ lines and the calibration gate did
+# not catch it because these rules are review tier and the gate only fails on free-count FPs.
+# Falsifier if you doubt this: put \A back and watch N-ROUTE-NOAUTH-ADMIN-AREA start firing.
+#
 # Exercised against targets/calibration by `pnpm validate:calibration`; see GROUND-TRUTH.md §B7.
 
 rules:
@@ -225,7 +245,9 @@ rules:
       # must not be asserted "no auth-check call anywhere". "auth" bare covers the next-auth v5
       # `auth()` accessor. Reading the session is a SEPARATE axis from whether the caller is
       # AUTHORIZED for this specific privileged action (harvey-authed-no-role-check).
-      - pattern-not-regex: (?i)\b((assert|require|ensure|authenticate|authorize|guard)[a-z0-9_]*|(?=[a-z0-9_]*(check|verify|with))[a-z0-9_]*(admin|permission|auth|session|tenant|role|access|user|login|signature|jwt|webhook|hmac|token)[a-z0-9_]*|constantTimeEqual|timingSafeEqual|getUser|getSession|getServerSession|getCurrentUser|getAuthUser|getAuthenticatedUser|auth)\s*\(
+      # #1066: LINE_PREFIX (file header) makes this text match blind to comments and string
+      # literals — `// TODO: requireAdmin()` no longer counts as a guard call.
+      - pattern-not-regex: (?im)^(?![ \t]*\*)(?:[^\n/"'`]|/(?![/*])|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`[^`\n]*`)*?\b((assert|require|ensure|authenticate|authorize|guard)[a-z0-9_]*|(?=[a-z0-9_]*(check|verify|with))[a-z0-9_]*(admin|permission|auth|session|tenant|role|access|user|login|signature|jwt|webhook|hmac|token)[a-z0-9_]*|constantTimeEqual|timingSafeEqual|getUser|getSession|getServerSession|getCurrentUser|getAuthUser|getAuthenticatedUser|auth)\s*\(
 
   # IDOR/BOLA shape: an id from the request (req.query/req.params, or the App Router route-handler
   # `{ params }` second-arg — params.id) is the SOLE predicate on a Supabase query — .eq('id', $ID)
@@ -633,4 +655,6 @@ rules:
               - metavariable-regex:
                   metavariable: $AUTHFN
                   regex: ^(jwtVerify|verifyJwt|verifyJWT|verifyToken|verifyAccessToken|verifySession|verifyAuth|requireAuth|decodeToken)$
-      - pattern-not-regex: (?i)(is_?admin|hasrole|requirerole|checkrole|assertrole|assertadmin|requireadmin|ensureadmin|\bauthorize|\.role\b|permission|forbidden|\b403\b)
+      # #1066: LINE_PREFIX (file header) — `// FIXME: no permission gate here yet` used to be
+      # read as evidence that a permission gate exists.
+      - pattern-not-regex: (?im)^(?![ \t]*\*)(?:[^\n/"'`]|/(?![/*])|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`[^`\n]*`)*?(is_?admin|hasrole|requirerole|checkrole|assertrole|assertadmin|requireadmin|ensureadmin|\bauthorize|\.role\b|permission|forbidden|\b403\b)

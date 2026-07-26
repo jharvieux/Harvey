@@ -81,7 +81,7 @@ if (!manifests.length) {
   console.error(`M6: no package.json found under ${targetDir} — the packet will say the dependency-tree class is unverifiable.`);
 }
 
-const packet = renderPacket(buildPacket(readFileSync(briefPath, "utf8"), targetDir, files, hotspots, manifests));
+const packet = renderPacket(buildPacket(readFileSync(briefPath, "utf8"), targetDir, files, hotspots, manifests, allFiles.length));
 if (hotspotsPath) {
   console.error(`M6: scoped packet to ${files.length} file(s) matching ${hotspots.length} M3 hotspot(s) (of ${allFiles.length} source files under the target).`);
 }

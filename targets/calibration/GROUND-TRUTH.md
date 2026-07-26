@@ -2109,3 +2109,47 @@ findings on safe twins. Zero new false positives.
    — split to its own issue.
 
 Answer key for the new fixtures: `src/scan/calibration/b3-injection.entries.ts` (#1027 block).
+
+## #1066 — suppressions the AUDITED PARTY controls, and the four adversarial positives
+
+The #989 lesson ("precision-only measurement cannot see unsoundness — a sanitizer that silently
+cleared 3 real injections scored identically to doing nothing") recurring in the guards #989 did not
+touch, plus two scope holes outside the rules entirely. Every claim below was MEASURED on
+2026-07-25 with semgrep 1.164.0 against a scratch fixture pair (control + one-line variant), then
+re-measured after the fix.
+
+| what silenced a real finding | before | after | fixture that must STILL fire |
+|---|---|---|---|
+| `// TODO: requireAdmin() before shipping` on an unauthenticated DELETE — `harvey-route-noauth`'s guard is a `pattern-not-regex` over the function's SOURCE TEXT, comments included | finding gone | fires | `P-NOAUTH-COMMENT-GUARD` (`pages/api/settings/delete-comment-guard.js`) |
+| `// FIXME: no permission gate here yet` on an authenticated admin route — same shape in `harvey-authed-no-role-check` | finding gone | fires | `P-ROLE-COMMENT-GUARD` (`app/api/admin/revenue-comment-guard/route.ts`) |
+| `sanitize(...)` where `sanitize` is a pass-through defined three lines below the sink — every XSS rule excluded the BARE name | finding gone | fires | `P-XSS-LOCAL-SANITIZE` (`components/UserBioLocalSanitize.tsx`); control `N-XSS-IMPORT-SANITIZE` (`components/UserBioImportSanitize.tsx`) still clears |
+| `/^[a-zA-Z0-9_]+$/m` — the #989 anchoring guard's flag group was `[a-z]*`, which admits `m`, and `/m` makes `^`/`$` match at line breaks (`node -e '/^[a-z0-9]+$/m.test("abc\n\x27 OR 1=1 --")'` → **true**) at 24 rule sites | finding gone | fires at high | `P-SQLI-MFLAG-GUARD` (`pages/api/sqli-mflag-guard.js`) |
+
+The marker of KNOWN-MISSING auth was exactly what suppressed the auth detectors — the worst possible
+correlation between a suppression and a defect.
+
+**Not rule bugs — scope.** `// nosemgrep` removed a finding while the file still appeared in
+`paths.scanned` (it read as scanned-and-clean); a `.semgrepignore` committed by the target travelled
+into the scan copy with the git-tracked files and applied; and semgrep's built-in default ignore set
+dropped `tests/`, `test/`, `vendor/`, `dist/`, `build/` — **5 of 8 probed directories, never listed
+anywhere**, `vendor/` being real shipped code. Harvey now passes `--disable-nosem` and
+`--x-ignore-semgrepignore-files` (8 of 8 scanned) and emits `SEM-SUPPRESS-00` / `SEM-SCOPE-00`. The
+scope row is derived from `paths.scanned`, not from the flags we passed, so a semgrep version that
+drops the `[INTERNAL]` flag re-surfaces as a counted disclosure rather than as silence.
+
+`P-SEMGREP-VENDOR-SCOPE` (`vendor/legacy-widget.js`) is the end-to-end alarm for that: an ordinary
+request→`execSync` command injection sitting in a directory semgrep used to drop. Verified to FAIL
+FIRST — without the flag, `semgrep --exclude node_modules targets/calibration/vendor` returns
+`results: 0, paths.scanned: []`; with it, the bug is caught at `high`.
+
+**One more thing the first attempt got wrong, recorded so nobody repeats it.** The comment-blindness
+fix was first written as an `\A`-anchored scanner over the function's source. MEASURED: semgrep runs
+a `pattern-not-regex` over the whole FILE and keeps only matches falling INSIDE the matched range, so
+an `\A`-anchored regex starts at file offset 0, lands outside every range, and suppresses **nothing**
+— every correctly-guarded route became a review-tier false positive (`N-ROUTE-NOAUTH-ADMIN-AREA`,
+`N-ROUTE-NOAUTH-ADMIN-AUDIT`). The calibration gate did NOT catch it: these rules are review tier and
+the gate only fails on free-count FPs. What caught it was diffing the committed dry-run artifact,
+which grew by 400+ lines. Regenerate and READ that diff — a review-tier precision regression is
+invisible to the gate.
+
+Answer keys: `src/scan/calibration/b3-injection.entries.ts`, `b4-xss.entries.ts`, `b7-auth.entries.ts`.

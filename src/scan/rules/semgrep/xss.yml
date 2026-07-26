@@ -41,13 +41,23 @@ rules:
     pattern-sanitizers:
       - pattern: DOMPurify.sanitize(...)
       - pattern: sanitizeHtml(...)
-      - pattern: sanitize(...)
+      # #1066: a BARE `sanitize(...)` cleared the sink even when `sanitize` was a pass-through
+      # no-op defined three lines below it — the audited party could silence a real XSS by naming
+      # a function. The name carries meaning only if it resolves to a library, so require an
+      # import binding. Adversarial positive: P-XSS-LOCAL-SANITIZE.
+      - patterns:
+          - pattern: sanitize(...)
+          - pattern-inside: |
+              import { sanitize } from "$MOD";
+              ...
       # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
       # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
       # by-side-effect on the guarded variable. Soundness constraints, each with a calibration
       # positive that must still fire: the regex must be ANCHORED (^…$ — an unanchored allowlist
       # matches a prefix and is a broken safeguard) and its class POSITIVE (a negated [^…] class is
       # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
+      # #1066: the FLAG group is [isuvy], not [a-z] -- /m makes ^ and $ match at line breaks, so
+      # /^[a-z0-9]+$/m.test("abc\n' OR 1=1 --") is TRUE and the anchoring guard above is void.
       - by-side-effect: true
         patterns:
           - pattern-either:
@@ -56,7 +66,7 @@ rules:
                       if (!$RE.test($X)) { ... return; }
                   - metavariable-regex:
                       metavariable: $RE
-                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
               # #1027: a Set-backed allowlist is the same exact-match membership test as
@@ -87,7 +97,7 @@ rules:
                       ...
                   - metavariable-regex:
                       metavariable: $RE
-                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
                   ...
@@ -153,13 +163,23 @@ rules:
     pattern-sanitizers:
       - pattern: DOMPurify.sanitize(...)
       - pattern: sanitizeHtml(...)
-      - pattern: sanitize(...)
+      # #1066: a BARE `sanitize(...)` cleared the sink even when `sanitize` was a pass-through
+      # no-op defined three lines below it — the audited party could silence a real XSS by naming
+      # a function. The name carries meaning only if it resolves to a library, so require an
+      # import binding. Adversarial positive: P-XSS-LOCAL-SANITIZE.
+      - patterns:
+          - pattern: sanitize(...)
+          - pattern-inside: |
+              import { sanitize } from "$MOD";
+              ...
       # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
       # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
       # by-side-effect on the guarded variable. Soundness constraints, each with a calibration
       # positive that must still fire: the regex must be ANCHORED (^…$ — an unanchored allowlist
       # matches a prefix and is a broken safeguard) and its class POSITIVE (a negated [^…] class is
       # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
+      # #1066: the FLAG group is [isuvy], not [a-z] -- /m makes ^ and $ match at line breaks, so
+      # /^[a-z0-9]+$/m.test("abc\n' OR 1=1 --") is TRUE and the anchoring guard above is void.
       - by-side-effect: true
         patterns:
           - pattern-either:
@@ -168,7 +188,7 @@ rules:
                       if (!$RE.test($X)) { ... return; }
                   - metavariable-regex:
                       metavariable: $RE
-                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
               # #1027: a Set-backed allowlist is the same exact-match membership test as
@@ -199,7 +219,7 @@ rules:
                       ...
                   - metavariable-regex:
                       metavariable: $RE
-                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
                   ...
@@ -246,8 +266,18 @@ rules:
             - pattern-not: '"..."'
             - pattern-not: DOMPurify.sanitize(...)
             - pattern-not: sanitizeHtml(...)
-            - pattern-not: sanitize(...)
             - pattern-not: escapeHtml(...)
+      # #1066: the bare `sanitize(...)` exclusion moved OUT of the metavariable-pattern (which has
+      # no file context to check an import against) and is re-applied here bound to an import — a
+      # locally-defined pass-through named `sanitize` no longer clears this sink.
+      - pattern-not:
+          patterns:
+            - pattern-either:
+                - pattern: "<$EL dangerouslySetInnerHTML={{ __html: sanitize(...) }} />"
+                - pattern: "<$EL dangerouslySetInnerHTML={{ __html: sanitize(...) }}>...</$EL>"
+            - pattern-inside: |
+                import { sanitize } from "$MOD";
+                ...
       - focus-metavariable: $VAL
 
   # javascript: URL XSS via a native <a href>. Review — a static rule can't see whether a scheme
