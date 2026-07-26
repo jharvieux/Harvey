@@ -33,7 +33,11 @@ into `Finding[]` (`src/findings.ts` shape): `src/cli/quality-scan.ts` wraps the 
   recomputed from that same significant-clusters set, not jscpd's raw total, so the headline number
   and the findings agree.
 - **M5 ids:** `M5-01`, `M5-02`, … — one per fully-unused file (knip's top-level `files`) and one
-  per file with unreferenced exports/types (knip's `issues`). Fully-dead files report a measured
+  per file with unreferenced exports/types (knip's `issues`). The ids are positional, so since
+  #1101 both lists are **sorted by path before numbering**: knip's own emission order is not stable
+  run-to-run (MEASURED 2026-07-26: 8 identical `pnpm quality-scan targets/calibration` runs gave 3
+  distinct orderings), which made `M5-22` name a different finding on each run — churn in the
+  client's deliverable and spurious drift in the committed artifacts. Fully-dead files report a measured
   line count (the CLI reads the file); partial dead-export findings deliberately do **not** claim
   a precise line-reduction number — knip reports the declaration, not the body size, and asserting
   one would be a guess, not a fact. A file or export whose path touches auth/guard/middleware/

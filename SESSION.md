@@ -2,21 +2,19 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-24 (evening 3) — issue-sweep: **9 PRs merged, 11 issues closed, 6 filed → net −5**. Docs consolidated to `briefs/`, CI router simplified, all CLAUDE.md relays APPLIED. See the block immediately below. Earlier blocks remain historical._
+_Last updated: 2026-07-26 — **doc reconciliation pass only** (the 2026-07-25/26 sweep's own block is still to be written). Reconciled: the `briefs/`-protection operator decision is RESOLVED (PR #1038), and #1021/#1023/#1027/#1029/#1030 are all CLOSED, so the 2026-07-24 (evening 3) block below carries nothing forward. Its prior header: "issue-sweep: 9 PRs merged, 11 issues closed, 6 filed → net −5; docs consolidated to `briefs/`, CI router simplified, all CLAUDE.md relays APPLIED." Earlier blocks remain historical._
 
 ## 2026-07-24 (evening 3) — issue-sweep: M2/fix-pipeline/calibration/taint/docs → 9 PRs merged
 
 **Merged:** #1017 (M9 source-recall tier, #1011) · #1018 (Realtime wire shape proven live, #1003) · #1019 (external-target M2, #965) · #1020 (CORS/GHA/postMessage re-tier + class-based grade curve, #996) · #1022 (semgrep resolver + §8 gate, #1012/#1009) · #1024 (FK-graph seeding + API-token probe, #997/#1001) · #1028 (a2 validator-guard taint, #989) · #1026 (docs → `briefs/`, #994) · #1031 (CI router + CLAUDE.md relays, #1025).
 
-### Open items carried forward
-- **#1021** — fix-pipeline §8: LLM implementer diffs + detectors for classes 1/2/5. The diff generator was deliberately NOT stubbed; classes 1/2/5 have **no detector at all** (re-measured — the old "unplanted fixtures" reason was wrong). Build order is detector → fixture, now locked as a test.
-- **#1023** — M2 guest / cross-org collaborator identity class. Needs a third principal: widens the seeder's `"a"|"b"` discriminator and the closed `PersonaId` union.
-- **#1027** — (a2) validator guards: projection-guards + non-allowlist guard forms. Field magnitude unmeasured (BenchProctor is synthetic; that gap is #960).
-- **#1029** — M2 Realtime **Broadcast/Presence + RLS on `realtime.messages` are unprobed**. The `M2-REALTIME-SCOPE` row currently speaks only to `postgres_changes`, so a reader can over-read the Realtime verdict.
-- **#1030** — Realtime probe covers only `cfg.tables[0]`, not every published table (disclosed in-finding, not fixed).
+### Open items carried forward — ALL CLOSED as of 2026-07-26 (nothing carried forward from this block)
+- ~~**#1021**~~ (CLOSED) — fix-pipeline §8: LLM implementer diffs + detectors for classes 1/2/5. The diff generator was deliberately NOT stubbed; classes 1/2/5 had **no detector at all** (re-measured — the old "unplanted fixtures" reason was wrong). Build order is detector → fixture, locked as a test.
+- ~~**#1023 / #1029 / #1030**~~ — **all CLOSED 2026-07-25 in PR #1054**: the guest / cross-org-collaborator identity class is a real seeded-and-signed-in third principal (`M2-GUEST-SCOPE`); Broadcast + Presence + the private-channel Realtime-Authorization posture are probed (`M2-REALTIME-CHANNEL-SCOPE`); and `postgres_changes` emits one verdict per published table instead of `cfg.tables[0]` alone.
+- ~~**#1027**~~ (CLOSED) — (a2) validator guards: projection-guards + non-allowlist guard forms. Field magnitude remains unmeasured (BenchProctor is synthetic; that gap is #960, still open).
 
-### ⚠️ OPEN OPERATOR DECISION
-**Should `briefs/` get the same explicit-file-naming protection as `docs/*.txt`/`docs/*.md` in CLAUDE.md's sensitive-paths list?** It now holds the M1/M6 briefs, FP catalog, D-091 catalog and the audit scope authority — content that shapes detection judgment — though it is not GTM/positioning IP. The 2026-07-24 permission was scoped to that one move, **not** a standing grant. Deliberately not decided by an agent.
+### ✅ RESOLVED — `briefs/` protection (was an open operator decision)
+**Decided 2026-07-24 and applied in PR #1038: `briefs/` is deliberately NOT protected.** It is functional tool input the scanners read at runtime, not prose/positioning IP, so it does not get the explicit-file-naming protection `docs/**/*.md` carries. The ruling is recorded in CLAUDE.md's sensitive-paths list. Nothing further owed — do not re-open this as a pending decision.
 
 ### Dropped as cosmetic (recorded on #994, veto to re-file)
 ~26 `docs/**.md` prose files and 4 calibration-corpus comments still cite pre-move paths; `reports/atc/findings.atc-2026-07-17.json` untouched as client data. None is a runtime path, so none can cause a silent tool failure.
@@ -49,7 +47,8 @@ Ran `/issue-sweep` over 58 triageable issues (6 dropped `deferred`/`needs-human-
 - **Operator decision recorded:** #883 packaging = **1 rescan/re-audit included in the base audit, additional rescans charged** → tracked in **#1013** for the pricing/engagement-terms copy (supervised site/docs = operator turf).
 - **Dropped (with rationale):** m1authz weak-hash fully-generic-name split stays semantic-tier — catching it would flag bare cache-key MD5, which `docs/fp-rules.txt` forbids (a deliberate boundary, not a gap).
 
-### ⚠️ CLAUDE.md RELAYS OWED (agents can't edit CLAUDE.md — operator to apply)
+### ✅ CLAUDE.md RELAYS — BOTH APPLIED (verified 2026-07-26; kept for the record, nothing owed)
+Item 1 was applied and the whole dated M2/coverage-guard status has since MOVED out of CLAUDE.md into `docs/design/coverage-guard-status.md` (#1052). Item 2 was superseded by #1038, which removed the stored calibration figure from CLAUDE.md entirely rather than refreshing it — the file now records no recall number on purpose.
 1. **M2 probe-families line is stale.** It says "…soft-delete data-residue (#907), and a first-class Realtime NOT-ASSESSED disclosure (#906, not a guessed probe)". Now: data-residue also covers **restore + tenant-teardown** (#954); a **control-gated Realtime RUNTIME probe** exists (#951, opt-in `HARVEY_PROBE_REALTIME`, wire-shape pending live proof #1003); and the door list omits **Supabase Storage** (#956) and the **share-link identity class** (#952). Full recommended replacement wording is in the **PR #1004 body**.
 2. **"Measure, don't recall" baseline parenthetical** (199/202 static positives, negatives 191/191) is stale — measured this sweep ~215/218 positives, 205/205 negatives. The line already self-disclaims "run `validate-calibration`; never quote this number," so nothing is strictly false — an **optional** refresh.
 

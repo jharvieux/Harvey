@@ -95,10 +95,25 @@ swaps the tail for a scope caveat (the verdict covers the probed table only). Re
 
 ## What is still NOT proven
 
-- Only `postgres_changes` was exercised. Realtime's **Broadcast** and **Presence** channels, and RLS on
-  `realtime.messages` (Realtime Authorization), were not probed at all.
-- Only ONE table per run is probed (`cfg.tables[0]`), so other tables in the publication stay
-  unassessed — the VERIFIED row now says so explicitly.
+- ~~Only `postgres_changes` was exercised. Realtime's **Broadcast** and **Presence** channels, and RLS
+  on `realtime.messages` (Realtime Authorization), were not probed at all.~~ **CLOSED by #1029**
+  (2026-07-25). `src/pentest/realtime-channel-probe.ts` joins one topic from two identities and checks
+  each class for cross-identity reach, gated on the same own-changes control (A must first receive its
+  OWN broadcast and see its OWN presence key). Wire shape MEASURED off the same
+  `realtime:v2.100.0` stack. Two measured results, and the finding is shaped around them: on the
+  PUBLIC namespace (`private: false`, the Supabase default) both sockets received each other's
+  broadcast and presence state — reported as a measured POSTURE, not a per-target misconfiguration,
+  because it is Supabase's documented default and only leaks if the app carries tenant-scoped data
+  there. On a PRIVATE channel the join was REFUSED (`phx_reply` status "error", "Unauthorized: You do
+  not have permissions to read from this Channel topic"), which is the correct answer BOTH for a
+  project with no Realtime Authorization policies on `realtime.messages` AND for one whose policies
+  simply do not cover Harvey's probe topic — Harvey cannot separate those two without the app's real
+  topic names, so the disclosure says exactly that rather than inferring "Authorization is not
+  configured". Verdict row: `M2-REALTIME-CHANNEL-SCOPE`.
+- ~~Only ONE table per run is probed (`cfg.tables[0]`), so other tables in the publication stay
+  unassessed — the VERIFIED row now says so explicitly.~~ **CLOSED by #1030** (2026-07-25): the probe
+  loops every seeded scoped table and emits one `M2-REALTIME-SCOPE-<table>` verdict per table. An
+  empty table list is a named not-assessed row, not silence.
 - Realtime versions other than v2.100.0 are unmeasured. The own-changes control is the standing guard:
   if the shape drifts, the control does not fire and the probe returns NOT ASSESSED, never a false clean.
 - The hosted observation covered connect + join only; no hosted change frame was observed, because
