@@ -2,7 +2,44 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-26 — issue-sweep: **24 PRs merged, 38 issues closed, 0 skips**. Theme: the orchestrator was throwing probe output away. See the block immediately below. Earlier blocks remain historical._
+_Last updated: 2026-07-26 (later) — issue-sweep IN PROGRESS: **15 of 16 batches merged, 20 issues closed**, last PR (#1144, fixture inventory) in the merge train. See the block immediately below. The prior 24-PR block follows it._
+
+## 2026-07-26 (later) — issue-sweep: conservation/CI-hardening → 15 PRs merged so far (LIVE)
+
+Running sweep over 44 triageable issues (10 dropped `deferred`/`needs-human-fix`; ~20 operator-only GTM/disclosure/epic). Concurrency held at 3. **Survived one mid-sweep session restart** (three executors killed, resumed from their worktrees — nothing lost). This block is the live "where we left off" — refresh it if the session ends.
+
+### Merged (15 batches → 20 issues closed)
+- **#1119** #1098 — SB-AUTH-OTP-EXPIRY read `otp_expiry`, a key hosted Supabase NEVER emits (spelled `mailer_otp_exp`/`sms_otp_exp`) — dead against every real client target. Class fix + 4 false provenance claims corrected.
+- **#1121** #1105 (split → **#1120**) — `pnpm verify` exited 1 on vitest worker-RPC timeouts with ZERO failing tests. **CI blind spot found: the `verify` job never installed the mechanical binaries, so every heavy end-to-end test was skipped in CI** — main looked green while it failed ~40% locally.
+- **#1122** #1091 — M2 unreadable-route count died at the pentest.ts subprocess seam. Executor found a sibling (**#1123**, merged in **#1132**).
+- **#1124** #1057/#1060/#1112 — projection-guards (41 FPs cleared, 0 real vulns lost, measured); data-class escalation plant; M3 plant decay (issue premise was FALSE — 2-yr window, not 90-day).
+- **#1126** #1087/#1093/#1099 — JWT two-statement decode; suppression holes; invented-fixture residuals.
+- **#1127** #1100 — M8 vacuous-test detector (real Stryker captures, not invented). Found the #940 taxonomy-allowlist gap recurring, fixed inline.
+- **#1129** #1095 — M4 scores self-file clones + compares same-file pairs (operator ruled in-thread). Found the retracted #232 rationale in a SECOND function; paid for O(n²) with an inline speedup.
+- **#1131** #1109 (split → **#1130**) — **all ten probes now typed Examined|NotAssessed** (was 3 of 10). 4 of 7 recorded blockers were FALSE. Unified orchestrator+gate tool-runners (the gate had drifted from the thing it guards).
+- **#1133** #1120/#1125 — `pnpm verify` **29/29 clean** (was 2-in-5 fail). Root cause deeper: run-audit.test.ts had a single 62s blocking call > vitest's hidden 60s worker-ack. New **`heavy-cli` CI job installs binaries + runs the 7 heavy files** — closes the blind spot.
+- **#1140** #1134 — converted 4 heavy CLI tests to awaited spawn, 2 guarded with a fires-in-CI threshold check.
+- **#1139** #1137 — M5-00 delivery gap. Real bug was worse than filed: the PARTIAL case (some scopes fail) **dropped every completed dead-code finding** and mislabeled as unassessed. Re-homed onto the typed result.
+- **#1135** #1128 — corpus-drift was RED on main (weekly cadence + path-filter = 6-day blind window). **36 baselines rebaselined, EVERY row attributed to a specific PR** (#1095 M4, #1094 M5-knip, #1088 isGeneratedSource), corpus-drift green twice. Filed **#1136**.
+- **#1141** #1138 — corpus-drift + heavy-cli → **daily**, scheduled failure opens an idempotent tracking issue (distinct marker labels).
+- **#1143** #1142 — conservation.yml → daily + idempotent issue-opening (`ci-conservation-alert`).
+
+### In flight
+- **#1144** #1130-inventory — fixture inventory (criterion 1 of #1130) in the merge train, awaiting verify gate. **#1130 stays OPEN** (re-capture + drift-check remainder, checklist commented on it). Found 2 hand-written fixtures with the #1063 shape: `src/__fixtures__/lighthouse-report.json` (primary is synthetic, its 2 siblings are real captures) + `vitals-report.json`.
+
+### ⚠️ CLAUDE.md RELAYS OWED (this sweep falsified them — orchestrator applies in ONE pass; agents cannot)
+1. **"3 of 10 probes migrated — remainder #1109"** → ALL TEN migrated (#1109); `UNTYPED_PROBES` empty. (Both the coverage-guard bullet and the "Still open: seven probes still returning untyped ProbeOutcome" clause.)
+2. **The two "conservation CLI logic AND wiring are part of pnpm verify" sentences** → the wiring test (`validate-conservation.test.ts`) moved OUT of `pnpm verify` (#1105), gated behind `HARVEY_CONSERVATION_E2E`, runs in `conservation.yml`.
+3. **M1-family "no row is the last one" list** → add `M3-KNOWLEDGE-00` (#1112).
+4. **"conservation.yml, weekly + on pipeline PRs"** → **daily** + on pipeline PRs, and a scheduled failure find-or-updates a tracking issue (`ci-conservation-alert`), mirroring corpus-drift/heavy-cli (#1138/#1142).
+5. **"pnpm verify # typecheck + lint + tests + knip"** → `tests` is now the LIGHT suite; 7 heavy child-process files run in CI's `heavy-cli` job (#1120/#1133), locally via `HARVEY_HEAVY_CLI_TESTS=1 pnpm exec vitest run`.
+- Full recommended wording for each is in the corresponding PR body.
+
+### Stale in the block below (now fixed): **#1105 is CLOSED** (line ~36 says OPEN); **#1109 done** (all 10 typed, line ~28 says 3 of 10).
+
+### Follow-ups filed this sweep (open): **#1136** (isGeneratedSource >1000-char-line false-excludes real source, dropped 1 M6 finding), **#1130** (fixture re-capture + schema-drift check remainder). All others (#1123/#1128/#1134/#1137/#1138/#1142) merged.
+
+### Operator decisions still open (unchanged this sweep): #1069 (liability→counsel), #946, #893, #888, #1084, #1072, #904, #900, #899, #1056. #1095 and #1098 RESOLVED this sweep.
 
 ## 2026-07-25/26 — issue-sweep: "we were throwing results away" → 24 PRs merged
 
