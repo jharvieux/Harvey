@@ -16,7 +16,7 @@
 //      fails loud on its own.
 
 import { AUDIT_MODULES, type AuditModule, type EngagementEnv, type ModuleCoverage, type ModuleSubStatus, MODULES } from "./audit-coverage.js";
-import type { Finding } from "./findings.js";
+import type { Finding, TestQuality } from "./findings.js";
 
 // What a probe reports about its OWN execution. It is deliberately not ModuleCoverage: a probe may
 // only describe what it did, and cannot claim a status for a module it isn't registered under.
@@ -30,9 +30,12 @@ import type { Finding } from "./findings.js";
 // #682: `subStatus: "sub-step-blocked"` on a partial says a sub-step was BLOCKED while a sibling
 // sub-step ran and surfaced `findings` — so a blocked Stryker run never discards the test-intent
 // tier's findings by degrading to requires-live-run (which carries none).
+// `testQuality` (#1045): M8's per-module §3b measurement is a module-level TABLE, not findings, so
+// it needs its own channel out of the probe — without one the orchestrator dropped it, and the
+// renderer's test-quality section was unreachable for its whole life.
 export type ProbeOutcome =
-  | { status: "ran"; detail: string; findings?: Finding[]; instance?: string; hotspots?: string[] }
-  | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string; hotspots?: string[]; subStatus?: ModuleSubStatus }
+  | { status: "ran"; detail: string; findings?: Finding[]; instance?: string; hotspots?: string[]; testQuality?: TestQuality }
+  | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string; hotspots?: string[]; subStatus?: ModuleSubStatus; testQuality?: TestQuality }
   | { status: "requires-live-run"; reason: string; instance?: string };
 
 // The seam that keeps this engine testable and offline: probes reach the outside world only through
@@ -143,6 +146,9 @@ interface AuditRunResult {
   // #515: M3's top-K hotspot ranking, when the M3 probe captured one. Fed to the assembler so every
   // module's findings get the shared hotspot enrichment. Absent ⇒ M3 produced no ranking this run.
   hotspots?: string[];
+  // #1045: M8's §3b test-quality measurement, when the mutation tier produced one. Absent ⇒ no
+  // mutation measurement this engagement, and M8's ledger row states why.
+  testQuality?: TestQuality;
 }
 
 // A registry missing a module is the #229 defect at the source — an audit that never even tries M5
@@ -172,6 +178,7 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
   const failures: ModuleFailure[] = [];
   const findings: Finding[] = [];
   let hotspots: string[] | undefined;
+  let testQuality: TestQuality | undefined;
 
   // Iterate AUDIT_MODULES, not `runners`: the ledger's shape is owned by the module enumeration,
   // so a registry can never shorten the audit by reordering or under-listing itself.
@@ -216,10 +223,11 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
         );
       }
       if (outcome.status !== "requires-live-run" && outcome.hotspots?.length) hotspots = outcome.hotspots;
+      if (outcome.status !== "requires-live-run" && outcome.testQuality) testQuality = outcome.testQuality;
     }
   }
 
-  return { recorded, failures, findings, ...(hotspots ? { hotspots } : {}) };
+  return { recorded, failures, findings, ...(hotspots ? { hotspots } : {}), ...(testQuality ? { testQuality } : {}) };
 }
 
 export function formatFailures(failures: ModuleFailure[]): string {

@@ -39,3 +39,18 @@ evidence, impact, fix, status, note`
   section, never as an asserted PII holding. `reviewFlagColumns` lists the flagged column name(s);
   a finding that also has asserted columns keeps `reviewFlagOnly: false` but still lists its
   flagged columns there, so no review-flag content is dropped from the report.
+
+## Document-level sections (beyond `findings[]`)
+
+- **`coverage[]`** (#349) — the derived per-module ledger. Drives the completeness banner, the
+  **Module coverage** table, and the **Confidence & limitations** table. Absent ⇒ the report falls
+  back to `meta.outOfScope`.
+- **`testQuality`** (#1045) — M8's §3b measurement, set by `run-audit --findings-out` from
+  `pnpm mutation-scan`'s `--out` artifact. Renders **Test quality & intent (M8)**: the overall
+  mutation score with its covered scope (#319 — a scoped score is never printed as a whole-repo
+  claim), the documented per-module table (Module/file · Line cov · Mutation score · Surviving
+  mutants (critical) · Action), and the surviving-mutant list. A row's `action` is optional — the
+  renderer derives one from the row's numbers when the operator has not written it. Absent
+  `testQuality` with an M8 coverage row ⇒ the section states that no mutation measurement was
+  produced, rather than disappearing.
+- **`baseline`** (#457) — the re-audit progress diff, when a `--baseline` was supplied.

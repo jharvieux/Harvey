@@ -10,7 +10,7 @@
 // them into the same silence (#349).
 
 import { buildAuditCoverage, type EngagementEnv, type ModuleCoverage } from "./audit-coverage.js";
-import type { CoverageRow, Finding, FindingsDocument, ReportMeta } from "./findings.js";
+import type { CoverageRow, Finding, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
 import { enrichFindingsWithHotspots } from "./hotspot-scan.js";
 
 // The derived coverage report's rows, projected onto the report schema's CoverageRow.
@@ -45,8 +45,11 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
 // #515: when the run captured an M3 hotspot ranking, tag every module's findings on a ranked hotspot
 // (onHotspot/hotspotRank) so the report up-ranks them across modules — one mechanism, every module.
 // Absent hotspots ⇒ findings pass through untagged, unchanged.
-export function assembleEngagementDocument(recorded: ModuleCoverage[], env: EngagementEnv, findings: Finding[], meta: ReportMeta, hotspots?: string[]): FindingsDocument {
+// #1045: M8's §3b test-quality table travels with the document the same way the ledger does — the
+// mutation tier's per-module measurement is a client-facing deliverable section, and an assembler
+// that dropped it left the scanner computing numbers with nowhere to go.
+export function assembleEngagementDocument(recorded: ModuleCoverage[], env: EngagementEnv, findings: Finding[], meta: ReportMeta, hotspots?: string[], testQuality?: TestQuality): FindingsDocument {
   const deduped = dedupeFindings(findings);
   const enriched = hotspots?.length ? enrichFindingsWithHotspots(deduped, hotspots) : deduped;
-  return { meta, coverage: coverageLedger(recorded, env), findings: enriched };
+  return { meta, coverage: coverageLedger(recorded, env), findings: enriched, ...(testQuality ? { testQuality } : {}) };
 }

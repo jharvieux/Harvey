@@ -26,6 +26,7 @@ import {
   summarizeLineCoverage,
   summarizeMutationReport,
   survivingMutantFindings,
+  testQualityFromArtifact,
   toReportRows,
   TS7_TSCONFIG_BYPASS_FILENAME,
   verifyMutationScope,
@@ -830,5 +831,52 @@ describe("reRootReportToApp (#655)", () => {
     expect(rootGlobs.every((g) => g.startsWith("!") || g.startsWith("apps/foo/"))).toBe(true);
     const { report } = reRootReportToApp(rawReport, "apps/foo");
     expect(report.files["src/a.ts"]).toBeDefined();
+  });
+});
+
+// #1045: the seam that was missing entirely — the CLI's --out artifact carried a real measurement
+// and nothing turned it into the deliverable's §3b payload. The honesty rules travel with it: an
+// unverifiable mutate scope is NOT a whole-repo claim, and a non-run must not fabricate a score.
+describe("testQualityFromArtifact (#1045)", () => {
+  const artifact = {
+    summary: {
+      overall: { mutationScore: 62.5 },
+      coveredScope: ["src/auth.ts"],
+      survivingMutants: [
+        { file: "src/auth.ts", line: 42, mutatorName: "ConditionalExpression", hotspot: true },
+        { file: "src/util.ts", line: 7, mutatorName: "BooleanLiteral", hotspot: false },
+      ],
+    },
+    reportRows: [{ module: "src/auth", lineCoverage: 94, mutationScore: 41, survivingCount: 12, hotspotSurvivingCount: 3 }],
+    scope: { verified: true, scoped: false, note: "run covered all 1 file(s) matched by the configured mutate globs" },
+    lineCoverage: { status: "ran" as const },
+  };
+
+  it("carries the overall score, the per-module rows, the scope verdict and the survivors", () => {
+    const tq = testQualityFromArtifact(artifact)!;
+    expect(tq.mutationScore).toBe(62.5);
+    expect(tq.rows).toEqual(artifact.reportRows);
+    expect(tq.wholeRepo).toBe(true);
+    expect(tq.survivorTotal).toBe(2);
+    expect(tq.survivors[0]).toEqual({ file: "src/auth.ts", line: 42, mutator: "ConditionalExpression", hotspot: true });
+  });
+
+  it("treats an UNVERIFIABLE scope as not-whole-repo — unproven is not full coverage (#504)", () => {
+    const unverified = { ...artifact, scope: { verified: false, scoped: false, note: "configured mutate scope not statically readable" } };
+    expect(testQualityFromArtifact(unverified)!.wholeRepo).toBe(false);
+    expect(testQualityFromArtifact({ ...artifact, scope: undefined })!.wholeRepo).toBe(false);
+  });
+
+  it("discloses a missing line-coverage verdict as partial rather than assuming it ran (#819)", () => {
+    const tq = testQualityFromArtifact({ ...artifact, lineCoverage: undefined })!;
+    expect(tq.lineCoverage.status).toBe("partial");
+    expect(tq.lineCoverage.reason).toMatch(/no line-coverage verdict/);
+  });
+
+  it("returns nothing for an artifact that is not a mutation measurement", () => {
+    // The no-test-suite branch: a finding and a moduleRecord, no summary. Inventing a table here
+    // would put a fabricated score in front of a client.
+    expect(testQualityFromArtifact({ finding: { id: "M8-00" }, moduleRecord: { status: "partial" } })).toBeUndefined();
+    expect(testQualityFromArtifact(undefined)).toBeUndefined();
   });
 });

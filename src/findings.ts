@@ -177,6 +177,43 @@ export interface ReportMeta {
   outOfScope: string;
 }
 
+// M8's §3b Test-quality payload (#1045). One row per module, the shape
+// docs/audit-report-skeleton.md §3b specifies — src/mutation-scan.ts's toReportRows plus the
+// honesty context (#319 covered scope, #504 scope verdict, #819 line-coverage pull status) the
+// score must never be printed without.
+export interface TestQualityRow {
+  module: string;
+  // Absent when the target's own coverage tool could not be run (#819) — the renderer says so on
+  // the row rather than printing 0%.
+  lineCoverage?: number;
+  mutationScore: number;
+  survivingCount: number;
+  hotspotSurvivingCount: number;
+  // The §3b "Action" column. Written by the operator per row; derived from the numbers when absent.
+  action?: string;
+}
+
+// A surviving mutant the suite never disproved — the "tests that can't fail" evidence.
+export interface TestQualitySurvivor {
+  file: string;
+  line: number;
+  mutator: string;
+  hotspot: boolean;
+}
+
+export interface TestQuality {
+  mutationScore: number;
+  coveredScope: string[];
+  // True only when the scope check VERIFIED the run covered the configured mutate globs in full
+  // (#504). An unverifiable scope reads false — "unproven" is not "whole repo".
+  wholeRepo: boolean;
+  scopeNote: string;
+  rows: TestQualityRow[];
+  lineCoverage: { status: "ran" | "partial"; reason?: string };
+  survivors: TestQualitySurvivor[];
+  survivorTotal: number;
+}
+
 export interface FindingsDocument {
   meta: ReportMeta;
   findings: Finding[];
@@ -187,6 +224,9 @@ export interface FindingsDocument {
   // The engagement baseline diff (#457). Present only when a re-audit consumed a prior baseline;
   // the renderer leads with a resolved/persistent/new progress view when it is.
   baseline?: BaselineSummary;
+  // M8's per-module test-quality table (#1045). Present when the run's mutation tier produced a
+  // measurement; absent when it did not — the M8 coverage row carries the reason in that case.
+  testQuality?: TestQuality;
 }
 
 // Bang-for-the-buck score, 0–100. Mirrors the formula in report-template/render.mjs.
@@ -266,6 +306,45 @@ function validateBaseline(baseline: unknown, errors: string[]): void {
   }
 }
 
+// #1045: a malformed testQuality would render a table of "undefined%" — a mutation score is a
+// client-facing claim, so a broken one must fail validation rather than reach the page.
+function validateTestQuality(tq: unknown, errors: string[]): void {
+  if (!isRecord(tq)) {
+    errors.push("testQuality: expected an object");
+    return;
+  }
+  if (typeof tq.mutationScore !== "number") errors.push("testQuality.mutationScore: expected number");
+  if (typeof tq.wholeRepo !== "boolean") errors.push("testQuality.wholeRepo: expected boolean");
+  if (typeof tq.scopeNote !== "string") errors.push("testQuality.scopeNote: expected string");
+  if (!Array.isArray(tq.coveredScope)) errors.push("testQuality.coveredScope: expected an array");
+  if (typeof tq.survivorTotal !== "number") errors.push("testQuality.survivorTotal: expected number");
+  if (!Array.isArray(tq.survivors)) errors.push("testQuality.survivors: expected an array");
+  const lc = tq.lineCoverage;
+  if (!isRecord(lc) || (lc.status !== "ran" && lc.status !== "partial")) {
+    errors.push('testQuality.lineCoverage: expected { status: "ran" | "partial" }');
+  } else if (lc.status === "partial" && typeof lc.reason !== "string") {
+    // Same rule as the coverage ledger: a gap without a reason is a silent skip.
+    errors.push("testQuality.lineCoverage.reason: required when status is \"partial\"");
+  }
+  if (!Array.isArray(tq.rows)) {
+    errors.push("testQuality.rows: expected an array");
+    return;
+  }
+  tq.rows.forEach((row: unknown, i: number) => {
+    const at = `testQuality.rows[${i}]`;
+    if (!isRecord(row)) {
+      errors.push(`${at}: not an object`);
+      return;
+    }
+    if (typeof row.module !== "string" || row.module === "") errors.push(`${at}.module: expected non-empty string`);
+    for (const k of ["mutationScore", "survivingCount", "hotspotSurvivingCount"] as const) {
+      if (typeof row[k] !== "number") errors.push(`${at}.${k}: expected number`);
+    }
+    if (row.lineCoverage !== undefined && typeof row.lineCoverage !== "number") errors.push(`${at}.lineCoverage: expected number`);
+    if (row.action !== undefined && typeof row.action !== "string") errors.push(`${at}.action: expected string`);
+  });
+}
+
 export function validateFindings(data: unknown): ValidationResult {
   const errors: string[] = [];
 
@@ -284,6 +363,7 @@ export function validateFindings(data: unknown): ValidationResult {
 
   if (data.coverage !== undefined) validateCoverage(data.coverage, errors);
   if (data.baseline !== undefined) validateBaseline(data.baseline, errors);
+  if (data.testQuality !== undefined) validateTestQuality(data.testQuality, errors);
 
   // #509: refuse a "done"/"complete" headline over a ledger that isn't. Only checked when a
   // derived ledger is present — a hand-authored legacy doc with no coverage[] has nothing to
