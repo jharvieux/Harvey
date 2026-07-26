@@ -487,23 +487,12 @@ describe("jscpdIgnoreScopeFinding (#1080)", () => {
   });
 });
 
-// Shaped from a real knip fixture: one fully-dead file + one file with two
-// unreferenced exports (a function and a const).
-const knipReport: KnipReport = {
-  files: ["src/dead.ts"],
-  issues: [
-    {
-      file: "src/mixed.ts",
-      exports: [{ name: "neverImported", line: 4 }],
-      types: [{ name: "UnusedType", line: 9 }],
-    },
-    {
-      file: "src/clean.ts",
-      exports: [],
-      types: [],
-    },
-  ],
-};
+// Real committed knip 5.88.1 `--reporter json` capture (see __fixtures__/knip/PROVENANCE.md): a
+// mini TS project with one fully-dead file (src/dead.ts) and one reachable file whose value export
+// (neverImported, line 4) and type export (UnusedType, line 9) are unreferenced (src/mixed.ts).
+const knipReport = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./scan/__fixtures__/knip/knip-5.88.1-report.json", import.meta.url)), "utf8"),
+) as KnipReport;
 
 describe("knipToFindings", () => {
   it("reports a fully-unused file with a measured line count when supplied", () => {
@@ -519,7 +508,13 @@ describe("knipToFindings", () => {
   });
 
   it("splits value exports (confirmed dead code) from exported types (review-tier), skipping clean files (#693)", () => {
-    const findings = knipToFindings(knipReport);
+    // A fully-used file never appears in knip's own report, so add an all-empty issue record for one
+    // (the shape a merged/legacy report can still carry) to prove the transform emits no finding for it.
+    const withCleanFile: KnipReport = {
+      ...knipReport,
+      issues: [...knipReport.issues, { file: "src/clean.ts", exports: [], types: [] }],
+    };
+    const findings = knipToFindings(withCleanFile);
     const valueExport = findings.find((f) => f.location === "src/mixed.ts" && f.confidence === "Confirmed");
     const typeExport = findings.find((f) => f.location === "src/mixed.ts" && f.confidence === "Review");
     // The unused VALUE export is confirmed dead code, grade-counted.
