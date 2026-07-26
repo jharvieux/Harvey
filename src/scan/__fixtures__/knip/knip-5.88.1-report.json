@@ -1,0 +1,35 @@
+{
+  "files": [
+    "src/dead.ts"
+  ],
+  "issues": [
+    {
+      "file": "src/mixed.ts",
+      "dependencies": [],
+      "devDependencies": [],
+      "optionalPeerDependencies": [],
+      "unlisted": [],
+      "binaries": [],
+      "unresolved": [],
+      "exports": [
+        {
+          "name": "neverImported",
+          "line": 4,
+          "col": 17,
+          "pos": 70
+        }
+      ],
+      "types": [
+        {
+          "name": "UnusedType",
+          "line": 9,
+          "col": 13,
+          "pos": 170
+        }
+      ],
+      "enumMembers": {},
+      "duplicates": [],
+      "catalog": []
+    }
+  ]
+}

@@ -1,0 +1,669 @@
+{
+  "files": {
+    "discount.ts": {
+      "language": "typescript",
+      "mutants": [
+        {
+          "id": "15",
+          "mutatorName": "StringLiteral",
+          "replacement": "\"\"",
+          "status": "NoCoverage",
+          "static": false,
+          "coveredBy": [],
+          "location": {
+            "end": {
+              "column": 62,
+              "line": 4
+            },
+            "start": {
+              "column": 34,
+              "line": 4
+            }
+          }
+        },
+        {
+          "id": "24",
+          "mutatorName": "ArithmeticOperator",
+          "replacement": "total / 0.9",
+          "status": "NoCoverage",
+          "static": false,
+          "coveredBy": [],
+          "location": {
+            "end": {
+              "column": 21,
+              "line": 7
+            },
+            "start": {
+              "column": 10,
+              "line": 7
+            }
+          }
+        },
+        {
+          "id": "10",
+          "mutatorName": "BlockStatement",
+          "replacement": "{}",
+          "statusReason": "expected undefined to be 80 // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "4"
+          ],
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 2,
+              "line": 8
+            },
+            "start": {
+              "column": 73,
+              "line": 3
+            }
+          }
+        },
+        {
+          "id": "11",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "true",
+          "statusReason": "total must be non-negative",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "4"
+          ],
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 16,
+              "line": 4
+            },
+            "start": {
+              "column": 7,
+              "line": 4
+            }
+          }
+        },
+        {
+          "id": "12",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "false",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 16,
+              "line": 4
+            },
+            "start": {
+              "column": 7,
+              "line": 4
+            }
+          }
+        },
+        {
+          "id": "13",
+          "mutatorName": "EqualityOperator",
+          "replacement": "total <= 0",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 16,
+              "line": 4
+            },
+            "start": {
+              "column": 7,
+              "line": 4
+            }
+          }
+        },
+        {
+          "id": "14",
+          "mutatorName": "EqualityOperator",
+          "replacement": "total >= 0",
+          "statusReason": "total must be non-negative",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "4"
+          ],
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 16,
+              "line": 4
+            },
+            "start": {
+              "column": 7,
+              "line": 4
+            }
+          }
+        },
+        {
+          "id": "16",
+          "mutatorName": "BooleanLiteral",
+          "replacement": "isMember",
+          "statusReason": "expected 100 to be 80 // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "4"
+          ],
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 16,
+              "line": 5
+            },
+            "start": {
+              "column": 7,
+              "line": 5
+            }
+          }
+        },
+        {
+          "id": "17",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "true",
+          "statusReason": "expected 100 to be 80 // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "4"
+          ],
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 16,
+              "line": 5
+            },
+            "start": {
+              "column": 7,
+              "line": 5
+            }
+          }
+        },
+        {
+          "id": "18",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "false",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 16,
+              "line": 5
+            },
+            "start": {
+              "column": 7,
+              "line": 5
+            }
+          }
+        },
+        {
+          "id": "19",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "true",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 19,
+              "line": 6
+            },
+            "start": {
+              "column": 7,
+              "line": 6
+            }
+          }
+        },
+        {
+          "id": "20",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "false",
+          "statusReason": "expected 90 to be 80 // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "4"
+          ],
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 19,
+              "line": 6
+            },
+            "start": {
+              "column": 7,
+              "line": 6
+            }
+          }
+        },
+        {
+          "id": "21",
+          "mutatorName": "EqualityOperator",
+          "replacement": "total > 100",
+          "statusReason": "expected 90 to be 80 // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "4"
+          ],
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 19,
+              "line": 6
+            },
+            "start": {
+              "column": 7,
+              "line": 6
+            }
+          }
+        },
+        {
+          "id": "22",
+          "mutatorName": "EqualityOperator",
+          "replacement": "total < 100",
+          "statusReason": "expected 90 to be 80 // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "4"
+          ],
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 19,
+              "line": 6
+            },
+            "start": {
+              "column": 7,
+              "line": 6
+            }
+          }
+        },
+        {
+          "id": "23",
+          "mutatorName": "ArithmeticOperator",
+          "replacement": "total / 0.8",
+          "statusReason": "expected 125 to be 80 // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "4"
+          ],
+          "coveredBy": [
+            "4"
+          ],
+          "location": {
+            "end": {
+              "column": 39,
+              "line": 6
+            },
+            "start": {
+              "column": 28,
+              "line": 6
+            }
+          }
+        }
+      ],
+      "source": "// M8 calibration fixture (#72 §M8) — the WEAK-test-covered source. See\n// discount.tautological.test.ts for the planted weak test (M8-P-TAUTOLOGICAL).\nexport function applyDiscount(total: number, isMember: boolean): number {\n  if (total < 0) throw new Error(\"total must be non-negative\");\n  if (!isMember) return total;\n  if (total >= 100) return total * 0.8; // members get 20% off orders >= 100\n  return total * 0.9; // members get 10% off smaller orders\n}\n"
+    },
+    "authz.ts": {
+      "language": "typescript",
+      "mutants": [
+        {
+          "id": "1",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "true",
+          "statusReason": "expected true to be false // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 4,
+          "killedBy": [
+            "3"
+          ],
+          "coveredBy": [
+            "0",
+            "1",
+            "2",
+            "3"
+          ],
+          "location": {
+            "end": {
+              "column": 23,
+              "line": 7
+            },
+            "start": {
+              "column": 7,
+              "line": 7
+            }
+          }
+        },
+        {
+          "id": "0",
+          "mutatorName": "BlockStatement",
+          "replacement": "{}",
+          "statusReason": "expected undefined to be true // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "0"
+          ],
+          "coveredBy": [
+            "0",
+            "1",
+            "2",
+            "3"
+          ],
+          "location": {
+            "end": {
+              "column": 2,
+              "line": 9
+            },
+            "start": {
+              "column": 64,
+              "line": 6
+            }
+          }
+        },
+        {
+          "id": "2",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "false",
+          "statusReason": "expected false to be true // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 2,
+          "killedBy": [
+            "1"
+          ],
+          "coveredBy": [
+            "0",
+            "1",
+            "2",
+            "3"
+          ],
+          "location": {
+            "end": {
+              "column": 23,
+              "line": 7
+            },
+            "start": {
+              "column": 7,
+              "line": 7
+            }
+          }
+        },
+        {
+          "id": "3",
+          "mutatorName": "EqualityOperator",
+          "replacement": "role !== \"admin\"",
+          "statusReason": "expected false to be true // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 2,
+          "killedBy": [
+            "1"
+          ],
+          "coveredBy": [
+            "0",
+            "1",
+            "2",
+            "3"
+          ],
+          "location": {
+            "end": {
+              "column": 23,
+              "line": 7
+            },
+            "start": {
+              "column": 7,
+              "line": 7
+            }
+          }
+        },
+        {
+          "id": "4",
+          "mutatorName": "StringLiteral",
+          "replacement": "\"\"",
+          "statusReason": "expected false to be true // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 2,
+          "killedBy": [
+            "1"
+          ],
+          "coveredBy": [
+            "0",
+            "1",
+            "2",
+            "3"
+          ],
+          "location": {
+            "end": {
+              "column": 23,
+              "line": 7
+            },
+            "start": {
+              "column": 16,
+              "line": 7
+            }
+          }
+        },
+        {
+          "id": "5",
+          "mutatorName": "BooleanLiteral",
+          "replacement": "false",
+          "statusReason": "expected false to be true // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "0"
+          ],
+          "coveredBy": [
+            "0",
+            "1"
+          ],
+          "location": {
+            "end": {
+              "column": 36,
+              "line": 7
+            },
+            "start": {
+              "column": 32,
+              "line": 7
+            }
+          }
+        },
+        {
+          "id": "6",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "true",
+          "statusReason": "expected true to be false // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 2,
+          "killedBy": [
+            "3"
+          ],
+          "coveredBy": [
+            "2",
+            "3"
+          ],
+          "location": {
+            "end": {
+              "column": 27,
+              "line": 8
+            },
+            "start": {
+              "column": 10,
+              "line": 8
+            }
+          }
+        },
+        {
+          "id": "7",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "false",
+          "statusReason": "expected false to be true // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "2"
+          ],
+          "coveredBy": [
+            "2",
+            "3"
+          ],
+          "location": {
+            "end": {
+              "column": 27,
+              "line": 8
+            },
+            "start": {
+              "column": 10,
+              "line": 8
+            }
+          }
+        },
+        {
+          "id": "8",
+          "mutatorName": "EqualityOperator",
+          "replacement": "action !== \"read\"",
+          "statusReason": "expected false to be true // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "2"
+          ],
+          "coveredBy": [
+            "2",
+            "3"
+          ],
+          "location": {
+            "end": {
+              "column": 27,
+              "line": 8
+            },
+            "start": {
+              "column": 10,
+              "line": 8
+            }
+          }
+        },
+        {
+          "id": "9",
+          "mutatorName": "StringLiteral",
+          "replacement": "\"\"",
+          "statusReason": "expected false to be true // Object.is equality",
+          "status": "Killed",
+          "static": false,
+          "testsCompleted": 1,
+          "killedBy": [
+            "2"
+          ],
+          "coveredBy": [
+            "2",
+            "3"
+          ],
+          "location": {
+            "end": {
+              "column": 27,
+              "line": 8
+            },
+            "start": {
+              "column": 21,
+              "line": 8
+            }
+          }
+        }
+      ],
+      "source": "// M8 calibration fixture (#72 §M8) — the STRONG-test-covered source. See\n// authz.strong.test.ts for the planted strong test (M8-N-STRONG).\nexport type Role = \"admin\" | \"member\";\nexport type Action = \"read\" | \"delete\";\n\nexport function canAccess(role: Role, action: Action): boolean {\n  if (role === \"admin\") return true;\n  return action === \"read\";\n}\n"
+    }
+  },
+  "schemaVersion": "1.0",
+  "thresholds": {
+    "high": 80,
+    "low": 60,
+    "break": null
+  },
+  "testFiles": {
+    "authz.strong.test.ts": {
+      "tests": [
+        {
+          "id": "0",
+          "name": "canAccess (strong) lets an admin read"
+        },
+        {
+          "id": "1",
+          "name": "canAccess (strong) lets an admin delete"
+        },
+        {
+          "id": "2",
+          "name": "canAccess (strong) lets a member read"
+        },
+        {
+          "id": "3",
+          "name": "canAccess (strong) denies a member from deleting"
+        }
+      ],
+      "source": "import { describe, expect, it } from \"vitest\";\nimport { canAccess } from \"./authz.js\";\n\n// M8-N-STRONG (#72 §M8) — planted STRONG test: exhaustive over the 2x2 role/action truth table,\n// including the denial path a weak test would skip. Must NOT land on the false-confidence list —\n// every mutant Stryker can plant on authz.ts (ConditionalExpression, EqualityOperator,\n// BooleanLiteral, StringLiteral) flips at least one of these four outcomes, so all mutants die.\ndescribe(\"canAccess (strong)\", () => {\n  it(\"lets an admin read\", () => {\n    expect(canAccess(\"admin\", \"read\")).toBe(true);\n  });\n\n  it(\"lets an admin delete\", () => {\n    expect(canAccess(\"admin\", \"delete\")).toBe(true);\n  });\n\n  it(\"lets a member read\", () => {\n    expect(canAccess(\"member\", \"read\")).toBe(true);\n  });\n\n  it(\"denies a member from deleting\", () => {\n    expect(canAccess(\"member\", \"delete\")).toBe(false);\n  });\n});\n"
+    },
+    "discount.tautological.test.ts": {
+      "tests": [
+        {
+          "id": "4",
+          "name": "applyDiscount (weak) gives members a discount on a big order"
+        }
+      ],
+      "source": "import { describe, expect, it } from \"vitest\";\nimport { applyDiscount } from \"./discount.js\";\n\n// M8-P-TAUTOLOGICAL (#72 §M8) — planted WEAK test: a single happy-path assertion that never\n// exercises the non-member branch, the negative-total guard, or the <100 member boundary.\n// \"If you deleted or inverted the logic it covers, would this test go red?\" (quality-extras.txt\n// M8 litmus test) — no, for every line but the one it happens to hit. Left deliberately weak so\n// Stryker's mutation run leaves surviving/no-coverage mutants on this file (the false-confidence\n// signal src/mutation-scan.ts is meant to surface).\ndescribe(\"applyDiscount (weak)\", () => {\n  it(\"gives members a discount on a big order\", () => {\n    expect(applyDiscount(100, true)).toBe(80);\n  });\n});\n"
+    }
+  }
+}

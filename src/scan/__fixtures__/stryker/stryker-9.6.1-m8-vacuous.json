@@ -1,0 +1,273 @@
+{
+  "files": {
+    "vacuous.ts": {
+      "language": "typescript",
+      "mutants": [
+        {
+          "id": "5",
+          "mutatorName": "StringLiteral",
+          "replacement": "\"\"",
+          "status": "NoCoverage",
+          "static": false,
+          "coveredBy": [],
+          "location": {
+            "end": {
+              "column": 30,
+              "line": 7
+            },
+            "start": {
+              "column": 27,
+              "line": 7
+            }
+          }
+        },
+        {
+          "id": "11",
+          "mutatorName": "StringLiteral",
+          "replacement": "\"\"",
+          "status": "NoCoverage",
+          "static": false,
+          "coveredBy": [],
+          "location": {
+            "end": {
+              "column": 13,
+              "line": 9
+            },
+            "start": {
+              "column": 10,
+              "line": 9
+            }
+          }
+        },
+        {
+          "id": "1",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "true",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "0"
+          ],
+          "location": {
+            "end": {
+              "column": 18,
+              "line": 7
+            },
+            "start": {
+              "column": 7,
+              "line": 7
+            }
+          }
+        },
+        {
+          "id": "0",
+          "mutatorName": "BlockStatement",
+          "replacement": "{}",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "0"
+          ],
+          "location": {
+            "end": {
+              "column": 2,
+              "line": 10
+            },
+            "start": {
+              "column": 51,
+              "line": 6
+            }
+          }
+        },
+        {
+          "id": "2",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "false",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "0"
+          ],
+          "location": {
+            "end": {
+              "column": 18,
+              "line": 7
+            },
+            "start": {
+              "column": 7,
+              "line": 7
+            }
+          }
+        },
+        {
+          "id": "3",
+          "mutatorName": "EqualityOperator",
+          "replacement": "score > 90",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "0"
+          ],
+          "location": {
+            "end": {
+              "column": 18,
+              "line": 7
+            },
+            "start": {
+              "column": 7,
+              "line": 7
+            }
+          }
+        },
+        {
+          "id": "7",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "false",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "0"
+          ],
+          "location": {
+            "end": {
+              "column": 18,
+              "line": 8
+            },
+            "start": {
+              "column": 7,
+              "line": 8
+            }
+          }
+        },
+        {
+          "id": "4",
+          "mutatorName": "EqualityOperator",
+          "replacement": "score < 90",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "0"
+          ],
+          "location": {
+            "end": {
+              "column": 18,
+              "line": 7
+            },
+            "start": {
+              "column": 7,
+              "line": 7
+            }
+          }
+        },
+        {
+          "id": "6",
+          "mutatorName": "ConditionalExpression",
+          "replacement": "true",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "0"
+          ],
+          "location": {
+            "end": {
+              "column": 18,
+              "line": 8
+            },
+            "start": {
+              "column": 7,
+              "line": 8
+            }
+          }
+        },
+        {
+          "id": "8",
+          "mutatorName": "EqualityOperator",
+          "replacement": "score > 80",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "0"
+          ],
+          "location": {
+            "end": {
+              "column": 18,
+              "line": 8
+            },
+            "start": {
+              "column": 7,
+              "line": 8
+            }
+          }
+        },
+        {
+          "id": "9",
+          "mutatorName": "EqualityOperator",
+          "replacement": "score < 80",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "0"
+          ],
+          "location": {
+            "end": {
+              "column": 18,
+              "line": 8
+            },
+            "start": {
+              "column": 7,
+              "line": 8
+            }
+          }
+        },
+        {
+          "id": "10",
+          "mutatorName": "StringLiteral",
+          "replacement": "\"\"",
+          "status": "Survived",
+          "static": false,
+          "testsCompleted": 1,
+          "coveredBy": [
+            "0"
+          ],
+          "location": {
+            "end": {
+              "column": 30,
+              "line": 8
+            },
+            "start": {
+              "column": 27,
+              "line": 8
+            }
+          }
+        }
+      ],
+      "source": "// M8-P-VACUOUS-STRYKER (#1100) — planted VACUOUS test fixture: the covering test below calls this\n// function and executes its branches, but its assertion never depends on the return value, so no\n// mutation of this logic can ever fail it. Distinct from the M8-P-DELETION-SURVIVING pair\n// (audit-log.ts): that one is scored by stub-check's deletion-survival execution; this one is\n// scored by real Stryker mutation testing — the coveredBy/killedBy join #1100 adds.\nexport function gradeScore(score: number): string {\n  if (score >= 90) return \"A\";\n  if (score >= 80) return \"B\";\n  return \"F\";\n}\n"
+    }
+  },
+  "schemaVersion": "1.0",
+  "thresholds": {
+    "high": 80,
+    "low": 60,
+    "break": null
+  },
+  "testFiles": {
+    "vacuous.smoke.test.ts": {
+      "tests": [
+        {
+          "id": "0",
+          "name": "gradeScore (vacuous smoke test) runs without throwing"
+        }
+      ],
+      "source": "import { describe, expect, it } from \"vitest\";\nimport { gradeScore } from \"./vacuous.js\";\n\n// M8-P-VACUOUS-STRYKER (#1100) — planted WEAK test: calls gradeScore and executes its branches\n// (so Stryker's per-test coverage analysis attributes coveredBy to this test), but the assertion\n// is a constant tautology that never depends on the call's actual return value. Every mutant\n// Stryker can plant on gradeScore's conditions/branches either Survives or reads NoCoverage —\n// none is ever Killed by this test, which is exactly the \"executes code, proves nothing\" gap\n// #1100's vacuousTestFindings surfaces.\ndescribe(\"gradeScore (vacuous smoke test)\", () => {\n  it(\"runs without throwing\", () => {\n    gradeScore(85);\n    expect(true).toBe(true);\n  });\n});\n"
+    }
+  }
+}

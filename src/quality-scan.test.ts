@@ -31,72 +31,36 @@ import {
 import { buildCoverageMatrix } from "./scan/calibration.js";
 import { m4m5Entries } from "./scan/calibration/m4-m5.entries.js";
 
-// Base two entries shaped from real `jscpd --reporters json` output (captured against a
-// throwaway two-file clone) — jscpd's json reporter emits duplicates out of size order. The
-// self-clone and tiny-header entries below are hand-built negative fixtures standing in for the
-// #232 FP shapes (icon-table self-repetition, shared import headers), not captured tool output.
-const jscpdReport: JscpdReport = {
-  statistics: { total: { percentage: 12.5, duplicatedLines: 40, lines: 320 } },
-  duplicates: [
-    {
-      format: "typescript",
-      lines: 11,
-      tokens: 113,
-      fragment: "function calculateTotal(items) {\n  let total = 0;\n  return total;\n}",
-      firstFile: { name: "src/a.ts", start: 1, end: 11 },
-      secondFile: { name: "src/b.ts", start: 1, end: 11 },
-    },
-    {
-      format: "typescript",
-      lines: 60,
-      tokens: 900,
-      fragment: "x".repeat(300),
-      firstFile: { name: "src/big1.ts", start: 5, end: 65 },
-      secondFile: { name: "src/big2.ts", start: 10, end: 70 },
-    },
-    // Same file both sides. #232 assumed this shape was inert repeated DATA and excluded the whole
-    // band; #1080 measured that false and #1095 restored it to the scored findings — at 40 lines it
-    // clears MIN_SIGNIFICANT_LINES and is scored exactly like a cross-file clone.
-    {
-      format: "typescript",
-      lines: 40,
-      tokens: 500,
-      fragment: "<path d=\"M10 10L20 20\" />".repeat(10),
-      firstFile: { name: "src/icons.tsx", start: 1, end: 40 },
-      secondFile: { name: "src/icons.tsx", start: 50, end: 90 },
-    },
-    // #232: a 6-line shared import header — real cross-file overlap, but under
-    // MIN_SIGNIFICANT_LINES, not worth a maintainability finding on its own.
-    {
-      format: "typescript",
-      lines: 6,
-      tokens: 80,
-      fragment: "import { a } from \"./a\";\nimport { b } from \"./b\";",
-      firstFile: { name: "src/c.ts", start: 1, end: 6 },
-      secondFile: { name: "src/d.ts", start: 1, end: 6 },
-    },
-  ],
-};
+// Real committed jscpd 4.2.5 `--reporters json` capture (see __fixtures__/jscpd/PROVENANCE.md): a
+// purpose-built clone corpus engineered so jscpd finds exactly four clones, one per band —
+// big1↔big2 (58 lines, Medium), selfclone.ts↔itself (17 lines, Low, same-file), small1↔small2 (10
+// lines, Info) and the sub-threshold tiny1↔tiny2 (8 lines, disclosed via M4-00).
+const jscpdReport = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./scan/__fixtures__/jscpd/jscpd-4.2.5-report.json", import.meta.url)), "utf8"),
+) as JscpdReport;
 
 describe("jscpdToFindings", () => {
   it("sorts worst clone clusters first regardless of report order", () => {
     const findings = jscpdToFindings(jscpdReport);
-    expect(findings[0]?.location).toContain("big1.ts");
-    expect(findings[1]?.location).toContain("icons.tsx"); // 40 lines, self-file — ranked on size like any other clone (#1095)
-    expect(findings[2]?.location).toContain("a.ts");
+    expect(findings[0]?.location).toContain("big1.ts"); // 58 lines
+    expect(findings[1]?.location).toContain("selfclone.ts"); // 17 lines, self-file — ranked on size like any other clone (#1095)
+    expect(findings[2]?.location).toContain("small1.ts"); // 10 lines
   });
 
   it("scales severity with duplicated line count", () => {
     const [big, self, small] = jscpdToFindings(jscpdReport);
-    expect(big?.severity).toBe("Medium"); // 60 lines >= 50
-    expect(self?.severity).toBe("Low"); // 40 lines: >= 15, < 50 — the SAME ladder cross-file clones use (#1095)
-    expect(small?.severity).toBe("Info"); // 11 lines < 15
+    expect(big?.severity).toBe("Medium"); // 58 lines >= 50
+    expect(self?.severity).toBe("Low"); // 17 lines: >= 15, < 50 — the SAME ladder cross-file clones use (#1095)
+    expect(small?.severity).toBe("Info"); // 10 lines < 15
   });
 
   it("truncates long fragments and reports exact line/token counts in impact", () => {
     const [big] = jscpdToFindings(jscpdReport);
-    expect(big?.evidence.length).toBeLessThanOrEqual(241);
-    expect(big?.impact).toBe("60 duplicated lines (900 tokens) — a fix in one copy is a fix missed in the other.");
+    // The 58-line clone's raw fragment is ~1.4 KB; the evidence is truncated at the preview length
+    // (marked with the trailing ellipsis) so it never carries the whole block.
+    expect(big?.evidence.endsWith("…")).toBe(true);
+    expect(big!.evidence.length).toBeLessThan(jscpdReport.duplicates[3]!.fragment.length);
+    expect(big?.impact).toBe("58 duplicated lines (582 tokens) — a fix in one copy is a fix missed in the other.");
   });
 
   it("assigns unique sequential M4 ids, with the #365/#1080 meta rows trailing and never colliding with the sequential ids", () => {
@@ -113,18 +77,18 @@ describe("jscpdToFindings", () => {
   // A second copy inside the SAME file is the #1081 failure mode with weaker discovery cues than
   // the cross-file case, so it earns a scored finding on identical terms.
   it("scores a same-file clone above the floor, with in-file fix text and a collapsed location (#1095)", () => {
-    const self = jscpdToFindings(jscpdReport).find((f) => f.location.includes("icons.tsx"));
+    const self = jscpdToFindings(jscpdReport).find((f) => f.location.includes("selfclone.ts"));
     expect(self).toBeDefined();
-    expect(self!.location).toBe("src/icons.tsx:1-40 ↔ :50-90"); // path stated once, not repeated
-    expect(self!.title).toBe("Duplicated code within one file: src/icons.tsx");
+    expect(self!.location).toBe("src/selfclone.ts:23-39 ↔ :1-17"); // path stated once, not repeated
+    expect(self!.title).toBe("Duplicated code within one file: src/selfclone.ts");
     expect(self!.fix).toContain("call it at both sites");
     expect(self!.fix).not.toContain("shared logic into one function/module");
     expect(self!.impact).toContain("no filename to jog the memory");
   });
 
-  it("emits no INDIVIDUAL finding for clusters under the significant-lines gate — e.g. a shared import header (#232)", () => {
+  it("emits no INDIVIDUAL finding for clusters under the significant-lines gate — e.g. the tiny sub-threshold clone (#232)", () => {
     const findings = jscpdToFindings(jscpdReport);
-    expect(findings.some((f) => f.location.includes("src/c.ts"))).toBe(false);
+    expect(findings.some((f) => f.location.includes("src/tiny1.ts"))).toBe(false);
   });
 });
 
@@ -138,7 +102,7 @@ describe("jscpdToFindings — sub-threshold small-clone disclosure (#365)", () =
     expect(disclosure?.severity).toBe("Info");
     expect(disclosure?.location).toBe("(repo-wide)");
     expect(disclosure?.title).toContain("1 small cross-file clone(s)");
-    expect(disclosure?.evidence).toContain("src/c.ts:1-6 ↔ src/d.ts:1-6 (6 lines)");
+    expect(disclosure?.evidence).toContain("src/tiny1.ts:2-9 ↔ src/tiny2.ts:2-9 (8 lines)");
   });
 
   it("does not count self-file repetition in the M4-00 sub-threshold disclosure — it gets its own M4-SELF-00 row instead (#1080)", () => {
@@ -161,11 +125,13 @@ describe("jscpdToFindings — sub-threshold small-clone disclosure (#365)", () =
   });
 
   it("emits no disclosure row at all when nothing was dropped — an empty band is not a finding", () => {
-    const bigOnly: JscpdReport = {
+    // Only the 58-line big clone (index 3), which is above the significance floor — so nothing is
+    // dropped into the sub-threshold band and no M4-00 row is emitted.
+    const significantOnly: JscpdReport = {
       statistics: { total: { percentage: 0, duplicatedLines: 0, lines: 100 } },
-      duplicates: [jscpdReport.duplicates[1]!],
+      duplicates: [jscpdReport.duplicates[3]!],
     };
-    expect(jscpdToFindings(bigOnly).find((f) => f.id === "M4-00")).toBeUndefined();
+    expect(jscpdToFindings(significantOnly).find((f) => f.id === "M4-00")).toBeUndefined();
   });
 });
 
@@ -427,17 +393,17 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
 
 describe("duplicationSummary", () => {
   it("recomputes the percentage from every significant cluster, cross-file or self-file, excluding only the sub-threshold band (#232/#1095)", () => {
-    // The 60-, 40- and 11-line clusters count — the self-file 40-liner among them, since #1095
-    // scores it; only the 6-line header is excluded. round(10000 * 111/320) / 100 = 34.69.
+    // The 58-, 17- and 10-line clusters count — the self-file 17-liner among them, since #1095
+    // scores it; only the 8-line tiny clone is excluded. round(10000 * 85/186) / 100 = 45.7.
     const summary = duplicationSummary(jscpdReport);
-    expect(summary.duplicatedLines).toBe(111);
-    expect(summary.percentage).toBe(34.69);
+    expect(summary.duplicatedLines).toBe(85);
+    expect(summary.percentage).toBe(45.7);
   });
 
   it("counts the dropped small-clone band separately without polluting the headline percentage (#365)", () => {
     const summary = duplicationSummary(jscpdReport);
-    expect(summary.subThresholdCloneCount).toBe(1); // the c.ts/d.ts import header
-    expect(summary.selfFileCloneCount).toBe(0); // the self-file 40-liner is scored now, not disclosed as a dropped band
+    expect(summary.subThresholdCloneCount).toBe(1); // the tiny1.ts/tiny2.ts clone
+    expect(summary.selfFileCloneCount).toBe(0); // the self-file 17-liner is scored now, not disclosed as a dropped band
   });
 });
 
@@ -487,23 +453,12 @@ describe("jscpdIgnoreScopeFinding (#1080)", () => {
   });
 });
 
-// Shaped from a real knip fixture: one fully-dead file + one file with two
-// unreferenced exports (a function and a const).
-const knipReport: KnipReport = {
-  files: ["src/dead.ts"],
-  issues: [
-    {
-      file: "src/mixed.ts",
-      exports: [{ name: "neverImported", line: 4 }],
-      types: [{ name: "UnusedType", line: 9 }],
-    },
-    {
-      file: "src/clean.ts",
-      exports: [],
-      types: [],
-    },
-  ],
-};
+// Real committed knip 5.88.1 `--reporter json` capture (see __fixtures__/knip/PROVENANCE.md): a
+// mini TS project with one fully-dead file (src/dead.ts) and one reachable file whose value export
+// (neverImported, line 4) and type export (UnusedType, line 9) are unreferenced (src/mixed.ts).
+const knipReport = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./scan/__fixtures__/knip/knip-5.88.1-report.json", import.meta.url)), "utf8"),
+) as KnipReport;
 
 describe("knipToFindings", () => {
   it("reports a fully-unused file with a measured line count when supplied", () => {
@@ -519,7 +474,13 @@ describe("knipToFindings", () => {
   });
 
   it("splits value exports (confirmed dead code) from exported types (review-tier), skipping clean files (#693)", () => {
-    const findings = knipToFindings(knipReport);
+    // A fully-used file never appears in knip's own report, so add an all-empty issue record for one
+    // (the shape a merged/legacy report can still carry) to prove the transform emits no finding for it.
+    const withCleanFile: KnipReport = {
+      ...knipReport,
+      issues: [...knipReport.issues, { file: "src/clean.ts", exports: [], types: [] }],
+    };
+    const findings = knipToFindings(withCleanFile);
     const valueExport = findings.find((f) => f.location === "src/mixed.ts" && f.confidence === "Confirmed");
     const typeExport = findings.find((f) => f.location === "src/mixed.ts" && f.confidence === "Review");
     // The unused VALUE export is confirmed dead code, grade-counted.
