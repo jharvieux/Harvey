@@ -533,6 +533,30 @@ describe("knipToFindings", () => {
     expect(reviewTier[0]?.fix).not.toContain("Delete");
     expect(reviewTier[0]?.fix).toContain("export");
   });
+
+  // #1101: M5 ids are positional, so before the sort they named a POSITION in knip's output rather
+  // than a finding — and knip's order is not stable run-to-run (MEASURED 2026-07-26: 8 identical
+  // `pnpm quality-scan targets/calibration` runs produced 3 distinct orderings). M4 and M5 each
+  // invoke quality-scan separately, so the two invocations minted the same id for two different
+  // findings and the assembled deliverable was rejected for duplicate ids. Deliberately exercises
+  // only the pure transform, so it cannot depend on which deps happen to be installed.
+  it("assigns each id from the finding, not from knip's emission order (#1101)", () => {
+    // The real shape: sibling routes whose rows are identical apart from their location, which knip
+    // emits in either order, plus two unreferenced files in either order.
+    const report = (order: string[]): KnipReport => ({
+      files: [...order],
+      issues: order.map((file) => ({ file, exports: [], types: [], unlisted: [{ name: "jsonwebtoken", line: 1 }] })),
+    });
+    const rows = (r: KnipReport): string[][] => knipToFindings(r).map((f) => [f.id, f.location, f.title]);
+    expect(rows(report(["app/api/b/route.ts", "app/api/a/route.ts"]))).toEqual(rows(report(["app/api/a/route.ts", "app/api/b/route.ts"])));
+    // And each id names the same finding whichever order arrived — not merely a matching pair of lists.
+    expect(rows(report(["app/api/b/route.ts", "app/api/a/route.ts"])).map((r) => `${r[0]}=${r[1]}`)).toEqual([
+      "M5-01=app/api/a/route.ts",
+      "M5-02=app/api/b/route.ts",
+      "M5-03=app/api/a/route.ts",
+      "M5-04=app/api/b/route.ts",
+    ]);
+  });
 });
 
 // #1050: knip's unused-dependency verdicts come from the resolved import graph, so a scope whose
