@@ -1,16 +1,46 @@
 {
-  "requestedUrl": "http://localhost:3000/dashboard",
-  "finalDisplayedUrl": "http://localhost:3000/dashboard",
-  "finalUrl": "http://localhost:3000/dashboard",
+  "_note": "REAL Lighthouse 13.4.0 capture (live run, 2026-07-26, issue #1130) — replaces the prior hand-written synthetic fixture (round scores 0.42/4800/720/0.24, no provenance) that was the primary LighthouseResult fixture and the highest-risk #1063 row in FIXTURE-INVENTORY.md. Captured the same way its two siblings (lighthouse-opportunity-audit.json, lighthouse-report-errored.json) were: served a deliberately-poor static page and ran lighthouse-node against it via chrome-launcher, headless, onlyCategories:['performance'] — the same invocation src/cli/lighthouse-scan.ts uses. The page fails all three tracked metrics on purpose: a valid 1600x1600 hero image loaded behind 1.5s of server latency (LCP 4.7s), a post-FCP ~800ms main-thread busy loop (TBT 3,150ms), and two banners inserted above existing content 500ms after load (CLS 0.595); the weighted roll-up is a 0.32 performance score. The bundled Playwright chromium yielded NO_FCP here (the #488/#556 failure mode), so the run used the system Google Chrome — the second candidate in lighthouse-scan.ts's resolution order. Trimmed to the fields src/lighthouse.ts's LighthouseResult reads: Lighthouse's ~170 other audits and its report metadata were DROPPED (never edited); every value kept is byte-for-byte as Lighthouse emitted it — note the non-round numericValues (4650.9089, 3149, 0.5953202217614142).",
+  "requestedUrl": "http://localhost:8945/",
+  "finalDisplayedUrl": "http://localhost:8945/",
+  "finalUrl": "http://localhost:8945/",
   "categories": {
-    "performance": { "id": "performance", "title": "Performance", "score": 0.42 }
+    "performance": {
+      "id": "performance",
+      "title": "Performance",
+      "score": 0.32
+    }
   },
   "audits": {
-    "first-contentful-paint": { "score": 0.55, "scoreDisplayMode": "numeric", "numericValue": 2100, "displayValue": "2.1 s" },
-    "largest-contentful-paint": { "score": 0.18, "scoreDisplayMode": "numeric", "numericValue": 4800, "displayValue": "4.8 s" },
-    "total-blocking-time": { "score": 0.21, "scoreDisplayMode": "numeric", "numericValue": 720, "displayValue": "720 ms" },
-    "cumulative-layout-shift": { "score": 0.63, "scoreDisplayMode": "numeric", "numericValue": 0.24, "displayValue": "0.24" },
-    "speed-index": { "score": 0.4, "scoreDisplayMode": "numeric", "numericValue": 5200, "displayValue": "5.2 s" }
+    "first-contentful-paint": {
+      "score": 1,
+      "scoreDisplayMode": "numeric",
+      "numericValue": 616.45445,
+      "displayValue": "0.6 s"
+    },
+    "largest-contentful-paint": {
+      "score": 0.34,
+      "scoreDisplayMode": "numeric",
+      "numericValue": 4650.9089,
+      "displayValue": "4.7 s"
+    },
+    "total-blocking-time": {
+      "score": 0.02,
+      "scoreDisplayMode": "numeric",
+      "numericValue": 3149,
+      "displayValue": "3,150 ms"
+    },
+    "cumulative-layout-shift": {
+      "score": 0.11,
+      "scoreDisplayMode": "numeric",
+      "numericValue": 0.5953202217614142,
+      "displayValue": "0.595"
+    },
+    "speed-index": {
+      "score": 1,
+      "scoreDisplayMode": "numeric",
+      "numericValue": 1219.4071300000571,
+      "displayValue": "1.2 s"
+    }
   },
   "runWarnings": []
 }
