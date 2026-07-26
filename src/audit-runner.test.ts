@@ -5,9 +5,18 @@ import { afterEach, describe, expect, it } from "vitest";
 import { assertAuditComplete, AUDIT_MODULES, buildAuditCoverage, type AuditModule } from "./audit-coverage.js";
 import { assertRegistryComplete, formatFailures, type ModuleRunner, type ProbeOutcome, type RunContext } from "./audit-runner.js";
 import { discoverSchemaFiles } from "./dynamic-validate.js";
-import type { Finding } from "./findings.js";
+import type { Finding, ReportMeta } from "./findings.js";
 import { runAudit } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
+import { assembleEngagementDocument } from "./audit-report.js";
+
+// #1137: placeholder meta so a probe outcome can be assembled into a deliverable and its delivery
+// asserted end to end.
+const m5137Meta: ReportMeta = {
+  client: "C", subtitle: "s", date: "2026-07-26", commit: "abc", auditor: "a", confidential: true,
+  overallHealth: 7, tenantIsolation: "HOLDS", authModel: "oauth", headline: "h", scope: "sc",
+  methodology: "m", outOfScope: "none",
+};
 
 // A tool run that produced real, positive evidence for whichever CLI the probe shelled out to.
 // #350: exit 0 is no longer enough — a probe reads the tool's OUTPUT, so the "everything ran
@@ -174,6 +183,50 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
 
   it("M5 runs once the target's deps are present — the prereq gates it, not a flag", () => {
     expect(runAudit(AUDIT_RUNNERS, ctx()).recorded.find((r) => r.module === "M5")?.status).toBe("ran");
+  });
+
+  // #1137: knip's M5-00 disclosure has two shapes and the probe must not collapse them. When knip
+  // ran on NO scope (no "M5 dead code across N scope(s)" line), the pass is NotAssessed — but the
+  // disclosure must still reach the reader, so the reason (with provenance + falsifier) is carried
+  // into the assembled deliverable's coverage ledger, not dropped with the Finding.
+  it("M5 records requires-live-run when knip ran on no scope, and the disclosure reaches the deliverable (#1137)", () => {
+    const noScope = ctx({
+      exec: (_c, argv) =>
+        argv.includes("quality-scan")
+          ? { ok: true, output: JSON.stringify([{ id: "M5-00" }]), stderr: "M4 duplication: 1.2% (60/5000 lines) — 3 clone cluster(s)\nM5 dead code: skipped (knip failed on every scope — see warnings above)" }
+          : cleanRun(argv),
+    });
+    const { recorded } = runAudit(AUDIT_RUNNERS, noScope);
+    const m5 = recorded.find((r) => r.module === "M5");
+    expect(m5?.status).toBe("requires-live-run");
+    expect(m5?.reason).toMatch(/knip did not run on any scope/);
+    const cov = assembleEngagementDocument(recorded, noScope.env, [], m5137Meta).coverage?.find((c) => c.module === "M5");
+    expect(cov?.reason).toMatch(/knip did not run on any scope/);
+    expect(cov?.reason).toMatch(/\[MEASURED; falsifier:/);
+  });
+
+  // #1137: the defect this closes — when knip completed on SOME scopes and emitted M5-00 for the
+  // rest, the probe used to return requires-live-run and drop the completed scopes' real dead-code
+  // findings (produced by quality-scan, delivered nowhere — the #1050 family). It is a partial
+  // Examined: the completed findings AND the M5-00 disclosure row both reach the assembled deliverable.
+  it("M5 partial — completed scopes' findings and the M5-00 disclosure both reach the deliverable, not requires-live-run (#1137)", () => {
+    const captured: Finding[] = [{ id: "M5-01" } as Finding, { id: "M5-00" } as Finding];
+    const partial = ctx({
+      captureDir: "/capture",
+      readFindings: (p) => (p.endsWith("M5.json") ? captured : []),
+      exec: (_c, argv) =>
+        argv.includes("quality-scan")
+          ? { ok: true, output: "", stderr: "M4 duplication: 1.2% (60/5000 lines) — 3 clone cluster(s)\nM5 dead code across 1 scope(s): 1 unused file(s), 0 file(s) with unused exports, 0 unused dependenc(ies) (#1050), 1/2 scope(s) incomplete (#505, see M5-00)" }
+          : cleanRun(argv),
+    });
+    const { recorded, findings, findingsByModule } = runAudit(AUDIT_RUNNERS, partial);
+    const m5 = recorded.find((r) => r.module === "M5");
+    expect(m5?.status).toBe("partial");
+    expect(m5?.reason).toMatch(/did not complete on every scope/);
+    expect(findingsByModule.M5?.map((f) => f.id)).toEqual(["M5-01", "M5-00"]);
+    const delivered = assembleEngagementDocument(recorded, partial.env, findings, m5137Meta).findings.map((f) => f.id);
+    expect(delivered).toContain("M5-01");
+    expect(delivered).toContain("M5-00");
   });
 
   // #771: mutation-scan's own suite-absence check is a static package.json/test-file read — no
@@ -476,15 +529,24 @@ const status = (runners: typeof AUDIT_RUNNERS, over: Partial<RunContext>, module
   runAudit(runners, ctx(over)).recorded.find((r) => r.module === module);
 
 describe("probes derive status from evidence, not the exit code (#350)", () => {
-  it("M5 — knip did not run (M5-00 disclosure emitted, exit 0) is NOT recorded ran", () => {
+  it("M5 — knip did not run on any scope (M5-00 emitted, no scope summary, exit 0) is NOT recorded ran", () => {
     // quality-scan exits 0 by design (#223) so M4 keeps its findings; the M5-00 finding is the tell.
     // #1109: knip having run on NO scope is a not-assessed, not a partial — the typed result draws
     // the line the old `partial` blurred, because a partial with no unit count reads as coverage.
-    const knipFailed = { exec: (_c: string, argv: string[]) => ({ ...cleanRun(argv), output: JSON.stringify([{ id: "M4-00" }, { id: "M5-00", title: "M5 dead-code scan (knip) did not run" }]) }) };
+    // #1137: "no scope" is the ABSENCE of the "M5 dead code across N scope(s)" stderr line — knip
+    // skipped every scope. (M5-00 WITH a scope count is the partial case, tested below.) The stderr
+    // is overridden here so it does not contradict the M5-00 the output emits.
+    const knipFailed = {
+      exec: (_c: string, argv: string[]) => ({
+        ...cleanRun(argv),
+        output: JSON.stringify([{ id: "M4-00" }, { id: "M5-00", title: "M5 dead-code scan (knip) did not run" }]),
+        ...(argv.includes("quality-scan") ? { stderr: "M4 duplication: 1.2% (60/5000 lines) — 3 clone cluster(s)\nM5 dead code: skipped (knip failed on every scope — see warnings above)" } : {}),
+      }),
+    };
     const m5 = status(AUDIT_RUNNERS, knipFailed, "M5");
     expect(m5?.status).not.toBe("ran");
     expect(m5?.status).toBe("requires-live-run");
-    expect(m5?.reason).toMatch(/knip did not run/);
+    expect(m5?.reason).toMatch(/knip did not run on any scope/);
   });
 
   // #505: a monorepo target where jscpd timed out on one workspace — quality-scan still exits 0
