@@ -81,11 +81,18 @@ may NO_FCP. `LIGHTHOUSE_CHROME_PATH` still overrides both. Combined with fix #1,
   discloses (M7L-00) rather than lying, but produces no scores. If Harvey wants Lighthouse to work
   without a system Chrome, it needs a Lighthouse-compatible headless Chrome provisioned (e.g. the
   `chrome-launcher`-bundled path or a real Chrome install), not the Playwright "for Testing" build.
-  Follow-up filed.
+  Follow-up filed. **— RESOLVED (do not carry forward): #556 provisions a Chrome-for-Testing build at
+  run time, and #818/#840 moved the bundled Playwright chromium to the FIRST candidate after #840
+  captured a real FCP with it live — the NO_FCP is environment/target-dependent, not universal. See
+  `docs/design/m7-chrome-provisioning.md`, where the standing "needs a Lighthouse-compatible Chrome"
+  constraint is recorded as a #1072 empirical reason with a `lighthouse`-tier falsifier.**
 - **Orchestrator gap unchanged.** `run-audit`'s M7 probe still never invokes the Lighthouse tier;
   the CWV pass remains an operator-run CLI whose `Finding[]` merges into the engagement findings
   (as designed in #387). Wiring it (or its pass-artifact) into `run-audit` is a separate follow-up
   noted in `docs/design/portability-cold-target.md`.
 - A bad `LIGHTHOUSE_CHROME_PATH` (non-existent binary) makes `chrome-launcher` emit an unhandled
   `error` event that escapes `main`'s catch and exits 1 with an `ENOENT` stack — loud (not a false
-  clean), but not routed through the M7L-00 disclosure. Low priority; noted.
+  clean), but not routed through the M7L-00 disclosure. Low priority; noted. **— RESOLVED by #556
+  Part 2: `safeLaunch()` converts the promoted `uncaughtException` into a rejected promise, so a bad
+  path now routes through the M7L-00 disclosure and exits 0. See `docs/design/m7-chrome-provisioning.md`
+  Part 2, pinned by the child-process test in `src/cli/lighthouse-scan.test.ts`.**

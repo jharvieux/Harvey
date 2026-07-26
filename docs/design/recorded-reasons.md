@@ -33,6 +33,7 @@ REASON: <the claim, in one line>
 KIND: empirical | decisional
 PROVENANCE: MEASURED|TRIED|ASSUMED YYYY-MM-DD
 FALSIFIER: <command>        # empirical only — REFUSED on decisional
+FALSIFIER-TIER: <name>      # optional, empirical only — the live tier the FALSIFIER needs (see below)
 OWNER: <person or role>     # decisional only
 DECISION: <doc path or issue ref>   # decisional only
 TOUCHES: <paths>            # optional; drives the subsystem-drift check
@@ -57,11 +58,27 @@ this is what it did; ASSUMED means inferred, never tested.
 shape is `grep -q <the thing that must not exist>`. A reason with no falsifier is unfalsifiable and
 therefore permanent, which is exactly what made the four wrong claims survive.
 
+**FALSIFIER-TIER — for a falsifier that can only run against a live environment (#1072).** Some
+empirical blockers are only re-testable on a tier that is not present on a normal offline run: a
+two-tenant M2 stack, a Lighthouse/CWV pass, a SecBench run, the paired Supabase security labs.
+Recording those with a plain `FALSIFIER:` forces one of two dishonesties — a fake offline proxy
+command that re-tests nothing, or an `UNVERIFIABLE` failure on every offline run. `FALSIFIER-TIER:`
+names the environment the command needs. On an offline run the falsifier is **SKIPPED-LIVE** —
+disclosed and counted, never dropped and never a failure — and on a run that declares that tier
+available it runs exactly like any other falsifier. It is optional, empirical-only (refused on a
+decisional reason, which must carry no falsifier at all), and its value must be one of the registered
+tiers — `m2-stack`, `lighthouse`, `secbench`, `supabase-labs`. A value outside that set is
+**malformed**, not silently always-skipped, because a typo would make the falsifier permanently
+skip. The registry is the `KNOWN_FALSIFIER_TIERS` set in `src/recorded-reasons.ts` — the single
+place a new live tier is added (like #341's `OWNERS` map).
+
 ## The gate
 
 ```bash
-pnpm exec tsx src/cli/validate-reasons.ts               # structural only, runs no commands
-pnpm exec tsx src/cli/validate-reasons.ts --revalidate  # also runs every empirical falsifier
+pnpm exec tsx src/cli/validate-reasons.ts                          # structural only, runs no commands
+pnpm exec tsx src/cli/validate-reasons.ts --revalidate             # runs every OFFLINE falsifier; live-tier ones are SKIPPED-LIVE
+pnpm exec tsx src/cli/validate-reasons.ts --revalidate --live      # also runs every FALSIFIER-TIER falsifier
+pnpm exec tsx src/cli/validate-reasons.ts --revalidate --tier m2-stack  # enable one live tier (repeatable)
 pnpm exec tsx src/cli/validate-reasons.ts --root <dir> --list
 ```
 
@@ -73,7 +90,10 @@ pnpm exec tsx src/cli/validate-reasons.ts --root <dir> --list
   exit: the blocker is gone and the text still asserts it. A falsifier that cannot run (exit 127, a
   signal, a timeout) is **UNVERIFIABLE**, also failing — otherwise a mistyped command's non-zero exit
   reads as "still blocked", the exact silent pass this exists to prevent. Decisional reasons are
-  excluded by kind, and the run says how many it excluded.
+  excluded by kind, and the run says how many it excluded. A falsifier carrying a `FALSIFIER-TIER:`
+  whose tier is not made available (`--tier <name>`, repeatable, or `--live` for all) is
+  **SKIPPED-LIVE** — reported and counted, never run and never a failure — so a live-only re-test is
+  disclosed rather than either faked or failed. An unknown `--tier` is refused loudly.
 - **Subsystem drift** — for a reason declaring `TOUCHES:`, commits landing on those paths after the
   reason's date are reported for review. This is the complement that catches the shape which actually
   broke: #1035's reason asserted knip could not run without `node_modules` while a sibling module grew
@@ -117,8 +137,27 @@ verify-before-you-record step rather than by the gate:
 3. `docs/design/spec-72-crossmodule-corpus.md` restated "M6: no detector" independently of
    `m6-simplification-eval.md`, which had already corrected it. Replaced with a pointer.
 
-**Remaining, tracked as the split remainder:** the claims whose falsifier needs a live tier (M2
-two-tenant stacks, Lighthouse/CWV, SecBench, the paired Supabase security labs) have no offline
-command and are not yet migrated — the gate needs a way to record a falsifier that is legitimately
-live-only without either failing as UNVERIFIABLE or quietly passing. Likewise the ~15 remaining
-`docs/design` claim lines and the open-issue bodies, which live outside the repo entirely.
+**The live-tier remainder — now CLOSED (#1072).** The claims whose falsifier needs a live tier (M2
+two-tenant stacks, Lighthouse/CWV, SecBench, the paired Supabase security labs) had no offline
+command. #1167 gave the gate a way to record a legitimately live-only falsifier without either
+failing as UNVERIFIABLE or quietly passing — `FALSIFIER-TIER:` (above), SKIPPED-LIVE offline and
+run under `--tier`/`--live`. #1072 then migrated the five named live-tier claims into
+`FALSIFIER-TIER:` blocks:
+
+| Where | Tier |
+|---|---|
+| `docs/design/vandyand-recall-measurement.md` — M2 cannot reach orgs/line_items | `m2-stack` |
+| `docs/design/crapi-m2-portability-measurement.md` — IDOR-OBJECT crAPI-shape not re-run live | `m2-stack` |
+| `docs/design/supabase-security-labs-paired-validation.md` — static tier cannot distinguish the pair (cause 1) | `supabase-labs` |
+| `docs/design/m7-chrome-provisioning.md` — CWV needs a Lighthouse-compatible Chrome | `lighthouse` |
+| `docs/design/superredhat-recall-measurement.md` — F-11 static-missed (detectors exist, do not reach the shape) | `secbench` |
+
+Verifying-before-wrapping caught two decayed claims along the way, corrected rather than wrapped:
+`m7-lighthouse-validation.md`'s "Playwright-only machines still can't measure CWV" (resolved by
+#556/#818/#840) and its bad-`LIGHTHOUSE_CHROME_PATH`-exits-1 note (resolved by #556 Part 2).
+
+**Still remaining:** the open-issue bodies carrying unguarded claim-shaped text (worked in #1072's
+issue-comment pass, which annotates rather than edits, since issues live outside the repo), and any
+`docs/design` claim lines not among the five above. Operator-gated wiring — a
+`--revalidate --tier <name>` step in the CI cadence and a `pnpm validate-reasons` npm script — is
+tracked separately (it touches `.github/workflows/**` and `package.json`).
