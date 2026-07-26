@@ -41,8 +41,15 @@ function hasBinary(name: string): boolean {
 const MECHANICAL_BINARIES_PRESENT = ["semgrep", "trufflehog", "gitleaks"].every(hasBinary);
 
 describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-scope path leaks into client-facing output (#933)", () => {
-  // 30s: drives the real mechanical scan (semgrep/trufflehog/gitleaks/osv-scanner) as a child
-  // process, well over vitest's 5s default under load.
+  // Drives the real mechanical scan (semgrep/trufflehog/gitleaks/osv-scanner) as a child process,
+  // so vitest's 5s default is far too short. 30s was too short too: #1125 is this file blowing that
+  // budget under full-suite parallel load while passing in isolation, reproduced by two sweep
+  // executors on unrelated branches. #1120 moved the file into the serialized heavy-CLI run
+  // (vitest.config.ts), where MEASURED 2026-07-26 both tests take ~11s each on a load-25 10-core
+  // machine — but that measurement is this hardware, and this describe block has never once
+  // executed on a CI runner (the `verify` job installs none of these binaries). 120s so the budget
+  // is not the thing that discovers unfamiliar hardware; the assertion is about path leakage, and
+  // nothing about it gets weaker with more headroom.
   it("does not leak the harvey-scan-scope-* mkdtemp prefix into the rendered report", () => {
     const stdout = execFileSync("node_modules/.bin/tsx", [CLI, "--dir", CALIBRATION], {
       cwd: REPO_ROOT,
@@ -51,7 +58,7 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-sco
     });
     expect(stdout).toMatch(/verified hygiene issue/); // sanity: the calibration fixture DOES produce findings
     expect(stdout).not.toMatch(SCRATCH_PREFIX);
-  }, 30000);
+  }, 120000);
 
   it("does not leak the scratch prefix into --findings-out (the raw mechanical Finding[])", () => {
     const outDir = mkdtempSync(join(tmpdir(), "harvey-quick-scan-test-"));
@@ -64,5 +71,5 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-sco
     const findings = JSON.parse(readFileSync(findingsOutPath, "utf8")) as { location: string }[];
     expect(findings.length).toBeGreaterThan(0);
     expect(findings.some((f) => SCRATCH_PREFIX.test(f.location))).toBe(false);
-  }, 30000);
+  }, 120000);
 });
