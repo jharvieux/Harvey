@@ -1,9 +1,9 @@
-// Client-facing report sections that carry rules worth testing on their own, split out of
+// Two client-facing report sections that carry rules worth testing on their own, split out of
 // render.mjs so they can be unit-tested without launching Chromium (same pattern, and the same
 // reason, as rollup.mjs — see src/report-sections.test.ts).
 //
 //   1. §3b Test quality & intent (M8)   — #1045
-// (§0 Limitations & liability follows in #1048.)
+//   2. §0 Limitations & liability        — #1048
 //
 // Plain .mjs (not src/*.ts) because render.mjs consumes it directly at render time; TS callers get
 // types from sections.d.mts.
@@ -135,3 +135,74 @@ export function testQualityBlock(data) {
     This is a stated gap, not a clean result — nothing here says the suite is adequate.</div>`;
 }
 
+// ---------------------------------------------------------------------------
+// §0 Limitations & liability — #1048
+// ---------------------------------------------------------------------------
+//
+// docs/audit-report-skeleton.md §0 makes this REQUIRED: "point-in-time advisory; not a guarantee of
+// completeness; not a substitute for a full penetration test; liability capped at fees paid. (LLC +
+// this paragraph = bounded risk.)" The renderer emitted none of it, so every delivered report went
+// out with no stated limitations — which reads as an unbounded warranty.
+//
+// The section is NEVER gated: absent operator/counsel-approved wording it renders the DRAFT below
+// under a banner that makes shipping it as-is impossible to do by accident. That is deliberate — a
+// report silently missing its terms is the failure this closes, so "no approved text" degrades to a
+// loud draft rather than to silence.
+//
+// DRAFT STATUS: the wording below was drafted by the audit tooling and has NOT been reviewed by
+// counsel. It is placeholder scaffolding for the real terms. Harvey #11 (form the LLC + standard
+// engagement/liability terms) and #743 (trust pages, legal review) track the approval; when counsel
+// signs off, the approved text goes in the findings document as `legalTerms.text` and this constant
+// stops rendering.
+export const DRAFT_NOTICE = "DRAFT — NOT REVIEWED BY COUNSEL";
+
+// Each entry is one paragraph of the draft. Kept as data so a test can pin that every element the
+// skeleton names (point-in-time, no-completeness-guarantee, not-a-pentest, liability cap) is present.
+export const DRAFT_TERMS = [
+  ["Point-in-time advisory", "This report describes the codebase as it stood at the commit and date on the cover page. It is a point-in-time advisory and says nothing about the state of the code, its configuration, or its dependencies before or after that point. Changes made after the reviewed commit — including changes made in response to this report — are not covered."],
+  ["Not a guarantee of completeness", "The findings in this report are the issues this engagement identified within its stated scope. They are not a complete inventory of the defects, vulnerabilities, or risks present in the reviewed code. The absence of a finding is not evidence that a class of issue does not exist; the Module coverage and Confidence & limitations tables state what was assessed, what was not, and what each result does and does not prove."],
+  ["Not a penetration test or a certification", "This is a code and configuration audit. It is not a substitute for a full penetration test, a red-team exercise, or a formal security certification or attestation, and it must not be represented as any of those to a customer, auditor, insurer, or regulator."],
+  ["No warranty", "The report is provided as-is, without warranty of any kind, express or implied, including any warranty of merchantability, fitness for a particular purpose, or non-infringement. Acting on the recommendations in this report — including applying any suggested fix — remains the client's decision and the client's responsibility, and every change should be reviewed and tested by the client before it reaches production."],
+  ["Limitation of liability", "To the maximum extent permitted by law, total liability arising out of or relating to this engagement is limited to the fees actually paid for it, and does not extend to indirect, incidental, consequential, special, or punitive damages, or to lost profits, revenue, or data."],
+  ["Confidentiality", "This report is prepared for the named client and contains information about that client's systems. It should be handled as confidential and shared only with people who need it to act on the findings."],
+];
+
+// The scope limit sentence is DERIVED from the coverage ledger, not hand-written: the ledger already
+// knows exactly which modules did not fully run and why, and a hand-typed scope paragraph would go
+// stale the first time a tier was added or dropped.
+export function derivedScopeLimits(coverage) {
+  const rows = coverage ?? [];
+  if (!rows.length) return "This engagement carried no derived coverage ledger, so the modules assessed cannot be enumerated here — treat the scope as unstated rather than complete.";
+  const gaps = rows.filter((r) => r.status !== "ran");
+  if (!gaps.length) return `All ${rows.length} module row(s) in the coverage ledger were assessed. Scope limits within each module are stated in the Confidence & limitations table.`;
+  const list = gaps.map((g) => `${g.module}${g.instance ? ` (${g.instance})` : ""} — ${g.status}: ${g.reason ?? "no reason recorded"}`);
+  return `${gaps.length} of ${rows.length} module row(s) were NOT fully assessed on this engagement, and nothing in this report warrants their subject matter: ${list.join("; ")}.`;
+}
+
+export function legalTermsSection(data) {
+  const m = data.meta ?? {};
+  const approved = data.legalTerms?.text;
+  const banner = approved
+    ? `<div style="font-size:11px;color:var(--muted);margin-bottom:8px">Engagement terms as supplied for this engagement${data.legalTerms.approvedBy ? ` (approved by ${esc(data.legalTerms.approvedBy)})` : " — no approver recorded"}.</div>`
+    : `<div class="crit" style="background:#fef2f2;border-color:#fecaca">
+        <div class="cu" style="color:#b3261e">⚠ ${DRAFT_NOTICE} — DO NOT DELIVER THIS REPORT AS-IS</div>
+        <div>The limitations and liability wording below is <b>placeholder text generated by the audit tooling</b>. It has not been
+        reviewed or approved by counsel and is not this engagement's legal terms. Replace it with counsel-approved wording
+        (supply <code>legalTerms.text</code> in the findings document) before this report is delivered to a client.
+        Tracked by Harvey #11 (entity + standard engagement/liability terms) and #743 (trust pages, legal review).</div>
+      </div>`;
+  const body = approved
+    ? `<div class="kv" style="white-space:pre-wrap">${esc(approved)}</div>`
+    : DRAFT_TERMS.map(([h, p]) => `<div class="kv" style="margin-top:8px"><b style="width:auto;display:block;color:#0f172a">${esc(h)}</b>${esc(p)}</div>`).join("");
+  return `<h2>Limitations &amp; liability</h2>
+    ${banner}
+    <div class="kv" style="margin-top:8px"><b style="width:auto;display:block;color:#0f172a">Scope reviewed</b>${esc(m.scope ?? "not stated")}${m.commit ? ` Reviewed at ${esc(m.commit)}${m.date ? ` on ${esc(m.date)}` : ""}.` : ""}</div>
+    <div class="kv" style="margin-top:8px"><b style="width:auto;display:block;color:#0f172a">What this engagement did not assess</b>${esc(derivedScopeLimits(data.coverage))}</div>
+    ${body}`;
+}
+
+// The cover-page counterpart to the banner above: an unapproved report is marked on page one, so a
+// draft can never be skimmed past on its way to a client.
+export function draftTermsBadge(data) {
+  return data.legalTerms?.text ? "" : `<div class="conf" style="margin-left:8px">${DRAFT_NOTICE}</div>`;
+}

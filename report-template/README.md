@@ -53,4 +53,8 @@ evidence, impact, fix, status, note`
   renderer derives one from the row's numbers when the operator has not written it. Absent
   `testQuality` with an M8 coverage row ⇒ the section states that no mutation measurement was
   produced, rather than disappearing.
+- **`legalTerms`** (#1048) — `{ text, approvedBy? }`. The **Limitations & liability** section is
+  ALWAYS rendered; without `legalTerms.text` it emits the tooling's DRAFT wording under a
+  "not reviewed by counsel — do not deliver as-is" banner (plus a cover-page badge). Supply
+  counsel-approved text here before a report ships. See `report-template/sections.mjs`.
 - **`baseline`** (#457) — the re-audit progress diff, when a `--baseline` was supplied.

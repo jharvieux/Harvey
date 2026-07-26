@@ -214,6 +214,15 @@ export interface TestQuality {
   survivorTotal: number;
 }
 
+// #1048: the engagement's limitations/liability wording. Absent ⇒ the renderer emits its DRAFT
+// text under a pending-legal-review banner; it is never omitted, because a report with no stated
+// limitations reads as an unbounded warranty.
+export interface LegalTerms {
+  text: string;
+  // Who approved it (counsel/operator). Recorded on the page so an unattributed block is visible.
+  approvedBy?: string;
+}
+
 export interface FindingsDocument {
   meta: ReportMeta;
   findings: Finding[];
@@ -227,6 +236,8 @@ export interface FindingsDocument {
   // M8's per-module test-quality table (#1045). Present when the run's mutation tier produced a
   // measurement; absent when it did not — the M8 coverage row carries the reason in that case.
   testQuality?: TestQuality;
+  // Operator/counsel-approved limitations & liability wording (#1048).
+  legalTerms?: LegalTerms;
 }
 
 // Bang-for-the-buck score, 0–100. Mirrors the formula in report-template/render.mjs.
@@ -364,6 +375,9 @@ export function validateFindings(data: unknown): ValidationResult {
   if (data.coverage !== undefined) validateCoverage(data.coverage, errors);
   if (data.baseline !== undefined) validateBaseline(data.baseline, errors);
   if (data.testQuality !== undefined) validateTestQuality(data.testQuality, errors);
+  if (data.legalTerms !== undefined && (!isRecord(data.legalTerms) || typeof data.legalTerms.text !== "string" || data.legalTerms.text.trim() === "")) {
+    errors.push("legalTerms.text: expected non-empty string — an empty terms block would render as approved-but-blank");
+  }
 
   // #509: refuse a "done"/"complete" headline over a ledger that isn't. Only checked when a
   // derived ledger is present — a hand-authored legacy doc with no coverage[] has nothing to

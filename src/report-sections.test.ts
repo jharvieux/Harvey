@@ -1,7 +1,11 @@
-// #1045 — §3b Test quality (report-template/sections.mjs): render.mjs gated the section on a
-// `testQuality` key NO producer ever set, and the shape it drew (one overall score) was not the
-// per-module table the skeleton specifies. So a full mutation run's numbers were computed and
-// dropped on the floor.
+// The two client-facing report sections that were specified but never reached the page
+// (report-template/sections.mjs):
+//
+//   #1045 — §3b Test quality: render.mjs gated the section on a `testQuality` key NO producer ever
+//           set, and the shape it drew (one overall score) was not the per-module table the
+//           skeleton specifies. So a full mutation run's numbers were computed and dropped.
+//   #1048 — §0 Limitations & liability: `grep -n liabilit report-template/*.mjs` returned nothing,
+//           so every delivered report carried no scope caveat and no liability cap.
 //
 // These pin what a paying client SEES, plus the honesty rules the numbers must never lose: a scoped
 // score is never a whole-repo claim, an ungenerated Line-cov cell is never drawn as 0%, and an
@@ -9,6 +13,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  DRAFT_NOTICE,
+  DRAFT_TERMS,
+  derivedScopeLimits,
+  draftTermsBadge,
+  legalTermsSection,
   testQualityAction,
   testQualityBlock,
   testQualitySection,
@@ -149,5 +158,54 @@ describe("a real mutation run reaches the rendered report (#1045)", () => {
     expect(html).toContain("src/auth");
     expect(html).toContain("41%");
     expect(html).not.toContain("No mutation measurement");
+  });
+});
+
+describe("§0 Limitations & liability (#1048)", () => {
+  it("always renders — the section is never gated on the wording being present", () => {
+    const html = legalTermsSection(doc());
+    expect(html).toContain("Limitations &amp; liability");
+  });
+
+  it("marks tooling-drafted wording as unapproved, on the section AND the cover", () => {
+    const html = legalTermsSection(doc());
+    expect(html).toContain(DRAFT_NOTICE);
+    expect(html).toContain("DO NOT DELIVER THIS REPORT AS-IS");
+    expect(html).toContain("#11"); // the entity + engagement-terms work
+    expect(html).toContain("#743"); // trust pages / legal review
+    expect(draftTermsBadge(doc())).toContain(DRAFT_NOTICE);
+  });
+
+  it("covers every element the skeleton requires", () => {
+    const text = DRAFT_TERMS.map(([h, p]) => `${h} ${p}`).join(" ").toLowerCase();
+    expect(text).toContain("point-in-time");
+    expect(text).toContain("not a complete inventory");
+    expect(text).toContain("not a substitute for a full penetration test");
+    expect(text).toContain("limited to the fees actually paid");
+    expect(text).toContain("without warranty");
+  });
+
+  it("takes operator/counsel-approved wording verbatim and drops the draft banner", () => {
+    const html = legalTermsSection(doc({ legalTerms: { text: "Liability is capped at the fees paid.", approvedBy: "Counsel" } }));
+    expect(html).toContain("Liability is capped at the fees paid.");
+    expect(html).toContain("approved by Counsel");
+    expect(html).not.toContain(DRAFT_NOTICE);
+    expect(html).not.toContain("Limitation of liability"); // the draft's own headings are gone
+    expect(draftTermsBadge(doc({ legalTerms: { text: "x" } }))).toBe("");
+  });
+
+  it("derives what was NOT assessed from the coverage ledger, with each reason", () => {
+    const coverage: CoverageRow[] = [
+      { module: "M1", name: "Multi-tenant security", status: "ran", detail: "pnpm scan" },
+      { module: "M2", name: "Local pen-test", status: "requires-live-run", reason: "no local stack was stood up" },
+    ];
+    const derived = derivedScopeLimits(coverage);
+    expect(derived).toContain("1 of 2 module row(s) were NOT fully assessed");
+    expect(derived).toContain("M2 — requires-live-run: no local stack was stood up");
+    expect(legalTermsSection(doc({ coverage }))).toContain("no local stack was stood up");
+  });
+
+  it("does not claim completeness when the ledger is absent", () => {
+    expect(derivedScopeLimits(undefined)).toContain("treat the scope as unstated rather than complete");
   });
 });

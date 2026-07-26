@@ -16,7 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
 import { capActionPlan, rollupFindings } from "./rollup.mjs";
-import { esc, testQualityBlock } from "./sections.mjs";
+import { draftTermsBadge, esc, legalTermsSection, testQualityBlock } from "./sections.mjs";
 
 const SEV = {
   Critical: { c: "#b3261e", o: 0 },
@@ -443,7 +443,7 @@ function buildHtml(data) {
     <h1>Security &amp; Health Audit</h1>
     <div class="sub">${esc(m.client)} — ${esc(m.subtitle)}</div>
     <div class="sub">${esc(m.date)} · ${esc(m.commit)} · Prepared by ${esc(m.auditor)}</div>
-    ${m.confidential ? '<div class="conf">CONFIDENTIAL</div>' : ""}
+    ${m.confidential ? '<div class="conf">CONFIDENTIAL</div>' : ""}${draftTermsBadge(data)}
 
     <div class="grid">
       <div class="card">${healthGauge(m.overallHealth)}</div>
@@ -491,6 +491,7 @@ function buildHtml(data) {
     ${na.length ? `<h2>Checked &amp; ruled out (not applicable)</h2>
     <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Items a checklist would flag, suppressed by the applicability gate (relevant to this app's auth model / architecture). Shown for transparency.</div>
     ${na.map((x) => `<div class="na"><span class="fid">${esc(x.id)}</span> <b>${esc(x.title)}</b> — ${esc(x.note ?? "Not applicable in context.")}</div>`).join("")}` : ""}
+    ${legalTermsSection(data)}
   </div>
   </body></html>`;
 }
