@@ -65,6 +65,47 @@ describe("validateFindings — mechanical scan fields", () => {
   });
 });
 
+// #1083: report-template/render.mjs places a finding in the report ONLY if it's asserted
+// (confidence !== "N/A" && !reviewFlagOnly), N/A (confidence === "N/A"), or review-flagged
+// (reviewFlagColumns.length > 0). A reviewFlagOnly finding with no reviewFlagColumns and a
+// non-"N/A" confidence matches none of the three and renders in no section — latent until #1083,
+// since the sole current producer (tools/pii-classify.mjs) always sets both together.
+describe("validateFindings — reviewFlagOnly requires reviewFlagColumns (#1083)", () => {
+  it("rejects reviewFlagOnly: true with no reviewFlagColumns — it would render in no report section", () => {
+    const doc = {
+      ...example,
+      findings: [{ ...example.findings[0], confidence: "Likely", reviewFlagOnly: true }],
+    };
+    const { ok, errors } = validateFindings(doc);
+    expect(ok).toBe(false);
+    expect(errors).toContainEqual(expect.stringContaining("findings[0].reviewFlagColumns"));
+  });
+
+  it("rejects reviewFlagOnly: true with an empty reviewFlagColumns array", () => {
+    const doc = {
+      ...example,
+      findings: [{ ...example.findings[0], confidence: "Likely", reviewFlagOnly: true, reviewFlagColumns: [] }],
+    };
+    expect(validateFindings(doc).ok).toBe(false);
+  });
+
+  it("accepts reviewFlagOnly: true when reviewFlagColumns is non-empty", () => {
+    const doc = {
+      ...example,
+      findings: [{ ...example.findings[0], confidence: "Likely", reviewFlagOnly: true, reviewFlagColumns: ["metadata"] }],
+    };
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+
+  it("accepts reviewFlagOnly: true with no reviewFlagColumns when confidence is N/A (the na section still shows it)", () => {
+    const doc = {
+      ...example,
+      findings: [{ ...example.findings[0], confidence: "N/A", reviewFlagOnly: true }],
+    };
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+});
+
 describe("validateFindings — cwe/owasp (#455)", () => {
   it("accepts a finding with cwe/owasp arrays set", () => {
     const doc = {

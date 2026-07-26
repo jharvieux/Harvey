@@ -464,6 +464,14 @@ export function validateFindings(data: unknown): ValidationResult {
         errors.push(`${at}.reviewFlagColumns: expected an array of strings`);
       }
     }
+    // #1083: the renderer places a finding in the report ONLY if it's in the asserted-findings list
+    // (confidence !== "N/A" && !reviewFlagOnly), the N/A list (confidence === "N/A"), or the
+    // review-flagged section (reviewFlagColumns.length > 0) — report-template/render.mjs. A
+    // reviewFlagOnly finding with no reviewFlagColumns and confidence !== "N/A" matches none of the
+    // three and renders in no section, while still being present in findings.json.
+    if (f.reviewFlagOnly === true && f.confidence !== "N/A" && !(Array.isArray(f.reviewFlagColumns) && f.reviewFlagColumns.length > 0)) {
+      errors.push(`${at}.reviewFlagColumns: required (non-empty) when reviewFlagOnly is true and confidence is not "N/A" — otherwise the finding renders in no report section`);
+    }
     if (f.baselineStatus !== undefined && !BASELINE_STATUSES.includes(f.baselineStatus as BaselineStatus)) {
       errors.push(`${at}.baselineStatus: "${String(f.baselineStatus)}" not one of ${BASELINE_STATUSES.join("/")}`);
     }

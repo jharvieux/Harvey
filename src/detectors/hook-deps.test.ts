@@ -5,7 +5,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { Linter } from "eslint";
+import { describe, expect, it, vi } from "vitest";
 import { detectHookDepFindings } from "./hook-deps.js";
 import type { SourceInput } from "./common.js";
 
@@ -43,5 +44,32 @@ describe("missing hook dependencies (react-hooks/exhaustive-deps adapter)", () =
   it("emits M7H ids so it can merge with M7C findings without collision", () => {
     const hits = detectHookDepFindings(loadFixtureDir("hook-deps/positive"));
     expect(hits[0]?.id).toBe("M7H-01");
+  });
+});
+
+// #1083: a file this pass's own ESLint+typescript-eslint config fails on used to be silently
+// dropped (`catch { continue; }`), behind a comment claiming "the other detectors already skip
+// it too" — false: the shared loader (load-sources.ts) has no try/catch, so an unreadable file
+// throws there and fails the WHOLE pass loud, before hook-deps.ts ever sees it. This only covers a
+// file that IS readable but this pass's own linter config chokes on. Simulated via a mocked
+// Linter.prototype.verify (a real-world trigger wasn't reproducible: ESLint's own verify() catches
+// parse errors and even parser stack overflows internally, converting them to `fatal` messages
+// rather than throwing — TRIED 2026-07-25, see PR body).
+describe("hook-deps lint parse failure disclosure (#1083)", () => {
+  it("counts and discloses a file the linter throws on, instead of silently dropping it", () => {
+    const spy = vi.spyOn(Linter.prototype, "verify").mockImplementation(() => {
+      throw new Error("simulated linter crash");
+    });
+    try {
+      const files: SourceInput[] = [{ path: "components/broken.tsx", text: "function Foo() { useEffect(() => { doSomething(userId) }, []) }" }];
+      const hits = detectHookDepFindings(files);
+      const coverage = hits.find((h) => h.id === "M7H-00");
+      expect(coverage).toBeDefined();
+      expect(coverage?.category).toBe("Coverage");
+      expect(coverage?.severity).toBe("Info");
+      expect(coverage?.evidence).toContain("components/broken.tsx");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

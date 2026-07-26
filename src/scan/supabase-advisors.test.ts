@@ -191,3 +191,57 @@ describe("parseAdvisorFindings — #671 auth-method gating", () => {
     expect(findings.find((x) => x.taxonomy === "auth_leaked_password_protection")!.severity).toBe("Medium");
   });
 });
+
+// #1083 — Splinter (local/connected tier) returns SECURITY and PERFORMANCE lints in one pass;
+// a PERFORMANCE lint must route through M7's curated profile (src/perf-scan.ts), not be filed as
+// a generic "Supabase advisor" Low with a docs-link fix.
+const MIXED_CATEGORY_FIXTURE: AdvisorsResponse = {
+  lints: [
+    {
+      name: "unindexed_foreign_keys",
+      title: "Unindexed foreign keys",
+      level: "INFO",
+      facing: "EXTERNAL",
+      categories: ["PERFORMANCE"],
+      description: "Identifies foreign key constraints without a covering index, which can impact database performance.",
+      detail: "Table `public.audit_logs` has a foreign key `audit_logs_tenant_id_fkey` without a covering index.",
+      remediation: "https://supabase.com/docs/guides/database/database-linter?lint=0001_unindexed_foreign_keys",
+      metadata: { name: "audit_logs", type: "table", schema: "public" },
+      cache_key: "unindexed_foreign_keys_public_audit_logs",
+    },
+    {
+      name: "rls_disabled_in_public",
+      title: "RLS Disabled in Public",
+      level: "ERROR",
+      facing: "EXTERNAL",
+      categories: ["SECURITY"],
+      detail: "Table `public.orders` is public, but RLS has not been enabled.",
+      metadata: { name: "orders", type: "table", schema: "public" },
+      cache_key: "rls_disabled_in_public_public_orders",
+    },
+  ],
+};
+
+describe("parseAdvisorFindings — #1083 PERFORMANCE lints route through M7's profile", () => {
+  it("files a PERFORMANCE-category lint under category Performance with M7's curated impact/fix, not a generic docs-link", () => {
+    const findings = parseAdvisorFindings(MIXED_CATEGORY_FIXTURE);
+    const perf = findings.find((f) => f.taxonomy === "unindexed_foreign_keys")!;
+    expect(perf.category).toBe("Performance");
+    expect(perf.severity).toBe("Perf");
+    expect(perf.impact).toContain("Sequential scans");
+    expect(perf.fix).toContain("covering-index migration");
+  });
+
+  it("leaves a SECURITY-category lint filed as a Supabase advisor, unaffected", () => {
+    const findings = parseAdvisorFindings(MIXED_CATEGORY_FIXTURE);
+    const sec = findings.find((f) => f.taxonomy === "rls_disabled_in_public")!;
+    expect(sec.category).toBe("Supabase advisor");
+    expect(sec.severity).toBe("Critical");
+  });
+
+  it("folds facing (EXTERNAL/INTERNAL) into the evidence text since Finding has no dedicated field for it", () => {
+    const findings = parseAdvisorFindings(MIXED_CATEGORY_FIXTURE);
+    const perf = findings.find((f) => f.taxonomy === "unindexed_foreign_keys")!;
+    expect(perf.evidence).toContain("external-facing");
+  });
+});
