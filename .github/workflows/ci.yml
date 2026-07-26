@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # #1138: a daily run so heavy-cli (the seven heavy files + real binaries) is exercised on a
+  # cadence, not only when a push/PR touches code. A regression from something no PR touches — a
+  # transitive dep bump, a runner-image change, a scanner-binary drift — would otherwise never trip
+  # it. On a schedule event the `changes` router sets code=true, so heavy-cli (and the full verify)
+  # run as a post-merge-style safety net.
+  schedule:
+    - cron: "0 6 * * *" # daily 06:00 UTC
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -86,6 +93,11 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # issues: write so a scheduled failure can find-or-update its tracking issue (#1138). A
+    # job-level block replaces the default token perms, so contents: read is restated for checkout.
+    permissions:
+      contents: read
+      issues: write
     steps:
       # The mechanical scan these drive reads git history (trufflehog/gitleaks); a shallow clone
       # would quietly narrow what they cover. Same reason as conservation.yml.
@@ -128,6 +140,28 @@ jobs:
         env:
           HARVEY_HEAVY_CLI_TESTS: "1"
         run: pnpm exec vitest run
+
+      # A scheduled heavy-cli failure (#1138) means a regression from something no PR touched. It
+      # goes red on main with no PR to surface it, so find-or-update ONE tracking issue by the marker
+      # label: comment on the open one if it exists, otherwise create it. Never fires on PR/push —
+      # those failures already gate the `verify` check on the PR. Distinct label from corpus-drift's.
+      - name: Open or update the heavy-cli tracking issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MARKER: ci-heavy-cli-alert
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create "$MARKER" --color B60205 \
+            --description "Auto-opened when the scheduled heavy-cli CI run fails" 2>/dev/null || true
+          body="The scheduled heavy-cli run failed (run: $RUN_URL). This job runs the seven heavy child-process test files with the real mechanical binaries (semgrep/trufflehog/gitleaks/osv-scanner). A failure here with no code change points at an environment regression — a transitive dep bump, a runner-image change, or a scanner-binary drift. Investigate the run, then close this issue once green."
+          existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "heavy-cli scheduled run failing" --label "$MARKER" --body "$body"
+          fi
 
   actionlint:
     name: actionlint

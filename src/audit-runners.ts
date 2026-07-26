@@ -543,9 +543,17 @@ const m4: ModuleRunner = { module: "M4", typed: true, run: perApp(m4Run) };
 //
 // #1109: migrated alongside M4 — same CLI, same stderr fix (see m4Run). knip's unit is the SCOPE
 // count: it analyses one workspace scope at a time, and quality-scan now names the total on its
-// stderr summary line. The M5-00 rung is the one branch that becomes a NotAssessed rather than an
-// Examined, and correctly so — "knip did not run on any scope" means nothing was examined, which is
-// exactly the sentence a `partial` with no unit count could not distinguish from a clean sweep.
+// stderr summary line.
+//
+// #1137: the M5-00 gap disclosure has TWO shapes, and the probe must not collapse them. When knip
+// analysed NO scope (no "M5 dead code across N scope(s)" line), nothing was examined → NotAssessed,
+// with the disclosure carried in the reason rather than as a dropped Finding. But when SOME scopes
+// completed and others failed, quality-scan emits M5-00 ALONGSIDE the completed scopes' real
+// dead-code findings — treating that as NotAssessed (as this probe used to) mislabels a partial run
+// as unassessed AND drops the completed findings the client is owed. That is a partial Examined that
+// carries `own` (the completed findings plus the M5-00 disclosure row), mirroring how m4Run carries
+// M4-99. The tell is scopesAnalysed: >0 means knip ran somewhere, so the M5-00 is a coverage gap,
+// not an "it never ran".
 const m5Run = (ctx: RunContext): ProbeResult => {
   const depsInstalled = hasNodeModules(ctx);
   const outPath = captureOut(ctx, "M5");
@@ -558,25 +566,32 @@ const m5Run = (ctx: RunContext): ProbeResult => {
   if (!findings) return { kind: "not-assessed", reason: `could not read quality-scan output to confirm knip ran: ${trimOut(output)}`, provenance: "MEASURED", falsifier: command };
   const emitted = (id: string): boolean => findings.some((f) => (f as { id?: string }).id === id);
   const scopeFalsifier = `${command} 2>&1 >/dev/null | grep -E "^M5 dead code across [1-9][0-9]* scope\\(s\\)"`;
-  if (emitted("M5-00")) {
-    return {
-      kind: "not-assessed",
-      reason: "knip did not run — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage was skipped this pass (M4 duplication still ran) (#223/#350)",
-      provenance: "MEASURED",
-      falsifier: scopeFalsifier,
-    };
-  }
   const scopes = scopesAnalysed(stderr);
   if (!scopes) {
-    return {
-      kind: "not-assessed",
-      reason: `quality-scan exited 0 and emitted no M5-00, but reported no knip scope count on stderr — an exit code alone is not evidence dead code was analysed (#350/#1109): ${trimOut(stderr ?? "")}`,
-      provenance: "MEASURED",
-      falsifier: scopeFalsifier,
-    };
+    // knip analysed no scope this pass. Either it emitted the M5-00 "did not run" disclosure, or it
+    // exited 0 with no scope summary at all — both are NotAssessed (nothing examined), and the M5-00
+    // shape rides the reason rather than a Finding no channel would deliver (#1137).
+    return emitted("M5-00")
+      ? {
+          kind: "not-assessed",
+          reason: "knip did not run on any scope — quality-scan emitted the M5-00 disclosure finding, so no dead code was analysed this pass (M4 duplication still ran) (#223/#350/#1137)",
+          provenance: "MEASURED",
+          falsifier: scopeFalsifier,
+        }
+      : {
+          kind: "not-assessed",
+          reason: `quality-scan exited 0 and emitted no M5-00, but reported no knip scope count on stderr — an exit code alone is not evidence dead code was analysed (#350/#1109): ${trimOut(stderr ?? "")}`,
+          provenance: "MEASURED",
+          falsifier: scopeFalsifier,
+        };
   }
   const own = ownRows(findings, "M5");
   const analysed = { unitsExamined: scopes, scope: "workspace scopes analysed by knip", findings: outPath ? own : [] } as const;
+  if (emitted("M5-00")) {
+    // Partial: knip ran on `scopes` workspace(s) but failed on others. The completed findings AND the
+    // M5-00 disclosure row (both in `own`) reach the deliverable; the reason names the gap (#505/#1137).
+    return { kind: "examined", detail: command, ...analysed, reason: "knip did not complete on every scope — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage is incomplete for this pass (the scopes that did complete are reported) (#505/#1137)" };
+  }
   if (emitted("M5-98")) {
     return {
       kind: "examined",
