@@ -6,7 +6,7 @@
 // a `packages/**` package: under per-workspace jscpd M4 sees nothing; under whole-repo it must find
 // the cross-workspace pair. A regression back to per-workspace jscpd fails this test.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -58,21 +58,33 @@ function monorepoFixture(): string {
   return repo;
 }
 
-function runCli(repo: string): Finding[] {
-  const outPath = join(repo, "quality-out.json");
-  execFileSync("node_modules/.bin/tsx", [CLI, repo, "--out", outPath], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    stdio: ["ignore", "ignore", "pipe"],
+// #1134: awaited spawn, not execFileSync. execFileSync blocks the vitest worker's event loop for the
+// call's duration, and a blocked worker cannot service the birpc ack for a task update it already
+// sent — vitest hardcodes a 60s window for that ack (see vitest.config.ts's HEAVY_CLI_TESTS comment,
+// and #1120/#1133 which found run-audit.test.ts's beforeAll actually over that line). Measured calls
+// here are ~0.7-1.7s each on this hardware, well under the ceiling either way, but the standing
+// constraint is "no single blocking window may approach 60s" for every heavy CLI test.
+function spawnCli(binPath: string, args: string[], cwd: string): Promise<void> {
+  return new Promise((res, rej) => {
+    const child = spawn(binPath, args, { cwd, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (d: Buffer) => (stderr += d));
+    child.on("error", rej);
+    child.on("close", (code) => (code === 0 ? res() : rej(new Error(`${binPath} ${args.join(" ")} exited ${code}: ${stderr}`))));
   });
+}
+
+async function runCli(repo: string): Promise<Finding[]> {
+  const outPath = join(repo, "quality-out.json");
+  await spawnCli("node_modules/.bin/tsx", [CLI, repo, "--out", outPath], REPO_ROOT);
   return JSON.parse(readFileSync(outPath, "utf8")) as Finding[];
 }
 
 describe("quality-scan CLI — jscpd runs whole-repo so cross-workspace clones are detected (#544)", () => {
   // 30s: drives the real CLI end-to-end (jscpd whole-repo + per-workspace knip on the now-enumerated
   // packages/** workspace, #548) as a child process — well over vitest's 5s default under load.
-  it("finds a clone spanning apps/web and a packages/** workspace", () => {
-    const findings = runCli(monorepoFixture());
+  it("finds a clone spanning apps/web and a packages/** workspace", async () => {
+    const findings = await runCli(monorepoFixture());
     const crossWorkspace = findings.filter(
       (f) => f.taxonomy.startsWith("M4 —") && f.location.includes("apps/web") && f.location.includes("packages/billing"),
     );
@@ -82,8 +94,8 @@ describe("quality-scan CLI — jscpd runs whole-repo so cross-workspace clones a
   // #580: this target has NO vite markers and a healthy (mostly-used) file set — the disclosure
   // must stay silent on a target that never asked the question, matching "a normal Vite target
   // with the plugin active is unaffected" from a non-Vite target's side too.
-  it("does not raise the M5-99 entry-uncertain disclosure on a normal, non-Vite target", () => {
-    const findings = runCli(monorepoFixture());
+  it("does not raise the M5-99 entry-uncertain disclosure on a normal, non-Vite target", async () => {
+    const findings = await runCli(monorepoFixture());
     expect(findings.find((f) => f.id === "M5-99")).toBeUndefined();
   }, 30000);
 });
@@ -137,8 +149,8 @@ function exportedTypesFixture(): string {
 }
 
 describe("quality-scan CLI — M5 injects knip ignoreExportsUsedInFile so exported-by-convention types aren't over-reported (#693/AoP#566)", () => {
-  it("suppresses a Props type used only in-file but still reports a truly-unreferenced exported type", () => {
-    const findings = runCli(exportedTypesFixture());
+  it("suppresses a Props type used only in-file but still reports a truly-unreferenced exported type", async () => {
+    const findings = await runCli(exportedTypesFixture());
     const typeFinding = findings.find((f) => f.title.includes("Exported-but-unreferenced type"));
     expect(typeFinding).toBeDefined();
     expect(typeFinding?.evidence).toContain("OrphanType");
@@ -149,8 +161,8 @@ describe("quality-scan CLI — M5 injects knip ignoreExportsUsedInFile so export
 });
 
 describe("quality-scan CLI — M5 discloses uncertain knip entry resolution on a mis-resolved Vite target (#580)", () => {
-  it("raises M5-99 when vite.config.ts/index.html are present but `vite` isn't resolvable", () => {
-    const findings = runCli(misresolvedViteFixture());
+  it("raises M5-99 when vite.config.ts/index.html are present but `vite` isn't resolvable", async () => {
+    const findings = await runCli(misresolvedViteFixture());
     const disclosure = findings.find((f) => f.id === "M5-99");
     expect(disclosure).toBeDefined();
     expect(disclosure?.taxonomy).toContain("M5");
@@ -185,8 +197,8 @@ function configlessNextFixture(): string {
 }
 
 describe("quality-scan CLI — M5 generates a knip config for a config-less scope so entries resolve (#696)", () => {
-  it("does not flag a test-only-imported lib (test globs make the test an entry), still flags a genuinely-dead lib as review-tier", () => {
-    const findings = runCli(configlessNextFixture());
+  it("does not flag a test-only-imported lib (test globs make the test an entry), still flags a genuinely-dead lib as review-tier", async () => {
+    const findings = await runCli(configlessNextFixture());
     const unusedFile = (name: string) => findings.find((f) => f.taxonomy.startsWith("M5 —") && f.title.startsWith("Unused") && f.location.endsWith(name));
 
     // test-only-imported file rescued by the generated test glob
@@ -216,8 +228,8 @@ function configlessViteFixture(): string {
 }
 
 describe("quality-scan CLI — M5 resolves Vite entries (index.html/main/vite.config) from a generated config (#696)", () => {
-  it("rescues vite.config.ts and main-reachable files, still flags a dead file at review tier", () => {
-    const findings = runCli(configlessViteFixture());
+  it("rescues vite.config.ts and main-reachable files, still flags a dead file at review tier", async () => {
+    const findings = await runCli(configlessViteFixture());
     const unusedFile = (name: string) => findings.find((f) => f.taxonomy.startsWith("M5 —") && f.title.startsWith("Unused") && f.location.endsWith(name));
 
     // index.html/main entry declared by the generated Vite globs keeps main.ts + its import used;
@@ -248,8 +260,8 @@ function ownKnipConfigFixture(): string {
 }
 
 describe("quality-scan CLI — M5 never overrides a target's own knip entry config (#696), only merges ignoreExportsUsedInFile (#695)", () => {
-  it("respects the target's entries (its config governs) and keeps its file findings Confirmed", () => {
-    const findings = runCli(ownKnipConfigFixture());
+  it("respects the target's entries (its config governs) and keeps its file findings Confirmed", async () => {
+    const findings = await runCli(ownKnipConfigFixture());
     const unusedFile = (name: string) => findings.find((f) => f.taxonomy.startsWith("M5 —") && f.title.startsWith("Unused") && f.location.endsWith(name));
 
     // reachable via the TARGET's own custom entry — proves Harvey did not override entries.
@@ -288,8 +300,8 @@ function noNodeModulesViteFixture(): string {
 }
 
 describe("quality-scan CLI — M5 runs without the target's node_modules via a plugins-disabled retry (#810)", () => {
-  it("produces dead-code findings on a no-node_modules target and discloses the reduced tier as M5-98, not the M5-00 gap", () => {
-    const findings = runCli(noNodeModulesViteFixture());
+  it("produces dead-code findings on a no-node_modules target and discloses the reduced tier as M5-98, not the M5-00 gap", async () => {
+    const findings = await runCli(noNodeModulesViteFixture());
     const unusedFile = (name: string) => findings.find((f) => f.taxonomy.startsWith("M5 —") && f.title.startsWith("Unused") && f.location.endsWith(name));
 
     // The dead file is surfaced even though knip could not load the target's config — at review tier
@@ -344,23 +356,19 @@ function poisonCwdFixture(): { poisonCwd: string; target: string } {
   return { poisonCwd, target };
 }
 
-function runCliFromCwd(cwd: string, repo: string): Finding[] {
+async function runCliFromCwd(cwd: string, repo: string): Promise<Finding[]> {
   const outPath = join(repo, "quality-out.json");
   // Absolute tsx path: `cwd` here is the whole point under test (an unrelated directory), so a
   // repo-relative "node_modules/.bin/tsx" (which every other helper in this file can use because
   // THEY pin cwd: REPO_ROOT) would not resolve.
-  execFileSync(join(REPO_ROOT, "node_modules", ".bin", "tsx"), [CLI, repo, "--out", outPath], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "ignore", "pipe"],
-  });
+  await spawnCli(join(REPO_ROOT, "node_modules", ".bin", "tsx"), [CLI, repo, "--out", outPath], cwd);
   return JSON.parse(readFileSync(outPath, "utf8")) as Finding[];
 }
 
 describe("quality-scan CLI — jscpd is not poisoned by an unrelated CWD's .gitignore/.jscpd.json (#948)", () => {
-  it("finds the real cross-file clone even when launched from a CWD whose own .gitignore would (if leaked) exclude the whole target", () => {
+  it("finds the real cross-file clone even when launched from a CWD whose own .gitignore would (if leaked) exclude the whole target", async () => {
     const { poisonCwd, target } = poisonCwdFixture();
-    const findings = runCliFromCwd(poisonCwd, target);
+    const findings = await runCliFromCwd(poisonCwd, target);
 
     const clone = findings.filter((f) => f.taxonomy.startsWith("M4 —") && f.location.includes("zzz/dup/a.ts") && f.location.includes("zzz/dup/b.ts"));
     expect(clone.length).toBeGreaterThan(0);
@@ -389,8 +397,8 @@ function unusedDependencyFixture(): string {
 }
 
 describe("quality-scan CLI — M5 reports unused dependencies (#1050)", () => {
-  it("surfaces a declared-but-never-imported runtime dependency and devDependency as M5 findings", () => {
-    const findings = runCli(unusedDependencyFixture());
+  it("surfaces a declared-but-never-imported runtime dependency and devDependency as M5 findings", async () => {
+    const findings = await runCli(unusedDependencyFixture());
     const deps = findings.find((f) => f.title === "Unused dependencies declared in package.json");
     const devDeps = findings.find((f) => f.title === "Unused devDependencies declared in package.json");
 
