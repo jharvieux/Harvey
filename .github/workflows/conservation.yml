@@ -90,6 +90,9 @@ jobs:
             | tar -xz -C "$HOME/.local/bin" gitleaks
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: OSV-scanner fixture schema drift check
+        run: pnpm exec tsx src/cli/osv-fixture-drift.ts
+
       # M3's FULL tier is the `vitals` plugin. Without it hotspot-scan drops to the reduced
       # churn×complexity tier (#807), which computes a ranking but no knowledge-risk analysis — so
       # it structurally cannot produce M3's planted truck-factor-1 row and the gate correctly
