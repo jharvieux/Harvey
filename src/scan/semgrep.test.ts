@@ -9,6 +9,7 @@ import {
   CI_PIPELINE_CATEGORY,
   CORS_BARE_WILDCARD_TAXONOMY,
   parseSemgrepFindings,
+  partitionGuardTokenSuppressed,
   partitionMarkerSuppressed,
   POSTMESSAGE_WILDCARD_TAXONOMY,
   runSemgrep,
@@ -16,6 +17,7 @@ import {
   semgrepScopeFinding,
   semgrepSuppressionFinding,
   semgrepUnavailableFinding,
+  stripCommentsAndStrings,
   type SemgrepOutput,
 } from "./semgrep.js";
 
@@ -419,6 +421,138 @@ describe("partitionMarkerSuppressed (#1066)", () => {
     expect(finding?.confidence).toBe("N/A");
     expect(finding?.title).toContain("1 semgrep finding suppressed");
     expect(finding?.evidence).toContain("app/Bio.tsx:12 (harvey-dangerously-set-inner-html)");
+  });
+
+  // #1093 (part 2): semgrep's own `// nosemgrep: rule-id` form scopes a marker to ONLY the named
+  // rule(s) — the re-derivation above used to ignore that scoping and withhold ANY finding on the
+  // marked line, moving an unrelated rule's match into `suppressed` instead of `reported`.
+  it("scopes a `nosemgrep: rule-id` marker to only the named rule, leaving an unrelated rule's match on the same line reported", () => {
+    const { dir, file } = withSource(["export function A() {", "  doDangerousThing(); // nosemgrep: harvey-a", "}"]);
+    try {
+      const { reported, suppressed } = partitionMarkerSuppressed({
+        results: [
+          { check_id: "harvey-a", path: file, start: { line: 2 } },
+          { check_id: "harvey-b", path: file, start: { line: 2 } },
+        ],
+      });
+      expect(suppressed.map((r) => r.check_id)).toEqual(["harvey-a"]);
+      expect(reported.map((r) => r.check_id)).toEqual(["harvey-b"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a bare `nosemgrep` marker (no rule-id scope) still suppresses every rule on the line", () => {
+    const { dir, file } = withSource(["export function A() {", "  doDangerousThing(); // nosemgrep", "}"]);
+    try {
+      const { reported, suppressed } = partitionMarkerSuppressed({
+        results: [
+          { check_id: "harvey-a", path: file, start: { line: 2 } },
+          { check_id: "harvey-b", path: file, start: { line: 2 } },
+        ],
+      });
+      expect(suppressed.map((r) => r.check_id).sort()).toEqual(["harvey-a", "harvey-b"]);
+      expect(reported).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a scoped marker naming a DIFFERENT rule does not suppress the rule that actually matched", () => {
+    const { dir, file } = withSource(["export function A() {", "  doDangerousThing(); // nosemgrep: harvey-unrelated", "}"]);
+    try {
+      const { reported, suppressed } = partitionMarkerSuppressed({
+        results: [{ check_id: "harvey-a", path: file, start: { line: 2 } }],
+      });
+      expect(suppressed).toEqual([]);
+      expect(reported.map((r) => r.check_id)).toEqual(["harvey-a"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// #1093 (part 1): both rules used to end in a `pattern-not-regex` LINE_PREFIX text search
+// (#1066) with no cross-line "am I inside a block comment" state — a multi-line block comment
+// whose interior lines didn't start with `*` still reached a guard-shaped token and cleared a
+// genuinely unguarded route. Both rules now match unconditionally in auth.yml and this
+// re-derives the check on the WHOLE matched span via a real comment/string state machine.
+describe("stripCommentsAndStrings (#1093)", () => {
+  it("blanks out //, /* multi-line */, and string/template literal contents while preserving line count", () => {
+    const src = [
+      "function f() {",
+      "  // requireAdmin() in a line comment",
+      "  /*",
+      "  requireAdmin()",
+      "  */",
+      '  const s = "requireAdmin()";',
+      "  doTheThing();",
+      "}",
+    ].join("\n");
+    const stripped = stripCommentsAndStrings(src);
+    expect(stripped.split("\n")).toHaveLength(src.split("\n").length);
+    expect(stripped).not.toMatch(/requireAdmin/);
+    expect(stripped).toMatch(/doTheThing\(\)/);
+  });
+});
+
+describe("partitionGuardTokenSuppressed (#1093)", () => {
+  const withSource = (lines: string[]): { dir: string; file: string } => {
+    const dir = mkdtempSync(join(tmpdir(), "harvey-guard-token-"));
+    const file = join(dir, "route.ts");
+    writeFileSync(file, lines.join("\n"));
+    return { dir, file };
+  };
+
+  it("a fake guard call wrapped in a MULTI-LINE block comment does not clear harvey-route-noauth (the block-comment hole)", () => {
+    const { dir, file } = withSource([
+      "export default async function handler(req, res) {",
+      "  /*",
+      "  requireAdmin()",
+      "  */",
+      '  await admin.from("settings").delete().eq("key", req.body.key);',
+      "}",
+    ]);
+    try {
+      const { reported, guarded } = partitionGuardTokenSuppressed({
+        results: [{ check_id: "harvey-route-noauth", path: file, start: { line: 1 }, end: { line: 6 } }],
+      });
+      expect(guarded).toEqual([]);
+      expect(reported).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a real guard call in actual code still clears harvey-route-noauth", () => {
+    const { dir, file } = withSource([
+      "export default async function handler(req, res) {",
+      "  requireAdmin(req);",
+      '  await admin.from("settings").delete().eq("key", req.body.key);',
+      "}",
+    ]);
+    try {
+      const { reported, guarded } = partitionGuardTokenSuppressed({
+        results: [{ check_id: "harvey-route-noauth", path: file, start: { line: 1 }, end: { line: 4 } }],
+      });
+      expect(reported).toEqual([]);
+      expect(guarded).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a rule this mechanism does not own passes through untouched", () => {
+    const { dir, file } = withSource(["export function f() { doTheThing(); }"]);
+    try {
+      const { reported, guarded } = partitionGuardTokenSuppressed({
+        results: [{ check_id: "harvey-something-else", path: file, start: { line: 1 }, end: { line: 1 } }],
+      });
+      expect(guarded).toEqual([]);
+      expect(reported).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

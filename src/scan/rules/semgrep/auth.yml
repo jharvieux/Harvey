@@ -245,9 +245,20 @@ rules:
       # must not be asserted "no auth-check call anywhere". "auth" bare covers the next-auth v5
       # `auth()` accessor. Reading the session is a SEPARATE axis from whether the caller is
       # AUTHORIZED for this specific privileged action (harvey-authed-no-role-check).
-      # #1066: LINE_PREFIX (file header) makes this text match blind to comments and string
-      # literals — `// TODO: requireAdmin()` no longer counts as a guard call.
-      - pattern-not-regex: (?im)^(?![ \t]*\*)(?:[^\n/"'`]|/(?![/*])|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`[^`\n]*`)*?\b((assert|require|ensure|authenticate|authorize|guard)[a-z0-9_]*|(?=[a-z0-9_]*(check|verify|with))[a-z0-9_]*(admin|permission|auth|session|tenant|role|access|user|login|signature|jwt|webhook|hmac|token)[a-z0-9_]*|constantTimeEqual|timingSafeEqual|getUser|getSession|getServerSession|getCurrentUser|getAuthUser|getAuthenticatedUser|auth)\s*\(
+      # #1093: this used to end in a `pattern-not-regex` (the LINE_PREFIX text match, #1066) that
+      # cleared the finding when a guard-shaped call appeared ANYWHERE in the function's SOURCE
+      # TEXT. LINE_PREFIX had no cross-line "inside a block comment" state, so a `/* ... */` whose
+      # interior lines didn't start with `*` still reached the guard token and silenced a
+      # genuinely unguarded route (P-NOAUTH-BLOCK-COMMENT-GUARD) — an `\A`-anchored fix is
+      # unavailable (see file header). Re-tried the AST alternative (nested `pattern-not-inside` +
+      # `metavariable-regex` on a wildcard $GUARD(...) callee) first: TRIED 2026-07-26, semgrep
+      # 1.164.0 — a minimal repro (one statement, no guard call at all) still matched
+      # `pattern-not-inside: function $F(...) { ...; $GUARD(...); ... }` because $GUARD can bind to
+      # the flagged call itself, so #126's "suppresses ALL matches, guarded or not" still holds and
+      # the AST route is not viable for this shape. So this rule now matches unconditionally and
+      # `partitionGuardTokenSuppressed` (src/scan/semgrep.ts) re-derives the guard check itself, on
+      # a real comment/string-stripped copy of the matched span (a state machine, not a per-line
+      # regex) — the same "re-derive it ourselves" shape as partitionMarkerSuppressed for nosem.
 
   # IDOR/BOLA shape: an id from the request (req.query/req.params, or the App Router route-handler
   # `{ params }` second-arg — params.id) is the SOLE predicate on a Supabase query — .eq('id', $ID)
@@ -655,6 +666,8 @@ rules:
               - metavariable-regex:
                   metavariable: $AUTHFN
                   regex: ^(jwtVerify|verifyJwt|verifyJWT|verifyToken|verifyAccessToken|verifySession|verifyAuth|requireAuth|decodeToken)$
-      # #1066: LINE_PREFIX (file header) — `// FIXME: no permission gate here yet` used to be
-      # read as evidence that a permission gate exists.
-      - pattern-not-regex: (?im)^(?![ \t]*\*)(?:[^\n/"'`]|/(?![/*])|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`[^`\n]*`)*?(is_?admin|hasrole|requirerole|checkrole|assertrole|assertadmin|requireadmin|ensureadmin|\bauthorize|\.role\b|permission|forbidden|\b403\b)
+      # #1093: same LINE_PREFIX block-comment hole as harvey-route-noauth above, and the same fix —
+      # this rule now matches unconditionally and `partitionGuardTokenSuppressed`
+      # (src/scan/semgrep.ts) re-derives the role/permission-gate check on a comment/string-
+      # stripped copy of the matched span. See harvey-route-noauth's comment for the full record
+      # (why the AST alternative was tried and rejected, MEASURED/TRIED 2026-07-26).

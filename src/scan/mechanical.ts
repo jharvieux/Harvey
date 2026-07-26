@@ -36,6 +36,7 @@ import {
   checkMissingCsp,
   checkPublicDirSensitive,
   parseSemgrepFindings,
+  partitionGuardTokenSuppressed,
   partitionMarkerSuppressed,
   runSemgrep,
   semgrepErrorFinding,
@@ -239,7 +240,13 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     if (semgrep.failure) {
       findings.push(semgrepUnavailableFinding(semgrep.failure));
     } else {
-      const { reported, suppressed } = partitionMarkerSuppressed(semgrep.result);
+      // #1093 — harvey-route-noauth/harvey-authed-no-role-check now match unconditionally in the
+      // YAML; this re-derives their guard/role-check clause on the real matched span before
+      // nosem re-derivation runs. A function the guard-token check clears was never a finding to
+      // begin with (not an in-repo suppression), so it must not reach partitionMarkerSuppressed or
+      // SEM-SUPPRESS-00.
+      const { reported: guardCleared } = partitionGuardTokenSuppressed(semgrep.result);
+      const { reported, suppressed } = partitionMarkerSuppressed({ results: guardCleared });
       findings.push(...parseSemgrepFindings({ results: reported }));
       findings.push(...semgrepSuppressionFinding(suppressed, scanDir));
       findings.push(...semgrepScopeFinding(scanDir, semgrep.result));

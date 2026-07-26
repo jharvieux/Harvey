@@ -22,7 +22,7 @@ import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import { detectSlopFindings } from "../detectors/slop.js";
 import { detectOrm, detectTargetFramework, nonNextWorkspaces } from "../scan/framework-detect.js";
-import { harveyRuleIds, runSemgrepOnFile } from "../scan/semgrep.js";
+import { harveyRuleIds, partitionGuardTokenSuppressed, runSemgrepOnFile } from "../scan/semgrep.js";
 import { fileOfLocation } from "./produce-plan.js";
 import type { DetectorRun } from "./verify.js";
 
@@ -76,7 +76,11 @@ function rerunSemgrep(finding: Finding, ruleId: string, targetDir: string): Dete
   const { result, failure } = runSemgrepOnFile(abs, targetDir);
   if (failure !== undefined) return notRun(`semgrep rule ${ruleId} could not be re-run: ${failure}`);
 
-  const hits = (result.results ?? []).filter((r) => (r.check_id.split(".").pop() ?? "") === ruleId);
+  // #1093: harvey-route-noauth/harvey-authed-no-role-check now match unconditionally in the YAML
+  // (their guard/role-check clause moved into partitionGuardTokenSuppressed) — without re-applying
+  // it here, a fix that added a real guard call would still read as "still firing".
+  const { reported } = partitionGuardTokenSuppressed(result);
+  const hits = reported.filter((r) => (r.check_id.split(".").pop() ?? "") === ruleId);
   return {
     detectorId: finding.taxonomy,
     fired: hits.length > 0,
