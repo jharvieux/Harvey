@@ -35,9 +35,13 @@ import uuid
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 DEFAULT_OUT = os.path.join(REPO_ROOT, "src", "__fixtures__", "vitals-report.json")
-VITALS_CLI = os.path.expanduser(
+_PLUGIN_CLI = os.path.expanduser(
     "~/.claude/plugins/cache/vitals/vitals/0.2.0/scripts/vitals_cli.py"
 )
+# The pinned plugin path when present (local plugin install); else vitals_cli.py on PATH — how CI
+# installs it (conservation.yml adds the cloned vitals scripts dir to PATH). run_vitals asserts the
+# version either way, so a wrong version on PATH still fails loud.
+VITALS_CLI = _PLUGIN_CLI if os.path.exists(_PLUGIN_CLI) else (shutil.which("vitals_cli.py") or _PLUGIN_CLI)
 EXPECTED_VERSION = "Vitals v0.2.0"
 
 DAY = 86400
