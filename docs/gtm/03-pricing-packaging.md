@@ -70,8 +70,8 @@ genuinely means everything. Each rung is a clean superset of the one before.
   mechanism (measures LOC → quotes the paid tiers).
 - **Rung 1 — Connected audit (cheaper paid).** The complete *review*: all ten modules
   with real verdicts (semantic triage, cleared false positives, named fixes) **plus a
-  read of your live database** (M1 live RLS, M7 Supabase advisors, prod-vs-migration
-  drift, M10 PII-protection-in-prod). No environment stand-up. Low incremental labor over
+  read of your live database** (M1 live RLS, M7 Supabase advisors, M10
+  PII-protection-in-prod). No environment stand-up. Low incremental labor over
   the source review — hence the modest price.
 - **Rung 2 — Full audit (premium — everything).** Everything in Connected **plus** Harvey
   stands up a copy of your stack and runs the dynamic work: the live pen-test (M2 — proven
@@ -129,7 +129,7 @@ The reason to buy is **not** "the free scan found a lot" (operator correction,
 2026-07-21). The free scan is source-only and reports what the code *indicates*. The paid
 tiers do things a source scan **structurally cannot**, and the two paid tiers split along
 what they access: **Connected** adds semantic verdicts (triage, named fixes) and a read of
-your live database (live RLS, advisors, drift, PII-in-prod); **Full** additionally stands
+your live database (live RLS, advisors, PII-in-prod); **Full** additionally stands
 up your stack to *prove* findings live (M2 pen-test) and runs mutation testing (M8). Market
 each on **unique capability**, never on free-scan issue volume. Copy Valletta's proven
 **"investor-ready / diligence" packaging** as a Full-tier add-on.
