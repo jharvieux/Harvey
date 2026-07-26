@@ -69,7 +69,40 @@ rules:
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
+              # #1027: a Set-backed allowlist is the same exact-match membership test as
+              # `.includes` on an array, so it carries exactly the same soundness — and the same
+              # dependence on the allowlist itself being correct.
+              - pattern: |
+                  if (!$SET.has($X)) { ... return; }
           - focus-metavariable: $X
+      # #1027: (a2) SCHEMA-validator guard — zod/valibot `safeParse` + an early return on
+      # `!result.success`. Measured as the largest unmodeled sub-population in the #989 census and
+      # the idiomatic shape in real Next/Express code, unlike BenchProctor's bare regex guards.
+      #
+      # What makes it sound is that the sink receives `$P.data` — a value the SCHEMA produced —
+      # rather than the original input, so this is closer to a transformation than a gate. But
+      # `z.string()` alone accepts every string, i.e. `.data` IS the raw input: the schema must
+      # carry a real allowlist. Hence the SAME constraints as the regex form, each with a
+      # calibration positive that must still fire: an ANCHORED, POSITIVE-class `.regex(...)`, or a
+      # `.enum([...])` membership list; and a failure branch that RETURNS. A guard on one variable
+      # while the sink reads another (`$P.data` never used) is untouched by construction.
+      - patterns:
+          - pattern: $P.data
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $P = $Z.regex($RE).safeParse(...);
+                      ...
+                      if (!$P.success) { ... return; }
+                      ...
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern-inside: |
+                  $P = $Z.enum([...]).safeParse(...);
+                  ...
+                  if (!$P.success) { ... return; }
+                  ...
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -136,7 +169,40 @@ rules:
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
+              # #1027: a Set-backed allowlist is the same exact-match membership test as
+              # `.includes` on an array, so it carries exactly the same soundness — and the same
+              # dependence on the allowlist itself being correct.
+              - pattern: |
+                  if (!$SET.has($X)) { ... return; }
           - focus-metavariable: $X
+      # #1027: (a2) SCHEMA-validator guard — zod/valibot `safeParse` + an early return on
+      # `!result.success`. Measured as the largest unmodeled sub-population in the #989 census and
+      # the idiomatic shape in real Next/Express code, unlike BenchProctor's bare regex guards.
+      #
+      # What makes it sound is that the sink receives `$P.data` — a value the SCHEMA produced —
+      # rather than the original input, so this is closer to a transformation than a gate. But
+      # `z.string()` alone accepts every string, i.e. `.data` IS the raw input: the schema must
+      # carry a real allowlist. Hence the SAME constraints as the regex form, each with a
+      # calibration positive that must still fire: an ANCHORED, POSITIVE-class `.regex(...)`, or a
+      # `.enum([...])` membership list; and a failure branch that RETURNS. A guard on one variable
+      # while the sink reads another (`$P.data` never used) is untouched by construction.
+      - patterns:
+          - pattern: $P.data
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $P = $Z.regex($RE).safeParse(...);
+                      ...
+                      if (!$P.success) { ... return; }
+                      ...
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern-inside: |
+                  $P = $Z.enum([...]).safeParse(...);
+                  ...
+                  if (!$P.success) { ... return; }
+                  ...
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -199,7 +265,40 @@ rules:
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
+              # #1027: a Set-backed allowlist is the same exact-match membership test as
+              # `.includes` on an array, so it carries exactly the same soundness — and the same
+              # dependence on the allowlist itself being correct.
+              - pattern: |
+                  if (!$SET.has($X)) { ... return; }
           - focus-metavariable: $X
+      # #1027: (a2) SCHEMA-validator guard — zod/valibot `safeParse` + an early return on
+      # `!result.success`. Measured as the largest unmodeled sub-population in the #989 census and
+      # the idiomatic shape in real Next/Express code, unlike BenchProctor's bare regex guards.
+      #
+      # What makes it sound is that the sink receives `$P.data` — a value the SCHEMA produced —
+      # rather than the original input, so this is closer to a transformation than a gate. But
+      # `z.string()` alone accepts every string, i.e. `.data` IS the raw input: the schema must
+      # carry a real allowlist. Hence the SAME constraints as the regex form, each with a
+      # calibration positive that must still fire: an ANCHORED, POSITIVE-class `.regex(...)`, or a
+      # `.enum([...])` membership list; and a failure branch that RETURNS. A guard on one variable
+      # while the sink reads another (`$P.data` never used) is untouched by construction.
+      - patterns:
+          - pattern: $P.data
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $P = $Z.regex($RE).safeParse(...);
+                      ...
+                      if (!$P.success) { ... return; }
+                      ...
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern-inside: |
+                  $P = $Z.enum([...]).safeParse(...);
+                  ...
+                  if (!$P.success) { ... return; }
+                  ...
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -266,7 +365,40 @@ rules:
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
+              # #1027: a Set-backed allowlist is the same exact-match membership test as
+              # `.includes` on an array, so it carries exactly the same soundness — and the same
+              # dependence on the allowlist itself being correct.
+              - pattern: |
+                  if (!$SET.has($X)) { ... return; }
           - focus-metavariable: $X
+      # #1027: (a2) SCHEMA-validator guard — zod/valibot `safeParse` + an early return on
+      # `!result.success`. Measured as the largest unmodeled sub-population in the #989 census and
+      # the idiomatic shape in real Next/Express code, unlike BenchProctor's bare regex guards.
+      #
+      # What makes it sound is that the sink receives `$P.data` — a value the SCHEMA produced —
+      # rather than the original input, so this is closer to a transformation than a gate. But
+      # `z.string()` alone accepts every string, i.e. `.data` IS the raw input: the schema must
+      # carry a real allowlist. Hence the SAME constraints as the regex form, each with a
+      # calibration positive that must still fire: an ANCHORED, POSITIVE-class `.regex(...)`, or a
+      # `.enum([...])` membership list; and a failure branch that RETURNS. A guard on one variable
+      # while the sink reads another (`$P.data` never used) is untouched by construction.
+      - patterns:
+          - pattern: $P.data
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $P = $Z.regex($RE).safeParse(...);
+                      ...
+                      if (!$P.success) { ... return; }
+                      ...
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern-inside: |
+                  $P = $Z.enum([...]).safeParse(...);
+                  ...
+                  if (!$P.success) { ... return; }
+                  ...
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -549,7 +681,40 @@ rules:
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
+              # #1027: a Set-backed allowlist is the same exact-match membership test as
+              # `.includes` on an array, so it carries exactly the same soundness — and the same
+              # dependence on the allowlist itself being correct.
+              - pattern: |
+                  if (!$SET.has($X)) { ... return; }
           - focus-metavariable: $X
+      # #1027: (a2) SCHEMA-validator guard — zod/valibot `safeParse` + an early return on
+      # `!result.success`. Measured as the largest unmodeled sub-population in the #989 census and
+      # the idiomatic shape in real Next/Express code, unlike BenchProctor's bare regex guards.
+      #
+      # What makes it sound is that the sink receives `$P.data` — a value the SCHEMA produced —
+      # rather than the original input, so this is closer to a transformation than a gate. But
+      # `z.string()` alone accepts every string, i.e. `.data` IS the raw input: the schema must
+      # carry a real allowlist. Hence the SAME constraints as the regex form, each with a
+      # calibration positive that must still fire: an ANCHORED, POSITIVE-class `.regex(...)`, or a
+      # `.enum([...])` membership list; and a failure branch that RETURNS. A guard on one variable
+      # while the sink reads another (`$P.data` never used) is untouched by construction.
+      - patterns:
+          - pattern: $P.data
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $P = $Z.regex($RE).safeParse(...);
+                      ...
+                      if (!$P.success) { ... return; }
+                      ...
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern-inside: |
+                  $P = $Z.enum([...]).safeParse(...);
+                  ...
+                  if (!$P.success) { ... return; }
+                  ...
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -686,6 +851,43 @@ rules:
       # #984: App Router next/headers request sources (cookies()/headers()).
       - pattern: cookies()
       - pattern: headers()
+    pattern-sanitizers:
+      # #1027: #989 shipped the (a2) guard sanitizer on 11 taint rules and left this one out. It was
+      # then MEASURED (2026-07-25, BenchProctor JS/Express quicktest 2026.07.22) to carry the largest
+      # modelable-guard false-positive population of every rule that was skipped — 43 of its FPs are
+      # safe twins wearing one of the three guard shapes below, more than any other rule. Same
+      # sanitizer, same soundness constraints, same adversarial fixtures.
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern: |
+                      if (!$RE.test($X)) { ... return; }
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern: |
+                  if (!$ARR.includes($X)) { ... return; }
+              - pattern: |
+                  if (!$SET.has($X)) { ... return; }
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: $P.data
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $P = $Z.regex($RE).safeParse(...);
+                      ...
+                      if (!$P.success) { ... return; }
+                      ...
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern-inside: |
+                  $P = $Z.enum([...]).safeParse(...);
+                  ...
+                  if (!$P.success) { ... return; }
+                  ...
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -984,7 +1186,40 @@ rules:
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
+              # #1027: a Set-backed allowlist is the same exact-match membership test as
+              # `.includes` on an array, so it carries exactly the same soundness — and the same
+              # dependence on the allowlist itself being correct.
+              - pattern: |
+                  if (!$SET.has($X)) { ... return; }
           - focus-metavariable: $X
+      # #1027: (a2) SCHEMA-validator guard — zod/valibot `safeParse` + an early return on
+      # `!result.success`. Measured as the largest unmodeled sub-population in the #989 census and
+      # the idiomatic shape in real Next/Express code, unlike BenchProctor's bare regex guards.
+      #
+      # What makes it sound is that the sink receives `$P.data` — a value the SCHEMA produced —
+      # rather than the original input, so this is closer to a transformation than a gate. But
+      # `z.string()` alone accepts every string, i.e. `.data` IS the raw input: the schema must
+      # carry a real allowlist. Hence the SAME constraints as the regex form, each with a
+      # calibration positive that must still fire: an ANCHORED, POSITIVE-class `.regex(...)`, or a
+      # `.enum([...])` membership list; and a failure branch that RETURNS. A guard on one variable
+      # while the sink reads another (`$P.data` never used) is untouched by construction.
+      - patterns:
+          - pattern: $P.data
+          - pattern-either:
+              - patterns:
+                  - pattern-inside: |
+                      $P = $Z.regex($RE).safeParse(...);
+                      ...
+                      if (!$P.success) { ... return; }
+                      ...
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+              - pattern-inside: |
+                  $P = $Z.enum([...]).safeParse(...);
+                  ...
+                  if (!$P.success) { ... return; }
+                  ...
     pattern-sinks:
       - patterns:
           - pattern: $RES.send(`...`)
