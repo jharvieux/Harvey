@@ -15,12 +15,32 @@ import type { SourceInput } from "./common.js";
 export const SOURCE_FILE = /\.(ts|tsx|jsx|js|mjs|cjs|mts|cts)$/;
 // Bundler output committed into a repo (public/ vendor scripts, prebuilt chunks) is machine-
 // generated, not fixable in place, and would swamp the M5/M6 indicator detectors now that .js is
-// read at all. Name check plus a content check, because minified filenames are not standardised:
-// no hand-authored source has a 1000-character line. Excluded deliberately, and counted in the
-// M1-EXT-00 disclosure (src/scan/ext-coverage.ts) so the exclusion is stated rather than silent.
+// read at all. Name check plus a content check, because minified filenames are not standardised.
+// #1136: "any single line over 1000 chars" false-excluded real, hand-authored source that merely
+// carries ONE long string literal (an LLM tool-description prompt, a SQL/GraphQL query) — dropping
+// the whole file, and every finding in it, for an unrelated line. MEASURED (inbox-zero's
+// apps/web/utils/ai/assistant/tools/rules/update-rule-tool.ts, pinned commit 2b78f2b3): 605 lines,
+// one 1081-char line, that line is 5.7% of the file's bytes — real source, wrongly excluded pre-fix.
+// A minified/generated file isn't "has a long line", it's "IS, almost entirely, long lines", so the
+// check is now relative to the file: an outlier line over LONG_OUTLIER must exist (unchanged
+// trigger) AND lines over LONG_LINE must account for at least LONG_LINE_FRACTION of the file's
+// total bytes (the file's bulk, not an aside, is packed onto long lines). MEASURED on carbon's
+// SVG-icon-path-data config files (packages/ee/src/{onshape,paperless-parts}/config.tsx, pinned
+// commit 92e19c04), the case #1088 originally added this check for: 65% and 54% of file bytes
+// respectively — both stay excluded, comfortably clear of inbox-zero's 5.7% on the other side of
+// the threshold. Counted in the M1-EXT-00 disclosure (src/scan/ext-coverage.ts) so the exclusion
+// is stated rather than silent.
 const GENERATED_NAME = /\.min\.[cm]?jsx?$/;
-export const isGeneratedSource = (name: string, text: string): boolean =>
-  GENERATED_NAME.test(name) || text.split("\n").some((line) => line.length > 1000);
+const LONG_OUTLIER = 1000;
+const LONG_LINE = 500;
+const LONG_LINE_FRACTION = 0.3;
+export const isGeneratedSource = (name: string, text: string): boolean => {
+  if (GENERATED_NAME.test(name)) return true;
+  const lines = text.split("\n");
+  if (!lines.some((line) => line.length > LONG_OUTLIER)) return false;
+  const longLineChars = lines.reduce((sum, line) => (line.length > LONG_LINE ? sum + line.length : sum), 0);
+  return longLineChars / text.length >= LONG_LINE_FRACTION;
+};
 // tsconfig/jsconfig are loaded so the M9 App Router pass can resolve `paths` aliases
 // (`@/…` imports) — without the file that defines what `@/` maps to, aliased imports are
 // invisible to the server→client-leak and server-only-guard cross-file resolution (#380).
