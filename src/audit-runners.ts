@@ -313,8 +313,20 @@ const m4: ModuleRunner = { module: "M4", run: perApp(m4Run) };
 // disclosure finding (#223). So the exit code is not the evidence; the presence of that finding in
 // the emitted array is. A knip that never resolved the target's deps is a coverage gap (partial),
 // not a clean `ran`.
+//
+// #1035: this probe used to early-return requires-live-run whenever the target had no
+// node_modules, on the recorded reason that "knip cannot resolve config imports without the
+// target's installed deps". #810 (2026-07-23) built the very fallback that reason calls impossible
+// — quality-scan re-runs knip with all plugins disabled and Harvey-inferred entries, disclosing an
+// M5-98 review-tier row — but it never touched this file, so through the orchestrator the guard
+// fired first and the fallback was unreachable. MEASURED 2026-07-25: `pnpm quality-scan
+// targets/prisma-xtenant-app` (no node_modules) completes and emits findings, while `run-audit
+// targets/calibration` (also no node_modules) recorded M5 requires-live-run. The guard is gone; the
+// distinction it was protecting survives as a STATUS rather than a refusal to run — without
+// installed deps M5 tops out at `partial`, because dead code found against an inferred entry graph
+// is review-tier, never confirmed.
 const m5Run = (ctx: RunContext): ProbeOutcome => {
-  if (!hasNodeModules(ctx)) return { status: "requires-live-run", reason: "target has no node_modules — knip cannot resolve config imports without the target's installed deps (run `npm install` in the target)" };
+  const depsInstalled = hasNodeModules(ctx);
   const outPath = captureOut(ctx, "M5");
   const command = `pnpm quality-scan ${ctx.targetDir}`;
   const { ok, output } = ctx.exec("pnpm", ["quality-scan", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
@@ -323,8 +335,26 @@ const m5Run = (ctx: RunContext): ProbeOutcome => {
   // bare Finding[] there and stays silent on stdout), else parsed from stdout (#312/#419).
   const findings = outPath && ctx.readFindings ? ctx.readFindings(outPath) : parseFindings(output);
   if (!findings) return { status: "requires-live-run", reason: `could not read quality-scan output to confirm knip ran: ${trimOut(output)}` };
-  if (findings.some((f) => (f as { id?: string }).id === "M5-00")) return { status: "partial", detail: command, reason: "knip did not run — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage was skipped this pass (M4 duplication still ran) (#223/#350)" };
-  return outPath && findings.length ? { status: "ran", detail: command, findings: findings as Finding[] } : { status: "ran", detail: command };
+  const emitted = (id: string): boolean => findings.some((f) => (f as { id?: string }).id === id);
+  const captured = outPath && findings.length ? { findings: findings as Finding[] } : {};
+  if (emitted("M5-00")) return { status: "partial", detail: command, reason: "knip did not run — quality-scan emitted the M5-00 disclosure finding, so dead-code coverage was skipped this pass (M4 duplication still ran) (#223/#350)" };
+  if (emitted("M5-98")) {
+    return {
+      status: "partial",
+      detail: command,
+      reason: "reduced (no-dependencies) tier — knip could not load the target's own config, so it re-ran with all plugins disabled and Harvey-inferred entry points (M5-98, #810). Dead code IS reported; the file-level findings are review-tier, not confirmed. Install the target's dependencies and re-run for confirmed file findings (#1035)",
+      ...captured,
+    };
+  }
+  if (!depsInstalled) {
+    return {
+      status: "partial",
+      detail: command,
+      reason: "target has no node_modules — knip completed from source alone against a Harvey-inferred entry graph (#696), so its file-level dead code is review-tier, not confirmed. Run `npm install` in the target and re-run for confirmed file findings (#1035)",
+      ...captured,
+    };
+  }
+  return { status: "ran", detail: command, ...captured };
 };
 // #506: knip is the clearest per-app tier — it needs each app's own node_modules/config, so a
 // monorepo runs it once per enumerated app.

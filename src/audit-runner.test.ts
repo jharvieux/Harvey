@@ -127,11 +127,34 @@ describe("the real ten probes (AUDIT_RUNNERS)", () => {
 
   // Each probe must gather its OWN evidence. These drive the real probes against a fake environment
   // and assert the prereq actually gates the outcome.
-  it("M5 refuses to run without the target's installed deps, naming the prereq", () => {
-    const noDeps = ctx({ exists: (p) => !p.endsWith("node_modules") });
+  // #1035: a deps-free target is a REDUCED tier, not an unrunnable one — #810 built the fallback
+  // and this probe used to refuse to reach it. The distinction it was protecting survives as a
+  // status: quality-scan is invoked, M5 records partial, and file-level dead code stays review-tier.
+  it("M5 without the target's installed deps still invokes quality-scan and records partial, not requires-live-run", () => {
+    const invoked: string[] = [];
+    const noDeps = ctx({
+      exists: (p) => !p.endsWith("node_modules"),
+      exec: (_c, argv) => {
+        if (argv.includes("quality-scan")) invoked.push(argv.join(" "));
+        return { ok: true, output: cleanOutput(argv) };
+      },
+    });
     const m5 = runAudit(AUDIT_RUNNERS, noDeps).recorded.find((r) => r.module === "M5");
-    expect(m5?.status).toBe("requires-live-run");
-    expect(m5?.reason).toMatch(/no node_modules/);
+    expect(invoked.length).toBeGreaterThan(0);
+    expect(m5?.status).toBe("partial");
+    expect(m5?.reason).toMatch(/review-tier, not confirmed/);
+  });
+
+  // The #810 reduced tier discloses itself with an M5-98 row; the orchestrator must surface THAT
+  // reason rather than a generic partial, so a reader knows plugins were disabled.
+  it("M5 reports the #810 reduced tier when quality-scan emitted M5-98", () => {
+    const reduced = ctx({
+      exists: (p) => !p.endsWith("node_modules"),
+      exec: (_c, argv) => (argv.includes("quality-scan") ? { ok: true, output: JSON.stringify([{ id: "M5-98" }]) } : { ok: true, output: cleanOutput(argv) }),
+    });
+    const m5 = runAudit(AUDIT_RUNNERS, reduced).recorded.find((r) => r.module === "M5");
+    expect(m5?.status).toBe("partial");
+    expect(m5?.reason).toMatch(/reduced \(no-dependencies\) tier/);
   });
 
   it("M5 runs once the target's deps are present — the prereq gates it, not a flag", () => {
@@ -1014,11 +1037,11 @@ describe("monorepo per-instance fan-out (#506)", () => {
     expect(seen).toEqual(expect.arrayContaining(["/target/apps/main", "/target/apps/rag"]));
   });
 
-  it("an app missing node_modules is an explicit requires-live-run row for THAT app, never absent (M5)", () => {
+  it("an app missing node_modules is an explicit reduced-tier row for THAT app, never absent (M5, #1035)", () => {
     const rec = runAudit(AUDIT_RUNNERS, ctx({ apps, exists: (p) => p !== "/target/apps/rag/node_modules" })).recorded;
     const m5 = rec.filter((r) => r.module === "M5");
     expect(m5).toHaveLength(2);
-    expect(m5.find((r) => r.instance === "apps/rag")?.status).toBe("requires-live-run");
+    expect(m5.find((r) => r.instance === "apps/rag")?.status).toBe("partial");
     expect(m5.find((r) => r.instance === "apps/rag")?.reason).toMatch(/no node_modules/);
     expect(m5.find((r) => r.instance === "apps/main")?.status).toBe("ran");
   });
