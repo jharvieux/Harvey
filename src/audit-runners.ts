@@ -13,6 +13,7 @@ import { findFreshPass, type PassArtifact, ranFromPass } from "./audit-pass-arti
 import type { ModuleRunner, ProbeOutcome, RunContext } from "./audit-runner.js";
 import { type DataClassMap, isDataClassMap } from "./data-class-escalation.js";
 import type { Finding } from "./findings.js";
+import { testQualityFromArtifact } from "./mutation-scan.js";
 
 // #416: fold a rejected-pass reason (wrong target, stale, malformed) into a probe's not-run reason,
 // so a pass artifact that was present but rejected fails loud rather than being silently ignored.
@@ -626,9 +627,16 @@ const m8: ModuleRunner = {
     if (!ok) return mutationBlocked(`${command} exited non-zero: ${trimOut(output)}`);
     const artifact = readArtifact(ctx, outPath);
     const verdict = mutationVerdict(artifact ?? output);
+    // #1045: the per-module §3b measurement rides out on its own channel — findings carry the
+    // survivor narratives, but the Module/Line-cov/Mutation-score/Surviving table lives only in
+    // this artifact, and before this it was computed and then dropped by the orchestrator. A
+    // SCOPED run (verdict "partial", #504) still carries it: the table names its own scope, so
+    // withholding it would hide a real measurement rather than qualify it.
+    const testQuality = testQualityFromArtifact(artifact);
+    const tq = testQuality ? { testQuality } : {};
     if (verdict.kind === "partial") {
       const findings = [...artifactFindings(artifact), ...staticFindings];
-      return findings.length ? { status: "partial", detail: command, reason: verdict.note, findings } : { status: "partial", detail: command, reason: verdict.note };
+      return findings.length ? { status: "partial", detail: command, reason: verdict.note, findings, ...tq } : { status: "partial", detail: command, reason: verdict.note, ...tq };
     }
     // #754: no test suite at all is a COMPLETE assessment — the M8-00 zero-coverage finding IS the
     // verdict (CLAUDE.md / #224) — so this reads `ran`, unlike the measurement-gap `partial` above.
@@ -638,7 +646,7 @@ const m8: ModuleRunner = {
     }
     if (verdict.kind === "unknown") return mutationBlocked(`mutation-scan produced no recognizable verdict: ${trimOut(output)}`);
     const findings = [...artifactFindings(artifact), ...staticFindings];
-    return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
+    return findings.length ? { status: "ran", detail: command, findings, ...tq } : { status: "ran", detail: command, ...tq };
   },
 };
 

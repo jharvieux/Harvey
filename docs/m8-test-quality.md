@@ -228,14 +228,26 @@ Map `pnpm mutation-scan`'s `reportRows` (`src/mutation-scan.ts`'s `toReportRows(
 - **Surviving mutants (critical)** ← `reportRows[].hotspotSurvivingCount` (the hotspot-flagged
   subset — that's the "critical" column, not the raw `survivingCount`, so the table matches the
   action-plan priority framing rather than just a raw defect count)
-- **Action** ← written by hand per row, e.g. "write a denial-path test for the RLS policy at
-  line 42" — pull the specific rule from the ranked false-confidence list in §2/§4.
+- **Action** ← `reportRows[].action` when the operator writes one, e.g. "write a denial-path test
+  for the RLS policy at line 42" — pull the specific rule from the ranked false-confidence list in
+  §2/§4. Absent one the renderer DERIVES the cell from the row's own numbers (hotspot survivors →
+  the denial/boundary sentence; the coverage-vs-score gap → the false-confidence sentence), because
+  a blank Action cell reads as "nothing to do here", which is the opposite of what a surviving
+  mutant means.
 
 Also feed the three report-level bullets `docs/audit-report-skeleton.md` §3b M8 already
 specifies directly from this wrapper's output: `summary.overall.mutationScore` (mutation score
 overall), the per-module rows above (mutation score per module), and the top of
 `summary.survivingMutants` / the merged false-confidence list (the "tests that can't fail" and
 "surviving mutants on a hotspot" bullets).
+
+**This is wired end to end since #1045** — it used to be a mapping described here and implemented
+nowhere. `src/mutation-scan.ts`'s `testQualityFromArtifact` turns the CLI's `--out` artifact into
+the deliverable's `testQuality` payload, the M8 probe carries it out on `ProbeOutcome.testQuality`,
+`assembleEngagementDocument` folds it into the engagement document, and
+`report-template/sections.mjs` draws the table. Before that the renderer gated the section on a key
+no producer ever set, so a full mutation run's numbers were computed and dropped. A run whose
+mutation tier produced no score renders a stated absence, never an omitted section.
 
 ## 6. Wiring code
 

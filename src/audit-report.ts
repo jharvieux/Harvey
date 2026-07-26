@@ -11,7 +11,7 @@
 
 import { buildAuditCoverage, type EngagementEnv, type ModuleCoverage } from "./audit-coverage.js";
 import { type DataClassMap, dataClassJoinNotAssessed, escalateFindingsByDataClass } from "./data-class-escalation.js";
-import type { CoverageRow, Finding, FindingsDocument, ReportMeta } from "./findings.js";
+import type { CoverageRow, Finding, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
 import { enrichFindingsWithHotspots } from "./hotspot-scan.js";
 
 // The derived coverage report's rows, projected onto the report schema's CoverageRow.
@@ -51,13 +51,17 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
 // of the data it touches. `dataMap` undefined means M10 classified NOTHING (no schema, no DB), which
 // is different from an empty map (M10 classified and found no regulated data): the first cannot run
 // the join and gets a not-assessed row, the second ran it and legitimately escalated nothing.
-export function assembleEngagementDocument(recorded: ModuleCoverage[], env: EngagementEnv, findings: Finding[], meta: ReportMeta, hotspots?: string[], dataMap?: DataClassMap): FindingsDocument {
+//
+// #1045: M8's §3b test-quality table travels with the document the same way the ledger does — the
+// mutation tier's per-module measurement is a client-facing deliverable section, and an assembler
+// that dropped it left the scanner computing numbers with nowhere to go.
+export function assembleEngagementDocument(recorded: ModuleCoverage[], env: EngagementEnv, findings: Finding[], meta: ReportMeta, hotspots?: string[], dataMap?: DataClassMap, testQuality?: TestQuality): FindingsDocument {
   const deduped = dedupeFindings(findings);
   const enriched = hotspots?.length ? enrichFindingsWithHotspots(deduped, hotspots) : deduped;
   const weighted = dataMap
     ? escalateFindingsByDataClass(enriched, dataMap)
     : [...enriched, dataClassJoinNotAssessed(m10NotRunReason(recorded))];
-  return { meta, coverage: coverageLedger(recorded, env), findings: weighted };
+  return { meta, coverage: coverageLedger(recorded, env), findings: weighted, ...(testQuality ? { testQuality } : {}) };
 }
 
 // The M10 rows' own words for why nothing was classified — quoted into M10-ESCALATION-00 so the

@@ -10,7 +10,7 @@
 // score — each is a mutant the suite did not prove itself against.
 
 import { dirname, isAbsolute, relative, sep } from "node:path";
-import type { Finding } from "./findings.js";
+import type { Finding, TestQuality, TestQualityRow } from "./findings.js";
 
 export type MutantStatus =
   | "Killed"
@@ -242,6 +242,38 @@ export function toReportRows(summary: MutationSummary, lineCoverageByModule?: Re
       hotspotSurvivingCount: forModule.filter((s) => s.hotspot).length,
     };
   });
+}
+
+// How many surviving mutants the deliverable lists individually. The rest are disclosed by count
+// (survivorTotal) — the no-silent-cap rule the rollup already applies to findings (#935).
+const SURVIVOR_LIST_MAX = 10;
+
+// #1045: the §3b Test-quality payload the deliverable renders, assembled from src/cli/mutation-scan.ts's
+// --out artifact (the only place the summary, the per-module rows, the #504 scope verdict and the
+// #819 line-coverage verdict exist together). Undefined when the artifact is not a real mutation
+// run — the no-test-suite and blocked branches write no `summary`, and M8's coverage row carries
+// the reason, so the report states why rather than rendering an empty table.
+export function testQualityFromArtifact(artifact: unknown): TestQuality | undefined {
+  if (typeof artifact !== "object" || artifact === null) return undefined;
+  const a = artifact as {
+    summary?: MutationSummary;
+    reportRows?: TestQualityRow[];
+    scope?: MutationScope;
+    lineCoverage?: TestQuality["lineCoverage"];
+  };
+  if (!a.summary?.overall || !Array.isArray(a.reportRows)) return undefined;
+  const survivors = a.summary.survivingMutants ?? [];
+  return {
+    mutationScore: a.summary.overall.mutationScore,
+    coveredScope: a.summary.coveredScope ?? [],
+    // An UNVERIFIABLE scope is not a whole-repo claim: only a verified, unscoped run earns `true`.
+    wholeRepo: Boolean(a.scope?.verified && !a.scope.scoped),
+    scopeNote: a.scope?.note ?? "the scan reported no mutate-scope verdict — treat the score as covering only the listed files",
+    rows: a.reportRows,
+    lineCoverage: a.lineCoverage ?? { status: "partial", reason: "the scan reported no line-coverage verdict (#819)" },
+    survivors: survivors.slice(0, SURVIVOR_LIST_MAX).map((s) => ({ file: s.file, line: s.line, mutator: s.mutatorName, hotspot: s.hotspot })),
+    survivorTotal: survivors.length,
+  };
 }
 
 // #819: the Istanbul `coverage-summary.json` shape (the json-summary reporter, produced by both
