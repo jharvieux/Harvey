@@ -17,6 +17,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
 import type { Finding } from "../findings.js";
 import type { SourceInput } from "./common.js";
+import { SOURCE_FILE } from "./load-sources.js";
 
 const HOOK_CALL = /\buse(Effect|LayoutEffect|InsertionEffect|Memo|Callback|ImperativeHandle)\s*\(/;
 
@@ -26,7 +27,7 @@ function lintFile(file: SourceInput): { line: number; message: string }[] {
   const messages = linter.verify(
     file.text,
     {
-      files: ["**/*.ts", "**/*.tsx", "**/*.jsx"], // flat config only matches .js by default
+      files: ["**/*.ts", "**/*.tsx", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.mts", "**/*.cts"], // flat config only matches .js by default
       languageOptions: {
         parser: tseslint.parser as Linter.Parser,
         parserOptions: { ecmaFeatures: { jsx: true }, sourceType: "module" },
@@ -45,7 +46,7 @@ export function detectHookDepFindings(files: SourceInput[]): Finding[] {
   const findings: Finding[] = [];
   let n = 0;
   for (const file of files) {
-    if (!/\.(ts|tsx|jsx)$/.test(file.path)) continue;
+    if (!SOURCE_FILE.test(file.path)) continue; // #1065: the loader's own filter, imported so the two can never drift apart
     if (!HOOK_CALL.test(file.text)) continue; // cheap pre-filter: no dep-taking hooks, no lint run
     let hits: { line: number; message: string }[];
     try {

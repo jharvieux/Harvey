@@ -18,7 +18,9 @@ import { callChainNames, loc, parse, type SourceInput } from "../detectors/commo
 import { mechanicalFinding } from "./common.js";
 
 // Plain .js is deliberately in scope — the calibration fixtures (and many Next.js pages/api routes)
-// are .js, which the shared loadSources() SOURCE_FILE regex excludes; this pass walks its own tree.
+// are .js. (The original reason for the separate walk, "loadSources() excludes .js", was true until
+// #1065 widened SOURCE_FILE on 2026-07-25; this pass runs inside runMechanicalScan, which hands it
+// no SourceInput[], so it keeps its own tree walk.)
 const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "coverage"]);
 

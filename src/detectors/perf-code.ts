@@ -17,6 +17,7 @@ import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { isViteTooling, type TargetFramework } from "../scan/framework-detect.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
+import { SOURCE_FILE } from "./load-sources.js";
 
 export type { SourceInput } from "./common.js";
 
@@ -1130,7 +1131,7 @@ function detectManualFontLink(sources: Map<string, ts.SourceFile>, nextId: NextI
 function detectMiddlewareFetch(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (!/(^|\/)middleware\.ts$/.test(path)) continue;
+    if (!/(^|\/)middleware\.[cm]?[jt]sx?$/.test(path)) continue;
     let hit: ts.CallExpression | undefined;
     const visit = (n: ts.Node) => {
       if (hit) return;
@@ -1164,7 +1165,7 @@ function detectMiddlewareFetch(sources: Map<string, ts.SourceFile>, nextId: Next
 // --- E1. Blocking sync I/O in a request handler [PERF] ----------------------------
 
 const SYNC_CALL = /^(readFileSync|readdirSync|writeFileSync|appendFileSync|statSync|execSync|execFileSync|spawnSync|pbkdf2Sync|scryptSync|generateKeyPairSync|gzipSync|gunzipSync|deflateSync|inflateSync|brotliCompressSync|brotliDecompressSync)$/;
-const HANDLER_PATH = /(\/route\.tsx?$)|((^|\/)pages\/api\/)/;
+const HANDLER_PATH = /(\/route\.[cm]?[jt]sx?$)|((^|\/)pages\/api\/)/;
 
 function detectSyncIoInHandler(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
@@ -1571,7 +1572,8 @@ export function detectPerfCodeFindings(files: SourceInput[], framework?: TargetF
   // Next-compiler assumptions.
   const isVite = isViteTooling(framework);
   const sources = new Map(
-    files.filter((f) => /\.(ts|tsx|jsx|mjs)$/.test(f.path)).map((f) => [f.path, parse(f.path, f.text)]),
+    // #1065: the loader's own filter, imported so the two can never drift apart.
+    files.filter((f) => SOURCE_FILE.test(f.path)).map((f) => [f.path, parse(f.path, f.text)]),
   );
   let n = 0;
   const nextId: NextId = () => `M7C-${String(++n).padStart(2, "0")}`;

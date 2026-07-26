@@ -20,6 +20,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { parse, type NextId, type SourceInput } from "./common.js";
+import { SOURCE_FILE } from "./load-sources.js";
 
 function makeFinding(
   nextId: NextId,
@@ -586,7 +587,9 @@ function detectUnusedParameter(sf: ts.SourceFile, path: string, nextId: NextId):
 // compiler-options in this single-file pipeline to check the actual `jsx` setting, so this is a
 // documented small allowlist per the issue's own fallback, not a detected fact).
 function isReactPragma(path: string, name: string): boolean {
-  return name === "React" && /\.(tsx|jsx)$/.test(path);
+  // #1065: .js/.mjs/.cjs are JSX modules too (React/Next allow JSX in plain .js) — they parse as
+  // TSX here, so the same pragma exemption has to apply or every one of them false-fires.
+  return name === "React" && /\.([jt]sx|[cm]?js)$/.test(path);
 }
 
 function importedBindings(clause: ts.ImportClause): { name: string; node: ts.Node }[] {
@@ -791,7 +794,7 @@ export function detectSlopFindings(files: SourceInput[]): Finding[] {
   const nextId: NextId = () => `SLOP-${String(++n).padStart(2, "0")}`;
   const findings: Finding[] = [];
   for (const f of files) {
-    if (!/\.(ts|tsx|jsx|mjs)$/.test(f.path)) continue;
+    if (!SOURCE_FILE.test(f.path)) continue; // #1065: the loader's own filter, imported so the two can never drift apart
     const sf = parse(f.path, f.text);
     const comments = collectComments(sf);
     findings.push(
