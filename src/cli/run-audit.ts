@@ -238,7 +238,7 @@ if (supabaseRefsArg.length > 1) console.log(`Supabase projects enumerated (M7 ad
 if (Object.keys(schemaHints).length) console.log(`Per-app schema hints (M10, #538): ${Object.entries(schemaHints).map(([app, path]) => `${app}=${path}`).join(", ")}`);
 console.log("");
 
-const { recorded, failures, findings, hotspots, dataMap } = runAudit(AUDIT_RUNNERS, ctx);
+const { recorded, failures, findings, hotspots, dataMap, testQuality } = runAudit(AUDIT_RUNNERS, ctx);
 // #975 — declare CWEs across the assembled deliverable (mechanical rows arrive enriched; captured
 // artifact/config-tier rows get theirs here) so --findings-out and --sarif-out both carry them.
 enrichFindingsCwe(findings);
@@ -265,7 +265,7 @@ let exportFindings: Finding[] = findings;
 
 if (findingsOut) {
   const meta: ReportMeta = metaPath ? (JSON.parse(readFileSync(metaPath, "utf8")) as ReportMeta) : placeholderMeta(targetDir);
-  let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots, dataMap);
+  let doc = assembleEngagementDocument(recorded, env, findings, meta, hotspots, dataMap, testQuality);
 
   // #457: diff against a prior engagement so the deliverable leads with progress. The baseline is a
   // full findings.json from a previous audit of the SAME client; we diff by finding identity
@@ -289,6 +289,10 @@ if (findingsOut) {
   }
   writeFileSync(findingsOut, `${JSON.stringify(doc, null, 2)}\n`);
   console.log(`\nEngagement findings (${doc.findings.length} finding(s) + coverage ledger) → ${findingsOut}`);
+  // #1045: absence of the §3b table is stated, never silent — a report with no test-quality section
+  // reads as "nothing to report" rather than "the mutation tier produced no measurement".
+  if (doc.testQuality) console.log(`M8 test-quality table: ${doc.testQuality.rows.length} module row(s), ${doc.testQuality.mutationScore}% overall mutation score`);
+  else console.error("⚠ no M8 test-quality table in this deliverable — the mutation tier produced no measurement this run; the M8 coverage row states why (#1045).");
   if (!metaPath) console.error("⚠ no --meta given: the deliverable carries a PLACEHOLDER meta — fill client/health/headline/scope before rendering the report.");
   exportFindings = doc.findings;
 }
