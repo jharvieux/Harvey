@@ -1,4 +1,4 @@
-// pnpm exec tsx src/cli/validate-reasons.ts [--root <path>]... [--revalidate] [--list]
+// pnpm exec tsx src/cli/validate-reasons.ts [--root <path>]... [--revalidate] [--list] [--live | --tier <name>]...
 //
 // The #1033 gate over recorded reasons. Two passes:
 //
@@ -18,6 +18,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DEFAULT_ROOTS,
+  KNOWN_FALSIFIER_TIERS,
   collectReasons,
   reasonKind,
   revalidateReasons,
@@ -80,14 +81,29 @@ for (const row of subsystemDrift(reasons, commitsSince)) {
 }
 
 if (process.argv.includes("--revalidate")) {
-  const rows = revalidateReasons(empirical, runFalsifier);
-  const broken = rows.filter((row) => row.status !== "holds");
-  console.log(`\nRe-validated ${rows.length} empirical falsifier(s); ${decisional.length} decisional reason(s) excluded by kind.`);
+  // --live enables every registered tier; --tier <name> (repeatable) enables specific ones. An
+  // unknown --tier is refused loudly rather than silently enabling nothing.
+  const requestedTiers = flagValues("--tier");
+  const unknownTiers = requestedTiers.filter((t) => !KNOWN_FALSIFIER_TIERS.has(t));
+  if (unknownTiers.length > 0) {
+    console.error(`✗ unknown --tier: ${unknownTiers.join(", ")} — known tiers: ${[...KNOWN_FALSIFIER_TIERS].join(", ")}`);
+    process.exit(1);
+  }
+  const availableTiers = process.argv.includes("--live") ? new Set(KNOWN_FALSIFIER_TIERS) : new Set(requestedTiers);
+
+  const rows = revalidateReasons(empirical, runFalsifier, availableTiers);
+  const skippedLive = rows.filter((row) => row.status === "SKIPPED-LIVE");
+  const broken = rows.filter((row) => row.status === "STALE" || row.status === "UNVERIFIABLE");
+  const ran = rows.length - skippedLive.length;
+  console.log(`\nRe-validated ${ran} empirical falsifier(s); ${skippedLive.length} live-only skipped; ${decisional.length} decisional reason(s) excluded by kind.`);
+  for (const row of skippedLive) {
+    console.log(`\nℹ SKIPPED-LIVE  ${row.file}:${row.line}\n    ${row.claim.slice(0, 120)}\n    ${row.detail}`);
+  }
   for (const row of broken) {
     failed = true;
     console.error(`\n✗ ${row.status}  ${row.file}:${row.line}\n    ${row.claim.slice(0, 120)}\n    ${row.detail}`);
   }
-  if (broken.length === 0 && rows.length > 0) console.log("✓ every empirical falsifier still exits non-zero — no reason has outlived its truth");
+  if (broken.length === 0 && ran > 0) console.log("✓ every empirical falsifier run still exits non-zero — no reason has outlived its truth");
 }
 
 process.exit(failed ? 1 : 0);
