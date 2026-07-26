@@ -2214,7 +2214,7 @@
     "status": "Open",
     "evidence": "This .npmrc does not set a minimum release age or sets it too low. Newly published packages can be malicious or unstable. Add `min-release-age = 7` to wait 7 days before resolving newly published package versions. Added in: v11.10 Reference: https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing-config-and-script-security-now-generally-available/",
     "impact": "This .npmrc does not set a minimum release age or sets it too low. Newly published packages can be malicious or unstable. Add `min-release-age = 7` to wait 7 days before resolving newly published package versions. Added in: v11.10 Reference: https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing-config-and-script-security-now-generally-available/",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing-config-and-script-security-now-generally-available/, https://github.com/npm/cli/pull/8965, https://semgrep.dev/r/package_managers.npm.npm-missing-minimum-release-age.npm-missing-minimum-release-age.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -2225,6 +2225,10 @@
     ],
     "owasp": [
       "A08:2021 - Software and Data Integrity Failures"
+    ],
+    "references": [
+      "https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing-config-and-script-security-now-generally-available/",
+      "https://github.com/npm/cli/pull/8965"
     ]
   },
   {
@@ -2238,7 +2242,7 @@
     "status": "Open",
     "evidence": "NPM registry authentication token detected",
     "impact": "NPM registry authentication token detected",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-npm-registry-auth-token.detected-npm-registry-auth-token.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -2250,6 +2254,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -3625,7 +3632,7 @@
     "status": "Open",
     "evidence": "Private Key detected. This is a sensitive credential and should not be hardcoded here. Instead, store this in a separate, private file.",
     "impact": "Private Key detected. This is a sensitive credential and should not be hardcoded here. Instead, store this in a separate, private file.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-private-key.detected-private-key.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -3637,6 +3644,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -3794,7 +3804,7 @@
     "status": "Open",
     "evidence": "The application accepts potentially user-controlled input `$PROP` which can control the location of the current window context. This can lead two types of vulnerabilities open-redirection and Cross-Site-Scripting (XSS) with JavaScript URIs. It is recommended to validate user-controllable input before allowing it to control the redirection.",
     "impact": "The application accepts potentially user-controlled input `$PROP` which can control the location of the current window context. This can lead two types of vulnerabilities open-redirection and Cross-Site-Scripting (XSS) with JavaScript URIs. It is recommended to validate user-controllable input before allowing it to control the redirection.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html, https://semgrep.dev/r/javascript.browser.security.open-redirect.js-open-redirect.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -3806,6 +3816,9 @@
     "owasp": [
       "A01:2021 - Broken Access Control",
       "A01:2025 - Broken Access Control"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html"
     ]
   },
   {
@@ -3867,7 +3880,7 @@
     "status": "Open",
     "evidence": "The target origin of the window.postMessage() API is set to \"*\". This could allow for information disclosure due to the possibility of any origin allowed to receive the message.",
     "impact": "The target origin of the window.postMessage() API is set to \"*\". This could allow for information disclosure due to the possibility of any origin allowed to receive the message.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures, https://semgrep.dev/r/javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -3879,6 +3892,9 @@
     "owasp": [
       "A08:2021 - Software and Data Integrity Failures",
       "A08:2025 - Software or Data Integrity Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures"
     ]
   },
   {
@@ -4108,7 +4124,7 @@
     "status": "Open",
     "evidence": "The 'final' call of a Decipher object checks the authentication tag in a mode for authenticated encryption. Failing to call 'final' will invalidate all integrity guarantees of the released ciphertext.",
     "impact": "The 'final' call of a Decipher object checks the authentication tag in a mode for authenticated encryption. Failing to call 'final' will invalidate all integrity guarantees of the released ciphertext.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://nodejs.org/api/crypto.html#deciphersetauthtagbuffer-encoding, https://owasp.org/Top10/A02_2021-Cryptographic_Failures/, https://semgrep.dev/r/javascript.node-crypto.security.aead-no-final.aead-no-final.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -4120,6 +4136,10 @@
     "owasp": [
       "A02:2021 - Cryptographic Failures",
       "A04:2025 - Cryptographic Failures"
+    ],
+    "references": [
+      "https://nodejs.org/api/crypto.html#deciphersetauthtagbuffer-encoding",
+      "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
     ]
   },
   {
@@ -4181,7 +4201,7 @@
     "status": "Open",
     "evidence": "A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and used by either an internal or external malicious adversary. It is recommended to use environment variables to securely provide credentials or retrieve credentials from a secure vault or HSM (Hardware Security Module).",
     "impact": "A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and used by either an internal or external malicious adversary. It is recommended to use environment variables to securely provide credentials or retrieve credentials from a secure vault or HSM (Hardware Security Module).",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html, https://semgrep.dev/r/javascript.jsonwebtoken.security.jwt-hardcode.hardcoded-jwt-secret.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -4193,6 +4213,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html"
     ]
   },
   {
@@ -4206,7 +4229,7 @@
     "status": "Open",
     "evidence": "The deprecated functions 'createCipher' and 'createDecipher' generate the same initialization vector every time. For counter modes such as CTR, GCM, or CCM this leads to break of both confidentiality and integrity, if the key is used more than once. Other modes are still affected in their strength, though they're not completely broken. Use 'createCipheriv' or 'createDecipheriv' instead.",
     "impact": "The deprecated functions 'createCipher' and 'createDecipher' generate the same initialization vector every time. For counter modes such as CTR, GCM, or CCM this leads to break of both confidentiality and integrity, if the key is used more than once. Other modes are still affected in their strength, though they're not completely broken. Use 'createCipheriv' or 'createDecipheriv' instead.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://nodejs.org/api/crypto.html#cryptocreatecipheralgorithm-password-options, https://nodejs.org/api/crypto.html#cryptocreatedecipheralgorithm-password-options, https://semgrep.dev/r/javascript.node-crypto.security.create-de-cipher-no-iv.create-de-cipher-no-iv.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -4214,6 +4237,10 @@
     "precisionTier": "high",
     "cwe": [
       "CWE-1204: Generation of Weak Initialization Vector (IV)"
+    ],
+    "references": [
+      "https://nodejs.org/api/crypto.html#cryptocreatecipheralgorithm-password-options",
+      "https://nodejs.org/api/crypto.html#cryptocreatedecipheralgorithm-password-options"
     ]
   },
   {
@@ -4251,7 +4278,7 @@
     "status": "Open",
     "evidence": "By letting user input control CORS parameters, there is a risk that software does not properly verify that the source of data or communication is valid. Use literal values for CORS settings.",
     "impact": "By letting user input control CORS parameters, there is a risk that software does not properly verify that the source of data or communication is valid. Use literal values for CORS settings.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS, https://semgrep.dev/r/javascript.express.security.cors-misconfiguration.cors-misconfiguration.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -4263,6 +4290,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS"
     ]
   },
   {
@@ -4441,7 +4471,7 @@
     "status": "Open",
     "evidence": "The call to 'createDecipheriv' with the Galois Counter Mode (GCM) mode of operation is missing an expected authentication tag length. If the expected authentication tag length is not specified or otherwise checked, the application might be tricked into verifying a shorter-than-expected authentication tag. This can be abused by an attacker to spoof ciphertexts or recover the implicit authentication key of GCM, allowing arbitrary forgeries.",
     "impact": "The call to 'createDecipheriv' with the Galois Counter Mode (GCM) mode of operation is missing an expected authentication tag length. If the expected authentication tag length is not specified or otherwise checked, the application might be tricked into verifying a shorter-than-expected authentication tag. This can be abused by an attacker to spoof ciphertexts or recover the implicit authentication key of GCM, allowing arbitrary forgeries.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://www.securesystems.de/blog/forging_ciphertexts_under_Galois_Counter_Mode_for_the_Node_js_crypto_module/, https://nodejs.org/api/crypto.html#cryptocreatedecipherivalgorithm-key-iv-options, https://owasp.org/Top10/A02_2021-Cryptographic_Failures/, https://semgrep.dev/r/javascript.node-crypto.security.gcm-no-tag-length.gcm-no-tag-length.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -4453,6 +4483,11 @@
     "owasp": [
       "A02:2021 - Cryptographic Failures",
       "A04:2025 - Cryptographic Failures"
+    ],
+    "references": [
+      "https://www.securesystems.de/blog/forging_ciphertexts_under_Galois_Counter_Mode_for_the_Node_js_crypto_module/",
+      "https://nodejs.org/api/crypto.html#cryptocreatedecipherivalgorithm-key-iv-options",
+      "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
     ]
   },
   {
@@ -4490,7 +4525,7 @@
     "status": "Open",
     "evidence": "Checks for setting the environment variable NODE_TLS_REJECT_UNAUTHORIZED to 0, which disables TLS verification. This should only be used for debugging purposes. Setting the option rejectUnauthorized to false bypasses verification against the list of trusted CAs, which also leads to insecure transport. These options lead to vulnerability to MTM attacks, and should not be used.",
     "impact": "Checks for setting the environment variable NODE_TLS_REJECT_UNAUTHORIZED to 0, which disables TLS verification. This should only be used for debugging purposes. Setting the option rejectUnauthorized to false bypasses verification against the list of trusted CAs, which also leads to insecure transport. These options lead to vulnerability to MTM attacks, and should not be used.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://nodejs.org/api/https.html#https_https_request_options_callback, https://stackoverflow.com/questions/20433287/node-js-request-cert-has-expired#answer-29397100, https://semgrep.dev/r/problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -4501,6 +4536,10 @@
     ],
     "owasp": [
       "A03:2017 - Sensitive Data Exposure"
+    ],
+    "references": [
+      "https://nodejs.org/api/https.html#https_https_request_options_callback",
+      "https://stackoverflow.com/questions/20433287/node-js-request-cert-has-expired#answer-29397100"
     ]
   },
   {
@@ -4796,7 +4835,7 @@
     "status": "Open",
     "evidence": "Detected usage of crypto.pseudoRandomBytes, which does not produce secure random numbers.",
     "impact": "Detected usage of crypto.pseudoRandomBytes, which does not produce secure random numbers.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A02_2021-Cryptographic_Failures, https://semgrep.dev/r/javascript.lang.security.detect-pseudorandombytes.detect-pseudoRandomBytes.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -4808,6 +4847,9 @@
     "owasp": [
       "A02:2021 - Cryptographic Failures",
       "A04:2025 - Cryptographic Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A02_2021-Cryptographic_Failures"
     ]
   },
   {
@@ -4941,7 +4983,7 @@
     "status": "Open",
     "evidence": "AWS Secret Access Key detected",
     "impact": "AWS Secret Access Key detected",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-aws-secret-access-key.detected-aws-secret-access-key.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -4953,6 +4995,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -5464,7 +5509,7 @@
     "status": "Open",
     "evidence": "Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
     "impact": "Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://react.dev/reference/react-dom/components/common#dangerously-setting-the-inner-html, https://semgrep.dev/r/typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -5477,6 +5522,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://react.dev/reference/react-dom/components/common#dangerously-setting-the-inner-html"
     ]
   },
   {
@@ -5655,7 +5703,7 @@
     "status": "Open",
     "evidence": "Found data from an Express or Next web request flowing to `eval`. If this data is user-controllable this can lead to execution of arbitrary system commands in the context of your application process. Avoid `eval` whenever possible.",
     "impact": "Found data from an Express or Next web request flowing to `eval`. If this data is user-controllable this can lead to execution of arbitrary system commands in the context of your application process. Avoid `eval` whenever possible.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval, https://nodejs.org/api/child_process.html#child_processexeccommand-options-callback, https://www.stackhawk.com/blog/nodejs-command-injection-examples-and-prevention/, https://ckarande.gitbooks.io/owasp-nodegoat-tutorial/content/tutorial/a1_-_server_side_js_injection.html, https://semgrep.dev/r/javascript.lang.security.audit.code-string-concat.code-string-concat.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5667,6 +5715,12 @@
     "owasp": [
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval",
+      "https://nodejs.org/api/child_process.html#child_processexeccommand-options-callback",
+      "https://www.stackhawk.com/blog/nodejs-command-injection-examples-and-prevention/",
+      "https://ckarande.gitbooks.io/owasp-nodegoat-tutorial/content/tutorial/a1_-_server_side_js_injection.html"
     ]
   },
   {
@@ -5752,7 +5806,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5765,6 +5819,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5778,7 +5835,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5791,6 +5848,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5828,7 +5888,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5841,6 +5901,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5854,7 +5917,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5867,6 +5930,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5904,7 +5970,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5917,6 +5983,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5930,7 +5999,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5943,6 +6012,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5956,7 +6028,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5969,6 +6041,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -6666,7 +6741,7 @@
     "status": "Open",
     "evidence": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
     "impact": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.injection.raw-html-format.raw-html-format.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -6679,6 +6754,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
     ]
   },
   {
@@ -7163,7 +7241,7 @@
     "status": "Open",
     "evidence": "If an attacker controls the x in require(x) then they can cause code to load that was not intended to run on the server.",
     "impact": "If an attacker controls the x in require(x) then they can cause code to load that was not intended to run on the server.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://github.com/google/node-sec-roadmap/blob/master/chapter-2/dynamism.md#dynamism-when-you-need-it, https://semgrep.dev/r/javascript.express.security.require-request.require-request.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -7175,6 +7253,9 @@
     "owasp": [
       "A01:2021 - Broken Access Control",
       "A01:2025 - Broken Access Control"
+    ],
+    "references": [
+      "https://github.com/google/node-sec-roadmap/blob/master/chapter-2/dynamism.md#dynamism-when-you-need-it"
     ]
   },
   {
@@ -7515,7 +7596,7 @@
     "status": "Open",
     "evidence": "User controllable data `req` enters `res.render(...)` this can lead to the loading of other HTML/templating pages that they may not be authorized to render. An attacker may attempt to use directory traversal techniques e.g. `../folder/index` to access other HTML pages on the file system. Where possible, do not allow users to define what should be  loaded in res.render or use an allow list for the existing application.",
     "impact": "User controllable data `req` enters `res.render(...)` this can lead to the loading of other HTML/templating pages that they may not be authorized to render. An attacker may attempt to use directory traversal techniques e.g. `../folder/index` to access other HTML pages on the file system. Where possible, do not allow users to define what should be  loaded in res.render or use an allow list for the existing application.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: http://expressjs.com/en/4x/api.html#res.render, https://semgrep.dev/r/javascript.express.security.audit.res-render-injection.res-render-injection.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -7527,6 +7608,9 @@
     "owasp": [
       "A01:2021 - Broken Access Control",
       "A01:2025 - Broken Access Control"
+    ],
+    "references": [
+      "http://expressjs.com/en/4x/api.html#res.render"
     ]
   },
   {
@@ -8335,7 +8419,7 @@
     "status": "Open",
     "evidence": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "impact": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.audit.xss.direct-response-write.direct-response-write.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -8348,6 +8432,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
     ]
   },
   {
@@ -8361,7 +8448,7 @@
     "status": "Open",
     "evidence": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
     "impact": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.injection.raw-html-format.raw-html-format.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -8374,6 +8461,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
     ]
   },
   {
@@ -8411,7 +8501,7 @@
     "status": "Open",
     "evidence": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "impact": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.audit.xss.direct-response-write.direct-response-write.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -8424,6 +8514,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
     ]
   },
   {
@@ -8437,7 +8530,7 @@
     "status": "Open",
     "evidence": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
     "impact": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.injection.raw-html-format.raw-html-format.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -8450,6 +8543,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
     ]
   },
   {
@@ -8535,7 +8631,7 @@
     "status": "Open",
     "evidence": "Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
     "impact": "Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://react.dev/reference/react-dom/components/common#dangerously-setting-the-inner-html, https://semgrep.dev/r/typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -8548,6 +8644,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://react.dev/reference/react-dom/components/common#dangerously-setting-the-inner-html"
     ]
   },
   {
@@ -8633,7 +8732,7 @@
     "status": "Open",
     "evidence": "Google (GCM) Service account detected",
     "impact": "Google (GCM) Service account detected",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -8645,6 +8744,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -8658,7 +8760,7 @@
     "status": "Open",
     "evidence": "Google (GCM) Service account detected",
     "impact": "Google (GCM) Service account detected",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -8670,6 +8772,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -8779,7 +8884,7 @@
     "status": "Open",
     "evidence": "bcrypt hash detected",
     "impact": "bcrypt hash detected",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -8791,6 +8896,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -8804,7 +8912,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -8817,6 +8925,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
