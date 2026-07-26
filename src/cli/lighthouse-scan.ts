@@ -56,7 +56,7 @@ import { join, resolve } from "node:path";
 import { launch, type LaunchedChrome, type Options as LaunchOptions } from "chrome-launcher";
 import runLighthouse from "lighthouse";
 import type { Finding } from "../findings.js";
-import { lighthouseRunErrorReason, lighthouseUnavailableFinding, parseLighthouseFindings, serveCommand, type LighthousePageResult, type LighthouseResult } from "../lighthouse.js";
+import { lighthouseRunErrorReason, lighthouseScopeDisclosureFinding, lighthouseUnavailableFinding, parseLighthouseFindings, serveCommand, type LighthousePageResult, type LighthouseResult } from "../lighthouse.js";
 import { tryChromeCandidates, type ChromeCandidate } from "../lighthouse-chrome-candidates.js";
 import { detectTargetFramework } from "../scan/framework-detect.js";
 
@@ -338,7 +338,10 @@ async function main(): Promise<void> {
       for (const route of routes.slice(1)) {
         pages.push(await auditRoute(target.base, route, chrome.port));
       }
-      const findings = parseLighthouseFindings(pages);
+      // #1074: onlyCategories: ["performance"] below means a11y/best-practices/SEO never ran —
+      // appended unconditionally whenever this tier actually produced a result, so the gap is
+      // disclosed rather than silent.
+      const findings = [...parseLighthouseFindings(pages), lighthouseScopeDisclosureFinding()];
       console.error(`M7 Lighthouse: ${pages.length} page(s) audited -> ${findings.length} finding(s)`);
       emit(findings);
     } finally {

@@ -1,0 +1,38 @@
+{
+  "_note": "REAL Lighthouse 13.4.0 capture (live run, 2026-07-25) — trimmed to the fields src/lighthouse.ts's LighthouseResult reads. Captured by serving a blank static page (no painted content) and running lighthouse-node against it with chrome-launcher, headless Chrome, onlyCategories:['performance'] — the same invocation src/cli/lighthouse-scan.ts uses. This is the NO_FCP failure mode #488/#556 already document: Lighthouse's core/scoring.js nulls categories.performance.score whenever ANY weighted performance audit (LCP weight 25, TBT weight 30, CLS weight 25 — confirmed from this same capture's categories.performance.auditRefs) has scoreDisplayMode 'error', so a page this broken already fails src/lighthouse.ts's lighthouseRunErrorReason (categories.performance.score == null) and never reaches parseLighthouseFindings via the shipped CLI. It is committed here anyway because it is the only REAL capture available of the scoreDisplayMode:'error'/errorMessage audit shape (#1074 requires a captured, not hand-written, fixture for that shape) — src/lighthouse.test.ts uses it to unit-test metricNotMeasuredFinding's own logic directly (bypassing the CLI's upstream guard), since that function must not silently read an errored audit as a clean pass regardless of whether today's single call site happens to filter the case out first.",
+  "requestedUrl": "http://localhost:8931/",
+  "finalDisplayedUrl": "http://localhost:8931/",
+  "finalUrl": "http://localhost:8931/",
+  "categories": {
+    "performance": { "id": "performance", "title": "Performance", "score": null }
+  },
+  "audits": {
+    "first-contentful-paint": {
+      "scoreDisplayMode": "error",
+      "errorMessage": "The page did not paint any content. Please ensure you keep the browser window in the foreground during the load and try again. (NO_FCP)"
+    },
+    "largest-contentful-paint": {
+      "scoreDisplayMode": "error",
+      "errorMessage": "The page did not paint any content. Please ensure you keep the browser window in the foreground during the load and try again. (NO_FCP)"
+    },
+    "total-blocking-time": {
+      "scoreDisplayMode": "error",
+      "errorMessage": "The page did not paint any content. Please ensure you keep the browser window in the foreground during the load and try again. (NO_FCP)"
+    },
+    "cumulative-layout-shift": {
+      "scoreDisplayMode": "error",
+      "errorMessage": "The page did not paint any content. Please ensure you keep the browser window in the foreground during the load and try again. (NO_FCP)"
+    },
+    "speed-index": {
+      "scoreDisplayMode": "error",
+      "errorMessage": "The page did not paint any content. Please ensure you keep the browser window in the foreground during the load and try again. (NO_FCP)"
+    }
+  },
+  "runtimeError": {
+    "code": "NO_FCP",
+    "message": "The page did not paint any content. Please ensure you keep the browser window in the foreground during the load and try again. (NO_FCP)"
+  },
+  "runWarnings": [
+    "The page did not paint any content. Please ensure you keep the browser window in the foreground during the load and try again. (NO_FCP)"
+  ]
+}
