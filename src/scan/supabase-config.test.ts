@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  AUTH_CONFIG_FIELDS,
   checkAuthConfig,
   checkAutoExposedTables,
   checkColumnGrantsToClientRoles,
@@ -59,14 +61,21 @@ describe("checkAuthConfig", () => {
     expect(taxonomies).toContain("Auth config: wildcard redirect allowlist");
   });
 
-  it("flags an OTP expiry over the 1-hour baseline", () => {
-    const findings = checkAuthConfig({ otp_expiry: 7200 });
+  it("flags an email OTP expiry over the 1-hour baseline", () => {
+    const findings = checkAuthConfig({ mailer_otp_exp: 7200 });
     expect(findings).toHaveLength(1);
     expect(findings[0]?.taxonomy).toBe("Auth config: long OTP expiry");
+    expect(findings[0]?.id).toBe("SB-AUTH-OTP-EXPIRY-EMAIL");
+  });
+
+  it("flags a long SMS OTP expiry separately from the email one", () => {
+    const findings = checkAuthConfig({ mailer_otp_exp: 7200, sms_otp_exp: 86400 });
+    expect(findings.map((f) => f.id)).toEqual(["SB-AUTH-OTP-EXPIRY-EMAIL", "SB-AUTH-OTP-EXPIRY-SMS"]);
+    expect(findings[1]?.evidence).toContain("sms_otp_exp=86400");
   });
 
   it("returns no findings for a hardened config", () => {
-    const findings = checkAuthConfig({ mailer_autoconfirm: false, password_hibp_enabled: true, otp_expiry: 600, uri_allow_list: "https://app.example.com/callback" });
+    const findings = checkAuthConfig({ mailer_autoconfirm: false, password_hibp_enabled: true, mailer_otp_exp: 600, sms_otp_exp: 600, uri_allow_list: "https://app.example.com/callback" });
     expect(findings).toEqual([]);
   });
 });
@@ -96,12 +105,16 @@ describe("checkAuthConfig — #671 auth-method gating", () => {
     expect(f.title).toContain("conditional");
   });
 
-  it("gates OTP expiry on email OR phone OTP being in use", () => {
-    const asserted = checkAuthConfig({ otp_expiry: 7200, external_email_enabled: true, external_phone_enabled: false });
-    expect(asserted[0]!.severity).toBe("Low");
-    const conditional = checkAuthConfig({ otp_expiry: 7200, external_email_enabled: false, external_phone_enabled: false });
-    expect(conditional[0]!.severity).toBe("Info");
-    expect(conditional[0]!.taxonomy).toBe("Auth config: long OTP expiry");
+  // #1098 — each OTP lifetime is its own API field, so each gates on the provider that issues it:
+  // a long SMS window on an email-only project is a conditional note, not an asserted Low.
+  it("gates each OTP expiry on its OWN provider", () => {
+    const emailOnly = checkAuthConfig({ mailer_otp_exp: 7200, sms_otp_exp: 7200, external_email_enabled: true, external_phone_enabled: false });
+    expect(emailOnly.find((f) => f.id === "SB-AUTH-OTP-EXPIRY-EMAIL")!.severity).toBe("Low");
+    expect(emailOnly.find((f) => f.id === "SB-AUTH-OTP-EXPIRY-SMS")!.severity).toBe("Info");
+
+    const neither = checkAuthConfig({ mailer_otp_exp: 7200, external_email_enabled: false, external_phone_enabled: false });
+    expect(neither[0]!.severity).toBe("Info");
+    expect(neither[0]!.taxonomy).toBe("Auth config: long OTP expiry");
   });
 
   it("never gates the wildcard-redirect advisor (applies to OAuth flows too)", () => {
@@ -113,16 +126,44 @@ describe("checkAuthConfig — #671 auth-method gating", () => {
 });
 
 describe("checkAuthConfig — Batch B8 planted config.toml shape", () => {
-  // Mirrors targets/calibration/supabase/config.toml (auth.email.otp_expiry=86400,
-  // auth.additional_redirect_urls includes "*") — see GROUND-TRUTH.md §"Batch B8". No live
-  // Management API config was read; this proves the parsing logic against the exact planted
-  // values offline.
+  // The planted values live in targets/calibration/supabase/config.toml (CLI spelling:
+  // [auth.email] otp_expiry = 86400, auth.additional_redirect_urls includes "*") — see
+  // GROUND-TRUTH.md §"Batch B8". The check reads the HOSTED Management API response, whose
+  // spelling differs, so the CLI keys are translated here rather than passed through:
+  // otp_expiry -> mailer_otp_exp, additional_redirect_urls -> uri_allow_list. #1098: passing the
+  // CLI spelling straight in is what made this check dead on every real target while this test
+  // stayed green — the conformance test below now blocks that shape at the type level.
   it("flags the planted 24h OTP expiry and wildcard redirect allowlist together", () => {
-    const findings = checkAuthConfig({ mailer_autoconfirm: false, password_hibp_enabled: true, otp_expiry: 86400, uri_allow_list: "https://127.0.0.1:3000,*" });
+    const findings = checkAuthConfig({ mailer_autoconfirm: false, password_hibp_enabled: true, mailer_otp_exp: 86400, uri_allow_list: "https://127.0.0.1:3000,*" });
     const taxonomies = findings.map((f) => f.taxonomy);
     expect(taxonomies).toContain("Auth config: long OTP expiry");
     expect(taxonomies).toContain("Auth config: wildcard redirect allowlist");
     expect(findings).toHaveLength(2);
+  });
+});
+
+// #1098 — the gate that would have caught the bug: every field the scan reads must exist, with the
+// declared type, in Supabase's own published response schema for GET /projects/{ref}/config/auth.
+// The fixture is a vendor capture, not a hand-written literal (see __fixtures__/supabase/PROVENANCE.md).
+describe("AuthConfig conforms to the captured Management API response schema", () => {
+  const schema = JSON.parse(
+    readFileSync(new URL("./__fixtures__/supabase/auth-config-response-schema-2026-07-26.json", import.meta.url), "utf8"),
+  ) as { properties: Record<string, { type?: string; anyOf?: { type: string }[] }> };
+
+  // A field is declared either as {type} or as {anyOf:[{type},{type:"null"}]} for a nullable one.
+  const declaredTypes = (name: string): string[] => {
+    const prop = schema.properties[name];
+    if (!prop) return [];
+    return (prop.anyOf ?? [prop]).map((t) => t.type).filter((t): t is string => t !== undefined && t !== "null");
+  };
+
+  it.each(Object.entries(AUTH_CONFIG_FIELDS))("%s exists in the response schema as %s", (field, type) => {
+    expect(declaredTypes(field)).toContain(type);
+  });
+
+  it("does not resurrect otp_expiry — the config.toml key that is not an API field", () => {
+    expect(schema.properties).not.toHaveProperty("otp_expiry");
+    expect(Object.keys(AUTH_CONFIG_FIELDS)).not.toContain("otp_expiry");
   });
 });
 

@@ -622,7 +622,7 @@ and is unit-tested against a recorded response.
 | P-STORAGE-PUBLIC | `[storage.buckets.avatars]` (`config.toml`) | `checkPublicBucketsWithNoPolicies` — `public=true`, zero `storage.objects` policies scoped to it | connected |
 | P-LEAKED-PW-OFF | Auth config (live-only, no local fixture) | `checkAuthConfig` — `password_hibp_enabled=false` | connected |
 | P-EMAIL-CONFIRM-OFF | `[auth.email] enable_confirmations` (`config.toml`) | `checkAuthConfig` — email confirmation disabled | connected |
-| P-OTP-LONG-EXPIRY | `[auth.email] otp_expiry = 86400` (`config.toml`) | `checkAuthConfig` — OTP expiry past the 3600s baseline | connected |
+| P-OTP-LONG-EXPIRY | `[auth.email] otp_expiry = 86400` (`config.toml`); hosted API spelling `mailer_otp_exp` | `checkAuthConfig` — OTP expiry past the 3600s baseline | connected |
 | P-OAUTH-REDIRECT-WILD | `[auth] additional_redirect_urls` (`config.toml`, `"*"`) | `checkAuthConfig` — wildcard redirect allowlist | connected |
 | P-PGNET-SSRF | `public.fetch_webhook_preview` (+ `pg_net` extension) | `checkDangerousExtensions` — `pg_net` enabled and callable via a `SECURITY DEFINER` RPC with a caller-supplied URL | connected |
 
@@ -640,7 +640,8 @@ No binary or live project was run for this batch. What WAS validated offline:
 `parseAdvisorFindings` was exercised against recorded advisor JSON fixtures covering all seven
 lint names above (`supabase-advisors.test.ts`), confirming the existing `CURATED_SEVERITY` map
 produces the expected severity for each; `checkAuthConfig` was exercised against the exact
-planted config shape (`otp_expiry: 86400`, a wildcard `uri_allow_list`) and `checkDangerousExtensions`
+planted config shape (24h OTP expiry — `mailer_otp_exp: 86400` in the hosted API's spelling of the
+planted `otp_expiry`, corrected in #1098 — plus a wildcard `uri_allow_list`) and `checkDangerousExtensions`
 against `pg_net` (`supabase-config.test.ts`). `pnpm validate:calibration` (static gate, run in this
 environment against the real installed binaries — semgrep, gitleaks, trufflehog, osv-scanner; no
 Docker/live DB involved): **positives caught 63/63 static (24 at high/free-count), 15
