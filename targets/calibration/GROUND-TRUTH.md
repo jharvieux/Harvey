@@ -1975,3 +1975,49 @@ and were already seeded before #221 in earlier batches, not new here: trusting a
 security-relevant value is `P-CLIENT-PAYMENT-AMOUNT`/`P-CLIENT-PRIV-HEADER` (Batch B14 above); a
 permission check present only in the UI is `P-CLIENT-RENDER-AUTHZ`/`P-MW-SOLE-AUTHZ` (Batch B15
 above) — both got a matching LLM-prompt lens added to `docs/scan-extras.txt`'s HIGH section (#328).
+
+## Batch B21 (#1021) — D-091 silent side-effect failure (zero-row update / unchecked mutation / void async)
+
+The three classes the fix pipeline's §8 acceptance list names (`docs/design/fix-implementation.md`)
+that had **no detector anywhere in `src/`** — not a semgrep rule, not an AST pass. #1009's remainder
+recorded them as unplanted *fixtures*; re-measured on 2026-07-25 the blocker was upstream, so a
+planted before/after fix fixture would have scored `notRun`, never green. Build order was therefore
+detector → corpus → fix fixture.
+
+All three land in `src/scan/rules/semgrep/silent-failure.yml` as WARNING + MEDIUM, so all three
+positives score at **review**. They are reliability heuristics whose shape is "this chain is missing
+a call", which cannot separate an oversight from a deliberate choice without reading intent — that
+belongs nowhere near the free count.
+
+### B21 positives — planted bugs (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-ZERO-ROW-UPDATE | `pages/api/payout-claim.js` | `harvey-zero-row-update` — `.update({status:"sending"}).eq("id", …).eq("status","pending")` with no `.select()` on the chain. Supabase returns `{ error: null }` for "matched 0 rows" exactly as for a successful write, so a lost race reads as a won one (D-091 #7) | review |
+| P-UNCHECKED-MUTATION | `pages/api/subscribe.js` | `harvey-unchecked-mutation` — an awaited `insert(...)` in statement position; the `{ error }` tuple is discarded and the handler returns 200 regardless. Supabase JS v2 does not throw on a DB error (D-091 #3) | review |
+| P-VOID-ASYNC | `pages/api/receipt.js` | `harvey-void-async` — `void writeReceiptAudit(...)` in a serverless handler; the host can freeze or terminate the process the moment the 202 is sent, so the audit write may never land (D-091 #8) | review |
+
+### B21 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why it clears |
+|---|---|---|
+| N-ZERO-ROW-SELECTED | `pages/api/payout-claim-safe.js` | the same compare-and-swap chained with `.select("id")` and asserting `data.length === 1` — `pattern-not-inside: $Z.select(...)` clears it. This is also the exact edit the §8 fix gate applies |
+| N-ZERO-ROW-TENANT-SCOPE | `pages/api/rename-workspace.js` | D-091's literal sketch shape (`update(...)` + two `.eq()` + no `.select()`) but both filters compare against VARIABLES — tenant scoping, not a CAS. The rule requires one filter against a string literal, which is what stops it flagging routine multi-tenant writes. Its `{ error }` is checked, so `harvey-unchecked-mutation` is clear too |
+| N-CHECKED-MUTATION | `pages/api/subscribe-safe.js` | `{ error }` destructured and returned on — `pattern-not-inside: $A = $B` clears any destructured/assigned result |
+| N-AWAITED-ASYNC | `pages/api/receipt-safe.js` | the same background work `await`ed; the rule matches only the `void` operator applied to a call |
+
+### B21 adjacency
+
+`harvey-unchecked-mutation` subtracts the CAS shape with an explicit `pattern-not`, so
+`pages/api/payout-claim.js` draws `harvey-zero-row-update` **only** — one code defect, one finding
+(the same discipline as B13's adjacency notes).
+
+`harvey-void-async` carries a `paths:` filter (`*api*`/`*inngest*`/`*worker*`). That surfaced a
+latent defect in the fix pipeline's single-file detector re-run, fixed in the same change: semgrep
+matches a rule's `paths:` against the path RELATIVE TO THE SCANNING ROOT, so pointing it straight at
+the file collapsed that to a bare basename and every path-filtered rule reported a false CLEAN.
+`runSemgrepOnFile` now roots the scan at the target dir, narrows with `--include`, and fails loud if
+`paths.scanned` does not contain the file.
+
+Answer key: `src/scan/calibration/b21-silent-failure.entries.ts`. All three classes also run the
+full fix-pipeline §8 gate in `src/fix/calibration-acceptance.test.ts`.

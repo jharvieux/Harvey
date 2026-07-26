@@ -1,0 +1,101 @@
+# Batch B21 (#1021) — the three D-091 "silent side-effect failure" classes named in the fix
+# pipeline's §8 acceptance list (docs/design/fix-implementation.md) that had NO detector anywhere in
+# src/: a status-guarded update whose zero-row outcome is indistinguishable from success (D-091 #7),
+# an awaited Supabase mutation whose `{ error }` tuple is discarded (D-091 #3), and `void`-prefixed
+# fire-and-forget async in a serverless handler (D-091 #8). Until these existed, planting a
+# before/after fix fixture for them produced `notRun` rows, not scored ones.
+#
+# All three are RELIABILITY classes, not security ones: they are WARNING + MEDIUM, so they route to
+# the review tier and never enter the free count (the trust boundary in src/scan/semgrep.ts).
+# That is the honest precision claim for heuristics whose shape — "this chain is missing a call" —
+# cannot distinguish an oversight from a deliberate choice without reading intent.
+#
+# Kept disjoint from each other, the same discipline as B13's adjacency notes: the zero-row CAS
+# shape is subtracted from harvey-unchecked-mutation by an explicit pattern-not, so a single
+# `.update().eq().eq()` statement is one finding, not two.
+#
+# Corpus answer key: src/scan/calibration/b21-silent-failure.entries.ts, fixtures under
+# targets/calibration/pages/api/ (see GROUND-TRUTH.md §B21).
+
+rules:
+  # D-091 #7. `.update({…}).eq("id", id).eq("status", "pending")` is a compare-and-swap: it no-ops
+  # when the row is not in the expected state, and Supabase JS reports that identically to a
+  # successful write — `{ error: null }`, no affected-row count. The caller cannot tell "I took the
+  # lock" from "someone else already did". The fix is to chain `.select(...)` and assert the
+  # returned array length, which is why the absence of `.select()` anywhere on the chain is the
+  # signal.
+  #
+  # Precision: D-091's own sketch is "any update(...) followed by 2+ .eq() calls without .select()",
+  # but plain tenant scoping (`.eq("tenant_id", tid).eq("id", id)`) has that shape and is not a CAS.
+  # So one of the two filters must compare against a STRING LITERAL — the state name a CAS guards
+  # on. A variable-valued filter pair stays silent (N-ZERO-ROW-TENANT-SCOPE).
+  - id: harvey-zero-row-update
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-252: Unchecked Return Value"]
+      confidence: MEDIUM
+      category: correctness
+      harveySeverity: Medium
+    message: >
+      Compare-and-swap update guarded on a literal state value with no .select() on the chain.
+      Supabase JS returns { error: null } whether the update matched one row or none, so a lost
+      race is indistinguishable from success. Chain .select("id") and assert the returned array
+      has the row count you expected before treating the write as done.
+    patterns:
+      - pattern-either:
+          - pattern: $DB.from($T).update($V).eq($C1, "...").eq($C2, $A2)
+          - pattern: $DB.from($T).update($V).eq($C1, $A1).eq($C2, "...")
+      - pattern-not-inside: $Z.select(...)
+
+  # D-091 #3. Supabase JS v2 does not throw on a DB error — it resolves `{ data, error }`. An
+  # awaited mutation in STATEMENT position therefore discards the only failure signal there is, and
+  # the handler goes on to return 200. Statement position is the whole check: a result that is
+  # destructured, assigned, or returned is checkable by the code that receives it, so those are
+  # deliberately cleared rather than guessed at.
+  - id: harvey-unchecked-mutation
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-252: Unchecked Return Value"]
+      confidence: MEDIUM
+      category: correctness
+      harveySeverity: Medium
+    message: >
+      Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw
+      on a database error, so this write can fail silently and the handler still returns success.
+      Destructure { error } and return a non-2xx response when it is truthy.
+    patterns:
+      - pattern: await <... $DB.from($T).$M(...) ...>
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(insert|update|upsert|delete)$
+      - pattern-not-inside: $A = $B
+      - pattern-not-inside: return ...
+      # The CAS shape is harvey-zero-row-update's finding — one defect, one row.
+      - pattern-not: await <... $DB.from($T).update($V).eq($C1, "...").eq($C2, $A2) ...>
+      - pattern-not: await <... $DB.from($T).update($V).eq($C1, $A1).eq($C2, "...") ...>
+
+  # D-091 #8. `void asyncFn()` in a serverless handler is fire-and-forget against a host that may
+  # freeze or kill the process the moment the response is returned — the audit write, the alert or
+  # the counter update may simply never run. Scoped by `paths:` to request-handler directories,
+  # where the host controls the lifetime; the same `void` in a long-lived server is a different
+  # (and much weaker) claim.
+  - id: harvey-void-async
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-252: Unchecked Return Value"]
+      confidence: MEDIUM
+      category: correctness
+      harveySeverity: Medium
+    paths:
+      include:
+        - "*api*"
+        - "*inngest*"
+        - "*worker*"
+    message: >
+      Fire-and-forget `void asyncFn(...)` in a serverless request handler. The function host can
+      freeze or terminate the process as soon as the response is sent, so this work may never
+      complete. Await it, or move it to a queue/background job that owns its own lifetime.
+    pattern: void $F(...)

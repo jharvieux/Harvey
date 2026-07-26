@@ -179,6 +179,28 @@ describe.skipIf(!SEMGREP_PRESENT)("rerunDetector — the semgrep resolver (#1012
     expect(resolvesToDetector(prefixed)).toBe(true);
     expect(rerunDetector(redirectFinding({ taxonomy: prefixed }), scratch(REDIRECT, redirectSrc)).fired).toBe(true);
   }, SEMGREP_TIMEOUT_MS);
+
+  // #1021: a rule's own `paths:` filter is matched against the path RELATIVE TO THE SCANNING ROOT.
+  // The re-run used to point semgrep straight at the file, which makes that root the file itself and
+  // collapses the relative path to a bare basename — so every path-filtered rule matched nothing and
+  // was reported CLEAN. A false clean is the worst outcome this gate can produce: it reads as a fixed
+  // bug. harvey-void-async (paths: *api*) is the standing case, and this test fails if the re-run
+  // ever stops rooting the scan at the target dir.
+  it("re-runs a rule that carries a `paths:` filter — a path-scoped rule is not silently clean", () => {
+    const receipt = "pages/api/receipt.js";
+    const src = readFileSync(join(REPO_ROOT, "targets/calibration", receipt), "utf8");
+    const f = finding({ id: "F-void", taxonomy: "harvey-void-async", location: `${receipt}:12`, category: "Next.js/web footgun" });
+
+    const before = rerunDetector(f, scratch(receipt, src));
+    expect(before.notRun).toBeUndefined();
+    expect(before.fired).toBe(true);
+
+    const fixed = src.replace("  void writeReceiptAudit(req.body.orderId);", "  await writeReceiptAudit(req.body.orderId);");
+    expect(fixed).not.toEqual(src);
+    const after = rerunDetector(f, scratch(receipt, fixed));
+    expect(after.notRun).toBeUndefined();
+    expect(after.fired).toBe(false);
+  }, SEMGREP_TIMEOUT_MS);
 });
 
 describe("rerunDetector — the semgrep resolver never manufactures a clean detector (#1012)", () => {
