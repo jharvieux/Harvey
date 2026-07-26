@@ -7,8 +7,17 @@
 // This is the universal write path for the passes that have no orchestrator seam — the LLM semantic
 // scan (`/vuln-scan → /triage`), the M6 reviewed verdict, a captured vitals report, a live pen-test
 // run. It stamps generatedAt from the real clock and target from --target (no hand-editing), loads
-// report-schema findings from --findings if given, and writes <out>/<module>.pass.json. On the next
-// `run-audit --artifacts-dir <out>`, that module derives `ran` from this artifact.
+// report-schema findings from --findings if given, and writes <out>/<module>.pass.json.
+//
+// What the next `run-audit --artifacts-dir <out>` does with it (#1042 — every module this CLI
+// accepts now has a consumer; before it, six of the ten were written and silently discarded):
+//   M1/M2/M3/M6  the pass IS the module's missing tier, so the row derives `ran` from it.
+//   M7           the pass IS the named Lighthouse/CWV tier, so the row stops asserting it did not
+//                run and merges its findings.
+//   M4/M5/M8/M9/M10  the findings are merged and the pass is named on the row, but the status is
+//                NOT upgraded to `ran`: the pass covers one tier and the orchestrator has no
+//                evidence about the rest (the #229 derive-don't-assert rule).
+// A stale, wrong-target or malformed artifact is named on the row as rejected, never ignored.
 //
 // Thin I/O wrapper per the repo convention — the schema/validation lives in src/audit-pass-artifact.ts.
 import { existsSync, readFileSync } from "node:fs";

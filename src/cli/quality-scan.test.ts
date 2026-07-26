@@ -369,3 +369,36 @@ describe("quality-scan CLI — jscpd is not poisoned by an unrelated CWD's .giti
     expect(findings.find((f) => f.id === "M4-99")).toBeUndefined();
   }, 30000);
 });
+
+// #1050: briefs/audit-modules.md names unused DEPENDENCIES as part of M5's dead-code output. knip
+// reports them; Harvey's KnipIssue type had no field for them, so they were dropped at the type
+// boundary and M5 under-reported with no disclosure — an absence that reads as a clean result.
+// MEASURED against knip 5.88.1 (2026-07-25): the JSON reporter puts them on the package.json issue
+// entry as `dependencies` / `devDependencies`, each [{ name, line, col, pos }]. This drives the real
+// CLI so the field names stay pinned to what knip actually emits, not to what an issue claimed.
+function unusedDependencyFixture(): string {
+  const repo = mkdtempSync(join(tmpdir(), "harvey-quality-unuseddep-cli-"));
+  dirs.push(repo);
+  write(repo, "package.json", JSON.stringify({
+    name: "unuseddep", private: true, version: "0.0.0", type: "module",
+    dependencies: { "left-pad": "^1.3.0" },
+    devDependencies: { rimraf: "^5.0.0" },
+  }));
+  write(repo, "src/index.ts", 'export const go = () => "used";\n');
+  return repo;
+}
+
+describe("quality-scan CLI — M5 reports unused dependencies (#1050)", () => {
+  it("surfaces a declared-but-never-imported runtime dependency and devDependency as M5 findings", () => {
+    const findings = runCli(unusedDependencyFixture());
+    const deps = findings.find((f) => f.title === "Unused dependencies declared in package.json");
+    const devDeps = findings.find((f) => f.title === "Unused devDependencies declared in package.json");
+
+    expect(deps?.evidence).toContain("left-pad");
+    expect(deps?.taxonomy).toBe("M5 — Slop / dead code");
+    // A runtime dependency nobody imports still ships into the installed tree — supply-chain
+    // surface, which is why it is not filed as pure tidiness.
+    expect(deps?.impact).toContain("supply-chain surface");
+    expect(devDeps?.evidence).toContain("rimraf");
+  }, 30000);
+});

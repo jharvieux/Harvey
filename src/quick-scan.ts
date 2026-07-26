@@ -16,6 +16,7 @@
 //      explicit risk disclosure naming what was NOT assessed. Source-tier RLS/authz signals ride
 //      alongside as non-grading INDICATORS (#220) — the honest teaser, never a verdict.
 
+import type { CodebaseSize } from "./scan/codebase-size.js";
 import type { DependencyReachability, Finding, Severity } from "./findings.js";
 import { SEVERITIES } from "./findings.js";
 import { byReachabilityThenSeverity } from "./scan/dep-reachability.js";
@@ -54,6 +55,10 @@ export interface HandrolledIndicatorClass {
 }
 
 export interface QuickScanReport {
+  // #1044: the codebase size the pricing page promises is "measured automatically during the free
+  // scan". Optional because the pure-transform entry point takes a Finding[] and cannot walk a
+  // tree; the CLI measures the target and passes it in, so every real free scan carries it.
+  size?: CodebaseSize;
   grade: Grade;
   score: number;
   gradeScope: string; // the grade annotated with what it does and does not cover (#227)
@@ -308,7 +313,7 @@ function toDiagnosis(f: Finding, includeFix: boolean): DiagnosisFinding {
 // Build the quick-scan report. `unlocked` models the paid boundary as a flag: locked (free)
 // withholds every fix except the teaser's; unlocked reveals all fixes. The precision filter
 // and the always-shown location apply in both modes.
-export function buildQuickScanReport(findings: Finding[], opts: { unlocked?: boolean } = {}): QuickScanReport {
+export function buildQuickScanReport(findings: Finding[], opts: { unlocked?: boolean; size?: CodebaseSize } = {}): QuickScanReport {
   const unlocked = opts.unlocked ?? false;
   const free = selectFreeFindings(findings);
   const graded = free.filter((f) => !isNonGrading(f));
@@ -321,6 +326,7 @@ export function buildQuickScanReport(findings: Finding[], opts: { unlocked?: boo
   const { grade, score } = computeGrade(graded);
   const sample = pickSample(graded);
   return {
+    ...(opts.size ? { size: opts.size } : {}),
     grade,
     score,
     gradeScope: gradeScopeLine(grade, indicators.length),
