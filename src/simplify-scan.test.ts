@@ -160,6 +160,33 @@ describe("buildPacket hotspot ordering (#442)", () => {
   });
 });
 
+// #1083: --hotspots scoping was disclosed only on stderr (src/cli/simplify-scan.ts console.error),
+// which does not travel with --out packet.md — a reviewer reading only the artifact never saw that
+// most of the tree was excluded from this pass.
+describe("renderPacket scope disclosure (#1083)", () => {
+  const cwd = process.cwd();
+  const paths = [`${cwd}/package.json`];
+
+  it("discloses IN THE ARTIFACT when the packet is a subset of the target's source files", () => {
+    const packet = buildPacket(BRIEF, cwd, paths, ["package.json"], [], 21386);
+    const out = renderPacket(packet);
+    expect(out).toMatch(/SCOPED REVIEW/);
+    expect(out).toContain("1 of 21386 source file(s)");
+    expect(out).toContain("21385 file(s) are NOT included here and are UNREVIEWED");
+  });
+
+  it("adds no scope disclosure when the packet covers every source file (no scoping happened)", () => {
+    const packet = buildPacket(BRIEF, cwd, paths, [], [], paths.length);
+    expect(renderPacket(packet)).not.toMatch(/SCOPED REVIEW/);
+  });
+
+  it("defaults totalSourceFiles to the packet's own file count when the caller doesn't pass it (back-compat)", () => {
+    const packet = buildPacket(BRIEF, cwd, paths);
+    expect(packet.totalSourceFiles).toBe(paths.length);
+    expect(renderPacket(packet)).not.toMatch(/SCOPED REVIEW/);
+  });
+});
+
 describe("scopePacketFiles (#621 — --hotspots bounds the packet on a monorepo)", () => {
   const dir = "/repo";
   const all = ["/repo/apps/main/a.ts", "/repo/apps/main/b.ts", "/repo/packages/x/c.ts"];

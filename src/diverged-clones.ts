@@ -341,6 +341,32 @@ function volumeCapFinding(consideredCount: number, cap: number): Finding {
   });
 }
 
+// #1080: the security-path pass ABOVE always runs, but only over the caller's narrowFiles subset
+// (touchesSecurityPath OR touchesTenantSupabasePath) — the REST of the tree is compared only when
+// the opt-in --whole-repo-diverged flag is passed (#809), which run-audit never does. Before this,
+// the only disclosure of that scoping was a `console.error` in src/cli/quality-scan.ts — stderr,
+// never the deliverable — so a report showing a whole-repo M4 duplication percentage next to
+// security-path-only diverged-clone findings read as "both covered the repo". Mirrors the
+// volumeCapFinding shape (also a scope disclosure, not an adjudication) and is suppressed by the
+// caller when the whole-repo pass DID run (nothing was skipped in that case).
+export function divergedScopeFinding(narrowFileCount: number, eligibleFileCount: number): Finding {
+  const uncovered = eligibleFileCount - narrowFileCount;
+  return reviewFinding({
+    id: "M4-97",
+    title: "M4 diverged-clone (near-miss) pass covered only the security-relevant file subset",
+    severity: "Info",
+    category: "Maintainability",
+    taxonomy: M4_DIVERGED_WIDE_TAXONOMY,
+    location: "(repo-wide)",
+    evidence: `The diverged-clone comparison ran over ${narrowFileCount} security/tenant-relevant file(s) of ${eligibleFileCount} eligible source file(s) in this scope. The remaining ${uncovered} file(s) were NOT compared for near-miss (Type-3) divergence this pass.`,
+    question: "Is this codebase's non-security-path portion large/important enough that a --whole-repo-diverged re-run is warranted for full near-miss coverage?",
+    impact: "A drifted copy of non-security logic elsewhere in the codebase (a bugfix or behavior change applied to one copy and not another) would not be caught by this pass — only the security/tenant-scoped subset is covered by default.",
+    fix: "Re-run `pnpm quality-scan` with `--whole-repo-diverged` to cover the remainder (opt-in — noisier, review tier, no security guarantee attached, see M4-DIVW-* findings).",
+    okWhen: "The engagement's risk focus is genuinely the security/tenant-isolation surface this pass already covers, or a separate --whole-repo-diverged run already covered the remainder.",
+    notOkWhen: "No --whole-repo-diverged run ever covers the remainder and the codebase has significant non-security business logic where drifted duplication would matter.",
+  });
+}
+
 // Default bound on how many extracted functions the whole-repo pass will pairwise-compare.
 // Comparison is O(n^2) in function count (bounded further by the length-ratio window below), so a
 // hard cap keeps a large codebase's scan tractable and reproducible instead of ever hanging.

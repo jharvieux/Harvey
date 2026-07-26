@@ -99,10 +99,18 @@ function isAllowAnnotated(sf: ts.SourceFile, node: ts.Node): boolean {
   return ranges.some((r) => sf.text.slice(r.pos, r.end).includes(ALLOW_ANNOTATION));
 }
 
+// #1081: cap on how many call-site locations a collapsed finding cites by name — the count itself
+// is always exact, this only bounds how long the evidence string gets (mirrors dep-reachability.ts's
+// FILES_CITED / diverged-clones.ts's MAX_MEMBERS_SHOWN convention).
+const MAX_LOCATIONS_SHOWN = 5;
+
 function detectFile(path: string, sf: ts.SourceFile): Finding[] {
   const serviceNames = collectServiceClientNames(sf, sf);
-  const findings: Finding[] = [];
-  const seen = new Set<string>();
+  // #1081: one file could carry several unscoped call sites on the SAME table (twelve unscoped
+  // `.from("orders")` calls in one cron handler) — dedup key (one finding per file+table) stays
+  // exactly as before, but every matching site is now collected instead of dropped after the first,
+  // so the collapsed finding can disclose how many were dropped and where.
+  const hits = new Map<string, { verbs: Set<string>; locations: string[] }>();
 
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && isChainTop(node)) {
@@ -110,28 +118,41 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
       const verb = [...SCOPED_VERBS].find((v) => names.includes(v));
       if (verb && names.includes("from") && isServiceRooted(node, serviceNames)) {
         const table = tableOf(node);
-        if (table && !seen.has(table) && !hasTenantPredicate(node) && !isAllowAnnotated(sf, node)) {
-          seen.add(table);
-          findings.push(
-            mechanicalFinding({
-              id: `AUTH-job-tenant-scope-${table}-${path.replace(/[^a-zA-Z0-9]+/g, "-")}`,
-              title: `${path} — service-role \`${verb}\` on \`${table}\` in a background-job path with no tenant predicate`,
-              severity: "High",
-              category: "Broken access control",
-              taxonomy: "Service-role query in a background-job path with no tenant predicate",
-              location: loc(path, sf, node),
-              evidence: `Heuristic "job-tenant-scope": a service-role \`.${verb}()\` on \`.from("${table}")\` in a background-job path (${path}) carries no tenant-scoping predicate (\`.eq\`/\`.in\`/\`.filter\`/\`.match\` on a tenant/owner column). Annotate the site \`// ${ALLOW_ANNOTATION}\` if a wrapper or RPC enforces scoping the AST can't see.`,
-              impact: "A background job runs with no request or session, so the service-role client bypasses RLS and this query reads (or writes) rows across every tenant. With no explicit tenant filter, one tenant's job can expose or mutate another tenant's data — exactly the class of ATC finding #2003.",
-              fix: `Scope the query to the job's tenant (e.g. \`.eq("tenant_id", tenantId)\` from the job payload/context), or if a wrapper/RPC already enforces tenancy, annotate the site \`// ${ALLOW_ANNOTATION}\`.`,
-              precisionTier: "review",
-            }),
-          );
+        if (table && !hasTenantPredicate(node) && !isAllowAnnotated(sf, node)) {
+          const entry = hits.get(table) ?? { verbs: new Set<string>(), locations: [] };
+          entry.verbs.add(verb);
+          entry.locations.push(loc(path, sf, node));
+          hits.set(table, entry);
         }
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(sf);
+
+  const findings: Finding[] = [];
+  for (const [table, { verbs, locations }] of hits) {
+    const verbList = [...verbs].join("/");
+    const shown = locations.slice(0, MAX_LOCATIONS_SHOWN);
+    const overflow = locations.length > MAX_LOCATIONS_SHOWN ? ` (+${locations.length - MAX_LOCATIONS_SHOWN} more)` : "";
+    const siteCount = locations.length > 1 ? ` Found at ${locations.length} call site(s) in this file: ${shown.join(", ")}${overflow}.` : "";
+    findings.push(
+      mechanicalFinding({
+        id: `AUTH-job-tenant-scope-${table}-${path.replace(/[^a-zA-Z0-9]+/g, "-")}`,
+        title: `${path} — service-role \`${verbList}\` on \`${table}\` in a background-job path with no tenant predicate`,
+        severity: "High",
+        category: "Broken access control",
+        taxonomy: "Service-role query in a background-job path with no tenant predicate",
+        location: locations[0]!,
+        evidence: `Heuristic "job-tenant-scope": a service-role \`.${verbList}()\` on \`.from("${table}")\` in a background-job path (${path}) carries no tenant-scoping predicate (\`.eq\`/\`.in\`/\`.filter\`/\`.match\` on a tenant/owner column).${siteCount} Annotate a site \`// ${ALLOW_ANNOTATION}\` if a wrapper or RPC enforces scoping the AST can't see.`,
+        impact:
+          "A background job runs with no request or session, so the service-role client bypasses RLS and this query reads (or writes) rows across every tenant. With no explicit tenant filter, one tenant's job can expose or mutate another tenant's data — exactly the class of ATC finding #2003." +
+          (locations.length > 1 ? ` Every one of the ${locations.length} call sites above needs the same fix — patching only the cited line leaves the rest exposed.` : ""),
+        fix: `Scope the query to the job's tenant (e.g. \`.eq("tenant_id", tenantId)\` from the job payload/context) at every cited call site, or if a wrapper/RPC already enforces tenancy, annotate each site \`// ${ALLOW_ANNOTATION}\`.`,
+        precisionTier: "review",
+      }),
+    );
+  }
   return findings;
 }
 

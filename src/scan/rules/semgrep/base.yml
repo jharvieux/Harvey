@@ -66,6 +66,8 @@ rules:
       # positive that must still fire: the regex must be ANCHORED (^…$ — an unanchored allowlist
       # matches a prefix and is a broken safeguard) and its class POSITIVE (a negated [^…] class is
       # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
+      # #1066: the FLAG group is [isuvy], not [a-z] -- /m makes ^ and $ match at line breaks, so
+      # /^[a-z0-9]+$/m.test("abc\n' OR 1=1 --") is TRUE and the anchoring guard above is void.
       - by-side-effect: true
         patterns:
           - pattern-either:
@@ -74,7 +76,7 @@ rules:
                       if (!$RE.test($X)) { ... return; }
                   - metavariable-regex:
                       metavariable: $RE
-                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
               # #1027: a Set-backed allowlist is the same exact-match membership test as
@@ -105,7 +107,7 @@ rules:
                       ...
                   - metavariable-regex:
                       metavariable: $RE
-                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
                   ...
@@ -168,7 +170,7 @@ rules:
           - focus-metavariable: $URL
 
   # Reflected XSS: request-controlled value flows into dangerouslySetInnerHTML. Taint mode with
-  # sanitizer stops (DOMPurify.sanitize / sanitizeHtml / sanitize) so a sanitized OR constant
+  # sanitizer stops (DOMPurify.sanitize / sanitizeHtml / an IMPORT-BOUND sanitize) so a sanitized OR constant
   # value is NOT a finding — only a value tainted from request input is. HIGH → free count.
   - id: harvey-dangerously-set-inner-html
     languages: [javascript, typescript]
@@ -194,13 +196,23 @@ rules:
     pattern-sanitizers:
       - pattern: DOMPurify.sanitize(...)
       - pattern: sanitizeHtml(...)
-      - pattern: sanitize(...)
+      # #1066: a BARE `sanitize(...)` cleared the sink even when `sanitize` was a pass-through
+      # no-op defined three lines below it — the audited party could silence a real XSS by naming
+      # a function. The name carries meaning only if it resolves to a library, so require an
+      # import binding. Adversarial positive: P-XSS-LOCAL-SANITIZE.
+      - patterns:
+          - pattern: sanitize(...)
+          - pattern-inside: |
+              import { sanitize } from "$MOD";
+              ...
       # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
       # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
       # by-side-effect on the guarded variable. Soundness constraints, each with a calibration
       # positive that must still fire: the regex must be ANCHORED (^…$ — an unanchored allowlist
       # matches a prefix and is a broken safeguard) and its class POSITIVE (a negated [^…] class is
       # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
+      # #1066: the FLAG group is [isuvy], not [a-z] -- /m makes ^ and $ match at line breaks, so
+      # /^[a-z0-9]+$/m.test("abc\n' OR 1=1 --") is TRUE and the anchoring guard above is void.
       - by-side-effect: true
         patterns:
           - pattern-either:
@@ -209,7 +221,7 @@ rules:
                       if (!$RE.test($X)) { ... return; }
                   - metavariable-regex:
                       metavariable: $RE
-                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
               # #1027: a Set-backed allowlist is the same exact-match membership test as
@@ -240,7 +252,7 @@ rules:
                       ...
                   - metavariable-regex:
                       metavariable: $RE
-                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[a-z]*$
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern-inside: |
                   $P = $Z.enum([...]).safeParse(...);
                   ...

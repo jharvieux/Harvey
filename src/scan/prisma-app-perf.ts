@@ -245,37 +245,44 @@ function whereObjectOf(node: ts.CallExpression): ts.ObjectLiteralExpression | un
   return whereProp.initializer;
 }
 
-function buildFilterFinding(
-  path: string,
-  sf: ts.SourceFile,
-  node: ts.CallExpression,
-  clientModel: string,
-  displayModel: string,
-  verb: string,
-  columns: string[],
-): Finding {
+// #1081: cap on how many call sites a collapsed finding cites by name — the callSiteCount itself
+// is always exact, this only bounds how long the evidence string gets (mirrors
+// dep-reachability.ts's FILES_CITED / diverged-clones.ts's MAX_MEMBERS_SHOWN convention).
+const MAX_LOCATIONS_SHOWN = 5;
+
+interface UnindexedFilterHit {
+  clientModel: string;
+  displayModel: string;
+  verb: string;
+  columns: string[];
+  locations: string[];
+}
+
+function buildFilterFinding(hit: UnindexedFilterHit): Finding {
+  const { clientModel, displayModel, verb, columns, locations } = hit;
   const cols = columns.join(", ");
+  const shown = locations.slice(0, MAX_LOCATIONS_SHOWN);
+  const overflow = locations.length > MAX_LOCATIONS_SHOWN ? `, +${locations.length - MAX_LOCATIONS_SHOWN} more` : "";
   return mechanicalFinding({
     id: `PRISMA-M7-UNINDEXED-FILTER-${displayModel}-${columns.join("-")}`,
     title: `${displayModel}.${cols} — filtered with no covering index`,
     severity: "Perf",
     category: "Performance",
     taxonomy: "M7 — Prisma filter column without index",
-    location: loc(path, sf, node),
-    evidence: `Heuristic "prisma-unindexed-filter": \`prisma.${clientModel}.${verb}({ where: { ${cols} } })\` at ${path} filters on \`${cols}\`, but ${displayModel} has no \`@unique\`/\`@id\` on ${columns.length > 1 ? "any of these fields" : "that field"} and no \`@@id\`/\`@@unique\`/\`@@index\` naming ${columns.length > 1 ? "any of them" : "it"} in schema.prisma — this query's filter has no index to use at all.`,
-    impact: "Every call forces a sequential scan of the table; latency degrades linearly as the table grows and is invisible in a dev-sized seed.",
-    fix: `Add \`@@index([${cols}])\` on model ${displayModel} (a single-column index if only one field is filtered together, composite if they're always queried together).`,
+    location: shown[0]!,
+    evidence: `Heuristic "prisma-unindexed-filter": \`prisma.${clientModel}.${verb}({ where: { ${cols} } })\` filters on \`${cols}\`, but ${displayModel} has no \`@unique\`/\`@id\` on ${columns.length > 1 ? "any of these fields" : "that field"} and no \`@@id\`/\`@@unique\`/\`@@index\` naming ${columns.length > 1 ? "any of them" : "it"} in schema.prisma — this filter has no index to use at all. Found at ${locations.length} call site${locations.length === 1 ? "" : "s"} across this scan: ${shown.join(", ")}${overflow}.`,
+    impact: `Every one of the ${locations.length} call site${locations.length === 1 ? "" : "s"} above forces a sequential scan of the table; latency degrades linearly as the table grows and is invisible in a dev-sized seed.`,
+    fix: `Add \`@@index([${cols}])\` on model ${displayModel} — one index fixes every call site listed above (a single-column index if only one field is filtered together, composite if they're always queried together).`,
     precisionTier: "review",
   });
 }
 
-function detectUnindexedFilters(
+function collectUnindexedFilters(
   path: string,
   sf: ts.SourceFile,
   schemaModels: Map<string, ModelFilterInfo>,
-  seen: Set<string>, // one finding per (model, sorted column set) across the whole scan — repeated call sites don't re-flood
-): Finding[] {
-  const findings: Finding[] = [];
+  hits: Map<string, UnindexedFilterHit>, // one finding per (model, sorted column set) across the whole scan — repeated call sites accumulate here instead of being dropped
+): void {
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node)) {
       const shape = prismaCallShape(node, FILTER_VERBS);
@@ -289,29 +296,28 @@ function detectUnindexedFilters(
         // Flag only when EVERY scalar filter key is uncovered — see the module-header gate.
         if (scalarKeys.length > 0 && uncovered.length === scalarKeys.length) {
           const key = `${shape.model}:${[...uncovered].sort().join(",")}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            findings.push(buildFilterFinding(path, sf, node, shape.model, info.displayName, shape.verb, uncovered));
-          }
+          const hit = hits.get(key) ?? { clientModel: shape.model, displayModel: info.displayName, verb: shape.verb, columns: uncovered, locations: [] };
+          hit.locations.push(loc(path, sf, node));
+          hits.set(key, hit);
         }
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(sf);
-  return findings;
 }
 
 export function detectPrismaAppPerfFindings(files: SourceInput[], schema: string): Finding[] {
   const schemaModels = parseModelFilterInfo(schema);
-  const seenFilters = new Set<string>();
+  const filterHits = new Map<string, UnindexedFilterHit>();
   const findings: Finding[] = [];
   for (const f of files) {
     if (!SOURCE_EXT.test(f.path)) continue;
     const sf = parse(f.path, f.text);
     findings.push(...detectN1(f.path, sf));
-    findings.push(...detectUnindexedFilters(f.path, sf, schemaModels, seenFilters));
+    collectUnindexedFilters(f.path, sf, schemaModels, filterHits);
   }
+  for (const hit of filterHits.values()) findings.push(buildFilterFinding(hit));
   return findings;
 }
 

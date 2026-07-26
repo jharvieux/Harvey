@@ -32,7 +32,16 @@ import { checkUnassessedSfcFiles } from "./sfc-coverage.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
 import { resolveBundleScan, scanSecrets } from "./secrets.js";
-import { checkMissingCsp, checkPublicDirSensitive, parseSemgrepFindings, runSemgrep, semgrepUnavailableFinding } from "./semgrep.js";
+import {
+  checkMissingCsp,
+  checkPublicDirSensitive,
+  parseSemgrepFindings,
+  partitionMarkerSuppressed,
+  runSemgrep,
+  semgrepScopeFinding,
+  semgrepSuppressionFinding,
+  semgrepUnavailableFinding,
+} from "./semgrep.js";
 import {
   checkEdgeFunctionVerifyJwt,
   checkMigrationDefinerAnonGrant,
@@ -220,8 +229,19 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
 
     // Semgrep footguns + missing-CSP config check. #950 — a missing/crashing binary degrades to
     // the SEM-00 disclosure instead of an uncaught ENOENT (mirrors osv-scanner, #512).
+    // #1066 — an in-repo `nosemgrep` marker still withholds its match from the finding list, but
+    // the withheld matches are counted in SEM-SUPPRESS-00, and anything semgrep never analysed is
+    // counted in SEM-SCOPE-00. A suppression the deliverable does not mention is one the audited
+    // party made on the auditor's behalf.
     const semgrep = runSemgrep(scanDir);
-    findings.push(...(semgrep.failure ? [semgrepUnavailableFinding(semgrep.failure)] : parseSemgrepFindings(semgrep.result)));
+    if (semgrep.failure) {
+      findings.push(semgrepUnavailableFinding(semgrep.failure));
+    } else {
+      const { reported, suppressed } = partitionMarkerSuppressed(semgrep.result);
+      findings.push(...parseSemgrepFindings({ results: reported }));
+      findings.push(...semgrepSuppressionFinding(suppressed, scanDir));
+      findings.push(...semgrepScopeFinding(scanDir, semgrep.result));
+    }
     findings.push(...checkMissingCsp(scanDir));
     findings.push(...checkHostingConfigHeaders(scanDir));
     findings.push(...checkPublicDirSensitive(scanDir));

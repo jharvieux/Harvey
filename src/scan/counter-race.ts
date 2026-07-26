@@ -64,6 +64,9 @@ function hasArithmetic(node: ts.Node): boolean {
   return found;
 }
 
+// #1081: same location-citation cap as job-tenant-scope.ts's MAX_LOCATIONS_SHOWN.
+const MAX_LOCATIONS_SHOWN = 5;
+
 function detectFile(path: string, sf: ts.SourceFile): Finding[] {
   // Names bound from a `.from(T).select(...)` chain → the table T they read.
   const selectBindings = new Map<string, string>();
@@ -85,8 +88,10 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
   collect(sf);
   if (selectBindings.size === 0) return [];
 
-  const findings: Finding[] = [];
-  const seen = new Set<string>();
+  // #1081: one file can carry several select-then-arithmetic-update races on the SAME table —
+  // dedup key (one finding per file+table) unchanged, but every matching site is now collected so
+  // the collapsed finding can disclose how many were dropped and where.
+  const hits = new Map<string, string[]>();
 
   const visitUpdate = (n: ts.Node): void => {
     if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "update") {
@@ -102,22 +107,10 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
           if (!hasArithmetic(value)) continue;
           const refs = identifiersIn(value);
           const derivedFromRead = [...refs].some((r) => selectBindings.get(r) === table);
-          if (derivedFromRead && !seen.has(table)) {
-            seen.add(table);
-            findings.push(
-              mechanicalFinding({
-                id: `RACE-read-modify-write-${table}-${path.replace(/[^a-zA-Z0-9]+/g, "-")}`,
-                title: `${path} — non-atomic read-modify-write on \`${table}\``,
-                severity: "Medium",
-                category: "Business logic",
-                taxonomy: "Non-atomic read-modify-write race condition",
-                location: loc(path, sf, n),
-                evidence: `Heuristic "read-modify-write" matched a .select() of \`${table}\` whose value is written back via .update() after an arithmetic (+/-) derivation in ${path} — two concurrent requests can lose an update.`,
-                impact: "Concurrent requests read the same value and both write value±1; interleaved increments are lost (lost-update race).",
-                fix: "Make the update atomic — a single `update ... set value = value + 1` / an RPC / a row lock — instead of select-then-update in application code.",
-                precisionTier: "review",
-              }),
-            );
+          if (derivedFromRead) {
+            const locations = hits.get(table) ?? [];
+            locations.push(loc(path, sf, n));
+            hits.set(table, locations);
           }
         }
       }
@@ -125,6 +118,29 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
     ts.forEachChild(n, visitUpdate);
   };
   visitUpdate(sf);
+
+  const findings: Finding[] = [];
+  for (const [table, locations] of hits) {
+    const shown = locations.slice(0, MAX_LOCATIONS_SHOWN);
+    const overflow = locations.length > MAX_LOCATIONS_SHOWN ? ` (+${locations.length - MAX_LOCATIONS_SHOWN} more)` : "";
+    const siteCount = locations.length > 1 ? ` Found at ${locations.length} call site(s) in this file: ${shown.join(", ")}${overflow}.` : "";
+    findings.push(
+      mechanicalFinding({
+        id: `RACE-read-modify-write-${table}-${path.replace(/[^a-zA-Z0-9]+/g, "-")}`,
+        title: `${path} — non-atomic read-modify-write on \`${table}\``,
+        severity: "Medium",
+        category: "Business logic",
+        taxonomy: "Non-atomic read-modify-write race condition",
+        location: locations[0]!,
+        evidence: `Heuristic "read-modify-write" matched a .select() of \`${table}\` whose value is written back via .update() after an arithmetic (+/-) derivation in ${path} — two concurrent requests can lose an update.${siteCount}`,
+        impact:
+          "Concurrent requests read the same value and both write value±1; interleaved increments are lost (lost-update race)." +
+          (locations.length > 1 ? ` Every one of the ${locations.length} sites above shares this race — patching only the cited line leaves the rest exposed.` : ""),
+        fix: "Make the update atomic — a single `update ... set value = value + 1` / an RPC / a row lock — instead of select-then-update in application code.",
+        precisionTier: "review",
+      }),
+    );
+  }
   return findings;
 }
 
