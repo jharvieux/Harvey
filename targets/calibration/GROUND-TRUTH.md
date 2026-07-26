@@ -2224,3 +2224,37 @@ which grew by 400+ lines. Regenerate and READ that diff — a review-tier precis
 invisible to the gate.
 
 Answer keys: `src/scan/calibration/b3-injection.entries.ts`, `b4-xss.entries.ts`, `b7-auth.entries.ts`.
+
+## #1060 — the corpus's first data-class ESCALATION
+
+M10's data-aware severity join (`src/data-class-escalation.ts`, #1049) was proven by unit tests and
+demonstrably matched real corpus output — and had never RAISED anything, because the corpus did not
+contain the case the feature exists for.
+
+MEASURED 2026-07-25 (re-measured 2026-07-26 before the fix), running `escalateFindingsByDataClass`
+over the committed `dry-run/findings.json` × `dry-run/pii-data-map.json`: **7 matches, 0
+escalations** — every table a planted finding named (`profiles`, `perf_orders`, `documents`,
+`internal_notes`, `tautology_articles`) scores Low, so the join correctly declined every time. The
+regulated tables were there (`pii_calibration_fixture` Critical/78, `legacy_accounts` High/7,
+`support_tickets` High/4) and no planted finding named any of them. Unit tests green, headline path
+untested.
+
+`20260726000001_regulated_overbroad_policy.sql` closes it. `public.patient_billing` carries
+`member_ssn` (US_SSN/SENSITIVE_PII, 4) + `card_number` (CARD/PCI, 6) = **10 → Critical**, declares
+`tenant_id`, and gets a `for select using (true)` policy — the same read-side leak as the
+`documents_select_all` plant, so `usingTrueReview` fires at High. AFTER: **8 matches, 1 escalation**
+— High → Critical, `dataClass.escalatedFrom: "High"`, naming `patient_billing` and its US_SSN/CARD
+infotypes.
+
+Column names are deliberately `member_ssn`/`card_number`, not `customer_ssn`/`card_last4`: those two
+are the M10 per-infotype answer key's own `location` values (`m10.entries.ts`), and this table must
+not become the fixture those entries score against. The M10 census is unchanged (20 positives / 10
+negatives).
+
+Effect on the recall gate, `pnpm exec tsx src/cli/validate-calibration.ts` 2026-07-26: GATE PASS,
+TP 237 FN 3 FP 0 TN 220 — the new positive is caught, no negative moved.
+
+Answer key: `P-RLS-USING-TRUE-REGULATED` in `src/scan/calibration/rls-static-semantics.entries.ts`
+(detection). The escalation itself is asserted against the committed artifacts by
+`src/data-class-escalation.test.ts` — detection and escalation are separate assertions on purpose,
+because the #1060 failure was precisely a working detector whose finding never reached the join.
