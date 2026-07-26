@@ -13,10 +13,10 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { buildCoverageMatrix, CORPUS, mechanicalCorpus, moduleCensus, type MatrixRow } from "../scan/calibration.js";
+import { buildCoverageMatrix, CORPUS, mechanicalCorpus, moduleCensus, scoreEntry, type MatrixRow } from "../scan/calibration.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision } from "../scan/heuristic-precision.js";
-import type { Finding } from "../findings.js";
+import { SEVERITIES, type Finding, type Severity } from "../findings.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs } from "../scan/dependencies.js";
 import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
@@ -106,6 +106,14 @@ const reviewMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expect
 // claimed catch. It never fails while the gap holds, and never passes silently once a rule lands.
 const noRuleBroken = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "none" && !r.pass);
 
+// #1157: severity-correctness. Every gate above asserts a finding APPEARS; this asserts a CAUGHT
+// positive with an answer-keyed severity is RATED right — the #1063 (every CVE shipped Medium) /
+// #1060 (data-class escalation never fired) failure mode, where a real Critical shown as Medium is
+// nearly as harmful as a miss. Only entries carrying expectedSeverity are scored; a mismatch fails
+// the gate exactly like a missing high-tier positive.
+const severityAnnotated = matrix.rows.filter((r) => r.kind === "positive" && r.expectedSeverity !== undefined);
+const severityMismatches = severityAnnotated.filter((r) => r.severityMismatch);
+
 // DECISION (#341): this live gate is security-weighted BY CONSTRUCTION — it scores only the M1
 // mechanical corpus (entries with no `module` label) because runMechanicalScan produces only M1
 // findings, and M1 is the credibility-critical lead where a wrong Critical is fatal. The other
@@ -179,7 +187,31 @@ console.log("\nGIT-HISTORY SECRET GATE (#129, dedicated throwaway-repo fixture):
 const gitHistoryGate = runGitHistorySecretGate();
 console.log(`  ${gitHistoryGate.detail.replace(/\n/g, "\n  ")}`);
 
-const gatePass = negFps.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok;
+// #1157: severity correctness — a caught positive rated wrong fails the gate like a miss. The
+// negative control proves the check can FAIL: take a real annotated entry, feed it a copy of its
+// own finding re-stamped to a DIFFERENT severity, and assert scoreEntry flags the mismatch. A green
+// severity line therefore means "every annotated positive rated right AND the check still fires" —
+// the same "passed AND can fail" contract the conservation gate's negative-control steps enforce.
+console.log(`\nSEVERITY CORRECTNESS (#1157) — delivered severity vs. answer key, scored on ${severityAnnotated.length} annotated positive(s):`);
+for (const r of severityAnnotated) {
+  const flag = r.severityMismatch ? "MISRATED" : "OK  ";
+  console.log(`  ${flag}  ${r.id.padEnd(24)} expected ${String(r.expectedSeverity).padEnd(9)} delivered ${(r.deliveredSeverities?.join("/") || "none")}`);
+}
+const severityControl = (() => {
+  const sample = severityAnnotated[0];
+  if (!sample) return { ok: false, detail: "no annotated positive to build a negative control from — the severity check is unproven" };
+  const entry = mechanicalCorpus(CORPUS).find((e) => e.id === sample.id && e.expectedSeverity !== undefined);
+  if (!entry?.expectedSeverity) return { ok: false, detail: `could not resolve annotated entry ${sample.id} to build a negative control` };
+  const wrong = SEVERITIES.find((s) => s !== entry.expectedSeverity) as Severity;
+  // Re-stamp EVERY finding to the wrong severity; scoreEntry selects the entry's own relevant ones,
+  // which are now all mis-rated, so a working check must flag it.
+  const misrated = findings.map((f) => ({ ...f, severity: wrong }));
+  const row = scoreEntry(entry, misrated);
+  return { ok: row.severityMismatch, detail: `entry ${entry.id}: expected ${entry.expectedSeverity}, forced its finding to ${wrong} → severity check ${row.severityMismatch ? "FIRED" : "DID NOT FIRE"}` };
+})();
+console.log(`  negative control: ${severityControl.detail}`);
+
+const gatePass = negFps.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && severityMismatches.length === 0 && severityControl.ok;
 if (!gatePass) {
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives: ${negFps.map((r) => r.id).join(", ")}`);
   if (!heuristic.ok) console.log(`GATE FAIL — M7/M8 heuristic precision corpus (#823): ${heuristic.rows.filter((r) => !r.pass).map((r) => r.id).join(", ")} — run pnpm exec tsx src/cli/validate-precision.ts`);
@@ -187,6 +219,8 @@ if (!gatePass) {
   if (noRuleBroken.length) console.log(`GATE FAIL — a mechanical rule now fires on a by-design no-rule gap (re-tier it): ${noRuleBroken.map((r) => r.id).join(", ")}`);
   if (!gitHistoryGate.pass) console.log("GATE FAIL — git-history secret gate (#129) did not pass, see detail above");
   if (parityThin.length) console.log(`GATE FAIL — parity minimum (#427): ${parityThin.map((c) => c.module).join(", ")} below ${MIN_POSITIVES_PER_MODULE} positives`);
+  if (severityMismatches.length) console.log(`GATE FAIL — delivered severity != answer key (#1157): ${severityMismatches.map((r) => `${r.id} (expected ${r.expectedSeverity}, got ${r.deliveredSeverities?.join("/") || "none"})`).join(", ")}`);
+  if (!severityControl.ok) console.log(`GATE FAIL — severity-correctness negative control did not fire (#1157): ${severityControl.detail} — the check is not proven able to fail`);
   process.exit(1);
 }
-console.log("\nGATE PASS — no free-count false positives; every high-tier rule fired on its positive.");
+console.log("\nGATE PASS — no free-count false positives; every high-tier rule fired on its positive; every annotated severity delivered as rated.");
