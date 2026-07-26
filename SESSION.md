@@ -2,7 +2,52 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-26 — **doc reconciliation pass only** (the 2026-07-25/26 sweep's own block is still to be written). Reconciled: the `briefs/`-protection operator decision is RESOLVED (PR #1038), and #1021/#1023/#1027/#1029/#1030 are all CLOSED, so the 2026-07-24 (evening 3) block below carries nothing forward. Its prior header: "issue-sweep: 9 PRs merged, 11 issues closed, 6 filed → net −5; docs consolidated to `briefs/`, CI router simplified, all CLAUDE.md relays APPLIED." Earlier blocks remain historical._
+_Last updated: 2026-07-26 — issue-sweep: **24 PRs merged, 38 issues closed, 0 skips**. Theme: the orchestrator was throwing probe output away. See the block immediately below. Earlier blocks remain historical._
+
+## 2026-07-25/26 — issue-sweep: "we were throwing results away" → 24 PRs merged
+
+Started as a routine sweep of 43 triageable issues. The first batch found `run-audit` invoking quick-scan without `--findings-out`, silently discarding **385 mechanical findings including 47 Critical**. The operator asked whether there were others. There were.
+
+### The class
+
+**A probe produces a result that never reaches the deliverable.** The coverage guard could not see it: the ledger proves a module was *accounted for*, never that its findings *arrived*. Four read-only investigators (uncaptured output / parse-boundary loss / orphaned producers / silent filtering) found **~55 confirmed instances**, filed as 19 issues, all worked this sweep.
+
+Worst of them, all measured, not estimated:
+- **#1065** — plain `.js`/`.cjs` was invisible to every AST detector. `targets/vuln-seam-app`, Harvey's own regression fixture, loaded **2 files and reported 0 findings**. Post-fix: calibration 155→394 files, 30→64 findings, recall gate unchanged.
+- **#1061** — `--sarif-out` without `--findings-out` exported a **97%-empty SARIF**: 15 results vs 503, all 51 Critical dropped, exit 0, `COVERAGE PASS`.
+- **#1063** — every dependency CVE ever shipped as **Medium**. The test fixture used `score: "7.5"`, a value osv-scanner never emits: type invented → fixture derived from the invented type → test confirmed the fixture. 19 of 35 rows misrated.
+- **#1066** — a target could silence Harvey with a comment. `// TODO: requireAdmin() before shipping` on an unauthenticated DELETE removed the finding. Also `nosemgrep`, a client-shipped `.semgrepignore`, a no-op local `sanitize()`, and the `/m` regex flag defeating the anchoring guard at **24** sites.
+- **#1078** — the gitleaks allowlist suppressed *by line*, deleting a real `sk_live_` that shared a line with a public key — while the anon-key FPs it existed to stop were shipping in the committed artifact. Both failure directions from one design.
+- **#1051** — the M9 cache signal **suppressed the finding it should raise**.
+
+### The structural answer (#1064 → #1096, both closed)
+
+Patching instances does not converge — **#1061 was created by the same flag-gating pattern used to fix #1040.** So:
+- **Conservation ledger** — `produced == delivered + deduped + suppressed + capped`; any unaccounted delta refuses the export.
+- **Plant-and-assert per module** — 9 of 10 plant a finding at the probe and assert it reaches the assembled deliverable. M2 is an explicit `UNEXERCISED` entry with a falsifier, not a silent skip.
+- **Typed probe results** — `Examined{findings, unitsExamined, scope}` | `NotAssessed{reason, provenance, falsifier}`. A silent empty is unrepresentable. **3 of 10 probes migrated — remainder #1109.**
+- **`.github/workflows/conservation.yml`** — the gate on a schedule, **with its own negative controls in the job**: a green run means *passed AND can still fail*.
+- **Captured fixtures only** for external tools. Hand-writing one is a defect (#1063 is why).
+
+### `main` went red mid-sweep — and the gate could not report it
+
+`#1094` made a latent defect reachable: `quality-scan` is ONE CLI emitting both `M4-*` and `M5-*`, and **both probes captured the whole array**, so every quality-scan finding entered the deliverable twice (since #519/#525). Combined with positional `M5-<n>` ids from knip's **unstable emission order** — measured: 8 identical runs on one tree → 3 distinct orderings — the copies disagreed and `validateFindings` rejected the document. The conservation gate then aborted *before asserting*, so `CONSERVATION PASS` meant "the document failed validation". Fixed in #1106 (total partition + sorted numbering).
+
+**It hid inside #1105:** `pnpm verify` can exit 1 on vitest worker-RPC timeouts with **zero failing tests**, which trained everyone to discount the exit code. #1105 is OPEN.
+
+### Notes worth keeping
+
+- **The drift gate caught a client-facing leak the required gate missed.** `SEC-GL-ALLOW-00` embedded the absolute scan-scope path (`/var/folders/...` locally, `/tmp/...` in CI) in a **client report**. `verify` passed; only the non-required `dry-run-drift` job failed. Root cause was architectural — every relativization guard watches `Finding.location`, and this was the first finding to put paths in `evidence`. **Should `dry-run-drift` be required? → #1107, awaiting decision.**
+- **A recorded rationale, measured, was simply wrong.** #232 excluded self-file clones as "internally-repetitive DATA — SVG icon tables, enum literals". Measured on real ATC (2,755 files): **76% copy-pasted test setup, 7% JSX blocks, zero SVG/enum clusters.** Retracted.
+- **#890 was fixed 25 minutes before it was filed** (`git blame` d623b3b 00:03 UTC vs issue 00:28 UTC). Closed as stale.
+- **Executors corrected six stale numbers** from the investigation issues (SARIF 14→15/450→503, `/m` 11→24 sites, a Lighthouse false-clean not reachable via the CLI, a line citation drifted 811→995, osv 16/33→19/35, trufflehog 2→1). Investigators measured against a codebase that kept moving.
+- **Label discipline (operator ruling 2026-07-26):** `deferred` is ONLY for intentional parks. Anything awaiting an operator ruling gets **`awaiting-decision`** so it surfaces at the next plan gate. Five issues were re-labelled after being wrongly marked deferred.
+
+### ⚠️ Awaiting operator decision (label `awaiting-decision`)
+**#1107** dry-run-drift required? · **#1069** liability wording → counsel · **#1095** score M4 self-file clones? · **#946** parameter-sourced taint scope · **#893** M10 value-sampling privacy ruling · **#888** free RLS write-probe go/no-go · **#1098** needs a live Supabase Management API token · **#1013** needs a *price* for the paid add-on rescan (packaging decided; copy already correct from PR #1016, **but the live site was never redeployed**)
+
+### Open engineering remainders
+#1109 (7 probes untyped) · #1105 (verify exit-code noise) · #1072 (falsifiers needing a live tier) · #1112 (M3's plant decays — vitals' 90-day churn window, 2 qualifying files) · #1084 (monorepo double-count) · #1091 (M2 unreadable count across the subprocess seam) · #1093 (block-comment suppression) · #1099/#1100 · #1056/#1057/#1060/#1087
 
 ## 2026-07-24 (evening 3) — issue-sweep: M2/fix-pipeline/calibration/taint/docs → 9 PRs merged
 
