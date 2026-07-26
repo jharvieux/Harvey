@@ -876,7 +876,7 @@
     "taxonomy": "Committed credential — suppressed by allowlist",
     "location": "(repo-wide)",
     "status": "Open",
-    "evidence": "4 match(es) were recognized as public-by-design credentials (Stripe publishable key, or a Supabase JWT whose decoded role claim is \"anon\") and not graded: /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-tzwLR3/.env.local:8 (jwt), /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-tzwLR3/src/lib/crossFileAnonKeyStore.ts:6 (jwt), /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-tzwLR3/src/lib/nocodeAnonClient.ts:7 (jwt), /var/folders/vp/wwf2371n4230x4kl6yhmzkcm0000gn/T/harvey-scan-scope-tzwLR3/supabase/seed.sql:91 (jwt).",
+    "evidence": "4 match(es) were recognized as public-by-design credentials (Stripe publishable key, or a Supabase JWT whose decoded role claim is \"anon\") and not graded: .env.local:8 (jwt), src/lib/crossFileAnonKeyStore.ts:6 (jwt), src/lib/nocodeAnonClient.ts:7 (jwt), supabase/seed.sql:91 (jwt).",
     "impact": "These matches were deliberately not graded. They are listed because a suppression that leaves no trace reads as a clean result: a real credential committed to a .template/.sample file is a known leak class, and only the sample-path category needs your confirmation.",
     "fix": "Confirm each sample/template match is an obviously-fake placeholder. If any is a real value, rotate it and replace it with a placeholder plus a rotate-me instruction.",
     "value": 1,

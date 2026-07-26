@@ -236,6 +236,21 @@ describe("allowlist suppressions are scoped to the value and counted (#1078)", (
   it("emits no row when nothing was suppressed — the disclosure must not become background noise", () => {
     expect(gitleaksAllowlistDisclosure([])).toBeUndefined();
   });
+
+  // #1104: gitleaks reports File absolute, under the per-run mkdtemp scan-scope copy. Because this
+  // row carries its paths in `evidence` (not `location`, which the CLI seams relativize) it shipped
+  // the auditor's temp-dir layout into a client-facing report and made the committed artifact
+  // unreproducible on any other machine.
+  it("reports paths target-relative, never the mkdtemp scan-scope root", () => {
+    const row = gitleaksAllowlistDisclosure([
+      { file: "/var/folders/vp/T/harvey-scan-scope-tzwLR3/.env.local", line: 8, rule: "jwt", reason: "public-key" },
+      { file: "/tmp/harvey-scan-scope-Hv172Z/src/lib/anon.ts", line: 6, rule: "jwt", reason: "public-key" },
+    ]);
+    expect(row?.evidence).toContain(".env.local:8 (jwt)");
+    expect(row?.evidence).toContain("src/lib/anon.ts:6 (jwt)");
+    expect(row?.evidence).not.toContain("harvey-scan-scope-");
+    expect(row?.evidence).not.toContain("/var/folders");
+  });
 });
 
 // #1078: the sweep is a VERIFIED-credential sweep plus a working-tree pattern pass, and said so

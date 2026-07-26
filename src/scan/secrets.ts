@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
+import { relativizeScanScope } from "./scan-scope.js";
 
 const GITLEAKS_CONFIG = new URL("./rules/gitleaks-supabase.toml", import.meta.url).pathname;
 // Rules whose match alone is ~100%-precision (no live verification needed): the decoded
@@ -256,8 +257,14 @@ export function gitleaksAllowlistDisclosure(suppressed: GitleaksSuppression[]): 
   if (suppressed.length === 0) return undefined;
   const sample = suppressed.filter((s) => s.reason === "sample-path");
   const publicKeys = suppressed.filter((s) => s.reason === "public-key");
+  // gitleaks reports File as an absolute path under the mkdtemp scan-scope copy. Every other
+  // finding's path reaches the report target-relative (relativizeScanScope, #285) because the
+  // path lives in `location`, which the CLI seams relativize — this row puts paths in `evidence`,
+  // which they do not, so it relativizes here. Two defects if it doesn't (#1104): the committed
+  // dry-run artifact can never match another machine's run, and a client-facing report discloses
+  // the auditor's temp-dir layout (on macOS, the operator's user folder hash).
   const where = (rows: GitleaksSuppression[]): string =>
-    [...new Set(rows.map((s) => `${s.file}${s.line ? `:${s.line}` : ""} (${s.rule})`))].sort().join(", ");
+    [...new Set(rows.map((s) => `${relativizeScanScope(s.file)}${s.line ? `:${s.line}` : ""} (${s.rule})`))].sort().join(", ");
   const parts = [
     sample.length > 0
       ? `${sample.length} credential-shaped match(es) in sample/template files were NOT graded — confirm they are placeholders, not real values committed to a template: ${where(sample)}.`
