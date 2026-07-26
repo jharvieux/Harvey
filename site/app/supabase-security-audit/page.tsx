@@ -209,7 +209,7 @@ CREATE POLICY "users can read" ON documents
                   A <b>coverage ledger</b>: exactly what we checked and what we didn&apos;t, with reasons. No silent
                   gaps.
                 </li>
-                <li>A re-audit credit: when you ship the fixes, we re-verify the critical findings once at no extra charge — additional re-audits are available as a paid add-on.</li>
+                <li>A re-audit credit: when you ship the fixes, we re-verify the critical findings once at no extra charge, if requested within 30 days of the original audit. Additional re-audits within that window are a paid add-on at 50% of the original audit price.</li>
                 <li>
                   Optional <b>investor-ready summary</b>: a buyer-facing document for fundraise or acquisition diligence.
                 </li>

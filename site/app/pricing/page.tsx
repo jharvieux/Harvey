@@ -234,7 +234,8 @@ export default function Pricing() {
               <span className="addon-tag">Included</span>
               <p>
                 <b>Re-audit credit.</b> When you ship the fixes, we re-verify the critical findings once at no extra
-                charge — additional re-audits are available as a paid add-on. The
+                charge, if requested within 30 days of the original audit. Additional re-audits within that window
+                are a paid add-on at 50% of the original audit price. The
                 repeat-customer diff automates it, so it&apos;s cheap for us and high-trust for you.
               </p>
             </div>
