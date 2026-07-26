@@ -6,7 +6,7 @@
 // export (#910); this proves it's also applied at quick-scan's own render/output boundary, for
 // --out/console, --findings-out, and --json alike, not just SARIF.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -40,6 +40,23 @@ function hasBinary(name: string): boolean {
 }
 const MECHANICAL_BINARIES_PRESENT = ["semgrep", "trufflehog", "gitleaks"].every(hasBinary);
 
+// #1134: awaited spawn, not execFileSync. execFileSync blocks the vitest worker's event loop for the
+// call's duration, and a blocked worker cannot service the birpc ack for a task update it already
+// sent — vitest hardcodes a 60s window for that ack (see vitest.config.ts's HEAVY_CLI_TESTS comment,
+// and #1120/#1133 which found run-audit.test.ts's beforeAll actually over that line). MEASURED
+// 2026-07-26 each call here takes ~10s on this hardware, comfortably under the 60s ceiling either
+// way, but the standing constraint is "no single blocking window may approach 60s" for every heavy
+// CLI test — awaiting a spawned child leaves the loop free regardless of how slow the call gets.
+function run(args: string[]): Promise<{ stdout: string }> {
+  return new Promise((res, rej) => {
+    const child = spawn("node_modules/.bin/tsx", args, { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"] });
+    let stdout = "";
+    child.stdout.on("data", (d: Buffer) => (stdout += d));
+    child.on("error", rej);
+    child.on("close", (code) => (code === 0 ? res({ stdout }) : rej(new Error(`quick-scan ${args.join(" ")} exited ${code}`))));
+  });
+}
+
 describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-scope path leaks into client-facing output (#933)", () => {
   // Drives the real mechanical scan (semgrep/trufflehog/gitleaks/osv-scanner) as a child process,
   // so vitest's 5s default is far too short. 30s was too short too: #1125 is this file blowing that
@@ -50,24 +67,17 @@ describe.skipIf(!MECHANICAL_BINARIES_PRESENT)("quick-scan CLI — no scratch-sco
   // executed on a CI runner (the `verify` job installs none of these binaries). 120s so the budget
   // is not the thing that discovers unfamiliar hardware; the assertion is about path leakage, and
   // nothing about it gets weaker with more headroom.
-  it("does not leak the harvey-scan-scope-* mkdtemp prefix into the rendered report", () => {
-    const stdout = execFileSync("node_modules/.bin/tsx", [CLI, "--dir", CALIBRATION], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+  it("does not leak the harvey-scan-scope-* mkdtemp prefix into the rendered report", async () => {
+    const { stdout } = await run([CLI, "--dir", CALIBRATION]);
     expect(stdout).toMatch(/verified hygiene issue/); // sanity: the calibration fixture DOES produce findings
     expect(stdout).not.toMatch(SCRATCH_PREFIX);
   }, 120000);
 
-  it("does not leak the scratch prefix into --findings-out (the raw mechanical Finding[])", () => {
+  it("does not leak the scratch prefix into --findings-out (the raw mechanical Finding[])", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "harvey-quick-scan-test-"));
     dirs.push(outDir);
     const findingsOutPath = join(outDir, "findings.json");
-    execFileSync("node_modules/.bin/tsx", [CLI, "--dir", CALIBRATION, "--findings-out", findingsOutPath, "--out", join(outDir, "report.txt")], {
-      cwd: REPO_ROOT,
-      stdio: ["ignore", "ignore", "ignore"],
-    });
+    await run([CLI, "--dir", CALIBRATION, "--findings-out", findingsOutPath, "--out", join(outDir, "report.txt")]);
     const findings = JSON.parse(readFileSync(findingsOutPath, "utf8")) as { location: string }[];
     expect(findings.length).toBeGreaterThan(0);
     expect(findings.some((f) => SCRATCH_PREFIX.test(f.location))).toBe(false);
