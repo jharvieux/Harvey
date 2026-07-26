@@ -41,6 +41,27 @@ import {
   type TruffleHogResult,
 } from "./secrets.js";
 
+// Real `gitleaks 8.30.1` output against Harvey's OWN custom ruleset, captured from a planted-secret
+// corpus — NOT hand-written. See __fixtures__/gitleaks/PROVENANCE.md for the command, the builder,
+// the single disclosed transform (File relativized, as production's relativizeScanScope does), and
+// the dropped fields. Retires the row-9 inline literals (#1156, closes #1150 row 9).
+const GITLEAKS_CORPUS: GitleaksResult[] = JSON.parse(
+  readFileSync(new URL("./__fixtures__/gitleaks/gitleaks-8.30.1-corpus.json", import.meta.url), "utf8"),
+) as GitleaksResult[];
+
+// Every captured record whose File basename matches — throws (never silently empty) if a re-capture
+// drops a file a test relies on.
+function capturedFor(fileBasename: string): GitleaksResult[] {
+  const rows = GITLEAKS_CORPUS.filter((r) => r.File.endsWith(fileBasename));
+  if (rows.length === 0) throw new Error(`no captured gitleaks records for file "${fileBasename}" — re-run build-corpus.mjs`);
+  return rows;
+}
+const capturedRule = (fileBasename: string, ruleId: string): GitleaksResult => {
+  const r = capturedFor(fileBasename).find((x) => x.RuleID === ruleId);
+  if (!r) throw new Error(`no captured gitleaks "${ruleId}" record in "${fileBasename}"`);
+  return r;
+};
+
 describe("parseTruffleHogFindings", () => {
   it("drops unverified hits — only a live-verified secret is ~100% precision", () => {
     const results: TruffleHogResult[] = [
@@ -76,132 +97,95 @@ describe("parseTruffleHogFindings", () => {
   });
 });
 
+// Every case feeds parseGitleaksFindings REAL captured records (GITLEAKS_CORPUS above). lib/admin.ts
+// carries a real (non-demo) service-role JWT; supabase/seed.sql the demo key whose decoded body fires
+// BOTH the service-role and demo-marker rules on one line; .github/workflows/saml-test.yml a
+// private-key + test-IdP marker; certs/idp-key.pem the same pair OUTSIDE a workflow.
 describe("parseGitleaksFindings", () => {
   it("tags the decoded service-role rule as high precision / Critical", () => {
-    const results: GitleaksResult[] = [
-      { RuleID: "supabase-service-role-jwt", File: "lib/admin.ts", StartLine: 8, Match: '"role":"service_role"' },
-    ];
-    const findings = parseGitleaksFindings(results, "source");
+    const findings = parseGitleaksFindings([capturedRule("lib/admin.ts", "supabase-service-role-jwt")], "source");
     expect(findings[0]?.precisionTier).toBe("high");
     expect(findings[0]?.severity).toBe("Critical");
     expect(findings[0]?.confidence).toBe("Confirmed");
   });
 
   it("tags generic gitleaks rules as review precision — regex/entropy alone isn't proof", () => {
-    const results: GitleaksResult[] = [
-      { RuleID: "generic-api-key", File: "lib/config.ts", StartLine: 2, Match: "apikey=abc123" },
-    ];
-    const findings = parseGitleaksFindings(results, "source");
+    const findings = parseGitleaksFindings([capturedRule("lib/config.ts", "generic-api-key")], "source");
     expect(findings[0]?.precisionTier).toBe("review");
     expect(findings[0]?.confidence).toBe("Review");
   });
 
   it("assigns stable, distinct ids per scope so source/bundle passes don't collide", () => {
-    const results: GitleaksResult[] = [{ RuleID: "generic-api-key", File: "a.ts" }];
-    const source = parseGitleaksFindings(results, "source");
-    const bundle = parseGitleaksFindings(results, "bundle");
-    expect(source[0]?.id).not.toBe(bundle[0]?.id);
+    const results = [capturedRule("lib/config.ts", "generic-api-key")];
+    expect(parseGitleaksFindings(results, "source")[0]?.id).not.toBe(parseGitleaksFindings(results, "bundle")[0]?.id);
   });
 
   it("gives private-key its own impact text, not the JWT-specific sentence (#211)", () => {
-    const results: GitleaksResult[] = [{ RuleID: "private-key", File: "certs/key.pem", StartLine: 1 }];
-    const findings = parseGitleaksFindings(results, "source");
+    const findings = parseGitleaksFindings([capturedRule("certs/key.pem", "private-key")], "source");
     expect(findings[0]?.impact).not.toContain("Decoded JWT role claim");
   });
 
   it("clears a high-precision hit co-located with the decoded supabase-demo iss claim (#210)", () => {
-    const results: GitleaksResult[] = [
-      { RuleID: "supabase-service-role-jwt", File: "supabase/seed.sql", StartLine: 2, Match: '"role":"service_role"' },
-      { RuleID: "supabase-demo-key-marker", File: "supabase/seed.sql", StartLine: 2, Match: '"iss":"supabase-demo"' },
-    ];
-    const findings = parseGitleaksFindings(results, "source");
-    expect(findings).toHaveLength(0);
+    const seed = capturedFor("supabase/seed.sql"); // the real demo key: both rules on the same File:StartLine
+    expect(new Set(seed.map((r) => r.RuleID))).toEqual(new Set(["supabase-service-role-jwt", "supabase-demo-key-marker"]));
+    expect(parseGitleaksFindings(seed, "source")).toHaveLength(0);
   });
 
   it("still flags a real (non-demo) service-role JWT with no demo marker present", () => {
-    const results: GitleaksResult[] = [
-      { RuleID: "supabase-service-role-jwt", File: "lib/admin.js", StartLine: 8, Match: '"role":"service_role"' },
-    ];
-    const findings = parseGitleaksFindings(results, "source");
+    const findings = parseGitleaksFindings([capturedRule("lib/admin.ts", "supabase-service-role-jwt")], "source");
     expect(findings).toHaveLength(1);
     expect(findings[0]?.precisionTier).toBe("high");
   });
 
   it("down-ranks a private-key hit sharing a CI workflow file with a test IdP marker, but doesn't drop it (#211)", () => {
-    const results: GitleaksResult[] = [
-      { RuleID: "private-key", File: ".github/workflows/main.yml", StartLine: 12 },
-      { RuleID: "harvey-test-idp-marker", File: ".github/workflows/main.yml", StartLine: 3, Match: "ENTITY_ID" },
-    ];
-    const findings = parseGitleaksFindings(results, "source");
-    expect(findings).toHaveLength(1);
+    const workflow = capturedFor(".github/workflows/saml-test.yml"); // private-key + harvey-test-idp-marker
+    const findings = parseGitleaksFindings(workflow, "source");
+    expect(findings).toHaveLength(1); // the test-idp-marker is a correlation marker, never surfaced
     expect(findings[0]?.precisionTier).toBe("review");
     expect(findings[0]?.severity).toBe("High");
     expect(findings[0]?.evidence).toContain("Down-ranked from Critical");
   });
 
   it("leaves a private-key hit outside a CI workflow at high, even with a test IdP marker elsewhere", () => {
-    const results: GitleaksResult[] = [
-      { RuleID: "private-key", File: "certs/key.pem", StartLine: 1 },
-      { RuleID: "harvey-test-idp-marker", File: "certs/key.pem", StartLine: 1, Match: "ENTITY_ID" },
-    ];
-    const findings = parseGitleaksFindings(results, "source");
+    const findings = parseGitleaksFindings(capturedFor("certs/idp-key.pem"), "source");
     expect(findings[0]?.precisionTier).toBe("high");
   });
 
   it("assigns the same ids to the same findings regardless of input order (#302)", () => {
-    const a: GitleaksResult = { RuleID: "generic-api-key", File: "lib/a.ts", StartLine: 1, Match: "apikey=aaa" };
-    const b: GitleaksResult = { RuleID: "generic-api-key", File: "lib/b.ts", StartLine: 2, Match: "apikey=bbb" };
-    const c: GitleaksResult = { RuleID: "private-key", File: "certs/key.pem", StartLine: 1 };
-
-    const byId = (findings: ReturnType<typeof parseGitleaksFindings>) =>
-      new Map(findings.map((f) => [f.location, f.id]));
-
+    const a = capturedRule("lib/config.ts", "generic-api-key");
+    const b = capturedRule("lib/pay.ts", "stripe-access-token");
+    const c = capturedRule("certs/key.pem", "private-key");
+    const byId = (findings: ReturnType<typeof parseGitleaksFindings>) => new Map(findings.map((f) => [f.location, f.id]));
     const run1 = byId(parseGitleaksFindings([a, b, c], "source"));
-    const run2 = byId(parseGitleaksFindings([c, a, b], "source"));
-    const run3 = byId(parseGitleaksFindings([b, c, a], "source"));
-
-    expect(run2).toEqual(run1);
-    expect(run3).toEqual(run1);
+    expect(byId(parseGitleaksFindings([c, a, b], "source"))).toEqual(run1);
+    expect(byId(parseGitleaksFindings([b, c, a], "source"))).toEqual(run1);
   });
 
   it("redacts a matched secret value so a real-shaped credential never reaches evidence (#308)", () => {
-    const secret = "sk_test_51Qm2vXcW8rNpKdLhGfYsAe4Uo1Bx6Vt0Zi7Ny5Mw3Qr8Kp2Ld6Hj";
-    const results: GitleaksResult[] = [
-      { RuleID: "stripe-access-token", File: "lib/pay.ts", StartLine: 4, Match: secret },
-    ];
-    const evidence = parseGitleaksFindings(results, "source")[0]?.evidence ?? "";
+    const stripe = capturedRule("lib/pay.ts", "stripe-access-token");
+    const secret = stripe.Match ?? "";
+    const evidence = parseGitleaksFindings([stripe], "source")[0]?.evidence ?? "";
     expect(evidence).not.toContain(secret);
     expect(evidence).toContain(`[redacted, ${secret.length} chars]`);
-    // A short prefix survives so triage can still distinguish two hits on the same rule+file.
-    expect(evidence).toContain("sk_test_51Qm");
+    expect(evidence).toContain("sk_test_51Qm"); // a short prefix survives so triage can distinguish two hits
   });
 
   it("redacts the password inside a matched connection-string URI (#308)", () => {
-    const uri = "postgres://appuser:S3cr3tP4ssZ9Qm2vXc@db.example.supabase.co";
-    const results: GitleaksResult[] = [
-      { RuleID: "harvey-db-uri-credentials", File: "supabase/migrations/001.sql", StartLine: 9, Match: uri },
-    ];
-    const evidence = parseGitleaksFindings(results, "source")[0]?.evidence ?? "";
+    const uri = capturedRule("supabase/migrations/001.sql", "harvey-db-uri-credentials");
+    const evidence = parseGitleaksFindings([uri], "source")[0]?.evidence ?? "";
     expect(evidence).not.toContain("S3cr3tP4ssZ9Qm2vXc");
-    expect(evidence).not.toContain(uri);
+    expect(evidence).not.toContain(uri.Match ?? "");
   });
 
   it("keeps the structural service_role claim verbatim — it is not a secret (#308)", () => {
-    const results: GitleaksResult[] = [
-      { RuleID: "supabase-service-role-jwt", File: "lib/admin.ts", StartLine: 8, Match: '"role":"service_role"' },
-    ];
-    const evidence = parseGitleaksFindings(results, "source")[0]?.evidence ?? "";
+    const evidence = parseGitleaksFindings([capturedRule("lib/admin.ts", "supabase-service-role-jwt")], "source")[0]?.evidence ?? "";
     expect(evidence).toContain('"role":"service_role"');
     expect(evidence).not.toContain("[redacted");
   });
 
   it("never surfaces the internal correlation marker rules as findings themselves", () => {
-    const results: GitleaksResult[] = [
-      { RuleID: "supabase-demo-key-marker", File: "supabase/seed.sql", StartLine: 2 },
-      { RuleID: "harvey-test-idp-marker", File: ".github/workflows/main.yml", StartLine: 3 },
-    ];
-    const findings = parseGitleaksFindings(results, "source");
-    expect(findings).toHaveLength(0);
+    const markers = [capturedRule("supabase/seed.sql", "supabase-demo-key-marker"), capturedRule(".github/workflows/saml-test.yml", "harvey-test-idp-marker")];
+    expect(parseGitleaksFindings(markers, "source")).toHaveLength(0);
   });
 });
 

@@ -40,6 +40,10 @@ on:
       - "src/audit-report.ts"
       - "src/cli/validate-conservation.ts"
       - "src/cli/run-audit.ts"
+      - "src/cli/fixture-drift.ts"
+      - "src/scan/fixture-drift-contracts.ts"
+      - "src/scan/__fixtures__/**"
+      - "src/__fixtures__/**"
       - "targets/calibration/**"
       - ".github/workflows/conservation.yml"
 
@@ -121,6 +125,26 @@ jobs:
         run: |
           set -euo pipefail
           vitals_cli.py version
+
+      # Captured-fixture schema-drift checks (#1130, mirroring the OSV step above): re-run each pinned
+      # tool against a reproducible seed and assert the FRESH output still satisfies the contract the
+      # committed fixture and its parser depend on (the #1063 invariant). jscpd/knip/lighthouse are
+      # node deps installed by pnpm; trufflehog is installed above; vitals is on PATH from the steps
+      # above; stryker installs the target's own dep tree via npx; lighthouse uses the runner's
+      # preinstalled Google Chrome via chrome-launcher. The two live-only fixtures (trufflehog
+      # VERIFIED, PostgREST) have no capture and so no drift check — they are reason-blocked.
+      - name: jscpd fixture schema drift check
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool jscpd
+      - name: knip fixture schema drift check
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool knip
+      - name: trufflehog fixture schema drift check
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool trufflehog
+      - name: vitals fixture schema drift check
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool vitals
+      - name: Stryker fixture schema drift check
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool stryker
+      - name: lighthouse fixture schema drift check
+        run: pnpm exec tsx src/cli/fixture-drift.ts --tool lighthouse
 
       - name: Conservation gate (must PASS)
         run: pnpm exec tsx src/cli/validate-conservation.ts

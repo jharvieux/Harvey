@@ -94,15 +94,30 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
   satisfies the schema contract the committed fixture (row 1) and `parseOsvFindings` depend on — the
   #1063 invariant that `severity[].score` is a CVSS vector string, not a bare number. A byte diff is
   not usable (osv.dev advisories churn); the check diffs the SHAPE. The contract + its negative
-  controls are under `pnpm verify`; the binary-running CLI is not (like dry-run-drift), and its
-  **cadence wiring (an npm-script alias + a conservation.yml / dry-run-drift step) is split to the
-  #1130 remainder** because both touch operator-owned paths (`package.json`, `.github/workflows`).
+  controls are under `pnpm verify`; the binary-running CLI is not (like dry-run-drift). Its cadence
+  wiring (the `osv-fixture-drift` npm-script alias + a `conservation.yml` step) landed with the OSV
+  check.
+- **Criterion 3 — the drift check extended to every OTHER captured tool** (`src/cli/fixture-drift.ts`
+  + `src/scan/fixture-drift-contracts.ts`, negative controls in
+  `src/scan/fixture-drift-contracts.test.ts`, all under `pnpm verify`). One parameterized CLI
+  (`--tool <jscpd|knip|trufflehog|vitals|stryker|lighthouse>`) re-runs each pinned tool against a
+  reproducible seed and asserts the FRESH output still satisfies the contract the committed fixture
+  and its parser depend on (the #1063 shape invariant), failing loud on a version or schema mismatch.
+  The seeds: jscpd → `targets/calibration/dup` (committed; not the fixture's own capture corpus, which
+  is not committed — disclosed); knip → a rebuilt throwaway mini-project matching row 12's provenance;
+  trufflehog → `buildGitHistoryFixture` (covers BOTH rows 8 and 10 — same tool/command/repo); vitals →
+  `seed.py` (row 6's committed re-capture seed); stryker → `targets/calibration/test-quality/` (npm ci
+  + `npx stryker run`); lighthouse → a locally-served static page via chrome-launcher (shape check, the
+  page's actual performance is irrelevant). Each has an npm-script alias (`<tool>-fixture-drift`) and a
+  `conservation.yml` step. **Every CAPTURED fixture now has a drift check.** The two live-only fixtures
+  — trufflehog **VERIFIED** (row 8's REASON block) and **PostgREST/GoTrue** (row 14) — have no capture
+  and therefore correctly get NO drift check; they are reason-blocked, not missing.
+- **Row 5 (`lighthouse-report.json`) drift check** re-runs Lighthouse 13.4.0; **Row 6
+  (`vitals-report.json`) drift check** re-runs the `seed.py` corpus reconstruction — both landed here,
+  so the row-6 "split to the #1130 remainder" note below is superseded.
 
-**Split to the #1130 remainder:**
+**Still open after the #1130 drift-check work above:**
 
-- **Row 6 (`vitals-report.json`)** — the tool IS installed (correction above), but a faithful
-  re-capture requires reproducing the M3 calibration corpus from a seeded git repo + a seeded
-  `.vitals` provenance DB (see row 6). Corpus-reconstruction scale, not a drop-in capture.
 - **Inline-literal rows (7–14)** — restructuring each tool's unit tests to consume committed
   artifacts; per-tool, and some (TruffleHog verified path, PostgREST) need a live provider / the M2
   two-tenant stack, so those get a `REASON:` block where an offline capture is impossible.
@@ -141,14 +156,21 @@ restructured to load the committed capture.
 **Split to the #1146 chunk-3 remainder issue (each needs a purpose-built target corpus that
 reproduces the specific per-branch assertions, or a tool this environment does not install):**
 
-- **Row 7 (semgrep)** — `parseSemgrepFindings` literals span many distinct rule scenarios
-  (service-role-in-client, workflow shell-injection routing, registry-rule cwe/owasp threading,
-  references composition, bare-string normalization). Reproducing each from a real `semgrep` run is
-  a per-rule target reconstruction, not a single drop-in capture.
-- **Row 9 (gitleaks 8.30.1, MEASURED — inventory's unversioned cell)** — `parseGitleaksFindings`
-  literals encode many correlation scenarios (demo-marker co-location, allowlist suppression,
-  doc-context reclassification) against Harvey's *custom* gitleaks ruleset; reproducing them needs a
-  planted-secret corpus run under the custom config.
+- **Row 7 (semgrep) — RE-CAPTURED (#1156, closes #1150 row 7).** Real `semgrep 1.164.0` output over a
+  purpose-built corpus lives at `__fixtures__/semgrep/semgrep-1.164.0-corpus.json` (+ `PROVENANCE.md`,
+  + reproducible `build-corpus.mjs`); `semgrep.test.ts`'s `parseSemgrepFindings` block loads it. Two
+  invented shapes were CORRECTED against the real run: the old `#455` no-cwe literal put no cwe on
+  `harvey-service-role-in-client`, but every harvey rule now ships cwe; the old `#976` bare-string-cwe
+  literal used a fabricated `tainted-sql-string` rule — the real bare-string carrier is
+  `bypass-tls-verification`. Two shapes no rule emits (no-cwe result, bare-string `references`) remain
+  as labelled synthetic negative-controls (REASON in the PROVENANCE).
+- **Row 9 (gitleaks 8.30.1) — RE-CAPTURED (#1156, closes #1150 row 9).** Real `gitleaks 8.30.1` output
+  over a planted-secret corpus, under Harvey's custom config, lives at
+  `__fixtures__/gitleaks/gitleaks-8.30.1-corpus.json` (+ `PROVENANCE.md`, + `build-corpus.mjs`);
+  `secrets.test.ts`'s `parseGitleaksFindings` block loads it. The capture VERIFIED the old literals
+  faithful (real RuleIDs, real `Match` values, and — load-bearing — the #210 demo co-location really
+  does report both rules on one `File:StartLine`). The `#1078` allowlist block keeps DEFANGED literals
+  by decision (a live-shaped key would trip push protection; decisional REASON in the PROVENANCE).
 - **Row 10 (TruffleHog git-history scoring)** — `scoreGitHistoryResults` inputs are minimal scoring
   literals; one is an inherently synthetic negative-control (a benign file trufflehog would never
   flag). Its positive case could later reference the row-8 capture.
