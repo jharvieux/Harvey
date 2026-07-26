@@ -87,7 +87,7 @@ Full methodology → *(link to The Audit page)*
 - For each finding: what it is, where it is, why it matters, and how to fix it.
 - A **coverage ledger**: exactly what we checked and what we didn't, with reasons. No
   silent gaps.
-- A re-audit credit: when you ship the fixes, we re-verify the critical findings once at no extra charge — additional re-audits are available as a paid add-on.
+- A re-audit credit: when you ship the fixes, we re-verify the critical findings once at no extra charge, if requested within 30 days of the original audit. Additional re-audits within that window are a paid add-on at 50% of the original audit price.
 - Optional **investor-ready summary**: a buyer-facing document for fundraise or
   acquisition diligence — non-technical to read, defensible under technical scrutiny.
 

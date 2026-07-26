@@ -119,9 +119,10 @@ are customers to renew — the path from service revenue to recurring revenue.
   Transparent, size-based pricing is a differentiator, a friction-remover for a
   self-serve-leaning buyer, and on-brand with Harvey's coverage-honesty identity.
 - **Offer a re-audit credit** (Valletta does): re-verify critical findings once at no extra
-  charge after the client ships fixes; **additional re-audits are a paid add-on** (one
-  included, extra rescans charged — operator decision 2026-07-24, #1013). Cheap to deliver
-  (the diff feature automates it), high trust.
+  charge after the client ships fixes, if requested within 30 days of the original audit;
+  **additional re-audits within that window are a paid add-on at 50% of the original audit
+  price** (one included, extra rescans charged — operator decision 2026-07-24, price/window
+  set 2026-07-26, #1013). Cheap to deliver (the diff feature automates it), high trust.
 
 ## Free vs. paid — the honest distinction (do not undersell the paid tiers)
 
