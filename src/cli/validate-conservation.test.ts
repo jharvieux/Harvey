@@ -104,9 +104,14 @@ describe.skipIf(!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !
     const { code, output } = runGate(["--seed-loss", "M7"]);
     expect(code).toBe(1);
     expect(output).toContain("GATE FAIL — M7 produced NOTHING");
-    // The deliverable still carries an M7 row (M9 captures detect-static unfiltered), so a check
-    // that only read the document would pass here. That it does not is the whole point (#1062).
-    expect(output).toMatch(/GONE\s+M7\s+produced=0\s+delivered=[1-9]/);
+    // The gate reads each module's OWN probe attribution (findingsByModule), not the merged
+    // document — that is why it catches this loss. Before #1084 M9 captured detect-static UNFILTERED
+    // and re-delivered M7's rows, so a seeded M7 loss stayed visible in the deliverable (delivered≥1)
+    // while M7 produced nothing — the #1062 masking, which the gate still caught via produced=0.
+    // #1084 makes M9 collect only the complement of M6/M7/M8, so nothing re-delivers M7's discarded
+    // rows and the loss is now visible in the document too (delivered=0). The gate fails on produced=0
+    // either way — the produced/delivered split is what's asserted, not the delivered count.
+    expect(output).toMatch(/GONE\s+M7\s+produced=0\s+delivered=0/);
     // The other direction, in the same run: a gate that fails on everything proves nothing, so the
     // eight unseeded plants must all have travelled probe → deliverable intact.
     for (const module of ["M1", "M3", "M4", "M5", "M6", "M8", "M9", "M10"]) {
