@@ -252,6 +252,46 @@ describe("parseSemgrepFindings", () => {
   });
 });
 
+// #1166: semgrep 1.164 emits its new 4-level taxonomy (MEASURED live: MEDIUM appears in the JSON;
+// CRITICAL/HIGH are the same taxonomy's upper bands). A registry rule with no harveySeverity override
+// must deliver at the mapped band, not fall through to the old Medium default — a Critical shipping
+// Medium was the bug. An unrecognised severity string fails loud instead of vanishing into a default.
+describe("#1166: semgrep new-taxonomy severity strings map correctly, unknowns fail loud", () => {
+  const registryResult = (severity: string): SemgrepOutput => ({
+    results: [{ check_id: "registry.some-rule", path: "app/x.ts", extra: { message: "m", severity } }],
+  });
+
+  it("maps a CRITICAL registry rule (no override) to Critical, not Medium", () => {
+    expect(parseSemgrepFindings(registryResult("CRITICAL"))[0]?.severity).toBe("Critical");
+  });
+
+  it("maps a HIGH registry rule (no override) to High, not Medium", () => {
+    expect(parseSemgrepFindings(registryResult("HIGH"))[0]?.severity).toBe("High");
+  });
+
+  it("maps MEDIUM to Medium and LOW to Low", () => {
+    expect(parseSemgrepFindings(registryResult("MEDIUM"))[0]?.severity).toBe("Medium");
+    expect(parseSemgrepFindings(registryResult("LOW"))[0]?.severity).toBe("Low");
+  });
+
+  it("still maps the legacy ERROR/WARNING/INFO taxonomy", () => {
+    expect(parseSemgrepFindings(registryResult("ERROR"))[0]?.severity).toBe("High");
+    expect(parseSemgrepFindings(registryResult("WARNING"))[0]?.severity).toBe("Medium");
+    expect(parseSemgrepFindings(registryResult("INFO"))[0]?.severity).toBe("Low");
+  });
+
+  it("negative control: an unmapped severity string throws rather than defaulting to Medium", () => {
+    expect(() => parseSemgrepFindings(registryResult("SEVERE"))).toThrow(/Unmapped semgrep severity "SEVERE"/);
+  });
+
+  it("a harveySeverity override still wins over the semgrep severity", () => {
+    const output: SemgrepOutput = {
+      results: [{ check_id: "harvey-x", path: "app/x.ts", extra: { message: "m", severity: "MEDIUM", metadata: { harveySeverity: "Critical" } } }],
+    };
+    expect(parseSemgrepFindings(output)[0]?.severity).toBe("Critical");
+  });
+});
+
 // #996: the canonical non-grading taxonomies live twice — as exported constants (what
 // NON_GRADING_TAXONOMIES keys on) and as metadata.harveyTaxonomy in the rule YAML (what the
 // findings actually carry). A drift between them silently re-grades the class, so pin the sync.
