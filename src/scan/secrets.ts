@@ -232,7 +232,7 @@ function isPublicAnonJwt(raw: string): boolean {
   }
 }
 
-export interface GitleaksSuppression {
+interface GitleaksSuppression {
   file: string;
   line?: number;
   rule: string;

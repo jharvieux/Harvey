@@ -413,6 +413,82 @@ describe("parseOsvFindings", () => {
   it("degrades gracefully to no findings for a target with no lockfile (mechanical.ts's runOsvScanner returns {})", () => {
     expect(parseOsvFindings({})).toEqual([]);
   });
+
+  // #1079: the fixed version, the CWE ids, the advisory links and the narrative all came out of the
+  // tool and were all discarded — remediation read "Upgrade past the vulnerable range" with no
+  // version, and 0 of 35 DEP-OSV rows carried a CWE, silently voiding #455 ticket routing for the
+  // whole category. The vulnerability object below is CAPTURED VERBATIM from
+  // `osv-scanner --format json --lockfile targets/calibration/package-lock.json` on osv-scanner
+  // 2.3.8 / osv-scalibr 0.4.5, 2026-07-26 (details truncated to its first two paragraphs).
+  describe("the advisory fields osv-scanner supplies reach the finding (#1079)", () => {
+    const captured: OsvScanResult = {
+      results: [
+        {
+          source: { path: "package-lock.json" },
+          packages: [
+            {
+              package: { name: "brace-expansion", version: "1.1.16", ecosystem: "npm" },
+              vulnerabilities: [
+                {
+                  id: "GHSA-mh99-v99m-4gvg",
+                  summary: "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+                  details:
+                    "### Summary\n\n`expand()` bounds the *number* of results it produces (the `max` option,\n`100_000` by default) but not their *length*. By chaining many brace groups,\nan attacker keeps the result count under `max` while making every result grow\nwith the number of groups.",
+                  aliases: ["CVE-2026-14257"],
+                  severity: [{ type: "CVSS_V3", score: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H" }],
+                  affected: [
+                    {
+                      package: { name: "brace-expansion", ecosystem: "npm" },
+                      ranges: [{ type: "SEMVER", events: [{ introduced: "0" }, { fixed: "5.0.8" }] }],
+                    },
+                  ],
+                  references: [
+                    { type: "WEB", url: "https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-mh99-v99m-4gvg" },
+                    { type: "ADVISORY", url: "https://nvd.nist.gov/vuln/detail/CVE-2026-14257" },
+                  ],
+                  database_specific: { cwe_ids: ["CWE-400", "CWE-770"] },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    it("names the fixed version in the remediation instead of 'past the vulnerable range'", () => {
+      const f = parseOsvFindings(captured)[0];
+      expect(f?.fix).toContain("Upgrade brace-expansion to 5.0.8 or later");
+      expect(f?.title).toContain("fixed in 5.0.8");
+    });
+
+    it("carries the advisory's CWE ids so #455 ticket routing works for the category", () => {
+      expect(parseOsvFindings(captured)[0]?.cwe).toEqual(["CWE-400", "CWE-770"]);
+    });
+
+    it("does not print the one-line summary as both title and impact", () => {
+      const f = parseOsvFindings(captured)[0];
+      expect(f?.impact).toContain("bounds the *number* of results");
+      // The GitHub advisory template's leading "### Summary" heading is not the narrative.
+      expect(f?.impact).not.toContain("###");
+      expect(f?.impact).not.toBe(f?.title);
+    });
+
+    it("says so explicitly when the advisory publishes no fixed version — silence would read as 'just upgrade'", () => {
+      const noFix: OsvScanResult = {
+        results: [
+          {
+            packages: [
+              {
+                package: { name: "abandoned", version: "1.0.0" },
+                vulnerabilities: [{ id: "GHSA-none", summary: "unpatched", affected: [{ package: { name: "abandoned" }, ranges: [{ events: [{ introduced: "0" }] }] }] }],
+              },
+            ],
+          },
+        ],
+      };
+      expect(parseOsvFindings(noFix)[0]?.fix).toContain("No fixed version is published");
+    });
+  });
 });
 
 describe("curated + OSV dedup (issue #73)", () => {

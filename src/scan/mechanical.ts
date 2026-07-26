@@ -56,6 +56,7 @@ import {
 } from "./supabase-static.js";
 import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, type DependencyMap } from "./supply-chain.js";
 import { checkWebExtensionManifest } from "./webext-manifest.js";
+import { lockfileLicenses } from "../sbom.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
@@ -300,8 +301,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkInstallScripts(pkg.scripts ?? {}));
       if (!skipNetworkChecks) {
         findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
-        // #456 — license compliance (SPDX + copyleft/unknown flags).
-        findings.push(...(await checkLicenseCompliance(allDeps)));
+        // #456 — license compliance (SPDX + copyleft/unknown flags). #1079: the lockfile Harvey
+        // already parses for the SBOM answers most of these, so pass it in — the registry is only
+        // queried for names it does not cover.
+        findings.push(...(await checkLicenseCompliance(allDeps, fetch, lockfileLicenses(scanDir))));
       }
     }
     findings.push(...checkLockfilePresence(scanDir));

@@ -507,20 +507,53 @@ export function checkKnownDependencyCVEs(deps: Record<string, string>, manifestP
   return findings;
 }
 
-// OSV-Scanner --format json shape (subset used here).
+// OSV-Scanner --format json shape (subset used here). #1079: `affected`, `database_specific`,
+// `references` and `details` were all present in the tool's output and all discarded — MEASURED
+// 2026-07-26 with osv-scanner 2.3.8 (osv-scalibr 0.4.5) against targets/calibration. The affected
+// range's `fixed` event is the version number the remediation has to name; `database_specific
+// .cwe_ids` is the CWE every other detector carries and no DEP-OSV row did; `details` is the
+// advisory's full narrative (3.8k chars on the brace-expansion advisory) where `summary` is one
+// line that was being printed twice, as both title and impact.
 export interface OsvScanResult {
   results?: {
     source?: { path?: string };
     packages?: {
       package?: { name?: string; version?: string; ecosystem?: string };
-      vulnerabilities?: {
-        id?: string;
-        summary?: string;
-        aliases?: string[];
-        severity?: { type?: string; score?: string }[];
-      }[];
+      vulnerabilities?: OsvVulnerability[];
     }[];
   }[];
+}
+
+export interface OsvVulnerability {
+  id?: string;
+  summary?: string;
+  details?: string;
+  aliases?: string[];
+  severity?: { type?: string; score?: string }[];
+  affected?: OsvAffected[];
+  references?: { type?: string; url?: string }[];
+  database_specific?: { cwe_ids?: string[] };
+}
+
+interface OsvAffected {
+  package?: { name?: string; ecosystem?: string };
+  ranges?: { type?: string; events?: { introduced?: string; fixed?: string }[] }[];
+}
+
+// OSV states a range as an event list; every `fixed` event names a first-patched version. Same
+// shape src/cli/osv-staleness.ts has modelled correctly since #247 — the knowledge existed in the
+// repo and was simply never wired into the scan path (#1079).
+function osvFixedVersions(vuln: OsvVulnerability, pkg: string): string[] {
+  const fixed: string[] = [];
+  for (const affected of vuln.affected ?? []) {
+    if (affected.package?.name !== pkg) continue;
+    for (const range of affected.ranges ?? []) {
+      for (const event of range.events ?? []) {
+        if (event.fixed !== undefined) fixed.push(event.fixed);
+      }
+    }
+  }
+  return [...new Set(fixed)];
 }
 
 // Advisory ids whose exploitability we've independently curated above (checkNextVersionCVEs) —
@@ -572,6 +605,23 @@ export function osvUnavailableFinding(reason: string): Finding {
   };
 }
 
+// Advisory `details` is Markdown and can run to several thousand characters (MEASURED 2026-07-26:
+// 13,729 and 2,850 on two axios advisories). Take the first prose paragraph — the part that says
+// what the vulnerability actually does — skipping the GitHub advisory template's leading
+// "### Summary" heading and any fenced repro code, and fall back to the one-line summary, which is
+// all Harvey used to have. The full text stays one click away behind the advisory link.
+const OSV_IMPACT_CHARS = 600;
+
+function osvImpact(vuln: OsvVulnerability): string {
+  const paragraph = (vuln.details ?? "")
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .find((p) => p.length > 0 && !p.startsWith("#") && !p.startsWith("```"));
+  if (!paragraph) return vuln.summary ?? "Known vulnerability in a resolved dependency version.";
+  const body = paragraph.length > OSV_IMPACT_CHARS ? `${paragraph.slice(0, OSV_IMPACT_CHARS).trimEnd()}…` : paragraph;
+  return vuln.summary && !body.startsWith(vuln.summary) ? `${vuln.summary} — ${body}` : body;
+}
+
 export function parseOsvFindings(result: OsvScanResult): Finding[] {
   const findings: Finding[] = [];
   for (const src of result.results ?? []) {
@@ -586,18 +636,37 @@ export function parseOsvFindings(result: OsvScanResult): Finding[] {
         // OSV duplicate rather than double-reporting the same vuln under two ids.
         if (curated) continue;
         const cvssScore = vuln.severity?.find((s) => s.type === "CVSS_V3")?.score ?? vuln.severity?.[0]?.score;
+        // #1079: every one of these came out of the tool and was thrown away. The fixed version is
+        // the difference between a remediation an engineer can act on and "upgrade past the
+        // vulnerable range"; the CWE is what #455 routes tickets on, and no DEP-OSV row carried one.
+        const fixedVersions = osvFixedVersions(vuln, name);
+        const cwe = vuln.database_specific?.cwe_ids;
+        const advisoryLinks = (vuln.references ?? [])
+          .filter((r) => r.type === "ADVISORY" && r.url)
+          .map((r) => r.url as string)
+          .slice(0, 3);
         findings.push(
           mechanicalFinding({
             id: `DEP-OSV-${id}`,
-            title: `${name}@${version}: ${vuln.summary ?? id}`,
+            title: `${name}@${version} vulnerable to ${id}${fixedVersions.length > 0 ? ` (fixed in ${fixedVersions.join(" / ")})` : ""}`,
             severity: severityFromCvss(cvssScore),
             category: "Dependency CVE",
             taxonomy: "Known-vulnerable dependency",
             location: `${src.source?.path ?? "lockfile"} (${name}@${version})`,
             dependency: name,
-            evidence: `OSV-Scanner matched ${id}${vuln.aliases?.length ? ` (aliases: ${vuln.aliases.join(", ")})` : ""} against ${name}@${version}.`,
-            impact: vuln.summary ?? "Known vulnerability in a resolved dependency version.",
-            fix: `Upgrade ${name} past the vulnerable range (see ${id}).`,
+            ...(cwe?.length ? { cwe } : {}),
+            evidence:
+              `OSV-Scanner matched ${id}${vuln.aliases?.length ? ` (aliases: ${vuln.aliases.join(", ")})` : ""} against ${name}@${version}.` +
+              (fixedVersions.length > 0 ? ` The advisory's affected range is fixed in ${fixedVersions.join(" / ")}.` : " The advisory names no fixed version.") +
+              (advisoryLinks.length > 0 ? ` Advisory: ${advisoryLinks.join(", ")}.` : ""),
+            // The one-line summary was being used as BOTH title and impact while `details` — the
+            // advisory's actual narrative — was discarded. Prefer details, capped: it runs to
+            // several thousand characters and the report renders it inline.
+            impact: osvImpact(vuln),
+            fix:
+              fixedVersions.length > 0
+                ? `Upgrade ${name} to ${fixedVersions[0]} or later (see ${id}).`
+                : `No fixed version is published for ${name} in ${id} — remove or replace the dependency, or apply the advisory's mitigation.`,
             precisionTier: "review",
           }),
         );
