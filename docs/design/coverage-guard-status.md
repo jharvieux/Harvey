@@ -19,10 +19,33 @@ findings for a planted defect is a FAIL (zero is legitimate in the field, never 
 the produced/delivered split is deliberate: M9 captures `detect-static` unfiltered, so a deliverable-
 only check would still see M7's rows after M7's capture broke entirely — which is how #1062 hid.
 M2 is the one module with no plant (it needs a stood-up stack) and is recorded in `UNEXERCISED` with
-a #1033 falsifier rather than dropped. Full record, including the deferred invariants (1)–(3) that
-await an operator ruling: `docs/design/conservation-of-findings.md`.
-**Still open here:** the CLI needs the mechanical binaries, so it is not part of `pnpm verify`; a
-workflow to run it on a schedule is an operator action (`.github/workflows/` is supervised).
+a #1033 falsifier rather than dropped. Full record: `docs/design/conservation-of-findings.md`.
+
+**2026-07-26 (#1096, invariant 1) — the plant-and-assert watches ten rows, not the whole set.** It
+asks whether the finding planted for module Mn arrived; it cannot see the other 595. The
+conservation LEDGER closes that: at the produce→assemble seam,
+`produced == delivered + deduped + suppressed + capped + not-applicable`, every non-delivered
+finding carrying a reason, any unaccounted delta a non-zero exit. It is asserted on the real
+engagement path (`run-audit --findings-out/--sarif-out` refuses to export an unbalanced document),
+not only on the fixture, so it holds on a client engagement where nothing is planted. Measured
+2026-07-26 on `targets/calibration`: produced 605 = delivered 575 + deduped 30 + unaccounted 0.
+`--seed-unaccounted` proves it can fail — and note that the plant-and-assert gate PASSES on that
+same seeded run, which is the point of having both.
+
+**2026-07-26 (#1096, invariant 2, PARTIAL — three of ten probes) — "ran, 0 findings" was
+unfalsifiable.** A probe could return `{ status: "ran", findings: [] }` and say nothing about what
+it looked at, so a broken capture (#1062), a scan that loaded zero product files (#1065) and a
+genuinely clean tool were one sentence in the ledger. The typed result (`Examined { findings,
+unitsExamined, scope } | NotAssessed { reason, provenance, falsifier }`, `src/audit-runner.ts`)
+makes the silent version a compile error, and an `Examined` reporting zero units throws.
+**M6, M7 and M9 are migrated; M1–M5, M8 and M10 are not** — the split is declared in
+`TYPED_PROBES`/`UNTYPED_PROBES` with a per-module reason, checked exhaustively at module load, so
+the half-migration is a visible fact rather than a grep. Remainder tracked in #1109.
+
+**Still open here:** M1–M5/M8/M10 still return the untyped `ProbeOutcome` (above). The scheduled
+workflow gap is CLOSED — `.github/workflows/conservation.yml` runs the gate weekly and on PRs that
+touch the pipeline, and its two negative-control steps assert that a seeded loss and a seeded
+unaccounted drop both still FAIL it.
 
 **2026-07-25 (#1065) — the zero-files guard was UNREACHABLE for nine months, and the tally it fed
 was a false clean.** `#350`'s "a scan of zero files records `partial`/`requires-live-run`, never

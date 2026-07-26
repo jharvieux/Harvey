@@ -142,6 +142,29 @@ describe("validateFindings — cwe/owasp (#455)", () => {
   });
 });
 
+// #1077: references is optional and validated the same way as cwe/owasp — a semgrep rule's own
+// remediation links, populated only from the rule's declared metadata (src/scan/semgrep.ts).
+describe("validateFindings — references (#1077)", () => {
+  it("accepts a finding with a references array set", () => {
+    const doc = { ...example, findings: [{ ...example.findings[0], references: ["https://example.com/advisory"] }] };
+    expect(validateFindings(doc).ok).toBe(true);
+  });
+
+  it("existing findings with no references still validate — the field is optional", () => {
+    expect(validateFindings({ ...example, findings: [{ ...example.findings[0] }] }).ok).toBe(true);
+  });
+
+  it("rejects a non-array references, and an array with a non-string element", () => {
+    const nonArray = validateFindings({ ...example, findings: [{ ...example.findings[0], references: "https://example.com" }] });
+    expect(nonArray.ok).toBe(false);
+    expect(nonArray.errors).toContainEqual(expect.stringContaining("findings[0].references"));
+
+    const badElement = validateFindings({ ...example, findings: [{ ...example.findings[0], references: ["https://example.com", 42] }] });
+    expect(badElement.ok).toBe(false);
+    expect(badElement.errors).toContainEqual(expect.stringContaining("findings[0].references"));
+  });
+});
+
 describe("validateFindings — coverage ledger (#349)", () => {
   const ledger = [
     { module: "M4", name: "Duplication", status: "ran", detail: "pnpm quality-scan /t" },

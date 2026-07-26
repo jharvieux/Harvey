@@ -68,5 +68,6 @@ tracker write-back.
   reason — disclosed, their tickets stay open, and a full re-audit of that tier remains the
   verification path. Extending resolvers (semgrep first, when the binary is present) widens the
   gate without changing its contract.
-- Packaging (bundled with the engagement vs paid add-on) is deliberately NOT encoded here — the
-  gate has no tier flag; that decision is the operator's (see #883).
+- Packaging decision made (#1013): one re-audit/rescan is included in the base engagement;
+  additional rescans are a paid add-on. The gate itself still has no tier flag — encoding the
+  add-on gate into `fix-verify.ts` (mirroring the #824 paid-tier pattern) is unbuilt.

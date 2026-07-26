@@ -66,6 +66,20 @@ describe("§3b Test quality — the documented per-module table (#1045)", () => 
     expect(html).toContain("3</b> of 12"); // hotspot survivors of total, per docs/m8-test-quality.md §5
   });
 
+  // #1076: the covered-code score is Stryker's OTHER published headline metric — shown alongside
+  // the primary score so "your tests are bad" and "your tests are decent but reach half the code"
+  // don't collapse into one number. Absent from an older artifact ⇒ simply not rendered, never
+  // fabricated as 0 or a copy of the primary score.
+  it("shows the covered-code score alongside the primary score when the run computed it (#1076)", () => {
+    const html = testQualitySection(tq({ mutationScoreBasedOnCoveredCode: 58.1 }));
+    expect(html).toContain("58.1");
+    expect(html).toContain("% of COVERED code");
+  });
+
+  it("omits the covered-code score entirely when the run's artifact predates it", () => {
+    expect(testQualitySection(tq())).not.toContain("% of COVERED code");
+  });
+
   it("flags the false-confidence gap — high line coverage over a low mutation score", () => {
     const html = testQualitySection(tq());
     // The auth row (94 line cov vs 41 mutation) is flagged; billing (70 vs 68) is within the gap.

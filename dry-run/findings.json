@@ -724,9 +724,9 @@
     "confidence": "Review",
     "category": "Secret exposure",
     "taxonomy": "Possible committed credential",
-    "location": "[source] src/lib/crossFileAnonKeyStore.ts:6",
+    "location": "[source] src/lib/nocodeServiceClient.ts:8",
     "status": "Open",
-    "evidence": "gitleaks rule \"jwt\" matched: eyJhbGciOiJI…[redacted, 192 chars].",
+    "evidence": "gitleaks rule \"jwt\" matched: eyJhbGciOiJI…[redacted, 203 chars].",
     "impact": "Pattern match on a potential secret; confirm before treating as a live credential.",
     "fix": "Rotate the credential if live, remove from source/history, and add to .gitignore.",
     "value": 4,
@@ -737,21 +737,27 @@
   },
   {
     "id": "SEC-GL-source-36",
-    "title": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data. (jwt)",
-    "severity": "High",
-    "confidence": "Review",
+    "title": "Supabase service_role JWT (decoded role claim) (supabase-service-role-jwt)",
+    "severity": "Critical",
+    "confidence": "Confirmed",
     "category": "Secret exposure",
-    "taxonomy": "Possible committed credential",
-    "location": "[source] src/lib/nocodeAnonClient.ts:7",
+    "taxonomy": "Committed credential",
+    "location": "[source] src/lib/nocodeServiceClient.ts:8",
     "status": "Open",
-    "evidence": "gitleaks rule \"jwt\" matched: eyJhbGciOiJI…[redacted, 192 chars].",
-    "impact": "Pattern match on a potential secret; confirm before treating as a live credential.",
+    "evidence": "gitleaks rule \"supabase-service-role-jwt\" matched: \"role\":\"service_role\".",
+    "impact": "Decoded JWT role claim confirms this is a service-role key — full database bypass of RLS.",
     "fix": "Rotate the credential if live, remove from source/history, and add to .gitignore.",
-    "value": 4,
+    "value": 5,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review"
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-798: Use of Hard-coded Credentials"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
   },
   {
     "id": "SEC-GL-source-37",
@@ -760,7 +766,7 @@
     "confidence": "Review",
     "category": "Secret exposure",
     "taxonomy": "Possible committed credential",
-    "location": "[source] src/lib/nocodeServiceClient.ts:8",
+    "location": "[source] src/lib/serviceRoleKeyStore.ts:5",
     "status": "Open",
     "evidence": "gitleaks rule \"jwt\" matched: eyJhbGciOiJI…[redacted, 203 chars].",
     "impact": "Pattern match on a potential secret; confirm before treating as a live credential.",
@@ -778,7 +784,7 @@
     "confidence": "Confirmed",
     "category": "Secret exposure",
     "taxonomy": "Committed credential",
-    "location": "[source] src/lib/nocodeServiceClient.ts:8",
+    "location": "[source] src/lib/serviceRoleKeyStore.ts:5",
     "status": "Open",
     "evidence": "gitleaks rule \"supabase-service-role-jwt\" matched: \"role\":\"service_role\".",
     "impact": "Decoded JWT role claim confirms this is a service-role key — full database bypass of RLS.",
@@ -797,48 +803,6 @@
   },
   {
     "id": "SEC-GL-source-39",
-    "title": "Uncovered a JSON Web Token, which may lead to unauthorized access to web applications and sensitive user data. (jwt)",
-    "severity": "High",
-    "confidence": "Review",
-    "category": "Secret exposure",
-    "taxonomy": "Possible committed credential",
-    "location": "[source] src/lib/serviceRoleKeyStore.ts:5",
-    "status": "Open",
-    "evidence": "gitleaks rule \"jwt\" matched: eyJhbGciOiJI…[redacted, 203 chars].",
-    "impact": "Pattern match on a potential secret; confirm before treating as a live credential.",
-    "fix": "Rotate the credential if live, remove from source/history, and add to .gitignore.",
-    "value": 4,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "review"
-  },
-  {
-    "id": "SEC-GL-source-40",
-    "title": "Supabase service_role JWT (decoded role claim) (supabase-service-role-jwt)",
-    "severity": "Critical",
-    "confidence": "Confirmed",
-    "category": "Secret exposure",
-    "taxonomy": "Committed credential",
-    "location": "[source] src/lib/serviceRoleKeyStore.ts:5",
-    "status": "Open",
-    "evidence": "gitleaks rule \"supabase-service-role-jwt\" matched: \"role\":\"service_role\".",
-    "impact": "Decoded JWT role claim confirms this is a service-role key — full database bypass of RLS.",
-    "fix": "Rotate the credential if live, remove from source/history, and add to .gitignore.",
-    "value": 5,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "high",
-    "cwe": [
-      "CWE-798: Use of Hard-coded Credentials"
-    ],
-    "owasp": [
-      "A07:2021 - Identification and Authentication Failures"
-    ]
-  },
-  {
-    "id": "SEC-GL-source-41",
     "title": "Self-hosted Supabase default JWT secret (unrotated docker default) (supabase-default-jwt-secret)",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -862,7 +826,7 @@
     ]
   },
   {
-    "id": "SEC-GL-source-42",
+    "id": "SEC-GL-source-40",
     "title": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations. (generic-api-key)",
     "severity": "High",
     "confidence": "Review",
@@ -880,7 +844,7 @@
     "precisionTier": "review"
   },
   {
-    "id": "SEC-GL-source-43",
+    "id": "SEC-GL-source-41",
     "title": "Hardcoded HTTP Authorization Bearer token literal (harvey-http-authorization-bearer)",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -904,6 +868,38 @@
     ]
   },
   {
+    "id": "SEC-GL-ALLOW-00",
+    "title": "Secret matches suppressed by allowlist (not graded)",
+    "severity": "Info",
+    "confidence": "N/A",
+    "category": "Secret exposure",
+    "taxonomy": "Committed credential — suppressed by allowlist",
+    "location": "(repo-wide)",
+    "status": "Open",
+    "evidence": "4 match(es) were recognized as public-by-design credentials (Stripe publishable key, or a Supabase JWT whose decoded role claim is \"anon\") and not graded: .env.local:8 (jwt), src/lib/crossFileAnonKeyStore.ts:6 (jwt), src/lib/nocodeAnonClient.ts:7 (jwt), supabase/seed.sql:91 (jwt).",
+    "impact": "These matches were deliberately not graded. They are listed because a suppression that leaves no trace reads as a clean result: a real credential committed to a .template/.sample file is a known leak class, and only the sample-path category needs your confirmation.",
+    "fix": "Confirm each sample/template match is an obviously-fake placeholder. If any is a real value, rotate it and replace it with a placeholder plus a rotate-me instruction.",
+    "value": 1,
+    "ease": 3,
+    "safety": 5
+  },
+  {
+    "id": "SEC-SCOPE-00",
+    "title": "Secret-scan scope: verified credentials only, and history is not pattern-scanned",
+    "severity": "Info",
+    "confidence": "N/A",
+    "category": "Secret exposure",
+    "taxonomy": "Committed credential — scope of assessment",
+    "location": "(repo-wide)",
+    "status": "Open",
+    "evidence": "TruffleHog runs with --only-verified on all three passes (source tree, git history, built bundle): a credential it detects but cannot verify against the live provider is not reported. gitleaks runs alongside with --no-git, so its pattern pass covers the WORKING TREE only and never walks git history.",
+    "impact": "A credential that exists only in git history AND cannot be verified — already rotated or expired, an internal/custom provider TruffleHog has no verifier for, or any provider unreachable from the scanning host — falls between the two tools and is not covered. Working-tree secrets are covered by both tools; this gap is specific to history.",
+    "fix": "To close it for this engagement, run `trufflehog git --results=unverified --json file://<repo>` against the client repository from a host with outbound network access and triage the unverified hits by hand.",
+    "value": 1,
+    "ease": 3,
+    "safety": 5
+  },
+  {
     "id": "SEC-BUNDLE-00",
     "title": "Built-bundle secret scan did not run",
     "severity": "Info",
@@ -921,21 +917,25 @@
   },
   {
     "id": "DEP-OSV-GHSA-mh99-v99m-4gvg",
-    "title": "brace-expansion@1.1.16: brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+    "title": "brace-expansion@1.1.16: brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash (fixed in 5.0.8)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (brace-expansion@1.1.16)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-mh99-v99m-4gvg (aliases: CVE-2026-14257) against brace-expansion@1.1.16. Rated High from the advisory's own HIGH rating.",
-    "impact": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
-    "fix": "Upgrade brace-expansion past the vulnerable range (see GHSA-mh99-v99m-4gvg).",
+    "evidence": "OSV-Scanner matched GHSA-mh99-v99m-4gvg (aliases: CVE-2026-14257) against brace-expansion@1.1.16. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 5.0.8. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-14257.",
+    "impact": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash — `expand()` bounds the *number* of results it produces (the `max` option,\n`100_000` by default) but not their *length*. By chaining many brace groups,\nan attacker keeps the result count under `max` while making every result grow\nwith the number of groups. Building `max` long results — plus the intermediate\narrays combined at each brace group — exhausts memory and crashes the Node\nprocess with an **uncatchable** out-of-memory error. `try/catch` around\n`expand()` does not help: the fatal error terminates the process.",
+    "fix": "Upgrade brace-expansion to 5.0.8 or later (see GHSA-mh99-v99m-4gvg).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-400",
+      "CWE-770"
+    ],
     "dependency": "brace-expansion",
     "reachability": {
       "status": "transitive-only",
@@ -945,21 +945,25 @@
   },
   {
     "id": "DEP-OSV-GHSA-grv7-fg5c-xmjg",
-    "title": "braces@2.3.2: Uncontrolled resource consumption in braces",
+    "title": "braces@2.3.2: Uncontrolled resource consumption in braces (fixed in 3.0.3)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (braces@2.3.2)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-grv7-fg5c-xmjg (aliases: CVE-2024-4068) against braces@2.3.2. Rated High from the advisory's own HIGH rating.",
-    "impact": "Uncontrolled resource consumption in braces",
-    "fix": "Upgrade braces past the vulnerable range (see GHSA-grv7-fg5c-xmjg).",
+    "evidence": "OSV-Scanner matched GHSA-grv7-fg5c-xmjg (aliases: CVE-2024-4068) against braces@2.3.2. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 3.0.3. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2024-4068.",
+    "impact": "Uncontrolled resource consumption in braces — The NPM package `braces` fails to limit the number of characters it can handle, which could lead to Memory Exhaustion. In `lib/parse.js,` if a malicious user sends \"imbalanced braces\" as input, the parsing will enter a loop, which will cause the program to start allocating heap memory without freeing it at any moment of the loop. Eventually, the JavaScript heap limit is reached, and the program will crash.",
+    "fix": "Upgrade braces to 3.0.3 or later (see GHSA-grv7-fg5c-xmjg).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-1050",
+      "CWE-400"
+    ],
     "dependency": "braces",
     "reachability": {
       "status": "transitive-only",
@@ -976,14 +980,17 @@
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (elliptic@6.6.1)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-848j-6mx2-7j84 (aliases: CVE-2025-14505) against elliptic@6.6.1. Rated Low from the advisory's own LOW rating.",
-    "impact": "Elliptic Uses a Cryptographic Primitive with a Risky Implementation",
-    "fix": "Upgrade elliptic past the vulnerable range (see GHSA-848j-6mx2-7j84).",
+    "evidence": "OSV-Scanner matched GHSA-848j-6mx2-7j84 (aliases: CVE-2025-14505) against elliptic@6.6.1. Rated Low from the advisory's own LOW rating. The advisory names no fixed version. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2025-14505.",
+    "impact": "Elliptic Uses a Cryptographic Primitive with a Risky Implementation — The ECDSA implementation of the Elliptic package generates incorrect signatures if an interim value of 'k' (as computed based on step 3.2 of  RFC 6979 https://datatracker.ietf.org/doc/html/rfc6979 ) has leading zeros and is susceptible to cryptanalysis, which can lead to secret key exposure. This happens, because the byte-length of 'k' is incorrectly computed, resulting in its getting truncated during the computation. Legitimate transactions or communications will be broken as a result. Furthermore, due to the nature of the fault, attackers could–under certain conditions–derive the secret key,…",
+    "fix": "No fixed version is published for elliptic in GHSA-848j-6mx2-7j84 — remove or replace the dependency, or apply the advisory's mitigation.",
     "value": 2,
     "ease": 4,
     "safety": 5,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-1240"
+    ],
     "dependency": "elliptic",
     "reachability": {
       "status": "transitive-only",
@@ -993,21 +1000,25 @@
   },
   {
     "id": "DEP-OSV-GHSA-29mw-wpgm-hmr9",
-    "title": "lodash@4.17.11: Regular Expression Denial of Service (ReDoS) in lodash",
+    "title": "lodash@4.17.11: Regular Expression Denial of Service (ReDoS) in lodash (fixed in 4.17.21)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (lodash@4.17.11)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-29mw-wpgm-hmr9 (aliases: CVE-2020-28500) against lodash@4.17.11. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Regular Expression Denial of Service (ReDoS) in lodash",
-    "fix": "Upgrade lodash past the vulnerable range (see GHSA-29mw-wpgm-hmr9).",
+    "evidence": "OSV-Scanner matched GHSA-29mw-wpgm-hmr9 (aliases: CVE-2020-28500) against lodash@4.17.11. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 4.17.21. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2020-28500.",
+    "impact": "Regular Expression Denial of Service (ReDoS) in lodash — All versions of package lodash prior to 4.17.21 are vulnerable to Regular Expression Denial of Service (ReDoS) via the `toNumber`, `trim` and `trimEnd` functions.",
+    "fix": "Upgrade lodash to 4.17.21 or later (see GHSA-29mw-wpgm-hmr9).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-1333",
+      "CWE-400"
+    ],
     "dependency": "lodash",
     "reachability": {
       "status": "declared-not-imported",
@@ -1017,21 +1028,25 @@
   },
   {
     "id": "DEP-OSV-GHSA-35jh-r3h4-6jhm",
-    "title": "lodash@4.17.11: Command Injection in lodash",
+    "title": "lodash@4.17.11: Command Injection in lodash (fixed in 4.17.21)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (lodash@4.17.11)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-35jh-r3h4-6jhm (aliases: CVE-2021-23337, CVE-2026-4800, GHSA-r5fr-rjxr-66jc) against lodash@4.17.11. Rated High from the advisory's own HIGH rating.",
-    "impact": "Command Injection in lodash",
-    "fix": "Upgrade lodash past the vulnerable range (see GHSA-35jh-r3h4-6jhm).",
+    "evidence": "OSV-Scanner matched GHSA-35jh-r3h4-6jhm (aliases: CVE-2021-23337, CVE-2026-4800, GHSA-r5fr-rjxr-66jc) against lodash@4.17.11. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 4.17.21. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2021-23337.",
+    "impact": "Command Injection in lodash — `lodash` versions prior to 4.17.21 are vulnerable to Command Injection via the template function.",
+    "fix": "Upgrade lodash to 4.17.21 or later (see GHSA-35jh-r3h4-6jhm).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-77",
+      "CWE-94"
+    ],
     "dependency": "lodash",
     "reachability": {
       "status": "declared-not-imported",
@@ -1041,21 +1056,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-f23m-r3pf-42rh",
-    "title": "lodash@4.17.11: lodash vulnerable to Prototype Pollution via array path bypass in `_.unset` and `_.omit`",
+    "title": "lodash@4.17.11: lodash vulnerable to Prototype Pollution via array path bypass in `_.unset` and `_.omit` (fixed in 4.18.0)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (lodash@4.17.11)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-f23m-r3pf-42rh (aliases: CVE-2025-13465, CVE-2026-2950, GHSA-xxjr-mmjv-4gpg) against lodash@4.17.11. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "lodash vulnerable to Prototype Pollution via array path bypass in `_.unset` and `_.omit`",
-    "fix": "Upgrade lodash past the vulnerable range (see GHSA-f23m-r3pf-42rh).",
+    "evidence": "OSV-Scanner matched GHSA-f23m-r3pf-42rh (aliases: CVE-2025-13465, CVE-2026-2950, GHSA-xxjr-mmjv-4gpg) against lodash@4.17.11. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 4.18.0. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-2950.",
+    "impact": "lodash vulnerable to Prototype Pollution via array path bypass in `_.unset` and `_.omit` — Lodash versions 4.17.23 and earlier are vulnerable to prototype pollution in the `_.unset` and `_.omit` functions. The fix for [CVE-2025-13465](https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg) only guards against string key members, so an attacker can bypass the check by passing array-wrapped path segments. This allows deletion of properties from built-in prototypes such as `Object.prototype`, `Number.prototype`, and `String.prototype`.",
+    "fix": "Upgrade lodash to 4.18.0 or later (see GHSA-f23m-r3pf-42rh).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-1321"
+    ],
     "dependency": "lodash",
     "reachability": {
       "status": "declared-not-imported",
@@ -1065,21 +1083,25 @@
   },
   {
     "id": "DEP-OSV-GHSA-jf85-cpcp-j695",
-    "title": "lodash@4.17.11: Prototype Pollution in lodash",
+    "title": "lodash@4.17.11: Prototype Pollution in lodash (fixed in 4.17.12)",
     "severity": "Critical",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (lodash@4.17.11)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-jf85-cpcp-j695 (aliases: CVE-2019-10744) against lodash@4.17.11. Rated Critical from the advisory's own CRITICAL rating.",
-    "impact": "Prototype Pollution in lodash",
-    "fix": "Upgrade lodash past the vulnerable range (see GHSA-jf85-cpcp-j695).",
+    "evidence": "OSV-Scanner matched GHSA-jf85-cpcp-j695 (aliases: CVE-2019-10744) against lodash@4.17.11. Rated Critical from the advisory's own CRITICAL rating. The advisory's affected range is fixed in 4.17.12. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2019-10744.",
+    "impact": "Prototype Pollution in lodash — Versions of `lodash` before 4.17.12 are vulnerable to Prototype Pollution.  The function `defaultsDeep` allows a malicious user to modify the prototype of `Object` via `{constructor: {prototype: {...}}}` causing the addition or modification of an existing property that will exist on all objects.",
+    "fix": "Upgrade lodash to 4.17.12 or later (see GHSA-jf85-cpcp-j695).",
     "value": 5,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-1321",
+      "CWE-20"
+    ],
     "dependency": "lodash",
     "reachability": {
       "status": "declared-not-imported",
@@ -1089,21 +1111,25 @@
   },
   {
     "id": "DEP-OSV-GHSA-p6mc-m468-83gw",
-    "title": "lodash@4.17.11: Prototype Pollution in lodash",
+    "title": "lodash@4.17.11: Prototype Pollution in lodash (fixed in 4.17.19)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (lodash@4.17.11)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-p6mc-m468-83gw (aliases: CVE-2020-8203) against lodash@4.17.11. Rated High from the advisory's own HIGH rating.",
-    "impact": "Prototype Pollution in lodash",
-    "fix": "Upgrade lodash past the vulnerable range (see GHSA-p6mc-m468-83gw).",
+    "evidence": "OSV-Scanner matched GHSA-p6mc-m468-83gw (aliases: CVE-2020-8203) against lodash@4.17.11. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 4.17.19. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2020-8203.",
+    "impact": "Prototype Pollution in lodash — Versions of lodash prior to 4.17.19 are vulnerable to Prototype Pollution. The functions `pick`, `set`, `setWith`, `update`, `updateWith`, and `zipObjectDeep` allow a malicious user to modify the prototype of Object if the property identifiers are user-supplied. Being affected by this issue requires manipulating objects based on user-provided property values or arrays.",
+    "fix": "Upgrade lodash to 4.17.19 or later (see GHSA-p6mc-m468-83gw).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-1321",
+      "CWE-770"
+    ],
     "dependency": "lodash",
     "reachability": {
       "status": "declared-not-imported",
@@ -1113,21 +1139,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-r5fr-rjxr-66jc",
-    "title": "lodash@4.17.11: lodash vulnerable to Code Injection via `_.template` imports key names",
+    "title": "lodash@4.17.11: lodash vulnerable to Code Injection via `_.template` imports key names (fixed in 4.18.0)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (lodash@4.17.11)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-r5fr-rjxr-66jc (aliases: CVE-2021-23337, CVE-2026-4800, GHSA-35jh-r3h4-6jhm) against lodash@4.17.11. Rated High from the advisory's own HIGH rating.",
-    "impact": "lodash vulnerable to Code Injection via `_.template` imports key names",
-    "fix": "Upgrade lodash past the vulnerable range (see GHSA-r5fr-rjxr-66jc).",
+    "evidence": "OSV-Scanner matched GHSA-r5fr-rjxr-66jc (aliases: CVE-2021-23337, CVE-2026-4800, GHSA-35jh-r3h4-6jhm) against lodash@4.17.11. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 4.18.0. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-4800, https://github.com/advisories/GHSA-35jh-r3h4-6jhm.",
+    "impact": "lodash vulnerable to Code Injection via `_.template` imports key names — The fix for [CVE-2021-23337](https://github.com/advisories/GHSA-35jh-r3h4-6jhm) added validation for the `variable` option in `_.template` but did not apply the same validation to `options.imports` key names. Both paths flow into the same `Function()` constructor sink.",
+    "fix": "Upgrade lodash to 4.18.0 or later (see GHSA-r5fr-rjxr-66jc).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-94"
+    ],
     "dependency": "lodash",
     "reachability": {
       "status": "declared-not-imported",
@@ -1137,21 +1166,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-xxjr-mmjv-4gpg",
-    "title": "lodash@4.17.11: Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions",
+    "title": "lodash@4.17.11: Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions (fixed in 4.17.23)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (lodash@4.17.11)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-xxjr-mmjv-4gpg (aliases: CVE-2025-13465, CVE-2026-2950, GHSA-f23m-r3pf-42rh) against lodash@4.17.11. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions",
-    "fix": "Upgrade lodash past the vulnerable range (see GHSA-xxjr-mmjv-4gpg).",
+    "evidence": "OSV-Scanner matched GHSA-xxjr-mmjv-4gpg (aliases: CVE-2025-13465, CVE-2026-2950, GHSA-f23m-r3pf-42rh) against lodash@4.17.11. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 4.17.23. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2025-13465.",
+    "impact": "Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions — Lodash versions 4.0.0 through 4.17.22 are vulnerable to prototype pollution in the `_.unset` and `_.omit` functions. An attacker can pass crafted paths which cause Lodash to delete methods from global prototypes.",
+    "fix": "Upgrade lodash to 4.17.23 or later (see GHSA-xxjr-mmjv-4gpg).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-1321"
+    ],
     "dependency": "lodash",
     "reachability": {
       "status": "declared-not-imported",
@@ -1161,21 +1193,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-952p-6rrq-rcjv",
-    "title": "micromatch@3.1.10: Regular Expression Denial of Service (ReDoS) in micromatch",
+    "title": "micromatch@3.1.10: Regular Expression Denial of Service (ReDoS) in micromatch (fixed in 4.0.8)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (micromatch@3.1.10)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-952p-6rrq-rcjv (aliases: CVE-2024-4067) against micromatch@3.1.10. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Regular Expression Denial of Service (ReDoS) in micromatch",
-    "fix": "Upgrade micromatch past the vulnerable range (see GHSA-952p-6rrq-rcjv).",
+    "evidence": "OSV-Scanner matched GHSA-952p-6rrq-rcjv (aliases: CVE-2024-4067) against micromatch@3.1.10. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 4.0.8. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2024-4067.",
+    "impact": "Regular Expression Denial of Service (ReDoS) in micromatch — The NPM package `micromatch` prior to version 4.0.8 is vulnerable to Regular Expression Denial of Service (ReDoS). The vulnerability occurs in `micromatch.braces()` in `index.js` because the pattern `.*` will greedily match anything. By passing a malicious payload, the pattern matching will keep backtracking to the input while it doesn't find the closing bracket. As the input size increases, the consumption time will also increase until it causes the application to hang or slow down. There was a merged fix but further testing shows the issue persisted prior to https://github.com/micromatch/mic…",
+    "fix": "Upgrade micromatch to 4.0.8 or later (see GHSA-952p-6rrq-rcjv).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-1333"
+    ],
     "dependency": "micromatch",
     "reachability": {
       "status": "transitive-only",
@@ -1185,21 +1220,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-36qx-fr4f-26g5",
-    "title": "next@14.2.35: Next.js has a Middleware / Proxy bypass in Pages Router applications using i18n",
+    "title": "next@14.2.35: Next.js has a Middleware / Proxy bypass in Pages Router applications using i18n (fixed in 15.5.16 / 16.2.5)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-36qx-fr4f-26g5 (aliases: CVE-2026-44573) against next@14.2.35. Rated High from the advisory's own HIGH rating.",
-    "impact": "Next.js has a Middleware / Proxy bypass in Pages Router applications using i18n",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-36qx-fr4f-26g5).",
+    "evidence": "OSV-Scanner matched GHSA-36qx-fr4f-26g5 (aliases: CVE-2026-44573) against next@14.2.35. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 15.5.16 / 16.2.5. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-44573.",
+    "impact": "Next.js has a Middleware / Proxy bypass in Pages Router applications using i18n — Applications using the Pages Router with `i18n` configured and middleware/proxy-based authorization can allow unauthorized access to protected page data through locale-less `/_next/data/<buildId>/<page>.json` requests. In affected configurations, middleware does not run for the unprefixed data route, allowing an attacker to retrieve SSR JSON for protected pages without passing the intended authorization checks.",
+    "fix": "Upgrade next to 15.5.16 or later (see GHSA-36qx-fr4f-26g5).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-863"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1227,21 +1265,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-3g8h-86w9-wvmq",
-    "title": "next@14.2.35: Next.js's Middleware / Proxy redirects can be cache-poisoned",
+    "title": "next@14.2.35: Next.js's Middleware / Proxy redirects can be cache-poisoned (fixed in 15.5.16 / 16.2.5)",
     "severity": "Low",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-3g8h-86w9-wvmq (aliases: CVE-2026-44572) against next@14.2.35. Rated Low from the advisory's own LOW rating.",
-    "impact": "Next.js's Middleware / Proxy redirects can be cache-poisoned",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-3g8h-86w9-wvmq).",
+    "evidence": "OSV-Scanner matched GHSA-3g8h-86w9-wvmq (aliases: CVE-2026-44572) against next@14.2.35. Rated Low from the advisory's own LOW rating. The advisory's affected range is fixed in 15.5.16 / 16.2.5. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-44572.",
+    "impact": "Next.js's Middleware / Proxy redirects can be cache-poisoned — Next.js uses the `x-nextjs-data` request header for internal data requests. On affected versions, an external client could send this header on a normal request to a path handled by middleware that returns a redirect.",
+    "fix": "Upgrade next to 15.5.16 or later (see GHSA-3g8h-86w9-wvmq).",
     "value": 2,
     "ease": 4,
     "safety": 5,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-349"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1269,21 +1310,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-3x4c-7xq6-9pq8",
-    "title": "next@14.2.35: Next.js: Unbounded next/image disk cache growth can exhaust storage",
+    "title": "next@14.2.35: Next.js: Unbounded next/image disk cache growth can exhaust storage (fixed in 16.1.7 / 15.5.14)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-3x4c-7xq6-9pq8 (aliases: CVE-2026-27980) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating.",
+    "evidence": "OSV-Scanner matched GHSA-3x4c-7xq6-9pq8 (aliases: CVE-2026-27980) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 16.1.7 / 15.5.14. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-27980.",
     "impact": "Next.js: Unbounded next/image disk cache growth can exhaust storage",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-3x4c-7xq6-9pq8).",
+    "fix": "Upgrade next to 16.1.7 or later (see GHSA-3x4c-7xq6-9pq8).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-400"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1311,21 +1355,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-4633-3j49-mh5q",
-    "title": "next@14.2.35: Next.js: Cache confusion of response bodies for requests with bodies containing invalid UTF-8 byte sequences",
+    "title": "next@14.2.35: Next.js: Cache confusion of response bodies for requests with bodies containing invalid UTF-8 byte sequences (fixed in 15.5.21 / 16.2.11)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-4633-3j49-mh5q (aliases: CVE-2026-64647) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Next.js: Cache confusion of response bodies for requests with bodies containing invalid UTF-8 byte sequences",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-4633-3j49-mh5q).",
+    "evidence": "OSV-Scanner matched GHSA-4633-3j49-mh5q (aliases: CVE-2026-64647) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 15.5.21 / 16.2.11.",
+    "impact": "Next.js: Cache confusion of response bodies for requests with bodies containing invalid UTF-8 byte sequences — A server-side `fetch` with a request body may return a cached **response** body from a different request to the same URL but different body. Confidential data in the `POST`'s **response** body would then leak to unauthorized requests. Though the request itself will not be deduped.",
+    "fix": "Upgrade next to 15.5.21 or later (see GHSA-4633-3j49-mh5q).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-116"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1353,21 +1400,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-4c39-4ccg-62r3",
-    "title": "next@14.2.35: Next.js: Unbounded Server Action payload in Edge runtime",
+    "title": "next@14.2.35: Next.js: Unbounded Server Action payload in Edge runtime (fixed in 15.5.21 / 16.2.11)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-4c39-4ccg-62r3 (aliases: CVE-2026-64646) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Next.js: Unbounded Server Action payload in Edge runtime",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-4c39-4ccg-62r3).",
+    "evidence": "OSV-Scanner matched GHSA-4c39-4ccg-62r3 (aliases: CVE-2026-64646) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 15.5.21 / 16.2.11.",
+    "impact": "Next.js: Unbounded Server Action payload in Edge runtime — Requests targeting Next.js applications using App Router with at least one Server Action can lead to excessive memory consumption if that Server Actions uses the Edge runtime",
+    "fix": "Upgrade next to 15.5.21 or later (see GHSA-4c39-4ccg-62r3).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-770"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1395,21 +1445,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-68g3-v927-f742",
-    "title": "next@14.2.35: Next.js: Cache confusion of response bodies for requests with bodies",
+    "title": "next@14.2.35: Next.js: Cache confusion of response bodies for requests with bodies (fixed in 15.5.21 / 16.2.11)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-68g3-v927-f742 (aliases: CVE-2026-64648) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Next.js: Cache confusion of response bodies for requests with bodies",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-68g3-v927-f742).",
+    "evidence": "OSV-Scanner matched GHSA-68g3-v927-f742 (aliases: CVE-2026-64648) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 15.5.21 / 16.2.11.",
+    "impact": "Next.js: Cache confusion of response bodies for requests with bodies — A server-side `fetch` with a request body may return a cached **response** body from a different request to the same URL but different body. Confidential data in the `POST`'s **response** body would then leak to unauthorized requests. Though the request itself will not be deduped.",
+    "fix": "Upgrade next to 15.5.21 or later (see GHSA-68g3-v927-f742).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-524"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1437,21 +1490,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-89xv-2m56-2m9x",
-    "title": "next@14.2.35: Next.js: Server-Side Request Forgery in Server Actions on custom servers",
+    "title": "next@14.2.35: Next.js: Server-Side Request Forgery in Server Actions on custom servers (fixed in 15.5.21 / 16.2.11)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-89xv-2m56-2m9x (aliases: CVE-2026-64649) against next@14.2.35. Rated High from the advisory's own HIGH rating.",
-    "impact": "Next.js: Server-Side Request Forgery in Server Actions on custom servers",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-89xv-2m56-2m9x).",
+    "evidence": "OSV-Scanner matched GHSA-89xv-2m56-2m9x (aliases: CVE-2026-64649) against next@14.2.35. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 15.5.21 / 16.2.11.",
+    "impact": "Next.js: Server-Side Request Forgery in Server Actions on custom servers — When a Server Action forwards or redirects a request, an attacker can cause the server to send that outbound request to a malicious host (Server-Side Request Forgery). This requires the attacker's request to control Host-associated headers. In some configurations, it's also possible to obtain internal values that weaken middleware/proxy authorization.",
+    "fix": "Upgrade next to 15.5.21 or later (see GHSA-89xv-2m56-2m9x).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-918"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1479,21 +1535,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-8h8q-6873-q5fj",
-    "title": "next@14.2.35: Next.js Vulnerable to Denial of Service with Server Components",
+    "title": "next@14.2.35: Next.js Vulnerable to Denial of Service with Server Components (fixed in 15.5.16 / 16.2.5)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-8h8q-6873-q5fj against next@14.2.35. Rated High from the advisory's own HIGH rating.",
-    "impact": "Next.js Vulnerable to Denial of Service with Server Components",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-8h8q-6873-q5fj).",
+    "evidence": "OSV-Scanner matched GHSA-8h8q-6873-q5fj against next@14.2.35. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 15.5.16 / 16.2.5. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-23870.",
+    "impact": "Next.js Vulnerable to Denial of Service with Server Components — A vulnerability affects certain React Server Components packages for versions 19.x and frameworks that use the affected packages, including Next.js 13.x, 14.x, 15.x, and 16.x using the App Router. The issue is tracked upstream as [CVE-2026-23870](https://github.com/facebook/react/security/advisories/GHSA-rv78-f8rc-xrxh).",
+    "fix": "Upgrade next to 15.5.16 or later (see GHSA-8h8q-6873-q5fj).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-770"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1521,21 +1580,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-955p-x3mx-jcvp",
-    "title": "next@14.2.35: Next.js: Unauthenticated disclosure of internal Server Function endpoints",
+    "title": "next@14.2.35: Next.js: Unauthenticated disclosure of internal Server Function endpoints (fixed in 15.5.21 / 16.2.11)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-955p-x3mx-jcvp (aliases: CVE-2026-64643) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Next.js: Unauthenticated disclosure of internal Server Function endpoints",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-955p-x3mx-jcvp).",
+    "evidence": "OSV-Scanner matched GHSA-955p-x3mx-jcvp (aliases: CVE-2026-64643) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 15.5.21 / 16.2.11.",
+    "impact": "Next.js: Unauthenticated disclosure of internal Server Function endpoints — In Next.js applications using App Router, Server Actions (`use server`) or `use cache` endpoints can be disclosed bypassing any authentication on the pages where these endpoints are usually used.",
+    "fix": "Upgrade next to 15.5.21 or later (see GHSA-955p-x3mx-jcvp).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-201"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1563,21 +1625,25 @@
   },
   {
     "id": "DEP-OSV-GHSA-9g9p-9gw9-jx7f",
-    "title": "next@14.2.35: Next.js self-hosted applications vulnerable to DoS via Image Optimizer remotePatterns configuration",
+    "title": "next@14.2.35: Next.js self-hosted applications vulnerable to DoS via Image Optimizer remotePatterns configuration (fixed in 15.5.10 / 16.1.5)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-9g9p-9gw9-jx7f (aliases: CVE-2025-59471) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Next.js self-hosted applications vulnerable to DoS via Image Optimizer remotePatterns configuration",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-9g9p-9gw9-jx7f).",
+    "evidence": "OSV-Scanner matched GHSA-9g9p-9gw9-jx7f (aliases: CVE-2025-59471) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 15.5.10 / 16.1.5. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2025-59471.",
+    "impact": "Next.js self-hosted applications vulnerable to DoS via Image Optimizer remotePatterns configuration — A DoS vulnerability exists in self-hosted Next.js applications that have `remotePatterns` configured for the Image Optimizer. The image optimization endpoint (`/_next/image`) loads external images entirely into memory without enforcing a maximum size limit, allowing an attacker to cause out-of-memory conditions by requesting optimization of arbitrarily large images. This vulnerability requires that `remotePatterns` is configured to allow image optimization from external domains and that the attacker can serve or control a large image on an allowed domain.",
+    "fix": "Upgrade next to 15.5.10 or later (see GHSA-9g9p-9gw9-jx7f).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-400",
+      "CWE-770"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1605,21 +1671,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-ffhc-5mcf-pf4q",
-    "title": "next@14.2.35: Next.js vulnerable to cross-site scripting in App Router applications using CSP nonces",
+    "title": "next@14.2.35: Next.js vulnerable to cross-site scripting in App Router applications using CSP nonces (fixed in 15.5.16 / 16.2.5)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-ffhc-5mcf-pf4q (aliases: CVE-2026-44581) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Next.js vulnerable to cross-site scripting in App Router applications using CSP nonces",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-ffhc-5mcf-pf4q).",
+    "evidence": "OSV-Scanner matched GHSA-ffhc-5mcf-pf4q (aliases: CVE-2026-44581) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 15.5.16 / 16.2.5. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-44581.",
+    "impact": "Next.js vulnerable to cross-site scripting in App Router applications using CSP nonces — App Router applications that rely on CSP nonces can be vulnerable to stored cross-site scripting when deployed behind shared caches. In affected versions, malformed nonce values derived from request headers could be reflected into rendered HTML in an unsafe way, allowing an attacker to poison cached responses and cause script execution for later visitors.",
+    "fix": "Upgrade next to 15.5.16 or later (see GHSA-ffhc-5mcf-pf4q).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-79"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1647,21 +1716,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-ggv3-7p47-pfv8",
-    "title": "next@14.2.35: Next.js: HTTP request smuggling in rewrites",
+    "title": "next@14.2.35: Next.js: HTTP request smuggling in rewrites (fixed in 16.1.7 / 15.5.13)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-ggv3-7p47-pfv8 (aliases: CVE-2026-29057) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating.",
+    "evidence": "OSV-Scanner matched GHSA-ggv3-7p47-pfv8 (aliases: CVE-2026-29057) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 16.1.7 / 15.5.13. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-29057.",
     "impact": "Next.js: HTTP request smuggling in rewrites",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-ggv3-7p47-pfv8).",
+    "fix": "Upgrade next to 16.1.7 or later (see GHSA-ggv3-7p47-pfv8).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-444"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1689,21 +1761,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-gx5p-jg67-6x7h",
-    "title": "next@14.2.35: Next.js has cross-site scripting in beforeInteractive scripts with untrusted input",
+    "title": "next@14.2.35: Next.js has cross-site scripting in beforeInteractive scripts with untrusted input (fixed in 15.5.16 / 16.2.5)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-gx5p-jg67-6x7h (aliases: CVE-2026-44580) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Next.js has cross-site scripting in beforeInteractive scripts with untrusted input",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-gx5p-jg67-6x7h).",
+    "evidence": "OSV-Scanner matched GHSA-gx5p-jg67-6x7h (aliases: CVE-2026-44580) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 15.5.16 / 16.2.5. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-44580.",
+    "impact": "Next.js has cross-site scripting in beforeInteractive scripts with untrusted input — Applications that use `beforeInteractive` scripts together with untrusted content can be vulnerable to cross-site scripting. In affected versions, serialized script content was not escaped safely before being embedded into the document, which could allow attacker-controlled input to break out of the intended script context and execute arbitrary JavaScript in a visitor's browser.",
+    "fix": "Upgrade next to 15.5.16 or later (see GHSA-gx5p-jg67-6x7h).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-79"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1731,21 +1806,25 @@
   },
   {
     "id": "DEP-OSV-GHSA-h25m-26qc-wcjf",
-    "title": "next@14.2.35: Next.js HTTP request deserialization can lead to DoS when using insecure React Server Components",
+    "title": "next@14.2.35: Next.js HTTP request deserialization can lead to DoS when using insecure React Server Components (fixed in 15.0.8 / 15.1.12 / 15.2.9 / 15.3.9 / 15.4.11 / 15.5.10 / 15.6.0-canary.61 / 16.0.11 / 16.1.5)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-h25m-26qc-wcjf against next@14.2.35. Rated High from the advisory's own HIGH rating.",
-    "impact": "Next.js HTTP request deserialization can lead to DoS when using insecure React Server Components",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-h25m-26qc-wcjf).",
+    "evidence": "OSV-Scanner matched GHSA-h25m-26qc-wcjf against next@14.2.35. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 15.0.8 / 15.1.12 / 15.2.9 / 15.3.9 / 15.4.11 / 15.5.10 / 15.6.0-canary.61 / 16.0.11 / 16.1.5. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-23864.",
+    "impact": "Next.js HTTP request deserialization can lead to DoS when using insecure React Server Components — A vulnerability affects certain React Server Components packages for versions 19.0.x, 19.1.x, and 19.2.x and frameworks that use the affected packages, including Next.js 13.x, 14.x, 15.x, and 16.x using the App Router. The issue is tracked upstream as [CVE-2026-23864](https://github.com/facebook/react/security/advisories/GHSA-83fc-fqcc-2hmg).",
+    "fix": "Upgrade next to 15.0.8 or later (see GHSA-h25m-26qc-wcjf).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-400",
+      "CWE-502"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1773,21 +1852,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-h64f-5h5j-jqjh",
-    "title": "next@14.2.35: Next.js has a Denial of Service in the Image Optimization API",
+    "title": "next@14.2.35: Next.js has a Denial of Service in the Image Optimization API (fixed in 15.5.16 / 16.2.5)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-h64f-5h5j-jqjh (aliases: CVE-2026-44577) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Next.js has a Denial of Service in the Image Optimization API",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-h64f-5h5j-jqjh).",
+    "evidence": "OSV-Scanner matched GHSA-h64f-5h5j-jqjh (aliases: CVE-2026-44577) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 15.5.16 / 16.2.5. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-44577.",
+    "impact": "Next.js has a Denial of Service in the Image Optimization API — When self-hosting Next.js with the default image loader, the Image Optimization API fetches local images entirely into memory without enforcing a maximum size limit. An attacker could cause out-of-memory conditions by requesting large local assets from the `/_next/image` endpoint that match the `images.localPatterns` configuration (by default, all patterns are allowed).",
+    "fix": "Upgrade next to 15.5.16 or later (see GHSA-h64f-5h5j-jqjh).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-770"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1815,21 +1897,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-m99w-x7hq-7vfj",
-    "title": "next@14.2.35: Next.js: Denial of Service in App Router using Server Actions",
+    "title": "next@14.2.35: Next.js: Denial of Service in App Router using Server Actions (fixed in 15.5.21 / 16.2.11)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-m99w-x7hq-7vfj (aliases: CVE-2026-64641) against next@14.2.35. Rated High from the advisory's own HIGH rating.",
-    "impact": "Next.js: Denial of Service in App Router using Server Actions",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-m99w-x7hq-7vfj).",
+    "evidence": "OSV-Scanner matched GHSA-m99w-x7hq-7vfj (aliases: CVE-2026-64641) against next@14.2.35. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 15.5.21 / 16.2.11.",
+    "impact": "Next.js: Denial of Service in App Router using Server Actions — Crafted requests targeting Next.js applications using App Router with at least one Server Action can lead to excessive CPU usage blocking processing of further requests in the same process.",
+    "fix": "Upgrade next to 15.5.21 or later (see GHSA-m99w-x7hq-7vfj).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-834"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1857,21 +1942,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-p9j2-gv94-2wf4",
-    "title": "next@14.2.35: Next.js: Server-Side Request Forgery in rewrites via attacker-controlled destination hostname",
+    "title": "next@14.2.35: Next.js: Server-Side Request Forgery in rewrites via attacker-controlled destination hostname (fixed in 15.5.21 / 16.2.11)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-p9j2-gv94-2wf4 (aliases: CVE-2026-64645) against next@14.2.35. Rated High from the advisory's own HIGH rating.",
-    "impact": "Next.js: Server-Side Request Forgery in rewrites via attacker-controlled destination hostname",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-p9j2-gv94-2wf4).",
+    "evidence": "OSV-Scanner matched GHSA-p9j2-gv94-2wf4 (aliases: CVE-2026-64645) against next@14.2.35. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 15.5.21 / 16.2.11.",
+    "impact": "Next.js: Server-Side Request Forgery in rewrites via attacker-controlled destination hostname — A `rewrites()` or `redirects()` rule that builds its external destination hostname from request-controlled input can be pointed at an arbitrary hostname, regardless of the rule's hostname suffix. For a rewrite, Next.js proxies the request to that arbitrary host and serves the response from the application's origin, leading to Server-Side Request forgery. A `redirects()` rule configured this way is vulnerable to an Open Redirect.",
+    "fix": "Upgrade next to 15.5.21 or later (see GHSA-p9j2-gv94-2wf4).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-918"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1899,21 +1987,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-q4gf-8mx6-v5v3",
-    "title": "next@14.2.35: Next.js has a Denial of Service with Server Components",
+    "title": "next@14.2.35: Next.js has a Denial of Service with Server Components (fixed in 15.5.15 / 16.2.3)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-q4gf-8mx6-v5v3 against next@14.2.35. Rated High from the advisory's own HIGH rating.",
-    "impact": "Next.js has a Denial of Service with Server Components",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-q4gf-8mx6-v5v3).",
+    "evidence": "OSV-Scanner matched GHSA-q4gf-8mx6-v5v3 against next@14.2.35. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 15.5.15 / 16.2.3.",
+    "impact": "Next.js has a Denial of Service with Server Components — A vulnerability affects certain React Server Components packages for versions 19.x and frameworks that use the affected packages, including Next.js 13.x, 14.x, 15.x, and 16.x using the App Router. The issue is tracked upstream as [CVE-2026-23869](https://github.com/facebook/react/security/advisories/GHSA-479c-33wc-g2pg). You can read more about this advisory our [this changelog](https://vercel.com/changelog/summary-of-cve-2026-23869).",
+    "fix": "Upgrade next to 15.5.15 or later (see GHSA-q4gf-8mx6-v5v3).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-770"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1941,21 +2032,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-vfv6-92ff-j949",
-    "title": "next@14.2.35: Next.js vulnerable to cache poisoning via collisions in React Server Component cache-busting",
+    "title": "next@14.2.35: Next.js vulnerable to cache poisoning via collisions in React Server Component cache-busting (fixed in 15.5.16 / 16.2.5)",
     "severity": "Low",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-vfv6-92ff-j949 (aliases: CVE-2026-44582) against next@14.2.35. Rated Low from the advisory's own LOW rating.",
-    "impact": "Next.js vulnerable to cache poisoning via collisions in React Server Component cache-busting",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-vfv6-92ff-j949).",
+    "evidence": "OSV-Scanner matched GHSA-vfv6-92ff-j949 (aliases: CVE-2026-44582) against next@14.2.35. Rated Low from the advisory's own LOW rating. The advisory's affected range is fixed in 15.5.16 / 16.2.5. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-44582.",
+    "impact": "Next.js vulnerable to cache poisoning via collisions in React Server Component cache-busting — React Server Component responses can be vulnerable to cache poisoning in deployments that rely on shared caches with insufficient response partitioning. In affected conditions, collisions in the `_rsc` cache-busting value can allow an attacker to poison cache entries so users receive the wrong response variant for a given URL.",
+    "fix": "Upgrade next to 15.5.16 or later (see GHSA-vfv6-92ff-j949).",
     "value": 2,
     "ease": 4,
     "safety": 5,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-328"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -1983,21 +2077,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-wfc6-r584-vfw7",
-    "title": "next@14.2.35: Next.js vulnerable to cache poisoning in React Server Component responses",
+    "title": "next@14.2.35: Next.js vulnerable to cache poisoning in React Server Component responses (fixed in 15.5.16 / 16.2.5)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (next@14.2.35)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-wfc6-r584-vfw7 (aliases: CVE-2026-44576) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "Next.js vulnerable to cache poisoning in React Server Component responses",
-    "fix": "Upgrade next past the vulnerable range (see GHSA-wfc6-r584-vfw7).",
+    "evidence": "OSV-Scanner matched GHSA-wfc6-r584-vfw7 (aliases: CVE-2026-44576) against next@14.2.35. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 15.5.16 / 16.2.5. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-44576.",
+    "impact": "Next.js vulnerable to cache poisoning in React Server Component responses — Applications using React Server Components can be vulnerable to cache poisoning when shared caches do not correctly partition response variants. Under affected conditions, an attacker can cause an RSC response to be served from the original URL and poison shared cache entries so later visitors receive component payloads instead of the expected HTML.",
+    "fix": "Upgrade next to 15.5.16 or later (see GHSA-wfc6-r584-vfw7).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-436"
+    ],
     "dependency": "next",
     "reachability": {
       "status": "imported",
@@ -2025,21 +2122,25 @@
   },
   {
     "id": "DEP-OSV-GHSA-6g55-p6wh-862q",
-    "title": "postcss@8.4.31: PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments",
+    "title": "postcss@8.4.31: PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments (fixed in 8.5.12)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (postcss@8.4.31)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-6g55-p6wh-862q (aliases: CVE-2026-45623) against postcss@8.4.31. Rated High from the advisory's own HIGH rating.",
-    "impact": "PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments",
-    "fix": "Upgrade postcss past the vulnerable range (see GHSA-6g55-p6wh-862q).",
+    "evidence": "OSV-Scanner matched GHSA-6g55-p6wh-862q (aliases: CVE-2026-45623) against postcss@8.4.31. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 8.5.12.",
+    "impact": "PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments — PostCSS's `PreviousMap` parses the `/*# sourceMappingURL=PATH */` comment from any CSS string passed to `process()` and dereferences `PATH` against the local filesystem with no scheme, allowlist, or traversal check. An attacker who controls the CSS input can cause the host process to read any file readable by Node and leak the first ~10 bytes of its content through the resulting `JSON.parse` `SyntaxError` message. The bug also yields a precise file-existence oracle and a controllable-read primitive that may be combined with large-file targets for DoS. The behaviour is triggered with PostCSS's…",
+    "fix": "Upgrade postcss to 8.5.12 or later (see GHSA-6g55-p6wh-862q).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-200",
+      "CWE-22"
+    ],
     "dependency": "postcss",
     "reachability": {
       "status": "transitive-only",
@@ -2049,21 +2150,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-qx2v-qp2m-jg93",
-    "title": "postcss@8.4.31: PostCSS has XSS via Unescaped </style> in its CSS Stringify Output",
+    "title": "postcss@8.4.31: PostCSS has XSS via Unescaped </style> in its CSS Stringify Output (fixed in 8.5.10)",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (postcss@8.4.31)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-qx2v-qp2m-jg93 (aliases: CVE-2026-41305) against postcss@8.4.31. Rated Medium from the advisory's own MODERATE rating.",
-    "impact": "PostCSS has XSS via Unescaped </style> in its CSS Stringify Output",
-    "fix": "Upgrade postcss past the vulnerable range (see GHSA-qx2v-qp2m-jg93).",
+    "evidence": "OSV-Scanner matched GHSA-qx2v-qp2m-jg93 (aliases: CVE-2026-41305) against postcss@8.4.31. Rated Medium from the advisory's own MODERATE rating. The advisory's affected range is fixed in 8.5.10. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2026-41305.",
+    "impact": "PostCSS has XSS via Unescaped </style> in its CSS Stringify Output — PostCSS v8.5.5 (latest) does not escape `</style>` sequences when stringifying CSS ASTs. When user-submitted CSS is parsed and re-stringified for embedding in HTML `<style>` tags, `</style>` in CSS values breaks out of the style context, enabling XSS.",
+    "fix": "Upgrade postcss to 8.5.10 or later (see GHSA-qx2v-qp2m-jg93).",
     "value": 3,
     "ease": 4,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-79"
+    ],
     "dependency": "postcss",
     "reachability": {
       "status": "transitive-only",
@@ -2073,21 +2177,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-r28c-9q8g-f849",
-    "title": "postcss@8.4.31: PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure",
+    "title": "postcss@8.4.31: PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure (fixed in 8.5.18)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (postcss@8.4.31)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-r28c-9q8g-f849 against postcss@8.4.31. Rated High from the advisory's own HIGH rating.",
-    "impact": "PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure",
-    "fix": "Upgrade postcss past the vulnerable range (see GHSA-r28c-9q8g-f849).",
+    "evidence": "OSV-Scanner matched GHSA-r28c-9q8g-f849 against postcss@8.4.31. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 8.5.18.",
+    "impact": "PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure — **File**: `lib/previous-map.js`\n**Line**: 87-98 (`loadFile`), 129-144 (`loadMap`)",
+    "fix": "Upgrade postcss to 8.5.18 or later (see GHSA-r28c-9q8g-f849).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-22"
+    ],
     "dependency": "postcss",
     "reachability": {
       "status": "transitive-only",
@@ -2097,21 +2204,24 @@
   },
   {
     "id": "DEP-OSV-GHSA-5c6j-r48x-rmvq",
-    "title": "serialize-javascript@4.0.0: Serialize JavaScript is Vulnerable to RCE via RegExp.flags and Date.prototype.toISOString()",
+    "title": "serialize-javascript@4.0.0: Serialize JavaScript is Vulnerable to RCE via RegExp.flags and Date.prototype.toISOString() (fixed in 7.0.3)",
     "severity": "High",
     "confidence": "Review",
     "category": "Dependency CVE",
     "taxonomy": "Known-vulnerable dependency",
     "location": "package-lock.json (serialize-javascript@4.0.0)",
     "status": "Open",
-    "evidence": "OSV-Scanner matched GHSA-5c6j-r48x-rmvq against serialize-javascript@4.0.0. Rated High from the advisory's own HIGH rating.",
-    "impact": "Serialize JavaScript is Vulnerable to RCE via RegExp.flags and Date.prototype.toISOString()",
-    "fix": "Upgrade serialize-javascript past the vulnerable range (see GHSA-5c6j-r48x-rmvq).",
+    "evidence": "OSV-Scanner matched GHSA-5c6j-r48x-rmvq against serialize-javascript@4.0.0. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 7.0.3. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2020-7660, https://github.com/advisories/GHSA-hxcc-f52p-wc94.",
+    "impact": "Serialize JavaScript is Vulnerable to RCE via RegExp.flags and Date.prototype.toISOString() — The serialize-javascript npm package (versions <= 7.0.2) contains a code injection vulnerability. It is an incomplete fix for CVE-2020-7660.",
+    "fix": "Upgrade serialize-javascript to 7.0.3 or later (see GHSA-5c6j-r48x-rmvq).",
     "value": 4,
     "ease": 3,
     "safety": 4,
     "mechanical": true,
     "precisionTier": "review",
+    "cwe": [
+      "CWE-96"
+    ],
     "dependency": "serialize-javascript",
     "reachability": {
       "status": "transitive-only",
@@ -2214,7 +2324,7 @@
     "status": "Open",
     "evidence": "This .npmrc does not set a minimum release age or sets it too low. Newly published packages can be malicious or unstable. Add `min-release-age = 7` to wait 7 days before resolving newly published package versions. Added in: v11.10 Reference: https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing-config-and-script-security-now-generally-available/",
     "impact": "This .npmrc does not set a minimum release age or sets it too low. Newly published packages can be malicious or unstable. Add `min-release-age = 7` to wait 7 days before resolving newly published package versions. Added in: v11.10 Reference: https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing-config-and-script-security-now-generally-available/",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing-config-and-script-security-now-generally-available/, https://github.com/npm/cli/pull/8965, https://semgrep.dev/r/package_managers.npm.npm-missing-minimum-release-age.npm-missing-minimum-release-age.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -2225,6 +2335,10 @@
     ],
     "owasp": [
       "A08:2021 - Software and Data Integrity Failures"
+    ],
+    "references": [
+      "https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing-config-and-script-security-now-generally-available/",
+      "https://github.com/npm/cli/pull/8965"
     ]
   },
   {
@@ -2238,7 +2352,7 @@
     "status": "Open",
     "evidence": "NPM registry authentication token detected",
     "impact": "NPM registry authentication token detected",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-npm-registry-auth-token.detected-npm-registry-auth-token.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -2250,6 +2364,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -3625,7 +3742,7 @@
     "status": "Open",
     "evidence": "Private Key detected. This is a sensitive credential and should not be hardcoded here. Instead, store this in a separate, private file.",
     "impact": "Private Key detected. This is a sensitive credential and should not be hardcoded here. Instead, store this in a separate, private file.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-private-key.detected-private-key.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -3637,6 +3754,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -3794,7 +3914,7 @@
     "status": "Open",
     "evidence": "The application accepts potentially user-controlled input `$PROP` which can control the location of the current window context. This can lead two types of vulnerabilities open-redirection and Cross-Site-Scripting (XSS) with JavaScript URIs. It is recommended to validate user-controllable input before allowing it to control the redirection.",
     "impact": "The application accepts potentially user-controlled input `$PROP` which can control the location of the current window context. This can lead two types of vulnerabilities open-redirection and Cross-Site-Scripting (XSS) with JavaScript URIs. It is recommended to validate user-controllable input before allowing it to control the redirection.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html, https://semgrep.dev/r/javascript.browser.security.open-redirect.js-open-redirect.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -3806,6 +3926,9 @@
     "owasp": [
       "A01:2021 - Broken Access Control",
       "A01:2025 - Broken Access Control"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html"
     ]
   },
   {
@@ -3867,7 +3990,7 @@
     "status": "Open",
     "evidence": "The target origin of the window.postMessage() API is set to \"*\". This could allow for information disclosure due to the possibility of any origin allowed to receive the message.",
     "impact": "The target origin of the window.postMessage() API is set to \"*\". This could allow for information disclosure due to the possibility of any origin allowed to receive the message.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures, https://semgrep.dev/r/javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -3879,6 +4002,9 @@
     "owasp": [
       "A08:2021 - Software and Data Integrity Failures",
       "A08:2025 - Software or Data Integrity Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures"
     ]
   },
   {
@@ -4108,7 +4234,7 @@
     "status": "Open",
     "evidence": "The 'final' call of a Decipher object checks the authentication tag in a mode for authenticated encryption. Failing to call 'final' will invalidate all integrity guarantees of the released ciphertext.",
     "impact": "The 'final' call of a Decipher object checks the authentication tag in a mode for authenticated encryption. Failing to call 'final' will invalidate all integrity guarantees of the released ciphertext.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://nodejs.org/api/crypto.html#deciphersetauthtagbuffer-encoding, https://owasp.org/Top10/A02_2021-Cryptographic_Failures/, https://semgrep.dev/r/javascript.node-crypto.security.aead-no-final.aead-no-final.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -4120,6 +4246,10 @@
     "owasp": [
       "A02:2021 - Cryptographic Failures",
       "A04:2025 - Cryptographic Failures"
+    ],
+    "references": [
+      "https://nodejs.org/api/crypto.html#deciphersetauthtagbuffer-encoding",
+      "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
     ]
   },
   {
@@ -4181,7 +4311,7 @@
     "status": "Open",
     "evidence": "A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and used by either an internal or external malicious adversary. It is recommended to use environment variables to securely provide credentials or retrieve credentials from a secure vault or HSM (Hardware Security Module).",
     "impact": "A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and used by either an internal or external malicious adversary. It is recommended to use environment variables to securely provide credentials or retrieve credentials from a secure vault or HSM (Hardware Security Module).",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html, https://semgrep.dev/r/javascript.jsonwebtoken.security.jwt-hardcode.hardcoded-jwt-secret.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -4193,6 +4323,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html"
     ]
   },
   {
@@ -4206,7 +4339,7 @@
     "status": "Open",
     "evidence": "The deprecated functions 'createCipher' and 'createDecipher' generate the same initialization vector every time. For counter modes such as CTR, GCM, or CCM this leads to break of both confidentiality and integrity, if the key is used more than once. Other modes are still affected in their strength, though they're not completely broken. Use 'createCipheriv' or 'createDecipheriv' instead.",
     "impact": "The deprecated functions 'createCipher' and 'createDecipher' generate the same initialization vector every time. For counter modes such as CTR, GCM, or CCM this leads to break of both confidentiality and integrity, if the key is used more than once. Other modes are still affected in their strength, though they're not completely broken. Use 'createCipheriv' or 'createDecipheriv' instead.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://nodejs.org/api/crypto.html#cryptocreatecipheralgorithm-password-options, https://nodejs.org/api/crypto.html#cryptocreatedecipheralgorithm-password-options, https://semgrep.dev/r/javascript.node-crypto.security.create-de-cipher-no-iv.create-de-cipher-no-iv.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -4214,6 +4347,10 @@
     "precisionTier": "high",
     "cwe": [
       "CWE-1204: Generation of Weak Initialization Vector (IV)"
+    ],
+    "references": [
+      "https://nodejs.org/api/crypto.html#cryptocreatecipheralgorithm-password-options",
+      "https://nodejs.org/api/crypto.html#cryptocreatedecipheralgorithm-password-options"
     ]
   },
   {
@@ -4251,7 +4388,7 @@
     "status": "Open",
     "evidence": "By letting user input control CORS parameters, there is a risk that software does not properly verify that the source of data or communication is valid. Use literal values for CORS settings.",
     "impact": "By letting user input control CORS parameters, there is a risk that software does not properly verify that the source of data or communication is valid. Use literal values for CORS settings.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS, https://semgrep.dev/r/javascript.express.security.cors-misconfiguration.cors-misconfiguration.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -4263,6 +4400,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS"
     ]
   },
   {
@@ -4441,7 +4581,7 @@
     "status": "Open",
     "evidence": "The call to 'createDecipheriv' with the Galois Counter Mode (GCM) mode of operation is missing an expected authentication tag length. If the expected authentication tag length is not specified or otherwise checked, the application might be tricked into verifying a shorter-than-expected authentication tag. This can be abused by an attacker to spoof ciphertexts or recover the implicit authentication key of GCM, allowing arbitrary forgeries.",
     "impact": "The call to 'createDecipheriv' with the Galois Counter Mode (GCM) mode of operation is missing an expected authentication tag length. If the expected authentication tag length is not specified or otherwise checked, the application might be tricked into verifying a shorter-than-expected authentication tag. This can be abused by an attacker to spoof ciphertexts or recover the implicit authentication key of GCM, allowing arbitrary forgeries.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://www.securesystems.de/blog/forging_ciphertexts_under_Galois_Counter_Mode_for_the_Node_js_crypto_module/, https://nodejs.org/api/crypto.html#cryptocreatedecipherivalgorithm-key-iv-options, https://owasp.org/Top10/A02_2021-Cryptographic_Failures/, https://semgrep.dev/r/javascript.node-crypto.security.gcm-no-tag-length.gcm-no-tag-length.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -4453,6 +4593,11 @@
     "owasp": [
       "A02:2021 - Cryptographic Failures",
       "A04:2025 - Cryptographic Failures"
+    ],
+    "references": [
+      "https://www.securesystems.de/blog/forging_ciphertexts_under_Galois_Counter_Mode_for_the_Node_js_crypto_module/",
+      "https://nodejs.org/api/crypto.html#cryptocreatedecipherivalgorithm-key-iv-options",
+      "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
     ]
   },
   {
@@ -4490,7 +4635,7 @@
     "status": "Open",
     "evidence": "Checks for setting the environment variable NODE_TLS_REJECT_UNAUTHORIZED to 0, which disables TLS verification. This should only be used for debugging purposes. Setting the option rejectUnauthorized to false bypasses verification against the list of trusted CAs, which also leads to insecure transport. These options lead to vulnerability to MTM attacks, and should not be used.",
     "impact": "Checks for setting the environment variable NODE_TLS_REJECT_UNAUTHORIZED to 0, which disables TLS verification. This should only be used for debugging purposes. Setting the option rejectUnauthorized to false bypasses verification against the list of trusted CAs, which also leads to insecure transport. These options lead to vulnerability to MTM attacks, and should not be used.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://nodejs.org/api/https.html#https_https_request_options_callback, https://stackoverflow.com/questions/20433287/node-js-request-cert-has-expired#answer-29397100, https://semgrep.dev/r/problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -4501,6 +4646,10 @@
     ],
     "owasp": [
       "A03:2017 - Sensitive Data Exposure"
+    ],
+    "references": [
+      "https://nodejs.org/api/https.html#https_https_request_options_callback",
+      "https://stackoverflow.com/questions/20433287/node-js-request-cert-has-expired#answer-29397100"
     ]
   },
   {
@@ -4796,7 +4945,7 @@
     "status": "Open",
     "evidence": "Detected usage of crypto.pseudoRandomBytes, which does not produce secure random numbers.",
     "impact": "Detected usage of crypto.pseudoRandomBytes, which does not produce secure random numbers.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A02_2021-Cryptographic_Failures, https://semgrep.dev/r/javascript.lang.security.detect-pseudorandombytes.detect-pseudoRandomBytes.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -4808,6 +4957,9 @@
     "owasp": [
       "A02:2021 - Cryptographic Failures",
       "A04:2025 - Cryptographic Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A02_2021-Cryptographic_Failures"
     ]
   },
   {
@@ -4941,7 +5093,7 @@
     "status": "Open",
     "evidence": "AWS Secret Access Key detected",
     "impact": "AWS Secret Access Key detected",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-aws-secret-access-key.detected-aws-secret-access-key.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -4953,6 +5105,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -5464,7 +5619,7 @@
     "status": "Open",
     "evidence": "Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
     "impact": "Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://react.dev/reference/react-dom/components/common#dangerously-setting-the-inner-html, https://semgrep.dev/r/typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -5477,6 +5632,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://react.dev/reference/react-dom/components/common#dangerously-setting-the-inner-html"
     ]
   },
   {
@@ -5655,7 +5813,7 @@
     "status": "Open",
     "evidence": "Found data from an Express or Next web request flowing to `eval`. If this data is user-controllable this can lead to execution of arbitrary system commands in the context of your application process. Avoid `eval` whenever possible.",
     "impact": "Found data from an Express or Next web request flowing to `eval`. If this data is user-controllable this can lead to execution of arbitrary system commands in the context of your application process. Avoid `eval` whenever possible.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval, https://nodejs.org/api/child_process.html#child_processexeccommand-options-callback, https://www.stackhawk.com/blog/nodejs-command-injection-examples-and-prevention/, https://ckarande.gitbooks.io/owasp-nodegoat-tutorial/content/tutorial/a1_-_server_side_js_injection.html, https://semgrep.dev/r/javascript.lang.security.audit.code-string-concat.code-string-concat.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5667,6 +5825,12 @@
     "owasp": [
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval",
+      "https://nodejs.org/api/child_process.html#child_processexeccommand-options-callback",
+      "https://www.stackhawk.com/blog/nodejs-command-injection-examples-and-prevention/",
+      "https://ckarande.gitbooks.io/owasp-nodegoat-tutorial/content/tutorial/a1_-_server_side_js_injection.html"
     ]
   },
   {
@@ -5752,7 +5916,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5765,6 +5929,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5778,7 +5945,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5791,6 +5958,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5828,7 +5998,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5841,6 +6011,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5854,7 +6027,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5867,6 +6040,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5904,7 +6080,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5917,6 +6093,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5930,7 +6109,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5943,6 +6122,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -5956,7 +6138,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -5969,6 +6151,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {
@@ -6666,7 +6851,7 @@
     "status": "Open",
     "evidence": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
     "impact": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.injection.raw-html-format.raw-html-format.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -6679,6 +6864,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
     ]
   },
   {
@@ -7163,7 +7351,7 @@
     "status": "Open",
     "evidence": "If an attacker controls the x in require(x) then they can cause code to load that was not intended to run on the server.",
     "impact": "If an attacker controls the x in require(x) then they can cause code to load that was not intended to run on the server.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://github.com/google/node-sec-roadmap/blob/master/chapter-2/dynamism.md#dynamism-when-you-need-it, https://semgrep.dev/r/javascript.express.security.require-request.require-request.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -7175,6 +7363,9 @@
     "owasp": [
       "A01:2021 - Broken Access Control",
       "A01:2025 - Broken Access Control"
+    ],
+    "references": [
+      "https://github.com/google/node-sec-roadmap/blob/master/chapter-2/dynamism.md#dynamism-when-you-need-it"
     ]
   },
   {
@@ -7515,7 +7706,7 @@
     "status": "Open",
     "evidence": "User controllable data `req` enters `res.render(...)` this can lead to the loading of other HTML/templating pages that they may not be authorized to render. An attacker may attempt to use directory traversal techniques e.g. `../folder/index` to access other HTML pages on the file system. Where possible, do not allow users to define what should be  loaded in res.render or use an allow list for the existing application.",
     "impact": "User controllable data `req` enters `res.render(...)` this can lead to the loading of other HTML/templating pages that they may not be authorized to render. An attacker may attempt to use directory traversal techniques e.g. `../folder/index` to access other HTML pages on the file system. Where possible, do not allow users to define what should be  loaded in res.render or use an allow list for the existing application.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: http://expressjs.com/en/4x/api.html#res.render, https://semgrep.dev/r/javascript.express.security.audit.res-render-injection.res-render-injection.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -7527,6 +7718,9 @@
     "owasp": [
       "A01:2021 - Broken Access Control",
       "A01:2025 - Broken Access Control"
+    ],
+    "references": [
+      "http://expressjs.com/en/4x/api.html#res.render"
     ]
   },
   {
@@ -8335,7 +8529,7 @@
     "status": "Open",
     "evidence": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "impact": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.audit.xss.direct-response-write.direct-response-write.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -8348,6 +8542,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
     ]
   },
   {
@@ -8361,7 +8558,7 @@
     "status": "Open",
     "evidence": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
     "impact": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.injection.raw-html-format.raw-html-format.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -8374,6 +8571,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
     ]
   },
   {
@@ -8411,7 +8611,7 @@
     "status": "Open",
     "evidence": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "impact": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.audit.xss.direct-response-write.direct-response-write.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -8424,6 +8624,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
     ]
   },
   {
@@ -8437,7 +8640,7 @@
     "status": "Open",
     "evidence": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
     "impact": "User data flows into the host portion of this manually-constructed HTML. This can introduce a Cross-Site-Scripting (XSS) vulnerability if this comes from user-provided input. Consider using a sanitization library such as DOMPurify to sanitize the HTML within.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.injection.raw-html-format.raw-html-format.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -8450,6 +8653,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
     ]
   },
   {
@@ -8535,7 +8741,7 @@
     "status": "Open",
     "evidence": "Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
     "impact": "Detection of dangerouslySetInnerHTML from non-constant definition. This can inadvertently expose users to cross-site scripting (XSS) attacks if this comes from user-provided input. If you have to use dangerouslySetInnerHTML, consider using a sanitization library such as DOMPurify to sanitize your HTML.",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://react.dev/reference/react-dom/components/common#dangerously-setting-the-inner-html, https://semgrep.dev/r/typescript.react.security.audit.react-dangerouslysetinnerhtml.react-dangerouslysetinnerhtml.",
     "value": 3,
     "ease": 4,
     "safety": 4,
@@ -8548,6 +8754,9 @@
       "A07:2017 - Cross-Site Scripting (XSS)",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://react.dev/reference/react-dom/components/common#dangerously-setting-the-inner-html"
     ]
   },
   {
@@ -8633,7 +8842,7 @@
     "status": "Open",
     "evidence": "Google (GCM) Service account detected",
     "impact": "Google (GCM) Service account detected",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -8645,6 +8854,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -8658,7 +8870,7 @@
     "status": "Open",
     "evidence": "Google (GCM) Service account detected",
     "impact": "Google (GCM) Service account detected",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -8670,6 +8882,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -8779,7 +8994,7 @@
     "status": "Open",
     "evidence": "bcrypt hash detected",
     "impact": "bcrypt hash detected",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures, https://semgrep.dev/r/generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -8791,6 +9006,9 @@
     "owasp": [
       "A07:2021 - Identification and Authentication Failures",
       "A07:2025 - Authentication Failures"
+    ],
+    "references": [
+      "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
     ]
   },
   {
@@ -8804,7 +9022,7 @@
     "status": "Open",
     "evidence": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
     "impact": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
-    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions, https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process.",
     "value": 4,
     "ease": 3,
     "safety": 4,
@@ -8817,6 +9035,9 @@
       "A01:2017 - Injection",
       "A03:2021 - Injection",
       "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
     ]
   },
   {

@@ -41,6 +41,118 @@ export type ProbeOutcome =
   | { status: "partial"; detail: string; reason: string; findings?: Finding[]; instance?: string; hotspots?: string[]; dataMap?: DataClassMap; subStatus?: ModuleSubStatus; testQuality?: TestQuality }
   | { status: "requires-live-run"; reason: string; instance?: string };
 
+// ---- #1096 invariant (2): the typed non-empty result ----
+//
+// The bad state ProbeOutcome permits, and permitted for its whole life: `{ status: "ran", detail,
+// findings: [] }` — "the module ran and found nothing", with no statement of what was looked at.
+// That sentence is indistinguishable from "the probe passed no --out and captured nothing" (#1062),
+// "the scan loaded 0 product source files and exited 0" (#1065) and "the tool ran clean". Three
+// different claims, one silence, and the report ships the reassuring one.
+//
+// Examined makes the reassuring reading unrepresentable: a probe that says it examined something
+// must say HOW MUCH and OF WHAT, in the same object as the findings. `unitsExamined: 0` is rejected
+// at normalization — a probe that examined nothing did not run, and must say so as NotAssessed.
+//
+// NotAssessed carries the #1033 reason contract at the TYPE level: a not-run reason without a
+// provenance tag and a falsifier is the shape four blockers were written in on 2026-07-24, all four
+// false. Here it will not compile.
+export interface Examined {
+  kind: "examined";
+  /** The count that makes "0 findings" checkable: source files read, tables classified, tests parsed. */
+  unitsExamined: number;
+  /** The units, named — "product source files", "database tables", "recorded pass artifacts". */
+  scope: string;
+  /** The command/tier that ran, for the ledger row. */
+  detail: string;
+  /** Required, and may be empty — but only in the company of unitsExamined and scope. */
+  findings: Finding[];
+  /** Present ⇒ the module ran PARTIALLY and this is why. Absent ⇒ a full `ran`. */
+  reason?: string;
+  subStatus?: ModuleSubStatus;
+  instance?: string;
+  hotspots?: string[];
+  dataMap?: DataClassMap;
+  testQuality?: TestQuality;
+}
+
+export interface NotAssessed {
+  kind: "not-assessed";
+  reason: string;
+  /** MEASURED = a command was run and this is what it did. TRIED = attempted, this happened.
+   *  ASSUMED = inferred, never tested. The four blockers falsified on 2026-07-24 were ASSUMED
+   *  written in MEASURED's register; the tag is what makes that distinguishable in the ledger. */
+  provenance: "MEASURED" | "TRIED" | "ASSUMED";
+  /** The command that exits 0 the day this reason stops being true. A reason with no falsifier is
+   *  unfalsifiable and therefore permanent. */
+  falsifier: string;
+  instance?: string;
+}
+
+export type ProbeResult = Examined | NotAssessed;
+/** What a probe may hand back mid-migration: the typed union, or the legacy shape. */
+export type ProbeReport = ProbeOutcome | ProbeResult;
+
+const isTyped = (r: ProbeReport): r is ProbeResult => "kind" in r;
+
+// The migration ledger for invariant (2). A module is in exactly one list, checked at module load,
+// for the same reason CALIBRATION_PLANTS/UNEXERCISED are: a half-migration nobody wrote down is
+// indistinguishable from a finished one, and "which probes are typed?" would become a grep instead
+// of a fact. Moving a module from UNTYPED to TYPED is the whole of the remaining work.
+export const TYPED_PROBES: AuditModule[] = ["M6", "M7", "M9"];
+
+export const UNTYPED_PROBES: { module: AuditModule; reason: string }[] = [
+  { module: "M1", reason: "quick-scan prints no unit count this probe can read — the mechanical tier's scanned-file total is internal to runMechanicalScan. Needs a counted number out of quick-scan first." },
+  { module: "M2", reason: "the probe never runs a tool under the orchestrator (it reads a pass artifact or reports the stack is unreachable), so its migration is NotAssessed-only and lands with the M2 live-run work." },
+  { module: "M3", reason: "hotspot-scan's object artifact carries the ranked file list; unitsExamined is the ranked-file count, a one-line read this tranche did not take." },
+  { module: "M4", reason: "quality-scan reports its jscpd line total on STDERR, which ctx.exec discards on success — the count is unreachable to the probe until quality-scan puts it in the --out artifact." },
+  { module: "M5", reason: "same as M4: knip's scanned-scope count is stderr-only." },
+  { module: "M8", reason: "mutation-scan's artifact has a mutant/test total, but the probe's four-rung verdict ladder (#754/#503/#513/#504) is the densest branch set of the ten and wants its own pass." },
+  { module: "M10", reason: "pii-classify's data map has a table count — a small migration, but it fans out per app AND per DB URL, so it is a two-shape change rather than one." },
+];
+
+{
+  const covered = new Set<AuditModule>([...TYPED_PROBES, ...UNTYPED_PROBES.map((u) => u.module)]);
+  const missing = AUDIT_MODULES.filter((m) => !covered.has(m));
+  if (missing.length) {
+    throw new Error(
+      `The typed-result migration ledger does not account for ${missing.join(", ")} — every module of M1–M10 belongs in TYPED_PROBES or UNTYPED_PROBES with the reason it is not migrated yet (#1096). A module in neither is a half-migration nobody can see.`,
+    );
+  }
+  const both = TYPED_PROBES.filter((m) => UNTYPED_PROBES.some((u) => u.module === m));
+  if (both.length) throw new Error(`The typed-result migration ledger both types and excuses ${both.join(", ")} — two answers to "is this probe migrated".`);
+}
+
+// Normalizes a typed result onto the transport the ledger and assembler already speak. The two
+// assertions are where the type's promise becomes a runtime one:
+//   - an Examined that examined nothing is a contradiction, not a clean scan (#1065's exact shape);
+//   - a module declared TYPED that hands back a legacy outcome has been laundered by a helper
+//     somewhere, and the compile-time guarantee is worthless if that passes silently.
+export function toOutcome(result: ProbeResult): ProbeOutcome {
+  const instance = result.instance ? { instance: result.instance } : {};
+  if (result.kind === "not-assessed") {
+    return { status: "requires-live-run", reason: `${result.reason} [${result.provenance}; falsifier: ${result.falsifier}]`, ...instance };
+  }
+  if (result.unitsExamined <= 0) {
+    throw new Error(
+      `A probe reported Examined with unitsExamined=${result.unitsExamined} (${result.scope}) — examining nothing is not a clean scan, it is a NotAssessed with a reason (#1065/#1096). Detail: ${result.detail}`,
+    );
+  }
+  const carried = {
+    findings: result.findings,
+    ...instance,
+    ...(result.hotspots ? { hotspots: result.hotspots } : {}),
+    ...(result.dataMap ? { dataMap: result.dataMap } : {}),
+    ...(result.testQuality ? { testQuality: result.testQuality } : {}),
+  };
+  // The unit count rides on the ledger's own detail string, so the deliverable's coverage row says
+  // what was looked at — a "ran, 0 findings" row that names 0 units read is no longer possible, and
+  // one that names 412 files is a claim the client can check.
+  const detail = `${result.detail} [examined ${result.unitsExamined} ${result.scope}]`;
+  return result.reason
+    ? { status: "partial", detail, reason: result.reason, ...(result.subStatus ? { subStatus: result.subStatus } : {}), ...carried }
+    : { status: "ran", detail, ...carried };
+}
+
 // The seam that keeps this engine testable and offline: probes reach the outside world only through
 // ctx, so a test drives real orchestration logic against fake tooling rather than a mocked runAudit.
 export interface RunContext {
@@ -131,7 +243,12 @@ export interface ModuleRunner {
   // probe returns one outcome. runAudit records one ledger row per returned outcome — so a fan-out
   // that enumerated N instances produces N rows, and an empty array is treated as a crash (a
   // fan-out with zero instances would be a silent skip, the one thing the gate exists to catch).
-  run: (ctx: RunContext) => ProbeOutcome | ProbeOutcome[];
+  // #1096: a migrated probe returns ProbeResult (Examined | NotAssessed) instead; runAudit
+  // normalizes. The union is the migration seam, and `typed` is what stops it being a hole — a
+  // runner that declares itself migrated is HELD to it at runtime, so a helper cannot quietly
+  // launder the result back into the untyped shape while the compile-time guarantee reads as kept.
+  typed?: true;
+  run: (ctx: RunContext) => ProbeReport | ProbeReport[];
 }
 
 interface ModuleFailure {
@@ -206,7 +323,19 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
     let outcomes: ProbeOutcome[];
     try {
       const result = runner.run(ctx);
-      outcomes = Array.isArray(result) ? result : [result];
+      const reports = Array.isArray(result) ? result : [result];
+      // #1096: a runner that declares itself migrated and hands back a legacy outcome means a
+      // helper somewhere laundered the typed result back into the untyped shape — the compile-time
+      // guarantee would still read as kept while the runtime one was gone. Fail loud instead.
+      if (runner.typed) {
+        const legacy = reports.filter((r) => !isTyped(r));
+        if (legacy.length) {
+          throw new Error(
+            `${module} declares itself migrated (typed: true) but returned ${legacy.length} legacy ProbeOutcome(s) — a migrated probe must return Examined | NotAssessed all the way out, or the typed contract is only decorative (#1096).`,
+          );
+        }
+      }
+      outcomes = reports.map((r) => (isTyped(r) ? toOutcome(r) : r));
     } catch (err) {
       // Recorded requires-live-run because that is the honest description of the OUTPUT (there is
       // none). The reason names the crash rather than a tier, and `failures` — not this row — is

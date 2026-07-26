@@ -221,6 +221,24 @@ describe("checkLicenseCompliance", () => {
     expect(findings[0]?.id).toBe("SUP-LICENSE-UNKNOWN-private-lib");
   });
 
+  // #1079: the license data was already sitting in the lockfile Harvey had just parsed for the
+  // SBOM (MEASURED 2026-07-26: 421 of 426 entries in targets/calibration/package-lock.json carry
+  // one), and this check was making one live registry request per dependency to fetch it again.
+  it("answers from the lockfile without touching the registry, and says where the answer came from", async () => {
+    const fetchImpl = packument({ license: "MIT" });
+    const findings = await checkLicenseCompliance({ "gpl-lib": "1.0.0" }, fetchImpl, { "gpl-lib": "GPL-3.0" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(findings[0]?.id).toBe("SUP-LICENSE-COPYLEFT-gpl-lib");
+    expect(findings[0]?.evidence).toContain("the lockfile");
+  });
+
+  it("still queries the registry for a name the lockfile does not answer", async () => {
+    const fetchImpl = packument({ license: "GPL-3.0" });
+    const findings = await checkLicenseCompliance({ "gpl-lib": "1.0.0" }, fetchImpl, { other: "MIT" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(findings[0]?.evidence).toContain("the npm registry");
+  });
+
   it("discloses SUP-LICENSE-00 naming the indeterminate packages on a network error (#1067)", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("getaddrinfo ENOTFOUND registry.npmjs.org");

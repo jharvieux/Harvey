@@ -353,35 +353,50 @@ function extractLicenseId(pkg: NpmPackument): string | undefined {
   return undefined;
 }
 
-// Live npm-registry license lookup, same trust boundary as checkSlopsquat above: a name-only
-// request (no code egress). A network failure or non-OK status leaves that package's license
-// indeterminate — which is not the same as "no license", and since #1067 is not the same as
-// silence either: the indeterminate names are counted into SUP-LICENSE-00. `licenseTier` on each returned
-// finding is "high" for a copyleft match (the SPDX id itself is deterministic, self-declared
-// registry data) and "review" for an unknown/missing/UNLICENSED license (the registry's `license`
-// field can be simply absent from otherwise-fine metadata, so it needs a human look before
-// treating it as a real gap). Non-grading regardless of tier (src/quick-scan.ts) — a license
-// conflict is a legal judgment, not a security verdict.
-export async function checkLicenseCompliance(deps: DependencyMap, fetchImpl: typeof fetch = fetch): Promise<Finding[]> {
+// License lookup. `lockfileLicenses` (#1079) is the resolved-tree license map from
+// src/sbom.ts's lockfile parse — package-lock.json records `license` on essentially every entry
+// (MEASURED 2026-07-26 on targets/calibration: 421 of 426), so the registry call is only made for
+// names the lockfile does not answer. That matters twice over: it is the version actually
+// installed rather than the registry's latest, and it removes one live request per dependency.
+//
+// The network path keeps its old trust boundary, same as checkSlopsquat above: a name-only request
+// (no code egress). A network failure or non-OK status leaves that package's license indeterminate
+// — which is not the same as "no license", and since #1067 is not the same as silence either: the
+// indeterminate names are counted into SUP-LICENSE-00. `licenseTier` on each returned finding is
+// "high" for a copyleft match (the SPDX id itself is deterministic, self-declared registry data)
+// and "review" for an unknown/missing/UNLICENSED license (the `license` field can be simply absent
+// from otherwise-fine metadata, so it needs a human look before treating it as a real gap).
+// Non-grading regardless of tier (src/quick-scan.ts) — a license conflict is a legal judgment, not
+// a security verdict.
+export async function checkLicenseCompliance(
+  deps: DependencyMap,
+  fetchImpl: typeof fetch = fetch,
+  lockfileLicenses: Readonly<Record<string, string>> = {},
+): Promise<Finding[]> {
   const findings: Finding[] = [];
   const indeterminate: string[] = [];
   const reasons = new Set<string>();
   for (const name of Object.keys(deps)) {
-    let body: NpmPackument;
-    try {
-      const res = await fetchImpl(`${NPM_REGISTRY}/${encodeURIComponent(name)}`);
-      if (!res.ok) {
+    let licenseId = lockfileLicenses[name];
+    let source = "the lockfile";
+    if (licenseId === undefined) {
+      let body: NpmPackument;
+      try {
+        const res = await fetchImpl(`${NPM_REGISTRY}/${encodeURIComponent(name)}`);
+        if (!res.ok) {
+          indeterminate.push(name);
+          reasons.add(`registry returned HTTP ${res.status}`);
+          continue;
+        }
+        body = (await res.json()) as NpmPackument;
+      } catch (err) {
         indeterminate.push(name);
-        reasons.add(`registry returned HTTP ${res.status}`);
+        reasons.add(`registry unreachable (${err instanceof Error ? err.message : String(err)})`);
         continue;
       }
-      body = (await res.json()) as NpmPackument;
-    } catch (err) {
-      indeterminate.push(name);
-      reasons.add(`registry unreachable (${err instanceof Error ? err.message : String(err)})`);
-      continue;
+      licenseId = extractLicenseId(body);
+      source = "the npm registry";
     }
-    const licenseId = extractLicenseId(body);
     const cls = classifyLicense(licenseId);
     if (cls === "permissive") continue;
     if (cls === "unknown") {
@@ -394,8 +409,8 @@ export async function checkLicenseCompliance(deps: DependencyMap, fetchImpl: typ
           taxonomy: "Unknown/missing dependency license",
           location: `package.json (${name})`,
           evidence: licenseId
-            ? `npm registry reports license "${licenseId}" for "${name}", which does not resolve to a recognized SPDX identifier.`
-            : `npm registry has no license field for "${name}".`,
+            ? `${source} reports license "${licenseId}" for "${name}", which does not resolve to a recognized SPDX identifier.`
+            : `${source} has no license field for "${name}".`,
           impact: "A dependency with no confirmed license (missing, ambiguous, or npm's UNLICENSED marker) carries no confirmed grant to use, modify, or redistribute it — a legal exposure in a distributed/commercial product, distinct from a security bug.",
           fix: `Confirm "${name}"'s actual license (its repository/README, or the maintainer directly) and record the finding; replace it if no usable license exists.`,
           precisionTier: "review",
@@ -411,7 +426,7 @@ export async function checkLicenseCompliance(deps: DependencyMap, fetchImpl: typ
         category: "License compliance",
         taxonomy: "Copyleft license conflict",
         location: `package.json (${name})`,
-        evidence: `npm registry reports "${name}" under "${licenseId}" (SPDX), a strong-copyleft license.`,
+        evidence: `${source} reports "${name}" under "${licenseId}" (SPDX), a strong-copyleft license.`,
         impact: "Strong-copyleft licenses (GPL/AGPL/LGPL and similar) impose reciprocal source-disclosure obligations that typically conflict with a closed/proprietary distribution — this needs a legal review before shipping, not just a code fix.",
         fix: `Confirm the actual distribution/linking model with counsel, or replace "${name}" with a permissively-licensed alternative.`,
         precisionTier: "high",

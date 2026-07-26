@@ -14,6 +14,8 @@ import {
   isPlaceholderSpec,
   mutationNotRunModuleRecord,
   mutationScore,
+  mutationScoreBasedOnCoveredCode,
+  noCoverageFindings,
   noTestSuiteFinding,
   noTestSuiteModuleRecord,
   reRootReportToApp,
@@ -72,6 +74,40 @@ describe("mutationScore", () => {
   it("rounds to one decimal place rather than truncating", () => {
     const mutants: StrykerMutant[] = [mutant({ status: "Killed" }), mutant({ status: "Killed" }), mutant({ status: "Survived" })];
     expect(mutationScore(mutants)).toBeCloseTo(66.7, 1);
+  });
+
+  // #1076: MEASURED against upstream's calculateMetrics.ts — RuntimeError sits in totalInvalid
+  // alongside CompileError, excluded from the denominator entirely. Harvey previously counted it as
+  // valid-but-undetected, silently pulling the score down; a comment claimed the mirror while the
+  // code diverged.
+  it("excludes RuntimeError from the denominator, same as CompileError (upstream calculateMetrics.ts)", () => {
+    const mutants: StrykerMutant[] = [mutant({ status: "Killed" }), mutant({ status: "RuntimeError" })];
+    expect(mutationScore(mutants)).toBe(100);
+  });
+});
+
+// #1076: recomputed from the committed ATC capture, this diverges sharply from mutationScore
+// (58.1% vs 27.8%) because half that repo's mutants were never executed at all — the two numbers
+// tell different stories and Stryker's own report shows both.
+describe("mutationScoreBasedOnCoveredCode (#1076)", () => {
+  it("scores detected over covered (detected + survived), excluding NoCoverage from the denominator", () => {
+    const mutants: StrykerMutant[] = [
+      mutant({ status: "Killed" }),
+      mutant({ status: "Survived" }),
+      mutant({ status: "NoCoverage" }),
+      mutant({ status: "NoCoverage" }),
+    ];
+    // covered = Killed + Survived = 2; detected = 1 → 50%, vs. mutationScore's 25% over all 4 valid.
+    expect(mutationScoreBasedOnCoveredCode(mutants)).toBe(50);
+    expect(mutationScore(mutants)).toBe(25);
+  });
+
+  it("returns 0 when every valid mutant has no coverage (nothing was ever executed)", () => {
+    expect(mutationScoreBasedOnCoveredCode([mutant({ status: "NoCoverage" }), mutant({ status: "NoCoverage" })])).toBe(0);
+  });
+
+  it("returns 0 when there are no valid mutants at all", () => {
+    expect(mutationScoreBasedOnCoveredCode([mutant({ status: "Ignored" })])).toBe(0);
   });
 });
 
@@ -348,6 +384,66 @@ describe("survivingMutantFindings (#435)", () => {
 
   it("emits nothing when no file's survivors concentrate in the boundary/negation families", () => {
     expect(survivingMutantFindings(summarizeMutationReport(report))).toEqual([]);
+  });
+});
+
+// #1076: ModuleMutationSummary already counted noCoverage per module; nothing turned it into a
+// Finding. A module the suite never even EXECUTED is a stronger signal than a surviving mutant
+// (survivingMutantFindings above) — this is the gap MEASURED at 50.8% on the committed ATC capture.
+describe("noCoverageFindings (#1076)", () => {
+  // Each fixture file lives in its OWN top-level directory: moduleOf() groups by dirname, so
+  // files sharing a directory would sum into one module's counts — these three are deliberately
+  // separate modules so each threshold case (majority/minority/too-small) is isolated.
+  const untested: StrykerReport = {
+    schemaVersion: "1",
+    files: {
+      "never-tested/file.ts": {
+        mutants: Array.from({ length: 8 }, (_, i) => mutant({ id: `nt${i}`, status: i === 0 ? "Killed" : "NoCoverage" })),
+      },
+      "well-tested/file.ts": {
+        mutants: [mutant({ id: "wt1", status: "Killed" }), mutant({ id: "wt2", status: "Killed" }), mutant({ id: "wt3", status: "NoCoverage" })],
+      },
+      "tiny/file.ts": {
+        mutants: [mutant({ id: "t1", status: "NoCoverage" }), mutant({ id: "t2", status: "NoCoverage" })],
+      },
+    },
+  };
+
+  it("emits an M8-05 finding for a module whose mutants are majority NoCoverage", () => {
+    const findings = noCoverageFindings(summarizeMutationReport(untested));
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      id: "M8-05-01",
+      category: "Test quality",
+      taxonomy: "M8 — Module has no mutation test coverage",
+      location: "never-tested",
+      severity: "Medium", // 7/8 = 87.5%, below the 90% High threshold
+    });
+  });
+
+  it("stays silent on a module below the no-coverage ratio threshold (2/3 killed)", () => {
+    const findings = noCoverageFindings(summarizeMutationReport(untested));
+    expect(findings.some((f) => f.location === "well-tested")).toBe(false);
+  });
+
+  it("stays silent on a module too small to be a signal, even at 100% no-coverage", () => {
+    const findings = noCoverageFindings(summarizeMutationReport(untested));
+    expect(findings.some((f) => f.location === "tiny")).toBe(false);
+  });
+
+  it("states the exact never-executed count and ratio in the evidence", () => {
+    const [finding] = noCoverageFindings(summarizeMutationReport(untested));
+    expect(finding?.evidence).toContain("7/8 mutant(s)");
+    expect(finding?.evidence).toContain("NEVER EXECUTED");
+  });
+
+  it("raises severity to High at or above a 90% no-coverage ratio", () => {
+    const whollyUntested: StrykerReport = {
+      schemaVersion: "1",
+      files: { "dead-code/file.ts": { mutants: Array.from({ length: 6 }, (_, i) => mutant({ id: `d${i}`, status: "NoCoverage" })) } },
+    };
+    const [finding] = noCoverageFindings(summarizeMutationReport(whollyUntested));
+    expect(finding?.severity).toBe("High");
   });
 });
 
@@ -878,5 +974,13 @@ describe("testQualityFromArtifact (#1045)", () => {
     // would put a fabricated score in front of a client.
     expect(testQualityFromArtifact({ finding: { id: "M8-00" }, moduleRecord: { status: "partial" } })).toBeUndefined();
     expect(testQualityFromArtifact(undefined)).toBeUndefined();
+  });
+
+  // #1076: the covered-code score threads through when the artifact carries it, and is simply
+  // absent (never fabricated as 0 or copied from mutationScore) for an older artifact that predates it.
+  it("carries mutationScoreBasedOnCoveredCode through when present, and omits it (not fabricates) when absent", () => {
+    const withCovered = { ...artifact, summary: { ...artifact.summary, overall: { ...artifact.summary.overall, mutationScoreBasedOnCoveredCode: 58.1 } } };
+    expect(testQualityFromArtifact(withCovered)!.mutationScoreBasedOnCoveredCode).toBe(58.1);
+    expect(testQualityFromArtifact(artifact)!.mutationScoreBasedOnCoveredCode).toBeUndefined();
   });
 });

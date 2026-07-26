@@ -18,7 +18,15 @@
 //     the tree is not resolved, saying so in a sentence a human reads.
 //   • buildSbom returns `warning`, so the CLI prints it and the operator sees it at generation time.
 // A lockfile Harvey cannot parse never yields a silently-thinner BOM: it degrades to the manifest's
-// direct dependencies and says that is what happened.
+// direct dependencies and says that is what happened. #1079 closed the remaining hole: completeness
+// used to be `components.length > 0`, so a parser recovering 1 of 900 entries still said "complete".
+// Each parser now COUNTS the entries it could not resolve and completeness is derived from that.
+//
+// ── What the BOM carries per component ───────────────────────────────────────────────────────────
+// name, version, purl, dev scope, plus (#1079) CycloneDX `licenses[]` and `hashes[]` — the two
+// fields an enterprise buyer's checklist actually looks for. Both come from the lockfile Harvey
+// already parses (MEASURED 2026-07-26 on targets/calibration/package-lock.json: 426 packages, 421
+// with `license`, 426 with `integrity`), so they cost nothing and require no network.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,6 +39,22 @@ interface SbomComponent {
   name: string;
   version: string;
   dev?: boolean;
+  // #1079: both sit in the lockfile Harvey already parses, and both are on the checklist an
+  // enterprise buyer runs against a delivered SBOM. `license` is npm's SPDX string (id or
+  // expression); `integrity` is the Subresource-Integrity string (`sha512-<base64>`) that lets a
+  // consumer verify the artifact they have is the one this BOM describes.
+  license?: string;
+  integrity?: string;
+}
+
+// #1079: `unmatched` is the whole point of this shape. Completeness used to be derived from
+// `components.length > 0`, so a parser that recovered 1 of 900 entries still reported "complete"
+// — the partial-presented-as-whole failure the module header calls THE risk with an SBOM. Every
+// parser now counts the lockfile entries it saw and could not resolve, and completeness is
+// derived from that count.
+interface ParsedLock {
+  components: SbomComponent[];
+  unmatched: number;
 }
 
 interface DependencySource {
@@ -42,39 +66,62 @@ interface DependencySource {
 
 // package-lock.json v2/v3 keys every installed package by its node_modules path; v1 nests them
 // under `dependencies`. Both carry the RESOLVED version, which is what an SBOM needs.
-export function parsePackageLock(text: string): SbomComponent[] {
-  const lock = JSON.parse(text) as {
-    packages?: Record<string, { version?: string; dev?: boolean }>;
-    dependencies?: Record<string, { version?: string; dev?: boolean; dependencies?: Record<string, unknown> }>;
-  };
+export function parsePackageLock(text: string): ParsedLock {
+  interface LockEntry {
+    version?: string;
+    dev?: boolean;
+    license?: string;
+    integrity?: string;
+    link?: boolean;
+    dependencies?: Record<string, unknown>;
+  }
+  const lock = JSON.parse(text) as { packages?: Record<string, LockEntry>; dependencies?: Record<string, LockEntry> };
   const out = new Map<string, SbomComponent>();
+  let unmatched = 0;
+  const add = (name: string, meta: LockEntry): void => {
+    out.set(`${name}@${meta.version ?? ""}`, {
+      name,
+      version: meta.version ?? "",
+      ...(meta.dev ? { dev: true } : {}),
+      ...(meta.license ? { license: meta.license } : {}),
+      ...(meta.integrity ? { integrity: meta.integrity } : {}),
+    });
+  };
 
   for (const [path, meta] of Object.entries(lock.packages ?? {})) {
     // "" is the root project itself, not a dependency; it is the BOM's subject, not a component.
-    if (path === "" || !meta.version) continue;
+    // A `link: true` entry is a workspace symlink, not a published artifact — also not a component.
+    if (path === "" || meta.link) continue;
     const name = path.replace(/^(?:.*\/)?node_modules\//, "");
-    if (!name) continue;
-    out.set(`${name}@${meta.version}`, { name, version: meta.version, ...(meta.dev ? { dev: true } : {}) });
+    if (!name || !meta.version) {
+      unmatched++;
+      continue;
+    }
+    add(name, meta);
   }
 
-  const walkV1 = (deps: Record<string, { version?: string; dev?: boolean; dependencies?: Record<string, unknown> }>): void => {
+  const walkV1 = (deps: Record<string, LockEntry>): void => {
     for (const [name, meta] of Object.entries(deps)) {
-      if (meta.version) out.set(`${name}@${meta.version}`, { name, version: meta.version, ...(meta.dev ? { dev: true } : {}) });
-      if (meta.dependencies) walkV1(meta.dependencies as Record<string, { version?: string; dev?: boolean }>);
+      if (meta.version) add(name, meta);
+      else unmatched++;
+      if (meta.dependencies) walkV1(meta.dependencies as Record<string, LockEntry>);
     }
   };
   if (!lock.packages && lock.dependencies) walkV1(lock.dependencies);
 
-  return [...out.values()];
+  return { components: [...out.values()], unmatched };
 }
 
 // pnpm-lock.yaml, `packages:` section only. Three key shapes across lockfile versions:
 //   v5: /braces/2.3.2:      v6: /braces@2.3.2:      v9: 'braces@2.3.2':
 // Parsed by line rather than with a YAML dependency (adding one is an operator decision, and the
-// section's grammar is this narrow).
-export function parsePnpmLock(text: string): SbomComponent[] {
+// section's grammar is this narrow). pnpm carries no license field, but every entry's
+// `resolution: {integrity: …}` is the same SRI hash package-lock records (#1079).
+export function parsePnpmLock(text: string): ParsedLock {
   const out = new Map<string, SbomComponent>();
   let inPackages = false;
+  let unmatched = 0;
+  let current: SbomComponent | undefined;
   for (const line of text.split("\n")) {
     if (/^packages:\s*$/.test(line)) {
       inPackages = true;
@@ -84,33 +131,62 @@ export function parsePnpmLock(text: string): SbomComponent[] {
     if (inPackages && /^\S/.test(line)) break;
     if (!inPackages) continue;
 
+    const integrity = /^\s{4}resolution:\s*\{\s*integrity:\s*([^,}\s]+)/.exec(line);
+    if (current && integrity?.[1]) {
+      current.integrity = integrity[1];
+      continue;
+    }
+
+    // A key line is at exactly two spaces of indent and ends with a colon. One that the version
+    // regex cannot resolve is a package this parser did not recover — counted, not ignored.
+    if (!/^\s{2}\S.*:\s*$/.test(line)) continue;
     const key = /^\s{2}'?\/?(@?[^'@\s]+(?:\/[^'@\s]+)?)[@/]([0-9][^'\s:(]*)'?(?:\([^)]*\))*'?:\s*$/.exec(line);
-    if (key?.[1] && key[2]) out.set(`${key[1]}@${key[2]}`, { name: key[1], version: key[2] });
+    if (key?.[1] && key[2]) {
+      current = { name: key[1], version: key[2] };
+      out.set(`${key[1]}@${key[2]}`, current);
+    } else {
+      current = undefined;
+      unmatched++;
+    }
   }
-  return [...out.values()];
+  return { components: [...out.values()], unmatched };
 }
 
 // yarn.lock — both the v1 format (`braces@^2.3.1:` / `  version "2.3.2"`) and Berry's
-// (`"braces@npm:^2.3.1":` / `  version: 2.3.2`).
-export function parseYarnLock(text: string): SbomComponent[] {
+// (`"braces@npm:^2.3.1":` / `  version: 2.3.2`). v1 records `integrity`, Berry records `checksum`.
+export function parseYarnLock(text: string): ParsedLock {
   const out = new Map<string, SbomComponent>();
   let name: string | undefined;
+  let current: SbomComponent | undefined;
+  let unmatched = 0;
   for (const line of text.split("\n")) {
     const header = /^"?(@?[^@"\s][^@"]*)@/.exec(line);
-    if (/^\S/.test(line) && header?.[1] && line.trimEnd().endsWith(":")) {
-      name = header[1];
+    if (/^\S/.test(line) && line.trimEnd().endsWith(":")) {
+      // A header that never reaches a `version` line yielded no component — count it when the
+      // next header arrives, so a truncated or unfamiliar entry cannot pass as a clean parse.
+      if (name) unmatched++;
+      name = header?.[1];
+      current = undefined;
+      if (!name) unmatched++;
+      continue;
+    }
+    const integrity = /^\s+(?:integrity|checksum):?\s+"?([^"\s]+)"?\s*$/.exec(line);
+    if (current && integrity?.[1]) {
+      current.integrity = integrity[1];
       continue;
     }
     const version = /^\s+version:?\s+"?([^"\s]+)"?\s*$/.exec(line);
     if (name && version?.[1]) {
-      out.set(`${name}@${version[1]}`, { name, version: version[1] });
+      current = { name, version: version[1] };
+      out.set(`${name}@${version[1]}`, current);
       name = undefined;
     }
   }
-  return [...out.values()];
+  if (name) unmatched++;
+  return { components: [...out.values()], unmatched };
 }
 
-const PARSERS: { file: string; parse: (text: string) => SbomComponent[] }[] = [
+const PARSERS: { file: string; parse: (text: string) => ParsedLock }[] = [
   { file: "package-lock.json", parse: parsePackageLock },
   { file: "pnpm-lock.yaml", parse: parsePnpmLock },
   { file: "yarn.lock", parse: parseYarnLock },
@@ -133,13 +209,27 @@ export function collectDependencies(dir: string): DependencySource {
     const path = join(dir, file);
     if (!existsSync(path)) continue;
     let components: SbomComponent[] = [];
+    let unmatched = 0;
     let parseError: string | undefined;
     try {
-      components = parse(readFileSync(path, "utf8"));
+      ({ components, unmatched } = parse(readFileSync(path, "utf8")));
     } catch (err) {
       parseError = (err as Error).message;
     }
     if (components.length > 0) {
+      // #1079: a parser that resolved SOME entries and skipped others is exactly the
+      // partial-presented-as-whole case. Say how many were missed rather than calling it complete
+      // because the array was non-empty.
+      if (unmatched > 0) {
+        return {
+          components,
+          source: file,
+          completeness: "incomplete",
+          note:
+            `${file} was parsed, but ${unmatched} of ${components.length + unmatched} entries could not be resolved to a name and version and are MISSING from this BOM. ` +
+            "Treat the component list as partial: an absent component here means unlisted, not absent from the project.",
+        };
+      }
       return { components, source: file, completeness: "complete", note: `Resolved dependency tree parsed from ${file}.` };
     }
     // A lockfile that is present but yields nothing is the dangerous case: it looks like a clean
@@ -167,10 +257,41 @@ export function collectDependencies(dir: string): DependencySource {
   };
 }
 
+// #1079: the resolved-tree license map for checkLicenseCompliance, from the same parse the SBOM
+// uses — so the BOM a client receives and the license findings can never disagree. Keyed by name
+// only, matching what that check consumes; when a tree holds two versions of a package under
+// different licenses the later entry wins, which is why the finding still names its source.
+export function lockfileLicenses(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const c of collectDependencies(dir).components) {
+    if (c.license) out[c.name] = c.license;
+  }
+  return out;
+}
+
 // purl (package-URL) for an npm component. The scope's leading "@" is percent-encoded; the "/"
 // separating namespace from name is not. Every other character valid in an npm name is URL-safe.
 function purl(c: SbomComponent): string {
   return `pkg:npm/${c.name.replace(/^@/, "%40")}@${encodeURIComponent(c.version)}`;
+}
+
+// CycloneDX splits a single SPDX id (`licenses[].license.id`) from a compound expression
+// (`licenses[].expression`) — "(MIT OR Apache-2.0)" in the id field fails schema validation, which
+// is the one thing a procurement pipeline will actually notice.
+function licenses(c: SbomComponent): object[] | undefined {
+  if (!c.license) return undefined;
+  return /[\s()]/.test(c.license) ? [{ expression: c.license }] : [{ license: { id: c.license } }];
+}
+
+// npm records Subresource Integrity (`sha512-<base64>`); CycloneDX wants an algorithm name and a
+// hex digest. A hash Harvey cannot convert is omitted rather than emitted in the wrong encoding —
+// a consumer verifying against a malformed digest gets a mismatch, which is worse than no hash.
+const SRI_ALG: Record<string, string> = { sha1: "SHA-1", sha256: "SHA-256", sha384: "SHA-384", sha512: "SHA-512" };
+
+function hashes(c: SbomComponent): object[] | undefined {
+  const [, alg, b64] = /^(sha1|sha256|sha384|sha512)-(.+)$/.exec(c.integrity ?? "") ?? [];
+  if (!alg || !b64) return undefined;
+  return [{ alg: SRI_ALG[alg], content: Buffer.from(b64, "base64").toString("hex") }];
 }
 
 export function buildSbom(dir: string, opts: { targetName?: string; timestamp?: string } = {}): { bom: object; warning?: string } {
@@ -189,6 +310,12 @@ export function buildSbom(dir: string, opts: { targetName?: string; timestamp?: 
         { name: "harvey:completeness", value: deps.completeness },
         { name: "harvey:source", value: deps.source },
         { name: "harvey:note", value: deps.note },
+        // #1079: licenses and hashes are the two fields a buyer checks, and how many components
+        // actually carry them depends on the lockfile format (package-lock records both; pnpm and
+        // yarn record only the integrity hash). State the coverage rather than letting a
+        // half-populated field read as the whole picture.
+        { name: "harvey:license-coverage", value: `${deps.components.filter((c) => c.license).length}/${deps.components.length} components carry a license from ${deps.source}` },
+        { name: "harvey:hash-coverage", value: `${deps.components.filter((c) => c.integrity).length}/${deps.components.length} components carry an integrity hash from ${deps.source}` },
       ],
     },
     components: deps.components.map((c) => ({
@@ -199,6 +326,8 @@ export function buildSbom(dir: string, opts: { targetName?: string; timestamp?: 
       purl: purl(c),
       // CycloneDX scope: dev-only dependencies are not part of the shipped artifact.
       ...(c.dev ? { scope: "optional" as const } : {}),
+      ...(licenses(c) ? { licenses: licenses(c) } : {}),
+      ...(hashes(c) ? { hashes: hashes(c) } : {}),
     })),
     // CycloneDX's own completeness statement. Kept alongside the properties above because a
     // consumer that ignores compositions must still be told, and vice versa.

@@ -96,22 +96,28 @@ regexTarget = "match"
 regexes = ['''@(?:localhost|127\.0\.0\.1)''']
 
 # The anon/publishable key is public by design and is the most credibility-fatal false positive
-# (docs/design/mechanical-toolchain.md §3). regexTarget = "line" so any line naming
-# NEXT_PUBLIC_SUPABASE_ANON_KEY is suppressed for EVERY rule — including the default JWT/entropy
-# rules that would otherwise flag the anon token's `eyJ...` shape. The service_role JWT lives on
-# its own line and is NOT suppressed. Paths cover documented sample/example files and deps.
+# (docs/design/mechanical-toolchain.md §3). This allowlist used to be `regexTarget = "line"`, which
+# suppressed every rule on any line MENTIONING the anon key or a pk_ key — MEASURED 2026-07-26
+# (gitleaks 8.30.1): a real `sk_live_` Stripe secret sharing a line with `pk_test_…` or with
+# `NEXT_PUBLIC_SUPABASE_ANON_KEY` was deleted outright, reported nowhere (#1078). regexTarget =
+# "match" scopes the suppression to the matched VALUE, so a rule that matched a different secret on
+# the same line still fires. The residue — the default `jwt` rule matching the anon token's own
+# `eyJ…` shape, whose match is the token itself and so cannot be recognized by name here — is
+# cleared by decoded role claim in parseGitleaksFindings (src/scan/secrets.ts), which COUNTS it.
+#
+# Only node_modules is path-allowlisted here. Sample/template/.env.example paths used to be dropped
+# by gitleaks too; they are now dropped in secrets.ts instead, so the drop can be counted and
+# disclosed as SEC-GL-ALLOW-00 rather than vanishing (#1078) — a real value committed to a
+# `.template` file is a well-known leak class, not automatically a placeholder.
 [allowlist]
-description = "Public anon key env var, Stripe publishable keys, documented sample env files, and dependency trees"
-regexTarget = "line"
+description = "Public anon key env var, Stripe publishable keys, and dependency trees"
+regexTarget = "match"
 regexes = [
   '''NEXT_PUBLIC_SUPABASE_ANON_KEY''',
   # Stripe publishable keys (pk_live_/pk_test_) are public by design, like the anon key — the
-  # NEXT_PUBLIC_*KEY name rule + generic-api-key would otherwise flag the line. Suppress the line.
+  # NEXT_PUBLIC_*KEY name rule + generic-api-key would otherwise flag the value.
   '''pk_(?:live|test)_[A-Za-z0-9]+''',
 ]
 paths = [
-  '''(^|/)\.env\.example$''',
-  '''\.sample$''',
-  '''\.template$''',
   '''(^|/)node_modules/''',
 ]

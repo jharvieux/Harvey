@@ -139,6 +139,10 @@ const NO_CWE: { match: (t: string) => boolean; reason: string }[] = [
   { match: (t) => t.startsWith("Coverage —"), reason: "coverage disclosure (a scope not assessed) — a not-assessed row, not a finding with a CWE" },
   { match: (t) => t.startsWith("Env var"), reason: "environment-variable hygiene/completeness signal — configuration correctness, not a security weakness class" },
   { match: (t) => t.endsWith("— coverage not assessed") || t.endsWith("— reachability not assessed"), reason: "coverage/reachability disclosure — a not-assessed row, not a finding with a CWE" },
+  // #1078: both are scope statements about the secret sweep, not detections. The first counts
+  // matches deliberately not graded (public-by-design keys, sample/template paths); the second
+  // states that TruffleHog ran verified-only and gitleaks never walked history.
+  { match: (t) => t.endsWith("— suppressed by allowlist") || t.endsWith("— scope of assessment"), reason: "suppression count / scope disclosure — states what was deliberately not graded, not a weakness found" },
   // Supply-chain / dependency posture — the weakness lives in the third-party component; a per-CVE
   // CWE (when OSV provides one) travels on the individual finding, not this taxonomy label.
   { match: (t) => /^(Known-vulnerable|Known-malicious|Slopsquatted|Possible typosquat|Unpinned|Non-registry|Install lifecycle|Missing lockfile|Copyleft|Unknown\/missing dependency|EOL framework)/.test(t), reason: "supply-chain / dependency-posture signal — a per-CVE CWE (when available from OSV) travels on the individual finding, not this taxonomy label" },

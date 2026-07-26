@@ -4,10 +4,14 @@
 // and a ranked surviving-mutant list. Pure transforms only; src/cli/mutation-scan.ts does the
 // process invocation and file I/O.
 //
-// Score formula mirrors Stryker's own published metric: a mutant is "valid" unless its status
-// is Ignored, CompileError, or Pending (never actually run); score = detected / valid, where
-// detected = Killed + Timeout. NoCoverage, Survived, and RuntimeError all count against the
-// score — each is a mutant the suite did not prove itself against.
+// Score formula mirrors Stryker's own published metric (mutation-testing-elements/packages/
+// metrics/src/calculateMetrics.ts — MEASURED 2026-07-25; this comment previously claimed the
+// mirror while diverging on RuntimeError, corrected by #1076): a mutant is "valid" unless its
+// status is Ignored or Pending (never actually run), or CompileError or RuntimeError (ran, but its
+// outcome reflects a build/runtime failure rather than test quality — upstream excludes both from
+// scoring the same way). score = detected / valid, where detected = Killed + Timeout. NoCoverage
+// and Survived count against the score — each is a mutant the suite had the opportunity to kill
+// and did not.
 
 import { dirname, isAbsolute, relative, sep } from "node:path";
 import type { Finding, TestQuality, TestQualityRow } from "./findings.js";
@@ -42,6 +46,13 @@ export interface StrykerReport {
   schemaVersion?: string;
   thresholds?: { high: number; low: number };
   files: Record<string, StrykerFileReport>;
+  // #1076: "Free-format object that represents the configuration used to run mutation testing"
+  // (mutation-testing-report-schema.json, MEASURED 2026-07-25) — the EFFECTIVE config, including
+  // its resolved `mutate` globs, sits in the JSON report already loaded. verifyMutationScope's
+  // caller (src/cli/mutation-scan.ts) reads config.mutate as the primary scope source, so a target
+  // using a non-JSON stryker.conf.mjs/.js (previously "not statically readable") is no longer
+  // scope-blind.
+  config?: Record<string, unknown>;
 }
 
 // Not exported: nothing outside this file needs to name these shapes — callers get them as
@@ -57,6 +68,12 @@ interface ModuleMutationSummary {
   ignored: number;
   compileErrors: number;
   mutationScore: number;
+  // #1076: Stryker's OTHER published headline metric — detected / (detected + survived), i.e. the
+  // score over only the mutants a test actually reached (excludes NoCoverage from the denominator,
+  // unlike mutationScore above). Recomputed from the committed ATC capture: 58.1% here vs. 27.8%
+  // for mutationScore — "your tests are bad" and "your tests are decent but reach half the code"
+  // are different findings, and Stryker's own report shows both.
+  mutationScoreBasedOnCoveredCode: number;
 }
 
 interface SurvivingMutant {
@@ -99,7 +116,13 @@ interface MutationSummary {
   coveredScope: string[];
 }
 
-const NOT_VALID: ReadonlySet<MutantStatus> = new Set(["Ignored", "CompileError", "Pending"]);
+// #1076: RuntimeError added — MEASURED 2026-07-25 against upstream's calculateMetrics.ts, which
+// puts RuntimeError in totalInvalid alongside CompileError (both excluded from the valid/scored
+// set); Harvey previously counted a RuntimeError mutant as valid-but-undetected, silently pulling
+// the score down whenever one occurred (runtimeErrors was 0 in the one real capture measured, so
+// this has never actually bitten a real report — but the header comment claimed the mirror while
+// the code diverged).
+const NOT_VALID: ReadonlySet<MutantStatus> = new Set(["Ignored", "CompileError", "Pending", "RuntimeError"]);
 const DETECTED: ReadonlySet<MutantStatus> = new Set(["Killed", "Timeout"]);
 const SURVIVING: ReadonlySet<MutantStatus> = new Set(["Survived", "NoCoverage"]);
 
@@ -108,6 +131,18 @@ export function mutationScore(mutants: StrykerMutant[]): number {
   if (valid.length === 0) return 0;
   const detected = valid.filter((m) => DETECTED.has(m.status)).length;
   return Math.round((detected / valid.length) * 1000) / 10;
+}
+
+// #1076: upstream's mutationScoreBasedOnCoveredCode (MEASURED 2026-07-25): detected / (detected +
+// survived) — i.e. valid mutants MINUS the ones with no coverage at all. Harvey computed only the
+// first score; this is the second one Stryker's own report always shows alongside it.
+export function mutationScoreBasedOnCoveredCode(mutants: StrykerMutant[]): number {
+  const valid = mutants.filter((m) => !NOT_VALID.has(m.status));
+  if (valid.length === 0) return 0;
+  const detected = valid.filter((m) => DETECTED.has(m.status)).length;
+  const covered = valid.filter((m) => m.status !== "NoCoverage").length;
+  if (covered === 0) return 0;
+  return Math.round((detected / covered) * 1000) / 10;
 }
 
 function summarize(module: string, mutants: StrykerMutant[]): ModuleMutationSummary {
@@ -123,6 +158,7 @@ function summarize(module: string, mutants: StrykerMutant[]): ModuleMutationSumm
     ignored: count("Ignored"),
     compileErrors: count("CompileError"),
     mutationScore: mutationScore(mutants),
+    mutationScoreBasedOnCoveredCode: mutationScoreBasedOnCoveredCode(mutants),
   };
 }
 
@@ -265,6 +301,11 @@ export function testQualityFromArtifact(artifact: unknown): TestQuality | undefi
   const survivors = a.summary.survivingMutants ?? [];
   return {
     mutationScore: a.summary.overall.mutationScore,
+    // #1076: absent ⇒ this artifact predates the metric (an older run's JSON) rather than a value
+    // invented here — same optional-when-not-computed convention as cwe/owasp/references elsewhere.
+    ...(a.summary.overall.mutationScoreBasedOnCoveredCode !== undefined
+      ? { mutationScoreBasedOnCoveredCode: a.summary.overall.mutationScoreBasedOnCoveredCode }
+      : {}),
     coveredScope: a.summary.coveredScope ?? [],
     // An UNVERIFIABLE scope is not a whole-repo claim: only a verified, unscoped run earns `true`.
     wholeRepo: Boolean(a.scope?.verified && !a.scope.scoped),
@@ -935,6 +976,47 @@ export function survivingMutantFindings(summary: MutationSummary): Finding[] {
         impact: "The suite never proved itself against the negation/boundary condition here (e.g. an inverted comparison or off-by-one) — a real defect on that path would pass every existing test.",
         fix: "Add test cases that exercise the boundary/negation condition directly (e.g. equal-to, just-over, just-under, and the inverted branch) for the mutators listed above.",
         value: 4,
+        ease: 3,
+        safety: 5,
+      } satisfies Finding;
+    });
+}
+
+// #1076: NoCoverage was parsed and counted per module (ModuleMutationSummary.noCoverage, computed
+// above by summarize()) but nothing downstream turned it into a Finding — MEASURED against the
+// committed real ATC capture (reports/atc/captures/m8-mutation-broad.json): 26,488/52,152 mutants
+// (50.8%) have NO coverage at all, and the deliverable's 32 findings were all "Denial/boundary path
+// untested" (survivingMutantFindings above), never stating that half the mutated code never ran. A
+// module the suite never even EXECUTED is a stronger, more urgent gap than a surviving mutant: that
+// code ran and wasn't killed; this code never ran at all. One finding per module whose mutants are
+// MAJORITY no-coverage (a module below NO_COVERAGE_MIN_MUTANTS is too small a sample to be a
+// signal, not filtered out of noise-aversion alone). No manual cap here: #935's presentation-layer
+// rollup (report-template/rollup.mjs) already groups repeats of the same (taxonomy, severity) shape
+// past ROLLUP_THRESHOLD, the same as every other finding family — a second cap here would just be
+// two caps disagreeing. Distinct id family from M8-00 (no suite at all) and M8-02-* (survived-but-
+// covered): M8-05-*.
+const NO_COVERAGE_MIN_MUTANTS = 5;
+const NO_COVERAGE_RATIO_THRESHOLD = 0.5;
+
+export function noCoverageFindings(summary: MutationSummary): Finding[] {
+  let n = 0;
+  return summary.byModule
+    .filter((m) => m.totalMutants >= NO_COVERAGE_MIN_MUTANTS && m.noCoverage / m.totalMutants >= NO_COVERAGE_RATIO_THRESHOLD)
+    .map((m) => {
+      const ratio = Math.round((m.noCoverage / m.totalMutants) * 1000) / 10;
+      return {
+        id: `M8-05-${String(++n).padStart(2, "0")}`,
+        status: "Open",
+        category: "Test quality",
+        title: `No test coverage at all: ${m.module}`,
+        severity: ratio >= 90 ? "High" : "Medium",
+        confidence: "Confirmed",
+        taxonomy: "M8 — Module has no mutation test coverage",
+        location: m.module,
+        evidence: `${m.noCoverage}/${m.totalMutants} mutant(s) in this module (${ratio}%) were NEVER EXECUTED by the test suite — not surviving a kill attempt, simply never run.`,
+        impact: "A defect anywhere in this module's mutated lines would pass every existing test, because no test exercises the code at all — a stronger, more urgent gap than a surviving mutant (which at least means the code ran and the suite failed to kill it).",
+        fix: "Add tests that execute this module's code at all (even a smoke test moves these mutants from NoCoverage toward Killed/Survived) before investing in kill-quality improvements here.",
+        value: 5,
         ease: 3,
         safety: 5,
       } satisfies Finding;

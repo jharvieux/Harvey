@@ -38,6 +38,7 @@ import {
   parseSemgrepFindings,
   partitionMarkerSuppressed,
   runSemgrep,
+  semgrepErrorFinding,
   semgrepScopeFinding,
   semgrepSuppressionFinding,
   semgrepUnavailableFinding,
@@ -56,6 +57,7 @@ import {
 } from "./supabase-static.js";
 import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, type DependencyMap } from "./supply-chain.js";
 import { checkWebExtensionManifest } from "./webext-manifest.js";
+import { lockfileLicenses } from "../sbom.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
@@ -241,6 +243,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...parseSemgrepFindings({ results: reported }));
       findings.push(...semgrepSuppressionFinding(suppressed, scanDir));
       findings.push(...semgrepScopeFinding(scanDir, semgrep.result));
+      // #1077: a file semgrep errored on (syntax error) still counts as "scanned", so the SCOPE
+      // diff above can't catch it — and paths.skipped is a distinct silence again. Named here so
+      // neither reads as a clean file.
+      findings.push(...semgrepErrorFinding(scanDir, semgrep.result));
     }
     findings.push(...checkMissingCsp(scanDir));
     findings.push(...checkHostingConfigHeaders(scanDir));
@@ -305,8 +311,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
         findings.push(licenseCoverageFinding(Object.keys(allDeps), NETWORK_SKIPPED_REASON));
       } else {
         findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
-        // #456 — license compliance (SPDX + copyleft/unknown flags).
-        findings.push(...(await checkLicenseCompliance(allDeps)));
+        // #456 — license compliance (SPDX + copyleft/unknown flags). #1079: the lockfile Harvey
+        // already parses for the SBOM answers most of these, so pass it in — the registry is only
+        // queried for names it does not cover.
+        findings.push(...(await checkLicenseCompliance(allDeps, fetch, lockfileLicenses(scanDir))));
       }
     }
     findings.push(...checkLockfilePresence(scanDir));

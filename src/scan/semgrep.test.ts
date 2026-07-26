@@ -12,6 +12,7 @@ import {
   partitionMarkerSuppressed,
   POSTMESSAGE_WILDCARD_TAXONOMY,
   runSemgrep,
+  semgrepErrorFinding,
   semgrepScopeFinding,
   semgrepSuppressionFinding,
   semgrepUnavailableFinding,
@@ -184,6 +185,68 @@ describe("parseSemgrepFindings", () => {
     const findings = parseSemgrepFindings(output);
     expect(findings[0]?.cwe).toEqual(["CWE-89: SQL Injection"]);
     expect(findings[0]?.owasp).toEqual(["A03:2021 - Injection"]);
+  });
+
+  // #1077: MEASURED 2026-07-25 (semgrep 1.164.0) — all 915 rules across the six registry packs
+  // Harvey loads carry metadata.references. Dropping it left 224/386 (58%) of a real deliverable's
+  // findings carrying the identical generic placeholder one line after the rule's own guidance was
+  // discarded (semgrep.ts:112 in the pre-fix code).
+  it("#1077: composes the fix from the rule's own references + source, instead of the generic placeholder", () => {
+    const output: SemgrepOutput = {
+      results: [
+        {
+          check_id: "package_managers.npm.npm-missing-minimum-release-age",
+          path: "package.json",
+          extra: {
+            message: "missing minimumReleaseAge",
+            severity: "ERROR",
+            metadata: {
+              confidence: "HIGH",
+              references: ["https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing/", "https://github.com/npm/cli/pull/8965"],
+              source: "https://semgrep.dev/r/package_managers.npm.npm-missing-minimum-release-age",
+              likelihood: "LOW",
+              impact: "HIGH",
+            },
+          },
+        },
+      ],
+    };
+    const [finding] = parseSemgrepFindings(output);
+    expect(finding?.references).toEqual(["https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing/", "https://github.com/npm/cli/pull/8965"]);
+    expect(finding?.fix).toContain("https://github.blog/changelog/2026-02-18-npm-bulk-trusted-publishing/");
+    expect(finding?.fix).toContain("https://semgrep.dev/r/package_managers.npm.npm-missing-minimum-release-age");
+    expect(finding?.fix).not.toBe("Review the matched code path against the rule's remediation guidance.");
+  });
+
+  it("#1077: a rule with no references/source (every harvey-* custom rule today) keeps the generic placeholder fix, and no references field", () => {
+    const output: SemgrepOutput = {
+      results: [
+        {
+          check_id: "harvey-dangerously-set-inner-html",
+          path: "app/Bio.tsx",
+          extra: { message: "xss", severity: "ERROR", metadata: { confidence: "HIGH" } },
+        },
+      ],
+    };
+    const [finding] = parseSemgrepFindings(output);
+    expect(finding?.references).toBeUndefined();
+    expect(finding?.fix).toBe("Review the matched code path against the rule's remediation guidance.");
+  });
+
+  it("#1077: a bare-STRING references value normalizes to an array, same as cwe/owasp (#976)", () => {
+    const output: SemgrepOutput = {
+      results: [
+        {
+          check_id: "some.rule",
+          path: "app/x.ts",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- proving the runtime shape a registry rule can ship, not the declared type
+          extra: { message: "m", severity: "ERROR", metadata: { references: "https://example.com/one-link" } as any },
+        },
+      ],
+    };
+    const [finding] = parseSemgrepFindings(output);
+    expect(finding?.references).toEqual(["https://example.com/one-link"]);
+    expect(finding?.fix).toContain("https://example.com/one-link");
   });
 });
 
@@ -385,5 +448,44 @@ describe("semgrepScopeFinding (#1066)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// #1077: MEASURED 2026-07-25 (semgrep 1.164.0) — a file with a syntax error still appears in
+// paths.scanned (so semgrepScopeFinding's diff above can't catch it) while contributing zero
+// findings, indistinguishable from a clean file. The repo already states the principle this
+// violates, verbatim, at runSemgrepOnFile's guard below — this closes the gap on the whole-tree
+// engagement path, which never read `errors[]` at all.
+describe("semgrepErrorFinding (#1077)", () => {
+  it("names a per-file parse error, even though the file is also in paths.scanned", () => {
+    const findings = semgrepErrorFinding("/target", {
+      errors: [{ type: "Syntax error", message: "Syntax error at line /target/app/broken.tsx:1:\nsomething unexpected", path: "/target/app/broken.tsx" }],
+      paths: { scanned: ["/target/app/broken.tsx"] },
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ id: "SEM-ERR-00", confidence: "N/A", severity: "Info", category: "Coverage" });
+    expect(findings[0]?.evidence).toContain("app/broken.tsx (Syntax error: Syntax error at line /target/app/broken.tsx:1:)");
+  });
+
+  // MEASURED 2026-07-25: semgrep emits errors[].type as a bare string for a whole-file syntax
+  // error but as an array (e.g. ["PartialParsing", [...]]) for a partial-parse warning.
+  it("handles errors[].type as an array without crashing or printing [object Object]", () => {
+    const findings = semgrepErrorFinding("/target", {
+      errors: [{ type: ["PartialParsing", ["some-detail"]], path: "/target/app/partial.ts" }],
+    });
+    expect(findings[0]?.evidence).toContain("PartialParsing");
+    expect(findings[0]?.evidence).not.toContain("[object Object]");
+  });
+
+  it("names a file semgrep chose to skip (paths.skipped, only populated at --verbose) alongside any errors", () => {
+    const findings = semgrepErrorFinding("/target", {
+      paths: { scanned: [], skipped: [{ path: "/target/vendor/huge.js", reason: "too_big" }] },
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.evidence).toContain("vendor/huge.js (skipped: too_big)");
+  });
+
+  it("stays silent when there are no errors and nothing was skipped", () => {
+    expect(semgrepErrorFinding("/target", { paths: { scanned: ["/target/app/ok.ts"] } })).toEqual([]);
   });
 });
