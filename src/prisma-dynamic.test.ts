@@ -15,10 +15,14 @@ import {
   hasCommittedMigrations,
   type PrismaLayout,
   type PrismaStandUpRunner,
+  prismaCliMajor,
+  prismaV7ApplyArgs,
+  prismaV7ConfigSource,
   readPrismaLayout,
   RLS_NOT_APPLICABLE,
   runPrismaDynamicValidation,
   selectPrismaMigrateCommand,
+  stripSchemaDatasourceUrl,
 } from "./prisma-dynamic.js";
 
 let dir: string;
@@ -92,6 +96,49 @@ describe("selectPrismaMigrateCommand", () => {
   });
   it("falls back to `db push` when there are no committed migrations", () => {
     expect(selectPrismaMigrateCommand(migLayout({ migrationsDir: null }))).toEqual(["db", "push", "--skip-generate"]);
+  });
+});
+
+// #1163 — Prisma 7 rejects `url = env()` in schema.prisma (P1012) and dropped --skip-generate. These
+// pure helpers let the live stand-up apply a Prisma-5/6-style schema under a v7 CLI.
+describe("prismaCliMajor", () => {
+  it("parses the major version from `prisma --version` output", () => {
+    expect(prismaCliMajor("prisma               : 7.9.0\n@prisma/client       : Not found\n")).toBe(7);
+    expect(prismaCliMajor("prisma                  : 5.18.0")).toBe(5);
+  });
+  it("returns null when no prisma version line is present (⇒ pre-v7, unchanged path)", () => {
+    expect(prismaCliMajor("no version here")).toBeNull();
+  });
+});
+
+describe("stripSchemaDatasourceUrl", () => {
+  it("removes the datasource url/directUrl assignment lines (the P1012 trigger) but keeps models", () => {
+    const schema = [
+      "datasource db {",
+      '  provider = "postgresql"',
+      '  url      = env("DATABASE_URL")',
+      '  directUrl = env("DIRECT_URL")',
+      "}",
+      "model Team { id String @id url String }",
+    ].join("\n");
+    const out = stripSchemaDatasourceUrl(schema);
+    expect(out).not.toMatch(/^\s*url\s*=/m);
+    expect(out).not.toMatch(/^\s*directUrl\s*=/m);
+    expect(out).toContain('provider = "postgresql"');
+    expect(out).toContain("model Team { id String @id url String }"); // a model field named url survives (no `=`)
+  });
+});
+
+describe("prismaV7ConfigSource + prismaV7ApplyArgs", () => {
+  it("synthesizes a plain-object config that points the datasource at DATABASE_URL", () => {
+    const src = prismaV7ConfigSource("/tmp/x/schema.prisma");
+    expect(src).toContain('schema: "/tmp/x/schema.prisma"');
+    expect(src).toContain("datasource: { url: process.env.DATABASE_URL }");
+    expect(src).not.toContain("import"); // no prisma/config import — loads before the target's deps install
+  });
+  it("drops --skip-generate and points the CLI at the config", () => {
+    expect(prismaV7ApplyArgs(["db", "push", "--skip-generate"], "/tmp/c.ts")).toEqual(["db", "push", "--config", "/tmp/c.ts"]);
+    expect(prismaV7ApplyArgs(["migrate", "deploy"], "/tmp/c.ts")).toEqual(["migrate", "deploy", "--config", "/tmp/c.ts"]);
   });
 });
 

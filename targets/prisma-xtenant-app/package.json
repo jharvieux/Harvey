@@ -2,18 +2,19 @@
   "name": "prisma-xtenant-app",
   "version": "0.0.0",
   "private": true,
-  "description": "INTENTIONALLY VULNERABLE M2 cross-tenant fixture for the Harvey pen-test kit (#796). Never deploy. A minimal Prisma membership app (User <- TeamMember -> Team) with one properly tenant-scoped team route and one unscoped route, so the authenticated cross-tenant BOLA probe's positive+negative branches are regression-gated offline. Answer key: README.md.",
+  "description": "INTENTIONALLY VULNERABLE M2 cross-tenant fixture for the Harvey pen-test kit (#796/#1163). Never deploy. A minimal Prisma membership app (User <- TeamMember -> Team) with one properly tenant-scoped team route and one unscoped route, so the authenticated cross-tenant BOLA probe's positive+negative branches are gated both OFFLINE (in-process, prisma-xtenant-fixture.test.ts) and LIVE (real Postgres + next-auth sessions, prisma-standup.ts). Answer key: README.md.",
   "scripts": {
-    "build": "next build",
+    "build": "prisma generate --schema=./schema.prisma && next build",
     "start": "next start"
   },
   "dependencies": {
-    "@prisma/client": "^5.18.0",
+    "@prisma/client": "^6.2.1",
     "next": "^14.2.5",
+    "next-auth": "^4.24.11",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "prisma": "^5.18.0"
+    "prisma": "^6.2.1"
   }
 }
