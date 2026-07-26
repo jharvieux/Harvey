@@ -6,13 +6,14 @@ import { summarizeMutationReport, type StrykerReport } from "./mutation-scan.js"
 import { buildCoverageMatrix } from "./scan/calibration.js";
 import { m3Entries } from "./scan/calibration/m3.entries.js";
 
-// REAL-schema fixture (see hotspot-scan.ts's header) — synthetic paths/values, verified field
-// shape from a live `vitals 0.2.0 report --json` capture (issue #94). Plants every M3 corpus
-// fixture from docs/design/spec-72-crossmodule-corpus.md §M3:
+// REAL `vitals 0.2.0 report --json` capture (see hotspot-scan.ts's header). Since #1146 this is
+// genuine tool output, produced by src/__fixtures__/vitals-recapture/seed.py from a purpose-seeded
+// git repo + `.vitals` provenance DB — NOT a hand-written fixture. The seed makes vitals emit every
+// M3 corpus fixture from docs/design/spec-72-crossmodule-corpus.md §M3:
 //   - core/checkout.ts    M3-P-HOTSPOT      high churn + high complexity -> highest risk_score, top-K
-//   - generated/schema.gen.ts  M3-N-CHURN-TRIVIAL  highest raw churn but trivial complexity -> low risk_score, must NOT be top-K
+//   - generated/schema.gen.ts  M3-N-CHURN-TRIVIAL  highest RAW churn but low complexity -> lower risk_score, must NOT be top-K
 //   - core/billing.ts     M3-P-TRUCK1       sole-author -> truck_factor: 1 in knowledge_risk
-//   - core/reporting.ts   M3-N-MULTIAUTHOR  3 seeded authors -> truck_factor: 3, must not be flagged
+//   - core/reporting.ts   M3-N-MULTIAUTHOR  3 balanced authors -> truck_factor 2, absent from knowledge_risk, must not be flagged
 //   - core/a.ts / core/b.ts  M3-P-COUPLING  always co-committed -> one coupling edge
 //   - core/checkout.ts    M3-P-AIPROV       also in provenance.ai_files + churn HIGH -> AI finding (#369)
 //   - lib/stable.ts       M3-N-AIPROV-STABLE  in provenance.ai_files but churn LOW, must NOT be flagged

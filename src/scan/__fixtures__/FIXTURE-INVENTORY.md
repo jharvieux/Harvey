@@ -52,27 +52,28 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
 | 3 | `src/__fixtures__/lighthouse-opportunity-audit.json` | Lighthouse 13.4.0 | **CAPTURED** | Inline `_note`: "REAL Lighthouse 13.4.0 capture (live run, 2026-07-25) … chrome-launcher + onlyCategories:['performance'] … Trimmed of headings/sortedBy/debugData". Provenance is inline, not a sibling `PROVENANCE.md`. Consumer: `src/lighthouse.test.ts`. |
 | 4 | `src/__fixtures__/lighthouse-report-errored.json` | Lighthouse 13.4.0 | **CAPTURED** | Inline `_note`: "REAL Lighthouse 13.4.0 capture (live run, 2026-07-25) … the NO_FCP failure mode". Provenance inline. Consumer: `src/lighthouse.test.ts`. |
 | 5 | `src/__fixtures__/lighthouse-report.json` | Lighthouse 13.4.0 | **CAPTURED** (#1130, 2026-07-26) | Was HAND-WRITTEN (round synthetic values, no provenance) — the primary `LighthouseResult` fixture and the highest-risk #1063 row. RE-CAPTURED: real Lighthouse 13.4.0 live run against a deliberately-poor served page (LCP 4650.9089ms, TBT 3149ms, CLS 0.5953202217614142, score 0.32 — non-round), same chrome-launcher + onlyCategories:['performance'] invocation as its two captured siblings; the bundled Playwright chromium yielded NO_FCP (#488/#556) so the system Google Chrome was used. Inline `_note` records provenance (matching siblings). Trimmed to the fields `LighthouseResult` reads; records dropped, never edited. Consumer: `src/lighthouse.test.ts`. |
-| 6 | `src/__fixtures__/vitals-report.json` | `vitals` 0.2.0 (Claude Code plugin) | **HAND-WRITTEN** (re-capture split to the #1130 remainder) | Self-declared synthetic; field names/nesting shaped from a #94 capture, values invented. **Correction (#1130, MEASURED 2026-07-26): the earlier "not installed" note has decayed.** `vitals` is NOT a PyPI package but the Claude Code plugin `vitals_cli.py`; version 0.2.0 (the pinned `EXPECTED_VITALS_VERSION`) IS installed at `~/.claude/plugins/cache/vitals/vitals/0.2.0/scripts/vitals_cli.py` (`vitals_cli.py version` → `Vitals v0.2.0`), and a real `report --json` run emits the full 11-key schema. The real blocker is NOT tool availability: this fixture is also the M3 **calibration corpus** plant (`m3.entries.ts`, scored via `buildCoverageMatrix` in `src/hotspot-scan.test.ts`), so a faithful re-capture must reproduce every planted entry (M3-P-HOTSPOT top-K, M3-N-CHURN-TRIVIAL not-top-K, truck_factor 1 vs 3, the a/b coupling edge) from a purpose-seeded git repo AND reproduce the AI-provenance sub-signal (M3-P-AIPROV / M3-N-AIPROV-*) from a seeded `.vitals` provenance DB — a fresh run has `provenance: {"has_data": false}` and would fail the AIPROV corpus entries. That is a corpus-reconstruction task on par with the inline-literal rows below, not a drop-in capture — split to the #1130 remainder. No automated live backstop. |
+| 6 | `src/__fixtures__/vitals-report.json` | `vitals` 0.2.0 (Claude Code plugin) | **CAPTURED** (#1146, 2026-07-26) | Was HAND-WRITTEN (self-declared synthetic; and it encoded values real vitals never emits — `churn_label: "MEDIUM"`, `truck_factor: 3` for a 3-equal-author file, that file listed in `knowledge_risk` at all). RE-CAPTURED from real `vitals 0.2.0 report --json` via `src/__fixtures__/vitals-recapture/seed.py`, which builds a purpose-seeded throwaway git repo + `.vitals` provenance DB whose history makes the tool emit every planted M3 corpus relationship (M3-P-HOTSPOT top-K, M3-N-CHURN-TRIVIAL out-of-top-3, `truck_factor` 1 for the sole-author file vs a multi-author file absent from `knowledge_risk`, the a↔b coupling edge, and the AI-provenance sub-signal from the seeded DB). Sibling `PROVENANCE.md` records version + command + the planted-relationship table; inline `_note` mirrors it. Every value comes from the tool; records may be dropped, never edited. Consumer: `src/hotspot-scan.test.ts` (40 assertions pass against the capture unchanged). Still no automated live backstop (vitals runs in no `pnpm verify`/CI gate), but the seed script is a mechanical re-capture path. |
 
 ## B. Inline literals feeding parse functions ("inline literals count")
 
 | # | Tool / pinned version | Location | Status | Live backstop |
 |---|----------------------|----------|--------|---------------|
 | 7 | semgrep | `src/scan/semgrep.test.ts` — `SemgrepOutput` literals fed to `parseSemgrepFindings` | **HAND-WRITTEN** | YES — real `semgrep` runs in `validate-calibration` / the dry-run harness against `targets/calibration`. |
-| 8 | TruffleHog 3.x (comments cite 3.96.0) | `src/scan/secrets.test.ts` — `TruffleHogResult[]` fed to `parseTruffleHogFindings` | **HAND-WRITTEN** | PARTIAL — dry-run runs real `trufflehog`, but the **verified-secret** path (`Verified:true`) needs live providers, so the verified branch has no offline backstop. Field shapes were MEASURED against trufflehog 3.96.0/v3 per code comments (#1078/#1099). |
+| 8 | TruffleHog 3.96.0 | `src/scan/secrets.test.ts` — `TruffleHogResult[]` fed to `parseTruffleHogFindings` | **CAPTURED** (#1146, 2026-07-26) — the #1078 rotation/provenance test now loads `__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json` (real `trufflehog git --no-verification --results=unverified --json` output; sibling `PROVENANCE.md`). The **verified-secret** path is a recorded REASON (verification is live-only); the grading-path tests override the single `Verified` field, disclosed at the test site. Other `parseTruffleHogFindings` literals in this file (the drop-unverified and #1099 empty-Redacted cases) remain minimal hand-built inputs exercising specific parse branches. | PARTIAL — dry-run runs real `trufflehog`; the verified branch has no offline backstop (recorded REASON, falsifier fires when a live-verified capture is committed). |
 | 9 | gitleaks | `src/scan/secrets.test.ts` + `src/scan/calibration.test.ts` — `GitleaksResult[]` fed to `parseGitleaksFindings` | **HAND-WRITTEN** (calibration corpora self-describe as "recorded gitleaks output mirroring the live `pnpm validate:calibration` run") | YES — real `gitleaks` runs in `validate-calibration` / dry-run. |
 | 10 | TruffleHog 3.96.0 (git-history) | `src/scan/git-history-secret-gate.test.ts` — `TruffleHogGitResult[]` fed to `scoreGitHistoryResults` | **CAPTURED** (#1150) | PARTIAL — as row 8. RE-CAPTURED: `src/scan/__fixtures__/trufflehog-git-history/trufflehog-3.96.0-git-history.json` + `PROVENANCE.md` — the real one-record output of `trufflehog git --no-verification --results=unverified --json` against a `buildGitHistoryFixture`-shaped repo. The benign file's negative control is by necessity synthetic (a real run emits nothing for it); the "false positive" branch's second record stays hand-built and is labelled so. |
 | 11 | jscpd 4.2.5 | `src/quality-scan.test.ts` — `JscpdReport` literal fed to `jscpdToFindings` | **CAPTURED** (#1150) | ON-DEMAND only — real jscpd runs via `check:duplication` / an M4 audit, neither in `pnpm verify`/CI. RE-CAPTURED: `src/scan/__fixtures__/jscpd/jscpd-4.2.5-report.json` + `PROVENANCE.md` — a real run against a purpose-built clone corpus engineered for exactly four clones (58L Medium / 17L Low same-file / 10L Info / 8L sub-threshold); every downstream assertion updated to the tool's real line/token counts. Version was MEASURED 4.2.5 (cell said 4.0.5). |
 | 12 | knip 5.88.1 | `src/quality-scan.test.ts` — `KnipReport` literals fed to `knipToFindings` | **CAPTURED** (#1150) | YES — `pnpm knip` runs inside `pnpm verify` (against Harvey's own repo, not the fixture). RE-CAPTURED: `src/scan/__fixtures__/knip/knip-5.88.1-report.json` + `PROVENANCE.md` — real `knip --reporter json` output against a mini TS project (one dead file + one file with an unused value export and an unused type). Version was MEASURED 5.88.1 (cell said 5.61.0). The clean-file empty-record skip is now an explicitly-labelled synthetic control (real knip omits fully-used files). |
 | 13 | Stryker 9.6.1 | `src/mutation-scan.test.ts` — `m8Report` + `vacuousReport` are **CAPTURED** (#1150); `report`/`untested`/`whollyUntested`/`mostlyStaticReport`/`oneFile` stay **HAND-WRITTEN** (engineered unit inputs, not re-capturable) | NONE automated — mutation testing runs in no `pnpm verify`/CI gate. RE-CAPTURED: `src/scan/__fixtures__/stryker/stryker-9.6.1-m8-calibration.json` + `stryker-9.6.1-m8-vacuous.json` + `PROVENANCE.md` — real `npx stryker run` output against `targets/calibration/test-quality/` (the "not installed" note had DECAYED — `@stryker-mutator/core@9.6.1` runs via npx against the target's own isolated dep tree). |
-| 14 | PostgREST / GoTrue HTTP responses | ~20 `src/pentest/*.test.ts`, `src/dynamic-validate.test.ts`, `src/scan/supabase*.test.ts` — inline response-body/error literals | **HAND-WRITTEN** | LIVE-STACK only — real responses come from the M2 two-tenant stack, which is not a CI gate. Large class; not individually enumerated here. |
+| 14 | PostgREST / GoTrue HTTP responses | ~20 `src/pentest/*.test.ts`, `src/dynamic-validate.test.ts`, `src/scan/supabase*.test.ts` — inline response-body/error literals | **REASON (live-only)** (#1146) — offline capture is impossible; the block is recorded below. | LIVE-STACK only — real responses come from the M2 two-tenant stack, which is not a CI gate. Large class; not individually enumerated here. |
 
 ## What this inventory concludes
 
-- **As of #1130 (2026-07-26), `lighthouse-report.json` (#5) is RE-CAPTURED** (real Lighthouse 13.4.0),
-  leaving `vitals-report.json` (#6) as the one remaining HAND-WRITTEN standalone file with no live
-  backstop — and its re-capture is blocked not by tool availability (vitals 0.2.0 IS installed) but by
-  the corpus-reconstruction it requires (see row 6), so it is split to the #1130 remainder.
+- **As of #1146 (2026-07-26), BOTH standalone hand-written files are RE-CAPTURED**:
+  `lighthouse-report.json` (#5, #1130, real Lighthouse 13.4.0) and `vitals-report.json` (#6, real
+  vitals 0.2.0 via the `seed.py` corpus-reconstruction — see row 6). No standalone fixture file in
+  section A remains HAND-WRITTEN. The remaining invariant-3 debt is entirely inline literals (§B) plus
+  the live-only backstops noted below.
 - The inline-literal fixtures for semgrep/gitleaks/knip DO have a live real-binary backstop (a schema
   drift would fail a gate elsewhere), which lowers — but does not erase — their risk: the literal
   itself can still encode a field the tool never emits, it just can't leave the tool *entirely* dead.
@@ -115,3 +116,46 @@ in an automated gate (so a schema drift would fail loud even though the fixture 
     markers, across ~15 `parseGitleaksFindings` scenarios plus the `calibration.test.ts` corpora).
 - The two #1109 ledger carryovers (producerless `suppressed`/`capped`/`not-applicable` columns; a
   second ledger across `applyBaseline` #457).
+
+## Inline-literal re-capture status (#1146, chunk 3 of the #1130 remainder)
+
+**Landed (this chunk):**
+
+- **Row 8 (TruffleHog, unverified path)** RE-CAPTURED — `__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json`
+  from a real `trufflehog git --no-verification --results=unverified --json` run (trufflehog 3.96.0,
+  2026-07-26), sibling `PROVENANCE.md`. `src/scan/secrets.test.ts`'s #1078 test loads it.
+- **Row 8 (TruffleHog, VERIFIED path)** and **Row 14 (PostgREST/GoTrue)** are recorded as live-only
+  REASON blocks (the TruffleHog one in `__fixtures__/trufflehog/PROVENANCE.md`; the PostgREST one
+  below), because an offline capture is genuinely impossible — not a fabricated fixture.
+
+REASON: PostgREST / GoTrue HTTP response and error literals cannot be captured offline — a faithful response body/status requires the live M2 two-tenant Supabase stack (PostgREST + GoTrue + Postgres with the two-tenant RLS seed) issuing the real request; there is no pinned binary that emits these bodies without the running stack.
+KIND: empirical
+PROVENANCE: MEASURED 2026-07-26
+FALSIFIER: test -f src/pentest/__fixtures__/postgrest-gotrue-live-responses.json
+
+The PostgREST falsifier exits 0 once the M2 stack is brought up and its real responses are captured
+and committed at that path, at which point the ~20 inline response literals across
+`src/pentest/*.test.ts`, `src/dynamic-validate.test.ts` and `src/scan/supabase*.test.ts` can be
+restructured to load the committed capture.
+
+**Split to the #1146 chunk-3 remainder issue (each needs a purpose-built target corpus that
+reproduces the specific per-branch assertions, or a tool this environment does not install):**
+
+- **Row 7 (semgrep)** — `parseSemgrepFindings` literals span many distinct rule scenarios
+  (service-role-in-client, workflow shell-injection routing, registry-rule cwe/owasp threading,
+  references composition, bare-string normalization). Reproducing each from a real `semgrep` run is
+  a per-rule target reconstruction, not a single drop-in capture.
+- **Row 9 (gitleaks 8.30.1, MEASURED — inventory's unversioned cell)** — `parseGitleaksFindings`
+  literals encode many correlation scenarios (demo-marker co-location, allowlist suppression,
+  doc-context reclassification) against Harvey's *custom* gitleaks ruleset; reproducing them needs a
+  planted-secret corpus run under the custom config.
+- **Row 10 (TruffleHog git-history scoring)** — `scoreGitHistoryResults` inputs are minimal scoring
+  literals; one is an inherently synthetic negative-control (a benign file trufflehog would never
+  flag). Its positive case could later reference the row-8 capture.
+- **Row 11 (jscpd 4.2.5, MEASURED — inventory says 4.0.5)** and **Row 12 (knip 5.88.1, MEASURED —
+  inventory says 5.61.0)** — the base `jscpdReport`/`knipReport` literals are engineered to hit
+  specific threshold bands; a real capture is feasible but requires purpose-built clone/dead-code
+  source and updating the downstream assertions to the tool's real counts.
+- **Row 13 (Stryker 9.6.1)** — `@stryker-mutator/*` is NOT installed in this environment; a real
+  capture requires installing it (touches the supervised `package.json`/lockfile) plus a mutation
+  target and a ~15-min run.

@@ -1,158 +1,156 @@
 {
-  "_note": "Synthetic vitals 0.2.0 report fixture, shaped to the REAL schema captured live for issue #94 (provenance shape verified against vitals 0.2.0's own vitals_cli.py/db.py for #369). Paths and values below are synthetic (no ATC data); the field names, nesting, and top-level shape are not. Plants the M3 corpus fixtures from docs/design/spec-72-crossmodule-corpus.md §M3: core/checkout.ts (M3-P-HOTSPOT, high churn + high complexity -> highest risk_score, top-K; also M3-P-AIPROV, in provenance.ai_files with churn_label HIGH), generated/schema.gen.ts (M3-N-CHURN-TRIVIAL, highest raw churn but trivial complexity -> low risk_score, must NOT be top-K; also M3-N-AIPROV-HUMAN, churn HIGH but NOT in ai_files), core/billing.ts (M3-P-TRUCK1, sole-author -> truck_factor 1 in knowledge_risk), core/reporting.ts (M3-N-MULTIAUTHOR, 3 seeded authors -> truck_factor 3, must not be flagged), core/a.ts / core/b.ts (M3-P-COUPLING, always co-committed -> one coupling edge), lib/stable.ts (M3-N-AIPROV-STABLE, in provenance.ai_files but churn LOW, must NOT be flagged; also rounds out the ranking).",
+  "_note": "CAPTURED, not hand-written. Real `vitals 0.2.0 report --json` output, produced by src/__fixtures__/vitals-recapture/seed.py against a purpose-seeded throwaway git repo + .vitals provenance DB (see src/__fixtures__/vitals-recapture/PROVENANCE.md). The seed reproduces every planted M3 calibration entry (m3.entries.ts) from the tool's own output: core/checkout.ts is the #1 churn x complexity hotspot (M3-P-HOTSPOT / M3-P-AIPROV); generated/schema.gen.ts has the highest RAW churn but ranks outside top-3 by risk (M3-N-CHURN-TRIVIAL / M3-N-AIPROV-HUMAN); core/billing.ts is sole-authored -> truck_factor 1 (M3-P-TRUCK1); core/reporting.ts is multi-author (M3-N-MULTIAUTHOR); core/a.ts<>core/b.ts are always co-committed -> one coupling edge (M3-P-COUPLING); lib/stable.ts is AI-authored but LOW churn (M3-N-AIPROV-STABLE). Records may be dropped from this capture, never edited. To re-capture: python3 src/__fixtures__/vitals-recapture/seed.py",
   "mode": "full",
-  "files_analyzed": 7,
-  "overall_health": 5.9,
   "repo_info": {
-    "total_commits": 512,
-    "contributors": 4,
-    "repo_age_days": 240
+    "total_commits": 72,
+    "contributors": 3,
+    "repo_age_days": 74
   },
   "file_health": {
-    "core/checkout.ts": 3.1,
-    "generated/schema.gen.ts": 6.0,
-    "core/billing.ts": 5.0,
-    "core/reporting.ts": 5.5,
-    "core/a.ts": 6.5,
-    "core/b.ts": 6.6,
-    "lib/stable.ts": 8.5
+    "core/a.ts": 5.7,
+    "core/b.ts": 5.7,
+    "lib/stable.ts": 7.7,
+    "core/reporting.ts": 4.8,
+    "core/billing.ts": 4.8,
+    "generated/schema.gen.ts": 6.7,
+    "core/checkout.ts": 4.3
   },
   "hotspots": [
     {
       "file_path": "core/checkout.ts",
-      "health": 3.1,
+      "health": 4.3,
       "role": "core",
-      "centrality": 9,
+      "centrality": 0,
       "churn_data": {
-        "changes": 38,
-        "lines_added": 900,
-        "lines_removed": 300,
-        "author_count": 2,
-        "last_change": "2026-06-01T00:00:00Z"
+        "changes": 17,
+        "lines_added": 243,
+        "lines_removed": 16,
+        "author_count": 3,
+        "last_change": "2026-07-23T21:53:14Z"
       },
       "churn_label": "HIGH",
-      "complexity_score": 61,
-      "coupling_strength": 0.2,
-      "changes": 38,
-      "risk_score": 92.0
-    },
-    {
-      "file_path": "generated/schema.gen.ts",
-      "health": 6.0,
-      "role": "generated",
-      "centrality": 1,
-      "churn_data": {
-        "changes": 55,
-        "lines_added": 4000,
-        "lines_removed": 3900,
-        "author_count": 1,
-        "last_change": "2026-06-15T00:00:00Z"
-      },
-      "churn_label": "HIGH",
-      "complexity_score": 4,
+      "complexity_score": 81,
       "coupling_strength": 0.0,
-      "changes": 55,
-      "risk_score": 8.0
-    },
-    {
-      "file_path": "core/billing.ts",
-      "health": 5.0,
-      "role": "core",
-      "centrality": 6,
-      "churn_data": {
-        "changes": 20,
-        "lines_added": 400,
-        "lines_removed": 150,
-        "author_count": 1,
-        "last_change": "2026-05-20T00:00:00Z"
-      },
-      "churn_label": "MEDIUM",
-      "complexity_score": 30,
-      "coupling_strength": 0.1,
-      "changes": 20,
-      "risk_score": 40.0
+      "changes": 17,
+      "risk_score": 96.9
     },
     {
       "file_path": "core/reporting.ts",
-      "health": 5.5,
+      "health": 4.8,
       "role": "core",
-      "centrality": 5,
+      "centrality": 0,
+      "churn_data": {
+        "changes": 16,
+        "lines_added": 232,
+        "lines_removed": 15,
+        "author_count": 3,
+        "last_change": "2026-06-04T21:53:14Z"
+      },
+      "churn_label": "HIGH",
+      "complexity_score": 81,
+      "coupling_strength": 0.0,
+      "changes": 16,
+      "risk_score": 83.2
+    },
+    {
+      "file_path": "core/billing.ts",
+      "health": 4.8,
+      "role": "core",
+      "centrality": 0,
+      "churn_data": {
+        "changes": 14,
+        "lines_added": 150,
+        "lines_removed": 13,
+        "author_count": 1,
+        "last_change": "2026-06-18T21:53:14Z"
+      },
+      "churn_label": "HIGH",
+      "complexity_score": 77,
+      "coupling_strength": 0.0,
+      "changes": 14,
+      "risk_score": 72.8
+    },
+    {
+      "file_path": "generated/schema.gen.ts",
+      "health": 6.7,
+      "role": "core",
+      "centrality": 0,
       "churn_data": {
         "changes": 18,
-        "lines_added": 300,
-        "lines_removed": 100,
+        "lines_added": 41,
+        "lines_removed": 17,
         "author_count": 3,
-        "last_change": "2026-05-18T00:00:00Z"
+        "last_change": "2026-07-06T21:53:14Z"
       },
-      "churn_label": "MEDIUM",
-      "complexity_score": 25,
-      "coupling_strength": 0.1,
+      "churn_label": "HIGH",
+      "complexity_score": 31,
+      "coupling_strength": 0.0,
       "changes": 18,
-      "risk_score": 35.0
+      "risk_score": 59.4
     },
     {
       "file_path": "core/a.ts",
-      "health": 6.5,
+      "health": 5.7,
       "role": "core",
-      "centrality": 4,
+      "centrality": 1,
       "churn_data": {
-        "changes": 12,
-        "lines_added": 150,
-        "lines_removed": 40,
-        "author_count": 2,
-        "last_change": "2026-05-01T00:00:00Z"
+        "changes": 5,
+        "lines_added": 18,
+        "lines_removed": 4,
+        "author_count": 3,
+        "last_change": "2026-05-17T21:53:14Z"
       },
-      "churn_label": "LOW",
-      "complexity_score": 15,
-      "coupling_strength": 0.9,
-      "changes": 12,
-      "risk_score": 30.0
+      "churn_label": "MED",
+      "complexity_score": 61,
+      "coupling_strength": 1.0,
+      "changes": 5,
+      "risk_score": 25.8
     },
     {
       "file_path": "core/b.ts",
-      "health": 6.6,
+      "health": 5.7,
       "role": "core",
-      "centrality": 4,
+      "centrality": 1,
       "churn_data": {
-        "changes": 11,
-        "lines_added": 140,
-        "lines_removed": 35,
-        "author_count": 2,
-        "last_change": "2026-05-01T00:00:00Z"
+        "changes": 5,
+        "lines_added": 18,
+        "lines_removed": 4,
+        "author_count": 3,
+        "last_change": "2026-05-17T21:53:14Z"
       },
-      "churn_label": "LOW",
-      "complexity_score": 14,
-      "coupling_strength": 0.9,
-      "changes": 11,
-      "risk_score": 28.0
+      "churn_label": "MED",
+      "complexity_score": 61,
+      "coupling_strength": 1.0,
+      "changes": 5,
+      "risk_score": 25.8
     },
     {
       "file_path": "lib/stable.ts",
-      "health": 8.5,
-      "role": "lib",
-      "centrality": 1,
+      "health": 7.7,
+      "role": "core",
+      "centrality": 0,
       "churn_data": {
-        "changes": 3,
-        "lines_added": 20,
-        "lines_removed": 5,
+        "changes": 2,
+        "lines_added": 13,
+        "lines_removed": 1,
         "author_count": 2,
-        "last_change": "2026-03-01T00:00:00Z"
+        "last_change": "2026-05-19T21:53:14Z"
       },
       "churn_label": "LOW",
-      "complexity_score": 5,
+      "complexity_score": 58,
       "coupling_strength": 0.0,
-      "changes": 3,
-      "risk_score": 5.0
+      "changes": 2,
+      "risk_score": 4.6
     }
   ],
   "coupling": [
     {
       "file_a": "core/a.ts",
       "file_b": "core/b.ts",
-      "co_changes": 10,
-      "coupling_strength": 0.9,
-      "total_a": 12,
-      "total_b": 11
+      "co_changes": 5,
+      "coupling_strength": 1.0,
+      "total_a": 5,
+      "total_b": 5
     }
   ],
   "knowledge_risk": [
@@ -160,13 +158,12 @@
       "file_path": "core/billing.ts",
       "truck_factor": 1,
       "author_count": 1,
-      "authors": [["alice", 20]]
-    },
-    {
-      "file_path": "core/reporting.ts",
-      "truck_factor": 3,
-      "author_count": 3,
-      "authors": [["alice", 6], ["bob", 6], ["carol", 6]]
+      "authors": [
+        [
+          "alice",
+          14
+        ]
+      ]
     }
   ],
   "provenance": {
@@ -175,26 +172,28 @@
       "total_events": 46,
       "unique_files": 2,
       "total_sessions": 3,
-      "first_event": 1748736000.0,
-      "last_event": 1750896000.0
+      "first_event": 1782942794.0,
+      "last_event": 1785016394.0
     },
     "ai_files": [
       {
         "file_path": "core/checkout.ts",
         "edit_count": 30,
         "write_count": 4,
-        "last_modified": 1750896000.0,
+        "last_modified": 1785016394.0,
         "total_events": 34
       },
       {
         "file_path": "lib/stable.ts",
         "edit_count": 10,
         "write_count": 2,
-        "last_modified": 1749081600.0,
+        "last_modified": 1785016394.0,
         "total_events": 12
       }
     ]
   },
   "trends": null,
+  "overall_health": 5.4,
+  "files_analyzed": 7,
   "scope": null
 }
