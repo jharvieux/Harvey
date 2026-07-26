@@ -4,10 +4,15 @@
 // shared calibration harness, plus (c) the mechanical cross-reference of other modules' findings
 // against the top-K hotspots (#363).
 //
-// STATUS: schema VERIFIED against a live `vitals 0.2.0 report --json <path>` run (issue #94).
-// VitalsReport/VitalsHotspotRow below match the real top-level shape: `hotspots` (per-file rows,
-// sorted by `risk_score`), a separate top-level `coupling` array (not nested per-row), and a
-// separate top-level `knowledge_risk` array (truck-factor lives there, not on hotspot rows).
+// STATUS: schema VERIFIED against a live `vitals 0.2.0 report --json <path>` run (issue #94), and
+// re-verified against vitals 0.2.0's own emitter source (scripts/vitals_cli.py:300-312) for #1075.
+// CORRECTION (#1075): the ROW types (VitalsHotspotRow / VitalsCouplingEdgeRow / VitalsKnowledgeRiskRow)
+// match the real per-row shape exactly, but VitalsReport is NOT the real top-level shape — vitals_cli.py
+// serializes 11 top-level keys (mode, repo_info, file_health, hotspots, coupling, knowledge_risk,
+// provenance, trends, overall_health, files_analyzed, scope); VitalsReport is a DELIBERATE subset
+// modelling only mode/hotspots/coupling/knowledge_risk/provenance/trends/overall_health (7 of 11) —
+// repo_info/file_health/files_analyzed/scope are not read. `hotspots` is per-file rows sorted by
+// `risk_score`; `coupling`/`knowledge_risk` are separate top-level arrays, not nested per hotspot row.
 // The `provenance` shape (#369) is verified against vitals 0.2.0's own source
 // (scripts/vitals_cli.py provenance_info + scripts/db.py get_ai_file_stats/get_provenance_summary):
 // `{ has_data: false }` when no .vitals provenance DB exists, or has_data: true plus `summary`
@@ -84,12 +89,45 @@ export interface VitalsProvenance {
   ai_files?: VitalsAiFileRow[];
 }
 
+// #1075: one row of vitals' day-over-day file_health trend (vitals_cli.py:269-287) — only ever
+// populated in `trends.degrading`/`trends.improving`, never at the top level.
+interface VitalsTrendFile {
+  file_path: string;
+  previous: number;
+  current: number;
+  delta: number;
+}
+
+// #1075: vitals' trend comparison against its own previous `.vitals` snapshot (vitals_cli.py:254-290).
+// null on a first-ever run (no prior snapshot to diff against) — that is a legitimate "no history
+// yet", not a gap. Previously entirely unread; the single most actionable M3 signal for a repeat
+// engagement ("health moved from 6.2 to 5.8, driven by these 7 files").
+export interface VitalsTrends {
+  previous_overall: number;
+  previous_timestamp: number;
+  days_since: number;
+  overall_delta: number;
+  degrading: VitalsTrendFile[];
+  improving: VitalsTrendFile[];
+}
+
 export interface VitalsReport {
   hotspots: VitalsHotspotRow[];
   coupling: VitalsCouplingEdgeRow[];
   knowledge_risk: VitalsKnowledgeRiskRow[];
   // Optional so a pre-0.2.0 capture without the key still parses; 0.2.0 always includes it.
   provenance?: VitalsProvenance;
+  // #1075: "full" (has git — churn/coupling/knowledge all real) or "complexity-only" (no git in the
+  // target — vitals_cli.py:301 sets churn=0 for every file, so EVERY hotspot's risk_score is 0.0 and
+  // the "ranking" is filesystem-walk order). Optional for back-compat with a pre-#1075 capture;
+  // absent ⇒ treat as unknown, not "full" (see isUnranked, which checks risk_score directly and does
+  // not depend on this field being present).
+  mode?: "full" | "complexity-only";
+  // #1075: null on a first-ever run (no prior .vitals snapshot); optional for back-compat.
+  trends?: VitalsTrends | null;
+  // #1075: vitals' single-number codebase health (0–10, lower = worse), computed from the SAME
+  // file_health scores hotspots are ranked by — but over every analysed file, not just the top-K.
+  overall_health?: number;
 }
 
 // Worst-first by vitals' risk_score. Rank is an ordering, never scored as a percentage — callers
@@ -102,6 +140,18 @@ export function topKFiles(report: VitalsReport, k: number): string[] {
   return rankHotspots(report)
     .slice(0, k)
     .map((r) => r.file_path);
+}
+
+// #1075: true when the ranking carries no real signal — vitals' own "complexity-only" mode (no git
+// history in the target: churn is 0 for every file, so risk_score = (10-health)×churn×… is EXACTLY
+// 0.0 across the board) leaves `hotspots` non-empty but its order is filesystem-walk order, not a
+// churn×complexity ranking. Checked directly on risk_score (not `mode`) so it also catches a
+// pre-#1075 capture that has no `mode` field at all. A genuinely EMPTY hotspots list (nothing
+// cleared vitals'/Harvey's own churn gate) is a different, already-disclosed case — topKFiles
+// already returns [] for it, so enrichment is already a no-op there — and is deliberately excluded
+// here so it isn't double-reported.
+export function isUnranked(report: VitalsReport): boolean {
+  return report.hotspots.length > 0 && report.hotspots.every((h) => h.risk_score === 0);
 }
 
 // Reduced-tier fallback (#807) — the churn×complexity ranking Harvey computes ITSELF from git
@@ -134,13 +184,26 @@ export interface FallbackFile {
   complexity: number;
 }
 
+// The same churn/complexity gate buildFallbackReport applies, factored out so the CLI can report
+// the PRE-slice qualifying count (#1075 point 4) without duplicating the filter.
+function qualifyingFallbackFiles(files: FallbackFile[]): FallbackFile[] {
+  return files.filter((f) => f.changes >= 2 && f.complexity > 0);
+}
+
+// #1075: buildFallbackReport's own `.slice(0, topN)` happens BEFORE the --out artifact is built, so
+// both the printed table and the artifact's `hotspots` array only ever see `topN` rows — the header
+// that prints `ranked.length` is printing the post-truncation count, not the qualifying total. This
+// gives the CLI the true count so it can print "showing top N of M" instead.
+export function fallbackQualifyingCount(files: FallbackFile[]): number {
+  return qualifyingFallbackFiles(files).length;
+}
+
 // Shapes reduced-tier inputs into a VitalsReport so the rest of the M3 pipeline (rankHotspots /
 // topKFiles / --out artifact / cross-reference) is unchanged. Gate mirrors vitals: churn ≥ 2 AND
 // nonzero complexity. risk = churn × complexity (the classic churn×complexity hotspot metric); no
 // health/role/centrality weighting exists in this tier.
 export function buildFallbackReport(files: FallbackFile[], topN = 10): VitalsReport {
-  const hotspots: VitalsHotspotRow[] = files
-    .filter((f) => f.changes >= 2 && f.complexity > 0)
+  const hotspots: VitalsHotspotRow[] = qualifyingFallbackFiles(files)
     .map((f) => ({
       file_path: f.file_path,
       health: 0,
@@ -271,7 +334,53 @@ export function toFactFindings(report: VitalsReport): Finding[] {
     });
   }
 
+  findings.push(...trendFindings(report));
+
   return findings;
+}
+
+// #1075: vitals' day-over-day file_health trend (vitals_cli.py:254-290) against its own previous
+// `.vitals` snapshot — the single most actionable M3 signal for a repeat/retainer engagement
+// ("health moved from 6.2 to 5.8, driven by these files"), previously never read at all (VitalsReport
+// declared 4 of vitals' 11 top-level keys). Absent/null on a first-ever run (no prior snapshot to
+// diff against) — that is a legitimate "no history yet", not a gap, so it emits nothing rather than
+// a disclosure row. One grouped finding (mirrors metricFinding's shape in src/lighthouse.ts) rather
+// than one per file, so a codebase with many degrading files doesn't flood the findings list.
+export function trendFindings(report: VitalsReport): Finding[] {
+  const t = report.trends;
+  if (!t || t.degrading.length === 0) return [];
+
+  const n = t.degrading.length;
+  const worst = [...t.degrading].sort((a, b) => a.delta - b.delta)[0]!;
+  const currentOverall = Math.round((t.previous_overall + t.overall_delta) * 10) / 10;
+
+  return [
+    {
+      id: "M3-TREND-00",
+      title: `Codebase health trending down: ${n} file${n === 1 ? "" : "s"} degraded over the last ${t.days_since} day${t.days_since === 1 ? "" : "s"} (overall ${t.previous_overall.toFixed(1)} → ${currentOverall.toFixed(1)})`,
+      severity: "Watch",
+      confidence: "Confirmed",
+      category: "Maintainability",
+      taxonomy: "Codebase health trend (degrading)",
+      location: worst.file_path,
+      status: "Open",
+      evidence:
+        `vitals: over the last ${t.days_since} day(s), ${n} file(s) health score dropped by more than 0.5, worst-first: ` +
+        t.degrading
+          .slice(0, 8)
+          .map((f) => `${f.file_path} (${f.previous}→${f.current})`)
+          .join(", ") +
+        (n > 8 ? `, +${n - 8} more` : "") +
+        `. Overall codebase health moved ${t.overall_delta >= 0 ? "+" : ""}${t.overall_delta} since the prior snapshot.`,
+      impact: "A file getting worse over time — not just currently bad — is a leading indicator, distinct from a static hotspot ranking: it names where the codebase is actively eroding.",
+      fix: "Review the degrading files above before their health drops further; re-run M3 periodically (retainer/repeat engagements) to keep tracking the trend.",
+      value: 2,
+      ease: 3,
+      safety: 5,
+      mechanical: true,
+      precisionTier: "high",
+    },
+  ];
 }
 
 // #515: the cross-module hotspot enrichment — the ONE mechanism applied to every module's findings
@@ -300,7 +409,14 @@ interface HotspotCrossRef {
 // containment of the hotspot file path in the finding's location, which covers "path:line",
 // "path (pkg)", and "a <> b" location formats. Annotates via `note` and moves flagged findings
 // to the front; severity and the BFTB inputs are never touched, so graded counts are unchanged.
+//
+// #1075: when the report isUnranked (vitals' complexity-only mode — every risk_score is 0.0), the
+// "top-K" is filesystem-walk order, not a ranking. Stamping "top remediation priority" onto another
+// module's finding from that order would MANUFACTURE a signal, not lose one — the one bug in this
+// class that invents information rather than dropping it. No-op instead: every finding passes
+// through untouched and hotspotFindingIds is empty.
 export function crossReferenceHotspots(findings: Finding[], report: VitalsReport, k = 10): HotspotCrossRef {
+  if (isUnranked(report)) return { findings, hotspotFindingIds: [] };
   const topK = topKFiles(report, k);
   const annotated = findings.map((f) => {
     const file = topK.find((hotspot) => f.location.includes(hotspot));

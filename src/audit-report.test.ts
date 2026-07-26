@@ -150,7 +150,7 @@ describe("dedupeFindings", () => {
 const toolOutput = (argv: string[]): string => {
   const cmd = argv.join(" ");
   if (cmd.includes("quality-scan")) return "[]";
-  if (cmd.includes("detect-static")) return "loaded 42 source files (30 product-code) from /target";
+  if (cmd.includes("detect-static")) return "loaded 42 source files (30 product source, 2 config, 10 test/story) from /target";
   if (cmd.includes("hotspot-scan.ts")) return "M3 hotspot table — /target (5 rows, worst first)";
   return "";
 };
@@ -227,7 +227,7 @@ describe("runAudit findings capture (#312/#420)", () => {
 describe("M8 captures findings from a real Stryker run (#435)", () => {
   it("reads the mutation-scan --out artifact's `findings` array and reports ran with findings", () => {
     const realRunCtx = ctx({
-      exec: (_c, argv) => ({ ok: true, output: argv.includes("detect-static") ? "loaded 42 source files (30 product-code) from /target" : "" }),
+      exec: (_c, argv) => ({ ok: true, output: argv.includes("detect-static") ? "loaded 42 source files (30 product source, 2 config, 10 test/story) from /target" : "" }),
       captureDir: "/cap",
       readFindings: () => [],
       readArtifact: (p) => (basename(p, ".json") === "M8" ? { summary: { overall: {} }, reportRows: [], findings: [finding("M8-DENIAL")] } : undefined),

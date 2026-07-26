@@ -39,7 +39,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
 import type { Finding } from "../findings.js";
-import { buildFallbackReport, complexityProxy, crossReferenceHotspots, type FallbackFile, rankHotspots, toFactFindings, topKFiles, type VitalsReport } from "../hotspot-scan.js";
+import { buildFallbackReport, complexityProxy, crossReferenceHotspots, fallbackQualifyingCount, type FallbackFile, isUnranked, rankHotspots, toFactFindings, topKFiles, type VitalsReport } from "../hotspot-scan.js";
 
 // #808: the vitals version src/hotspot-scan.ts's VitalsReport shape is verified against (#94/#369).
 // A mismatch fails loud with expected/actual BEFORE the report schema-drift check, so version drift
@@ -156,7 +156,9 @@ function resolveVitals(): { bin: string; prefixArgs: string[] } | undefined {
 // installed. churn = per-file change count over 90 days (git log); complexity = complexityProxy over
 // the current file. Fails loud (exit 1) if the target is not a git checkout — with neither vitals nor
 // git there is no basis for a ranking, and a silent empty table would read as a clean bill of health.
-function buildReducedReport(): VitalsReport {
+// #1075 point 4: also returns the PRE-slice qualifying count (fallbackQualifyingCount) so the CLI can
+// print "showing top N of M" instead of the post-truncation row count buildFallbackReport returns.
+function buildReducedReport(): { report: VitalsReport; qualifying: number } {
   let log: string;
   try {
     log = execFileSync("git", ["log", "--since=90 days ago", "--name-only", "--pretty=format:"], { cwd: targetDir, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
@@ -182,16 +184,17 @@ function buildReducedReport(): VitalsReport {
     }
     files.push({ file_path: file, changes, complexity: complexityProxy(src) });
   }
-  return buildFallbackReport(files, Math.max(topK, 50));
+  return { report: buildFallbackReport(files, Math.max(topK, 50)), qualifying: fallbackQualifyingCount(files) };
 }
 
-function loadReport(): { report: VitalsReport; reduced: boolean } {
+function loadReport(): { report: VitalsReport; reduced: boolean; qualifying?: number } {
   if (reportPath) {
     return { report: parseReport(readFileSync(resolve(reportPath), "utf8")), reduced: false };
   }
   const vitals = resolveVitals();
   if (!vitals) {
-    return { report: buildReducedReport(), reduced: true };
+    const { report, qualifying } = buildReducedReport();
+    return { report, reduced: true, qualifying };
   }
   let raw: string;
   try {
@@ -204,19 +207,45 @@ function loadReport(): { report: VitalsReport; reduced: boolean } {
   return { report: parseReport(raw), reduced: false };
 }
 
-const { report, reduced } = loadReport();
+const { report, reduced, qualifying } = loadReport();
 if (reduced) {
   console.log("⚠ M3 REDUCED TIER (vitals plugin unavailable) — Harvey-computed churn×complexity ranking from git history only.");
   console.log("  NOT assessed in this tier: file health, co-change coupling, knowledge-risk (truck-factor), AI-provenance. Install the vitals plugin for the full M3 signal.");
 }
+// #1075 point 1: vitals' own "complexity-only" mode (no git in the target) sets churn=0 for every
+// file, so every hotspot's risk_score is 0.0 — the "ranking" below is filesystem-walk order, not a
+// churn×complexity ranking. Checked on risk_score directly (isUnranked), not just `mode`, so a
+// pre-#1075 capture with no `mode` field is still caught.
+const unranked = isUnranked(report);
 const ranked = rankHotspots(report);
-const top = topKFiles(report, topK);
+const top = unranked ? [] : topKFiles(report, topK);
 const findings = toFactFindings(report);
 
-console.log(`M3 hotspot table — ${targetDir} (${ranked.length} rows, worst first)`);
+const rowsTruncated = reduced && qualifying !== undefined && qualifying > ranked.length;
+console.log(
+  rowsTruncated
+    ? `M3 hotspot table — ${targetDir} (showing top ${ranked.length} of ${qualifying} files that cleared the churn gate, worst first)`
+    : `M3 hotspot table — ${targetDir} (${ranked.length} rows, worst first)`,
+);
+if (unranked) {
+  // "M3 UNRANKED" is matched by src/audit-runners.ts to record this run `partial` (mirrors "M3
+  // REDUCED TIER" for #807) — keep this exact string if the wording changes.
+  console.log(
+    `  ⚠ M3 UNRANKED: ${report.mode === "complexity-only" ? 'vitals ran in "complexity-only" mode — the target has no git history, so churn is 0 for every file and' : "every row scored"} risk_score 0.0. The table below is filesystem-walk order, NOT a churn×complexity ranking — it will NOT be used for cross-module hotspot enrichment or the M3 cross-reference below.`,
+  );
+}
 console.log("  risk   health  churn   changes  complexity  file");
 for (const row of ranked) {
   console.log(`  ${String(row.risk_score).padStart(6)} ${String(row.health).padStart(6)}  ${row.churn_label.padEnd(6)} ${String(row.changes).padStart(8)} ${String(row.complexity_score).padStart(11)}  ${row.file_path}`);
+}
+
+if (report.overall_health !== undefined) {
+  console.log(`\nOverall codebase health: ${report.overall_health.toFixed(1)}/10 (vitals' own weighted roll-up over every analysed file, not just the table above)`);
+}
+if (report.trends) {
+  console.log(`Trend vs. prior snapshot (${report.trends.days_since}d ago): ${report.trends.overall_delta >= 0 ? "+" : ""}${report.trends.overall_delta} overall, ${report.trends.degrading.length} file(s) degrading, ${report.trends.improving.length} improving.`);
+} else if (report.trends === null) {
+  console.log("Trend vs. prior snapshot: none — first vitals run against this target (no prior .vitals snapshot to compare).");
 }
 
 const byTaxonomy = new Map<string, number>();
@@ -228,6 +257,12 @@ if (!report.provenance) {
   console.log("  AI-provenance: NOT ASSESSED — report has no provenance key (pre-0.2.0 vitals capture?)");
 } else if (!report.provenance.has_data) {
   console.log("  AI-provenance: no data — no .vitals provenance DB in the target (vitals capture hooks not installed, or no AI edits logged)");
+}
+// #1075 point 3: vitals itself caps these two lists before Harvey ever sees them (vitals_cli.py:
+// `coupling_data[:5]`, `knowledge_files = code_files[:50]`) — stated so "N found" is never read as
+// the full census, mirroring coveredScopeLine's honesty pattern (src/mutation-scan.ts).
+if (!reduced) {
+  console.log("  NOTE: vitals caps co-change coupling at the top 5 pairs and truck-factor/knowledge-risk analysis at the first 50 churning source files — the counts above are capped inputs, not a full census.");
 }
 
 let crossReferenced: ReturnType<typeof crossReferenceHotspots> | undefined;
@@ -241,23 +276,40 @@ if (findingsPaths.length) {
     return parsed as Finding[];
   });
   crossReferenced = crossReferenceHotspots(external, report, topK);
-  console.log(`\nCross-reference: ${crossReferenced.hotspotFindingIds.length} of ${external.length} finding(s) sit on a top-${topK} hotspot — flagged top remediation priority:`);
-  for (const id of crossReferenced.hotspotFindingIds) console.log(`  ${id}`);
+  console.log(
+    unranked
+      ? `\nCross-reference: SKIPPED — the hotspot ranking is unranked (see above), so no finding is stamped "top remediation priority" against it.`
+      : `\nCross-reference: ${crossReferenced.hotspotFindingIds.length} of ${external.length} finding(s) sit on a top-${topK} hotspot — flagged top remediation priority:`,
+  );
+  if (!unranked) for (const id of crossReferenced.hotspotFindingIds) console.log(`  ${id}`);
 }
 
 if (hotspotsOutPath) {
   writeFileSync(hotspotsOutPath, `${top.join("\n")}\n`);
-  console.log(`\ntop-${topK} hotspot file list → ${hotspotsOutPath} (feed to \`pnpm mutation-scan <t> --hotspots ${hotspotsOutPath}\`)`);
+  console.log(
+    unranked
+      ? `\nhotspot file list → ${hotspotsOutPath} is EMPTY (ranking unranked — see above), so no downstream consumer (M8 --hotspots, cross-module enrichment) will tag anything against it`
+      : `\ntop-${topK} hotspot file list → ${hotspotsOutPath} (feed to \`pnpm mutation-scan <t> --hotspots ${hotspotsOutPath}\`)`,
+  );
 }
 
 if (outPath) {
+  const partialReasons: string[] = [];
+  if (reduced) partialReasons.push("vitals plugin unavailable — reduced M3 tier: churn×complexity ranking only, no coupling/knowledge-risk/AI-provenance");
+  if (unranked) partialReasons.push(`ranking unranked — ${report.mode === "complexity-only" ? "vitals ran in complexity-only mode (no git history in the target)" : "every hotspot row scored risk_score 0.0"}; the table is filesystem-walk order and was excluded from cross-module hotspot enrichment/cross-reference`);
+
   const artifact = {
     target: targetDir,
+    mode: report.mode,
+    overallHealth: report.overall_health,
     topK: top,
     hotspots: ranked,
     findings,
     crossReferenced,
-    ...(reduced ? { reduced: true, partialReason: "vitals plugin unavailable — reduced M3 tier: churn×complexity ranking only, no coupling/knowledge-risk/AI-provenance" } : {}),
+    ...(rowsTruncated ? { qualifyingFileCount: qualifying } : {}),
+    ...(reduced ? { reduced: true } : {}),
+    ...(unranked ? { unranked: true } : {}),
+    ...(partialReasons.length ? { partialReason: partialReasons.join(" | ") } : {}),
   };
   writeFileSync(outPath, `${JSON.stringify(artifact, null, 2)}\n`);
   console.log(`\nM3 artifact → ${outPath} — merge \`findings\` (and \`crossReferenced.findings\`) into the engagement findings.json for report-template/`);

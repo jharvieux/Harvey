@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Finding } from "./findings.js";
-import { aiProvenanceFiles, buildFallbackReport, classifyChurn, complexityProxy, couplingEdges, crossReferenceHotspots, enrichFindingsWithHotspots, rankHotspots, toFactFindings, topKFiles, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
+import { aiProvenanceFiles, buildFallbackReport, classifyChurn, complexityProxy, couplingEdges, crossReferenceHotspots, enrichFindingsWithHotspots, fallbackQualifyingCount, isUnranked, rankHotspots, toFactFindings, topKFiles, trendFindings, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
 import { summarizeMutationReport, type StrykerReport } from "./mutation-scan.js";
 import { buildCoverageMatrix } from "./scan/calibration.js";
 import { m3Entries } from "./scan/calibration/m3.entries.js";
@@ -213,5 +213,115 @@ describe("M3 reduced tier (#807, vitals-unavailable fallback)", () => {
   it("caps the ranking at topN", () => {
     const files = Array.from({ length: 20 }, (_, i) => ({ file_path: `f${i}.ts`, changes: i + 2, complexity: 2 }));
     expect(buildFallbackReport(files, 5).hotspots).toHaveLength(5);
+  });
+
+  // #1075 point 4: buildFallbackReport's own .slice(0, topN) happens before the caller ever sees the
+  // report, so the post-slice hotspots.length alone can't tell the CLI how many files actually
+  // qualified — fallbackQualifyingCount exposes the pre-slice count from the same filter.
+  it("fallbackQualifyingCount reports the PRE-slice qualifying total, independent of topN", () => {
+    const files = Array.from({ length: 20 }, (_, i) => ({ file_path: `f${i}.ts`, changes: i + 2, complexity: 2 }));
+    expect(fallbackQualifyingCount(files)).toBe(20);
+    expect(buildFallbackReport(files, 5).hotspots).toHaveLength(5); // same input, capped view
+  });
+
+  it("fallbackQualifyingCount applies the same churn/complexity gate as buildFallbackReport", () => {
+    const files = [
+      { file_path: "hot.ts", changes: 6, complexity: 7 },
+      { file_path: "rare.ts", changes: 1, complexity: 9 }, // below churn gate
+      { file_path: "trivial.ts", changes: 9, complexity: 0 }, // no complexity
+    ];
+    expect(fallbackQualifyingCount(files)).toBe(1);
+  });
+});
+
+// #1075 point 1: vitals' own "complexity-only" mode (no git in the target) sets churn=0 for every
+// file, so every hotspot's risk_score is EXACTLY 0.0 — the resulting "ranking" is filesystem-walk
+// order, and previously nothing stopped enrichFindingsWithHotspots/crossReferenceHotspots from
+// stamping "top remediation priority" onto other modules' findings based on that arbitrary order.
+// This is the one bug in the #1064 class that INVENTS a signal rather than losing one.
+describe("M3 unranked reports are never used for cross-module enrichment (#1075)", () => {
+  const complexityOnlyReport: VitalsReport = {
+    mode: "complexity-only",
+    hotspots: [
+      { file_path: "z.ts", health: 5, role: "core", centrality: 0, churn_data: { changes: 0, lines_added: 0, lines_removed: 0, author_count: 0, last_change: "" }, churn_label: "LOW", complexity_score: 12, coupling_strength: 0, changes: 0, risk_score: 0 },
+      { file_path: "a.ts", health: 5, role: "core", centrality: 0, churn_data: { changes: 0, lines_added: 0, lines_removed: 0, author_count: 0, last_change: "" }, churn_label: "LOW", complexity_score: 3, coupling_strength: 0, changes: 0, risk_score: 0 },
+    ],
+    coupling: [],
+    knowledge_risk: [],
+  };
+
+  it("isUnranked is true when every risk_score is 0 and hotspots is non-empty", () => {
+    expect(isUnranked(complexityOnlyReport)).toBe(true);
+  });
+
+  it("isUnranked is false for a genuinely-ranked report (varying risk_score)", () => {
+    expect(isUnranked(report)).toBe(false); // the module-level #94 fixture — real varying scores
+  });
+
+  it("isUnranked is false for a genuinely EMPTY hotspots list — that's a different, already-disclosed case", () => {
+    expect(isUnranked({ hotspots: [], coupling: [], knowledge_risk: [] })).toBe(false);
+  });
+
+  it("crossReferenceHotspots no-ops entirely against an unranked report — no finding is stamped 'top remediation priority'", () => {
+    const finding = planted("M1-RLS-01", "z.ts:1"); // z.ts is filesystem-walk-order "first" — NOT a real hotspot
+    const { findings, hotspotFindingIds } = crossReferenceHotspots([finding], complexityOnlyReport, 3);
+    expect(hotspotFindingIds).toEqual([]);
+    expect(findings[0]?.note).toBeUndefined();
+    expect(findings).toEqual([finding]); // untouched, not even reordered
+  });
+
+  it("crossReferenceHotspots still fires normally against a genuinely-ranked report (regression check)", () => {
+    const { hotspotFindingIds } = crossReferenceHotspots([planted("M1-RLS-01", "core/checkout.ts:1")], report, 3);
+    expect(hotspotFindingIds).toEqual(["M1-RLS-01"]);
+  });
+});
+
+// #1075 point 2: trends/overall_health were declared nowhere in VitalsReport and never read — the
+// single most actionable M3 signal for a repeat engagement ("health moved from 6.2 to 5.8, driven by
+// these files"), silently dropped even though vitals_cli.py always serializes it.
+describe("M3 trend findings (#1075)", () => {
+  it("emits nothing when trends is null (first-ever run — no prior snapshot, not a gap)", () => {
+    expect(trendFindings({ ...report, trends: null })).toEqual([]);
+  });
+
+  it("emits nothing when trends has no degrading files", () => {
+    expect(trendFindings({ ...report, trends: { previous_overall: 6, previous_timestamp: 0, days_since: 7, overall_delta: 0.3, degrading: [], improving: [] } })).toEqual([]);
+  });
+
+  it("emits one grouped finding naming the worst-degrading file and the overall delta", () => {
+    const withTrend: VitalsReport = {
+      ...report,
+      trends: {
+        previous_overall: 6.2,
+        previous_timestamp: 1735689600,
+        days_since: 14,
+        overall_delta: -0.4,
+        degrading: [
+          { file_path: "core/checkout.ts", previous: 5.0, current: 3.1, delta: -1.9 },
+          { file_path: "core/billing.ts", previous: 6.0, current: 5.4, delta: -0.6 },
+        ],
+        improving: [],
+      },
+    };
+    const findings = trendFindings(withTrend);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.id).toBe("M3-TREND-00");
+    expect(findings[0]?.location).toBe("core/checkout.ts"); // worst delta
+    expect(findings[0]?.evidence).toContain("core/checkout.ts");
+    expect(findings[0]?.evidence).toContain("core/billing.ts");
+    expect(findings[0]?.title).toContain("2 files");
+  });
+
+  it("is included in toFactFindings' output", () => {
+    const withTrend: VitalsReport = {
+      ...report,
+      trends: { previous_overall: 6, previous_timestamp: 0, days_since: 1, overall_delta: -0.6, degrading: [{ file_path: "x.ts", previous: 6, current: 5.4, delta: -0.6 }], improving: [] },
+    };
+    expect(toFactFindings(withTrend).map((f) => f.id)).toContain("M3-TREND-00");
+  });
+
+  it("does not appear in the calibration corpus fixture (trends: null there — regression check)", () => {
+    expect(report.trends).toBeNull();
+    expect(toFactFindings(report).map((f) => f.id)).not.toContain("M3-TREND-00");
   });
 });

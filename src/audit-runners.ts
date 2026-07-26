@@ -165,10 +165,22 @@ const mutationVerdict = (
   }
 };
 
-// detect-static (M7 code + M9) prints "loaded N source files ..." on stdout. The file count, not the
-// exit code, is the evidence a scan happened — the tool exits 0 over an empty directory (#350).
+// detect-static (M7 code + M9) prints "loaded N source files (M product source, …)" on stdout. The
+// file count, not the exit code, is the evidence a scan happened — the tool exits 0 over an empty
+// directory (#350).
+//
+// #1065: the TOTAL is not that evidence. package.json and next.config.js are loaded on every target
+// (the M9 pass needs them to resolve `paths` aliases), so the total can never be 0 and the
+// "nothing scanned" guard below could never fire — it read `loaded 2 source files` as a real scan
+// on a 13-file app whose every route was invisible. The PRODUCT SOURCE count is the one that means
+// code was read. M8's test-intent tier is the exception: test files are its subject matter, so it
+// reads the full set and asks for the total.
 const filesScanned = (output: string): number | undefined => {
   const m = output.match(/loaded (\d+) source files/);
+  return m ? Number(m[1]) : undefined;
+};
+const productFilesScanned = (output: string): number | undefined => {
+  const m = output.match(/\((\d+) product source[,)]/);
   return m ? Number(m[1]) : undefined;
 };
 
@@ -318,6 +330,18 @@ const m3: ModuleRunner = {
           ...(hotspots?.length ? { hotspots } : {}),
         };
       }
+      // #1075: vitals ran (installed, real report) but in "complexity-only" mode (no git history in
+      // the target) — every hotspot's risk_score is 0.0, so the ranking is filesystem-walk order,
+      // not a churn×complexity ranking. `hotspots` is always [] here (the CLI withholds topK when
+      // unranked — see src/cli/hotspot-scan.ts), so this never reaches cross-module enrichment.
+      if (/M3 UNRANKED/.test(output)) {
+        return {
+          status: "partial",
+          detail: command,
+          reason: 'vitals ran in "complexity-only" mode (no git history in the target) — every file scores risk_score 0.0, so the hotspot table is NOT a churn×complexity ranking and was excluded from cross-module enrichment/cross-reference.',
+          ...(findings.length ? { findings } : {}),
+        };
+      }
       return {
         status: "ran",
         detail: command,
@@ -450,7 +474,7 @@ const m6: ModuleRunner = {
     const indicatorOutPath = captureOut(ctx, "M6");
     const indicatorCommand = `pnpm detect-static ${ctx.targetDir}`;
     const indicatorRun = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(indicatorOutPath ? ["--out", indicatorOutPath] : [])]);
-    const indicatorScanned = indicatorRun.ok ? filesScanned(indicatorRun.output) : undefined;
+    const indicatorScanned = indicatorRun.ok ? productFilesScanned(indicatorRun.output) : undefined;
     const indicatorFindings = indicatorScanned ? handrolledFindings(readCaptured(ctx, indicatorOutPath)) : [];
 
     if (!ctx.env.llm) {
@@ -541,7 +565,7 @@ const m7: ModuleRunner = {
     const codeOutPath = captureOut(ctx, "M7");
     const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(codeOutPath ? ["--out", codeOutPath] : [])]);
     if (!ok) return withCwv({ status: "requires-live-run", reason: `pnpm detect-static exited non-zero: ${trimOut(output)}` });
-    if (!filesScanned(output)) return withCwv({ status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — no code tier to run (empty or non-source target) (#350)` });
+    if (!productFilesScanned(output)) return withCwv({ status: "requires-live-run", reason: `detect-static scanned 0 product source files under ${ctx.targetDir} — no code tier to run (empty or non-source target) (#350/#1065)` });
     const codeFindings = perfCodeFindings(readCaptured(ctx, codeOutPath));
     // The code tier runs ONCE, at target root — so its findings ride on exactly one row. Below, that
     // is the first Supabase project's row, for the same reason the CWV pass rides on the first only.
@@ -671,15 +695,16 @@ const m8: ModuleRunner = {
 // M9 (#350): detect-static exits 0 over an empty directory ("loaded 0 source files"). Exit code is
 // not evidence of a scan; the file count the tool printed is. Zero files scanned is not `ran`.
 // detect-static prints the count to stdout AND writes a bare Finding[] to --out, so status and
-// capture (#312) coexist in real runs.
+// capture (#312) coexist in real runs. #1065: it is the PRODUCT SOURCE count — the total includes
+// package.json, which every target has, so this guard was unreachable until 2026-07-25.
 const m9Run = (ctx: RunContext): ProbeOutcome => {
   const outPath = captureOut(ctx, "M9");
   const command = `pnpm detect-static ${ctx.targetDir}`;
   const { ok, output } = ctx.exec("pnpm", ["detect-static", ctx.targetDir, ...(outPath ? ["--out", outPath] : [])]);
   if (!ok) return { status: "requires-live-run", reason: `${command} exited non-zero: ${trimOut(output)}` };
-  const scanned = filesScanned(output);
+  const scanned = productFilesScanned(output);
   if (scanned === undefined) return { status: "requires-live-run", reason: `could not read detect-static output to confirm files were scanned: ${trimOut(output)}` };
-  if (scanned === 0) return { status: "requires-live-run", reason: `detect-static scanned 0 source files under ${ctx.targetDir} — nothing to analyze (empty or non-source target) (#350)` };
+  if (scanned === 0) return { status: "requires-live-run", reason: `detect-static scanned 0 product source files under ${ctx.targetDir} — nothing to analyze (empty or non-source target) (#350/#1065)` };
   const findings = readCaptured(ctx, outPath);
   return findings.length ? { status: "ran", detail: command, findings } : { status: "ran", detail: command };
 };

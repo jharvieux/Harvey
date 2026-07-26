@@ -8,6 +8,7 @@
 // fetch wrapper.
 
 import type { Finding, Severity } from "../findings.js";
+import { profileFor } from "../perf-scan.js";
 import { mechanicalFinding } from "./common.js";
 import { eitherEnabled, gateOnAuthMethod, type AuthMethodState, type AuthMethods } from "./supabase-config.js";
 
@@ -62,16 +63,45 @@ const AUTH_METHOD_GATED_LINTS: Record<string, { label: string; state: (m: AuthMe
   auth_otp_short: { label: "email or SMS OTP", state: (m) => eitherEnabled(m.email, m.phone) },
 };
 
+// #1083 — Splinter (the local/connected tier's source, src/scan/supabase-splinter.ts) returns
+// SECURITY and PERFORMANCE lints together in one pass; a PERFORMANCE lint (unindexed_foreign_keys,
+// auth_rls_initplan, unused_index, …) used to be filed here as a generic "Supabase advisor" Low
+// with only a docs-link fix, instead of M7's curated impact/fix text. Route it through the SAME
+// profile the hosted M7 advisor pull uses (src/perf-scan.ts#profileFor) — one source of truth for
+// what these rules mean, not a second copy that drifts. `facing` (EXTERNAL vs INTERNAL) is folded
+// into the evidence text since Finding carries no dedicated field for it.
 export function parseAdvisorFindings(response: AdvisorsResponse, authMethods?: AuthMethods): Finding[] {
   return response.lints.map((lint, i) => {
+    const id = `SB-ADV-${lint.cache_key ?? `${lint.name}-${i + 1}`}`;
+    const location = entityLocation(lint);
+    const detail = lint.detail ?? lint.description ?? lint.title;
+    const evidence = lint.facing ? `${detail} (${lint.facing.toLowerCase()}-facing)` : detail;
+    if (lint.categories?.includes("PERFORMANCE")) {
+      const profile = profileFor({ name: lint.name, title: lint.title, level: lint.level, detail, description: lint.description, remediation: lint.remediation, metadata: lint.metadata, cache_key: lint.cache_key });
+      // taxonomy stays lint.name (not profile.taxonomy) — same convention as the SECURITY branch
+      // below, one Finding per lint keyed by its rule name; profile.taxonomy is M7's own GROUPED
+      // label (perf-scan.ts rolls many lints of the same name into one Finding, this does not).
+      return mechanicalFinding({
+        id,
+        title: lint.title,
+        severity: profile.severity,
+        category: "Performance",
+        taxonomy: lint.name,
+        location,
+        evidence,
+        impact: profile.impact,
+        fix: profile.fix,
+        precisionTier: "high",
+      });
+    }
     const input = {
-      id: `SB-ADV-${lint.cache_key ?? `${lint.name}-${i + 1}`}`,
+      id,
       title: lint.title,
       severity: CURATED_SEVERITY[lint.name] ?? LEVEL_SEVERITY[lint.level],
       category: "Supabase advisor",
       taxonomy: lint.name,
-      location: entityLocation(lint),
-      evidence: lint.detail ?? lint.description ?? lint.title,
+      location,
+      evidence,
       impact: lint.description ?? lint.title,
       fix: lint.remediation ?? "See the Supabase database linter docs for this lint.",
       precisionTier: "high" as const,

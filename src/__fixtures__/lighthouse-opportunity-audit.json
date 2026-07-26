@@ -1,0 +1,16 @@
+{
+  "_note": "REAL Lighthouse 13.4.0 capture (live run, 2026-07-25) of the `unused-css-rules` audit object — the details/metricSavings opportunity shape #1074 says Harvey drops. Captured by serving a page with a link to a 4000-rule unused stylesheet and running lighthouse-node against it (same chrome-launcher + onlyCategories:['performance'] invocation src/cli/lighthouse-scan.ts uses). Trimmed of Lighthouse's own `headings`/`sortedBy`/`debugData` (report-rendering metadata Harvey does not need), keeping every field src/lighthouse.ts's LighthouseAuditDetails/metricSavings types read.",
+  "score": 0.5,
+  "scoreDisplayMode": "metricSavings",
+  "numericValue": 0,
+  "displayValue": "Est savings of 182 KiB",
+  "metricSavings": { "FCP": 0, "LCP": 0 },
+  "details": {
+    "type": "opportunity",
+    "items": [
+      { "url": "http://localhost:8932/big.css", "wastedBytes": 186090, "wastedPercent": 100, "totalBytes": 186090 }
+    ],
+    "overallSavingsMs": 0,
+    "overallSavingsBytes": 186090
+  }
+}

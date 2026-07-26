@@ -12,8 +12,13 @@ export interface SourceInput {
 
 export type NextId = () => string;
 
+// #1065: plain .js/.mjs/.cjs parse as TSX, not TS. JSX in a `.js` file is the norm in React and
+// Next (targets/vuln-seam-app's app/page.js is exactly that), and under ScriptKind.TS every `<div>`
+// parses as a type assertion and the tree is garbage. The reverse risk does not exist: `<T>expr`
+// type assertions aren't valid JavaScript, so nothing in a .js file needs the TS reading.
+// .ts/.mts/.cts keep it, because there `<T>expr` IS a type assertion.
 function isTsxPath(path: string): boolean {
-  return path.endsWith(".tsx") || path.endsWith(".jsx");
+  return /\.([jt]sx|[cm]?js)$/.test(path);
 }
 
 export function parse(path: string, text: string): ts.SourceFile {
