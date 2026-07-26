@@ -523,6 +523,42 @@ describe("monorepo fan-out namespaces finding ids by instance (#620)", () => {
   });
 });
 
+// #1084: detect-static emits a MIXED Finding[] — M6/M7/M8 owned classes, M9 boundaries, and classes
+// only M9 collects (M1-SFC-00, …). M6/M7/M8 capture their own prefix at target ROOT; M9 used to
+// capture the whole array UNFILTERED. On a single-app target that was a byte-identical superset the
+// deliverable's dedupe collapsed, but M9 runs PER APP on a monorepo and the assembler namespaces a
+// per-app row's ids (#620) — so a root-scope M7 finding and M9's per-app twin (`M7C-01@web`) were
+// both delivered, the same issue counted twice. M9 now collects only the COMPLEMENT of M6/M7/M8, so
+// the twin is gone AND the unowned class M9 alone owns still reaches the deliverable (both halves of
+// the issue's gate).
+describe("monorepo — M9 collects the complement of M6/M7/M8, ending the double-count (#1084)", () => {
+  const detectStatic = [
+    { id: "M7C-01", taxonomy: "M7 — Raw <img> instead of next/image", location: "app/page.tsx:2" },
+    { id: "M1-SFC-00", taxonomy: "M1 — SFC file not analysed", location: "Widget.svelte" },
+  ] as unknown as Finding[];
+  // detect-static's capture is shared by M6/M7/M8/M9; every other probe's --out file is unrelated
+  // (quick-scan's M1.json, pii-classify's M10.json, …) and must stay empty so this isolates the seam.
+  const monorepo = ctx({
+    apps: [{ name: "web", path: "/target/apps/web" }, { name: "api", path: "/target/apps/api" }],
+    captureDir: "/capture",
+    readFindings: (p: string) => (/M6\.json|M7\.json|M8-static\.json|M9\.json/.test(p) ? detectStatic : []),
+    readArtifact: () => undefined,
+  });
+
+  it("a root-scope M7 finding and its per-app M9 twin resolve to exactly one delivered row", () => {
+    const ids = runAudit(AUDIT_RUNNERS, monorepo).findings.map((f) => f.id);
+    // Before the fix M9's unfiltered per-app capture added M7C-01@web and M7C-01@api alongside the
+    // root-scope M7C-01 — three rows for one issue. Now only the root-scope row survives.
+    expect(ids.filter((id) => id.startsWith("M7C-01"))).toEqual(["M7C-01"]);
+  });
+
+  it("still delivers the unowned class only M9 collects, per app — the partition drops nothing", () => {
+    const ids = runAudit(AUDIT_RUNNERS, monorepo).findings.map((f) => f.id);
+    expect(ids).toContain("M1-SFC-00@web");
+    expect(ids).toContain("M1-SFC-00@api");
+  });
+});
+
 // A RunContext whose exec succeeds (exit 0) but returns the no-op OUTPUT each tool prints when it
 // scanned nothing — the exact shape #350 proved slips past an exit-code check.
 const status = (runners: typeof AUDIT_RUNNERS, over: Partial<RunContext>, module: AuditModule) =>

@@ -24,10 +24,13 @@
 // --seed-loss <Mn>  SEED A VIOLATION: discard everything module Mn's probe produced, before
 //                 assembly, reproducing the #1040/#1061 break in which results were produced and
 //                 then dropped. The gate must fail naming Mn. It exists because a gate nobody has
-//                 watched fail is not evidence that it can (#350) — and note it still fails for a
-//                 module whose rows another probe re-collects (M9 captures detect-static unfiltered,
-//                 so M7's rows survive in the deliverable while M7 itself produced nothing: the
-//                 #1062 shape).
+//                 watched fail is not evidence that it can (#350). It reads each module's OWN probe
+//                 attribution (findingsByModule), not the merged document, so it catches the loss
+//                 even if another probe or a synthesizer contributes the same taxonomy. (Before #1084
+//                 M9 captured detect-static UNFILTERED and re-collected M7's rows, so a seeded M7 loss
+//                 stayed visible in the deliverable while M7 produced nothing — the #1062 shape. #1084
+//                 makes M9 collect only the complement of M6/M7/M8, so that masking is gone; reading
+//                 findingsByModule is why the gate never depended on it.)
 // --seed-unaccounted  SEED THE OTHER VIOLATION (#1096): drop one finding out of the ASSEMBLED
 //                 deliverable with no disposition — what an undeclared filter at a consumer
 //                 boundary does. The plant-and-assert above can miss it (it watches ten rows); the
