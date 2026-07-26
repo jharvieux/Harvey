@@ -143,12 +143,12 @@ const capturingCtx = ctx({
 describe("runAudit findings capture (#312/#420)", () => {
   it("collects findings from the emitting modules (bare-array AND object-artifact) and nothing from the non-emitters", () => {
     const captured = runAudit(AUDIT_RUNNERS, capturingCtx);
-    // M4/M5/M9/M10 emit a bare Finding[] (M10 since #436); M3/M8 embed findings in an object
-    // artifact (#420). M1/M2/M7 collect nothing — their findings come from a paid/live/human pass
-    // this run cannot observe. M6's free indicator layer CAN collect (#397), filtered to the
-    // `M6 — Indicator: …` taxonomy — this fixture's generic "tx" taxonomy doesn't match, so it
-    // collects nothing here too, but for a different (mock-fidelity) reason.
-    expect(captured.findings.map((f) => f.id).sort()).toEqual(["M10", "M3", "M4", "M5", "M8", "M9"]);
+    // M1/M4/M5/M9/M10 emit a bare Finding[] (M10 since #436, M1's mechanical tier since #1040);
+    // M3/M8 embed findings in an object artifact (#420). M2/M7 collect nothing — their findings
+    // come from a live/human pass this run cannot observe. M6's free indicator layer CAN collect
+    // (#397), filtered to the `M6 — Indicator: …` taxonomy — this fixture's generic "tx" taxonomy
+    // doesn't match, so it collects nothing here too, but for a different (mock-fidelity) reason.
+    expect(captured.findings.map((f) => f.id).sort()).toEqual(["M1", "M10", "M3", "M4", "M5", "M8", "M9"]);
   });
 
   it("captures M8's zero-coverage finding out of its object artifact, as a partial (not ran)", () => {

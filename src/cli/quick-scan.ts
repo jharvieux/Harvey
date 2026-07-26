@@ -34,6 +34,7 @@
 
 import { writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
+import { measureCodebaseSize } from "../scan/codebase-size.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { relativizeScanScope } from "../scan/scan-scope.js";
 import { CI_PIPELINE_CATEGORY } from "../scan/semgrep.js";
@@ -91,6 +92,17 @@ function render(r: QuickScanReport): string {
   lines.push("");
   lines.push(...wrap(r.riskDisclosure, "  "));
   lines.push("");
+
+  // #1044: the size and its band, printed with the definition that produced them. The pricing page
+  // calls this an "instant, transparent quote" — a band with no stated method is neither.
+  if (r.size) {
+    lines.push("  ── Codebase size (your paid-tier quote band) ────────────");
+    lines.push(`  ${r.size.loc.toLocaleString("en-US")} lines of application code across ${r.size.files.toLocaleString("en-US")} file(s)`);
+    lines.push(`  Band: ${r.size.bandLabel}`);
+    if (r.size.excludedFiles > 0) lines.push(`  ${r.size.excludedFiles.toLocaleString("en-US")} generated/vendored/build file(s) excluded — you are not quoted on them.`);
+    lines.push(...wrap(`How this is measured: ${r.size.definition}`, "  "));
+    lines.push("");
+  }
 
   if (r.total === 0) {
     lines.push("  No hygiene issues found — nothing mechanically verifiable to fix.");
@@ -233,7 +245,7 @@ async function main(): Promise<void> {
     ...f,
     location: relativizeScanScope(f.location),
   }));
-  const report = buildQuickScanReport(rawFindings);
+  const report = buildQuickScanReport(rawFindings, { size: measureCodebaseSize(resolve(dir)) });
 
   const findingsOut = arg("--findings-out");
   if (findingsOut) writeFileSync(findingsOut, `${JSON.stringify(rawFindings, null, 2)}\n`);
