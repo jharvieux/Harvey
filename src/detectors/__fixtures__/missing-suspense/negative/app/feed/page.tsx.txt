@@ -1,0 +1,16 @@
+import { Suspense } from "react";
+import { cookies } from "next/headers";
+
+// The same route with the dynamic subtree wrapped in a boundary — the static shell streams first.
+export default async function FeedPage() {
+  const token = cookies().get("t");
+  const data = await fetch("https://api.example.com/feed");
+
+  return (
+    <Suspense fallback={null}>
+      <div>
+        {token?.value} {data.status}
+      </div>
+    </Suspense>
+  );
+}

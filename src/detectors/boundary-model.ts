@@ -41,6 +41,7 @@ export type M9Check =
   | "missing-server-only"
   | "accidental-dynamic"
   | "cache-config"
+  | "cache-bleed"
   | "route-segment-config"
   | "missing-suspense"
   | "unbounded-route";
@@ -83,6 +84,7 @@ const CHECK_LABELS: Record<M9Check, string> = {
   "missing-server-only": "server-only module guard",
   "accidental-dynamic": "accidental dynamic rendering",
   "cache-config": "unsafe/missing cache config",
+  "cache-bleed": "cross-user cache bleed (per-user data under a shared cache key)",
   "route-segment-config": "route segment config (dynamic/revalidate)",
   "missing-suspense": "missing Suspense/streaming boundary",
   "unbounded-route": "unbounded/self-calling route or edge fn",

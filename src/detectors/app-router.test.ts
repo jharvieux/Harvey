@@ -416,6 +416,47 @@ describe("unsafe/missing cache config (MED, best-effort)", () => {
   });
 });
 
+// #1051 — the OTHER cache failure mode briefs/audit-modules.md requires. The missing-config check
+// above treats any cache signal as evidence of correctness, so before this the bleed case was
+// suppressed by the very directive that causes it and the scan reported clean.
+describe("cross-user cache bleed (HIGH)", () => {
+  const BLEED = "M9 — Cross-user cache bleed";
+
+  it("flags per-user data cached under a global key, a session read inside a `use cache` scope, and a public Cache-Control on an authenticated response", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("cache-bleed/positive"));
+    const bleeds = findings.filter((f) => f.taxonomy === BLEED);
+
+    expect(bleeds).toHaveLength(3);
+    for (const f of bleeds) expect(f).toMatchObject({ severity: "High", category: "Security" });
+    expect(bleeds.map((f) => f.location).sort()).toEqual(["app/api/invoices/route.ts", "app/dashboard/page.tsx:6", "app/orders/page.tsx:7"]);
+  });
+
+  it("stays quiet when the identity is in the cache key, arrives as a `use cache` argument, or the response is private", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("cache-bleed/negative"));
+    expect(taxonomies(findings)).not.toContain(BLEED);
+  });
+
+  // The existing missing-config negative caches a non-user-specific `teams` list — it must stay a
+  // true negative for BOTH cache checks, not trade one finding for the other.
+  it("does not fire on the missing-cache-config negative (a cached read with nothing per-user about it)", () => {
+    const findings = detectAppRouterFindings(loadFixtureDir("cache-config/negative"));
+    expect(taxonomies(findings)).not.toContain(BLEED);
+  });
+
+  it("discloses a non-inline cached callback as not-assessed rather than dropping it", () => {
+    const findings = detectAppRouterFindings([
+      {
+        path: "app/orders/page.tsx",
+        text: `import { unstable_cache } from "next/cache";\nimport { loadOrders } from "../../lib/orders";\nconst cached = unstable_cache(loadOrders, ["orders"]);\nexport default async function Page() { return <div>{(await cached()).length}</div>; }\n`,
+      },
+    ]);
+    const row = findings.find((f) => f.taxonomy === "M9 — Cross-user cache bleed — not assessed");
+
+    expect(row, "the undecidable shape must be disclosed, not silently dropped").toBeDefined();
+    expect(row).toMatchObject({ confidence: "N/A", location: "app/orders/page.tsx:3" });
+  });
+});
+
 describe("data-fetching waterfalls (MED, best-effort)", () => {
   it("flags two independent sequential DB awaits in an async Server Component", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("waterfall/positive"));
