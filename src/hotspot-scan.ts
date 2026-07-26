@@ -17,8 +17,9 @@
 // (scripts/vitals_cli.py provenance_info + scripts/db.py get_ai_file_stats/get_provenance_summary):
 // `{ has_data: false }` when no .vitals provenance DB exists, or has_data: true plus `summary`
 // and `ai_files` (30-day window, ordered by total_events desc) when it does.
-// `src/__fixtures__/vitals-report.json` is a synthetic report built to this real shape (paths and
-// values are synthetic; the field names and nesting are not).
+// `src/__fixtures__/vitals-report.json` is a REAL `vitals 0.2.0 report --json` capture (#1146),
+// produced by src/__fixtures__/vitals-recapture/seed.py from a purpose-seeded git repo + `.vitals`
+// provenance DB — not hand-written; every value comes from the tool.
 //
 // Per the locked product decision (docs/design/spec-72-crossmodule-corpus.md preamble #2) and its
 // M3 section: a hotspot RANK is an ordering over a continuous score, not a true/false finding —
