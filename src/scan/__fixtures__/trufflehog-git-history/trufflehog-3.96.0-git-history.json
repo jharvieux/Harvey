@@ -1,0 +1,37 @@
+[
+  {
+    "SourceMetadata": {
+      "Data": {
+        "Git": {
+          "commit": "a1c4abf66d3ee90f6a88e9e4c716c343b9facbe9",
+          "file": "lib/leaked-token.js",
+          "email": "Harvey Calibration <calibration@harvey.test>",
+          "repository": "file://<fixture-repo>",
+          "timestamp": "2026-07-26 22:01:01 +0000",
+          "line": 1,
+          "repository_local_path": "<trufflehog-clone>"
+        }
+      }
+    },
+    "SourceID": 1,
+    "SourceType": 16,
+    "SourceName": "trufflehog - git",
+    "DetectorType": 8,
+    "DetectorName": "Github",
+    "DetectorDescription": "GitHub is a platform for version control and collaboration. Personal access tokens (PATs) can be used to access and modify repositories and other resources.",
+    "DecoderName": "PLAIN",
+    "Verified": false,
+    "VerificationFromCache": false,
+    "Raw": "ghp_Z9Qm2vXcW8rNpKdLhGfYsAe4Uo1Bx6Vt0Zi7N",
+    "RawV2": "",
+    "Redacted": "",
+    "ExtraData": {
+      "rotation_guide": "https://howtorotate.com/docs/tutorials/github/",
+      "version": "2"
+    },
+    "StructuredData": null,
+    "SecretParts": {
+      "key": "ghp_Z9Qm2vXcW8rNpKdLhGfYsAe4Uo1Bx6Vt0Zi7N"
+    }
+  }
+]
