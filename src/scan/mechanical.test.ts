@@ -190,3 +190,30 @@ describe("runMechanicalScan degrades when semgrep is unavailable (#950)", () => 
     expect(disclosure?.evidence).toContain("semgrep not found on PATH");
   });
 });
+
+// #1077: a file semgrep errored on (or chose to skip) still counts as "scanned" for SEM-SCOPE-00's
+// purposes, so that disclosure alone can't catch it — this proves runMechanicalScan actually reads
+// `semgrep.result.errors`/`paths.skipped` and emits SEM-ERR-00, rather than the whole-tree path
+// discarding them the way the fix-pipeline single-file re-run never did.
+describe("runMechanicalScan surfaces semgrep parse errors and skipped files (#1077)", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "harvey-mechanical-semgrep-err-"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "fixture" }));
+    runSemgrep.mockReturnValueOnce({
+      result: {
+        errors: [{ type: "Syntax error", message: "Syntax error at line 1", path: join(dir, "broken.tsx") }],
+        paths: { scanned: [join(dir, "broken.tsx")], skipped: [{ path: join(dir, "vendor", "huge.js"), reason: "too_big" }] },
+      },
+    });
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("emits SEM-ERR-00 naming the errored and skipped files, never reading them as clean", async () => {
+    const findings = await runMechanicalScan({ dir, skipNetworkChecks: true });
+    const disclosure = findings.find((f) => f.id === "SEM-ERR-00");
+    expect(disclosure).toBeDefined();
+    expect(disclosure?.evidence).toContain("broken.tsx");
+    expect(disclosure?.evidence).toContain("huge.js");
+  });
+});

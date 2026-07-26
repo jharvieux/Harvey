@@ -44,7 +44,22 @@ export interface SemgrepResult {
     // in NON_GRADING_TAXONOMIES (src/quick-scan.ts), the same routing the doc-context credential
     // reclassification (#934) uses. Also stable across environments, unlike the path-prefixed
     // check_id the taxonomy otherwise carries.
-    metadata?: { confidence?: string; harveySeverity?: string; harveyTaxonomy?: string; cwe?: string[] | string; owasp?: string[] | string };
+    // #1077: references/likelihood/impact/source are the rule's own remediation metadata — MEASURED
+    // 2026-07-25 (semgrep 1.164.0) on all six registry packs Harvey loads: 915/915 rules carry
+    // `references`, 638 carry likelihood+impact. Dropping these left 224/386 (58%) of a real
+    // deliverable's findings carrying an identical placeholder fix string one line after the rule's
+    // own guidance was discarded.
+    metadata?: {
+      confidence?: string;
+      harveySeverity?: string;
+      harveyTaxonomy?: string;
+      cwe?: string[] | string;
+      owasp?: string[] | string;
+      references?: string[] | string;
+      likelihood?: string;
+      impact?: string;
+      source?: string;
+    };
   };
 }
 
@@ -53,12 +68,16 @@ export interface SemgrepOutput {
   // Per-path problems semgrep reports WITHOUT failing the run (a syntax error in one file, an
   // unreadable scanning root). Empty results next to an error on the scanned path means the rules
   // never evaluated that file — load-bearing for the fix pipeline's re-run (#1012), which must not
-  // read "no match" off a file semgrep could not parse.
-  errors?: { type?: string; message?: string; path?: string }[];
+  // read "no match" off a file semgrep could not parse. #1077: `type` is a bare string for a
+  // whole-file syntax error (MEASURED 2026-07-25) but semgrep also emits it as an array (e.g.
+  // ["PartialParsing", [...]]) for a partial-parse warning — typed to admit both rather than assume.
+  errors?: { type?: string | unknown[]; message?: string; path?: string }[];
   // Absolute paths semgrep actually analysed. #1021 — the single-file re-run narrows a rooted scan
   // with --include, and a narrowing that matched nothing is indistinguishable from a clean file
-  // unless this is read.
-  paths?: { scanned?: string[] };
+  // unless this is read. #1077: `skipped` (files semgrep chose not to analyse — size limit,
+  // semgrepignore, minified) is only populated at `--verbose`; runSemgrep now passes it instead of
+  // `--quiet` (mutually exclusive) so this is never silently empty.
+  paths?: { scanned?: string[]; skipped?: { path?: string; reason?: string }[] };
 }
 
 const SEVERITY_FROM_SEMGREP: Record<string, Severity> = { ERROR: "High", WARNING: "Medium", INFO: "Low" };
@@ -94,6 +113,18 @@ function strList(v: string[] | string | undefined): string[] | undefined {
   return v ? [v] : undefined;
 }
 
+const GENERIC_FIX = "Review the matched code path against the rule's remediation guidance.";
+
+// #1077: compose the fix from the rule's OWN remediation links when it declared any — the generic
+// placeholder was showing on 224/386 (58%) of a real deliverable's findings one line after this
+// exact metadata was discarded. Falls back to the placeholder only when the rule (e.g. every one of
+// Harvey's own harvey-* custom rules today, MEASURED 2026-07-25) declares no references/source.
+function composeFix(references: string[] | undefined, source: string | undefined): string {
+  const links = [...(references ?? []), ...(source ? [source] : [])];
+  if (links.length === 0) return GENERIC_FIX;
+  return `Review the matched code path against the rule's remediation guidance: ${links.join(", ")}.`;
+}
+
 export function parseSemgrepFindings(output: SemgrepOutput): Finding[] {
   return (output.results ?? []).map((r, i) => {
     const meta = r.extra?.metadata;
@@ -104,6 +135,7 @@ export function parseSemgrepFindings(output: SemgrepOutput): Finding[] {
     // fully-reported non-grading category, with the routing reason stated on the finding.
     const ciWorkflow = CI_WORKFLOW_PATH.test(r.path);
     const impact = r.extra?.message ?? "See the rule's message for the specific risk.";
+    const references = strList(meta?.references);
     return mechanicalFinding({
       id: `SEM-${i + 1}`,
       title: `${r.check_id}: ${message}`,
@@ -113,11 +145,12 @@ export function parseSemgrepFindings(output: SemgrepOutput): Finding[] {
       location: `${r.path}${r.start?.line ? `:${r.start.line}` : ""}`,
       evidence: r.extra?.message ?? `Semgrep rule ${r.check_id} matched.`,
       impact: ciWorkflow ? impact + CI_PIPELINE_IMPACT_SUFFIX : impact,
-      fix: "Review the matched code path against the rule's remediation guidance.",
+      fix: composeFix(references, meta?.source),
       precisionTier: high ? "high" : "review",
       // #455 — populate only from the rule's own declared metadata, never invented here.
       cwe: strList(meta?.cwe),
       owasp: strList(meta?.owasp),
+      references,
     });
   });
 }
@@ -233,7 +266,10 @@ export function runSemgrep(dir: string): { result: SemgrepOutput; failure?: stri
     "--exclude", "node_modules",
     "--disable-nosem",
     "--json",
-    "--quiet",
+    // #1077: --verbose (not --quiet — the two are mutually exclusive) so paths.skipped is
+    // populated; the extra diagnostic text it also prints goes to stderr, which this call never
+    // reads, so stdout stays pure JSON.
+    "--verbose",
     dir,
   ];
   const attempt = (argv: string[]): { out: string } | { failure: string; enoent: boolean } => {
@@ -349,6 +385,55 @@ export function semgrepScopeFinding(dir: string, output: SemgrepOutput): Finding
       impact:
         "No semgrep rule ran against this code, so the absence of footgun findings in these files means nothing was looked for — not that nothing is there. Recorded so the gap reads as 'not assessed' rather than clean.",
       fix: "Re-run the scan on a machine whose semgrep accepts --x-ignore-semgrepignore-files, or review these files by hand for the classes the semgrep rules cover.",
+      value: 1,
+      ease: 4,
+      safety: 5,
+      mechanical: true,
+    },
+  ];
+}
+
+// #1077: `type` is a bare string for a whole-file syntax error but an array (e.g.
+// ["PartialParsing", [...]]) for a partial-parse warning — normalize either shape to one line
+// rather than let an array interpolate as "[object Object]" or similar.
+function describeErrorType(type: string | unknown[] | undefined): string {
+  if (Array.isArray(type)) return type.map((t) => (typeof t === "string" ? t : JSON.stringify(t))).join("/") || "unknown";
+  return type ?? "unknown";
+}
+
+// #1077: the repo already states the principle this violates, verbatim, at runSemgrepOnFile below —
+// "no match on a file the rules never evaluated must never be read as clean" — but only applied it
+// on the fix pipeline's single-file re-run. The whole-tree engagement path discarded `errors[]`
+// entirely: MEASURED 2026-07-25, a file with a syntax error still appears in `paths.scanned` (so
+// semgrepScopeFinding's diff doesn't catch it either) while contributing zero findings —
+// indistinguishable from a clean file. `paths.skipped` (files semgrep chose not to analyse for size/
+// ignore/minified reasons, only populated at --verbose) is the same class of silence and reported
+// alongside it, same contract as SEM-00/SEM-SCOPE-00: a counted, named row, never an absence.
+export function semgrepErrorFinding(dir: string, output: SemgrepOutput): Finding[] {
+  const errors = output.errors ?? [];
+  const skipped = (output.paths?.skipped ?? []).filter((s) => s.path);
+  if (errors.length === 0 && skipped.length === 0) return [];
+  const errorLines = errors.map((e) => {
+    const rel = e.path ? relative(dir, e.path) : "(unknown path)";
+    const detail = e.message?.trim().split("\n")[0];
+    return `${rel} (${describeErrorType(e.type)}${detail ? `: ${detail}` : ""})`;
+  });
+  const skippedLines = skipped.map((s) => `${relative(dir, s.path!)} (skipped: ${s.reason ?? "unspecified reason"})`);
+  const all = [...errorLines, ...skippedLines];
+  const shown = all.slice(0, 25);
+  return [
+    {
+      id: "SEM-ERR-00",
+      title: `${all.length} file${all.length === 1 ? "" : "s"} semgrep could not fully evaluate (parse error or skip)`,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Coverage",
+      taxonomy: "Coverage — files semgrep errored on or skipped",
+      location: "(repo-wide)",
+      status: "Open",
+      evidence: `Semgrep reported ${errors.length} per-file error(s) and ${skipped.length} skipped file(s) — these still count as "scanned" (an errored file even appears in paths.scanned) and would otherwise read as clean: ${shown.join("; ")}${all.length > shown.length ? `, and ${all.length - shown.length} more` : ""}.`,
+      impact: "A file semgrep could not parse, or chose not to analyse (size limit, ignore rule, minified), contributes zero findings — the absence of footgun findings there means nothing was looked for, not that nothing is present.",
+      fix: "Fix the syntax error (or reduce the file below semgrep's size/timeout limits) so semgrep can parse and analyse the file, then re-run the scan.",
       value: 1,
       ease: 4,
       safety: 5,

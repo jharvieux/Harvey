@@ -99,6 +99,15 @@ function cweOwaspLine(f) {
   return `<div class="kv"><b>CWE/OWASP</b> ${parts.join(" · ")}</div>`;
 }
 
+// #1077: the rule's own remediation links (semgrep metadata.references + its source page) —
+// absent unless the source declared any (e.g. every one of Harvey's own harvey-* rules today, which
+// carry no references, so the Fix line above stays the generic placeholder for those).
+function referencesLine(f) {
+  if (!f.references?.length) return "";
+  const links = f.references.map((r) => `<a href="${esc(r)}">${esc(r)}</a>`).join(" · ");
+  return `<div class="kv"><b>References</b> ${links}</div>`;
+}
+
 function findingCard(f) {
   const s = bftb(f);
   const sc = SEV[f.severity]?.c ?? "#64748b";
@@ -120,6 +129,7 @@ function findingCard(f) {
     <div class="kv"><b>Evidence</b> ${esc(f.evidence)}</div>
     <div class="kv"><b>Impact</b> ${esc(f.impact)}</div>
     <div class="kv"><b>Fix</b> ${esc(f.fix)}</div>
+    ${referencesLine(f)}
     ${f.lowConfidenceMatch ? `<div class="crit"><div class="cu">⚠ Possible carry-over — confirm manually:</div>
       <div>This looks like it might be the same issue as prior finding <b>${esc(f.lowConfidenceMatch)}</b>, but the match was not confident (a rename or re-label), so it is counted as <b>new</b> and that prior finding still shows as resolved. Confirm whether they are the same before reporting progress.</div></div>` : ""}
     ${f.okWhen || f.notOkWhen ? `<div class="crit"><div class="cu">When this is OK vs. not — confirm against your design:</div>
