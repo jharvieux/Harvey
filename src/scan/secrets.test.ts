@@ -26,6 +26,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 import {
   DOC_CONTEXT_CREDENTIAL_TAXONOMY,
   gitHistorySecretsUnavailableFinding,
+  gitleaksAllowlistDisclosure,
+  gitleaksSuppression,
   gitleaksUnavailableFinding,
   isDocExamplePath,
   isGitRepoRoot,
@@ -33,6 +35,7 @@ import {
   parseTruffleHogFindings,
   resolveBundleScan,
   scanSecrets,
+  secretScanScopeFinding,
   truffleHogUnavailableFinding,
   type GitleaksResult,
   type TruffleHogResult,
@@ -187,6 +190,106 @@ describe("parseGitleaksFindings", () => {
     ];
     const findings = parseGitleaksFindings(results, "source");
     expect(findings).toHaveLength(0);
+  });
+});
+
+// #1078: the line-level allowlist deleted a real secret that merely shared a line with a public
+// key. MEASURED 2026-07-26 (gitleaks 8.30.1) against Harvey's own config: `sk_live_…` alone was
+// detected; the same secret with `pk_test_…` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` on the line, or in
+// a `config.template` file, was reported NOWHERE — 3 of 4 fixtures silently suppressed.
+describe("allowlist suppressions are scoped to the value and counted (#1078)", () => {
+  // Fake, structure-only Supabase JWTs (header.payload.sig). The two differ ONLY in the decoded
+  // role claim — which is exactly why keying on line co-location could never separate them.
+  const ANON_JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJhbm9uIn0.sig";
+  const SERVICE_JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJzZXJ2aWNlX3JvbGUifQ.sig";
+  // Defanged: the live-shaped key used against the real binary during the measurement above trips
+  // GitHub push protection, and these tests exercise parseGitleaksFindings, not the gitleaks regex.
+  const STRIPE_SECRET = "sk_live_FAKE_calibration_not_a_real_key_a9xZ3";
+
+  it("keeps a real secret that shares a line with a publishable key or the anon key", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "stripe-access-token", File: "lib/pay.ts", StartLine: 4, Match: STRIPE_SECRET },
+      { RuleID: "generic-api-key", File: "lib/pay.ts", StartLine: 4, Match: "pk_test_FAKEcalibrationPublishableKey01" },
+      { RuleID: "jwt", File: ".env.local", StartLine: 8, Match: ANON_JWT },
+    ];
+    const findings = parseGitleaksFindings(results, "source");
+    expect(findings.map((f) => f.location)).toEqual(["[source] lib/pay.ts:4"]);
+  });
+
+  it("clears the anon key by its DECODED role claim and never the service_role sibling", () => {
+    expect(gitleaksSuppression({ RuleID: "jwt", File: "a.ts", Match: ANON_JWT })?.reason).toBe("public-key");
+    expect(gitleaksSuppression({ RuleID: "jwt", File: "a.ts", Match: SERVICE_JWT })).toBeUndefined();
+  });
+
+  it("does not grade a sample/template match, but counts it — a real value in a template is a leak class", () => {
+    const results: GitleaksResult[] = [
+      { RuleID: "stripe-access-token", File: "config.template", StartLine: 2, Match: STRIPE_SECRET },
+      { RuleID: "stripe-access-token", File: ".env.example", StartLine: 1, Match: STRIPE_SECRET },
+    ];
+    expect(parseGitleaksFindings(results, "source")).toHaveLength(0);
+    const row = gitleaksAllowlistDisclosure(results.map((r) => gitleaksSuppression(r)!));
+    expect(row?.id).toBe("SEC-GL-ALLOW-00");
+    expect(row?.evidence).toContain("2 credential-shaped match(es) in sample/template files");
+    expect(row?.evidence).toContain("config.template:2");
+  });
+
+  it("emits no row when nothing was suppressed — the disclosure must not become background noise", () => {
+    expect(gitleaksAllowlistDisclosure([])).toBeUndefined();
+  });
+});
+
+// #1078: the sweep is a VERIFIED-credential sweep plus a working-tree pattern pass, and said so
+// nowhere. MEASURED 2026-07-26 on a throwaway repo (trufflehog 3.96.0): a fake GitHub PAT added
+// then removed is recovered by `--no-verification --results=unverified` (1 result) and by
+// `--only-verified` (0 results) — production's flags cannot see it.
+describe("secretScanScopeFinding (#1078)", () => {
+  it("names both halves of the gap: verified-only, and history is not pattern-scanned", () => {
+    const f = secretScanScopeFinding();
+    expect(f.severity).toBe("Info");
+    expect(f.evidence).toContain("--only-verified");
+    expect(f.evidence).toContain("--no-git");
+    expect(f.impact).toContain("only in git history");
+    expect(f.fix).toContain("--results=unverified");
+  });
+});
+
+// #1078: TruffleHog ships the provider's own rotation procedure and the commit provenance with
+// every result, and Harvey discarded both on a Critical finding whose entire remediation IS
+// rotation. Fixture CAPTURED VERBATIM from `trufflehog git --no-verification --results=unverified
+// --json file://<fixture>` on trufflehog 3.96.0, 2026-07-26 (Verified flipped to true so it
+// reaches the grading path; the real run's fake token could not verify).
+describe("TruffleHog rotation guidance and commit provenance reach the finding (#1078)", () => {
+  const captured: TruffleHogResult = {
+    DetectorName: "Github",
+    DecoderName: "PLAIN",
+    Verified: true,
+    Redacted: "",
+    ExtraData: { rotation_guide: "https://howtorotate.com/docs/tutorials/github/", version: "2" },
+    SourceMetadata: {
+      Data: {
+        Git: {
+          commit: "1f475839d1a0156ec7afffc637ed841c070286a3",
+          file: "lib/leaked-token.js",
+          email: "C <c@h.test>",
+          timestamp: "2026-07-26 04:39:34 +0000",
+          line: 1,
+        },
+      },
+    },
+  };
+
+  it("appends the provider rotation guide to the fix and the author/date to the evidence", () => {
+    const f = parseTruffleHogFindings([captured], "git-history")[0];
+    expect(f?.fix).toContain("https://howtorotate.com/docs/tutorials/github/");
+    expect(f?.evidence).toContain("C <c@h.test>");
+    expect(f?.evidence).toContain("2026-07-26 04:39:34 +0000");
+  });
+
+  it("reports a non-PLAIN decoder — a base64-buried secret is a different finding and a different search", () => {
+    const f = parseTruffleHogFindings([{ ...captured, DecoderName: "BASE64" }], "source")[0];
+    expect(f?.evidence).toContain("BASE64 decoder");
+    const plain = parseTruffleHogFindings([captured], "source")[0];
+    expect(plain?.evidence).not.toContain("decoder");
   });
 });
 

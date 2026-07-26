@@ -70,6 +70,20 @@ export interface TruffleHogGitResult {
 // --no-verification skips every live provider call (deterministic, no network — a fake token
 // could never verify anyway). --results=unverified surfaces the pattern match itself, which is
 // exactly the git-history-recovery capability under test.
+//
+// #1078 — these are NOT the flags production runs. Production is `trufflehog git --only-verified`
+// (runTruffleHogGitHistory in secrets.ts), so this gate proves TruffleHog can WALK HISTORY and
+// nothing about what production's verification filter then discards. The divergence is forced,
+// not an oversight: the fixture's token is fake by construction and could never verify, so a gate
+// on production's flags would fail on every run and prove nothing. The gap it leaves — an
+// unverifiable history secret — is disclosed to the client by secretScanScopeFinding (SEC-SCOPE-00)
+// rather than left implicit.
+//
+// REASON: this gate cannot run production's --only-verified flags, because its fixture secret is fake and can never verify
+// KIND: decisional
+// PROVENANCE: MEASURED 2026-07-26
+// OWNER: operator
+// DECISION: #1078 — gate proves history recovery; production's verified-only scope is disclosed via SEC-SCOPE-00 instead
 function runTruffleHogGitHistory(dir: string): TruffleHogGitResult[] {
   let out: string;
   try {
@@ -107,7 +121,9 @@ export function scoreGitHistoryResults(results: TruffleHogGitResult[]): GitHisto
     `(${positiveHits.length} hit(s), detector ${positiveHits[0]?.DetectorName ?? "-"}) — ` +
     `secret added then removed from HEAD, recovered from git history\n` +
     `  N-GIT-HISTORY-BENIGN: ${negativeClear ? "clear" : "FALSE POSITIVE"} ` +
-    `(${negativeHits.length} hit(s)) — benign add/remove of a non-secret value`;
+    `(${negativeHits.length} hit(s)) — benign add/remove of a non-secret value\n` +
+    `  SCOPE (#1078): scored with --no-verification --results=unverified, NOT production's ` +
+    `--only-verified — this proves history recovery only, never what verification then discards`;
   return { pass: positiveCaught && negativeClear, positiveCaught, negativeClear, detail };
 }
 
