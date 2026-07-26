@@ -44,6 +44,14 @@ const BASE_EXCLUDE = [
 // rebasing onto de899d7), 12-62s each, zero unhandled errors, load average 23-25 throughout; the
 // serialized heavy run 5 of 5 green, 106-175s. The slowest file left in the light suite is 2.8s.
 //
+// AND A THIRD THING, which only the CI runner exposed — this PR's first `heavy-cli` run failed with
+// all 7 files and 83 tests PASSING and one RPC timeout. src/cli/run-audit.test.ts blocked a SINGLE
+// uninterrupted window for 62s (a beforeAll doing two full ten-module orchestrator runs back to
+// back) on hardware slower than this laptop. Serializing a set does not help a file that outlasts
+// the window by itself; that beforeAll now awaits a spawned child instead of blocking on
+// execFileSync. **The standing constraint for anything in this list: no single blocking window may
+// approach 60s.** The remaining six block ~15s at most, which is why they were left synchronous.
+//
 // They are NOT dropped — .github/workflows/ci.yml runs them on every code PR in the `heavy-cli`
 // job, serialized, with the mechanical binaries actually installed (which the `verify` job
 // deliberately does not do, so the skipIf(MECHANICAL_BINARIES_PRESENT) blocks inside three of them
