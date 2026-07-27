@@ -55,8 +55,16 @@
 //   "Do Not Rely on Middleware as the Sole Authorization Boundary" -> b15 (P-MW-SOLE-AUTHZ,
 //     P-MW-MATCHER-EXCLUDES-API).
 //   "Dependency and Supply Chain Security" -> b2-deps + b10-deps.
-// Thirteen of the sheet's recommendations land here. That is the good-news half of this measurement
-// and it is why the gap list below is six rows rather than nineteen.
+// TWELVE of the sheet's nineteen recommendations land here. That is the good-news half of this
+// measurement and it is why the gap list below is six rows rather than nineteen.
+//
+// THE ARITHMETIC, so nothing hides in it. The pinned sheet has 19 actionable items (18 `###`
+// subsections plus the Dependency and Supply Chain section). 12 are covered above, 6 are the
+// measured gaps below, and 1 — JSON State Serialization — is out-of-universe: 12 + 6 + 1 = 19, and
+// every item is in exactly one bucket. The out-of-universe list below carries SEVEN entries rather
+// than one because six of them are sub-recommendations inside a covered or gapped subsection, not
+// items of their own; they are listed so a reader can see they were considered and why they are not
+// scoreable, but they do not add to the 19.
 //
 // OUT-OF-UNIVERSE (recorded, not dropped — no static source signal, or not a distinct defect):
 //   "JSON State Serialization" — this revision only cross-references a subsection ("Avoid JSON
