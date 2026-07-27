@@ -70,8 +70,9 @@ beforeAll(() => {
   );
 
   // Synthetic webpack-stats JSON (#179): the shape @next/bundle-analyzer's `generateStatsFile`
-  // writes (webpack Stats.toJson()) — no real analyzer run, since installing the dependency
-  // is out of scope (package.json is supervised).
+  // writes (webpack Stats.toJson()) — no real analyzer run. The recorded reason was that
+  // `package.json` is supervised, which is FALSE (operator ruling 2026-07-27, #1319): it is on no
+  // sensitive-paths list. Verifying this fixture against a real analyzer run is #1304.
   statsDir = mkdtempSync(join(tmpdir(), "harvey-bundle-stats-"));
   statsPath = join(statsDir, "client-stats.json");
   writeFileSync(
