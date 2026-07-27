@@ -330,7 +330,8 @@ Two side effects, recorded rather than left to surprise the next reader.
 
 1. The entry has no `license`, so it joins `SUP-LICENSE-00`'s indeterminate list on the offline
    path. That is correct — a lockfile entry with no license field genuinely cannot be classified —
-   and it moves the SBOM license coverage for this target to 390 of 396 components.
+   and it moves the SBOM license coverage for this target down by one component. MEASURED
+   2026-07-27, after the `uid` plant below joined it: 390 of 397 components carry a license.
 2. osv-scanner independently matches the name and emits
    `DEP-OSV-GHSA-c2m4-w5hm-vqjw-crossenv@0.0.0-synthetic` (review tier). That is welcome
    corroboration — a third party we do not control agrees this name is malware, which is the one
@@ -338,6 +339,28 @@ Two side effects, recorded rather than left to surprise the next reader.
    NOT corpus-keyed, for the same reason `P-NEXT-CVE-CACHE` is keyed on its class rather than an
    advisory id: OSV advisory data moves. `P-KNOWN-IOC-TRANSITIVE` keys on the IOC row's own
    "indicator-of-compromise" wording, which no OSV row carries, so the two cannot be confused.
+
+### B2 transitive-typosquat plant (#1231 follow-up)
+
+`package-lock.json` also carries `uid`, declared by no `package.json` in this target and Levenshtein-1
+from `uuid` in `checkTyposquat`'s popular-package corpus. #1231 widened `checkKnownIoc` **and**
+`checkTyposquat` from the root manifest's names to the whole resolved tree, but only the IOC half got
+a calibration row — the typosquat half was held by unit tests alone, so the gate that fails loud on a
+silent regression did not cover it. `P-TYPOSQUAT-TRANSITIVE` is that row.
+
+`uid` is a **real published npm package** (registry HEAD 200, verified 2026-07-27). That is
+deliberate and is the same construction `P-TYPOSQUAT` uses for `expres`: a name the registry knows
+keeps `checkSlopsquat` silent, so the row scores the name-shape check alone rather than a 404. The
+lockfile entry is still SYNTHETIC (`0.0.0-synthetic`, no `resolved`, no `integrity`, no `license`) —
+nothing here is ever installed, and the name is the only field `checkTyposquat` reads.
+
+The corpus row matches on the finding's transitive-reach sentence ("reached only through the resolved
+dependency tree"), never on the package name, so the manifest-declared `P-TYPOSQUAT` positive cannot
+satisfy it. `N-IOC-TRANSITIVE-CLEAN` (`crypto-browserify@3.12.1`) is the shared boundary negative: it
+sits equally transitively and is edit-distance 1 from nothing.
+
+Side effect, recorded: the entry has no `license`, so like `crossenv` it joins `SUP-LICENSE-00`'s
+indeterminate list on the offline path — the count in that row moves from 9 to 10 packages.
 
 ### B2 negatives — benign lookalikes (must NOT be flagged in the free count)
 
