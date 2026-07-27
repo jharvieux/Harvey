@@ -2575,6 +2575,20 @@ eight fixtures produced findings for entirely different defects** (path traversa
 data exposure), every finding correct, and an unscoped `match` would have recorded all three gaps as
 COVERED. That is the #1062 masking shape reached through a corpus instead of a producer seam.
 
+**The masking shape then reappeared inside #1200's own row, which is worth recording (2026-07-27).**
+`P-OWASP-NODE-BODY-LIMIT` scopes two shapes — `express.json()` with no `limit`, and a raw
+`req.on("data", …)` accumulator with no byte ceiling. Only the first shipped, and the row was declared
+satisfied on the grounds that "one relevant finding is enough". That is the same error the header
+above warns about, reached from the other direction: not another probe's finding standing in for
+ours, but one half of a class standing in for the whole class. Both halves are covered now — the
+accumulator by `src/scan/raw-body-limit.ts`, with `request-size-limit-set.ts` carrying two negatives
+(a running byte total compared against a ceiling, and a chunk streamed to disk instead of buffered).
+
+The same reopen fixed `P-OWASP-NODE-REDOS`'s disclosure. The rule matches a regex **literal** only,
+and that bound lived in a YAML comment and a corpus note — neither of which a client ever reads. It
+is in the rule's `message` now, so it travels into the emitted finding. The standing rule this
+batch established: **a bounded detector states its bound in the finding it emits.**
+
 The React sheet is thirteen recommendations already covered, six measured gaps (#1237–#1240), and
 seven out-of-universe. One gap is a **facet** gap rather than a class gap: we do detect SSRF, but the
 detector is anchored on the route-handler shape and misses the Server Component `{ params }` form the

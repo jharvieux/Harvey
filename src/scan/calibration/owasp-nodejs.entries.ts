@@ -119,7 +119,7 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     location: "src/owasp-node/no-request-size-limit.ts",
     match: ["size limit", "body limit", "payload"],
     expectedTier: "review",
-    note: "Sheet, Application Security: 'Set request size limits via middleware for different content types.' `express.json()` without `limit`, and a raw `req.on(\"data\")` accumulator with no cap — one request can exhaust process memory. Was MEASURED zero findings (2026-07-26); harvey-body-parser-no-limit (src/scan/rules/semgrep/owasp-node.yml, #1200) now catches the missing-`limit` shape, re-measured caught at review tier. DISCLOSED remaining scope: the raw `req.on(\"data\")` accumulator half is not separately covered (see the rule file's note) — this row is satisfied by the body-parser half alone, one relevant finding being enough.",
+    note: "Sheet, Application Security: 'Set request size limits via middleware for different content types.' `express.json()` without `limit`, and a raw `req.on(\"data\")` accumulator with no cap — one request can exhaust process memory. Was MEASURED zero findings (2026-07-26). BOTH shapes are covered now: harvey-body-parser-no-limit (src/scan/rules/semgrep/owasp-node.yml, #1200) catches the missing-`limit` option, and src/scan/raw-body-limit.ts catches the unbounded accumulator. The note here previously said the accumulator half was uncovered but that 'this row is satisfied by the body-parser half alone, one relevant finding being enough' — that reasoning was WRONG and is exactly the masking shape this file's header warns about: a row satisfied by a different defect than the one under test records a gap as covered. A `match` scoped to the class, not to whichever finding happens to land on the file, is what keeps the two halves separately answerable. Both re-measured caught at review tier (MEASURED 2026-07-27, `validate-calibration`). DISCLOSED bound on the accumulator half, stated in the finding itself and not only here: the byte ceiling is looked for in the enclosing handler only, so a limit imposed by middleware or a wrapper in another module reads as absent.",
   },
   {
     id: "N-OWASP-NODE-BODY-LIMIT-SET",
@@ -128,6 +128,14 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     location: "src/owasp-node/request-size-limit-set.ts",
     match: ["size limit", "body limit", "payload"],
     note: "#1200 negative: `express.json({ limit: \"100kb\" })` clears the missing-limit rule.",
+  },
+  {
+    id: "N-OWASP-NODE-RAW-BODY-GUARDED",
+    kind: "negative",
+    cls: "Raw req.on(\"data\") accumulator with a running byte total compared against a ceiling",
+    location: "src/owasp-node/request-size-limit-set.ts",
+    match: ["size limit", "body limit", "payload"],
+    note: "#1200 negative for the ACCUMULATOR half (the shape src/scan/raw-body-limit.ts flags): `/ingest-bounded` buffers chunks exactly like the positive but tracks `received` against MAX_BODY_BYTES and calls `req.destroy()` past it. The same file's `/ingest-streamed` handler is the second edge — `out.write(c)` streams the chunk to disk instead of buffering it, so the heap never grows and it is not a size defect. Confirmed silent by MEASUREMENT, not inspection (raw mechanical scan over targets/calibration, 2026-07-27: zero SEC-RAW-BODY rows on this file).",
   },
   {
     id: "P-OWASP-NODE-REDOS",
