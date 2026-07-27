@@ -1,0 +1,136 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+// #1221: the taint SOURCE vocabulary drifted apart rule by rule. Twelve rules carried a
+// byte-identical hand-copied source list and the widenings of #570/#984/#987/#601 landed on some
+// copies and not others — MEASURED 2026-07-27 (semgrep 1.164.0), 17 of 21 server-side taint rules
+// could not see `await req.json()` and 19 of 21 could not see `searchParams.get()`.
+//
+// The fix is a YAML anchor per file. Anchors resolve at parse time and do not cross documents, so
+// the block is physically duplicated — which is the same failure mode one indirection later unless
+// something fails loud. These two tests are that something: the copies must stay identical, and a
+// server-side taint rule must either USE the anchor or be listed below with a reason. A new rule
+// that hand-rolls its own source list is the defect, and it now cannot land silently.
+
+const RULES_DIR = dirname(fileURLToPath(import.meta.url));
+
+// Rules that deliberately do NOT take the canonical block. Each is a judgment about what the rule
+// is ABOUT, not an oversight — an unexplained absence from this map is what the test catches.
+const NARROW_BY_DESIGN: Record<string, string> = {
+  "harvey-dangerously-set-inner-html": "client-side render sources (router.query/useSearchParams), not server request accessors",
+  "harvey-select-star-pii": "the source is a DB projection, not the request",
+  "harvey-dangerously-set-inner-html-stored": "stored-XSS: the source is a DB read, not the request",
+  "harvey-dom-innerhtml": "client-side DOM sources (location.hash/search, router.query)",
+  "harvey-document-write": "client-side DOM sources",
+  "harvey-href-js-url": "client-side DOM sources",
+  "harvey-open-url-sink": "client-side DOM sources",
+  "harvey-set-attribute-xss": "client-side DOM sources",
+  "harvey-cors-reflected-origin-object": "the Origin header specifically — a wider source set would change the bug class",
+  "harvey-mass-assignment": "body-only by design: the bug is spreading the whole body, so a header or query source is not this weakness",
+  "harvey-idor-param": "an IDOR source is an IDENTIFIER (query/route param/searchParams), so cookies and headers are out of class — #1221's two missing shapes were added to its own list instead",
+  "harvey-lib-path-traversal": "library entry points (exported function parameters), not request accessors",
+  "harvey-lib-command-injection": "library entry points",
+  "harvey-lib-code-injection": "library entry points",
+};
+
+// Rules whose source list is narrower for no RECORDED reason — measured drift awaiting a per-rule
+// judgment (#1224). Deliberately a separate map from NARROW_BY_DESIGN: calling an unexamined gap
+// "by design" is how a gap stops being outstanding work without anyone deciding it should.
+const PENDING_JUDGMENT: Record<string, string> = {
+  "harvey-crlf-header-injection": "#1224",
+  "harvey-prototype-pollution": "#1224",
+  "harvey-unsafe-deserialization": "#1224",
+};
+
+interface Rule {
+  file: string;
+  id: string;
+  taint: boolean;
+  sources: string;
+}
+
+function parseRules(file: string): Rule[] {
+  const text = readFileSync(join(RULES_DIR, file), "utf8");
+  const chunks = text.split(/^ {2}- id: /m).slice(1);
+  return chunks.map((chunk) => {
+    const id = chunk.split("\n")[0]!.trim();
+    const sourcesMatch = /^ {4}pattern-sources:\n((?: {6}.*\n|\n)*)/m.exec(chunk);
+    return { file, id, taint: /^ {4}mode: taint$/m.test(chunk), sources: sourcesMatch?.[1] ?? "" };
+  });
+}
+
+function ruleFiles(): string[] {
+  return readdirSync(RULES_DIR).filter((f) => f.endsWith(".yml"));
+}
+
+// The anchor definition block, from its key to the first line at column 0 that follows it.
+function anchorBlock(file: string): string | undefined {
+  const text = readFileSync(join(RULES_DIR, file), "utf8");
+  const start = text.indexOf("x-request-source: &request_source\n");
+  if (start === -1) return undefined;
+  const rest = text.slice(start);
+  const end = /\n(?=\S)/.exec(rest.slice("x-request-source: &request_source\n".length));
+  const block = end === null ? rest : rest.slice(0, "x-request-source: &request_source\n".length + end.index);
+  return block.trimEnd();
+}
+
+describe("canonical request-taint source block (#1221)", () => {
+  it("is byte-identical in every file that declares it", () => {
+    const declared = ruleFiles()
+      .map((f) => [f, anchorBlock(f)] as const)
+      .filter((pair): pair is readonly [string, string] => pair[1] !== undefined);
+
+    expect(declared.length).toBeGreaterThan(1);
+    const [firstFile, canonical] = declared[0]!;
+    for (const [file, block] of declared.slice(1)) {
+      expect(block, `${file}'s copy of the canonical source block has drifted from ${firstFile}'s`).toBe(canonical);
+    }
+  });
+
+  it("carries the App Router shapes the drift had lost", () => {
+    const canonical = anchorBlock("base.yml");
+    expect(canonical).toBeDefined();
+    for (const pattern of ["await $REQ.json()", "$U.searchParams.get(...)", "$U.searchParams"]) {
+      expect(canonical, `the canonical block lost ${pattern} — the shape #1221 exists to add`).toContain(pattern);
+    }
+    // A bare `$SP.get(...)` was MEASURED to fire on Map/Headers/config/FormData `.get()` even
+    // behind ssrf-fetch's http-client guard. It must never re-enter the shared block.
+    expect(canonical).not.toContain("- pattern: $SP.get(...)");
+  });
+
+  it("is used by every server-side taint rule that is not narrow by design", () => {
+    const offenders = ruleFiles()
+      .flatMap(parseRules)
+      .filter(
+        (r) =>
+          r.taint &&
+          !r.sources.includes("*request_source") &&
+          NARROW_BY_DESIGN[r.id] === undefined &&
+          PENDING_JUDGMENT[r.id] === undefined,
+      )
+      .map((r) => `${r.file}:${r.id}`);
+
+    expect(
+      offenders,
+      "these taint rules hand-roll their own source list. Use `- *request_source`, or add the rule " +
+        "to NARROW_BY_DESIGN with the reason it is deliberately narrower. A silently divergent copy " +
+        "is exactly the #1221 defect.",
+    ).toEqual([]);
+  });
+
+  it("has no stale exemptions", () => {
+    const taintIds = new Set(ruleFiles().flatMap(parseRules).filter((r) => r.taint).map((r) => r.id));
+    const stale = [...Object.keys(NARROW_BY_DESIGN), ...Object.keys(PENDING_JUDGMENT)].filter((id) => !taintIds.has(id));
+    expect(stale, "these rules no longer exist or are no longer taint rules").toEqual([]);
+  });
+
+  it("does not leave a resolved rule sitting in PENDING_JUDGMENT", () => {
+    const adopted = ruleFiles()
+      .flatMap(parseRules)
+      .filter((r) => r.sources.includes("*request_source") && PENDING_JUDGMENT[r.id] !== undefined)
+      .map((r) => r.id);
+    expect(adopted, "these rules now use the canonical block — drop them from PENDING_JUDGMENT").toEqual([]);
+  });
+});
