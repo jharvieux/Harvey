@@ -162,6 +162,10 @@ const SECURITY: Record<string, [string, string | null]> = {
   // Failure): the mechanism does not merely fail, it never runs, and what ships is unsanitized HTML
   // rendered into the page — which is CWE-79's definition, and the class the OWASP sheet names.
   "Browser-only sanitizer in a server-rendered component": ["79", "A03"],
+  // #1204: X-Powered-By names the server framework to any caller. MEASURED against MITRE's own
+  // CWE-200 page (cwe.mitre.org/data/definitions/200.html, 2026-07-27): Memberships lists "OWASP
+  // Top Ten 2021 Category A01:2021 - Broken Access Control".
+  "Framework version disclosed via X-Powered-By": ["200", "A01"],
 };
 
 // Non-security taxonomies: recorded as no-clean-CWE WITH A REASON rather than left unclassified.
