@@ -2,7 +2,49 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-27 (midday) — resume complete: 3 PRs merged, #1205 UNBLOCKED and awaiting an operator action, a new GHA gap found from an operator question, **an OWASP maintainer replied to #2308**. Newest block first._
+_Last updated: 2026-07-27 (afternoon) — **the conservation gate is now a REQUIRED check (#1205 closed)** and the OWASP ack-watch was found BROKEN and rebuilt in CI. 3 PRs merged. Newest block first._
+
+## 2026-07-27 (afternoon) — resume: #1205 landed, and the ack-watch was not watching
+
+Operator granted workflow-file changes and authority to flip CI tests to required. Both queued CI items are done.
+
+### ✅ #1205 CLOSED — the conservation gate now BLOCKS the merge path
+
+`main`'s required checks are now **three**:
+```
+verify
+regenerate dry-run findings + diff committed artifact
+plant → deliverable, and the produced/delivered arithmetic   ← added this session
+```
+
+- **PR #1215** moved the `paths:` filter off the `pull_request` trigger and INTO the job as a short-circuit step, mirroring `dry-run-drift.yml`. This was the non-skippable prerequisite: a path-filtered required check deadlocks every PR outside its filter.
+- **Proven live, not argued:** PR #1216 touched only a new workflow file — none of conservation's filtered paths — and the job ran, short-circuited and reported **green in 12s**. That is the deadlock scenario executing successfully.
+- **Negative controls confirmed still asserting** (per-step, from #1215's run): gate PASS ✓, wiring test ✓, seeded-producer-loss-must-fail ✓, seeded-unaccounted-drop-must-fail ✓. So "required" carries the strong claim — *passed AND could have failed*.
+- **#1206 stays OPEN.** 5 green runs mean the flake is rare, not that its root cause is named.
+- **Residual gap, stated not hidden:** this blocks PRs only. `strict: true` means a PR must be current with `main`, but a direct push is unaffected. The daily scheduled run + `ci-conservation-alert` remains the backstop.
+
+### ⚠️ The OWASP ack-watch was BROKEN — found, replaced, and the replacement was broken too
+
+The queue said "verify the ack-watch routine." Verified. **It was not working.**
+
+**Measured:** routine `trig_01UD5yXDN8jMghazEBZnCGrV` fired on schedule at `12:02:23Z`; the change had been present since `01:59:41Z` (jmanico's comment on #2308); **zero `owasp-ack-alert` issues have ever existed.** It ran ~10h after a real change and raised nothing. Its alerting path ran `gh` in a sandbox whose auth was never confirmed, and every failure branch in its prompt ended in "state it clearly in your final summary" — a summary with no reader. Fail-loud into a void.
+
+**Replaced by `.github/workflows/owasp-ack-watch.yml`** (PR #1216 + fix #1217), using the repo's own proven pattern (`ci-conservation-alert`/`ci-corpus-drift-alert`/`ci-heavy-cli-alert`): `github.token` authenticates both the upstream read and the issue write, the run is a durable artifact with logs, `workflow_dispatch` lets a human run it and *see* the output. Two separate alarms — `owasp-ack-alert` (upstream moved) vs `ci-owasp-watch-alert` (we went blind, which is NOT "no change"). Idempotent with no external state: last-reported state is stamped into the tracking issue, so a standing change is reported once, not re-announced daily.
+
+**The old routine is DISABLED and renamed `[RETIRED — replaced by …]`.** Deleting it outright needs a human at https://claude.ai/code/routines.
+
+**Lesson worth keeping — a stub can manufacture a green.** The pre-merge local harness stubbed the `gh issue` writes so it wouldn't create issues. Five scenarios passed. The first real run then read upstream perfectly and died on `not a git repository` at the write. It proved the LOGIC and not the WIRING — the produced-vs-delivered split (#1040/#1062/#1064) reached through a test stub instead of a producer seam. Fixed with `GH_REPO` (#1217).
+
+### ⚠️ CLAUDE.md RELAYS OWED — I did not edit the file (no explicit request naming it)
+1. **Line 48, "Git and PRs":** "with BOTH required checks green (`verify`, and since #1107 …)" is now FALSE — there are **three**. Recommended: *"with ALL THREE required checks green (`verify`; since #1107 `regenerate dry-run findings + diff committed artifact` — the `dry-run-drift` gate; and since #1205 `plant → deliverable, and the produced/delivered arithmetic` — the conservation gate)"*.
+2. **Line 39, conservation bullet:** "it runs on a schedule of its own (…, daily + on pipeline PRs, #1142)" is now stale. Recommended: *"daily and on EVERY PR — since #1205 it is a required status check, so its `paths:` filter moved inside the job as a short-circuit that still reports green (the #1107 deadlock rule)"*.
+
+### Next, in order
+1. **#1192 React corpus** — unchanged; prerequisite done, source pinned to `anuragnedunuri/CheatSheetSeries@4332c39c`, inventory deliberately un-bucketed (buckets must be MEASURED by running the scanner, per #1191).
+2. **#1212** GHA token-permission gap, then the other OWASP-corpus gap issues (#1195–#1198, #1200–#1203).
+3. Declared-set follow-up: `Database_Security_Cheat_Sheet.md` + `Authorization_Cheat_Sheet.md` belong in the corpus set — picking only flattering sheets destroys the independent-answer-key property.
+4. Still **do NOT draft either cheat sheet** — #2308 carries 0 labels; the ack IS a label (`ACK_OBTAINED`). jmanico's "I like this idea" is encouragement, not approval.
+
 
 ## 2026-07-27 (morning) — resume: conservation flake, the #1194 detector, OWASP maintainer contact
 
