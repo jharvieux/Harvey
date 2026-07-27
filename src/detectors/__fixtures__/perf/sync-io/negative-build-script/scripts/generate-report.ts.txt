@@ -1,0 +1,7 @@
+import { readFileSync } from "node:fs";
+
+// #1203: a build/tooling script (scripts/ dir) — never on a request path regardless of what it
+// exports, so the broadened (non-handler-path) tier must stay silent here.
+export function loadManifest(name: string): string {
+  return readFileSync(`./manifests/${name}.json`, "utf8");
+}
