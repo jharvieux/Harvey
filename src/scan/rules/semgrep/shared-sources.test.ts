@@ -25,6 +25,7 @@ const NARROW_BY_DESIGN: Record<string, string> = {
   "harvey-cors-reflected-origin-object": "the Origin header specifically — a wider source set would change the bug class",
   "harvey-mass-assignment": "body-only by design: the bug is spreading the whole body, so a header or query source is not this weakness",
   "harvey-idor-param": "an IDOR source is an IDENTIFIER (query/route param/searchParams), so cookies and headers are out of class — #1221's two missing shapes were added to its own list instead",
+  "harvey-prototype-pollution": "a recursive merge pollutes via KEYS, so an attacker-controlled STRING is inert — route params and searchParams.get are out of class, and URLSearchParams/cookies()/headers() keep their entries in internal slots a deep merge never walks (#1224)",
   "harvey-lib-path-traversal": "library entry points (exported function parameters), not request accessors",
   "harvey-lib-command-injection": "library entry points",
   "harvey-lib-code-injection": "library entry points",
@@ -44,11 +45,11 @@ const CLIENT_RULES = [
   "harvey-set-attribute-xss",
 ];
 
-const PENDING_JUDGMENT: Record<string, string> = {
-  "harvey-crlf-header-injection": "#1224",
-  "harvey-prototype-pollution": "#1224",
-  "harvey-unsafe-deserialization": "#1224",
-};
+// Rules whose source list is narrower for no RECORDED reason — measured drift awaiting a per-rule
+// judgment. Deliberately a separate map from NARROW_BY_DESIGN: calling an unexamined gap "by
+// design" is how a gap stops being outstanding work without anyone deciding it should. #1224
+// emptied it, and it is kept as the landing slot for the next unexamined narrowing.
+const PENDING_JUDGMENT: Record<string, string> = {};
 
 interface Rule {
   file: string;

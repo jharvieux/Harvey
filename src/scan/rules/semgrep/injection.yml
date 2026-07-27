@@ -468,17 +468,39 @@ rules:
     message: >
       Request body flows into a recursive merge — prototype pollution (a __proto__/constructor key
       mutates Object.prototype). Validate keys, or merge only an explicit allowlist of fields.
+    # #1224 judgment: this rule does NOT take the canonical block, and the reason is the sink.
+    # A recursive merge pollutes only via KEYS, so a source qualifies only if it can carry an
+    # attacker-named key — an attacker-controlled STRING merged into an object is inert.
+    #
+    # IN: `req.body` (parsed JSON) and `await req.json()` — a JSON body is exactly what carries
+    # `__proto__`, and #1224 is right that it is this rule's single most important omission.
+    # `req.query` too, because Express's qs parses `?__proto__[x]=1` into a NESTED OBJECT — the
+    # classic vector. `req.cookies`/`req.headers` stay: their KEYS are attacker-named.
+    #
+    # OUT, deliberately: `req.params` and `searchParams.get(...)` return STRINGS, and a route
+    # segment cannot pollute a prototype on its own. `$U.searchParams`, `cookies()` and `headers()`
+    # are WHATWG objects whose entries live in internal slots, not own enumerable properties, so a
+    # deep merge walks nothing. Each of these would be recall theatre: a source that cannot reach
+    # this weakness.
     pattern-sources:
-      - pattern: req.body
-      - pattern: req.query
-      # #984: cookies/headers are attacker-controllable request sources.
-      - pattern: req.cookies
-      - pattern: req.headers
-      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
-      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
-      # taint dataflow once the base object is a source; the method form is a distinct call shape.
-      - pattern: req.get(...)
-      - pattern: req.header(...)
+      - patterns:
+          - pattern-either:
+              - pattern: $REQ.body
+              - pattern: $REQ.query
+              # #984: cookies/headers are attacker-controllable request sources.
+              - pattern: $REQ.cookies
+              - pattern: $REQ.headers
+              # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+              # destructured/bracket/aliased/multi-hop forms of these sources propagate through
+              # semgrep's taint dataflow once the base object is a source; the method form is a
+              # distinct call shape. Both return strings and so are inert for THIS sink, but they
+              # predate #1224 and removing them changes no outcome.
+              - pattern: $REQ.get(...)
+              - pattern: $REQ.header(...)
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^_?(req|request|nextReq|nextRequest|httpReq|incoming)$
+      - pattern: await $REQ.json()
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -505,17 +527,14 @@ rules:
     message: >
       Request input is deserialized with an unsafe unserialize() (node-serialize executes embedded
       function bodies) — remote code execution. Use JSON.parse and validate the shape.
+    # #1224 judgment: adopt the canonical block WHOLESALE — the opposite call from its neighbour
+    # harvey-prototype-pollution, and for the same reason read the other way. `unserialize()`
+    # consumes a serialized STRING, so every attacker-controlled string is in class: a payload in a
+    # query param, a route segment, or a session COOKIE — the classic vector this rule exists for,
+    # and one its old list could not see on the App Router at all. #1224 grouped these two rules
+    # together; the sink is what separates them.
     pattern-sources:
-      - pattern: req.body
-      - pattern: req.query
-      # #984: cookies/headers are attacker-controllable request sources.
-      - pattern: req.cookies
-      - pattern: req.headers
-      # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
-      # destructured/bracket/aliased/multi-hop forms of these sources propagate through semgrep's
-      # taint dataflow once the base object is a source; the method form is a distinct call shape.
-      - pattern: req.get(...)
-      - pattern: req.header(...)
+      - *request_source
     pattern-sinks:
       - patterns:
           - pattern-either:
