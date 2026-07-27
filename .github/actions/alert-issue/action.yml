@@ -116,9 +116,19 @@ runs:
         \`\`\`"
 
         url=$(gh issue create --title "${TITLE}${SUFFIX}" --label "$MARKER" --body "$drill_body")
-        num=$(find_open drill)
+
+        # `gh issue list --label` reads a label index that lags `issue create` by a second or two —
+        # measured, not assumed: the first drill run of #1287 created issue #1334 and found nothing
+        # 2.5s later, while the identical query returned it from a laptop moments after. Retry
+        # rather than sleep blindly, and still fail loud if it never shows up.
+        num=""
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+          num=$(find_open drill)
+          [ -n "$num" ] && break
+          sleep 2
+        done
         if [ -z "$num" ]; then
-          echo "::error::the drill created $url, but the find step cannot see it. The find half of find-or-update is broken — a second failure would open a duplicate issue instead of updating this one."
+          echo "::error::the drill created $url, but 10 lookups over 20s never found it. The find half of find-or-update is broken — a second failure would open a duplicate issue instead of updating this one."
           exit 1
         fi
 
