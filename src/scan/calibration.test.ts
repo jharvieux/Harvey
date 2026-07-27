@@ -17,6 +17,8 @@ import { knownPublicCredsEntries } from "./calibration/known-public-creds.entrie
 import { m9AuthzEntries } from "./calibration/m9-authz.entries.js";
 import { m9CheckEntries } from "./calibration/m9-checks.entries.js";
 import { m9PortEntries } from "./calibration/m9-ports.entries.js";
+import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
+import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import type { TargetFramework } from "./framework-detect.js";
 import type { SourceInput } from "../detectors/app-router.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
@@ -1082,5 +1084,31 @@ describe("#374 static auth_rls_initplan corpus (live checkMigrationRlsInitplanSt
     const flagged = findings.map((f) => f.location);
     expect(flagged.some((l) => l.includes("perf_orders_select_own"))).toBe(true);
     expect(flagged.every((l) => !l.includes("perf_events_select_own"))).toBe(true);
+  });
+});
+
+describe("#1203 M7 blocking-loop (live detectPerfCodeFindings over the committed OWASP fixture)", () => {
+  // P-OWASP-NODE-BLOCKING-LOOP is tagged module: "M7" in owasp-nodejs.entries.ts, which excludes
+  // it from validate-calibration.ts's M1 mechanical scoring (mechanicalCorpus) — this block is
+  // where it is actually proven caught, same shape as the #221/#374 blocks above: the REAL
+  // detector against the REAL committed fixture, so the answer key can't drift from what the
+  // scanner emits.
+  const entry = owaspNodejsEntries.find((e) => e.id === "P-OWASP-NODE-BLOCKING-LOOP");
+  if (!entry) throw new Error("P-OWASP-NODE-BLOCKING-LOOP missing from owasp-nodejs.entries.ts");
+  const findings = detectPerfCodeFindings([
+    { path: entry.location, text: readFileSync(join(import.meta.dirname, "../../targets/calibration", entry.location), "utf8") },
+  ]);
+
+  it("catches pbkdf2Sync and readFileSync in blocking-event-loop.ts at review tier", () => {
+    const row = scoreEntry(entry, findings);
+    expect(row.pass, row.detail).toBe(true);
+    expect(row.caughtTier).toBe(entry.expectedTier);
+  });
+
+  it("fires both calls, each at Review confidence with the reachability caveat disclosed", () => {
+    const hits = findings.filter((f) => f.taxonomy === "M7 — Blocking sync I/O in request handler");
+    expect(hits).toHaveLength(2);
+    expect(hits.every((f) => f.confidence === "Review")).toBe(true);
+    expect(hits.every((f) => f.evidence.includes("reachability"))).toBe(true);
   });
 });
