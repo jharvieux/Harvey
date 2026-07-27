@@ -35,6 +35,7 @@ import { b19PrismaTenantScopeEntries } from "./calibration/b19-prisma-tenant-sco
 import { b20DrizzleTenantScopeEntries } from "./calibration/b20-drizzle-tenant-scope.entries.js";
 import { b21SilentFailureEntries } from "./calibration/b21-silent-failure.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
+import { owaspMultiTenantEntries } from "./calibration/owasp-multitenant.entries.js";
 import { rlsStaticSemanticsEntries } from "./calibration/rls-static-semantics.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
 import { m7Entries } from "./calibration/m7.entries.js";
@@ -79,6 +80,7 @@ export const CORPUS: CorpusEntry[] = [
   ...b20DrizzleTenantScopeEntries,
   ...b21SilentFailureEntries,
   ...knownPublicCredsEntries,
+  ...owaspMultiTenantEntries,
   ...rlsStaticSemanticsEntries,
   ...m9AuthzEntries,
   ...m9CheckEntries,
@@ -196,9 +198,12 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
   // (pass=false) rather than letting a by-design gap silently become a claimed catch (#425).
   if (entry.expectedTier === "none") {
     const held = relevant.length === 0;
+    const measured = entry.gapKind === "measured-gap";
     const detail = held
-      ? "intended gap — no mechanical rule by design (measured LLM-tier); nothing fired"
-      : `REGRESSION: a mechanical rule now reaches this by-design gap — re-tier this entry. Fired: ${relevant.map((f) => f.taxonomy).join(", ")}`;
+      ? measured
+        ? "MEASURED GAP — planted, scanned, nothing fired; outstanding work, not a boundary (see entry note for the tracking issue)"
+        : "intended gap — no mechanical rule by design (measured LLM-tier); nothing fired"
+      : `REGRESSION: a mechanical rule now reaches this ${measured ? "recorded gap — close the entry out and re-tier it" : "by-design gap — re-tier this entry"}. Fired: ${relevant.map((f) => f.taxonomy).join(", ")}`;
     return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass: held, detail, ...noSev };
   }
 

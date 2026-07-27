@@ -15,6 +15,7 @@
 // measurable from it — the vibe-dummy FP oracle stays the precision gate (the issue's guardrail).
 
 import { execFileSync } from "node:child_process";
+import { arg, assertKnownFlags } from "./args.js";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import type { OsvScanResult } from "../scan/dependencies.js";
 import { fileURLToPath } from "node:url";
@@ -30,12 +31,17 @@ import {
   SECBENCH_REPO,
 } from "../scan/secbench.js";
 
-function arg(flag: string): string | undefined {
-  const i = process.argv.indexOf(flag);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
+const FLAGS = [
+  "--dir",
+  "--target",
+  "--library-source-tree",
+  "--lockfile-tree",
+  "--osv-report",
+  "--semgrep-json",
+] as const;
 
-const dir = arg("--dir");
+assertKnownFlags(FLAGS);
+const dir = arg("--dir") ?? arg("--target");
 if (!dir) {
   console.error(
     `Usage: validate-secbench --dir <secbench-checkout> --osv-report <osv.json> [--semgrep-json <sg.json>]\n` +

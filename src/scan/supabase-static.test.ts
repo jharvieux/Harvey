@@ -6,6 +6,7 @@ import {
   checkEdgeFunctionVerifyJwt,
   checkMigrationDefinerAuthz,
   checkMigrationPolicySemantics,
+  checkMigrationRlsBypass,
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsStatic,
   checkOpenSignupConfig,
@@ -795,5 +796,74 @@ describe("checkMigrationRlsInitplanStatic (#374)", () => {
       ].join("\n"),
     });
     expect(checkMigrationRlsInitplanStatic(dir)).toEqual([]);
+  });
+});
+
+describe("checkMigrationRlsBypass (#1190 — from the OWASP Multi-Tenant cheat sheet)", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function writeMigrations(files: Record<string, string>): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-rlsbypass-"));
+    const dir = join(root, "supabase", "migrations");
+    mkdirSync(dir, { recursive: true });
+    for (const [name, sql] of Object.entries(files)) writeFileSync(join(dir, name), sql);
+    return root;
+  }
+
+  const enabledWithPolicy = (t: string) =>
+    `create table public.${t} (id uuid primary key, tenant_id uuid not null);\n` +
+    `alter table public.${t} enable row level security;\n` +
+    `create policy ${t}_iso on public.${t} for all using (tenant_id = current_setting('app.current_tenant')::uuid);\n`;
+
+  it("flags a role granted BYPASSRLS at Critical — the bypass FORCE does not close", () => {
+    const dir = writeMigrations({
+      "0001.sql": `${enabledWithPolicy("ledger")}create role app_worker login bypassrls;`,
+    });
+    const f = checkMigrationRlsBypass(dir).filter((x) => x.id.startsWith("SB-RLS-BYPASSRLS"));
+    expect(f).toHaveLength(1);
+    expect(f[0]!.severity).toBe("Critical");
+    expect(f[0]!.id).toBe("SB-RLS-BYPASSRLS-app_worker");
+  });
+
+  it("does NOT flag NOBYPASSRLS, which contains the same substring but is the safe form", () => {
+    const dir = writeMigrations({
+      "0001.sql": `${enabledWithPolicy("ledger")}alter role app_worker nobypassrls;`,
+    });
+    expect(checkMigrationRlsBypass(dir).filter((x) => x.id.startsWith("SB-RLS-BYPASSRLS"))).toHaveLength(0);
+  });
+
+  it("rolls missing FORCE into ONE review-tier finding rather than one per table", () => {
+    // The per-table high-tier version of this check fired on 21 tables of the real corpus; the
+    // rollup is the #935 shape. Three unforced tables must still yield exactly one finding.
+    const dir = writeMigrations({
+      "0001.sql": enabledWithPolicy("a") + enabledWithPolicy("b") + enabledWithPolicy("c"),
+    });
+    const f = checkMigrationRlsBypass(dir).filter((x) => x.id === "SB-RLS-NOFORCE-ROLLUP");
+    expect(f).toHaveLength(1);
+    expect(f[0]!.precisionTier).toBe("review");
+    expect(f[0]!.evidence).toContain("a, b, c");
+  });
+
+  it("clears a table that enables, polices AND forces row level security", () => {
+    const dir = writeMigrations({
+      "0001.sql": `${enabledWithPolicy("contracts")}alter table public.contracts force row level security;`,
+    });
+    expect(checkMigrationRlsBypass(dir)).toHaveLength(0);
+  });
+
+  it("ignores an RLS-enabled table with no policy — deny-all, where missing FORCE changes nothing", () => {
+    const dir = writeMigrations({
+      "0001.sql":
+        "create table public.service_state (id uuid primary key);\nalter table public.service_state enable row level security;",
+    });
+    expect(checkMigrationRlsBypass(dir)).toHaveLength(0);
+  });
+
+  it("does not read commented-out DDL as a real grant", () => {
+    const dir = writeMigrations({
+      "0001.sql": `${enabledWithPolicy("ledger")}-- create role app_worker login bypassrls;`,
+    });
+    expect(checkMigrationRlsBypass(dir).filter((x) => x.id.startsWith("SB-RLS-BYPASSRLS"))).toHaveLength(0);
   });
 });

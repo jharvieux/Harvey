@@ -51,6 +51,7 @@ import {
   checkMigrationDynamicSqlInjection,
   checkMigrationPolicySemantics,
   checkMigrationRlsInitplanStatic,
+  checkMigrationRlsBypass,
   checkMigrationRlsStatic,
   checkOpenSignupConfig,
   inferAuthMethodsFromSource,
@@ -277,6 +278,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(unsupportedDataLayerNote(orm));
     } else {
       findings.push(...checkMigrationRlsStatic(scanDir));
+      findings.push(...checkMigrationRlsBypass(scanDir));
       findings.push(...checkMigrationPolicySemantics(scanDir, tenancyOverride));
       findings.push(...checkMigrationDefinerAuthz(scanDir));
       findings.push(...checkMigrationDefinerAnonGrant(scanDir));

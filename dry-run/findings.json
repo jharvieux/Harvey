@@ -900,22 +900,6 @@
     "safety": 5
   },
   {
-    "id": "SEC-BUNDLE-00",
-    "title": "Built-bundle secret scan did not run",
-    "severity": "Info",
-    "confidence": "N/A",
-    "category": "Secret exposure",
-    "taxonomy": "Client-inlined secret — coverage not assessed",
-    "location": "(bundle)",
-    "status": "Open",
-    "evidence": "Built-bundle secret pass did not run: no built bundle found (.next/static or dist/) — run a production build so client-inlined secrets can be scanned.",
-    "impact": "Client-inlined secrets (VITE_*/NEXT_PUBLIC_*/REACT_APP_* baked into the shipped JS) are not covered — a disclosed coverage gap, not a finding of zero secrets in the bundle.",
-    "fix": "Produce a production build (`next build` -> .next/static, or `vite build` -> dist/) and re-run the scan, or pass --bundle <dir> at the built assets.",
-    "value": 1,
-    "ease": 3,
-    "safety": 5
-  },
-  {
     "id": "DEP-OSV-GHSA-mh99-v99m-4gvg-brace-expansion@1.1.16",
     "title": "brace-expansion@1.1.16: brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash (fixed in 5.0.8)",
     "severity": "High",
@@ -9294,6 +9278,30 @@
   },
   {
     "id": "SEM-291",
+    "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-missing-server-only",
+    "location": "src/owasp-mt/privileged-connection-request-path.ts:11",
+    "status": "Open",
+    "evidence": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "impact": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEM-292",
     "title": "src.scan.rules.semgrep.harvey-edgefn-secret-fallback: A secret read from Deno.env falls back to a hardcoded secret-shaped string literal — the literal ships in the deployed function bundle and its git history. Fail closed (throw) when the env var is absent; never embed a fallback secret.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -9317,7 +9325,7 @@
     ]
   },
   {
-    "id": "SEM-292",
+    "id": "SEM-293",
     "title": "generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash: bcrypt hash detected",
     "severity": "High",
     "confidence": "Review",
@@ -9345,7 +9353,7 @@
     ]
   },
   {
-    "id": "SEM-293",
+    "id": "SEM-294",
     "title": "javascript.lang.security.detect-child-process.detect-child-process: Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed.",
     "severity": "High",
     "confidence": "Review",
@@ -9374,7 +9382,7 @@
     ]
   },
   {
-    "id": "SEM-294",
+    "id": "SEM-295",
     "title": "src.scan.rules.semgrep.harvey-command-injection: Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn with an argument array and no shell, and validate the input against an allowlist.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -9578,6 +9586,30 @@
     ]
   },
   {
+    "id": "SB-RLS-STATIC-mt_invoices",
+    "title": "public.mt_invoices is created but never gets RLS enabled in any migration",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "category": "Supabase config",
+    "taxonomy": "Migration table without RLS (static)",
+    "location": "supabase/migrations/20260726000002_owasp_mt_isolation.sql:10",
+    "status": "Open",
+    "evidence": "create table public.mt_invoices has no matching \"alter table public.mt_invoices enable row level security\" anywhere in supabase/migrations/.",
+    "impact": "A public-schema table with RLS off is auto-exposed via PostgREST — every row is readable/writable by anyone holding the anon key, with no per-row restriction.",
+    "fix": "Add `alter table public.mt_invoices enable row level security;` plus policies, or move the table out of the exposed public schema.",
+    "value": 5,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
     "id": "SB-RLS-STATIC-nocode_tickets",
     "title": "public.nocode_tickets is created but never gets RLS enabled in any migration",
     "severity": "Critical",
@@ -9620,6 +9652,56 @@
     "precisionTier": "high",
     "cwe": [
       "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SB-RLS-BYPASSRLS-mt_app_worker",
+    "title": "Role mt_app_worker is granted BYPASSRLS, which voids every row-level policy for that role",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "category": "Supabase config",
+    "taxonomy": "Role with BYPASSRLS defeats row-level security (static)",
+    "location": "supabase/migrations/20260726000002_owasp_mt_isolation.sql:34",
+    "status": "Open",
+    "evidence": "create role mt_app_worker login bypassrls — in supabase/migrations/20260726000002_owasp_mt_isolation.sql.",
+    "impact": "PostgreSQL documents that roles with BYPASSRLS always bypass row security; FORCE ROW LEVEL SECURITY does not constrain them, because FORCE governs the table owner. Any request served over a connection using this role reads and writes every tenant's rows regardless of the policies defined on the table.",
+    "fix": "Remove BYPASSRLS from mt_app_worker (`alter role mt_app_worker nobypassrls;`) and reserve privileged connections for migrations and administrative jobs. If a code path must use one to serve user requests, it has to re-implement tenant scoping itself, because the database will no longer do it.",
+    "value": 5,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-269: Improper Privilege Management"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SB-RLS-NOFORCE-ROLLUP",
+    "title": "21 RLS-enabled table(s) never force row level security, so the owning role bypasses their policies",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Supabase config",
+    "taxonomy": "RLS enabled without FORCE — owner bypasses policies (static)",
+    "location": "supabase/migrations/20260724000001_rls_drop_policy_broken.sql:19",
+    "status": "Open",
+    "evidence": "21 table(s) have \"enable row level security\" and at least one policy but no matching \"force row level security\" in any migration: audit_events, counters, documents, gadgets, internal_notes, invoices, mt_ledger, notes, patient_billing, perf_events, perf_line_items, perf_orders, perf_shipments, pii_calibration_fixture, plans, profiles, support_tickets, tautology_articles, tenant_reports, tenants, widgets. Review question: Does any runtime code path connect as the role that OWNS these tables? On a stock Supabase project PostgREST connects as anon/authenticated, which are not the owner, and this is defence-in-depth only. A self-hosted or custom-pooled deployment that connects as the owning role has no row-level isolation on these tables at all.",
+    "impact": "PostgreSQL exempts a table's owner from row security unless FORCE ROW LEVEL SECURITY is set. Where the owning role is used at runtime, every policy listed here holds for non-owner roles only.",
+    "fix": "Add `alter table public.<table> force row level security;` alongside each enable statement — inert when the owner never serves requests, and closes the gap when it does.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "okWhen": "Runtime access is exclusively through PostgREST as anon/authenticated, or through a role that does not own these tables — the stock hosted-Supabase arrangement. FORCE is then hardening, not a fix.",
+    "notOkWhen": "Any application connection, pooler, migration job or edge function connects as the table-owning role (common in self-hosted deployments and in direct-Postgres access alongside PostgREST) — those paths read and write every tenant's rows.",
+    "cwe": [
+      "CWE-269: Improper Privilege Management"
     ],
     "owasp": [
       "A01:2021 - Broken Access Control"
@@ -9794,7 +9876,7 @@
     "taxonomy": "M1 — Multi-tenant security",
     "location": "supabase/migrations/",
     "status": "Open",
-    "evidence": "The static policy review inferred tenancy PER TABLE by looking for one of the known tenant-key columns (tenant_id, org_id, organization_id, workspace_id, account_id, company_id). Reviewed as per-tenant: profiles → per-tenant on \"tenant_id\"; notes → per-tenant on \"tenant_id\"; counters → per-tenant on \"tenant_id\"; documents → per-tenant on \"tenant_id\"; invoices → per-tenant on \"tenant_id\"; pii_calibration_fixture → per-tenant on \"tenant_id\"; perf_orders → per-tenant on \"tenant_id\"; perf_events → per-tenant on \"tenant_id\"; internal_notes → per-tenant on \"tenant_id\"; support_tickets → per-tenant on \"tenant_id\"; tenant_reports → per-tenant on \"tenant_id\"; tautology_articles → per-tenant on \"tenant_id\"; audit_events → per-tenant on \"tenant_id\"; patient_billing → per-tenant on \"tenant_id\". Reviewed as per-user (no recognised tenant column — a row bound to auth.uid() is treated as the isolation boundary): tenants, perf_line_items, perf_shipments, objects, plans, widgets, gadgets. NOT RECOGNISED — these tables declare a scoping column that is not on the known list, so they were reviewed as per-user and any cross-tenant policy bug in them WAS NOT LOOKED FOR: perf_line_items (declares order_id); perf_shipments (declares order_id); widgets (declares site). Coverage note: the scoping-column scan above names a column when it ends in \"_id\" OR is a foreign key to a tenant-shaped table (tenants/orgs/accounts/workspaces/companies). A bare tenant column with NEITHER signal — an off-list name (e.g. \"tenant\", \"site\", \"region_slug\") and no FK to a tenant table — is still reviewed as per-user and will not be named. An empty list above is not proof that no such column exists.",
+    "evidence": "The static policy review inferred tenancy PER TABLE by looking for one of the known tenant-key columns (tenant_id, org_id, organization_id, workspace_id, account_id, company_id). Reviewed as per-tenant: profiles → per-tenant on \"tenant_id\"; notes → per-tenant on \"tenant_id\"; counters → per-tenant on \"tenant_id\"; documents → per-tenant on \"tenant_id\"; invoices → per-tenant on \"tenant_id\"; pii_calibration_fixture → per-tenant on \"tenant_id\"; perf_orders → per-tenant on \"tenant_id\"; perf_events → per-tenant on \"tenant_id\"; internal_notes → per-tenant on \"tenant_id\"; support_tickets → per-tenant on \"tenant_id\"; tenant_reports → per-tenant on \"tenant_id\"; tautology_articles → per-tenant on \"tenant_id\"; audit_events → per-tenant on \"tenant_id\"; patient_billing → per-tenant on \"tenant_id\"; mt_ledger → per-tenant on \"tenant_id\"; mt_contracts → per-tenant on \"tenant_id\". Reviewed as per-user (no recognised tenant column — a row bound to auth.uid() is treated as the isolation boundary): tenants, perf_line_items, perf_shipments, objects, plans, widgets, gadgets. NOT RECOGNISED — these tables declare a scoping column that is not on the known list, so they were reviewed as per-user and any cross-tenant policy bug in them WAS NOT LOOKED FOR: perf_line_items (declares order_id); perf_shipments (declares order_id); widgets (declares site). Coverage note: the scoping-column scan above names a column when it ends in \"_id\" OR is a foreign key to a tenant-shaped table (tenants/orgs/accounts/workspaces/companies). A bare tenant column with NEITHER signal — an off-list name (e.g. \"tenant\", \"site\", \"region_slug\") and no FK to a tenant table — is still reviewed as per-user and will not be named. An empty list above is not proof that no such column exists.",
     "impact": "This is the review's central assumption, not a defect. If a table listed as per-user is really tenant-scoped under a name the list does not know (e.g. site_id), its policies were judged against the wrong model and cross-tenant findings were silently missed — a failed inference is indistinguishable from a clean result unless it is stated.",
     "fix": "Confirm the assumed model above. If a table is tenant-scoped under a column not listed, re-run this scan with `--tenant-key <column>` (quick-scan / mechanical scan, or detect-deeper at the connected tier) — the reviewer uses the declared column for any table that has it instead of guessing from the built-in list. Use `--tenant-mode per-user` instead if the app is genuinely single-tenant end to end. Until re-run, treat the per-user verdict for any unlisted table as not assessed.",
     "value": 1,
@@ -10778,6 +10860,30 @@
     "precisionTier": "review",
     "cwe": [
       "CWE-602: Client-Side Enforcement of Server-Side Security"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
+  },
+  {
+    "id": "AUTH-upload-no-limit-src-owasp-mt-storage-path-no-tenant-ts",
+    "title": "src/owasp-mt/storage-path-no-tenant.ts writes an upload to storage with no size/MIME limit",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Upload to storage with no size/MIME limit",
+    "location": "src/owasp-mt/storage-path-no-tenant.ts",
+    "status": "Open",
+    "evidence": "Heuristic \"upload-no-limit\" matched a storage .upload() with no content-length/MIME guard in src/owasp-mt/storage-path-no-tenant.ts.",
+    "impact": "An attacker can store arbitrarily large or executable content, or exhaust the storage quota.",
+    "fix": "Enforce a content-length cap and a MIME allowlist before the storage write.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-434: Unrestricted Upload of File with Dangerous Type"
     ],
     "owasp": [
       "A04:2021 - Insecure Design"

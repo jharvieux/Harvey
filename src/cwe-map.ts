@@ -65,6 +65,11 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Client-supplied payment amount trusted by server": ["602", "A04"],
   // Missing authorization on a resource/route/channel.
   "Migration table without RLS (static)": ["862", "A01"],
+  // #1190: the two privileged-role bypasses of an otherwise-correct policy set. CWE-269 (Improper
+  // Privilege Management) rather than 862 — the authorization check EXISTS and is right; the defect
+  // is that the role it runs as is exempt from it.
+  "Role with BYPASSRLS defeats row-level security (static)": ["269", "A01"],
+  "RLS enabled without FORCE — owner bypasses policies (static)": ["269", "A01"],
   rls_disabled_in_public: ["862", "A01"],
   "Middleware matcher excludes /api routes": ["862", "A01"],
   "Unauthenticated debug/admin route": ["862", "A01"],

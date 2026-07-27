@@ -29,6 +29,7 @@
 // blended into the request→sink SOURCE-DETECTOR RECALL number above.
 
 import { execFileSync } from "node:child_process";
+import { arg, assertKnownFlags } from "./args.js";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -41,10 +42,12 @@ import { recallPct } from "../scan/secbench.js";
 import { detectAppRouterFindings, type SourceInput } from "../detectors/app-router.js";
 import type { CoverageMatrix, MatrixRow } from "../scan/calibration.js";
 
-function arg(flag: string): string | undefined {
-  const i = process.argv.indexOf(flag);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
+const FLAGS = [
+  "--dir",
+  "--target",
+  "--json",
+  "--real",
+] as const;
 
 if (process.argv.includes("--real")) {
   const git = (cloneDir: string, ...a: string[]): void => void execFileSync("git", ["-C", cloneDir, ...a], { stdio: ["ignore", "ignore", "pipe"] });
@@ -79,7 +82,8 @@ if (process.argv.includes("--real")) {
 }
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const dir = arg("--dir") ?? join(repoRoot, "targets", "calibration");
+assertKnownFlags(FLAGS);
+const dir = arg("--dir") ?? arg("--target") ?? join(repoRoot, "targets", "calibration");
 
 const corpus = sourceTierCorpus(); // throws loud if the answer key drifted
 const findings = await runMechanicalScan({ dir });

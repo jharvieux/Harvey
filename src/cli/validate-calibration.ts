@@ -11,6 +11,7 @@
 // follow-ups, e.g. OSV needing a lockfile) are reported but do not fail the gate.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { arg, assertKnownFlags } from "./args.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { buildCoverageMatrix, CORPUS, mechanicalCorpus, moduleCensus, scoreEntry, type MatrixRow } from "../scan/calibration.js";
@@ -22,13 +23,15 @@ import { runGitHistorySecretGate } from "../scan/git-history-secret-gate.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { checkKnownIoc, checkLockfilePresence } from "../scan/supply-chain.js";
 
-function arg(flag: string): string | undefined {
-  const i = process.argv.indexOf(flag);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
+const FLAGS = [
+  "--dir",
+  "--target",
+  "--json",
+] as const;
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const dir = arg("--dir") ?? join(repoRoot, "targets", "calibration");
+assertKnownFlags(FLAGS);
+const dir = arg("--dir") ?? arg("--target") ?? join(repoRoot, "targets", "calibration");
 
 // Secondary manifest fixtures: each targets/calibration/fixtures/<app>/ is a STANDALONE project
 // root (its own package.json, its own — or absent — lockfile), scanned independently of the main

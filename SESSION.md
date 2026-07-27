@@ -2,7 +2,37 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-26 (late) — after the conservation sweep, a **producer→deliverable VERIFICATION wave** + operator-ruling wave. The sweep found real dropped findings everywhere it looked; all fixed. Newest block first; the sweep block and the 24-PR block follow._
+_Last updated: 2026-07-26 (night) — **OWASP contribution thread**: two cheat-sheet proposals filed upstream, an ack-watch routine scheduled, and three coverage-corpus issues opened to measure Harvey against an answer key we did not author. Newest block first._
+
+## 2026-07-26 (night) — OWASP upstream contributions + independent coverage corpora
+
+Operator question: "you mentioned there was no OWASP model for Next.js and that we could submit one — how would we do that." Verified the claim (it held), then filed, then turned it into a measurement program.
+
+### Filed upstream — awaiting maintainer ack (MEASURED 2026-07-26: both had 0 labels, 0 comments at filing)
+- **[OWASP/CheatSheetSeries#2308](https://github.com/OWASP/CheatSheetSeries/issues/2308)** — NEW cheat sheet: **Next.js Security**. Verified gap: no Next.js sheet exists and **no one had ever proposed one** (searched all issues). Framework precedent is strong — 12 framework/platform sheets (Django, Rails, Laravel, Symfony, DotNet, Node.js, Docker, K8s, GitHub Actions…). Six issue classes mapped to CWEs: middleware-as-authz-boundary (CVE-2025-29927), Server Actions as unauthenticated endpoints, route-handler/page authz asymmetry, server data crossing the `"use client"` boundary, cache poisoning/cross-user cache leakage (CVE-2024-46982), `next.config.js` attack surface.
+- **[OWASP/CheatSheetSeries#2309](https://github.com/OWASP/CheatSheetSeries/issues/2309)** — UPDATE to the existing **`Multi_Tenant_Security_Cheat_Sheet.md`** (shipped Dec 2025, author `@KadirArslan`). Three gaps, each verified by direct grep of the file at `master`: (1) `FORCE ROW LEVEL SECURITY` covers table owners only — superusers and `BYPASSRLS` roles **always** bypass (quoted the Postgres docs verbatim); the sheet has zero occurrences of `BYPASSRLS`/`service_role`/`bypass`/`superuser`. (2) Its policy reads a session GUC (`current_setting('app.current_tenant')`) with no mention of `SET LOCAL` or transaction-mode pooling — a stale GUC on a pooled connection is a cross-tenant read where policy, schema and app code all still look correct. (3) No guidance on **verifying** isolation at all (Section 8 is monitoring/alerting, i.e. after the fact).
+
+### Decided AGAINST filing (recorded so it isn't re-litigated)
+**No Supabase-specific cheat sheet.** OWASP is vendor-neutral and every framework/platform sheet is an open-source framework or open standard. **Firebase — far more widely deployed — has zero presence in that repo**, which is the negative signal. Supabase belongs as a vendor-neutral *example* inside the multi-tenant sheet, which is what #2309 does.
+
+### Ack-watch routine (the ack is invisible by default)
+**GitHub does not send notifications for label changes**, and the formal ack in that project IS a label (`ACK_WAITING` → `ACK_OBTAINED`). A comment notifies; a silent relabel does not. Also: filing via `gh issue create` bypassed the template's auto-labels, so both issues currently carry **no labels** and sit in the untriaged stream (a maintainer will label them; we lack write access).
+- Routine **`trig_01UD5yXDN8jMghazEBZnCGrV`** — daily 12:00 UTC / 08:00 ET. Reads both issues via the public API, compares to the zero-labels/zero-comments baseline, and on ANY change find-or-updates an issue in this repo labeled **`owasp-ack-alert`** (new label, mirrors `ci-corpus-drift-alert`/`ci-heavy-cli-alert`). Fail-loud: a failed read must report as a failed read, never "no change."
+- **Do not start drafting either cheat sheet before `ACK_OBTAINED`.** #543 (React) is the cautionary tale: proposed 2021, ACK'd in 2 days, then stalled 3 years; its PR #2196 is open since May 2026 with **89 review comments** and maintainers demanding cuts.
+- ⚠ **Unverified:** the routine's first test run (`cse_01UvN9UK9uSNJh6sQP3zvVoq`) was triggered but its output was NOT observed. Confirm it printed the no-change line.
+
+### The measurement program — three issues filed (#1190/#1191/#1192)
+**Why:** our calibration corpus is scored against `briefs/anti-patterns.md` — a catalog we wrote, then wrote detectors for. That measures internal consistency, not coverage; we cannot fail a check we authored to match what we already catch. The OWASP sheets are an **independent answer key we did not author and cannot quietly edit.** Operator ruling: **this is for finding real product gaps, NOT for marketing** — the deliverable is a gap list, never a percentage.
+- **#1190** (opus) Multi-Tenant — **do this first.** Closest to what Harvey sells, and it carries the forcing function: we just publicly told OWASP that three things matter, so if Harvey can't detect them we should find out before a maintainer does.
+- **#1191** (sonnet) Node.js — expect a LARGE intended-gap bucket (helmet/HSTS/cookie flags/CSP). Those are the interesting ones: "we don't check that" and "we deliberately don't check that" look identical from outside, and only one is acceptable.
+- **#1192** (sonnet) React — source is the UNMERGED PR #2196, so **pin to a commit SHA**, and open a post-merge reconciliation follow-up. Operator overrode my objection here and was right: benchmark instability only matters if you publish a number; for gap-finding a draft is fine.
+
+**Key rails discovery — no new gate needed.** `CorpusEntry.expectedTier: "none"` in `src/scan/calibration/types.ts` ALREADY means "planted positive with no mechanical rule by design → scored as an INTENDED GAP, not a recall miss, **and the gate FAILS LOUD if any rule ever fires on it**." That is exactly the disclosed-scope bucket, already built. So these are `*.entries.ts` files + fixtures registered in `src/scan/calibration.ts`, scored by the existing `validate-calibration` — not a parallel instrument.
+
+**Selection-bias guard to honor:** picking sheets by where we expect to score well destroys the independent-answer-key property. `Database_Security_Cheat_Sheet.md` and `Authorization_Cheat_Sheet.md` are also in Harvey's domain and belong in the declared set — a follow-up once the three land.
+
+### Next
+Execute **#1190** → #1191 → #1192, each a PR into `main`. Note `dry-run-drift` is a required check and these touch `targets/calibration/**`, so regenerate and commit both dry-run artifacts. **No CLAUDE.md sentence was falsified by this thread** (grep-checked: no OWASP/corpus claim there; the detector-census figures live in the tool, not the file). Nothing owed.
 
 ## 2026-07-26 (late) — verification wave + operator rulings → ~30 more PRs, real drops found & fixed
 
