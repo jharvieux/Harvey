@@ -681,7 +681,7 @@ rules:
               - pattern-inside: |
                   $R = path.resolve($BASE, $X);
                   ...
-                  if (!$R.startsWith($PREFIX)) return $EARLY;
+                  if (!$R.startsWith($PREFIX)) return ...;
                   ...
     pattern-sinks:
       # #1220: the five modelled sinks were all callback/sync `fs.*` spelled with a LITERAL `fs.`

@@ -22,11 +22,6 @@ const NARROW_BY_DESIGN: Record<string, string> = {
   "harvey-dangerously-set-inner-html": "client-side render sources (router.query/useSearchParams), not server request accessors",
   "harvey-select-star-pii": "the source is a DB projection, not the request",
   "harvey-dangerously-set-inner-html-stored": "stored-XSS: the source is a DB read, not the request",
-  "harvey-dom-innerhtml": "client-side DOM sources (location.hash/search, router.query)",
-  "harvey-document-write": "client-side DOM sources",
-  "harvey-href-js-url": "client-side DOM sources",
-  "harvey-open-url-sink": "client-side DOM sources",
-  "harvey-set-attribute-xss": "client-side DOM sources",
   "harvey-cors-reflected-origin-object": "the Origin header specifically — a wider source set would change the bug class",
   "harvey-mass-assignment": "body-only by design: the bug is spreading the whole body, so a header or query source is not this weakness",
   "harvey-idor-param": "an IDOR source is an IDENTIFIER (query/route param/searchParams), so cookies and headers are out of class — #1221's two missing shapes were added to its own list instead",
@@ -38,6 +33,17 @@ const NARROW_BY_DESIGN: Record<string, string> = {
 // Rules whose source list is narrower for no RECORDED reason — measured drift awaiting a per-rule
 // judgment (#1224). Deliberately a separate map from NARROW_BY_DESIGN: calling an unexamined gap
 // "by design" is how a gap stops being outstanding work without anyone deciding it should.
+// The client sink rules take the OTHER shared block (#1223, xss.yml's `*dom_source`) — a DOM
+// source is a different vocabulary, not a narrower one, so it gets its own anchor and its own
+// coverage assertion rather than an exemption.
+const CLIENT_RULES = [
+  "harvey-dom-innerhtml",
+  "harvey-document-write",
+  "harvey-href-js-url",
+  "harvey-open-url-sink",
+  "harvey-set-attribute-xss",
+];
+
 const PENDING_JUDGMENT: Record<string, string> = {
   "harvey-crlf-header-injection": "#1224",
   "harvey-prototype-pollution": "#1224",
@@ -107,6 +113,7 @@ describe("canonical request-taint source block (#1221)", () => {
         (r) =>
           r.taint &&
           !r.sources.includes("*request_source") &&
+          !r.sources.includes("*dom_source") &&
           NARROW_BY_DESIGN[r.id] === undefined &&
           PENDING_JUDGMENT[r.id] === undefined,
       )
@@ -120,9 +127,31 @@ describe("canonical request-taint source block (#1221)", () => {
     ).toEqual([]);
   });
 
+  it("gives every client sink rule the shared DOM source block", () => {
+    const byId = new Map(ruleFiles().flatMap(parseRules).map((r) => [r.id, r]));
+    const missing = CLIENT_RULES.filter((id) => !byId.get(id)?.sources.includes("*dom_source"));
+    expect(
+      missing,
+      "these client sink rules hand-roll their own DOM source list. #1223 measured three of them " +
+        "blind to location.hash/.search while two siblings in the same file declared both.",
+    ).toEqual([]);
+  });
+
+  it("keeps the DOM source block carrying the fragment", () => {
+    const xss = readFileSync(join(RULES_DIR, "xss.yml"), "utf8");
+    const start = xss.indexOf("x-dom-source: &dom_source\n");
+    expect(start).toBeGreaterThan(-1);
+    const body = xss.slice(start).split(/\n(?=\S)/)[0]!;
+    for (const pattern of ["location.hash", "location.search"]) {
+      expect(body, `the DOM source block lost ${pattern} — the shape #1223 exists to add`).toContain(pattern);
+    }
+  });
+
   it("has no stale exemptions", () => {
     const taintIds = new Set(ruleFiles().flatMap(parseRules).filter((r) => r.taint).map((r) => r.id));
-    const stale = [...Object.keys(NARROW_BY_DESIGN), ...Object.keys(PENDING_JUDGMENT)].filter((id) => !taintIds.has(id));
+    const stale = [...Object.keys(NARROW_BY_DESIGN), ...Object.keys(PENDING_JUDGMENT), ...CLIENT_RULES].filter(
+      (id) => !taintIds.has(id),
+    );
     expect(stale, "these rules no longer exist or are no longer taint rules").toEqual([]);
   });
 
