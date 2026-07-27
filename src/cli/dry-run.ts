@@ -149,15 +149,18 @@ async function main(): Promise<void> {
   try {
     mech = await timePhase("M1 + supply chain", "mechanical scan (secrets, deps, semgrep, supply-chain, leftover-auth)", () =>
       // skipNetworkChecks: findings.json is committed and contractually deterministic across
-      // machines (#285) — the live npm-registry calls (checkLicenseCompliance, checkSlopsquat)
-      // would let it drift on registry reachability, not just the target/scanner. Real engagement
-      // scans are unaffected: this flag is opt-in and only the dry-run harness sets it.
+      // machines (#285) — a live npm-registry call would let it drift on registry reachability,
+      // not just the target/scanner. It pins off checkSlopsquat entirely and, since #1213,
+      // checkLicenseCompliance's registry FALLBACK only: that check classifies from the committed
+      // lockfile, which is deterministic, so the copyleft detection stays exercised here instead of
+      // going silent. Real engagement scans are unaffected: this flag is opt-in and only the
+      // dry-run harness sets it.
       runMechanicalScan({ dir: scratch.scanDir, skipNetworkChecks: true, skipBundleScan: true }),
     );
   } finally {
     scratch.cleanup();
   }
-  mech.report.notes = "secrets (trufflehog+gitleaks), dependency CVEs (osv-scanner + curated Next.js ranges), semgrep, supply-chain, leftover-auth grep — all ran live against the target, except the two live npm-registry checks (license compliance, slopsquat) which are skipped to keep this artifact network-independent.";
+  mech.report.notes = "secrets (trufflehog+gitleaks), dependency CVEs (osv-scanner + curated Next.js ranges), semgrep, supply-chain, leftover-auth grep — all ran live against the target, except the live npm-registry lookups (slopsquat entirely, and license compliance's registry fallback — its lockfile classification still ran) which are skipped to keep this artifact network-independent.";
   phases.push(mech.report);
   allFindings.push(...mech.findings);
 
