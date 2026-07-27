@@ -79,3 +79,22 @@ The relevance test lives **inside the CLI** — a PR is in scope if its *body* c
 or a `remainder:` line, which no file diff can answer — so the short-circuit uses the same parser the
 gate uses instead of a second copy in YAML that could disagree with it. `edited` is in the trigger
 list because the input is the PR body.
+
+### Scoping, and why both gates share one context
+
+GitHub's required-checks list is **branch-level only** — there is no per-PR-type requirement — so all
+the scoping has to live in the job's own relevance test. Each gate states its verdict on its own line,
+first, every run:
+
+```
+● Gate 1 (acceptance criteria, #1315): 2 closing reference(s) — #1315, #1316.
+○ Gate 2 (remainder liveness, #1316): NO-OP — no `remainder:` line and no `split` disposition …
+```
+
+Gate 1 is in scope iff the body carries a closing keyword; Gate 2 iff it declares a remainder or a
+`split`. Either can no-op while the other runs. **An unexplained green is indistinguishable from a
+check that did nothing because it was broken**, so a no-op always names its reason.
+
+They share one job and one context deliberately. Splitting them would add a second required context
+for a 16-second check, and would let a `split` disposition be accepted by a green Gate 1 while Gate 2
+— the only thing that makes `split` mean anything — sat red on the same PR. They are one assertion.

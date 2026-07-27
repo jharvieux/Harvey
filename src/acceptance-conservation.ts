@@ -378,10 +378,21 @@ export function checkAcceptance(prBody: string, lookup: IssueLookup, repo?: stri
 }
 
 export function formatAcceptance(report: AcceptanceReport): string {
-  const out: string[] = [];
-  if (report.noop) {
-    return "✓ no closing keyword and no `remainder:` line in this PR body — nothing closes, so there are no criteria to conserve.";
-  }
+  // The two gates share one job and one check context, so each states its own relevance verdict
+  // FIRST. GitHub's required-checks list is branch-level — there is no per-PR-type requirement — so
+  // the scoping has to live here, and a green no-op has to say WHY it was a no-op. An unexplained
+  // green is indistinguishable from a check that did nothing because it was broken.
+  const gate1Refs = [...report.closes.map((n) => `#${n}`), ...report.unresolvableCloses];
+  const out: string[] = [
+    gate1Refs.length === 0
+      ? "○ Gate 1 (acceptance criteria, #1315): NO-OP — this PR body carries no closing keyword, so no issue closes on merge and there are no criteria to conserve."
+      : `● Gate 1 (acceptance criteria, #1315): ${gate1Refs.length} closing reference(s) — ${gate1Refs.join(", ")}.`,
+    report.remainders.length === 0
+      ? "○ Gate 2 (remainder liveness, #1316): NO-OP — no `remainder:` line and no `split` disposition, so nothing is deferred to another issue."
+      : `● Gate 2 (remainder liveness, #1316): ${report.remainders.length} remainder reference(s) — ${report.remainders.map((r) => `#${r.remainder}`).join(", ")}.`,
+    "",
+  ];
+  if (report.noop) return `${out.join("\n")}✓ nothing for either gate to assert on this PR.`;
 
   for (const e of report.parseErrors) out.push(`✗ ${e}`);
 

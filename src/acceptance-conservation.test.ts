@@ -230,7 +230,16 @@ describe("the green no-op", () => {
     const r = checkAcceptance("A docs tidy-up. Refs #12.\n", lookupOf());
     expect(r.noop).toBe(true);
     expect(r.ok).toBe(true);
-    expect(formatAcceptance(r)).toContain("no closing keyword");
+    // A green run has to say WHY it was green: an unexplained pass is indistinguishable from a
+    // check that did nothing because it was broken.
+    expect(formatAcceptance(r)).toContain("Gate 1 (acceptance criteria, #1315): NO-OP");
+    expect(formatAcceptance(r)).toContain("Gate 2 (remainder liveness, #1316): NO-OP");
+  });
+
+  it("states each gate's relevance separately — one may be in scope while the other is not", () => {
+    const out = formatAcceptance(checkAcceptance(BOTH_MET, lookupOf(issue({ number: 10 }))));
+    expect(out).toContain("Gate 1 (acceptance criteria, #1315): 1 closing reference(s) — #10.");
+    expect(out).toContain("Gate 2 (remainder liveness, #1316): NO-OP");
   });
 });
 
