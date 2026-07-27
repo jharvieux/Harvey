@@ -214,6 +214,45 @@ export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]):
   });
 }
 
+// #1318 (Gate 6 of #1320) — the census above is advisory, and an advisory number that nobody has to
+// act on is how 257 claim-shaped lines accumulated outside the registry in the first place. The
+// ratchet makes it strictly NON-WORSENING without demanding anyone migrate the backlog: the count
+// may fall, never rise.
+//
+// Per FILE rather than one total, for two reasons. A single number is satisfied by deleting a claim
+// in one doc and adding one in another — the population is unchanged and the gate stays green. And
+// a per-file breach can NAME the lines to look at, which a global delta cannot: #1318's acceptance
+// asks for the new lines, because otherwise the fix is a guessing game.
+//
+// Deliberately no exemption list. Suppressing a file recreates exactly the invisibility this exists
+// to remove; the way past a breach is to write the claim as a falsifiable block, or to bump that
+// file's baseline in a diff a human reads.
+export type ClaimBaseline = Record<string, number>;
+
+export function claimCensusByFile(claims: { file: string }[]): ClaimBaseline {
+  const out: ClaimBaseline = {};
+  for (const c of claims) out[c.file] = (out[c.file] ?? 0) + 1;
+  return out;
+}
+
+export interface RatchetBreach {
+  file: string;
+  baseline: number;
+  now: number;
+}
+
+/** A file absent from the baseline has an implicit budget of 0, so a NEW doc full of claims breaches. */
+export function claimRatchetBreaches(baseline: ClaimBaseline, current: ClaimBaseline): RatchetBreach[] {
+  return Object.entries(current)
+    .filter(([file, now]) => now > (baseline[file] ?? 0))
+    .map(([file, now]) => ({ file, baseline: baseline[file] ?? 0, now }))
+    .sort((a, b) => b.now - b.baseline - (a.now - a.baseline));
+}
+
+export function claimTotal(census: ClaimBaseline): number {
+  return Object.values(census).reduce((n, c) => n + c, 0);
+}
+
 const PROVENANCE_FORM = /^(MEASURED|TRIED|ASSUMED) (\d{4}-\d{2}-\d{2})\b/;
 // A falsifier that is a placeholder is worse than a missing one: it satisfies the gate while
 // re-testing nothing.

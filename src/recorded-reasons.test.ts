@@ -2,9 +2,14 @@ import { describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CLAIM_BASELINE } from "./unstructured-claims-baseline.js";
 import {
   DEFAULT_ROOTS,
+  claimCensusByFile,
+  claimRatchetBreaches,
+  claimTotal,
   collectReasons,
+  collectSources,
   issueSources,
   parseRecordedReasons,
   reasonKind,
@@ -17,6 +22,7 @@ import {
 } from "./recorded-reasons.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const reasonsForCensus = collectReasons(DEFAULT_ROOTS, REPO_ROOT);
 
 const CLAIM = "REASON: the shared source loader does not read .svelte/.vue/.astro";
 const EMPIRICAL_KIND = "KIND: empirical";
@@ -283,5 +289,39 @@ describe("the repo's own recorded reasons (the gate `pnpm verify` enforces)", ()
   it("include real reasons of both kinds, so this gate cannot pass vacuously", () => {
     expect(reasons.filter((r) => reasonKind(r) === "empirical").length).toBeGreaterThan(0);
     expect(reasons.filter((r) => reasonKind(r) === "decisional").length).toBeGreaterThan(0);
+  });
+});
+
+describe("the claim ratchet (#1318) — the census may fall, never rise", () => {
+  it("passes when every file is at or under its baseline", () => {
+    expect(claimRatchetBreaches({ "a.md": 3, "b.md": 1 }, { "a.md": 3, "b.md": 0 })).toEqual([]);
+  });
+
+  // The negative control. A per-file baseline is the point: a single global total is satisfied by
+  // deleting a claim here and adding one there, leaving the population untouched.
+  it("fails on one added claim line, and on a swap that leaves the total unchanged", () => {
+    expect(claimRatchetBreaches({ "a.md": 3 }, { "a.md": 4 })).toEqual([{ file: "a.md", baseline: 3, now: 4 }]);
+    expect(claimRatchetBreaches({ "a.md": 3, "b.md": 1 }, { "a.md": 2, "b.md": 2 })).toEqual([{ file: "b.md", baseline: 1, now: 2 }]);
+  });
+
+  it("gives a file absent from the baseline a budget of zero, so a new doc full of claims breaches", () => {
+    expect(claimRatchetBreaches({}, { "new.md": 2 })).toEqual([{ file: "new.md", baseline: 0, now: 2 }]);
+  });
+
+  // End-to-end over the real repo with a real claim-shaped line planted, rather than over a hand-
+  // built census: proves the vocabulary, the census and the ratchet are actually wired to each other.
+  it("fires when a claim-shaped comment is planted in a real repo file", () => {
+    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT).filter((s) => s.file.endsWith(".md"));
+    const planted = sources.map((s) => (s.file === "CLAUDE.md" ? { ...s, text: `${s.text}\nThis cannot be measured by any existing tier.\n` } : s));
+    const census = claimCensusByFile(untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #")));
+    expect(claimRatchetBreaches(CLAIM_BASELINE, census)).toEqual([{ file: "CLAUDE.md", baseline: CLAIM_BASELINE["CLAUDE.md"], now: (CLAIM_BASELINE["CLAUDE.md"] ?? 0) + 1 }]);
+  });
+
+  it("holds the committed baseline over this repo right now", () => {
+    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT).filter((s) => s.file.endsWith(".md"));
+    const census = claimCensusByFile(untriagedClaims(sources, reasonsForCensus).filter((c) => !c.file.startsWith("issue #")));
+    expect(claimRatchetBreaches(CLAIM_BASELINE, census)).toEqual([]);
+    // A baseline that drifted to zero would pass the line above forever while measuring nothing.
+    expect(claimTotal(CLAIM_BASELINE)).toBeGreaterThan(100);
   });
 });

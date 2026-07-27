@@ -15,32 +15,41 @@
       "workflow": ".github/workflows/conservation.yml",
       "marker": "ci-conservation-alert",
       "provenBy": {
-        "run": "PENDING",
-        "issue": 0,
-        "at": "PENDING"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313133260",
+        "issue": 1337,
+        "at": "2026-07-27"
       }
     },
     {
       "workflow": ".github/workflows/corpus-drift.yml",
       "marker": "ci-corpus-drift-alert",
       "provenBy": {
-        "run": "PENDING",
-        "issue": 0,
-        "at": "PENDING"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313134292",
+        "issue": 1338,
+        "at": "2026-07-27"
       }
     },
     {
       "workflow": ".github/workflows/reasons-drift.yml",
       "marker": "ci-reasons-alert",
       "provenBy": {
-        "run": "PENDING",
-        "issue": 0,
-        "at": "PENDING"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313132177",
+        "issue": 1336,
+        "at": "2026-07-27"
       }
     },
     {
       "workflow": ".github/workflows/ci.yml",
       "marker": "ci-heavy-cli-alert",
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313136499",
+        "issue": 1340,
+        "at": "2026-07-27"
+      }
+    },
+    {
+      "workflow": ".github/workflows/alert-paths.yml",
+      "marker": "ci-alert-paths-alert",
       "provenBy": {
         "run": "PENDING",
         "issue": 0,
@@ -51,9 +60,9 @@
       "workflow": ".github/workflows/owasp-ack-watch.yml",
       "marker": "ci-owasp-watch-alert",
       "provenBy": {
-        "run": "PENDING",
-        "issue": 0,
-        "at": "PENDING"
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313135460",
+        "issue": 1339,
+        "at": "2026-07-27"
       }
     }
   ],

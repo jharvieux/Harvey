@@ -1,0 +1,135 @@
+# Gate 5 of epic #1320 (#1287). The ONLINE half of the alert-path gate.
+#
+# The structural half — every alert path dispatch-provable, registered, carrying a proof run, and a
+# scheduled workflow either alerting or disclosed — is pure and lives in `pnpm verify` via
+# src/alert-paths.test.ts. This job exists for the one assertion that needs the network:
+#
+#   EVERY MARKER LABEL STILL EXISTS.
+#
+# That is #1287's standing invariant. Each alert step self-heals its label with `gh label create`,
+# so a marker label that does not exist is machine-checkable proof the path has never executed —
+# which is exactly how three unfired paths were found. It is also the half NO DIFF CAN SPEAK TO: a
+# label deleted by hand in the GitHub UI changes no file in this repo, and a deleted label breaks
+# find-or-update so every future alarm opens a duplicate issue instead of updating one.
+#
+# TWO TIERS, like conservation.yml, because this job does two unrelated things:
+#   • the LABEL check is TIME-based — it detects out-of-band deletion, so it runs on every PR and
+#     on the daily schedule regardless of what changed.
+#   • the NEGATIVE CONTROLS are CHANGE-based — they re-prove the gate can still fail, which only
+#     needs re-asserting when the gate's own code moves.
+#
+# No `paths:` filter on the trigger, deliberately: a path-filtered required check never reports on
+# PRs outside its filter and deadlocks them permanently (#1107). It runs on every PR and short-
+# circuits with a LOGGED reason instead.
+
+name: alert-paths
+
+on:
+  schedule:
+    - cron: "45 7 * * *" # Daily 07:45 UTC — between conservation (07:30) and reasons-drift (08:00)
+  workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-alert-paths-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
+  pull_request:
+
+concurrency:
+  group: alert-paths-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  alert-paths:
+    name: every alert path is dispatch-provable and its marker label exists
+    runs-on: ubuntu-latest
+    # issues: write so the scheduled failure below can raise its own alarm. This gate holds every
+    # other scheduled workflow to that rule; exempting itself would be the one exemption that
+    # matters, since a silently broken alert-path gate takes every other alarm's proof with it.
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT an alert-path gate failure."
+          exit 1
+
+      - id: filter
+        name: Does this change set touch the alert-path gate itself?
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "Not a pull_request (${{ github.event_name }}) — running the negative controls too."
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD)
+          relevant=false
+          while IFS= read -r f; do
+            case "$f" in
+              .github/workflows/*|.github/actions/*|.github/alert-paths.json|src/alert-paths.ts|src/cli/validate-alert-paths.ts) relevant=true ;;
+            esac
+          done <<< "$files"
+          # Logged either way: a green run must be legible as "checked and clean" or "correctly
+          # skipped", never as an unexplained pass.
+          if [ "$relevant" = "true" ]; then
+            echo "This PR touches a workflow, the shared alert action, the registry or the gate — negative controls will run."
+          else
+            echo "This PR touches none of .github/workflows/**, .github/actions/**, .github/alert-paths.json or the gate source, so the negative controls are skipped. The marker-label check below STILL RUNS: label deletion happens outside any diff."
+          fi
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Always, on every PR and every schedule. `gh` that cannot run exits 127 = UNVERIFIABLE and
+      # still fails the job — "I could not check" must never be reported as "checked and clean".
+      - name: Every marker label exists (and the structure still holds)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm exec tsx src/cli/validate-alert-paths.ts --labels
+
+      - name: Negative control — a schedule-only alert condition must FAIL the gate
+        if: steps.filter.outputs.relevant == 'true'
+        run: |
+          if pnpm exec tsx src/cli/validate-alert-paths.ts --seed-unprovable; then
+            echo "::error::--seed-unprovable put every alert path back on a cron-only condition — the exact state main was in while four alert paths sat unfired — and the gate still exited 0. The PASS above means nothing (#1287)."
+            exit 1
+          fi
+
+      - name: Negative control — a missing marker label must FAIL the gate
+        if: steps.filter.outputs.relevant == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if pnpm exec tsx src/cli/validate-alert-paths.ts --labels --seed-missing-label; then
+            echo "::error::--seed-missing-label removed a marker label from the observed set and the gate still exited 0. A missing label is the one machine-checkable proof that an alert path never ran, so this control failing to fail voids the whole gate (#1287)."
+            exit 1
+          fi
+
+      # A scheduled failure here means the alert-path gate itself went blind — read it as "no alarm
+      # in this repo can currently be shown to work", not as one more red job.
+      - name: Open or update the alert-paths tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-alert-paths-alert
+          label-description: Auto-opened when the scheduled alert-paths CI run fails
+          title: alert-paths scheduled run failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The scheduled `alert-paths` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Either a marker label no longer exists — which breaks find-or-update, so every future alarm opens a duplicate issue rather than updating one — or an alert path lost its `workflow_dispatch` condition, or a negative control stopped failing. Until this is green, treat every other alert path in this repo as unproven. See the job log for which check."

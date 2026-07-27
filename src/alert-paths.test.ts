@@ -74,7 +74,7 @@ describe("checkAlertPaths — the seeded states main was actually in before #128
 
   it("rejects an alert path missing from the registry, and a registry entry missing from the workflows", () => {
     expect(checkAlertPaths([facts()], registry({ paths: [] }))[0]?.detail).toContain("not in .github/alert-paths.json");
-    expect(checkAlertPaths([facts({ alertSteps: [] })], registry())[0]?.detail).toContain("no workflow uses it");
+    expect(checkAlertPaths([facts({ scheduled: false, alertSteps: [] })], registry())[0]?.detail).toContain("no workflow uses it");
   });
 
   // Without this the drill input is decorative: dispatching it runs a green job and "proves" a path
