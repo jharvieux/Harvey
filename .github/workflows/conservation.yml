@@ -24,6 +24,20 @@
 # produced nothing for its plant. That is a scanner or pipeline bug (the #1040/#1050/#1061/#1062
 # class), never something to rebaseline — there is no baseline here to move.
 # On failure of step 2 or 3: the gate itself stopped working. Fix the gate before trusting step 1.
+#
+# REQUIRED STATUS CHECK on `main` since #1205 (operator ruling 2026-07-27). PR #1199 squash-merged
+# while this job was RED: a gate built to stop silent drops was itself advisory on the merge path,
+# which is the very shape it exists to prevent. The daily schedule plus `ci-conservation-alert`
+# (#1142) catches a red run afterwards — that is detection, not prevention. The precondition was
+# #1206's flakiness (4 red in 8 runs, the vitals fixture-drift step); five consecutive green runs
+# were measured before this flipped.
+#
+# Being required is why this workflow has NO `paths:` filter on `pull_request` any more. GitHub
+# waits forever for a required context that never reports, so a path-filtered required check
+# deadlocks every PR outside its filter — the exact deadlock #1107 hit when dry-run-drift became
+# required. The filter therefore moved INSIDE the job (the `filter` step below): the job always
+# runs and always reports, and only the expensive work is conditional. The path list is unchanged
+# by that move — same set, evaluated one layer down.
 
 name: conservation
 
@@ -32,21 +46,12 @@ on:
     - cron: "30 7 * * *" # Daily 07:30 UTC — after dry-run-drift
   workflow_dispatch:
   pull_request:
-    paths:
-      - "src/audit-conservation.ts"
-      - "src/conservation-ledger.ts"
-      - "src/audit-runner.ts"
-      - "src/audit-runners.ts"
-      - "src/audit-report.ts"
-      - "src/cli/validate-conservation.ts"
-      - "src/cli/run-audit.ts"
-      - "src/cli/fixture-drift.ts"
-      - "src/scan/fixture-drift-contracts.ts"
-      - "src/scan/__fixtures__/**"
-      - "src/__fixtures__/**"
-      - "targets/calibration/**"
-      - ".github/workflows/conservation.yml"
 
+# A cancellation here is only ever caused by a NEWER run on the same `github.ref` — for a PR that
+# is `refs/pull/N/merge`, so the superseding run reports against the newer head commit, which is
+# the commit branch protection actually evaluates. A `cancelled` conclusion is therefore never the
+# latest result for the head SHA and cannot strand a merge. (Same posture dry-run-drift.yml and
+# ci.yml already take for their required contexts.)
 concurrency:
   group: conservation-${{ github.ref }}
   cancel-in-progress: true
@@ -67,21 +72,65 @@ jobs:
     timeout-minutes: 20
     steps:
       # The M3 probe reads the target's authorship history and the M1 secrets tier reads git history,
-      # so a shallow clone would degrade both into honest-but-useless not-run rows.
+      # so a shallow clone would degrade both into honest-but-useless not-run rows. fetch-depth: 0
+      # is also what lets the filter step below diff against the PR base.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # The `paths:` filter that used to live on the `pull_request` trigger, moved in-job by #1205
+      # so this context reports on EVERY PR (see the header note on the #1107 deadlock). `case`
+      # patterns, not pathspecs: in `case` a `*` matches `/` too, so `src/scan/*` covers the whole
+      # subtree. Schedule and workflow_dispatch always run the full job.
+      - id: filter
+        name: Does this change set touch the conservation pipeline or its fixtures?
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD)
+          echo "Changed files:"
+          echo "$files"
+          relevant=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              src/audit-conservation.ts) relevant=true ;;
+              src/conservation-ledger.ts) relevant=true ;;
+              src/audit-runner.ts) relevant=true ;;
+              src/audit-runners.ts) relevant=true ;;
+              src/audit-report.ts) relevant=true ;;
+              src/cli/validate-conservation.ts) relevant=true ;;
+              src/cli/run-audit.ts) relevant=true ;;
+              src/cli/fixture-drift.ts) relevant=true ;;
+              src/scan/fixture-drift-contracts.ts) relevant=true ;;
+              src/scan/__fixtures__/*) relevant=true ;;
+              src/__fixtures__/*) relevant=true ;;
+              targets/calibration/*) relevant=true ;;
+              .github/workflows/conservation.yml) relevant=true ;;
+            esac
+          done <<< "$files"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          if [ "$relevant" = "false" ]; then
+            echo "No change to the conservation pipeline, its probes, its fixtures or this workflow — a planted finding's route to the deliverable cannot have changed from this PR. Nothing to assert. The daily scheduled run covers the tree regardless."
+          fi
+
       - uses: pnpm/action-setup@v4
+        if: steps.filter.outputs.relevant == 'true'
       - uses: actions/setup-node@v4
+        if: steps.filter.outputs.relevant == 'true'
         with:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: steps.filter.outputs.relevant == 'true'
 
       # Same pins as dry-run-drift.yml / corpus-drift.yml — each scanner degrades to "found nothing"
       # without its binary rather than failing loudly, which here would look like a module that
       # legitimately produced nothing instead of the missing toolchain it is.
       - name: Install mechanical-tier scanner binaries
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           pipx install semgrep
@@ -95,6 +144,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: OSV-scanner fixture schema drift check
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm exec tsx src/cli/osv-fixture-drift.ts
 
       # M3's FULL tier is the `vitals` plugin. Without it hotspot-scan drops to the reduced
@@ -109,6 +159,7 @@ jobs:
       # check — loud, and correct, but it would block this job on an unrelated upstream release.
       # Bumping the pin means re-verifying the schema first.
       - name: Install the vitals plugin (M3's full tier)
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           mkdir -p "$HOME/vitals"
@@ -122,6 +173,7 @@ jobs:
       # does quote the probe's reason, so nothing is lost either way — this just puts the toolchain
       # failure where a toolchain failure belongs, one step after the install.
       - name: Assert vitals resolves at the pinned version
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           vitals_cli.py version
@@ -134,19 +186,26 @@ jobs:
       # preinstalled Google Chrome via chrome-launcher. The two live-only fixtures (trufflehog
       # VERIFIED, PostgREST) have no capture and so no drift check — they are reason-blocked.
       - name: jscpd fixture schema drift check
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm exec tsx src/cli/fixture-drift.ts --tool jscpd
       - name: knip fixture schema drift check
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm exec tsx src/cli/fixture-drift.ts --tool knip
       - name: trufflehog fixture schema drift check
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm exec tsx src/cli/fixture-drift.ts --tool trufflehog
       - name: vitals fixture schema drift check
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm exec tsx src/cli/fixture-drift.ts --tool vitals
       - name: Stryker fixture schema drift check
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm exec tsx src/cli/fixture-drift.ts --tool stryker
       - name: lighthouse fixture schema drift check
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm exec tsx src/cli/fixture-drift.ts --tool lighthouse
 
       - name: Conservation gate (must PASS)
+        if: steps.filter.outputs.relevant == 'true'
         run: pnpm exec tsx src/cli/validate-conservation.ts
 
       # #1105: the vitest wiring test for this gate (src/cli/validate-conservation.test.ts) is
@@ -155,11 +214,13 @@ jobs:
       # ("Timeout calling onTaskUpdate", exit 1 with zero failing tests). Run it here instead,
       # alone, with the toolchain already on PATH from the steps above.
       - name: Conservation gate — vitest wiring test (isolated from pnpm verify)
+        if: steps.filter.outputs.relevant == 'true'
         env:
           HARVEY_CONSERVATION_E2E: "1"
         run: pnpm exec vitest run src/cli/validate-conservation.test.ts
 
       - name: Negative control — a seeded producer loss must FAIL the gate
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           if pnpm exec tsx src/cli/validate-conservation.ts --seed-loss M7; then
             echo "::error::--seed-loss M7 discarded everything the M7 probe produced and the gate still exited 0. The gate cannot fail, so its PASS above means nothing (#350/#1065)."
@@ -167,6 +228,7 @@ jobs:
           fi
 
       - name: Negative control — a seeded unaccounted drop must FAIL the ledger
+        if: steps.filter.outputs.relevant == 'true'
         run: |
           if pnpm exec tsx src/cli/validate-conservation.ts --seed-unaccounted; then
             echo "::error::--seed-unaccounted removed a finding from the assembled deliverable with no disposition and the conservation ledger still exited 0. The arithmetic is not being asserted (#1096)."
