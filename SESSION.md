@@ -2,7 +2,7 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-27 (evening) — **external-scanner comparison (Akido vs Harvey on ATC)**: 6 Harvey issues + 1 ATC security issue filed, 2 of my own claims measured FALSE. Newest block first._
+_Last updated: 2026-07-27 (evening) — CI cost reviews: conservation drift-checks re-tiered (#1226) and **heavy-cli sharded, 236s → 112s (#1228)**; earlier: **external-scanner comparison (Akido vs Harvey on ATC)**: 6 Harvey issues + 1 ATC security issue filed, 2 of my own claims measured FALSE. Newest block first._
 
 ## 2026-07-27 (evening) — Akido-vs-Harvey comparison on ATC: taint SOURCE drift across 21 rules
 
@@ -121,6 +121,48 @@ falsifiable questions recorded on the issue, the sharper one being: **does `vita
 exit 0 when its git scope resolves empty?** If so, `run_vitals` cannot detect it and a hand
 re-capture would silently commit an empty fixture. **#1206 stays OPEN** — the mitigation removes the
 blast radius, not the bug. Rerun was green, confirming flake not regression.
+
+### heavy-cli cost review (operator: "do the same analysis for heavy-cli")
+
+**Different answer from conservation: heavy-cli was NOT running where it provides no value.** Two
+suspicions MEASURED FALSE before anything was changed — (1) it does not re-run the light suite
+(`include: HEAVY_CLI_TESTS` restricts it; the run reports `Test Files 7 passed (7)`), and (2) its
+scheduled-alert step is not dead code (`ci.yml` does carry `schedule: 0 6 * * *`). Path-narrowing
+does not pay either: 186 of 199 code-file touches in the last 50 commits are `src/` or `targets/`.
+
+**The real finding was structural: serialization is a PER-MACHINE constraint being paid as
+wall-clock.** 205s was the SUM of seven files, not the max. `maxForks: 1` exists because they starve
+vitest's RPC channel when they overlap on ONE machine (#1120/#1133) — separate runners are separate
+machines, so a matrix shard preserves that constraint exactly rather than relaxing it. **PR #1228:
+236s → 112s (53%), MEASURED**, at +28% CI minutes (operator chose 3 shards over 2 or 4).
+
+**Design point worth keeping: the shard split is DERIVED, never declared.** `HEAVY_CLI_TESTS` moved
+to `src/heavy-cli-tests.ts`, read by BOTH `vitest.config.ts` and `src/cli/heavy-shard.ts`, which the
+workflow asks what to run. File names in `ci.yml` would let an eighth heavy file be added to the
+suite and run in NO shard — green CI, silently reduced coverage, no row in any tally.
+`src/heavy-cli-tests.test.ts` asserts the partition for every width 1–7.
+
+**I over-predicted, and the correction is the useful part.** Predicted 104s, first sharded run
+landed 141s. Setup model was accurate (33s vs 31s) and shards 2/3 were close; the entire gap was
+`run-audit`, which ran ~87s against its 58.3s reference with lighthouse stacked behind it.
+run-audit is both the longest file AND the most variable (58s / 87s / 58s across three runs), so it
+sets the floor at any width. It now carries its HIGH observation as its weight hint, which gives it
+a shard to itself so its variance costs only itself. **This also caps the 4-shard case**: a fourth
+runner cannot beat a floor that moves 58→87s on its own.
+
+### Do some PRs need only SOME heavy tests? Yes — and the recommendation is NOT to build it
+
+Computed each test's real dependency closure (static imports + the CLIs they SPAWN + `pnpm <script>`
+→ file via package.json; the orchestrator invokes scanners by script name, so import-only analysis
+undercounts badly). Closures: run-audit 90 files (32% of prod src), quick-scan 55, calibration-
+acceptance 28, detector-rerun 22, quality-scan 12, mutation-scan 10, lighthouse-scan 10.
+
+Against the last 50 commits: **72% need all 7, 14% a strict subset, 14% none.** But the payoff is
+only ~7% of heavy test time (~15s/commit) against sharding's ~118s/commit — **and the dependency map
+took FOUR attempts to compute correctly** (broken import resolver; wrong seeds; comment-stripping
+that ate `**/*.ts` globs; a missing pnpm-script edge). Every error was caught only by a control, and
+**every one silently SHRANK a closure**. A CI selector on that map fails in the unsafe direction:
+skipping a test that was needed, merging a regression green. Recorded, not built.
 
 ### ✅ CLAUDE.md RELAYS — APPLIED (operator granted CLAUDE.md edit authority mid-session)
 Both applied in ONE pass against the final state, per the file's own rule. (1) "BOTH required checks" → **ALL THREE**, naming the conservation context. (2) the conservation bullet's "daily + on pipeline PRs" → daily + **required on EVERY PR**, with the #1107 deadlock rule and the new two-tier filter (#1226) spelled out.
