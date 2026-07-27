@@ -451,5 +451,47 @@
     "phi": false,
     "pci": true,
     "secret": false
+  },
+  "mt_ledger": {
+    "columns": [
+      {
+        "column": "memo",
+        "infotype": "FREE_TEXT_REVIEW",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "FREE_TEXT_REVIEW"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
+  },
+  "mt_contracts": {
+    "columns": [
+      {
+        "column": "body",
+        "infotype": "FREE_TEXT_REVIEW",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "FREE_TEXT_REVIEW"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
   }
 }

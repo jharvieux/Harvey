@@ -34,6 +34,7 @@
 
 import { writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
+import { arg, assertKnownFlags, targetDir } from "./args.js";
 import { measureCodebaseSize } from "../scan/codebase-size.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { relativizeScanScope } from "../scan/scan-scope.js";
@@ -59,10 +60,18 @@ const QUICK_SCAN_SARIF_SCOPE =
   "M1 were NOT run. Absence of a result here is not evidence of absence of a problem. " +
   "Run `run-audit <target> --sarif-out <file>` for an export carrying a real per-module ledger.";
 
-function arg(flag: string): string | undefined {
-  const i = process.argv.indexOf(flag);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
+const FLAGS = [
+  "--bundle",
+  "--dir",
+  "--target",
+  "--findings-out",
+  "--json",
+  "--out",
+  "--sarif-out",
+  "--sbom-out",
+  "--tenant-key",
+  "--tenant-mode",
+] as const;
 
 function tenantMode(raw: string | undefined): "per-tenant" | "per-user" | undefined {
   if (raw === undefined || raw === "per-tenant" || raw === "per-user") return raw;
@@ -237,7 +246,8 @@ function render(r: QuickScanReport): string {
 }
 
 async function main(): Promise<void> {
-  const dir = arg("--dir") ?? process.cwd();
+  assertKnownFlags(FLAGS);
+  const dir = targetDir();
   const bundle = arg("--bundle");
   const tenantKey = arg("--tenant-key");
   const mode = tenantMode(arg("--tenant-mode"));

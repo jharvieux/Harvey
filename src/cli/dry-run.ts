@@ -152,7 +152,7 @@ async function main(): Promise<void> {
       // machines (#285) — the live npm-registry calls (checkLicenseCompliance, checkSlopsquat)
       // would let it drift on registry reachability, not just the target/scanner. Real engagement
       // scans are unaffected: this flag is opt-in and only the dry-run harness sets it.
-      runMechanicalScan({ dir: scratch.scanDir, skipNetworkChecks: true }),
+      runMechanicalScan({ dir: scratch.scanDir, skipNetworkChecks: true, skipBundleScan: true }),
     );
   } finally {
     scratch.cleanup();

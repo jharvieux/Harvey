@@ -104,6 +104,132 @@ export function checkMigrationRlsStatic(dir: string): Finding[] {
     );
 }
 
+// Roles granted BYPASSRLS, and tables whose row security is enabled but not FORCEd. Both are ways a
+// correct-looking set of policies is void at runtime.
+//
+// WHY, and how this gap was found (MEASURED 2026-07-26 against the OWASP Multi-Tenant Application
+// Security Cheat Sheet at CheatSheetSeries commit 46f8d04, as an answer key Harvey did not author):
+// checkMigrationRlsStatic above catches a table with NO row security. Nothing caught a table that
+// has row security and a correct tenant policy but is still readable in full by a privileged role.
+// Two distinct shapes:
+//
+//   BYPASSRLS — per the PostgreSQL documentation, "Superusers and roles with the BYPASSRLS attribute
+//   always bypass the row security system when accessing a table." Unconditionally: FORCE ROW LEVEL
+//   SECURITY does not constrain it, because FORCE governs the table OWNER. A Supabase service-role
+//   key is exactly this role. Granting it to the role an application connects as makes every policy
+//   in the schema decorative.
+//
+//   Missing FORCE — a table owner bypasses row security by default. The cheat sheet flags this
+//   ("Force RLS for table owners too (important!)") and its own example gets it right; app schemas
+//   frequently do not, and migrations commonly run as the owner.
+//
+// This is the detector behind the gap we proposed adding to that sheet upstream
+// (OWASP/CheatSheetSeries#2309 item 1) — filed because the sheet documents the FORCE line but not
+// the BYPASSRLS bypass it does not close.
+const BYPASSRLS_ROLE = /(?:create|alter)\s+role\s+([a-z0-9_"]+)([^;]*?)\bbypassrls\b/gi;
+const FORCE_RLS = /alter\s+table\s+(?:only\s+)?(?:([a-z0-9_]+)\.)?([a-z0-9_]+)\s+force\s+row\s+level\s+security/gi;
+const CREATE_POLICY_ON = /create\s+policy\s+[a-z0-9_"]+\s+on\s+(?:([a-z0-9_]+)\.)?([a-z0-9_]+)/gi;
+
+export function checkMigrationRlsBypass(dir: string): Finding[] {
+  const sources = readRlsSqlSources(dir);
+  if (sources.length === 0) return [];
+
+  const findings: Finding[] = [];
+  const enabled = new Set<string>();
+  const forced = new Set<string>();
+  const policied = new Set<string>();
+  const enabledAt = new Map<string, { file: string; line: number }>();
+
+  for (const { file: rel, raw } of sources) {
+    const sql = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/--[^\n]*/g, "");
+
+    for (const m of sql.matchAll(ENABLE_RLS)) {
+      if ((m[1] ?? "public").toLowerCase() !== "public") continue;
+      const name = m[2]!.toLowerCase();
+      enabled.add(name);
+      if (!enabledAt.has(name)) enabledAt.set(name, { file: rel, line: sql.slice(0, m.index).split("\n").length });
+    }
+    for (const m of sql.matchAll(FORCE_RLS)) {
+      if ((m[1] ?? "public").toLowerCase() !== "public") continue;
+      forced.add(m[2]!.toLowerCase());
+    }
+    for (const m of sql.matchAll(CREATE_POLICY_ON)) {
+      if ((m[1] ?? "public").toLowerCase() !== "public") continue;
+      policied.add(m[2]!.toLowerCase());
+    }
+    for (const m of sql.matchAll(BYPASSRLS_ROLE)) {
+      const role = m[1]!.replace(/"/g, "").toLowerCase();
+      // `nobypassrls` contains "bypassrls"; the \b in the pattern does not exclude it because the
+      // preceding "no" is a word character run, so reject it explicitly.
+      if (/\bnobypassrls\b/i.test(m[0])) continue;
+      const line = sql.slice(0, m.index).split("\n").length;
+      findings.push(
+        mechanicalFinding({
+          id: `SB-RLS-BYPASSRLS-${role}`,
+          title: `Role ${role} is granted BYPASSRLS, which voids every row-level policy for that role`,
+          severity: "Critical",
+          category: "Supabase config",
+          taxonomy: "Role with BYPASSRLS defeats row-level security (static)",
+          location: `${rel}:${line}`,
+          evidence: `${m[0].trim().replace(/\s+/g, " ")} — in ${rel}.`,
+          impact:
+            "PostgreSQL documents that roles with BYPASSRLS always bypass row security; FORCE ROW LEVEL SECURITY does not constrain them, because FORCE governs the table owner. Any request served over a connection using this role reads and writes every tenant's rows regardless of the policies defined on the table.",
+          fix: `Remove BYPASSRLS from ${role} (\`alter role ${role} nobypassrls;\`) and reserve privileged connections for migrations and administrative jobs. If a code path must use one to serve user requests, it has to re-implement tenant scoping itself, because the database will no longer do it.`,
+          precisionTier: "high",
+        }),
+      );
+    }
+  }
+
+  // Enabled + has at least one policy, but never FORCEd. Requiring a policy keeps this off tables
+  // where RLS-enabled-with-no-policy already denies everything — there the missing FORCE changes
+  // nothing, and SB-RLS-STATIC/policy checks own that shape.
+  //
+  // ONE ROLLED-UP REVIEW-TIER FINDING, NOT ONE PER TABLE — and deliberately not High. MEASURED
+  // 2026-07-26 when this was first written per-table at high tier: it fired on 21 of the calibration
+  // corpus's tables, i.e. essentially every RLS-enabled table, because almost no schema forces RLS.
+  // Two reasons that output would have been wrong:
+  //
+  //   1. Precision. In a standard Supabase deployment public-schema tables are owned by `postgres`
+  //      while PostgREST serves requests as `anon`/`authenticated` — NOT the owner. The owner-bypass
+  //      is therefore not on the request path, so a per-table High overstates it. The genuinely
+  //      dangerous privileged-role case is BYPASSRLS, caught precisely above (1 hit, 0 false fires,
+  //      same run).
+  //   2. Volume. 21 new High rows per report is the shape #935 exists to prevent. A disclosed rollup
+  //      is the sanctioned answer; demoting a module's band would not be.
+  //
+  // Review tier, never free-count: whether an owner-role connection reaches runtime is a fact about
+  // deployment that migration SQL cannot answer, so this asks rather than asserts.
+  const unforced = [...enabled].filter((n) => !forced.has(n) && policied.has(n)).sort();
+  if (unforced.length > 0) {
+    const first = enabledAt.get(unforced[0]!)!;
+    findings.push(
+      reviewFinding({
+        id: "SB-RLS-NOFORCE-ROLLUP",
+        title: `${unforced.length} RLS-enabled table(s) never force row level security, so the owning role bypasses their policies`,
+        severity: "Low",
+        category: "Supabase config",
+        taxonomy: "RLS enabled without FORCE — owner bypasses policies (static)",
+        location: `${first.file}:${first.line}`,
+        evidence:
+          `${unforced.length} table(s) have "enable row level security" and at least one policy but no matching ` +
+          `"force row level security" in any migration: ${unforced.join(", ")}.`,
+        question:
+          "Does any runtime code path connect as the role that OWNS these tables? On a stock Supabase project PostgREST connects as anon/authenticated, which are not the owner, and this is defence-in-depth only. A self-hosted or custom-pooled deployment that connects as the owning role has no row-level isolation on these tables at all.",
+        impact:
+          "PostgreSQL exempts a table's owner from row security unless FORCE ROW LEVEL SECURITY is set. Where the owning role is used at runtime, every policy listed here holds for non-owner roles only.",
+        fix: "Add `alter table public.<table> force row level security;` alongside each enable statement — inert when the owner never serves requests, and closes the gap when it does.",
+        okWhen:
+          "Runtime access is exclusively through PostgREST as anon/authenticated, or through a role that does not own these tables — the stock hosted-Supabase arrangement. FORCE is then hardening, not a fix.",
+        notOkWhen:
+          "Any application connection, pooler, migration job or edge function connects as the table-owning role (common in self-hosted deployments and in direct-Postgres access alongside PostgREST) — those paths read and write every tenant's rows.",
+      }),
+    );
+  }
+
+  return findings;
+}
+
 // Tenant-key column names, in preference order. At connected tier the operator DECLARES the
 // tenancy model (`--tenant-key`); source-only there's nobody to ask, so it's inferred — UNLESS
 // the same override is supplied here too (#280; see TenancyOverride below).

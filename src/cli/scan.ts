@@ -11,15 +11,23 @@
 // Prints a Finding[] JSON array to stdout (or writes it to --out).
 
 import { writeFileSync } from "node:fs";
+import { arg, assertKnownFlags, targetDir } from "./args.js";
 import { enrichFindingsCwe } from "../cwe-map.js";
 import type { Finding } from "../findings.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { runSupabaseScan } from "../scan/supabase.js";
 
-function arg(flag: string): string | undefined {
-  const i = process.argv.indexOf(flag);
-  return i >= 0 ? process.argv[i + 1] : undefined;
-}
+const FLAGS = [
+  "--bundle",
+  "--dir",
+  "--target",
+  "--functions",
+  "--mechanical",
+  "--out",
+  "--supabase",
+  "--tenant-key",
+  "--tenant-mode",
+] as const;
 
 function tenantMode(raw: string | undefined): "per-tenant" | "per-user" | undefined {
   if (raw === undefined || raw === "per-tenant" || raw === "per-user") return raw;
@@ -37,7 +45,8 @@ function emit(findings: Finding[]): void {
 
 async function main(): Promise<void> {
   if (process.argv.includes("--mechanical")) {
-    const dir = arg("--dir") ?? process.cwd();
+    assertKnownFlags(FLAGS);
+    const dir = targetDir();
     const bundle = arg("--bundle");
     const tenantKey = arg("--tenant-key");
     const mode = tenantMode(arg("--tenant-mode"));

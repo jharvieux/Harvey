@@ -41,6 +41,15 @@ export interface CorpusEntry {
   match?: string[];
   // Positives: the tier we expect the detection at. Negatives: omit.
   expectedTier?: ExpectedTier;
+  // Only meaningful with expectedTier "none", which covers two DIFFERENT situations that must not
+  // read alike in the gate output (#1190). "by-design" is the original meaning: a class no
+  // mechanical rule is intended to reach, measured as LLM-tier remit. "measured-gap" is a real
+  // coverage gap that was planted, scanned, and found uncaught — recorded here so it is scored as a
+  // gap rather than a miss, with an issue tracking the fix. Both fail loud if a rule ever fires;
+  // they differ only in whether the gap is an accepted boundary or outstanding work, and calling
+  // the second one "by design" would misreport it. Defaults to "by-design" so existing rows keep
+  // their meaning.
+  gapKind?: "by-design" | "measured-gap";
   // Positives: the exact Severity the DELIVERED finding must carry (#1157). Presence is NOT
   // detection (that is expectedTier) — it is a scored assertion that a caught finding is RATED
   // right, so a real Critical shipped as Medium fails the gate the way a miss does (#1063/#1060).
