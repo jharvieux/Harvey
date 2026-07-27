@@ -40,6 +40,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/client-supplied-tenant.ts": "M1",
   "src/scan/tenant-guc-scope.ts": "M1",
   "src/scan/cache-tenant-scope.ts": "M1",
+  "src/scan/storage-tenant-scope.ts": "M1",
   "src/scan/secret-rotation.ts": "M1",
   "src/scan/env-schema.ts": "M1",
   "src/scan/webext-manifest.ts": "M1",

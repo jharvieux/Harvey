@@ -145,10 +145,10 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     kind: "positive",
     cls: "Storage object path is the caller-supplied filename, with no tenant prefix or ownership check",
     location: "src/owasp-mt/storage-path-no-tenant.ts",
-    match: ["tenant-prefix", "tenant scope", "tenant_id"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "GAP. Sheet section 6 ('tenant-prefixed paths', 'validate tenant ownership before serving files'). One tenant overwrites and reads another's objects in a shared bucket. MEASURED: zero findings FOR THIS CLASS — note that AUTH-upload-no-limit DOES fire on this file at High, but for an unrelated defect (no size/MIME limit), which is why `match` is scoped to tenant wording: without it the adjacent finding would satisfy the relevance check and mask the gap. That masking is the #1062 shape, in miniature. Tracked in #1198.",
+    match: ["without a tenant prefix"],
+    expectedTier: "review",
+    expectedSeverity: "High",
+    note: "Sheet section 6 ('tenant-prefixed paths', 'validate tenant ownership before serving files'). One tenant overwrites and reads another's objects in a shared bucket. WAS a measured gap (MEASURED 2026-07-26: zero findings FOR THIS CLASS — AUTH-upload-no-limit DID fire on this file at High, but for an unrelated defect, no size/MIME limit). CLOSED by #1198's storage-tenant-scope.ts, own taxonomy 'Storage object path without a tenant prefix (cross-tenant object read/overwrite)' — `match` is scoped to that exact phrase so this entry cannot be satisfied by AUTH-upload-no-limit's finding on the same file, which is the #1062 masking shape this corpus already warns about. Confirmed by running the scanner over the fixture.",
   },
   {
     id: "P-OWASP-MT-LOG-TENANT",
@@ -201,5 +201,13 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     location: "src/owasp-mt/tenant-guc-session-scoped.ts",
     match: ["withTenantSetConfig"],
     note: "withTenantSetConfig's `set_config('app.current_tenant', $1, true)`, the function-form negative. Confirmed silent: SET_CONFIG_UNSAFE only matches a literal `false` third argument.",
+  },
+  {
+    id: "N-OWASP-MT-STORAGE-PATH-SCOPED",
+    kind: "negative",
+    cls: "Storage object path prefixed with the tenant id off the verified session",
+    location: "src/owasp-mt/storage-path-no-tenant.ts",
+    match: ["uploadAttachmentScoped"],
+    note: "uploadAttachmentScoped's `${session.user.tenantId}/${filename}` path, the negative #1198's storage-tenant-scope.ts had to clear to ship. Confirmed silent: the path resolves (through the local `path` binding) to text mentioning `session`/`tenantId`, which clears the finding.",
   },
 ];
