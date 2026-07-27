@@ -684,7 +684,13 @@ export function parseOsvFindings(result: OsvScanResult): Finding[] {
           .slice(0, 3);
         findings.push(
           mechanicalFinding({
-            id: `DEP-OSV-${id}`,
+            // #1175: the id used to be the advisory alone. OSV routinely reports one advisory
+            // (e.g. a monorepo-wide dependency) against MULTIPLE packages — id-ing on the advisory
+            // alone collided for the second package and validateFindings' unique-id check refused
+            // to export the whole document. name+version make the id unique per affected instance
+            // while staying stable for a genuine repeat of the same advisory/package/version, which
+            // still collapses in dedupeFindings (byte-identical content, not just a matching id).
+            id: `DEP-OSV-${id}-${name}@${version}`,
             // The summary stays in the title — it is the one line that says what the vuln IS. The
             // #1079 defect was that it was ALSO the impact; the fix is to give impact real content
             // (osvImpact below), not to strip the title down to an advisory id.
