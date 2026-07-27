@@ -88,6 +88,28 @@ export default function DataHandling() {
                 party outside the tightly-scoped service providers below.
               </p>
 
+              <h2>Findings are built to avoid your raw data in the first place</h2>
+              <p>
+                Two of Harvey&apos;s checks touch the kind of data you&apos;d most want handled carefully, and both are
+                built to minimize what they retain:
+              </p>
+              <ul>
+                <li>
+                  <b>Data classification (PII/PHI/PCI).</b> By default this check looks at column <i>names, types, and
+                  table context</i> — it never reads or stores actual cell values, and the finding it produces records
+                  only the column name and inferred category (e.g. &quot;<code>email</code> — PII, high confidence&quot;),
+                  never real customer data. A deeper mode that samples real values to classify free-text or generic
+                  columns exists as a design only — we have deliberately not built it until there is a clear consent
+                  model for sampling your data, so it cannot run against your engagement today.
+                </li>
+                <li>
+                  <b>Credential/secret scanning.</b> When a check finds something that looks like a live credential, the
+                  finding stores a redacted excerpt (a short prefix plus a length, e.g.{" "}
+                  <code>sk_live_51Q…[redacted, 44 chars]</code>) — enough to confirm and locate the match, never the
+                  usable secret itself.
+                </li>
+              </ul>
+
               <h2>Where it lives</h2>
               <p>
                 Scan requests are delivered to us by email through <b>Resend</b>, our transactional email provider. The
