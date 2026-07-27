@@ -30,11 +30,14 @@
 // remainder reference is checked on three separate conditions — exists, OPEN, cross-linked from the
 // original — and the report names WHICH failed, never just that one did.
 //
-// Two deliberate, disclosed bounds. (1) Only bullets at the SHALLOWEST indent of the acceptance
-// section are criteria; deeper bullets read as elaboration and are counted and reported, not
-// silently dropped. (2) The evidence check proves the SHAPE of evidence, not its truth — it can
-// tell "done" from "`pnpm verify` — 25 files, 0 failures", and it cannot tell a real command from
-// an invented one. It raises the floor; it is not a reviewer.
+// The two bounds that shape the code below: (1) only bullets at the SHALLOWEST indent of the
+// acceptance section are criteria — deeper bullets read as elaboration and are counted and
+// reported, not silently dropped; (2) the evidence check proves the SHAPE of evidence, not its
+// truth — it can tell "done" from "`pnpm verify` — 25 files, 0 failures", and it cannot tell a real
+// command from an invented one. It raises the floor; it is not a reviewer. The COMPLETE list —
+// including the residual looseness in each evidence shape and what a green `cross-linked` row does
+// and does not prove — is `docs/design/acceptance-conservation.md`, "Deliberate, disclosed bounds",
+// which is authoritative. Do not treat this comment as the full set.
 
 type Disposition = "met" | "split" | "relayed";
 
@@ -86,7 +89,7 @@ interface ParsedBody {
 }
 
 const DECORATION = /^[\s>|*+-]*(?:\[[ xX]\]\s*)?/;
-const HEADING = /^#{1,6}\s+(.*?)\s*$/;
+const HEADING = /^(#{1,6})\s+(.*?)\s*$/;
 const BOLD_HEADING = /^\*\*(.+?)\*\*:?\s*$/;
 const ACCEPTANCE_HEADING = /^\**\s*acceptance\b/i;
 const BULLET = /^(\s*)(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?(\S.*)$/;
@@ -105,8 +108,20 @@ const REMAINDER_LINE = /^remainder\s*:\s*#(\d+)\b/i;
 const lines = (text: string): string[] => text.replace(/\r\n/g, "\n").split("\n");
 const strip = (line: string): string => line.replace(DECORATION, "");
 
-function headingText(line: string): string | undefined {
-  return HEADING.exec(line)?.[1] ?? BOLD_HEADING.exec(line)?.[1];
+/**
+ * A bold pseudo-heading (`**Like this.**`) carries no level, so it ranks BELOW `######` — deliberately.
+ * The section then ends only at a heading AT OR ABOVE the acceptance heading's own level, which is
+ * what stops `**This one matters.**` or a `###` sub-heading from cutting the section short. It used
+ * to: `## Acceptance / - one / **This one matters.** / - two / - three` parsed as ONE criterion and
+ * reported nothing, so two bullets vanished from a gate whose entire purpose is that nothing vanishes
+ * silently. When the acceptance heading is ITSELF bold, level 7 == level 7, so the next bold line
+ * still ends it and that convention keeps working.
+ */
+function heading(line: string): { level: number; text: string } | undefined {
+  const h = HEADING.exec(line);
+  if (h) return { level: h[1]!.length, text: h[2]! };
+  const b = BOLD_HEADING.exec(line);
+  return b ? { level: 7, text: b[1]! } : undefined;
 }
 
 interface ParsedCriteria {
@@ -119,13 +134,17 @@ interface ParsedCriteria {
 export function parseAcceptanceCriteria(body: string): ParsedCriteria {
   const all = lines(body);
   let start = -1;
+  let startLevel = 0;
   let end = all.length;
   for (let i = 0; i < all.length; i++) {
-    const heading = headingText(all[i]!);
-    if (heading === undefined) continue;
+    const h = heading(all[i]!);
+    if (h === undefined) continue;
     if (start === -1) {
-      if (ACCEPTANCE_HEADING.test(heading)) start = i + 1;
-    } else {
+      if (ACCEPTANCE_HEADING.test(h.text)) {
+        start = i + 1;
+        startLevel = h.level;
+      }
+    } else if (h.level <= startLevel) {
       end = i;
       break;
     }
@@ -211,11 +230,21 @@ export function parseBody(prBody: string, repo?: string): ParsedBody {
 // A bare "done" is an unmapped bullet wearing a disposition (#1315). These are the shapes that
 // carry something a reader can go and check; the list is a floor, not a judgement of truth.
 const EVIDENCE_SHAPES: { name: string; re: RegExp }[] = [
-  { name: "a backticked command or output", re: /`[^`]{4,}`/ },
+  // A backticked run of plain English words is not a command: `` `all good` `` passed the old
+  // /`[^`]{4,}`/ and pointed at nothing. So the span must either be a single token (a path, a flag,
+  // an identifier) or contain a character English prose does not use. `pnpm verify` is two plain
+  // words and no longer matches HERE — it matches the command shape below, which is what it is.
+  { name: "a backticked command, path or identifier", re: /`(?=[^`]{4,}`)(?:[^`\s]+|[^`]*[^`A-Za-z\s][^`]*)`/ },
   { name: "a command", re: /\b(?:pnpm|npm|npx|node|tsx|vitest|git|gh|semgrep|docker|make|curl|psql)\s+\S/ },
   { name: "a file path", re: /[\w./-]+\.(?:ts|tsx|js|mjs|cjs|json|md|ya?ml|sql|sh|py|toml)(?::\d+)?/ },
   { name: "a quoted test name", re: /"[^"]{8,}"/ },
-  { name: "a commit sha", re: /\b[0-9a-f]{7,40}\b/ },
+  // The old /\b[0-9a-f]{7,40}\b/ matched ordinary English — "defaced", "accede", "facade" are all
+  // 6-7 letters drawn from [a-f] — and any 7-digit number, so "run 90131391124 was green" read as a
+  // commit reference. A sha MIXES digits and hex letters; a run of only one or only the other is
+  // prose or a number. Cost of the narrowing: an all-digit or all-[a-f] short sha prefix is no
+  // longer recognised AS a sha (disclosed in docs/design/acceptance-conservation.md) — cite it
+  // inside backticks, or name the command, instead.
+  { name: "a commit sha", re: /\b(?=[0-9a-f]{7,40}\b)(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]+\b/ },
 ];
 
 const BARE_ASSERTION = /^(?:done|yes|ok|okay|completed?|verified|works?|fixed|met|n\/a|na|as stated|as described|implemented|shipped|true)\b[.!]*$/i;
@@ -275,9 +304,6 @@ interface AcceptanceReport {
   ok: boolean;
 }
 
-const mentions = (record: IssueRecord | undefined, issue: number): boolean =>
-  record !== undefined && new RegExp(`#${issue}\\b`).test([record.body, ...record.comments].join("\n"));
-
 function checkRemainder(ref: RemainderRef, lookup: IssueLookup, closes: number[]): RemainderVerdict {
   const record = lookup(ref.remainder);
   const conditions: Condition[] = [];
@@ -303,7 +329,13 @@ function checkRemainder(ref: RemainderRef, lookup: IssueLookup, closes: number[]
   if (originals.length === 0) {
     conditions.push({ name: "cross-linked", status: "not-assessed", detail: "this PR closes no issue, so there is no original to cross-link from" });
   } else {
-    const linked = originals.filter((o) => mentions(lookup(o), ref.remainder));
+    // ANY mention of the remainder number anywhere in the original's body or comments satisfies
+    // this — the check is that the number is DISCOVERABLE from the issue, not that the sentence
+    // around it describes the deferral. Disclosed in docs/design/acceptance-conservation.md.
+    const linked = originals.filter((o) => {
+      const orig = lookup(o);
+      return orig !== undefined && new RegExp(`#${ref.remainder}\\b`).test([orig.body, ...orig.comments].join("\n"));
+    });
     conditions.push(linked.length > 0
       ? { name: "cross-linked", status: "pass", detail: `#${linked.join(", #")} references #${ref.remainder}` }
       : { name: "cross-linked", status: "fail", detail: `none of #${originals.join(", #")} references #${ref.remainder} in its body or comments — comment the cross-link on the original so the deferral is discoverable from the issue, not only from this PR` });
@@ -383,12 +415,18 @@ export function formatAcceptance(report: AcceptanceReport): string {
   // the scoping has to live here, and a green no-op has to say WHY it was a no-op. An unexplained
   // green is indistinguishable from a check that did nothing because it was broken.
   const gate1Refs = [...report.closes.map((n) => `#${n}`), ...report.unresolvableCloses];
+  // A `split` that names no issue number produces no remainder REFERENCE, so it must not be
+  // reported as "no split disposition" — that reads as nothing deferred when something was.
+  const numberlessSplits = report.issues.flatMap((i) => i.criteria).filter((c) => c.disposition === "split").length - report.remainders.filter((r) => r.original !== undefined).length;
+  const gate2Noop = numberlessSplits > 0
+    ? `○ Gate 2 (remainder liveness, #1316): NO-OP — ${numberlessSplits} \`split\` disposition(s) name no issue number, so there is no remainder whose liveness could be checked. Gate 1 fails them.`
+    : "○ Gate 2 (remainder liveness, #1316): NO-OP — no `remainder:` line and no `split` disposition, so nothing is deferred to another issue.";
   const out: string[] = [
     gate1Refs.length === 0
       ? "○ Gate 1 (acceptance criteria, #1315): NO-OP — this PR body carries no closing keyword, so no issue closes on merge and there are no criteria to conserve."
       : `● Gate 1 (acceptance criteria, #1315): ${gate1Refs.length} closing reference(s) — ${gate1Refs.join(", ")}.`,
     report.remainders.length === 0
-      ? "○ Gate 2 (remainder liveness, #1316): NO-OP — no `remainder:` line and no `split` disposition, so nothing is deferred to another issue."
+      ? gate2Noop
       : `● Gate 2 (remainder liveness, #1316): ${report.remainders.length} remainder reference(s) — ${report.remainders.map((r) => `#${r.remainder}`).join(", ")}.`,
     "",
   ];
@@ -431,10 +469,17 @@ export function formatAcceptance(report: AcceptanceReport): string {
     }
   }
 
+  // The verdict names WHICH gate failed. A dead remainder reported as "a criterion this PR did not
+  // account for" sends the reader to the wrong half of the gate.
+  const gate1Failed = report.parseErrors.length > 0 || report.issues.some((i) => !i.ok);
+  const gate2Failed = report.remainders.some((r) => !r.ok);
   out.push("");
   out.push(report.ok
     ? "✓ every acceptance bullet of every issue this PR closes is mapped, and every remainder is live."
-    : "✗ acceptance conservation FAILED — an issue would close with a criterion this PR did not account for.");
+    : `✗ acceptance conservation FAILED — ${[
+        gate1Failed ? "an issue would close with a criterion this PR did not account for" : "",
+        gate2Failed ? "a deferral points at an issue that is closed or does not exist, which is indistinguishable in outcome from not deferring at all" : "",
+      ].filter(Boolean).join("; and ")}.`);
   return out.join("\n");
 }
 
@@ -487,6 +532,15 @@ const SELFTEST_ISSUES: IssueRecord[] = [
   },
   { number: 9002, state: "OPEN", body: "Remainder of #9001.", comments: [] },
   { number: 9003, state: "CLOSED", body: "A closed issue, for the Gate 2 control.", comments: [] },
+  {
+    // The section-truncation control. A standalone bold line used to END the acceptance section, so
+    // this issue parsed as ONE criterion and the last two vanished with nothing reported — silent
+    // omission inside the gate whose whole subject is silent omission.
+    number: 9004,
+    state: "OPEN",
+    body: ["## Acceptance", "- one", "", "**This one matters.**", "", "- two", "- three"].join("\n"),
+    comments: [],
+  },
 ];
 
 export const SELFTEST_BODY = [
@@ -495,6 +549,24 @@ export const SELFTEST_BODY = [
   "ACCEPTANCE #9001.1 met: `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
   "ACCEPTANCE #9001.2 split: #9002",
   "ACCEPTANCE #9001.3 relayed: asked on the issue — should the gate read commit messages too?",
+].join("\n");
+
+// Hand-written violating bodies, one per rule, kept literal rather than derived: a seeder that
+// mutates SELFTEST_BODY can only plant what SELFTEST_BODY already contains, and these two rules are
+// about text the healthy body deliberately does not contain.
+const SELFTEST_HEX_PROSE_BODY = [
+  "Closes #9001",
+  "",
+  // "defaced" is seven letters drawn from [a-f]; the sha shape used to read it as a commit.
+  "ACCEPTANCE #9001.1 met: defaced accede facade nonsense words",
+  "ACCEPTANCE #9001.2 split: #9002",
+  "ACCEPTANCE #9001.3 relayed: asked on the issue — should the gate read commit messages too?",
+].join("\n");
+
+const SELFTEST_TRUNCATED_SECTION_BODY = [
+  "Closes #9004",
+  "",
+  "ACCEPTANCE #9004.1 met: `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
 ].join("\n");
 
 export const SELFTEST_LOOKUP: IssueLookup = (n) => SELFTEST_ISSUES.find((i) => i.number === n);
@@ -512,5 +584,7 @@ export function selftestCases(): SelftestCase[] {
     { name: "a `met` hollowed out to a bare assertion", body: seedBareEvidence(SELFTEST_BODY).body, expect: "fail" },
     { name: "a remainder pointing at a CLOSED issue", body: seedRemainder(SELFTEST_BODY, 9003), expect: "fail" },
     { name: "a remainder pointing at an issue that does not exist", body: seedRemainder(SELFTEST_BODY, 9999), expect: "fail" },
+    { name: "a `met` whose only sha-shaped evidence is English words spelt in hex letters", body: SELFTEST_HEX_PROSE_BODY, expect: "fail" },
+    { name: "an acceptance section whose bullets sit below a standalone bold line", body: SELFTEST_TRUNCATED_SECTION_BODY, expect: "fail" },
   ];
 }

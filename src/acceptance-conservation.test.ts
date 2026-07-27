@@ -53,6 +53,25 @@ describe("parseAcceptanceCriteria", () => {
     expect(nestedFolded).toBe(1);
   });
 
+  it("NEGATIVE CONTROL: a standalone bold line does NOT end the section — it used to drop the rest silently", () => {
+    const { criteria, nestedFolded } = parseAcceptanceCriteria("## Acceptance\n- one\n\n**This one matters.**\n\n- two\n- three\n");
+    expect(criteria.map((c) => c.text)).toEqual(["one", "two", "three"]);
+    expect(nestedFolded).toBe(0);
+  });
+
+  it("NEGATIVE CONTROL: a `###` sub-heading does not end the section either", () => {
+    expect(parseAcceptanceCriteria("## Acceptance\n- one\n\n### Sub\n\n- two\n- three\n").criteria).toHaveLength(3);
+  });
+
+  it("still ends the section at a heading AT OR ABOVE the acceptance heading's level", () => {
+    expect(parseAcceptanceCriteria("### Acceptance\n- one\n\n## Scope\n- not a criterion\n").criteria).toHaveLength(1);
+    expect(parseAcceptanceCriteria("# Acceptance\n- one\n\n# Scope\n- not a criterion\n").criteria).toHaveLength(1);
+  });
+
+  it("ends a BOLD acceptance heading at the next bold line — that convention has no levels to compare", () => {
+    expect(parseAcceptanceCriteria("**Acceptance**\n- one\n\n**Scope note**\n- not a criterion\n").criteria).toHaveLength(1);
+  });
+
   it("falls back to a checklist when the issue has no Acceptance heading", () => {
     const { criteria, source } = parseAcceptanceCriteria("Do the thing.\n\n- [ ] ship it\n- [x] test it\n");
     expect(criteria.map((c) => c.text)).toEqual(["ship it", "test it"]);
@@ -179,6 +198,30 @@ describe("evidence, not assertion", () => {
   it("rejects a long sentence that still points at nothing checkable", () => {
     expect(evidenceProblems("this was handled as part of the broader refactor")).toEqual([expect.stringContaining("names none of")]);
   });
+
+  it("NEGATIVE CONTROL: English words spelt in hex letters are not a commit sha", () => {
+    // "defaced", "accede" and "facade" are drawn entirely from [a-f]; the shape used to accept them.
+    expect(evidenceProblems("defaced accede facade nonsense words")).toEqual([expect.stringContaining("names none of")]);
+  });
+
+  it("NEGATIVE CONTROL: a long number is not a commit sha", () => {
+    expect(evidenceProblems("run 90131391124 was green")).toEqual([expect.stringContaining("names none of")]);
+  });
+
+  it("still accepts a real sha, which mixes digits and hex letters", () => {
+    expect(evidenceProblems("fixed in d57ab0a on main")).toEqual([]);
+    expect(evidenceProblems("landed in 5304d8e, see the diff")).toEqual([]);
+  });
+
+  it("NEGATIVE CONTROL: backticking a phrase of plain English does not make it a command", () => {
+    expect(evidenceProblems("I confirmed this by hand: `all good`")).toEqual([expect.stringContaining("names none of")]);
+  });
+
+  it("still accepts a backticked flag, path or identifier, and a two-word command by its name", () => {
+    for (const detail of ["`--seed-bare-evidence` exits 1", "the fix is in `formatAcceptance`, see the diff", "`pnpm verify` — 25 files, 0 failures"]) {
+      expect(evidenceProblems(detail)).toEqual([]);
+    }
+  });
 });
 
 describe("Gate 2 — remainder liveness", () => {
@@ -216,6 +259,25 @@ describe("Gate 2 — remainder liveness", () => {
   it("refuses a split that names no remainder at all — a split with no remainder is a deletion", () => {
     const body = "Closes #40\n\nACCEPTANCE #40.1 split: deferred for now\n";
     expect(problems(body, lookupOf(original))).toEqual([expect.stringContaining("names no remainder issue")]);
+  });
+
+  it("does not report a numberless split as `no split disposition` — that reads as nothing deferred", () => {
+    const out = formatAcceptance(checkAcceptance("Closes #40\n\nACCEPTANCE #40.1 split: deferred for now\n", lookupOf(original)));
+    expect(out).toContain("1 `split` disposition(s) name no issue number");
+    expect(out).not.toContain("no `remainder:` line and no `split` disposition");
+  });
+
+  it("names the DEFERRAL as the failure when the only fault is a dead remainder", () => {
+    const body = seedRemainder("Closes #40\n\nACCEPTANCE #40.1 met: src/foo.ts:1\n", 41);
+    const out = formatAcceptance(checkAcceptance(body, lookupOf(original, issue({ number: 41, state: "CLOSED" }))));
+    expect(out).toContain("a deferral points at an issue that is closed or does not exist");
+    expect(out).not.toContain("a criterion this PR did not account for");
+  });
+
+  it("names BOTH halves when a criterion is unmapped and a remainder is dead", () => {
+    const body = seedRemainder("Closes #40\n", 41);
+    const out = formatAcceptance(checkAcceptance(body, lookupOf(original, issue({ number: 41, state: "CLOSED" }))));
+    expect(out).toContain("a criterion this PR did not account for; and a deferral points at an issue");
   });
 
   it("checks a bare `remainder:` line even on a PR that closes nothing, and does not invent an original", () => {

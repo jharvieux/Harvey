@@ -45,26 +45,81 @@ correct, and only the target's state is wrong.
 
 ## Deliberate, disclosed bounds
 
+This list is meant to be **complete**, and the file header of `src/acceptance-conservation.ts` points
+here rather than restating a subset. Gate 4 (#1317) ships the rule that *a bound recorded in a comment
+must appear in the finding it bounds*; a gate owes its own design doc the same.
+
 - The evidence check proves the **shape** of evidence, not its truth. It separates "done" from
   "`pnpm verify` — 25 files, 0 failures"; it cannot tell a real command from an invented one. It
   raises the floor; it is not a reviewer.
+- **Per-shape looseness, and what the 2026-07-27 narrowing changed.** Three of the five shapes were
+  found accepting plain prose; two were narrowed and one is deliberately left as it is:
+  - **The quoted shape** accepts any 8+ characters between double quotes, so `"it all looks great"`
+    passes as "a quoted test name". Nothing mechanical distinguishes a quoted test name from a quoted
+    sentence, and requiring a nearby word like *test* would reject a bare, correct test name. Left
+    loose on purpose.
+  - **The backticked shape** was `` `[^`]{4,}` ``, which accepted `` `all good` ``. It now requires the
+    span to be a single token (a path, a flag, an identifier) **or** to contain a character English
+    prose does not use, so a backticked English phrase no longer passes. A single backticked English
+    *word* of 4+ characters still does, if the rest of the line pushes the line past 12 characters.
+  - **The commit-sha shape** was `` \b[0-9a-f]{7,40}\b ``, which matched ordinary English —
+    *defaced*, *accede*, *facade* are words spelt entirely in `[a-f]` — and any 7-digit number, so
+    `run 90131391124 was green` read as a commit reference. It now requires the run to mix digits
+    **and** hex letters. The cost: a short sha prefix that happens to be all digits or all `[a-f]`
+    is no longer recognised as a sha. Cite it in backticks, or name the command, instead.
+- **The gate rewards formatting in both directions, and errs toward refusing.** Good evidence phrased
+  as plain prose is rejected — `measured: 5 of 5 criteria dispositioned, 0 unmapped` fails, and so
+  does an unquoted test name. This is deliberate: a false ACCEPT lets an unmet criterion close an
+  issue silently, which is the #1206 shape the gate exists for, while a false REJECT is loud, names
+  every accepted shape in the error, and is fixed by adding backticks.
 - Only bullets at the **shallowest indent** of the acceptance section are criteria. Deeper bullets
   read as elaboration — counted and reported in the output, never silently dropped.
+- The section runs from the acceptance heading to the next heading **at or above its own level**. A
+  standalone bold line (`**Like this.**`) and a deeper `###` sub-heading do **not** end it. They used
+  to: `## Acceptance / - one / **This one matters.** / - two / - three` parsed as **one** criterion
+  and reported nothing, so two bullets were dropped with no row in the output — silent omission inside
+  the gate whose subject is silent omission. Measured against the 200 most recent issues on
+  2026-07-27, 156 of which carry an acceptance section, the change moved **zero** of them; it closes a
+  latent gap rather than reinterpreting real bodies. The residual bound: a genuine sub-section under
+  the acceptance heading now contributes its bullets as criteria, which fails LOUD rather than
+  dropping them. When the acceptance heading is itself bold, the next bold line still ends it.
+- **A green `cross-linked` row proves the remainder number is discoverable from the original — nothing
+  more.** The condition is satisfied by **any** mention of that number anywhere in the original's body
+  or comments, in any sentence. Demonstrated live on 2026-07-27: re-pointing #1316.3's `split` at
+  #1260 — unrelated M2 work that #1316's body names only in a historical aside (*"Recovered only by
+  this audit, 16 days later, as #1260"*) — satisfies exists, OPEN and cross-linked, and the gate
+  prints `✓ cross-linked: #1316 references #1260` and exits 0. So a reader **can** conclude the
+  number appears on the
+  original and a human following the issue would see it; they **cannot** conclude the sentence around
+  it describes this deferral, or that the remainder covers the split-out work. Tightening it would
+  mean parsing intent from prose, which is the judgement call this gate deliberately does not make.
 - The parser is **negation-blind, exactly as GitHub is**: `does not close #19` closes #19. A gate that
   read the negation would wave through the exact PR bodies the audit found.
 - A cross-repo or URL-form closing reference cannot be resolved by a repo-scoped lookup. It gets a
   named `NOT ASSESSED` row, not silence.
+- The gate reads the PR **body**. A criterion met by a bare click — closing the issue in the GitHub UI
+  or from the Development sidebar, with no closing keyword to parse — never reaches it. Tracked as
+  **#1341**; not addressed here.
 
 ## Negative control
 
 `--selftest` scores a hermetic scenario (`SELFTEST_BODY` / `SELFTEST_ISSUES`): one healthy body that
-must PASS and four seeded violations — a dropped disposition, a `met` hollowed out to "done", a
-remainder pointing at a CLOSED issue, a remainder pointing at one that does not exist — that must
-each FAIL. It needs no network, so CI's proof that the gate can fail does not depend on whichever PR
-is under test. `--seed-drop-disposition`, `--seed-bare-evidence` and `--seed-remainder <n>` plant the
-same violations into a real body, mirroring `validate-conservation.ts`'s `--seed-*` flags. The same
-scenario is scored by `src/acceptance-conservation.test.ts` under `pnpm verify`, so there is one
-fixture rather than two that can drift apart.
+must PASS and six seeded violations — a dropped disposition, a `met` hollowed out to "done", a
+remainder pointing at a CLOSED issue, a remainder pointing at one that does not exist, a `met` whose
+only sha-shaped evidence is English words spelt in hex letters, and an acceptance section whose
+bullets sit below a standalone bold line — that must each FAIL. It needs no network, so CI's proof
+that the gate can fail does not depend on whichever PR is under test. `--seed-drop-disposition`,
+`--seed-bare-evidence` and `--seed-remainder <n>` plant the first three into a real body, mirroring
+`validate-conservation.ts`'s `--seed-*` flags; the last two are hand-written bodies, because a seeder
+that mutates a healthy body can only plant what that body already contains. The same scenario is
+scored by `src/acceptance-conservation.test.ts` under `pnpm verify`, so there is one fixture rather
+than two that can drift apart.
+
+Each of the three rules narrowed on 2026-07-27 was proven to fail in isolation by reverting the fix
+and watching exactly its own control go red: the sha shape (`NEGATIVE CONTROL: English words spelt in
+hex letters are not a commit sha`), the backtick shape (`NEGATIVE CONTROL: backticking a phrase of
+plain English does not make it a command`) and the section parser (`NEGATIVE CONTROL: a standalone
+bold line does NOT end the section`).
 
 Exit codes are three-valued on purpose: `0` pass or green no-op, `1` gate failed, `2` gate could not
 run. A control that accepted any non-zero code would go green on exit 2 — the #1246 shape, where five
