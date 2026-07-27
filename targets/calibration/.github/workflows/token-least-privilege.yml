@@ -1,0 +1,26 @@
+# N-GHA-LEAST-PRIVILEGE (NEGATIVE, #1212): the correct form — an explicit, narrow workflow-level
+# block, widened per job only where the job genuinely writes. Neither the write-all rule nor the
+# missing-block absence check may fire here; a rule that flags every workflow it reads would make
+# the two positives above worthless.
+name: token-least-privilege
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm test
+
+  comment:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - run: gh pr comment "$PR" --body "tests passed"

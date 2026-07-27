@@ -2367,3 +2367,144 @@ tests (verified to fail first against the pre-#1136 heuristic, then pass against
 committed dry-run artifact (`dry-run/findings.json`) is the standing regression gate: if this
 heuristic regresses, `P-M6-LONGLINE-JSONEQ`'s finding silently disappears from the artifact and
 `dry-run-drift` goes red.
+
+## #1182 — storage buckets and anon read policies declared in MIGRATION SQL
+
+`supabase/migrations/20260727000001_storage_buckets_static.sql`.
+
+cipherx CX-10 (`docs/design/cipherx-recall-measurement.md`) was recorded a mechanical MISS with the
+reason "no `storage.buckets` static pass". Two existing detectors already covered adjacent halves of
+the class and neither could see this one: `checkPublicBucketsWithNoPolicies`
+(`src/scan/supabase.ts`) reads `select id, name, public from storage.buckets` off a LIVE database
+(connected tier), and `harvey-public-bucket` (#560) reads `createBucket(…, {public:true})` in
+app/seed code. A bucket committed as SQL is neither.
+
+`checkMigrationStorageBuckets` (`src/scan/supabase-static.ts`) reads the same committed migration
+set the RLS passes read. Review tier, per the indicators-not-verdicts framing: a deliberately public
+asset bucket is a legitimate design and migration text cannot say which one this is.
+
+### #1182 positives — planted bugs (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-STORAGE-BUCKET-PUBLIC-SQL | `20260727000001_storage_buckets_static.sql:8` | `insert into storage.buckets (id, name, public, file_size_limit) values ('kyc-documents', …, true, …)` — Supabase serves every object in a public bucket unauthenticated from `/storage/v1/object/public/<bucket>/<path>`, a path `storage.objects` RLS does not govern | review (High) |
+| P-STORAGE-BUCKET-PUBLIC-SQL-2ND-ROW | `20260727000001_storage_buckets_static.sql:14` | the same statement with the boolean in a DIFFERENT column position and two rows, one public and one not. Pins the rule to reading the tuple by column index; a positional assumption flags `internal-archive` too | review (High) |
+| P-STORAGE-ANON-READ-POLICY | `20260727000001_storage_buckets_static.sql:23` | `create policy exports_read_anon on storage.objects for select to anon using (bucket_id = 'exports')` — a PRIVATE bucket whose read policy is not. MEASURED 2026-07-27: the shared policy reviewer produced nothing on this shape, because its rules all key on a clause that references the caller and this one references none | review (High) |
+
+### #1182 negatives — benign lookalikes (must NOT be flagged in the free count)
+
+| id | location | why it clears |
+|---|---|---|
+| N-STORAGE-BUCKET-PRIVATE-SQL | same file | `public` is `false`; the rule reads the value at the `public` column's index, not the presence of the word |
+| N-STORAGE-BUCKET-NO-PUBLIC-COL | same file | the insert omits the `public` column entirely (Postgres defaults it to false) — cleared by the column-list check, which is what stops the rule guessing at an absent value |
+| N-STORAGE-ANON-READ-OWN-FOLDER | same file | the same `to anon` SELECT policy scoped to `(storage.foldername(name))[1] = (select auth.uid())::text` — the one-folder-per-user pattern, correct even for a signed-URL flow. Same table, same command, same grantee, different USING clause. The `(select …)` wrapper also keeps the `auth_rls_initplan` perf lint quiet, so this fixture is silent for every rule and the corpus row cannot read as a hit from an unrelated one |
+
+Parser change: `ParsedPolicy` gained `roles` (`src/migration-sql-parse.ts`), read from the `TO`
+clause of the header span only. An omitted `TO` parses as `["public"]` — Postgres's own default, not
+an empty set.
+
+## #1183 — a SPARED `USING (true)` SELECT, overruled by M10's classification of the same table
+
+`supabase/migrations/20260727000002_using_true_pii.sql`.
+
+supatest F9: `profiles` SELECT `USING(true)` exposes every user's email. `checkUsingTrueReview`
+SPARES it (the table declares no recognised tenant key), so it surfaced only inside the
+`SB-RLS-USING-TRUE-UNASSESSED` disclosure — while the SAME run's M10 pass classified the same table
+`EMAIL, USERNAME_HANDLE, PHOTO`.
+
+The spare is the correct precision call and it stays: `N-RLS-PUBLIC-CATALOG-USING-TRUE`
+(`plans_select_public`) is the reason it exists. What changes is that a second module has already
+answered the question the spare leaves open, so `checkMigrationPolicySemantics` now reads
+`classifyMigrationSql(allSql).dataMap` — the same static feed `src/cli/dry-run.ts`'s M10 phase uses,
+no live tier — and upgrades the spare to an asserted finding when the table carries a qualifying
+column. An upgraded table is REMOVED from the unassessed disclosure: it was assessed.
+
+### The gate, and why it is not "the table appears in the data map"
+
+MEASURED 2026-07-27 against this target: the data map classifies `plans.name` and `cities.name` as
+`NAME?` at **low** confidence and `notes.body`/`documents.body` as `FREE_TEXT_REVIEW` — a public
+catalog's product name IS a name. An any-hit gate would upgrade exactly the case the spare protects.
+The qualifying signal is a column M10 is CONFIDENT about (`confidence: "high"` — an unambiguous
+direct identifier) or one in a regulated category (`SENSITIVE_PII`/`PHI`/`PCI`/`SECRET`), where even
+a medium-confidence hit is worth asserting.
+
+| id | kind | location | shape |
+|---|---|---|---|
+| P-RLS-USING-TRUE-PII-SPARED | positive | `20260727000002_using_true_pii.sql:19` | `newsletter_subscribers_select_all` — `for select using (true)` on a table with no tenant column and an `email` column (`EMAIL`, high confidence). Upgraded → review (High) |
+| N-RLS-USING-TRUE-AMBIGUOUS-NAME | negative | `20260727000002_using_true_pii.sql:33` | `support_categories_select_all` — same clause, same absent tenant key, and the table IS in the data map (`name` → `NAME?`, low). Must stay spared, appearing in `SB-RLS-USING-TRUE-UNASSESSED` and nowhere else |
+
+`--tenant-mode per-user` still suppresses the upgrade: a DECLARED per-user model is an assertion,
+not an unassessed silence (the same carve-out #338 made for the disclosure itself).
+
+## #1184 — verbose error / internal state in an App Router response body
+
+`app/api/ar-debug-env/route.ts` (positive) and `app/api/ar-debug-env-safe/route.ts` (negative).
+
+cipherx CX-18: `src/app/api/debug/route.ts` returned `error.stack`, `process.cwd()` and an env dump;
+mechanical caught only the connection string that happened to be embedded in the dump, and the
+broader facets were recorded semantic-only. Two causes, both fixed here.
+
+`harvey-verbose-error`'s four patterns were all Express-shaped AND single-argument, so the App
+Router form — `NextResponse.json(body, { status: 500 })` — matched none of them. MEASURED
+2026-07-27: the whole positive fixture produced zero `harvey-*` findings beforehand. The patterns
+now use `$RES.json(…, ...)`, which covers `res.json` / `NextResponse.json` / `Response.json` in one
+and admits the init argument while still matching the one-argument call (`P-VERBOSE-ERROR`,
+`pages/api/verbose.js`, still fires).
+
+`harvey-internal-state-response` is new and covers the other half: `process.env` (every secret the
+process holds) or `process.cwd()` in a response body. Scoped to a RESPONSE position, which is the
+whole precision argument — reading `process.env` to configure a client is the normal way to use it,
+and logging `process.cwd()` server-side is unremarkable. It matches the object as a WHOLE, not a
+single read (`process.env.NEXT_PUBLIC_URL`), so echoing one already-public config value back does
+not fire.
+
+| id | kind | location | shape |
+|---|---|---|---|
+| P-VERBOSE-ERROR-APPROUTER | positive | `app/api/ar-debug-env/route.ts:15` | `NextResponse.json({ …, stack: (err as Error).stack, … }, { status: 500 })` → `harvey-verbose-error`, review |
+| P-INTERNAL-STATE-RESPONSE | positive | `app/api/ar-debug-env/route.ts:15` | the same object also carries `cwd: process.cwd()` and `env: process.env` → `harvey-internal-state-response`, review (Medium) |
+| N-VERBOSE-ERROR-LOGGED-NOT-RETURNED | negative | `app/api/ar-debug-env-safe/route.ts` | every token both rules key on is present — `.stack`, `process.cwd()`, `process.env` — and all of them are arguments to `console.error`, with a literal string returned. Logging the detail is the RECOMMENDED practice; returning it is the defect |
+
+## Batch B22 (#1212) — GITHUB_TOKEN permission scope in GitHub Actions workflows
+
+`.github/workflows/token-write-all.yml`, `token-job-write-all.yml`, `token-least-privilege.yml`,
+plus the pre-existing `saml-integration-test.yml`.
+
+GitHub Actions is NOT covered by the infrastructure out-of-scope decision (#903,
+`docs/design/infrastructure-out-of-scope.md`, which names Dockerfiles/Compose/Terraform/K8s):
+Harvey already ships four registry GHA classes from `p/security-audit` and a non-grading category
+built for them (`CI_PIPELINE_CATEGORY`, #996). So this is a gap INSIDE an in-scope area.
+
+MEASURED 2026-07-27 before the detector was written: Harvey's own semgrep invocation over a workflow
+carrying `permissions: write-all`, and over one with no permissions block at all, produced ZERO
+findings on both — while the same six-pack flagged the mutable action tag, the `pull_request_target`
+checkout, the run-shell injection and the `curl | sh` on neighbouring shapes. Harvey reported one
+half of the `pull_request_target` pair (the checkout) and not the other (the token that makes it
+repository compromise rather than a nuisance).
+
+Why a TS pass (`src/scan/gha-permissions.ts`) and not a `harvey-*` semgrep rule: the second shape is
+an ABSENCE. A workflow with no `permissions:` block inherits the repository default — still "Read
+and write" for repositories created before February 2023 — and there is nothing in the file to
+pattern-match.
+
+### B22 positives — planted bugs (must be caught)
+
+| id | location | detection | tier |
+|---|---|---|---|
+| P-GHA-WRITE-ALL | `.github/workflows/token-write-all.yml:10` | `permissions: write-all` at workflow level, on a `pull_request_target` trigger that checks out the PR head. `high` — the grant is an exact fact in the file, not an inference | high (High) |
+| P-GHA-JOB-WRITE-ALL | `.github/workflows/token-job-write-all.yml:23` | the workflow-level block is `contents: read` (correct) and the `release` job overrides it with `permissions: write-all`. A rule reading only the top-level key scores the first positive and silently misses this one | high (High) |
+| P-GHA-NO-PERMISSIONS | `.github/workflows/saml-integration-test.yml` | a job and no `permissions:` anywhere, so `GITHUB_TOKEN` inherits the repository default. `review`, not high: whether that default is read-only is a repository/organisation setting the scan cannot read, so the finding asks rather than asserts | review (Medium) |
+
+### B22 negative — benign lookalike (must NOT be flagged in the free count)
+
+| id | location | why it clears |
+|---|---|---|
+| N-GHA-LEAST-PRIVILEGE | `.github/workflows/token-least-privilege.yml` | `permissions: { contents: read }` at workflow level, widened to `pull-requests: write` on the one job that comments. Load-bearing in both directions — a rule flagging every workflow it read (the obvious implementation of the absence check) fires here, and so does one keying on the mere presence of the word `write` |
+
+### B22 routing and adjacency
+
+Both classes carry `CI_PIPELINE_CATEGORY`, so they are reported in full and never graded, matching
+the registry GHA classes (#996 — the fact-vs-exploitability split; a CI token scope is not
+app-surface exploitability). `saml-integration-test.yml` keeps its own `N-SAML-TEST-PRIVATE-KEY`
+entry, keyed on a disjoint `match` term (`private-key`), so the two answer-key rows on that file
+cannot cross-attribute. A workflow file with no `jobs:` key is skipped outright: a reusable fragment
+has no token to scope.
