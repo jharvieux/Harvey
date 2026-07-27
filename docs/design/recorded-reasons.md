@@ -110,10 +110,11 @@ an unbound placeholder must fail, or the binding rule has stopped being enforced
 
 Subsystem drift only ever watched the reasons whose author happened to declare `TOUCHES:` — 9 of 15
 empirical reasons (measured 2026-07-27). Making the field **mandatory** was the obvious fix and is
-**rejected**: the three negative controls in `reasons-drift.yml` plant reasons that carry no
-`TOUCHES:`, so a mandatory field would make all three exit non-zero for the wrong reason. A green job
-whose own controls no longer prove anything is precisely the false green this whole family exists to
-kill.
+**rejected**: the three fixture-planting negative controls in `reasons-drift.yml` plant reasons that
+carry no `TOUCHES:`, so a mandatory field would make all three exit non-zero for the wrong reason. A
+green job whose own controls no longer prove anything is precisely the false green this whole family
+exists to kill. The rule generalises past `TOUCHES:`: **no new mandatory field may be added to a
+reason block without first adding it to those three planted heredocs.**
 
 Instead the paths are **derived from the falsifier the author already wrote** (#1246): a token in the
 `FALSIFIER:` naming a path that exists in this checkout is a subsystem the claim depends on.
@@ -252,22 +253,43 @@ four items are closed here:
 
 | Was | Now |
 |---|---|
-| Claims in GitHub issue bodies were read by nothing | `--issues` lints them structurally and censuses them; falsifiers stay unexecuted, with mirroring named as the remedy |
+| Claims in GitHub issue bodies were read by nothing | `--issues` lints them structurally and censuses them **on the daily `reasons-drift.yml` schedule**; falsifiers stay unexecuted, with mirroring named as the remedy |
 | `TOUCHES:` optional, so drift watched 9 of 15 empirical reasons | Declared **or derived from the falsifier**; a declared path that does not resolve is now an error; the unwatchable ones are counted and named |
 | The untriaged `docs/design` population was a number in this document | Counted on every run (`--census`), so it is measured rather than recalled |
 | The `<placeholder>` binding contract was undocumented | Documented above — the next person to write a live-tier falsifier does not have to rediscover #1072's redirect bug |
 
+### The cadence for issue-recorded claims
+
+A mechanism nothing invokes is the same green-but-proving-nothing failure as no mechanism, so
+`.github/workflows/reasons-drift.yml`'s daily job runs `pnpm validate-reasons --revalidate --issues`
+— one step, because `--issues` is a strict superset of the surfaces the repo-only run reads. It
+needs `GH_TOKEN` in the step env; it needs no new permission, since the job already holds
+`issues: write` for its tracking issue.
+
+Three properties the cadence has to preserve:
+
+- **Issue-recorded falsifiers are still never executed**, `--revalidate` on the same run or not. The
+  CLI filters them out of the re-validation pass and prints `ℹ NOT RE-TESTED` per row. This is a
+  security boundary, not an ergonomic one: an issue body is writable by anyone with comment access,
+  and a scheduled job runs it with the repo checked out and a token in the environment. Path data
+  that reaches `git log` from an issue-recorded `TOUCHES:`/`FALSIFIER:` is passed as `spawnSync`
+  argv, never through a shell, and only after `watchedPaths` has filtered it to paths that already
+  exist in the checkout.
+- **A fetch that reads nothing fails loud.** "0 issue-recorded claims" from a `gh` that never worked
+  is indistinguishable from a clean tracker. The fourth negative control plants an unusable
+  credential and asserts both that the run exits non-zero *and* that it does so for that reason.
+- **The three fixture-planting controls deliberately omit `--issues`.** Pointed at the real tracker,
+  an unrelated malformed issue block anywhere would make all three exit non-zero for the wrong
+  reason and they would pass vacuously — the same shape as the mandatory-`TOUCHES:` trap above.
+
 **Still remaining, and split out rather than silently narrowed:**
 
-1. **The cadence does not include `--issues`.** `.github/workflows/reasons-drift.yml` runs
-   `pnpm validate-reasons --revalidate`; adding `--issues` needs that file plus an `issues: read`
-   permission on the job. Supervised path — operator-gated.
-2. **The four live tiers still execute nowhere on a cadence.** No CI job stands up a two-tenant M2
+1. **The four live tiers still execute nowhere on a cadence.** No CI job stands up a two-tenant M2
    stack, a Lighthouse-capable Chrome against a served target, a SecBench clone, or the paired
    supabase-security-labs variants. With the bindings above they are runnable **by hand** where the
    tier exists; putting them on a schedule needs the tier itself, which is the real blocker — not
    the workflow syntax.
-3. **Triaging the censused claims into blocks.** The count makes the population visible; shrinking it
+2. **Triaging the censused claims into blocks.** The count makes the population visible; shrinking it
    is per-claim work, and each one must be **re-verified before it is recorded**, never wrapped in a
    block as-is. Wrapping an unverified claim in a `PROVENANCE:` tag launders it, which is the failure
    this whole convention was built against.
