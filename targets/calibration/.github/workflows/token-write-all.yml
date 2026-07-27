@@ -1,0 +1,19 @@
+# P-GHA-WRITE-ALL (POSITIVE, #1212): `permissions: write-all` at workflow level hands GITHUB_TOKEN
+# every scope GitHub offers. Paired here with the pull_request_target + PR-head checkout that
+# Harvey's registry rules already catch, because that combination is what turns a broad token from
+# a hygiene note into repository compromise — Harvey reported one half of the pair and not the other.
+name: token-write-all
+
+on:
+  pull_request_target:
+
+permissions: write-all
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: npm ci && npm run build

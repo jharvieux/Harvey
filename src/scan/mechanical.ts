@@ -25,10 +25,12 @@ import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
+import { scanEmitterUnhandledError } from "./emitter-error.js";
 import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachability.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./framework-detect.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
+import { checkWorkflowPermissions } from "./gha-permissions.js";
 import { checkInfrastructureScope } from "./infra-scope.js";
 import { scanJobTenantScope } from "./job-tenant-scope.js";
 import { checkUnanalysedLanguages } from "./language-coverage.js";
@@ -57,6 +59,7 @@ import {
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsBypass,
   checkMigrationRlsStatic,
+  checkMigrationStorageBuckets,
   checkOpenSignupConfig,
   inferAuthMethodsFromSource,
   type TenancyOverride,
@@ -307,6 +310,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkMigrationDefinerAnonGrant(scanDir));
       findings.push(...checkMigrationDynamicSqlInjection(scanDir));
       findings.push(...checkMigrationRlsInitplanStatic(scanDir));
+      findings.push(...checkMigrationStorageBuckets(scanDir));
       findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
       // #671 — gate the email-confirmation advisor on whether email auth is actually used (source
       // heuristic): an OAuth-only app gets a conditional note, not an asserted Medium.
@@ -326,6 +330,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #886 — Dockerfiles/Terraform/K8s manifests are out of scope by decision, not by oversight
     // (docs/design/infrastructure-out-of-scope.md). Say so when the target has them.
     findings.push(...checkInfrastructureScope(scanDir));
+
+    // #1212 — GITHUB_TOKEN scope. GHA is NOT covered by the infra-scope decision above: Harvey
+    // already ships four registry GHA classes and a non-grading category built for them. The
+    // missing-block half is an absence check, which no pattern rule can express.
+    findings.push(...checkWorkflowPermissions(scanDir));
 
     // Supply chain.
     if (pkg) {
@@ -408,6 +417,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #664 — service_role key hardcoded as a JWT literal (same-file or cross-file const) and
     // passed to createClient. Real base64 decode + role/iss claim check, incl. plain .js.
     findings.push(...scanServiceRoleLiteral(scanDir));
+
+    // #1202 — EventEmitter emits 'error' with no same-file listener; disclosed same-file-only
+    // limitation (a listener attached by an importing module is invisible to this pass).
+    findings.push(...scanEmitterUnhandledError(scanDir));
 
     // #681 — service-role query in a background-job path (Inngest/cron/queue/worker) with no
     // tenant predicate at all. AST dataflow, incl. plain .js.

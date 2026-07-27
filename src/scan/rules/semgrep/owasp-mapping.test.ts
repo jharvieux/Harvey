@@ -48,6 +48,10 @@ const OFFICIAL_CWE_TO_OWASP_2021: Record<string, string> = {
   "CWE-598": "A04:2021 - Insecure Design",
   "CWE-602": "A04:2021 - Insecure Design",
   "CWE-1021": "A04:2021 - Insecure Design",
+  // A04 — Insecure Design (#1202, MEASURED 2026-07-27 against MITRE's own CWE-235 page,
+  // cwe.mitre.org/data/definitions/235.html): Memberships lists category id 1348, which is
+  // OWASP Top Ten 2021 A04:2021 - Insecure Design.
+  "CWE-235": "A04:2021 - Insecure Design",
   // A05 — Security Misconfiguration
   "CWE-611": "A05:2021 - Security Misconfiguration",
   "CWE-614": "A05:2021 - Security Misconfiguration",
@@ -82,6 +86,14 @@ const NO_OWASP_CWES: Record<string, string> = {
   // category (no CWE-1344 child). Falsifier: re-read that page's Memberships section — if a
   // 2021 category appears, move CWE-252 into OFFICIAL_CWE_TO_OWASP_2021 instead.
   "CWE-252": "Unchecked Return Value — MITRE's memberships place it under OWASP 2004 A7 and 2025 A10, not any Top-10-2021 category",
+  // #1200, MEASURED 2026-07-27 against MITRE's own CWE-770 page (cwe.mitre.org/data/
+  // definitions/770.html): Memberships lists CERT/ISA-62443 cross-sections, no OWASP Top Ten
+  // mention at all — not just no 2021 category.
+  "CWE-770": "Allocation of Resources Without Limits or Throttling — MITRE's memberships carry no OWASP Top Ten mapping of any year",
+  // #1200, MEASURED 2026-07-27 against MITRE's own CWE-524 page (cwe.mitre.org/data/
+  // definitions/524.html): Memberships lists two SFP/comprehensive-categorization clusters, no
+  // OWASP Top Ten mention at all.
+  "CWE-524": "Use of Cache Containing Sensitive Information — MITRE's memberships carry no OWASP Top Ten mapping of any year",
 };
 
 const RULES_DIR = join(dirname(fileURLToPath(import.meta.url)));

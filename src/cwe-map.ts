@@ -17,6 +17,7 @@ import type { Finding } from "./findings.js";
 
 const CWE: Record<string, string> = {
   "200": "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor",
+  "248": "CWE-248: Uncaught Exception",
   "250": "CWE-250: Execution with Unnecessary Privileges",
   "269": "CWE-269: Improper Privilege Management",
   "287": "CWE-287: Improper Authentication",
@@ -86,6 +87,14 @@ const SECURITY: Record<string, [string, string | null]> = {
   "PostgREST schema exposure wider than intended": ["668", "A01"],
   "Realtime publication broadcasts an unprotected table": ["668", "A01"],
   "Public bucket with no policies": ["668", "A01"],
+  // #1182 — the static twins of the row above: the same exposure read from committed migration SQL
+  // instead of a live storage.buckets/pg_policies pull, so they carry the same CWE.
+  "Public storage bucket declared in migration SQL (static)": ["668", "A01"],
+  "storage.objects read policy open to anon (static)": ["668", "A01"],
+  // #1183 — a read policy that admits every row of a table M10 classified as personal data. The
+  // policy EXISTS and is syntactically fine; what it exposes is the defect, so this is the
+  // information-exposure CWE rather than a missing-authorization one.
+  "USING(true) read policy on an M10-classified PII table (static)": ["200", "A01"],
   "pg_graphql introspection enabled in production": ["200", "A01"],
   "Sensitive file in public/ directory": ["538", "A01"],
   "Sensitive value logged to console": ["532", "A09"],
@@ -127,12 +136,22 @@ const SECURITY: Record<string, [string, string | null]> = {
   // Over-privileged database roles / grants — CWE is clean, OWASP does not categorize these.
   "Column-level grant to client role outside RLS model": ["732", null],
   "Default privileges grant future objects to client role": ["732", null],
+  // #1212 — GITHUB_TOKEN scope. Same weakness as the two grants above (a critical resource handed
+  // more permission than it needs), whether granted explicitly or inherited from a repository
+  // default; OWASP does not place CWE-732 under a Top-10-2021 category.
+  "GitHub Actions workflow grants write-all token permissions": ["732", null],
+  "GitHub Actions workflow declares no token permissions": ["732", null],
   "SECURITY DEFINER granted to anon (static)": ["269", null],
   "pg_cron job calls a SECURITY DEFINER function": ["269", null],
   "pg_cron job runs as a superuser role": ["250", null],
   "Over-broad WebExtension permissions": ["250", null],
   // Race condition — CWE clean, not in a Top-10-2021 category.
   "Non-atomic read-modify-write race condition": ["362", null],
+  // #1202: an EventEmitter 'error' emit with no listener crashes the process — a remote DoS if
+  // reachable from a request. MEASURED against MITRE's own CWE-248 page (cwe.mitre.org/data/
+  // definitions/248.html, 2026-07-27): Memberships lists OWASP Top Ten 2004 A9 and 2025 A10:2025,
+  // no 2021 category — clean CWE, OWASP omitted.
+  "EventEmitter emits 'error' with no registered listener": ["248", null],
 };
 
 // Non-security taxonomies: recorded as no-clean-CWE WITH A REASON rather than left unclassified.

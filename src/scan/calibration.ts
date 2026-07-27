@@ -34,9 +34,11 @@ import { b18JobTenantScopeEntries } from "./calibration/b18-job-tenant-scope.ent
 import { b19PrismaTenantScopeEntries } from "./calibration/b19-prisma-tenant-scope.entries.js";
 import { b20DrizzleTenantScopeEntries } from "./calibration/b20-drizzle-tenant-scope.entries.js";
 import { b21SilentFailureEntries } from "./calibration/b21-silent-failure.entries.js";
+import { b22GhaPermissionsEntries } from "./calibration/b22-gha-permissions.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { owaspMultiTenantEntries } from "./calibration/owasp-multitenant.entries.js";
 import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
+import { owaspReactEntries } from "./calibration/owasp-react.entries.js";
 import { rlsStaticSemanticsEntries } from "./calibration/rls-static-semantics.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
 import { m7Entries } from "./calibration/m7.entries.js";
@@ -80,9 +82,11 @@ export const CORPUS: CorpusEntry[] = [
   ...b19PrismaTenantScopeEntries,
   ...b20DrizzleTenantScopeEntries,
   ...b21SilentFailureEntries,
+  ...b22GhaPermissionsEntries,
   ...knownPublicCredsEntries,
   ...owaspMultiTenantEntries,
   ...owaspNodejsEntries,
+  ...owaspReactEntries,
   ...rlsStaticSemanticsEntries,
   ...m9AuthzEntries,
   ...m9CheckEntries,

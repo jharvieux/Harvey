@@ -335,6 +335,16 @@ describe("blocking sync I/O in request handler", () => {
   it("does not flag a run-once module-scope sync read", () => {
     expect(byTaxonomy("sync-io/negative", TAX)).toHaveLength(0);
   });
+  it("#1203: flags pbkdf2Sync/readFileSync inside exported functions outside a recognised handler path, at Review confidence", () => {
+    const hits = byTaxonomy("sync-io/positive-generic", TAX);
+    expect(hits).toHaveLength(2);
+    expect(hits.every((h) => h.confidence === "Review")).toBe(true);
+    expect(hits.map((h) => h.title).join(" | ")).toContain("pbkdf2Sync");
+    expect(hits.map((h) => h.title).join(" | ")).toContain("readFileSync");
+  });
+  it("#1203: does not flag a sync read in a build/tooling script (scripts/ dir)", () => {
+    expect(byTaxonomy("sync-io/negative-build-script", TAX)).toHaveLength(0);
+  });
 });
 
 describe("JSON deep-clone", () => {

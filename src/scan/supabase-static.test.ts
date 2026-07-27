@@ -9,6 +9,7 @@ import {
   checkMigrationRlsBypass,
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsStatic,
+  checkMigrationStorageBuckets,
   checkOpenSignupConfig,
   inferAuthMethodsFromSource,
   type TenancyOverride,
@@ -865,5 +866,122 @@ describe("checkMigrationRlsBypass (#1190 — from the OWASP Multi-Tenant cheat s
       "0001.sql": `${enabledWithPolicy("ledger")}-- create role app_worker login bypassrls;`,
     });
     expect(checkMigrationRlsBypass(dir).filter((x) => x.id.startsWith("SB-RLS-BYPASSRLS"))).toHaveLength(0);
+  });
+});
+
+// #1182 (cipherx CX-10) — buckets and storage.objects read policies declared in migration SQL.
+// The connected-tier check reads a LIVE storage.buckets and the #560 semgrep rule reads
+// createBucket() in app code; a bucket committed as SQL was visible to neither.
+describe("checkMigrationStorageBuckets (#1182)", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function writeMigrations(sql: string): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-buckets-"));
+    const dir = join(root, "supabase", "migrations");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "0001.sql"), sql);
+    return root;
+  }
+
+  const buckets = (dir: string) => checkMigrationStorageBuckets(dir).filter((f) => f.id.startsWith("SB-STORAGE-PUBLIC-BUCKET"));
+  const policies = (dir: string) => checkMigrationStorageBuckets(dir).filter((f) => f.id.startsWith("SB-STORAGE-ANON-READ"));
+
+  it("flags a bucket inserted with public = true", () => {
+    const dir = writeMigrations("insert into storage.buckets (id, name, public) values ('kyc', 'kyc', true);");
+    expect(buckets(dir).map((f) => f.id)).toEqual(["SB-STORAGE-PUBLIC-BUCKET-kyc"]);
+  });
+
+  it("reads the flag by COLUMN INDEX, so one public row in a multi-row insert flags only itself", () => {
+    // The precision claim: a positional assumption would flag both rows, or the wrong one.
+    const dir = writeMigrations(
+      "insert into storage.buckets (id, public, name) values ('reports', true, 'reports'), ('archive', false, 'archive');",
+    );
+    expect(buckets(dir).map((f) => f.id)).toEqual(["SB-STORAGE-PUBLIC-BUCKET-reports"]);
+  });
+
+  it("clears an insert that omits the public column — Postgres defaults it to false", () => {
+    const dir = writeMigrations("insert into storage.buckets (id, name) values ('cache', 'cache');");
+    expect(buckets(dir)).toHaveLength(0);
+  });
+
+  it("flags a storage.objects SELECT policy granted to anon whose clause names no caller", () => {
+    const dir = writeMigrations("create policy exports_anon on storage.objects for select to anon using (bucket_id = 'exports');");
+    expect(policies(dir).map((f) => f.id)).toEqual(["SB-STORAGE-ANON-READ-exports_anon"]);
+  });
+
+  it("clears the same anon-granted policy when it binds the object to the caller's own folder", () => {
+    const dir = writeMigrations(
+      "create policy exports_own on storage.objects for select to anon " +
+        "using (bucket_id = 'exports' and (storage.foldername(name))[1] = auth.uid()::text);",
+    );
+    expect(policies(dir)).toHaveLength(0);
+  });
+
+  it("clears a policy granted only to authenticated — the grantee list is the discriminator", () => {
+    const dir = writeMigrations("create policy exports_auth on storage.objects for select to authenticated using (bucket_id = 'exports');");
+    expect(policies(dir)).toHaveLength(0);
+  });
+
+  it("treats an omitted TO clause as PUBLIC, which is what Postgres does", () => {
+    const dir = writeMigrations("create policy exports_default on storage.objects for select using (bucket_id = 'exports');");
+    expect(policies(dir).map((f) => f.id)).toEqual(["SB-STORAGE-ANON-READ-exports_default"]);
+  });
+});
+
+// #1183 (supatest F9) — a SPARED USING(true) SELECT is upgraded to an asserted finding when M10
+// classifies the same table as holding personal data. The spare itself must survive: it is what
+// keeps a world-readable catalog out of the report.
+describe("checkMigrationPolicySemantics — USING(true) × M10 PII (#1183)", () => {
+  let root: string;
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function writeMigrations(sql: string): string {
+    root = mkdtempSync(join(tmpdir(), "harvey-usingtrue-pii-"));
+    const dir = join(root, "supabase", "migrations");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "0001.sql"), sql);
+    return root;
+  }
+
+  // One column per line: M10's column parser splits a create-table body on newlines, which is how
+  // real migrations are written and how targets/calibration's fixtures are laid out.
+  const openTable = (t: string, cols: string[]): string =>
+    `create table public.${t} (\n  id uuid primary key,\n${cols.map((c) => `  ${c}`).join(",\n")}\n);\n` +
+    `alter table public.${t} enable row level security;\n` +
+    `create policy ${t}_select_all on public.${t} for select using (true);\n`;
+
+  const upgraded = (dir: string, o?: TenancyOverride) =>
+    checkMigrationPolicySemantics(dir, o).filter((x) => x.id.startsWith("SB-RLS-USING-TRUE-PII"));
+
+  it("upgrades the spare when M10 classifies a high-confidence identifier column", () => {
+    const dir = writeMigrations(openTable("subscribers", ["email text not null"]));
+    const f = upgraded(dir);
+    expect(f).toHaveLength(1);
+    expect(f[0]!.severity).toBe("High");
+    expect(f[0]!.evidence).toContain("email (EMAIL)");
+  });
+
+  it("removes an upgraded table from the unassessed disclosure — it was assessed, not spared", () => {
+    const dir = writeMigrations(openTable("subscribers", ["email text not null"]));
+    expect(checkMigrationPolicySemantics(dir).find((x) => x.id === "SB-RLS-USING-TRUE-UNASSESSED")).toBeUndefined();
+  });
+
+  it("keeps the spare for a catalog whose only classified column is a LOW-confidence name", () => {
+    // The whole precision argument: `name` classifies NAME? at low confidence, which is what a
+    // published price list looks like. An "appears in the data map" gate would flag it.
+    const dir = writeMigrations(openTable("plans", ["name text not null", "price_cents integer not null"]));
+    expect(upgraded(dir)).toHaveLength(0);
+    expect(checkMigrationPolicySemantics(dir).find((x) => x.id === "SB-RLS-USING-TRUE-UNASSESSED")?.evidence).toContain("plans");
+  });
+
+  it("upgrades on a regulated-category column even when M10's confidence is not high", () => {
+    const dir = writeMigrations(openTable("claims", ["member_ssn text not null"]));
+    expect(upgraded(dir)).toHaveLength(1);
+  });
+
+  it("does not upgrade when the operator DECLARED per-user mode — that is an assertion, not a silence", () => {
+    const dir = writeMigrations(openTable("subscribers", ["email text not null"]));
+    expect(upgraded(dir, { mode: "per-user" })).toHaveLength(0);
   });
 });

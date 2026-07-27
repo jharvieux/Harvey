@@ -19,6 +19,7 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { classifyMigrationSql, type TableDataMapEntry } from "../../tools/pii-classify.mjs";
 import { definerReviewFindings } from "../definer-review.js";
 import type { Finding } from "../findings.js";
 import { parseDefinerFunctions, parseLivePolicies } from "../migration-sql-parse.js";
@@ -230,6 +231,108 @@ export function checkMigrationRlsBypass(dir: string): Finding[] {
   return findings;
 }
 
+// #1182 (cipherx CX-10) — storage buckets and storage.objects read policies declared in COMMITTED
+// migration SQL. checkPublicBucketsWithNoPolicies (supabase.ts) reads `select id, name, public from
+// storage.buckets` off a live database (connected tier) and the #560 semgrep rule reads
+// createBucket(…, {public:true}) in app/seed code; a bucket committed as an INSERT into
+// storage.buckets was visible to neither, which is how CX-10 was recorded a mechanical MISS.
+//
+// Two shapes, both plain text in the migration set:
+//   1. `insert into storage.buckets (…, public, …) values (…, true, …)` — Supabase serves every
+//      object in a public bucket unauthenticated from /storage/v1/object/public/<bucket>/<path>,
+//      and storage.objects RLS does not apply to that path.
+//   2. a storage.objects SELECT policy whose grantees include anon/public and whose USING clause
+//      names no caller at all — the bucket is private but its read policy is not.
+// Review tier, per the issue's "static analysis indicates … confirm live" framing: a deliberately
+// public asset bucket (avatars, marketing images) is a legitimate design, and the migration text
+// cannot say which one this is.
+const STORAGE_BUCKET_INSERT = /insert\s+into\s+storage\.buckets\s*\(([^)]*)\)\s*values/gi;
+const CALLER_PREDICATE = /auth\.(uid|jwt|role)\s*\(\)|current_setting\s*\(|\bowner\b/i;
+const ANON_ROLE = /^(anon|public)$/;
+
+// The top-level `( … )` groups of a VALUES list, from `after` to the statement's terminating ";".
+function valueTuples(sql: string, after: number): string[] {
+  const end = sql.indexOf(";", after);
+  const list = sql.slice(after, end === -1 ? undefined : end);
+  const tuples: string[] = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] === "(") {
+      if (depth === 0) start = i + 1;
+      depth++;
+    } else if (list[i] === ")") {
+      depth--;
+      if (depth === 0 && start >= 0) tuples.push(list.slice(start, i));
+    }
+  }
+  return tuples;
+}
+
+export function checkMigrationStorageBuckets(dir: string): Finding[] {
+  const sources = readRlsSqlSources(dir);
+  if (sources.length === 0) return [];
+
+  const findings: Finding[] = [];
+  for (const { file: rel, raw } of sources) {
+    const sql = raw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " ")).replace(/--[^\n]*/g, "");
+    for (const m of sql.matchAll(STORAGE_BUCKET_INSERT)) {
+      const cols = columnDefs(m[1]!).map((c) => c.trim().toLowerCase());
+      const publicIdx = cols.indexOf("public");
+      if (publicIdx === -1) continue; // no `public` column — Postgres defaults it to false
+      const idIdx = cols.indexOf("id") === -1 ? cols.indexOf("name") : cols.indexOf("id");
+      for (const tuple of valueTuples(sql, m.index + m[0].length)) {
+        const values = columnDefs(tuple).map((v) => v.trim());
+        if (!/^true$/i.test(values[publicIdx] ?? "")) continue;
+        const bucket = (values[idIdx] ?? "(unnamed)").replace(/'/g, "");
+        const line = sql.slice(0, m.index).split("\n").length;
+        findings.push(
+          mechanicalFinding({
+            id: `SB-STORAGE-PUBLIC-BUCKET-${bucket}`,
+            title: `Storage bucket "${bucket}" is created public in migration SQL`,
+            severity: "High",
+            category: "Multi-tenant security",
+            taxonomy: "Public storage bucket declared in migration SQL (static)",
+            location: `${rel}:${line}`,
+            evidence: `insert into storage.buckets sets public = true for "${bucket}" in ${rel}. Supabase serves every object in a public bucket unauthenticated from /storage/v1/object/public/${bucket}/<path>; storage.objects RLS policies do not apply to that path.`,
+            impact: `Anyone who learns or guesses an object path reads it — no session, no policy evaluation. If "${bucket}" holds user uploads (documents, identity scans, invoices) rather than public assets, every tenant's files are world-readable by URL.`,
+            fix: `Set public = false for "${bucket}" and serve its objects through signed URLs, plus a storage.objects SELECT policy scoping objects to their owner/tenant. Leave it public only if the bucket holds assets that are meant to be served to anonymous visitors.`,
+            precisionTier: "review",
+            bftb: { value: 5, ease: 4, safety: 3 },
+          }),
+        );
+      }
+    }
+  }
+
+  for (const p of parseLivePolicies(readMigrations(dir)).policies) {
+    if (p.schema.toLowerCase() !== "storage" || p.table.toLowerCase() !== "objects") continue;
+    if (p.cmd !== "SELECT" && p.cmd !== "ALL") continue;
+    if (!p.roles.some((r) => ANON_ROLE.test(r))) continue;
+    // A clause that names the caller at all is the semantic reviewer's business (it already flags
+    // "references the caller but binds no row column to auth.uid()"); this rule owns the shape that
+    // reviewer stays silent on — a read policy with no caller reference whatsoever.
+    if (p.qual === null || CALLER_PREDICATE.test(p.qual)) continue;
+    findings.push(
+      mechanicalFinding({
+        id: `SB-STORAGE-ANON-READ-${p.name}`,
+        title: `storage.objects policy ${p.name} grants anonymous read with no owner predicate`,
+        severity: "High",
+        category: "Multi-tenant security",
+        taxonomy: "storage.objects read policy open to anon (static)",
+        location: `${p.file}:${p.line} (storage.objects.${p.name})`,
+        evidence: `Policy ${p.name} is FOR ${p.cmd} TO ${p.roles.join(", ")} with USING (${p.qual.trim()}) — the clause narrows the bucket but never references the caller (auth.uid()/auth.jwt()/owner), so every object it covers is readable by an unauthenticated holder of the anon key.`,
+        impact: "Storage is a separate door onto tenant data. A private bucket whose SELECT policy is open to anon leaks every object in it — the PostgREST/RLS results say nothing about this surface.",
+        fix: `Scope the policy to the object's owner or tenant (e.g. USING (bucket_id = '…' and (storage.foldername(name))[1] = auth.uid()::text)), or grant it TO authenticated only if every signed-in user is genuinely entitled to every object.`,
+        precisionTier: "review",
+        bftb: { value: 5, ease: 4, safety: 4 },
+      }),
+    );
+  }
+
+  return findings;
+}
+
 // Tenant-key column names, in preference order. At connected tier the operator DECLARES the
 // tenancy model (`--tenant-key`); source-only there's nobody to ask, so it's inferred — UNLESS
 // the same override is supplied here too (#280; see TenancyOverride below).
@@ -409,6 +512,48 @@ function usingTrueUnassessedFinding(spared: Map<string, string[]>): Finding {
   });
 }
 
+// #1183 (supatest F9) — the M1↔M10 join that turns a SPARED `USING (true)` SELECT into an asserted
+// finding. The spare itself is the correct precision call and stays: a world-readable catalog (a
+// published price list) and a leaking per-user table are the same text, and without a tenant key
+// the reviewer cannot tell them apart. What it cannot see is that another module ALREADY decided —
+// M10 classifies the same table's columns from the same migration SQL, and on supatest's `profiles`
+// it returned EMAIL. A USING(true) SELECT over that is an email breach, not an open question.
+//
+// The gate is deliberately NOT "the table appears in the data map". MEASURED 2026-07-27 against
+// targets/calibration: the map classifies `plans.name` and `cities.name` as low-confidence NAME?
+// and `notes.body`/`documents.body` as FREE_TEXT_REVIEW — a public catalog's product name IS a
+// name, so any-hit would upgrade exactly the case the spare protects. The qualifying signal is a
+// column M10 is CONFIDENT about (an unambiguous direct identifier: email, SSN, phone) or one in a
+// regulated category, where even a medium-confidence hit is worth asserting.
+const REGULATED_CATEGORIES = new Set(["SENSITIVE_PII", "PHI", "PCI", "SECRET"]);
+
+function personalDataColumns(entry: TableDataMapEntry | undefined): TableDataMapEntry["columns"] {
+  return (entry?.columns ?? []).filter((c) => c.confidence === "high" || REGULATED_CATEGORIES.has(c.category));
+}
+
+function usingTruePiiFinding(
+  table: string,
+  policies: string[],
+  entry: TableDataMapEntry,
+  personal: TableDataMapEntry["columns"],
+  location: string,
+): Finding {
+  const columns = personal.map((c) => `${c.column} (${c.infotype})`).join(", ");
+  return mechanicalFinding({
+    id: `SB-RLS-USING-TRUE-PII-${table}`,
+    title: `World-readable policy on ${table}, which M10 classified as holding personal data`,
+    severity: "High",
+    category: "Multi-tenant security",
+    taxonomy: "USING(true) read policy on an M10-classified PII table (static)",
+    location,
+    evidence: `${policies.length > 1 ? "Policies" : "Policy"} ${policies.join(", ")} on public.${table} read with USING (true), so every row is in scope for every caller the policy applies to — including anon, unless a role restriction narrows it. The table declares no recognised tenant key, which normally leaves this shape SPARED as an unassessed catalog; M10's classification of the same migration SQL says it is not a catalog: ${columns} (${entry.categories.join("/")}, data score ${entry.severityScore}).`,
+    impact: `Every row of ${table} — including ${personal.map((c) => c.column).join(", ")} for every user — is readable by anyone the policy admits. This is the shape that reads as "no findings" when the two signals are looked at separately: the policy review spares it for want of a tenant key, and the data map records the columns without knowing who can read them.`,
+    fix: `Confirm public.${table} is genuinely meant to be world-readable. If it is not, replace USING (true) with an owner or tenant predicate (e.g. USING (id = auth.uid()) for a per-user table), and re-run with \`--tenant-key <column>\` if the table is tenant-scoped under a name the review does not recognise.`,
+    precisionTier: "review",
+    bftb: { value: 5, ease: 4, safety: 4 },
+  });
+}
+
 // The column list of `create table [schema.]<table> ( … )`, or null if this SQL never declares it.
 function tableBody(sql: string, table: string): string | null {
   const m = new RegExp(`create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:\\w+\\.)?${table}\\s*\\(`, "i").exec(sql);
@@ -483,13 +628,24 @@ export function checkMigrationPolicySemantics(dir: string, tenancyOverride?: Ten
   const models = new Map<string, TenancyModel>();
   const unrecognised = new Map<string, string[]>();
   const usingTrueSpared = new Map<string, string[]>(); // table -> policy names whose USING(true) went unassessed (#338)
+  // #1183 — M10's classification of the SAME migration SQL, read here so a spare can be overruled
+  // by what the table actually holds. Same static feed dry-run.ts's M10 phase uses; no live tier.
+  const dataMap = classifyMigrationSql(allSql).dataMap;
   for (const [table, policies] of byTable) {
     const model = inferTenancyModel(allSql, table, tenancyOverride);
     models.set(table, model);
     if (model.mode === "per-user") {
       unrecognised.set(table, unrecognisedScopeColumns(allSql, table));
-      const spared = policies.filter(isUsingTrueGated).map((p) => p.name);
-      if (spared.length > 0) usingTrueSpared.set(table, spared);
+      const spared = policies.filter(isUsingTrueGated);
+      const personal = personalDataColumns(dataMap[table]);
+      if (spared.length > 0 && personal.length > 0 && tenancyOverride?.mode !== "per-user") {
+        // Asserted, so it must NOT also appear in the unassessed disclosure — it was assessed.
+        findings.push(
+          usingTruePiiFinding(table, spared.map((p) => p.name), dataMap[table]!, personal, sites.get(`${spared[0]!.schema}.${table}.${spared[0]!.name}`) ?? "supabase/migrations/"),
+        );
+      } else if (spared.length > 0) {
+        usingTrueSpared.set(table, spared.map((p) => p.name));
+      }
     }
     for (const f of policyReviewFindings(policies, model)) {
       const site = sites.get(f.location);

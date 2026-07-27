@@ -493,5 +493,47 @@
     "phi": false,
     "pci": false,
     "secret": false
+  },
+  "newsletter_subscribers": {
+    "columns": [
+      {
+        "column": "email",
+        "infotype": "EMAIL",
+        "category": "PII",
+        "confidence": "high"
+      }
+    ],
+    "infotypes": [
+      "EMAIL"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 1,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
+  },
+  "support_categories": {
+    "columns": [
+      {
+        "column": "name",
+        "infotype": "NAME?",
+        "category": "PII",
+        "confidence": "low"
+      }
+    ],
+    "infotypes": [
+      "NAME?"
+    ],
+    "categories": [
+      "PII"
+    ],
+    "severityScore": 0.3,
+    "severity": "Low",
+    "phi": false,
+    "pci": false,
+    "secret": false
   }
 }

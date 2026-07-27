@@ -1,0 +1,26 @@
+# P-GHA-JOB-WRITE-ALL (POSITIVE, #1212): the same grant made per JOB rather than for the whole
+# workflow. The workflow-level block is correctly narrow, which is what makes this the shape a
+# reviewer skims past — the release job silently re-widens the token to every scope.
+name: token-job-write-all
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm test
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions: write-all
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm publish

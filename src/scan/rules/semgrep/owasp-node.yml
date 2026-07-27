@@ -1,0 +1,190 @@
+# OWASP Node.js Security Cheat Sheet measured gaps (src/scan/calibration/owasp-nodejs.entries.ts,
+# #1191/#1200/#1201/#1202). Per-batch custom-rule file (see base.yml header for the directory
+# convention) — kept separate from base/injection/headers.yml so this batch stays conflict-free
+# with whatever else is touching those files.
+#
+# Exercised against targets/calibration/src/owasp-node/ by `pnpm validate:calibration`.
+
+rules:
+  # P-OWASP-NODE-VM-SANDBOX: vm.runInNewContext/runInThisContext handed a non-literal (dynamic)
+  # script. Node's own docs are explicit that vm is NOT a security boundary — a hardcoded literal
+  # script (a fixed rule baked into the source) is the benign form, hence the string-wildcard
+  # exclusion on the first argument. HIGH: very few benign forms for a dynamic script reaching vm.
+  - id: harvey-vm-unsafe-sandbox
+    languages: [javascript, typescript]
+    severity: ERROR
+    metadata:
+      cwe: ["CWE-693: Protection Mechanism Failure"]
+      confidence: HIGH
+      category: security
+      harveySeverity: High
+    message: >
+      vm.runInNewContext/runInThisContext evaluates a dynamically-built script. Node's own
+      documentation is explicit that the vm module is NOT a security sandbox — treat any value
+      reaching it as capable of reaching the host realm. Do not use vm to run untrusted or
+      dynamically-assembled code.
+    patterns:
+      - pattern-either:
+          - pattern: $M.runInNewContext($EXPR, ...)
+          - pattern: $M.runInThisContext($EXPR, ...)
+      - metavariable-pattern:
+          metavariable: $EXPR
+          patterns:
+            - pattern-not: '"..."'
+
+  # P-OWASP-NODE-BODY-LIMIT: express.json/urlencoded/raw/text (or the bodyParser equivalents)
+  # with no `limit` option — the framework default applies and one request can exhaust process
+  # memory. Review: some deployments genuinely intend the default and cap size elsewhere (a
+  # reverse-proxy body-size limit), so this is a heuristic presence check, not a certainty.
+  - id: harvey-body-parser-no-limit
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-770: Allocation of Resources Without Limits or Throttling"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      A body-parsing middleware has no `limit` option — the framework default applies and one
+      request body can exhaust process memory. Set an explicit size limit (e.g.
+      express.json({ limit: "100kb" })) sized to what the route legitimately needs.
+    patterns:
+      - pattern-either:
+          - pattern: express.json()
+          - pattern: 'express.json({ ... })'
+          - pattern: express.urlencoded()
+          - pattern: 'express.urlencoded({ ... })'
+          - pattern: express.raw()
+          - pattern: 'express.raw({ ... })'
+          - pattern: express.text()
+          - pattern: 'express.text({ ... })'
+          - pattern: bodyParser.json()
+          - pattern: 'bodyParser.json({ ... })'
+          - pattern: bodyParser.urlencoded()
+          - pattern: 'bodyParser.urlencoded({ ... })'
+      - pattern-not: 'express.json({ ..., limit: $L, ... })'
+      - pattern-not: 'express.urlencoded({ ..., limit: $L, ... })'
+      - pattern-not: 'express.raw({ ..., limit: $L, ... })'
+      - pattern-not: 'express.text({ ..., limit: $L, ... })'
+      - pattern-not: 'bodyParser.json({ ..., limit: $L, ... })'
+      - pattern-not: 'bodyParser.urlencoded({ ..., limit: $L, ... })'
+  # NOTE (disclosed, not silent): the OWASP fixture's SECOND shape — a raw `req.on("data", ...)`
+  # accumulator with no byte ceiling — is not separately covered. A generic "no size check
+  # anywhere in this callback" rule needs the same-block-sequence idiom below and reliably
+  # excluding every legitimate size-check shape (early-return, destroy(), a running total checked
+  # in a different handler) proved too failure-prone to ship at this precision bar; the rule above
+  # already satisfies this corpus row (one relevant finding is enough), so this is scope, not a
+  # silent gap.
+
+  # P-OWASP-NODE-SENSITIVE-CACHE: an identity/session-reading handler sets Cache-Control to
+  # public or a positive max-age/s-maxage — a shared proxy/CDN can serve one user's response to
+  # the next requester. Scoped to a handler that ALSO reads an identity signal (req.headers[...],
+  # req.cookies, or getServerSession) in the same function, so a genuinely public/static route
+  # (no identity read at all) stays silent — see the m9 cross-user-cache-bleed check for the
+  # narrower App-Router-only version of this idea (src/detectors/app-router.ts).
+  - id: harvey-sensitive-response-cached
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-524: Use of Cache Containing Sensitive Information"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      This handler reads an identity/session signal and marks its response publicly cacheable
+      (Cache-Control: public / a positive max-age or s-maxage). A shared proxy or CDN can serve
+      one user's response to the next requester. Use private, no-store (or no-cache) for any
+      response that varies by identity.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              function $F($REQ, $RES) {
+                ...
+                const $ID = $REQ.headers[$H];
+                ...
+                $RES.setHeader("Cache-Control", $V);
+                ...
+              }
+          - pattern: |
+              function $F($REQ, $RES) {
+                ...
+                $RES.setHeader("Cache-Control", $V);
+                ...
+                const $ID = $REQ.headers[$H];
+                ...
+              }
+          - pattern: |
+              function $F($REQ, $RES) {
+                ...
+                const $ID = $REQ.cookies[$H];
+                ...
+                $RES.setHeader("Cache-Control", $V);
+                ...
+              }
+          - pattern: |
+              function $F($REQ, $RES) {
+                ...
+                const $ID = getServerSession(...);
+                ...
+                $RES.setHeader("Cache-Control", $V);
+                ...
+              }
+      - metavariable-regex:
+          metavariable: $V
+          regex: (?i).*(public|max-age=[1-9]|s-maxage=[1-9]).*
+
+  # P-OWASP-NODE-HPP: `req.query.<param> as string` cast, then `.includes`/`.indexOf` on the
+  # result. Express parses a repeated query key into a string[], so the cast is a lie and the
+  # method call silently changes from substring containment to array membership. Normalizing the
+  # value first (Array.isArray guard, String(...) coercion, or a schema .parse()) never takes this
+  # exact cast shape, so those forms are unreachable by construction — no explicit pattern-not
+  # needed.
+  - id: harvey-hpp-query-cast
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-235: Improper Handling of Extra Parameters"]
+      owasp: ["A04:2021 - Insecure Design"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      HTTP parameter pollution: req.query.<param> is cast `as string`, then tested with
+      .includes()/.indexOf(). Express turns a repeated query parameter into a string[], so a
+      value like ?role=user&role=admin makes the cast a lie and silently changes the check from
+      substring containment to array membership. Normalize first (Array.isArray(v) ? v[0] : v, or
+      a schema parse) before testing.
+    pattern-either:
+      # Inline: the cast and the call are the same expression, so no pattern-inside is needed.
+      - pattern: ($REQ.query.$P as string).includes($A)
+      - pattern: ($REQ.query.$P as string).indexOf($A)
+      # Via a variable: $X must resolve back to the cast, established with pattern-inside.
+      - patterns:
+          - pattern-either:
+              - pattern: $X.includes($A)
+              - pattern: $X.indexOf($A)
+          - pattern-inside: |
+              const $X = $REQ.query.$P as string;
+              ...
+
+  # P-OWASP-NODE-REDOS (source-level, distinct from the P-WS-REDOS-CVE dependency-CVE check): a
+  # regex LITERAL with a nested quantifier ((x+)+/(x*)* style) — catastrophic backtracking on a
+  # crafted input. harvey-redos (injection.yml) already catches this shape inside `new RegExp("...")`;
+  # this rule adds the bare `/regex/` literal form, which is syntactically a different AST node
+  # and needs its own match. Whole-literal text scan (semgrep constant propagation does not
+  # resolve a metavariable-regex check through an identifier bound to a regex literal, only
+  # through direct literal use), so this is Option 1 from the issue — cheap, catches the textbook
+  # nested-quantifier shape, and is blind to more exotic/derived ReDoS patterns (disclosed, not
+  # silent). A single top-level quantified group with NO inner quantifier ((ab)+) does not match.
+  - id: harvey-redos-literal
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-1333: Inefficient Regular Expression Complexity"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Medium
+    message: >
+      Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking
+      (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length.
+    pattern-regex: /[^/\n]*\([^()\n]*[+*][^()\n]*\)\s*[+*][^/\n]*/
