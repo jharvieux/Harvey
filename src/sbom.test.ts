@@ -174,7 +174,8 @@ describe("licenseScope (#1213)", () => {
       join(dir, "package-lock.json"),
       JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2", license: "MIT" }, "node_modules/@img/sharp-libvips": { version: "1.2.4", license: "LGPL-3.0-or-later" } } }),
     );
-    const scope = licenseScope(dir, ["axios"]);
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { axios: "^1.7.2" } }));
+    const scope = licenseScope(dir);
     expect(scope.candidates).toEqual([
       { name: "axios", version: "1.7.2", license: "MIT", direct: true },
       { name: "@img/sharp-libvips", version: "1.2.4", license: "LGPL-3.0-or-later", direct: false },
@@ -188,14 +189,15 @@ describe("licenseScope (#1213)", () => {
       join(dir, "package-lock.json"),
       JSON.stringify({ packages: { "node_modules/dep": { version: "1.0.0", license: "MIT" }, "node_modules/other/node_modules/dep": { version: "2.0.0", license: "GPL-3.0" } } }),
     );
-    expect(licenseScope(dir, []).candidates.map((c) => `${c.name}@${c.version}=${c.license}`)).toEqual(["dep@1.0.0=MIT", "dep@2.0.0=GPL-3.0"]);
+    expect(licenseScope(dir).candidates.map((c) => `${c.name}@${c.version}=${c.license}`)).toEqual(["dep@1.0.0=MIT", "dep@2.0.0=GPL-3.0"]);
   });
 
   // An optionalDependency the lockfile skipped, or any manifest name on a target with no lockfile,
   // still has to reach the registry fallback rather than dropping out of the candidate set.
   it("keeps a manifest-declared name the tree never resolved", () => {
     writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2" } } }));
-    expect(licenseScope(dir, ["axios", "fsevents"]).candidates).toContainEqual({ name: "fsevents", direct: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { axios: "^1.7.2" }, optionalDependencies: { fsevents: "2.3.3" } }));
+    expect(licenseScope(dir).candidates).toContainEqual({ name: "fsevents", direct: true });
   });
 });
 

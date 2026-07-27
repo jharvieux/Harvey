@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LicenseCandidate, LicenseScope } from "../sbom.js";
-import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, classifyLicense, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding } from "./supply-chain.js";
+import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, classifyLicense, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, supplyChainScopeFinding } from "./supply-chain.js";
 
 describe("checkTyposquat", () => {
   it("flags a name one edit from a popular package", () => {
@@ -22,9 +22,11 @@ describe("checkTyposquat", () => {
   });
 });
 
+const declaredIn = (manifest: string, deps: Record<string, string>) => Object.entries(deps).map(([name, range]) => ({ manifest, name, range }));
+
 describe("checkUnpinnedDependencies", () => {
   it("flags caret/tilde/wildcard ranges as high precision", () => {
-    const findings = checkUnpinnedDependencies({ react: "^18.2.0", zod: "3.22.0", lodash: "*" });
+    const findings = checkUnpinnedDependencies(declaredIn("package.json", { react: "^18.2.0", zod: "3.22.0", lodash: "*" }));
     expect(findings).toHaveLength(1);
     expect(findings[0]?.evidence).toContain("react@^18.2.0");
     expect(findings[0]?.evidence).toContain("lodash@*");
@@ -33,18 +35,20 @@ describe("checkUnpinnedDependencies", () => {
   });
 
   it("returns no finding when every dependency is exactly pinned", () => {
-    expect(checkUnpinnedDependencies({ react: "18.2.0", zod: "3.22.0" })).toEqual([]);
+    expect(checkUnpinnedDependencies(declaredIn("package.json", { react: "18.2.0", zod: "3.22.0" }))).toEqual([]);
   });
 });
 
 describe("checkNonRegistryDependencies", () => {
   it("flags git/url/file dependency sources at review tier", () => {
-    const findings = checkNonRegistryDependencies({
-      "left-pad": "git+https://github.com/left-pad/left-pad.git",
-      local: "file:../local-pkg",
-      react: "^18.2.0",
-      zod: "3.22.0",
-    });
+    const findings = checkNonRegistryDependencies(
+      declaredIn("package.json", {
+        "left-pad": "git+https://github.com/left-pad/left-pad.git",
+        local: "file:../local-pkg",
+        react: "^18.2.0",
+        zod: "3.22.0",
+      }),
+    );
     expect(findings).toHaveLength(1);
     expect(findings[0]?.evidence).toContain("left-pad@git+https://github.com/left-pad/left-pad.git");
     expect(findings[0]?.evidence).toContain("local@file:../local-pkg");
@@ -53,20 +57,20 @@ describe("checkNonRegistryDependencies", () => {
   });
 
   it("does not flag registry semver ranges", () => {
-    expect(checkNonRegistryDependencies({ react: "^18.2.0", zod: "3.22.0", next: "~14.2.5" })).toEqual([]);
+    expect(checkNonRegistryDependencies(declaredIn("package.json", { react: "^18.2.0", zod: "3.22.0", next: "~14.2.5" }))).toEqual([]);
   });
 });
 
 describe("checkInstallScripts", () => {
   it("flags a postinstall lifecycle script at review tier", () => {
-    const findings = checkInstallScripts({ build: "next build", postinstall: "node ./setup.js" });
+    const findings = checkInstallScripts([{ label: "package.json", scripts: { build: "next build", postinstall: "node ./setup.js" } }]);
     expect(findings).toHaveLength(1);
     expect(findings[0]?.evidence).toContain("postinstall");
     expect(findings[0]?.precisionTier).toBe("review");
   });
 
   it("does not flag when no install lifecycle hooks are present", () => {
-    expect(checkInstallScripts({ build: "next build", test: "vitest" })).toEqual([]);
+    expect(checkInstallScripts([{ label: "package.json", scripts: { build: "next build", test: "vitest" } }])).toEqual([]);
   });
 });
 
@@ -201,6 +205,7 @@ describe("checkLicenseCompliance", () => {
     note: "Resolved dependency tree parsed from package-lock.json.",
     direct: candidates.filter((c) => c.direct).length,
     transitive: candidates.filter((c) => !c.direct).length,
+    declaredFrom: { manifests: 1, source: "no workspace globs declared", unresolvedGlobs: [], unreadable: [] },
     ...over,
   });
 
@@ -249,7 +254,7 @@ describe("checkLicenseCompliance", () => {
   });
 
   // #1079: the license data was already sitting in the lockfile Harvey had just parsed for the
-  // SBOM (MEASURED 2026-07-27: 390 of 395 components in targets/calibration/package-lock.json carry
+  // SBOM (MEASURED 2026-07-27: 390 of 396 components in targets/calibration/package-lock.json carry
   // one), and this check was making one live registry request per dependency to fetch it again.
   it("answers from the lockfile without touching the registry, and says where the answer came from", async () => {
     const fetchImpl = packument({ license: "MIT" });
@@ -376,5 +381,121 @@ describe("deliberately skipped registry tier (#1067)", () => {
     expect(evidence).toContain("pkg-0");
     expect(evidence).toContain("and 10 more");
     expect(evidence).not.toContain("pkg-29");
+  });
+});
+
+// #1231 — the six checks #1213 left manifest-scoped, each with its own widening decision. These
+// tests are about WHICH SET each one reads and what it says about the set it did not read; the
+// detection logic itself is covered by the describes above.
+describe("resolved-tree widening (#1231)", () => {
+  const tree = { declared: new Set(["react"]), source: "pnpm-lock.yaml" };
+
+  it("flags a typosquat that only the resolved tree reaches, and says it is not the client's to edit", () => {
+    const [finding] = checkTyposquat(["react", "expres"], tree);
+    expect(finding?.id).toBe("SUP-TYPO-expres");
+    expect(finding?.location).toBe("pnpm-lock.yaml (expres)");
+    expect(finding?.evidence).toContain("reached only through the resolved dependency tree");
+    expect(finding?.fix).toContain("npm ls expres");
+  });
+
+  it("flags a known-malicious package reached transitively — the event-stream delivery shape", () => {
+    const [finding] = checkKnownIoc(["react", "flatmap-stream"], "package.json", tree);
+    expect(finding?.severity).toBe("Critical");
+    expect(finding?.location).toBe("pnpm-lock.yaml (flatmap-stream)");
+    expect(finding?.evidence).toContain("event-stream delivery shape");
+  });
+
+  // A caller with only a manifest passes no tree, and must get byte-identical wording to before —
+  // the declared/transitive clause is additive, not a rewrite of every existing row.
+  it("says nothing about the tree when the caller had no tree to give it", () => {
+    const [typo] = checkTyposquat(["expres"]);
+    expect(typo?.location).toBe("package.json");
+    expect(typo?.evidence).not.toContain("resolved dependency tree");
+    const [ioc] = checkKnownIoc(["flatmap-stream"]);
+    expect(ioc?.location).toBe("package.json (flatmap-stream)");
+    expect(ioc?.evidence).not.toContain("event-stream delivery shape");
+  });
+
+  it("attributes a range finding to the workspace member that declared it, not to the root", () => {
+    const [finding] = checkUnpinnedDependencies([
+      { manifest: "package.json", name: "zod", range: "3.22.0" },
+      { manifest: "apps/web/package.json", name: "react", range: "^18.2.0" },
+    ]);
+    expect(finding?.evidence).toContain("react@^18.2.0 (apps/web/package.json)");
+    expect(finding?.location).toBe("apps/web/package.json");
+  });
+
+  it("names the manifest count rather than one file when several members are flagged", () => {
+    const [finding] = checkNonRegistryDependencies([
+      { manifest: "apps/web/package.json", name: "left-pad", range: "git+https://example.com/left-pad.git" },
+      { manifest: "apps/api/package.json", name: "local", range: "file:../local-pkg" },
+    ]);
+    expect(finding?.location).toBe("2 workspace manifests");
+  });
+
+  it("sees a workspace member's postinstall, which the root-only read never did", () => {
+    const [finding] = checkInstallScripts([
+      { label: "package.json", scripts: { build: "next build" } },
+      { label: "apps/web/package.json", scripts: { postinstall: "node ./setup.js" } },
+    ]);
+    expect(finding?.evidence).toBe("apps/web/package.json → postinstall: node ./setup.js");
+    expect(finding?.location).toBe("apps/web/package.json (scripts)");
+  });
+});
+
+// #1231 — the registry existence check widened from the root manifest to every workspace member's,
+// which is unbounded in principle. A silent truncation is the one outcome the cap must not have.
+describe("checkSlopsquat registry-lookup cap (#1231)", () => {
+  it("stops at the cap and names it, rather than truncating silently", async () => {
+    const fetchImpl = vi.fn(async () => new Response("", { status: 200 })) as unknown as typeof fetch;
+    const findings = await checkSlopsquat(Array.from({ length: 320 }, (_, i) => `pkg-${i}`), fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(300);
+    const coverage = findings.find((f) => f.id === "SUP-SLOPSQUAT-00");
+    expect(coverage?.title).toContain("did not run for 20 dependencies");
+    expect(coverage?.evidence).toContain("cap of 300 packages was reached");
+    expect(coverage?.evidence).toContain("pkg-300");
+  });
+});
+
+// #1231/#1232 — the row that makes each check's scope legible in the deliverable. #1213's lesson is
+// that a defensible scope decision recorded only in a comment is, from the client's side,
+// indistinguishable from an oversight.
+describe("supplyChainScopeFinding (SUP-SCOPE-00)", () => {
+  const scope = (over: Partial<LicenseScope> = {}): LicenseScope => ({
+    candidates: [],
+    source: "pnpm-lock.yaml",
+    completeness: "complete",
+    note: "",
+    direct: 4,
+    transitive: 391,
+    declaredFrom: { manifests: 3, source: "pnpm-workspace.yaml", unresolvedGlobs: [], unreadable: [] },
+    ...over,
+  });
+  const args = { license: scope(), treeNames: 395, declaredNames: 40, osvRan: true };
+
+  it("names every manifest-scoped check and why the tree cannot answer it", () => {
+    const finding = supplyChainScopeFinding(args);
+    expect(finding.severity).toBe("Info");
+    expect(finding.confidence).toBe("N/A");
+    expect(finding.evidence).toContain("3 manifests (pnpm-workspace.yaml)");
+    expect(finding.evidence).toContain("395 package names from pnpm-lock.yaml");
+    expect(finding.evidence).toContain("SUP-UNPINNED and SUP-NON-REGISTRY");
+    expect(finding.evidence).toContain("integrity hash");
+    expect(finding.impact).toContain("NOT a verdict that the tree is clean");
+  });
+
+  it("moves the curated CVE table into the tree-wide set exactly when osv-scanner did not run", () => {
+    expect(supplyChainScopeFinding(args).evidence).toContain("double-report");
+    expect(supplyChainScopeFinding({ ...args, osvRan: false }).evidence).toContain("widened for this pass because osv-scanner did not run");
+  });
+
+  it("discloses a workspace glob that resolved to nothing instead of a plausible-looking count", () => {
+    const finding = supplyChainScopeFinding({
+      ...args,
+      license: scope({ declaredFrom: { manifests: 1, source: "pnpm-workspace.yaml", unresolvedGlobs: ["packages/*"], unreadable: ["apps/web/package.json"] } }),
+    });
+    expect(finding.evidence).toContain("matched no package.json");
+    expect(finding.evidence).toContain("packages/*");
+    expect(finding.evidence).toContain("could not be parsed");
   });
 });
