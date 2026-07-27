@@ -31,7 +31,7 @@ import { checkUnanalysedLanguages } from "./language-coverage.js";
 import { checkUnassessedSfcFiles } from "./sfc-coverage.js";
 import { scanLeftoverAuth } from "./leftover-auth.js";
 import { resolveScanScope } from "./scan-scope.js";
-import { resolveBundleScan, scanSecrets } from "./secrets.js";
+import { bundleScanSkippedFinding, resolveBundleScan, scanSecrets } from "./secrets.js";
 import {
   checkMissingCsp,
   checkPublicDirSensitive,
@@ -99,6 +99,17 @@ function runOsvScanner(dir: string): { result: OsvScanResult; failure?: string }
 interface MechanicalScanOptions {
   dir: string;
   bundleDir?: string; // .next/static after `next build`, if available — passed to the secret scan
+  // Force the built-bundle secret pass to report NOT RUN instead of auto-detecting a bundle.
+  //
+  // WHY (found 2026-07-26 by the dry-run-drift gate failing on a correctly-regenerated artifact):
+  // resolveBundleScan probes the ORIGINAL target dir, not the git-tracked scratch copy, so it finds
+  // a gitignored .next/static when the developer happens to have run a build. For a real engagement
+  // that is DESIRED — client-inlined secrets live in shipped JS, which is never committed. But it
+  // makes the output depend on local build state, and dry-run/findings.json is committed and
+  // contractually deterministic. Same class of uncontrolled input as the live npm-registry calls,
+  // and handled the same way: the dry-run harness pins it off so SEC-BUNDLE-00 always emits, which
+  // is also the honest report — the dry run genuinely does not scan a bundle.
+  skipBundleScan?: boolean;
   // #280 — the same tenancy declaration detect-deeper.ts accepts at the connected tier
   // (--tenant-key/--tenant-mode), so the static RLS-tenancy inference can be told the app's
   // convention instead of only inferring it from the built-in candidate list.
@@ -207,7 +218,7 @@ function unsupportedDataLayerNote(orm: Exclude<TargetOrm, "unknown" | "supabase"
 }
 
 export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Finding[]> {
-  const { dir, bundleDir, tenancyOverride, handrolledIndicators, skipNetworkChecks } = opts;
+  const { dir, bundleDir, tenancyOverride, handrolledIndicators, skipNetworkChecks, skipBundleScan } = opts;
 
   // Scope the walk to what should actually be scanned (issue #101): git-tracked files only
   // when dir is a git repo (excludes .env.local, .claude/worktrees/, node_modules, .next —
@@ -220,7 +231,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     const findings: Finding[] = [];
 
     // Secrets — source, git history, and built bundle (auto-detected .next/static or dist/, #588).
-    const bundle = resolveBundleScan(dir, bundleDir);
+    const bundle = skipBundleScan ? { disclosure: bundleScanSkippedFinding() } : resolveBundleScan(dir, bundleDir);
     findings.push(...scanSecrets(scanDir, dir, bundle.bundleDir));
     if (bundle.disclosure) findings.push(bundle.disclosure);
 

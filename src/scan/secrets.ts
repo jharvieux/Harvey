@@ -516,6 +516,15 @@ export function resolveBundleScan(dir: string, explicit?: string): { bundleDir?:
 
 // Same disclosure contract as SEC-TH-GH-00/DEP-OSV-00: a visible not-assessed row, never a silent
 // skip. Info severity — a coverage gap, not a finding of zero bundle secrets.
+// The deterministic variant, for the committed-artifact path (dry-run.ts). Distinct wording from the
+// auto-detect miss on purpose: "we did not look" is a different statement from "we looked and there
+// was no build", and the artifact should say which one it means.
+export function bundleScanSkippedFinding(): Finding {
+  return bundleScanUnavailableFinding(
+    "the bundle pass is pinned off on this path so the committed artifact stays deterministic — local build state must not change it",
+  );
+}
+
 function bundleScanUnavailableFinding(reason: string): Finding {
   return {
     id: "SEC-BUNDLE-00",

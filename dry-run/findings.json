@@ -900,6 +900,22 @@
     "safety": 5
   },
   {
+    "id": "SEC-BUNDLE-00",
+    "title": "Built-bundle secret scan did not run",
+    "severity": "Info",
+    "confidence": "N/A",
+    "category": "Secret exposure",
+    "taxonomy": "Client-inlined secret — coverage not assessed",
+    "location": "(bundle)",
+    "status": "Open",
+    "evidence": "Built-bundle secret pass did not run: the bundle pass is pinned off on this path so the committed artifact stays deterministic — local build state must not change it.",
+    "impact": "Client-inlined secrets (VITE_*/NEXT_PUBLIC_*/REACT_APP_* baked into the shipped JS) are not covered — a disclosed coverage gap, not a finding of zero secrets in the bundle.",
+    "fix": "Produce a production build (`next build` -> .next/static, or `vite build` -> dist/) and re-run the scan, or pass --bundle <dir> at the built assets.",
+    "value": 1,
+    "ease": 3,
+    "safety": 5
+  },
+  {
     "id": "DEP-OSV-GHSA-mh99-v99m-4gvg-brace-expansion@1.1.16",
     "title": "brace-expansion@1.1.16: brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash (fixed in 5.0.8)",
     "severity": "High",

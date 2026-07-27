@@ -95,7 +95,7 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     match: ["tenant"],
     expectedTier: "none",
     gapKind: "measured-gap",
-    note: "GAP, not by-design — the sheet's single most important rule ('Never trust client-supplied tenant IDs' / 'Bind tenant context to authenticated user sessions', section 1) and arguably Harvey's core differentiator. MEASURED 2026-07-26: zero findings. Root cause is a SHAPE ASSUMPTION in the existing tenant-scope detectors (prisma-tenant-scope.ts, drizzle equivalents): they look for a query with NO tenant predicate. Here the predicate is PRESENT and correct-looking — `where: { tenantId: body.tenantId }` — but its VALUE is attacker-controlled, so every current detector reads this as properly scoped. The detector needs to ask where the predicate's value came from, not whether it exists. Tracked in the follow-up issue filed from #1190.",
+    note: "GAP, not by-design — the sheet's single most important rule ('Never trust client-supplied tenant IDs' / 'Bind tenant context to authenticated user sessions', section 1) and arguably Harvey's core differentiator. MEASURED 2026-07-26: zero findings. Root cause is a SHAPE ASSUMPTION in the existing tenant-scope detectors (prisma-tenant-scope.ts, drizzle equivalents): they look for a query with NO tenant predicate. Here the predicate is PRESENT and correct-looking — `where: { tenantId: body.tenantId }` — but its VALUE is attacker-controlled, so every current detector reads this as properly scoped. The detector needs to ask where the predicate's value came from, not whether it exists. Tracked in #1194.",
   },
   {
     id: "P-OWASP-MT-GUC-SESSION",
@@ -105,7 +105,7 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     match: ["current_tenant", "SET LOCAL", "pool"],
     expectedTier: "none",
     gapKind: "measured-gap",
-    note: "GAP. Our OWASP/CheatSheetSeries#2309 item 2. The sheet's own policy reads current_setting('app.current_tenant') and never mentions SET LOCAL or transaction-mode pooling. `SET app.current_tenant = …` on a pooled connection persists after release, so a later request is evaluated against the PREVIOUS tenant's id — a cross-tenant read in which policy, schema and application code all still look correct. MEASURED: zero findings. Tractable as a mechanical rule (SET vs SET LOCAL on a pooled client is syntactic), which is why it is filed rather than accepted.",
+    note: "GAP. Our OWASP/CheatSheetSeries#2309 item 2. The sheet's own policy reads current_setting('app.current_tenant') and never mentions SET LOCAL or transaction-mode pooling. `SET app.current_tenant = …` on a pooled connection persists after release, so a later request is evaluated against the PREVIOUS tenant's id — a cross-tenant read in which policy, schema and application code all still look correct. MEASURED: zero findings. Tractable as a mechanical rule (SET vs SET LOCAL on a pooled client is syntactic), which is why it is filed rather than accepted. Tracked in #1195.",
   },
   {
     id: "P-OWASP-MT-CACHE-KEY",
@@ -115,7 +115,7 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     match: ["cache", "dashboard:"],
     expectedTier: "none",
     gapKind: "measured-gap",
-    note: "GAP. Sheet section 4 ('Prefix all cache keys with tenant identifier'). The first tenant to populate `dashboard:${boardId}` serves its rows to every other tenant requesting the same id. MEASURED: zero findings. Higher FP risk than the others — a tenant-agnostic cache is legitimate for genuinely global data — so any detector needs the negative below to stay silent, which is why the pair is planted together.",
+    note: "GAP. Sheet section 4 ('Prefix all cache keys with tenant identifier'). The first tenant to populate `dashboard:${boardId}` serves its rows to every other tenant requesting the same id. MEASURED: zero findings. Higher FP risk than the others — a tenant-agnostic cache is legitimate for genuinely global data — so any detector needs the negative below to stay silent, which is why the pair is planted together. Tracked in #1196.",
   },
   {
     id: "P-OWASP-MT-RATE-LIMIT",
@@ -125,7 +125,7 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     match: ["rate", "limit", "hits"],
     expectedTier: "none",
     gapKind: "measured-gap",
-    note: "GAP. Sheet section 5 ('per-tenant rate limiting and quotas') and the sheet's 'Noisy Neighbor' risk. This is ALSO briefs/anti-patterns.md D-091 item 19, which was a surprise: the catalogued pattern has no Harvey detector, because D-091 #19's stated guard (`pnpm check:rate-limit-store`) is ATC's OWN CI check, not something Harvey ships. Verified 2026-07-26: no `harvey-*` semgrep rule matches /rate/ at all. So a documented anti-pattern reached the taxonomy without a detector — worth noting as a class, since D-091 is described as the M1 taxonomy source. MEASURED: zero findings.",
+    note: "GAP. Sheet section 5 ('per-tenant rate limiting and quotas') and the sheet's 'Noisy Neighbor' risk. This is ALSO briefs/anti-patterns.md D-091 item 19, which was a surprise: the catalogued pattern has no Harvey detector, because D-091 #19's stated guard (`pnpm check:rate-limit-store`) is ATC's OWN CI check, not something Harvey ships. Verified 2026-07-26: no `harvey-*` semgrep rule matches /rate/ at all. So a documented anti-pattern reached the taxonomy without a detector — worth noting as a class, since D-091 is described as the M1 taxonomy source. MEASURED: zero findings. Tracked in #1197, which also asks for a D-091 detector-coverage audit.",
   },
   {
     id: "P-OWASP-MT-STORAGE-PATH",
@@ -135,7 +135,7 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     match: ["tenant-prefix", "tenant scope", "tenant_id"],
     expectedTier: "none",
     gapKind: "measured-gap",
-    note: "GAP. Sheet section 6 ('tenant-prefixed paths', 'validate tenant ownership before serving files'). One tenant overwrites and reads another's objects in a shared bucket. MEASURED: zero findings FOR THIS CLASS — note that AUTH-upload-no-limit DOES fire on this file at High, but for an unrelated defect (no size/MIME limit), which is why `match` is scoped to tenant wording: without it the adjacent finding would satisfy the relevance check and mask the gap. That masking is the #1062 shape, in miniature.",
+    note: "GAP. Sheet section 6 ('tenant-prefixed paths', 'validate tenant ownership before serving files'). One tenant overwrites and reads another's objects in a shared bucket. MEASURED: zero findings FOR THIS CLASS — note that AUTH-upload-no-limit DOES fire on this file at High, but for an unrelated defect (no size/MIME limit), which is why `match` is scoped to tenant wording: without it the adjacent finding would satisfy the relevance check and mask the gap. That masking is the #1062 shape, in miniature. Tracked in #1198.",
   },
   {
     id: "P-OWASP-MT-LOG-TENANT",
