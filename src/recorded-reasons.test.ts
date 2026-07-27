@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DEFAULT_ROOTS,
   collectReasons,
+  issueSources,
   parseRecordedReasons,
   reasonKind,
   revalidateReasons,
   subsystemDrift,
+  untriagedClaims,
   validateRecordedReason,
+  watchedPaths,
   type ParsedReason,
 } from "./recorded-reasons.js";
 
@@ -205,13 +209,72 @@ describe("subsystemDrift — catches the #1035 shape without re-running anything
   it("stays quiet when the subsystem has not moved", () => {
     expect(subsystemDrift([withTouches], () => [])).toEqual([]);
   });
+
+  // #1246 — the alternative was making TOUCHES mandatory, which would fail the three planted
+  // negative controls in reasons-drift.yml structurally and stop them proving anything.
+  it("watches a reason that declared no TOUCHES, by deriving the paths its falsifier names", () => {
+    const rows = subsystemDrift([one(EMPIRICAL)], () => ["abc1234"], (p) => p === "src/detectors/load-sources.ts");
+    expect(rows[0]?.detail).toContain("src/detectors/load-sources.ts");
+  });
+});
+
+describe("watchedPaths — declared TOUCHES plus whatever the falsifier already names (#1246)", () => {
+  const all = () => true;
+
+  it("keeps only tokens that exist here, so a <placeholder> and a /tmp scratch path drop out", () => {
+    const r = one([CLAIM, EMPIRICAL_KIND, PROVENANCE, "FALSIFIER: pnpm quick-scan --dir <clone> --out /tmp/x.json && grep -q y src/scan/leftover-auth.ts", FALSIFIER_TIER]);
+    expect(watchedPaths(r, (p) => p === "src/scan/leftover-auth.ts")).toEqual(["src/scan/leftover-auth.ts"]);
+  });
+
+  it("ignores node_modules — a path outside this repo's history can only ever report zero commits", () => {
+    expect(watchedPaths(one([CLAIM, EMPIRICAL_KIND, PROVENANCE, "FALSIFIER: test -d node_modules/vitest/dist"]), all)).toEqual([]);
+  });
+
+  it("unions the declared paths with the derived ones rather than letting either win", () => {
+    const r = one([...EMPIRICAL, "TOUCHES: docs/design/m6-simplification-eval.md"]);
+    expect(watchedPaths(r, all).sort()).toEqual(["docs/design/m6-simplification-eval.md", "src/detectors/load-sources.ts"]);
+  });
+
+  it("rejects a declared path that is not in the checkout — git log on a typo is silent forever", () => {
+    const r = one([...EMPIRICAL, "TOUCHES: src/detectors/loadsources.ts"]);
+    expect(validateRecordedReason(r, () => false).join()).toContain("is not a path in this checkout");
+  });
+});
+
+describe("untriagedClaims — the claims outside every block, counted rather than assumed clean (#1246)", () => {
+  const source = (text: string) => [{ file: "doc.md", text }];
+
+  it("counts a standing claim that no block covers", () => {
+    const rows = untriagedClaims(source("M6 cannot be scored by the corpus.\n"), []);
+    expect(rows).toEqual([{ file: "doc.md", line: 1, text: "M6 cannot be scored by the corpus." }]);
+  });
+
+  it("does not re-count a claim that has already been triaged into a block", () => {
+    const text = `${block(EMPIRICAL, "")}\n`;
+    expect(untriagedClaims([{ file: "doc.md", text }], parseRecordedReasons(text, "doc.md"))).toEqual([]);
+  });
+
+  it("skips fenced code — a sample command is not a claim about the world", () => {
+    expect(untriagedClaims(source("```\ngrep -q 'cannot' x\n```\n"), [])).toEqual([]);
+  });
+});
+
+describe("issueSources — a claim recorded outside the repo is still a claim (#1246)", () => {
+  it("renders the body and each comment as its own addressable surface", () => {
+    const sources = issueSources([{ number: 920, body: "b", comments: [{ body: "c1" }, { body: "c2" }] }]);
+    expect(sources.map((s) => s.file)).toEqual(["issue #920", "issue #920 (comment 1)", "issue #920 (comment 2)"]);
+  });
 });
 
 describe("the repo's own recorded reasons (the gate `pnpm verify` enforces)", () => {
   const reasons = collectReasons(DEFAULT_ROOTS, REPO_ROOT);
 
-  it("are all well-formed", () => {
-    const bad = reasons.map((r) => ({ at: `${r.file}:${r.line}`, errors: validateRecordedReason(r) })).filter((x) => x.errors.length > 0);
+  // The exists predicate is real here on purpose: a TOUCHES: path that does not resolve makes the
+  // subsystem-drift half permanently silent for that reason, which no structural check would see.
+  it("are all well-formed, and every path they claim to watch resolves", () => {
+    const bad = reasons
+      .map((r) => ({ at: `${r.file}:${r.line}`, errors: validateRecordedReason(r, (p) => existsSync(resolve(REPO_ROOT, p))) }))
+      .filter((x) => x.errors.length > 0);
     expect(bad).toEqual([]);
   });
 
