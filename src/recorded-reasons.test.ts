@@ -171,8 +171,18 @@ describe("a supervised path produces a relay, not a silent close (#1319)", () =>
     expect(validateRecordedReason(one([BLOCKED, DECISIONAL_KIND, PROVENANCE, OWNER, "DECISION: asked the operator"])).join()).toContain("names no venue");
   });
 
+  // The venue rule first shipped as /#\d+|\//, where any slash at all counted — so "pending a
+  // go/no-go" satisfied it, which is precisely the relay-with-no-venue the rule exists to refuse.
+  it("REFUSES a DECISION whose only path-like token is a slash inside a word", () => {
+    expect(validateRecordedReason(one([BLOCKED, DECISIONAL_KIND, PROVENANCE, OWNER, "DECISION: pending a go/no-go"])).join()).toContain("names no venue");
+  });
+
   it("accepts the blocker once it is decisional and points at the issue the question is recorded on", () => {
     expect(validateRecordedReason(one([BLOCKED, DECISIONAL_KIND, PROVENANCE, OWNER, "DECISION: #1319"]))).toEqual([]);
+  });
+
+  it("accepts a decision-record path as the venue too", () => {
+    expect(validateRecordedReason(one([BLOCKED, DECISIONAL_KIND, PROVENANCE, OWNER, "DECISION: docs/design/recorded-reasons.md"]))).toEqual([]);
   });
 
   // The live false-positive this guard has to survive: src/cli/validate-conservation.test.ts's two
@@ -181,6 +191,19 @@ describe("a supervised path produces a relay, not a silent close (#1319)", () =>
   it("leaves a reason that merely mentions a supervised path alone", () => {
     const mentions = "REASON: this block needs HARVEY_CONSERVATION_E2E, which only .github/workflows/conservation.yml sets";
     expect(validateRecordedReason(one([mentions, EMPIRICAL_KIND, PROVENANCE, FALSIFIER]))).toEqual([]);
+  });
+
+  // The harder half, and the one the first cut of this check got wrong: supervision vocabulary and a
+  // supervised path BOTH present, one clause apart, with the path cited as a reference rather than
+  // named as the blocker. Co-occurrence cannot tell this from BLOCKED above.
+  it("leaves a supervised path CITED as the record of a ruling alone, supervision vocabulary and all", () => {
+    const cites = "REASON: the source loader does not read .svelte files; the scope rationale and the operator ruling behind it are recorded in docs/design/infrastructure-out-of-scope.md";
+    expect(validateRecordedReason(one([cites, EMPIRICAL_KIND, PROVENANCE, FALSIFIER]))).toEqual([]);
+  });
+
+  it("still fires when the blocker names a file inside the supervised directory", () => {
+    const named = "REASON: the CI wiring is not done because the .github/workflows/ci.yml job is supervised";
+    expect(validateRecordedReason(one([named, EMPIRICAL_KIND, PROVENANCE, FALSIFIER])).join()).toContain("produces a RELAY, never a silent stop");
   });
 });
 

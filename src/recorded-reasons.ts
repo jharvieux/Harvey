@@ -223,26 +223,6 @@ const PROVENANCE_FORM = /^(MEASURED|TRIED|ASSUMED) (\d{4}-\d{2}-\d{2})\b/;
 // re-testing nothing.
 const PLACEHOLDER = /^(n\/?a|tbd|todo|none|unknown|\?+)$/i;
 
-// #1319 — A BUDGET LIMIT MUST NOT BORROW IMPOSSIBILITY'S VOCABULARY. Four claims recorded in this
-// repo asserted that the world forecloses something while actually describing the author's remaining
-// afternoon: #951's "a full pull is out of budget" (the next executor pulled the whole stack and
-// shipped a merged live proof 26 minutes later, finding a real bug the guess would have missed),
-// #957's "genuinely out of reach for a mechanical assembly" (98 lines, 3h25m later, no new
-// dependency), #52's "correctly NOT mechanically detectable" (detectors now exist for all three
-// named classes) and #873's "our mechanical tier structurally cannot see that shape" (the function
-// it needed had shipped a week earlier). A budget claim invites the next person to just do it; an
-// impossibility claim closes the file, and closes it SILENTLY, because by construction nobody
-// exercises a path recorded as foreclosed.
-//
-// PROVENANCE already separates the two registers: ASSUMED means nobody went and looked. So
-// impossibility vocabulary on an ASSUMED reason is refused. The author has three honest exits, all
-// one line: measure it and say MEASURED, name the real constraint (time), or ask the question.
-// Matched literally, including inside a denial ("not technically impossible") — the check reads
-// words, not sentences, and re-tagging a denial as MEASURED is the cheaper correction.
-function impossibilityPhrase(claim: string): string | undefined {
-  return CLAIM_VOCABULARY.exec(claim)?.[0];
-}
-
 // #1319 — A SUPERVISED PATH PRODUCES A RELAY, NOT A SILENT CLOSE. No executor has ever recorded
 // "asked the operator, was refused", while grants are routine and on the record (#1141, #1205,
 // #1216) — yet "that path is supervised" silently terminated acceptance criteria in #945, #1056,
@@ -253,12 +233,32 @@ function impossibilityPhrase(claim: string): string | undefined {
 //
 // The path list mirrors CLAUDE.md's "Sensitive paths — never auto-change" section, which is the
 // authority; package.json/pnpm-lock.yaml are deliberately absent (operator ruling 2026-07-27 — a
-// folk belief that they were supervised was blocking five separate pieces of work). Both halves must
-// match: a reason that merely MENTIONS .github/workflows/ci.yml is describing CI, not citing
-// supervision, and several legitimate reasons here do exactly that.
-const SUPERVISED_PATH = /\.github\/workflows|CLAUDE\.md|report-template\/findings\.|docs\/[\w./-]*\.md/;
-const SUPERVISION_CITED = /\bsupervised|\bsensitive path|\bprotected path|\bnever auto-change|\boperator (approval|sign-?off|ruling|permission)/i;
-const RELAY_VENUE = /#\d+|\//;
+// folk belief that they were supervised was blocking five separate pieces of work).
+//
+// A supervised path appears in a reason two ways and only one of them is a blocker. "…the operator
+// ruling behind it is recorded in docs/design/infrastructure-out-of-scope.md" CITES the path;
+// "…because .github/workflows/ is supervised" BLOCKS on it. Co-occurrence of the two vocabularies
+// anywhere in the text cannot tell them apart — the citation above was refused by the first cut of
+// this check. So the supervision predicate must ATTACH to the path: the path is the SUBJECT of it
+// ("<path> is supervised", "<path>, which needs an operator ruling", "the <path> file is
+// protected"), or the OBJECT of a prohibition ("cannot edit <path>", "a supervised path like
+// <path>"). A path that is merely named, cited or described stays untouched.
+const SUPERVISED_PATH = String.raw`(?:\.github/workflows[\w./-]*|CLAUDE\.md|report-template/findings\.[\w.-]*|docs/[\w./-]*\.md)`;
+const SUPERVISED_STATE = String.raw`(?:supervised|sensitive|protected|human-owned|off-limits|never auto-change)`;
+const OPERATOR_RULING = String.raw`operator (?:approval|sign-?off|ruling|permission)`;
+// Up to three words of noun between the path and its predicate: "<path> file is supervised".
+const NOUN_GAP = String.raw`(?:,? which)?(?:\s+\w+){0,3}`;
+const SUPERVISION_CITED_AS_BLOCKER = new RegExp(
+  [
+    `${SUPERVISED_PATH}${NOUN_GAP}\\s+(?:is|are|remains?|stays?|being)\\s+(?:an?\\s+)?${SUPERVISED_STATE}`,
+    `${SUPERVISED_PATH}${NOUN_GAP}\\s+(?:needs?|requires?|awaits?)\\s+(?:an?\\s+)?${OPERATOR_RULING}`,
+    `(?:${SUPERVISED_STATE} path|(?:cannot|can't|must not|may not|not allowed to|never)\\s+(?:auto-)?(?:edit|change|modify|touch|write to))[^.;\\n]{0,40}?${SUPERVISED_PATH}`,
+  ].join("|"),
+  "i",
+);
+// #1319 first shipped this as /#\d+|\//, where ANY slash counted — "pending a go/no-go" passed as a
+// venue. The documented contract is an issue ref or a decision record, so require one of those.
+const RELAY_VENUE = /#\d+|https?:\/\/\S+|\b[\w-]+(?:\/[\w.-]+)*\.(?:md|txt|ya?ml|json)\b/;
 
 /**
  * `exists` answers "is this a path in the checkout" — injected so validation and derivation stay
@@ -278,11 +278,27 @@ export function validateRecordedReason(r: ParsedReason, exists: (path: string) =
   else if (!PROVENANCE_FORM.test(f.PROVENANCE)) errors.push(`PROVENANCE: must start "MEASURED|TRIED|ASSUMED YYYY-MM-DD", got "${f.PROVENANCE}"`);
 
   const claim = f.REASON ?? "";
-  const impossibility = impossibilityPhrase(claim);
+  // #1319 — A BUDGET LIMIT MUST NOT BORROW IMPOSSIBILITY'S VOCABULARY. Four claims recorded in this
+  // repo asserted that the world forecloses something while actually describing the author's
+  // remaining afternoon: #951's "a full pull is out of budget" (the next executor pulled the whole
+  // stack and shipped a merged live proof 26 minutes later, finding a real bug the guess would have
+  // missed), #957's "genuinely out of reach for a mechanical assembly" (98 lines, 3h25m later, no
+  // new dependency), #52's "correctly NOT mechanically detectable" (detectors now exist for all
+  // three named classes) and #873's "our mechanical tier structurally cannot see that shape" (the
+  // function it needed had shipped a week earlier). A budget claim invites the next person to just
+  // do it; an impossibility claim closes the file, and closes it SILENTLY, because by construction
+  // nobody exercises a path recorded as foreclosed.
+  //
+  // PROVENANCE already separates the two registers: ASSUMED means nobody went and looked. So
+  // impossibility vocabulary on an ASSUMED reason is refused. The author has three honest exits, all
+  // one line: measure it and say MEASURED, name the real constraint (time), or ask the question.
+  // Matched literally, including inside a denial ("not technically impossible") — the check reads
+  // words, not sentences, and re-tagging a denial as MEASURED is the cheaper correction.
+  const impossibility = CLAIM_VOCABULARY.exec(claim)?.[0];
   if (impossibility && PROVENANCE_FORM.exec(f.PROVENANCE ?? "")?.[1] === "ASSUMED") {
     errors.push(`REASON: says "${impossibility}" on an ASSUMED provenance — that is impossibility's vocabulary spent on a claim nobody tested (#1319). Four such claims were falsified in 2026-07, one of them 26 minutes later. Go look and re-tag it MEASURED/TRIED, or name the real constraint ("not attempted this round; the pull is ~20s"), or ask it as a question ("does the token store expose non-owner reads?") — a question invites the next person to test it, an assertion closes the file.`);
   }
-  if (SUPERVISED_PATH.test(claim) && SUPERVISION_CITED.test(claim)) {
+  if (SUPERVISION_CITED_AS_BLOCKER.test(claim)) {
     if (kind === "empirical") {
       errors.push("REASON: cites a supervised path as the blocker, so this is decisional, not empirical (#1319) — no command re-tests whether the operator has approved. Record it as decisional with an OWNER and a DECISION naming where the operator was asked; a supervised path produces a RELAY, never a silent stop.");
     } else if (f.DECISION && !RELAY_VENUE.test(f.DECISION)) {

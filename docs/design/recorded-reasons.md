@@ -123,14 +123,28 @@ criteria in #945 (*"the gate runs in CI"* — unmet, unmentioned), #1056, #472 a
 
 Supervision is not a fact a command can re-test; it is a question awaiting a human. So a `REASON:`
 that **cites a supervised path as its blocker** must be `decisional`, and its `DECISION:` must name
-the venue where the operator was actually asked — an issue ref or a decision-record path. A
-`DECISION:` with neither is a relay with no venue, which is the silent close wearing a field name.
+the venue where the operator was actually asked — an issue ref (`#1234`), a URL, or a path with a
+document extension (`docs/design/recorded-reasons.md`). A `DECISION:` with none of those is a relay
+with no venue, which is the silent close wearing a field name. The venue test started as "contains a
+`#N` or a slash", where *any* slash counted, so `pending a go/no-go` bought a venue it does not have —
+the negative control that now pins it is `no-venue.ts` in `src/cli/validate-reasons.test.ts`.
 
 Both halves must match before the rule fires: the claim names a supervised path (`.github/workflows`,
 `CLAUDE.md`, `report-template/findings.*`, `docs/**/*.md` — mirroring CLAUDE.md's *Sensitive paths*
 list, which is the authority) **and** cites supervision as the reason. A claim that merely *mentions*
 `.github/workflows/ci.yml` is describing CI, which is what both reasons at the head of
 `src/cli/validate-conservation.test.ts` legitimately do.
+
+**The second half is an attachment test, not co-occurrence** — the first cut of this check asked only
+whether the two vocabularies both appeared *somewhere* in the `REASON:`, and that refuses a perfectly
+good empirical reason whose last clause reads *"…the operator ruling behind it is recorded in
+`docs/design/infrastructure-out-of-scope.md`"*. That is a citation, not a blocker, and a gate that
+cries wolf gets disabled. So the supervision predicate must **attach to the path**: the path is its
+subject (*"`<path>` is supervised"*, *"`<path>`, which needs an operator ruling"*, *"the `<path>` job
+is protected"*) or the object of a prohibition (*"cannot edit `<path>`"*, *"a supervised path like
+`<path>`"*). A path that is only named, cited or described is left alone. Both directions carry a
+negative control at the unit and child-process levels — the citation above is asserted to PASS, and
+`.github/workflows/ci.yml is supervised` to fail.
 
 `package.json` and `pnpm-lock.yaml` are deliberately **absent** from that list — operator ruling
 2026-07-27, after a folk belief that they were supervised was found blocking five separate pieces of
