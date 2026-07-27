@@ -916,7 +916,7 @@
     "safety": 5
   },
   {
-    "id": "DEP-OSV-GHSA-mh99-v99m-4gvg",
+    "id": "DEP-OSV-GHSA-mh99-v99m-4gvg-brace-expansion@1.1.16",
     "title": "brace-expansion@1.1.16: brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash (fixed in 5.0.8)",
     "severity": "High",
     "confidence": "Review",
@@ -944,7 +944,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-grv7-fg5c-xmjg",
+    "id": "DEP-OSV-GHSA-grv7-fg5c-xmjg-braces@2.3.2",
     "title": "braces@2.3.2: Uncontrolled resource consumption in braces (fixed in 3.0.3)",
     "severity": "High",
     "confidence": "Review",
@@ -972,7 +972,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-848j-6mx2-7j84",
+    "id": "DEP-OSV-GHSA-848j-6mx2-7j84-elliptic@6.6.1",
     "title": "elliptic@6.6.1: Elliptic Uses a Cryptographic Primitive with a Risky Implementation",
     "severity": "Low",
     "confidence": "Review",
@@ -999,7 +999,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-29mw-wpgm-hmr9",
+    "id": "DEP-OSV-GHSA-29mw-wpgm-hmr9-lodash@4.17.11",
     "title": "lodash@4.17.11: Regular Expression Denial of Service (ReDoS) in lodash (fixed in 4.17.21)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1027,7 +1027,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-35jh-r3h4-6jhm",
+    "id": "DEP-OSV-GHSA-35jh-r3h4-6jhm-lodash@4.17.11",
     "title": "lodash@4.17.11: Command Injection in lodash (fixed in 4.17.21)",
     "severity": "High",
     "confidence": "Review",
@@ -1055,7 +1055,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-f23m-r3pf-42rh",
+    "id": "DEP-OSV-GHSA-f23m-r3pf-42rh-lodash@4.17.11",
     "title": "lodash@4.17.11: lodash vulnerable to Prototype Pollution via array path bypass in `_.unset` and `_.omit` (fixed in 4.18.0)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1082,7 +1082,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-jf85-cpcp-j695",
+    "id": "DEP-OSV-GHSA-jf85-cpcp-j695-lodash@4.17.11",
     "title": "lodash@4.17.11: Prototype Pollution in lodash (fixed in 4.17.12)",
     "severity": "Critical",
     "confidence": "Review",
@@ -1110,7 +1110,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-p6mc-m468-83gw",
+    "id": "DEP-OSV-GHSA-p6mc-m468-83gw-lodash@4.17.11",
     "title": "lodash@4.17.11: Prototype Pollution in lodash (fixed in 4.17.19)",
     "severity": "High",
     "confidence": "Review",
@@ -1138,7 +1138,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-r5fr-rjxr-66jc",
+    "id": "DEP-OSV-GHSA-r5fr-rjxr-66jc-lodash@4.17.11",
     "title": "lodash@4.17.11: lodash vulnerable to Code Injection via `_.template` imports key names (fixed in 4.18.0)",
     "severity": "High",
     "confidence": "Review",
@@ -1165,7 +1165,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-xxjr-mmjv-4gpg",
+    "id": "DEP-OSV-GHSA-xxjr-mmjv-4gpg-lodash@4.17.11",
     "title": "lodash@4.17.11: Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions (fixed in 4.17.23)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1192,7 +1192,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-952p-6rrq-rcjv",
+    "id": "DEP-OSV-GHSA-952p-6rrq-rcjv-micromatch@3.1.10",
     "title": "micromatch@3.1.10: Regular Expression Denial of Service (ReDoS) in micromatch (fixed in 4.0.8)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1219,7 +1219,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-36qx-fr4f-26g5",
+    "id": "DEP-OSV-GHSA-36qx-fr4f-26g5-next@14.2.35",
     "title": "next@14.2.35: Next.js has a Middleware / Proxy bypass in Pages Router applications using i18n (fixed in 15.5.16 / 16.2.5)",
     "severity": "High",
     "confidence": "Review",
@@ -1264,7 +1264,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-3g8h-86w9-wvmq",
+    "id": "DEP-OSV-GHSA-3g8h-86w9-wvmq-next@14.2.35",
     "title": "next@14.2.35: Next.js's Middleware / Proxy redirects can be cache-poisoned (fixed in 15.5.16 / 16.2.5)",
     "severity": "Low",
     "confidence": "Review",
@@ -1309,7 +1309,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-3x4c-7xq6-9pq8",
+    "id": "DEP-OSV-GHSA-3x4c-7xq6-9pq8-next@14.2.35",
     "title": "next@14.2.35: Next.js: Unbounded next/image disk cache growth can exhaust storage (fixed in 16.1.7 / 15.5.14)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1354,7 +1354,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-4633-3j49-mh5q",
+    "id": "DEP-OSV-GHSA-4633-3j49-mh5q-next@14.2.35",
     "title": "next@14.2.35: Next.js: Cache confusion of response bodies for requests with bodies containing invalid UTF-8 byte sequences (fixed in 15.5.21 / 16.2.11)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1399,7 +1399,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-4c39-4ccg-62r3",
+    "id": "DEP-OSV-GHSA-4c39-4ccg-62r3-next@14.2.35",
     "title": "next@14.2.35: Next.js: Unbounded Server Action payload in Edge runtime (fixed in 15.5.21 / 16.2.11)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1444,7 +1444,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-68g3-v927-f742",
+    "id": "DEP-OSV-GHSA-68g3-v927-f742-next@14.2.35",
     "title": "next@14.2.35: Next.js: Cache confusion of response bodies for requests with bodies (fixed in 15.5.21 / 16.2.11)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1489,7 +1489,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-89xv-2m56-2m9x",
+    "id": "DEP-OSV-GHSA-89xv-2m56-2m9x-next@14.2.35",
     "title": "next@14.2.35: Next.js: Server-Side Request Forgery in Server Actions on custom servers (fixed in 15.5.21 / 16.2.11)",
     "severity": "High",
     "confidence": "Review",
@@ -1534,7 +1534,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-8h8q-6873-q5fj",
+    "id": "DEP-OSV-GHSA-8h8q-6873-q5fj-next@14.2.35",
     "title": "next@14.2.35: Next.js Vulnerable to Denial of Service with Server Components (fixed in 15.5.16 / 16.2.5)",
     "severity": "High",
     "confidence": "Review",
@@ -1579,7 +1579,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-955p-x3mx-jcvp",
+    "id": "DEP-OSV-GHSA-955p-x3mx-jcvp-next@14.2.35",
     "title": "next@14.2.35: Next.js: Unauthenticated disclosure of internal Server Function endpoints (fixed in 15.5.21 / 16.2.11)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1624,7 +1624,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-9g9p-9gw9-jx7f",
+    "id": "DEP-OSV-GHSA-9g9p-9gw9-jx7f-next@14.2.35",
     "title": "next@14.2.35: Next.js self-hosted applications vulnerable to DoS via Image Optimizer remotePatterns configuration (fixed in 15.5.10 / 16.1.5)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1670,7 +1670,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-ffhc-5mcf-pf4q",
+    "id": "DEP-OSV-GHSA-ffhc-5mcf-pf4q-next@14.2.35",
     "title": "next@14.2.35: Next.js vulnerable to cross-site scripting in App Router applications using CSP nonces (fixed in 15.5.16 / 16.2.5)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1715,7 +1715,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-ggv3-7p47-pfv8",
+    "id": "DEP-OSV-GHSA-ggv3-7p47-pfv8-next@14.2.35",
     "title": "next@14.2.35: Next.js: HTTP request smuggling in rewrites (fixed in 16.1.7 / 15.5.13)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1760,7 +1760,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-gx5p-jg67-6x7h",
+    "id": "DEP-OSV-GHSA-gx5p-jg67-6x7h-next@14.2.35",
     "title": "next@14.2.35: Next.js has cross-site scripting in beforeInteractive scripts with untrusted input (fixed in 15.5.16 / 16.2.5)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1805,7 +1805,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-h25m-26qc-wcjf",
+    "id": "DEP-OSV-GHSA-h25m-26qc-wcjf-next@14.2.35",
     "title": "next@14.2.35: Next.js HTTP request deserialization can lead to DoS when using insecure React Server Components (fixed in 15.0.8 / 15.1.12 / 15.2.9 / 15.3.9 / 15.4.11 / 15.5.10 / 15.6.0-canary.61 / 16.0.11 / 16.1.5)",
     "severity": "High",
     "confidence": "Review",
@@ -1851,7 +1851,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-h64f-5h5j-jqjh",
+    "id": "DEP-OSV-GHSA-h64f-5h5j-jqjh-next@14.2.35",
     "title": "next@14.2.35: Next.js has a Denial of Service in the Image Optimization API (fixed in 15.5.16 / 16.2.5)",
     "severity": "Medium",
     "confidence": "Review",
@@ -1896,7 +1896,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-m99w-x7hq-7vfj",
+    "id": "DEP-OSV-GHSA-m99w-x7hq-7vfj-next@14.2.35",
     "title": "next@14.2.35: Next.js: Denial of Service in App Router using Server Actions (fixed in 15.5.21 / 16.2.11)",
     "severity": "High",
     "confidence": "Review",
@@ -1941,7 +1941,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-p9j2-gv94-2wf4",
+    "id": "DEP-OSV-GHSA-p9j2-gv94-2wf4-next@14.2.35",
     "title": "next@14.2.35: Next.js: Server-Side Request Forgery in rewrites via attacker-controlled destination hostname (fixed in 15.5.21 / 16.2.11)",
     "severity": "High",
     "confidence": "Review",
@@ -1986,7 +1986,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-q4gf-8mx6-v5v3",
+    "id": "DEP-OSV-GHSA-q4gf-8mx6-v5v3-next@14.2.35",
     "title": "next@14.2.35: Next.js has a Denial of Service with Server Components (fixed in 15.5.15 / 16.2.3)",
     "severity": "High",
     "confidence": "Review",
@@ -2031,7 +2031,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-vfv6-92ff-j949",
+    "id": "DEP-OSV-GHSA-vfv6-92ff-j949-next@14.2.35",
     "title": "next@14.2.35: Next.js vulnerable to cache poisoning via collisions in React Server Component cache-busting (fixed in 15.5.16 / 16.2.5)",
     "severity": "Low",
     "confidence": "Review",
@@ -2076,7 +2076,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-wfc6-r584-vfw7",
+    "id": "DEP-OSV-GHSA-wfc6-r584-vfw7-next@14.2.35",
     "title": "next@14.2.35: Next.js vulnerable to cache poisoning in React Server Component responses (fixed in 15.5.16 / 16.2.5)",
     "severity": "Medium",
     "confidence": "Review",
@@ -2121,7 +2121,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-6g55-p6wh-862q",
+    "id": "DEP-OSV-GHSA-6g55-p6wh-862q-postcss@8.4.31",
     "title": "postcss@8.4.31: PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments (fixed in 8.5.12)",
     "severity": "High",
     "confidence": "Review",
@@ -2149,7 +2149,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-qx2v-qp2m-jg93",
+    "id": "DEP-OSV-GHSA-qx2v-qp2m-jg93-postcss@8.4.31",
     "title": "postcss@8.4.31: PostCSS has XSS via Unescaped </style> in its CSS Stringify Output (fixed in 8.5.10)",
     "severity": "Medium",
     "confidence": "Review",
@@ -2176,7 +2176,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-r28c-9q8g-f849",
+    "id": "DEP-OSV-GHSA-r28c-9q8g-f849-postcss@8.4.31",
     "title": "postcss@8.4.31: PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure (fixed in 8.5.18)",
     "severity": "High",
     "confidence": "Review",
@@ -2203,7 +2203,7 @@
     }
   },
   {
-    "id": "DEP-OSV-GHSA-5c6j-r48x-rmvq",
+    "id": "DEP-OSV-GHSA-5c6j-r48x-rmvq-serialize-javascript@4.0.0",
     "title": "serialize-javascript@4.0.0: Serialize JavaScript is Vulnerable to RCE via RegExp.flags and Date.prototype.toISOString() (fixed in 7.0.3)",
     "severity": "High",
     "confidence": "Review",
