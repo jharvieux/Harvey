@@ -58,6 +58,27 @@
 // TWELVE of the sheet's nineteen recommendations land here. That is the good-news half of this
 // measurement and it is why the gap list below is six rows rather than nineteen.
 //
+// WHAT THE SIX GAPS BECAME (2026-07-27, #1237/#1238/#1239/#1240 — one sweep, four issues). Five of
+// the six now have a detector and are scored as ordinary positives; ONE (PROP-OVERSHARE) is still an
+// open gap, and it is the one that was recorded rather than filed because it needs per-app knowledge
+// of which fields are sensitive. The five are worth reading as a group, because only ONE of them was
+// the thing the corpus appeared to say it was:
+//   SSR-SANITIZER  — a genuine new class. Silent BECAUSE of a correct suppression: every
+//                    dangerouslySetInnerHTML rule excludes an import-bound sanitize() wrap, so
+//                    DOMPurify in a Server Component read as protection. New AST pass (#1239).
+//   RSC-SSRF       — a FACET of a covered class. The fix belonged in the shared request-source
+//                    block, not in the SSRF rule: all 21 server-side taint rules were blind to the
+//                    Server Component's `{ params }` props, not just this one (#1240).
+//   URL-SECRET     — the SAME facet shape again. harvey-secret-in-url-param already scored the
+//                    class and was anchored on outbound HTTP; #1237 added the navigation sinks.
+//   RSC-BOUNDARY   — the issue's premise was FALSE. detectServerClientLeak has scored this class
+//                    since #848; what was missing is that it recognised a raw row only through a
+//                    Supabase/Drizzle `.from().select()` chain (#1238). Now scored under M9.
+//   PROP-SPREAD    — a genuine new rule (harvey-jsx-prop-spread-injection, #1237).
+// Three of five were FACETS of things Harvey already did, and no capability claim we could have
+// written would have exposed them — "we detect SSRF" was true and missed the RSC page. That is the
+// argument for a third-party answer key stated as a result rather than as a hope.
+//
 // THE ARITHMETIC, so nothing hides in it. The pinned sheet has 19 actionable items (18 `###`
 // subsections plus the Dependency and Supply Chain section). 12 are covered above, 6 are the
 // measured gaps below, and 1 — JSON State Serialization — is out-of-universe: 12 + 6 + 1 = 19, and
@@ -111,20 +132,20 @@ export const owaspReactEntries: CorpusEntry[] = [
     kind: "positive",
     cls: "Untrusted object spread into a component, letting the caller inject arbitrary props",
     location: "src/owasp-react/prop-spread-injection.tsx",
-    match: ["prop injection"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, XSS Prevention: 'Avoid Prop Injection via the Spread Operator'. `<Field {...userInput} />` where userInput is parsed from a query parameter lets the attacker supply dangerouslySetInnerHTML itself — an XSS sink reached without the source ever naming one, which is why every dangerouslySetInnerHTML rule we have stays dark. MEASURED 2026-07-27: zero findings. Mechanically tractable and high-precision: a JSX spread whose operand traces to a request source, with the allowlist-filtered form (also in this fixture, and which must stay silent) as the negative. Tracked in #1237.",
+    match: ["jsx-prop-spread"],
+    expectedTier: "review",
+    expectedSeverity: "High",
+    note: "Sheet, XSS Prevention: 'Avoid Prop Injection via the Spread Operator'. `<Field {...userInput} />` where userInput is parsed from a query parameter lets the attacker supply dangerouslySetInnerHTML itself — an XSS sink reached without the source ever naming one, which is why every dangerouslySetInnerHTML rule stayed dark on it. CLOSED by #1237 (harvey-jsx-prop-spread-injection, xss.yml); MEASURED 2026-07-27, caught at review tier. Review and not free-count on purpose: the rule is only shippable because of its sanitizer, and a heuristic sanitizer is not a ~100%-precision boundary. The match keyword is the RULE id fragment, not the file's — `prop-spread-injection` appears in the fixture's own path and would self-match. N-OWASP-REACT-PROP-ALLOWLIST in the same file is the negative and stays silent.",
   },
   {
     id: "P-OWASP-REACT-RSC-BOUNDARY",
     kind: "positive",
     cls: "Server Component passes a whole database row as a prop to a Client Component",
+    module: "M9",
     location: "src/owasp-react/rsc-boundary-full-object.tsx",
-    match: ["server/client boundary"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, SSR Security: 'Shape Data Explicitly at the Server/Client Boundary' — the sheet calls this the most critical architectural concern in SSR. Every prop crossing into a Client Component is serialized into the RSC flight payload the browser receives, so `<ClientProfile user={user} />` ships the row's passwordHash and billing identifiers over the wire whether or not anything renders them. MEASURED 2026-07-27: zero findings. Adjacent but NOT the same as the #1057 projection guards or SEC-PG-RESJSON excessive-data-exposure, which score what a route RETURNS as JSON; nothing scores the server-to-client component boundary. Tracked in #1238.",
+    match: ["Server→client data leak"],
+    expectedTier: "review",
+    note: "Sheet, SSR Security: 'Shape Data Explicitly at the Server/Client Boundary' — the sheet calls this the most critical architectural concern in SSR. CORRECTION TO THE RECORD (#1238, 2026-07-27): #1238 was filed saying 'nothing scores the server-to-client component boundary'. That was FALSE — detectServerClientLeak has scored exactly this class since #848 (M9C-LEAK-POS, live in validate-source-recall). What was real is narrower and was still worth closing: the check recognised a raw row ONLY through a Supabase/Drizzle `.from().select()` chain, so the repo/DAO and Prisma model reads every non-Supabase app uses were invisible, and the fixture ALSO had no Client Component to import (the boundary was not expressible). #1238 widened the row-read shape and planted client-profile.tsx. MEASURED 2026-07-27: caught at review tier. Scored under M9, where the detector lives — calibration.test.ts's '#1238 OWASP React RSC boundary' block, since runMechanicalScan is not that detector's pipeline.",
   },
   {
     id: "P-OWASP-REACT-SSR-SANITIZER",
@@ -132,9 +153,9 @@ export const owaspReactEntries: CorpusEntry[] = [
     cls: "Browser-only sanitizer (DOMPurify) called in a server-rendered component",
     location: "src/owasp-react/ssr-browser-sanitizer.tsx",
     match: ["browser-only sanitizer"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, SSR Security: 'Use a Server-Compatible Sanitization Library for SSR HTML' — DOMPurify needs a browser DOM and cannot sanitize in Node. MEASURED 2026-07-27: zero findings, and the reason matters — every dangerouslySetInnerHTML rule EXCLUDES an import-bound sanitize() wrap (N-XSS-IMPORT-SANITIZE pins that exclusion deliberately), so a DOMPurify call in a Server Component is read as protection by exactly the rules that would otherwise fire. This is the #1066 no-op-sanitizer lesson recurring through a different mechanism: there the sanitizer was locally defined and fake, here it is a genuine library running where it cannot work. The sanitize-html form in the same fixture is the negative. Tracked in #1239.",
+    expectedTier: "high",
+    expectedSeverity: "High",
+    note: "Sheet, SSR Security: 'Use a Server-Compatible Sanitization Library for SSR HTML' — DOMPurify needs a browser DOM and cannot sanitize in Node. CLOSED by #1239 (src/scan/ssr-sanitizer.ts); MEASURED 2026-07-27, caught at high tier. The gap's cause is recorded because it recurs: every dangerouslySetInnerHTML rule EXCLUDES an import-bound sanitize() wrap (N-XSS-IMPORT-SANITIZE pins that exclusion deliberately), so a DOMPurify call in a Server Component was read as protection by exactly the rules that would otherwise fire — the semgrep layer is structurally blind to it, which is why the check is its own AST pass rather than another sanitizer exclusion. #1066's no-op-sanitizer lesson through a different mechanism: there the sanitizer was locally defined and fake, here it is a genuine library running where it cannot work. The sanitize-html form in the same fixture is the negative and stays silent.",
   },
   {
     id: "P-OWASP-REACT-RSC-SSRF",
@@ -142,19 +163,19 @@ export const owaspReactEntries: CorpusEntry[] = [
     cls: "Route param interpolated into a server-side fetch URL inside a Server Component page",
     location: "src/owasp-react/rsc-fetch-unvalidated.tsx",
     match: ["ssrf"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, SSR Security: 'Validate User Input Before Server-Side Fetch Calls'. A FACET GAP, not a class gap, and that is the interesting part: Harvey does catch this class — P-SSRF-APPROUTER scores App Router searchParams reaching a cross-file fetch wrapper — but the detector is anchored on the route-handler shape, and the sheet's own example (and this fixture) is an async Server Component page taking `{ params }`. MEASURED 2026-07-27: zero findings. A coverage claim of 'we detect SSRF' would have been true and still missed this, which is the kind of thing only a third-party answer key surfaces. Tracked in #1240.",
+    expectedTier: "review",
+    expectedSeverity: "Medium",
+    note: "Sheet, SSR Security: 'Validate User Input Before Server-Side Fetch Calls'. A FACET GAP, not a class gap, and that is what made it worth chasing: Harvey already caught this class — P-SSRF-APPROUTER scores App Router searchParams reaching a cross-file fetch wrapper — but every rule was anchored on request ACCESSORS (`req.query`, `searchParams.get`), and the sheet's own example is an async Server Component page taking `{ params }` as a destructured prop. CLOSED by #1240, which fixed it where it actually lived: the canonical `x-request-source` block (base/injection/headers .yml), so ALL 21 server-side taint rules gained the shape, not just SSRF. MEASURED 2026-07-27, caught at review tier. ProductPageValidated in the same fixture stays silent — #1240 also gave harvey-ssrf-fetch a validator-guard sanitizer, since without it the rule fired on the remedy the sheet recommends.",
   },
   {
     id: "P-OWASP-REACT-URL-SECRET",
     kind: "positive",
     cls: "Password-reset token placed in a client-side navigation URL",
     location: "src/owasp-react/sensitive-data-in-url.tsx",
-    match: ["token in the query string"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, Sensitive Data Exposure: 'Keep Sensitive Data Out of URLs'. `navigate(`/reset?token=${passwordResetToken}`)` writes the token to browser history, to the Referer header of every subsequent third-party request, and to any proxy or analytics log on the path. MEASURED 2026-07-27: zero findings. Weaker mechanically than the four above — deciding a query-parameter name carries a secret is a naming heuristic, so a narrow allowlist of names (token/secret/password/otp/session) is probably the only shippable form, and this may honestly belong at review tier. Tracked in #1237 alongside the prop-spread rule.",
+    match: ["secret-in-url-param"],
+    expectedTier: "review",
+    expectedSeverity: "Medium",
+    note: "Sheet, Sensitive Data Exposure: 'Keep Sensitive Data Out of URLs'. `navigate(`/reset?token=${passwordResetToken}`)` writes the token to browser history, to the Referer header of every subsequent third-party request, and to any proxy or analytics log on the path. CLOSED by #1237, and NOT with a new rule: harvey-secret-in-url-param already scored this class and was simply anchored on OUTBOUND HTTP sinks (fetch/axios), so #1237 added the client-side navigation sinks to it — the second facet gap of the same shape as #1240's, found in the same corpus. MEASURED 2026-07-27, caught at review tier, which is where this honestly belongs: deciding a query-parameter NAME carries a secret is a naming heuristic. The allowlist stays narrow and deliberately omits `session` and `code` — a conference `?session=` and an OAuth `?code=` are routine. The useResetRedirectSafe form in the same fixture stays silent.",
   },
   {
     id: "P-OWASP-REACT-PROP-OVERSHARE",
@@ -174,14 +195,15 @@ export const owaspReactEntries: CorpusEntry[] = [
     id: "N-OWASP-REACT-PROP-ALLOWLIST",
     kind: "negative",
     cls: "Untrusted props filtered against an allowlist before the spread",
-    location: "src/owasp-react/prop-spread-injection.tsx",
-    note: "ProfileFormAllowlisted filters the parsed object through ALLOWED_PROPS before spreading — the sheet's own remedy, and the form a future prop-spread rule must clear to be shippable. Confirmed silent 2026-07-27: the whole fixture produces zero findings today, so this is a forward guard rather than a passed test, and it is the row that will fail if #1237's rule ships flagging every spread.",
+    location: "src/owasp-react/prop-spread-allowlisted.tsx",
+    note: "ProfileFormAllowlisted filters the parsed object through ALLOWED_PROPS before spreading — the sheet's own remedy, and the form harvey-jsx-prop-spread-injection has to clear to be shippable at all. #1237 moved it out of the positive's file: while it shared that location the positive's own finding satisfied this row's relevance and it could only score 'review-tier hit, triaged out', which reads as though the safe form was flagged. Confirmed FULLY silent 2026-07-27 against the shipped rule. Its companion guard is the no-op-filter probe recorded in the rule's own header: `Object.entries(x).filter(() => true)` must still FIRE, or the sanitizer is #1066 again.",
   },
   {
     id: "N-OWASP-REACT-SHAPED-BOUNDARY",
     kind: "negative",
     cls: "Server Component passes only the two fields the Client Component renders",
-    location: "src/owasp-react/rsc-boundary-full-object.tsx",
-    note: "UserProfileShaped passes name and avatarUrl individually instead of the row. Confirmed silent 2026-07-27. Same forward-guard status as the row above: it exists so #1238's detector cannot ship by flagging every RSC-to-client prop.",
+    module: "M9",
+    location: "src/owasp-react/rsc-boundary-shaped.tsx",
+    note: "UserProfileShaped passes name and avatarUrl individually instead of the row — the same query and the same Client Component, so the ONLY difference is the projection. #1238 moved it out of the positive's file: while the positive produced nothing this row could not fail, and once the positive fires a negative sharing its location is satisfied by the positive's own finding and can only be scored trivially. Confirmed silent 2026-07-27 against the widened row-read shape, which is exactly what it now guards.",
   },
 ];

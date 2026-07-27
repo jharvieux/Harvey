@@ -18,6 +18,7 @@ import { m9AuthzEntries } from "./calibration/m9-authz.entries.js";
 import { m9CheckEntries } from "./calibration/m9-checks.entries.js";
 import { m9PortEntries } from "./calibration/m9-ports.entries.js";
 import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
+import { owaspReactEntries } from "./calibration/owasp-react.entries.js";
 import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import type { TargetFramework } from "./framework-detect.js";
 import type { SourceInput } from "../detectors/app-router.js";
@@ -987,6 +988,43 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
       const m = buildCoverageMatrix(findings, m9CheckEntries.filter((e) => e.location === `m9-corpus/${check}/positive`));
       expect(m.positivesCaughtHigh, check).toBe(0);
     }
+  });
+});
+
+describe("#1238 OWASP React RSC boundary (live detectAppRouterFindings over targets/calibration)", () => {
+  // The one OWASP-React row whose detector is NOT runMechanicalScan's: the server→client leak check
+  // is M9's, so validate-calibration excludes the pair and this is the gate that scores it instead.
+  // Unlike the #848 block above these fixtures DO live in the scanned calibration target — the
+  // OWASP corpus is measured by scanning that target, and moving them out would decouple this pair
+  // from the run every other row in owasp-react.entries.ts is scored against.
+  const CALIBRATION_REACT = fileURLToPath(new URL("../../targets/calibration/src/owasp-react/", import.meta.url));
+
+  function loadReactFixtures(): SourceInput[] {
+    return readdirSync(CALIBRATION_REACT)
+      .filter((e) => e.endsWith(".tsx"))
+      .map((e) => ({ path: `src/owasp-react/${e}`, text: readFileSync(join(CALIBRATION_REACT, e), "utf8") }));
+  }
+
+  const entries = owaspReactEntries.filter((e) => e.module === "M9");
+
+  it("catches the whole-row prop crossing into a Client Component and clears the shaped projection", () => {
+    expect(entries.map((e) => e.id).sort()).toEqual(["N-OWASP-REACT-SHAPED-BOUNDARY", "P-OWASP-REACT-RSC-BOUNDARY"]);
+    const findings = detectAppRouterFindings(loadReactFixtures());
+    for (const entry of entries) {
+      const row = scoreEntry(entry, findings);
+      expect(row.pass, `${entry.id}: ${row.detail}`).toBe(true);
+    }
+    const pos = scoreEntry(entries.find((e) => e.kind === "positive")!, findings);
+    expect(pos.caughtTier, "the M9 boundary heuristic must never enter the free count").toBe("review");
+  });
+
+  it("fires on the ORM row read, not merely on a Supabase chain (#1238's actual widening)", () => {
+    // The fixture binds `await db.getUser(userId)`. Before #1238 collectRawRowNames recognised only
+    // `.from().select()`, so this test fails the moment that widening is reverted — which is the one
+    // way this row could silently go back to reporting a gap.
+    const findings = detectAppRouterFindings(loadReactFixtures());
+    const leak = findings.find((f) => f.location.includes("rsc-boundary-full-object"));
+    expect(leak?.evidence).toContain("user");
   });
 });
 

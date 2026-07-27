@@ -44,6 +44,32 @@ x-request-source: &request_source
     # #984: App Router next/headers request sources.
     - pattern: cookies()
     - pattern: headers()
+    # #1240: the App Router SERVER COMPONENT request props. A page/layout receives its dynamic route
+    # segments and query string as DESTRUCTURED PARAMETERS — `{ params }` / `{ searchParams }` — and
+    # never as a `req` object, so every arm above is blind to the idiomatic RSC page. Found through
+    # the SSRF facet (P-OWASP-REACT-RSC-SSRF), but the gap was never SSRF's: the shared block did not
+    # model the source, so all 21 rules missed it.
+    #
+    # Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS
+    # (TRIED 2026-07-27, semgrep 1.164.0 — `function $C({ ..., $P, ... }, ...) { ... }` and three
+    # variants matched nothing on a file the equivalent name-based rule matched twice). The
+    # `pattern-not-inside` is what makes the name safe: a locally-ASSIGNED `params`/`searchParams` is
+    # an options bag, a URLSearchParams the module built itself, or a Map alias — never a request
+    # prop, because a destructured parameter is never assigned. MEASURED against five benign probes
+    # (options object, axios config, locally-built URLSearchParams, Map alias, RPC argument bag): the
+    # bare name-constrained access fired on THREE of five; with the not-inside it fires on none,
+    # while all four RSC positives still fire. `await $RSCPROP` carries the Next 15 shape, where
+    # `params` is a Promise the component awaits before destructuring.
+    - patterns:
+        - pattern-either:
+            - pattern: $RSCPROP.$RSCFIELD
+            - pattern: await $RSCPROP
+        - metavariable-regex:
+            metavariable: $RSCPROP
+            regex: ^(params|searchParams)$
+        - pattern-not-inside: |
+            $RSCPROP = ...
+            ...
 
 rules:
   # SQLi via a raw-SQL-executor RPC. The high-precision signal is the FUNCTION NAME: exec_sql /
@@ -723,6 +749,16 @@ rules:
       - *request_source
     pattern-sanitizers:
       - pattern: path.basename(...)
+      # #1240: A VALUE USED AS A QUERY FILTER DOES NOT TAINT THE QUERY'S RESULT. Once the Server
+      # Component / route-handler `params` prop became a source, semgrep — which has no notion of a
+      # database boundary — propagated request taint through `.eq("id", params.jobId)` into the row
+      # that came BACK, and then into a storage path built from that row's column. MEASURED
+      # 2026-07-27 on targets/calibration: that is precisely the false positive N-STORAGE-DB-PATH
+      # exists to charge for (#1220 — a real ATC route an external tool flagged and Harvey correctly
+      # did not). A WHERE value selects rows; it never becomes one. Nothing is lost by cutting it:
+      # the STORED variant of this class is a separate rule that takes the DB read as its SOURCE.
+      - pattern: $Q.eq(...)
+      - pattern: $Q.match(...)
       # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
       # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
       # by-side-effect on the guarded variable. Soundness constraints, each with a calibration

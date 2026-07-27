@@ -40,6 +40,7 @@ const CWE: Record<string, string> = {
   "798": "CWE-798: Use of Hard-coded Credentials",
   "862": "CWE-862: Missing Authorization",
   "89": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+  "79": "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
 };
 
 const OWASP: Record<string, string> = {
@@ -157,6 +158,10 @@ const SECURITY: Record<string, [string, string | null]> = {
   // `express.json({ limit })` option the semgrep half of this issue already tags CWE-770; OWASP
   // does not place CWE-770 under a Top-10-2021 category.
   "Request body accumulated with no size limit": ["770", null],
+  // #1239: a browser-only sanitizer on the server. CWE-79 rather than CWE-693 (Protection Mechanism
+  // Failure): the mechanism does not merely fail, it never runs, and what ships is unsanitized HTML
+  // rendered into the page — which is CWE-79's definition, and the class the OWASP sheet names.
+  "Browser-only sanitizer in a server-rendered component": ["79", "A03"],
 };
 
 // Non-security taxonomies: recorded as no-clean-CWE WITH A REASON rather than left unclassified.

@@ -11271,15 +11271,15 @@
   },
   {
     "id": "SEM-362",
-    "title": "src.scan.rules.semgrep.harvey-redos-literal: Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length. SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health: it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or compiled from user input — is NOT assessed by this rule, and neither is a catastrophic pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match, not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover regexes written here.",
+    "title": "src.scan.rules.semgrep.harvey-redos-literal: Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length.",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-redos-literal",
     "location": "src/owasp-node/redos-regex.ts:4",
     "status": "Open",
-    "evidence": "Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length. SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health: it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or compiled from user input — is NOT assessed by this rule, and neither is a catastrophic pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match, not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover regexes written here.\n",
-    "impact": "Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length. SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health: it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or compiled from user input — is NOT assessed by this rule, and neither is a catastrophic pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match, not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover regexes written here.\n",
+    "evidence": "Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length.\n",
+    "impact": "Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 3,
     "ease": 4,
@@ -11292,15 +11292,15 @@
   },
   {
     "id": "SEM-363",
-    "title": "src.scan.rules.semgrep.harvey-redos-literal: Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length. SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health: it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or compiled from user input — is NOT assessed by this rule, and neither is a catastrophic pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match, not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover regexes written here.",
+    "title": "src.scan.rules.semgrep.harvey-redos-literal: Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length.",
     "severity": "Medium",
     "confidence": "Review",
     "category": "Next.js/web footgun",
     "taxonomy": "src.scan.rules.semgrep.harvey-redos-literal",
     "location": "src/owasp-node/redos-regex.ts:11",
     "status": "Open",
-    "evidence": "Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length. SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health: it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or compiled from user input — is NOT assessed by this rule, and neither is a catastrophic pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match, not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover regexes written here.\n",
-    "impact": "Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length. SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health: it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or compiled from user input — is NOT assessed by this rule, and neither is a catastrophic pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match, not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover regexes written here.\n",
+    "evidence": "Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length.\n",
+    "impact": "Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length.\n",
     "fix": "Review the matched code path against the rule's remediation guidance.",
     "value": 3,
     "ease": 4,
@@ -11355,6 +11355,54 @@
   },
   {
     "id": "SEM-366",
+    "title": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection: An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added).",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection",
+    "location": "src/owasp-react/prop-spread-injection.tsx:11",
+    "status": "Open",
+    "evidence": "An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added).\n",
+    "impact": "An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added).\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
+  },
+  {
+    "id": "SEM-367",
+    "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-ssrf-fetch",
+    "location": "src/owasp-react/rsc-fetch-unvalidated.tsx:10",
+    "status": "Open",
+    "evidence": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching.\n",
+    "impact": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-918: Server-Side Request Forgery (SSRF)"
+    ],
+    "owasp": [
+      "A10:2021 - Server-Side Request Forgery (SSRF)"
+    ]
+  },
+  {
+    "id": "SEM-368",
     "title": "src.scan.rules.semgrep.harvey-dom-innerhtml: A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS. Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -11378,7 +11426,31 @@
     ]
   },
   {
-    "id": "SEM-367",
+    "id": "SEM-369",
+    "title": "src.scan.rules.semgrep.harvey-secret-in-url-param: A secret is passed as a URL query parameter (api_key/access_token/token/secret). Secrets in URLs leak into logs, proxies, browser history, and Referer headers. Send it in an Authorization header instead.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-secret-in-url-param",
+    "location": "src/owasp-react/sensitive-data-in-url.tsx:10",
+    "status": "Open",
+    "evidence": "A secret is passed as a URL query parameter (api_key/access_token/token/secret). Secrets in URLs leak into logs, proxies, browser history, and Referer headers. Send it in an Authorization header instead.\n",
+    "impact": "A secret is passed as a URL query parameter (api_key/access_token/token/secret). Secrets in URLs leak into logs, proxies, browser history, and Referer headers. Send it in an Authorization header instead.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-598: Use of GET Request Method With Sensitive Query Strings"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
+  },
+  {
+    "id": "SEM-370",
     "title": "src.scan.rules.semgrep.harvey-edgefn-secret-fallback: A secret read from Deno.env falls back to a hardcoded secret-shaped string literal — the literal ships in the deployed function bundle and its git history. Fail closed (throw) when the env var is absent; never embed a fallback secret.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -11402,7 +11474,7 @@
     ]
   },
   {
-    "id": "SEM-368",
+    "id": "SEM-371",
     "title": "generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash: bcrypt hash detected",
     "severity": "High",
     "confidence": "Review",
@@ -11430,7 +11502,7 @@
     ]
   },
   {
-    "id": "SEM-369",
+    "id": "SEM-372",
     "title": "javascript.lang.security.detect-child-process.detect-child-process: Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed.",
     "severity": "High",
     "confidence": "Review",
@@ -11459,7 +11531,7 @@
     ]
   },
   {
-    "id": "SEM-370",
+    "id": "SEM-373",
     "title": "src.scan.rules.semgrep.harvey-command-injection: Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn with an argument array and no shell, and validate the input against an allowlist.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -12462,24 +12534,6 @@
     "precisionTier": "review"
   },
   {
-    "id": "SUP-TYPO-uid",
-    "title": "Dependency \"uid\" is one edit from popular package \"uuid\"",
-    "severity": "High",
-    "confidence": "Review",
-    "category": "Supply chain",
-    "taxonomy": "Possible typosquat/slopsquat",
-    "location": "package-lock.json (uid)",
-    "status": "Open",
-    "evidence": "\"uid\" has Levenshtein distance 1 from \"uuid\" (offline corpus match, not a live-registry lookup). It is reached only through the resolved dependency tree in package-lock.json, not declared in any manifest.",
-    "impact": "If this is a typosquat, install pulls attacker-controlled code with full build/runtime access.",
-    "fix": "Confirm \"uid\" is the package the depending dependency intends; it is not yours to edit, so trace which package pulls it in (npm ls uid) before acting.",
-    "value": 4,
-    "ease": 3,
-    "safety": 4,
-    "mechanical": true,
-    "precisionTier": "review"
-  },
-  {
     "id": "SUP-IOC-crossenv",
     "title": "Dependency \"crossenv\" is a known-malicious package (IOC feed match)",
     "severity": "Critical",
@@ -12607,9 +12661,9 @@
   {
     "location": "package.json",
     "id": "SUP-LICENSE-00",
-    "title": "Dependency license-compliance check did not run for 10 packages",
+    "title": "Dependency license-compliance check did not run for 9 packages",
     "taxonomy": "Coverage — dependency license not assessed",
-    "evidence": "License scope: 400 packages (11 declared in a manifest, 389 reached only through the resolved tree) from package-lock.json. The declared half was read from 1 manifest (no workspace globs declared). The dependency license lookup could not reach a verdict: the live npm-registry fallback was deliberately skipped for this pass (skipNetworkChecks), so packages whose license the lockfile does not record could not be classified. Not assessed: expres, left-pad, react-supabase-helpers, busboy@1.6.0, console-browserify@1.2.0, crossenv@0.0.0-synthetic, enhanced-resolve@4.5.0, querystring-es3@0.2.1, streamsearch@1.1.0, uid@0.0.0-synthetic.",
+    "evidence": "License scope: 399 packages (11 declared in a manifest, 388 reached only through the resolved tree) from package-lock.json. The declared half was read from 1 manifest (no workspace globs declared). The dependency license lookup could not reach a verdict: the live npm-registry fallback was deliberately skipped for this pass (skipNetworkChecks), so packages whose license the lockfile does not record could not be classified. Not assessed: expres, left-pad, react-supabase-helpers, busboy@1.6.0, console-browserify@1.2.0, crossenv@0.0.0-synthetic, enhanced-resolve@4.5.0, querystring-es3@0.2.1, streamsearch@1.1.0.",
     "impact": "License classification reads the license the lockfile or the registry records; without it no copyleft or unlicensed dependency can be identified. The absence of license findings for these packages is a disclosed coverage gap, NOT a clean license bill.",
     "fix": "Re-run the scan from a machine with direct access to https://registry.npmjs.org (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.",
     "severity": "Info",
@@ -12626,7 +12680,7 @@
     "id": "SUP-SCOPE-00",
     "title": "Supply-chain checks: 3 read the whole resolved dependency tree, 4 are limited to declared manifests",
     "taxonomy": "Coverage — supply-chain check scope",
-    "evidence": "Declared set: 11 package names from 1 manifest (no workspace globs declared). Resolved tree: 365 package names from package-lock.json. Read the whole resolved tree: SUP-TYPO-* (typosquat); SUP-IOC-* (known-malicious names); SUP-LICENSE-* (license compliance). Limited to the declared manifests: SUP-UNPINNED and SUP-NON-REGISTRY, which read the declared version RANGE — a lockfile records the version that resolved, never the range that was declared, so the resolved tree cannot answer the question they ask; SUP-SLOPSQUAT-* over 11 declared names, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves; SUP-INSTALL-SCRIPT, since a lifecycle script only ever exists in a manifest; DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows.",
+    "evidence": "Declared set: 11 package names from 1 manifest (no workspace globs declared). Resolved tree: 364 package names from package-lock.json. Read the whole resolved tree: SUP-TYPO-* (typosquat); SUP-IOC-* (known-malicious names); SUP-LICENSE-* (license compliance). Limited to the declared manifests: SUP-UNPINNED and SUP-NON-REGISTRY, which read the declared version RANGE — a lockfile records the version that resolved, never the range that was declared, so the resolved tree cannot answer the question they ask; SUP-SLOPSQUAT-* over 11 declared names, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves; SUP-INSTALL-SCRIPT, since a lifecycle script only ever exists in a manifest; DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows.",
     "impact": "A manifest-scoped check cannot see a package reached only through the resolved dependency tree. The absence of its findings across that tree is a disclosed scope boundary, NOT a verdict that the tree is clean.",
     "fix": "Nothing to fix for the range-based checks — SUP-UNPINNED and SUP-NON-REGISTRY ask about a declared range, which only a manifest carries. For the rest, commit a lockfile Harvey can parse (package-lock.json, pnpm-lock.yaml or yarn.lock) and declare every workspace member in pnpm-workspace.yaml / package.json#workspaces, so no member's manifest is missed.",
     "severity": "Info",
@@ -13977,24 +14031,27 @@
     ]
   },
   {
-    "id": "SEC-RAW-BODY-src-owasp-node-no-request-size-limit-ts-430",
-    "title": "req.on(\"data\", ...) accumulates the request body with no size limit",
-    "severity": "Medium",
-    "confidence": "Review",
-    "category": "Denial of service",
-    "taxonomy": "Request body accumulated with no size limit",
-    "location": "src/owasp-node/no-request-size-limit.ts:12",
+    "id": "XSS-ssr-browser-sanitizer-src-owasp-react-ssr-browser-sanitizer-tsx-13",
+    "title": "src/owasp-react/ssr-browser-sanitizer.tsx — browser-only sanitizer runs on the server",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Next.js/web footgun",
+    "taxonomy": "Browser-only sanitizer in a server-rendered component",
+    "location": "src/owasp-react/ssr-browser-sanitizer.tsx:13",
     "status": "Open",
-    "evidence": "`req.on(\"data\", (c: Buffer) => chunks.push(c))` buffers each chunk, and no byte ceiling — no running-total comparison, no `req.destroy()`/`.pause()`, no limit/max value — appears anywhere in the enclosing handler in src/owasp-node/no-request-size-limit.ts. A ceiling imposed by middleware, a wrapper in another module, or a reverse proxy is OUTSIDE what this pass reads.",
-    "impact": "One request with an arbitrarily large body is buffered whole in memory, so a single caller can exhaust the process heap — a denial of service that needs no authentication.",
-    "fix": "Track the accumulated byte count and reject past a ceiling sized to what the route legitimately needs (`if (received > MAX_BYTES) { req.destroy(); return; }`), or read the body through a bounded parser (express.json({ limit: \"100kb\" }), raw-body's `limit` option).",
-    "value": 3,
-    "ease": 4,
+    "evidence": "`DOMPurify.sanitize(article.body)` — `dompurify` is imported here and `ArticleBody` is an async component — React has no async Client Components, so it renders on the server. DOMPurify depends on browser DOM APIs it does not have in Node.",
+    "impact": "The sanitizer call reads as protection to reviewers and to every dangerouslySetInnerHTML rule (all of them exclude an import-bound sanitizer wrap), but on the server it throws or returns the input unchanged. The raw HTML renders during SSR — before hydration, and before any client-side guard can run.",
+    "fix": "Swap `dompurify` for a server-compatible sanitizer (`isomorphic-dompurify` or `sanitize-html`), or construct DOMPurify against a supplied DOM (`createDOMPurify(new JSDOM('').window)`).",
+    "value": 4,
+    "ease": 3,
     "safety": 4,
     "mechanical": true,
-    "precisionTier": "review",
+    "precisionTier": "high",
     "cwe": [
-      "CWE-770: Allocation of Resources Without Limits or Throttling"
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
     ]
   },
   {

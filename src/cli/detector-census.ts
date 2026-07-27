@@ -44,6 +44,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/cache-tenant-scope.ts": "M1",
   "src/scan/storage-tenant-scope.ts": "M1",
   "src/scan/secret-rotation.ts": "M1",
+  "src/scan/ssr-sanitizer.ts": "M1", // #1239 — browser-only sanitizer (dompurify) called in a server-rendered module
   "src/scan/env-schema.ts": "M1",
   "src/scan/webext-manifest.ts": "M1",
   "src/scan/language-coverage.ts": "M1",

@@ -107,6 +107,16 @@ describe("canonical request-taint source block (#1221)", () => {
     expect(canonical).not.toContain("- pattern: $SP.get(...)");
   });
 
+  it("carries the Server Component request props, guarded by the not-inside that makes them safe", () => {
+    const canonical = anchorBlock("base.yml");
+    for (const pattern of ["$RSCPROP.$RSCFIELD", "await $RSCPROP", "^(params|searchParams)$"]) {
+      expect(canonical, `the canonical block lost ${pattern} — the RSC page shape #1240 exists to add`).toContain(pattern);
+    }
+    // Without this exclusion the name-constrained access fired on three of five benign probes
+    // (options bag, locally-built URLSearchParams, Map alias). Dropping it silently re-opens them.
+    expect(canonical, "the `$RSCPROP = ...` not-inside is what makes a NAME-matched source safe — it must not be dropped").toContain("$RSCPROP = ...");
+  });
+
   it("is used by every server-side taint rule that is not narrow by design", () => {
     const offenders = ruleFiles()
       .flatMap(parseRules)
