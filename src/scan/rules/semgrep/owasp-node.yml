@@ -92,7 +92,9 @@ rules:
       This handler reads an identity/session signal and marks its response publicly cacheable
       (Cache-Control: public / a positive max-age or s-maxage). A shared proxy or CDN can serve
       one user's response to the next requester. Use private, no-store (or no-cache) for any
-      response that varies by identity.
+      response that varies by identity. SCOPE OF THIS CHECK: the identity read and the
+      Cache-Control write must be in the SAME handler. A route that caches publicly while its
+      identity read happens indirectly — via a helper, middleware or layout — is not assessed.
     patterns:
       - pattern-either:
           - pattern: |
