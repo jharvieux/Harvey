@@ -284,15 +284,28 @@ rules:
       predicate on this query — no owner/tenant scoping (e.g. .eq('user_id', session.user.id)) in
       the same chain. Any caller who can guess/enumerate another record's id can read or write it
       (IDOR/BOLA, OWASP API1).
+    # #1221 measured this rule blind to BOTH `searchParams.get()` and `await req.json()`, then put
+    # it outside its own scope list and outside #1224's split — so it would have fallen through.
+    # It does NOT adopt base.yml's canonical block: an IDOR source is an IDENTIFIER, and widening
+    # to cookies/headers would change what the rule is about. The two shapes added are the two an
+    # id actually arrives by on the App Router — `?id=` and a JSON body on a by-id write.
     pattern-sources:
-      - pattern: req.query
-      - pattern: req.params
+      - patterns:
+          - pattern-either:
+              - pattern: $REQ.query
+              - pattern: $REQ.params
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: ^_?(req|request|nextReq|nextRequest|httpReq|incoming)$
       # App Router route handler: `export async function GET(req, { params }) { ... params.id ... }`
       - pattern: params.$K
       # #601 (CX-13): Next 15/16 makes the route-handler `params` a Promise, read as
       # `const { id } = await params;`. The destructured id is tainted from the awaited promise —
       # a source `params.$K` (property access) never saw, so the pure-App-Router IDOR stayed dark.
       - pattern: await params
+      - pattern: $U.searchParams.get(...)
+      - pattern: $U.searchParams
+      - pattern: await $REQ.json()
     pattern-sinks:
       - patterns:
           - pattern-either:

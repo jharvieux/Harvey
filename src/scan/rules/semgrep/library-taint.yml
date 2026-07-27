@@ -25,6 +25,43 @@
 # (b3-injection.entries.ts P-LIB-*/N-LIB-*) and, on real CVEs, by the library-source pathway of
 # validate-secbench.ts.
 
+# Shape B — an EXPORTED library function's parameter, shared by all three rules below through a
+# YAML anchor (#1222). It was hand-copied three times; unifying it is the #1221 lesson applied
+# before the divergence happens rather than after.
+#
+# #1222: `export function $F($P, ...)` also matches `export async function GET(req: Request)`, so
+# an App Router ROUTE HANDLER was being read as a library entry point. That is not a save when the
+# app-layer rule is blind — it is a severity downgrade (High -> Medium) narrated with the wrong
+# story: a client is told their public HTTP route is "an exported library function's parameter".
+# Worse, it MASKS: a calibration entry scored on "did a relevant finding appear?" records the gap
+# as covered, which is the #1062 shape reached through rule precedence.
+#
+# The App Router HTTP-method names are therefore excluded, so the app-layer rules own those routes.
+# Sequenced deliberately AFTER #1221/#1220/#1223/#1224: doing this first would have converted a
+# Medium-with-the-wrong-message into silence, which is worse than either.
+x-library-entry-point: &library_entry_point
+  patterns:
+    - pattern-either:
+        - pattern: module.exports = function $F($P, ...) { ... }
+        - pattern: module.exports = ($P, ...) => { ... }
+        - pattern: module.exports.$N = function ($P, ...) { ... }
+        - pattern: module.exports.$N = ($P, ...) => { ... }
+        - pattern: exports.$N = function ($P, ...) { ... }
+        - pattern: exports.$N = ($P, ...) => { ... }
+        - patterns:
+            - pattern-either:
+                - pattern: export function $F($P, ...) { ... }
+                - pattern: export const $F = ($P, ...) => { ... }
+            - metavariable-regex:
+                metavariable: $F
+                regex: ^(?!(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$).*$
+        # App Router handlers are always NAMED exports, so the anonymous default stays a library
+        # shape. The neighbouring Pages-Router case needs no exclusion: MEASURED 2026-07-27, this
+        # ANONYMOUS pattern never matched the named `export default function handler(req, res)`, so
+        # a Pages API route was never captured here in the first place.
+        - pattern: export default function ($P, ...) { ... }
+    - focus-metavariable: $P
+
 rules:
   # Path traversal from a library entry point: a request-callback param (raw http/https server) or an
   # exported-function param joined into a filesystem path and read/written. path.basename confines it.
@@ -56,18 +93,7 @@ rules:
               - pattern: https.createServer($OPT, ($REQ, $RES) => { ... })
           - focus-metavariable: $REQ
       # Shape B — exported library function parameter (public API surface).
-      - patterns:
-          - pattern-either:
-              - pattern: module.exports = function $F($P, ...) { ... }
-              - pattern: module.exports = ($P, ...) => { ... }
-              - pattern: module.exports.$N = function ($P, ...) { ... }
-              - pattern: module.exports.$N = ($P, ...) => { ... }
-              - pattern: exports.$N = function ($P, ...) { ... }
-              - pattern: exports.$N = ($P, ...) => { ... }
-              - pattern: export function $F($P, ...) { ... }
-              - pattern: export const $F = ($P, ...) => { ... }
-              - pattern: export default function ($P, ...) { ... }
-          - focus-metavariable: $P
+      - *library_entry_point
     pattern-sanitizers:
       - pattern: path.basename(...)
     pattern-sinks:
@@ -101,18 +127,7 @@ rules:
       execSync) — OS command injection. Use execFile/spawn with an argument array and no shell, and
       validate the argument against an allowlist.
     pattern-sources:
-      - patterns:
-          - pattern-either:
-              - pattern: module.exports = function $F($P, ...) { ... }
-              - pattern: module.exports = ($P, ...) => { ... }
-              - pattern: module.exports.$N = function ($P, ...) { ... }
-              - pattern: module.exports.$N = ($P, ...) => { ... }
-              - pattern: exports.$N = function ($P, ...) { ... }
-              - pattern: exports.$N = ($P, ...) => { ... }
-              - pattern: export function $F($P, ...) { ... }
-              - pattern: export const $F = ($P, ...) => { ... }
-              - pattern: export default function ($P, ...) { ... }
-          - focus-metavariable: $P
+      - *library_entry_point
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -140,18 +155,7 @@ rules:
       execution. Parse the argument as data (e.g. JSON.parse) or dispatch against an allowlist; never
       evaluate an untrusted argument.
     pattern-sources:
-      - patterns:
-          - pattern-either:
-              - pattern: module.exports = function $F($P, ...) { ... }
-              - pattern: module.exports = ($P, ...) => { ... }
-              - pattern: module.exports.$N = function ($P, ...) { ... }
-              - pattern: module.exports.$N = ($P, ...) => { ... }
-              - pattern: exports.$N = function ($P, ...) { ... }
-              - pattern: exports.$N = ($P, ...) => { ... }
-              - pattern: export function $F($P, ...) { ... }
-              - pattern: export const $F = ($P, ...) => { ... }
-              - pattern: export default function ($P, ...) { ... }
-          - focus-metavariable: $P
+      - *library_entry_point
     pattern-sinks:
       - patterns:
           - pattern-either:
