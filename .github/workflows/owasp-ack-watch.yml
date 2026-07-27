@@ -1,0 +1,176 @@
+# Watches the two OWASP cheat-sheet proposals we filed upstream (CheatSheetSeries #2308 "New CS
+# proposal: Next.js Security", #2309 "Update: Multi_Tenant_Security_Cheat_Sheet") and raises a
+# tracking issue here when either one moves.
+#
+# WHY A WATCH EXISTS AT ALL: in that project the formal acknowledgement IS a label
+# (ACK_WAITING/NEW_CS/UPDATE_CS at triage, then ACK_OBTAINED when approved), and **GitHub does not
+# send notifications for label changes**. A comment notifies; a silent relabel does not. Drafting
+# either sheet before ACK_OBTAINED is the mistake #543 (React) is the cautionary tale for —
+# proposed 2021, ACK'd in two days, then stalled three years, its PR #2196 open with 89 review
+# comments. So the ack is both load-bearing and invisible by default.
+#
+# WHY IT LIVES IN CI AND NOT IN A SCHEDULED CLOUD AGENT: it used to be routine
+# `trig_01UD5yXDN8jMghazEBZnCGrV`. That routine was correct on paper and useless in practice.
+# MEASURED 2026-07-27: it fired on schedule at 12:02:23Z, a real change had been present since
+# 01:59:41Z (jmanico, an OWASP project leader, commented "I like this idea" on #2308), and it
+# raised nothing — zero `owasp-ack-alert` issues ever existed. Its alerting path ran `gh` inside a
+# sandbox whose auth we never confirmed, and every failure branch in its prompt terminated in
+# "state it clearly in your final summary" — a summary with no reader. That is fail-loud into a
+# void, which is the repo's own silent-omission defect class wearing a watchdog's clothes.
+#
+# GitHub Actions removes all three failure modes at once: `github.token` authenticates both the
+# upstream read (5000 req/hr instead of a shared-IP anonymous 60) and the issue write, the job is
+# a durable artifact with logs, and a broken run goes red and opens its own tracking issue on the
+# `ci-owasp-watch-alert` marker — the same shape corpus-drift/heavy-cli/conservation already use
+# (#1138/#1142).
+#
+# TWO DISTINCT ALARMS, DELIBERATELY NOT MERGED:
+#   `owasp-ack-alert`      — the upstream proposals changed. This is news; act on it.
+#   `ci-owasp-watch-alert` — this watch could not read upstream. This is NOT "no change"; an issue
+#                            you could not read is not an issue that did not change.
+#
+# NOT A REQUIRED CHECK and deliberately not on `pull_request`: it observes a third-party repo, so
+# it says nothing about whether a change here is correct.
+
+name: owasp-ack-watch
+
+on:
+  schedule:
+    - cron: "0 12 * * *" # Daily 12:00 UTC / 08:00 ET — same slot the retired routine held
+  workflow_dispatch: # so a human can run it and SEE the output; the routine's first run never was
+
+concurrency:
+  group: owasp-ack-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    name: OWASP proposal ack watch (#2308 / #2309)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 10
+    steps:
+      - name: Read both proposals and report any change from the filing baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM: OWASP/CheatSheetSeries
+          MARKER: owasp-ack-alert
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # BASELINE, recorded at filing on 2026-07-26: both issues open, zero labels, zero
+          # comments. Any deviation on either is a change worth the operator's attention.
+          changed=false
+          ack=false
+          state=""
+          report=""
+
+          for n in 2308 2309; do
+            # No `|| true` here on purpose. A failed read must surface AS a failed read — reporting
+            # "no change" for an issue we could not fetch is the exact lie this watch exists to
+            # prevent. set -e plus the explicit check below takes the job red, and the final step
+            # then opens the ci-owasp-watch-alert issue.
+            if ! json=$(gh api "repos/$UPSTREAM/issues/$n" 2>&1); then
+              echo "::error::Could not read $UPSTREAM#$n — the watch did NOT run. This is not 'no change': an issue that could not be read is not an issue that did not change."
+              echo "$json"
+              exit 1
+            fi
+
+            labels=$(printf '%s' "$json" | jq -r '[.labels[].name] | sort | join(",")')
+            comments=$(printf '%s' "$json" | jq -r '.comments')
+            issue_state=$(printf '%s' "$json" | jq -r '.state')
+            url=$(printf '%s' "$json" | jq -r '.html_url')
+
+            state="${state}${n}:[${labels}]:${comments}:${issue_state}|"
+
+            line="- **#${n}** — labels: \`[${labels}]\` · comments: **${comments}** · state: \`${issue_state}\` · ${url}"
+            if [ -n "$labels" ] || [ "$comments" != "0" ] || [ "$issue_state" != "open" ]; then
+              changed=true
+              # Quote the latest comment so the operator can judge without opening GitHub.
+              if [ "$comments" != "0" ]; then
+                latest=$(gh api "repos/$UPSTREAM/issues/$n/comments" \
+                  --jq '.[-1] | "  - latest comment — **@\(.user.login)** at \(.created_at):\n\n    > \(.body | gsub("\n"; "\n    > "))"')
+                line="${line}"$'\n'"${latest}"
+              fi
+            else
+              line="${line} — unchanged from baseline"
+            fi
+            case "$labels" in *ACK_OBTAINED*) ack=true ;; esac
+            report="${report}${line}"$'\n'
+          done
+
+          echo "Current state: $state"
+
+          if [ "$changed" = "false" ]; then
+            echo "No change: #2308 and #2309 both still unlabeled with 0 comments."
+            exit 0
+          fi
+
+          # Idempotence without external state: the last-reported state is stamped into the
+          # tracking issue itself, so a standing change (jmanico's comment will sit there for
+          # weeks) is reported ONCE rather than re-announced every morning. An alert that cries
+          # wolf daily gets filtered out, and then the ACK_OBTAINED it was built for goes unread.
+          existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
+          last=""
+          if [ -n "$existing" ]; then
+            last=$( { gh issue view "$existing" --json body --jq '.body'
+                      gh issue view "$existing" --json comments --jq '.comments[].body'; } \
+                    | sed -n 's/.*owasp-ack-state: \([^ ]*\) -->.*/\1/p' | tail -1 )
+          fi
+
+          if [ "$state" = "$last" ]; then
+            echo "Change already reported on issue #${existing} (state unchanged since last report). Not commenting again."
+            exit 0
+          fi
+
+          headline="An OWASP proposal changed state."
+          if [ "$ack" = "true" ]; then
+            headline="**ACK_OBTAINED is present.** Drafting work on that cheat sheet can begin."
+          fi
+
+          body="${headline}
+
+          ${report}
+          Baseline at filing (2026-07-26): both issues open, zero labels, zero comments.
+
+          Remember the ack in this project IS a label, not a comment — \`ACK_OBTAINED\` is the one that unblocks drafting. A friendly comment is encouragement, not approval (#543 is the cautionary tale).
+
+          <sub>Watch: ${RUN_URL} · <!-- owasp-ack-state: ${state} --></sub>"
+
+          gh label create "$MARKER" --color B60205 \
+            --description "Auto-opened when an OWASP cheat-sheet proposal (#2308/#2309) changes state" 2>/dev/null || true
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+            echo "Commented on existing tracking issue #${existing}."
+          else
+            gh issue create --title "OWASP proposal status changed: #2308 / #2309" \
+              --label "$MARKER" --body "$body"
+          fi
+
+      # A watch that breaks silently is worse than no watch, because it manufactures the false
+      # confidence that someone is looking. Distinct marker from `owasp-ack-alert` so "upstream
+      # moved" and "we went blind" can never be mistaken for each other in the issue list.
+      - name: Open or update the watch-broken tracking issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MARKER: ci-owasp-watch-alert
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create "$MARKER" --color B60205 \
+            --description "Auto-opened when the scheduled OWASP ack-watch run fails" 2>/dev/null || true
+          body="The scheduled \`owasp-ack-watch\` run FAILED (run: $RUN_URL), so the OWASP proposals #2308/#2309 were **not** checked today. Treat this as 'we are blind', never as 'no change' — the ack we are waiting for is a silent label change. Check the two issues by hand until this is green again. Close this issue once green."
+          existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "owasp-ack-watch scheduled run failing" --label "$MARKER" --body "$body"
+          fi
