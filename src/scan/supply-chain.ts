@@ -9,6 +9,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Finding } from "../findings.js";
+import type { LicenseScope } from "../sbom.js";
 import { mechanicalFinding } from "./common.js";
 
 // High-traffic npm packages a typosquat/slopsquat target would mimic. Not exhaustive.
@@ -64,28 +65,28 @@ export function checkTyposquat(depNames: string[]): Finding[] {
 
 const NPM_REGISTRY = "https://registry.npmjs.org";
 
-// #1067: both live-registry checks used to `console.warn(...); continue;` per package — a message
-// on the OPERATOR'S TERMINAL, not in the deliverable. Offline, behind a proxy, or rate-limited,
-// every package goes indeterminate and both checks return `[]`, which in the report is
-// indistinguishable from "checked, nothing wrong". These two rows are the established
+// #1067: both registry-backed checks used to `console.warn(...); continue;` per package — a
+// message on the OPERATOR'S TERMINAL, not in the deliverable. Offline, behind a proxy, or
+// rate-limited, every package goes indeterminate and both checks return `[]`, which in the report
+// is indistinguishable from "checked, nothing wrong". These two rows are the established
 // DEP-OSV-00 / SEM-00 / M5-00 contract applied to the tier that was missing it, and the same rows
-// ship when the checks are deliberately skipped — a skipped tier is still an unassessed tier.
+// ship when a lookup is deliberately skipped — a skipped tier is still an unassessed tier.
 const NAME_SAMPLE = 20;
 
-function registryCoverageFinding(id: string, label: string, taxonomy: string, impact: string, names: readonly string[], reason: string): Finding {
-  const sample = names.length <= NAME_SAMPLE ? names.join(", ") : `${names.slice(0, NAME_SAMPLE).join(", ")} … and ${names.length - NAME_SAMPLE} more`;
+const REGISTRY_FIX = `Re-run the scan from a machine with direct access to ${NPM_REGISTRY} (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.`;
+
+function sampleNames(names: readonly string[]): string {
+  return names.length <= NAME_SAMPLE ? names.join(", ") : `${names.slice(0, NAME_SAMPLE).join(", ")} … and ${names.length - NAME_SAMPLE} more`;
+}
+
+function coverageFinding(args: { id: string; title: string; taxonomy: string; evidence: string; impact: string; fix: string }): Finding {
   return {
-    id,
-    title: `${label} did not run for ${names.length} dependenc${names.length === 1 ? "y" : "ies"}`,
+    ...args,
     severity: "Info",
     confidence: "N/A",
     category: "Supply chain",
-    taxonomy,
     location: "package.json",
     status: "Open",
-    evidence: `${reason} Not assessed: ${sample}.`,
-    impact,
-    fix: `Re-run the scan from a machine with direct access to ${NPM_REGISTRY} (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.`,
     value: 1,
     ease: 4,
     safety: 5,
@@ -94,29 +95,56 @@ function registryCoverageFinding(id: string, label: string, taxonomy: string, im
 }
 
 export function slopsquatCoverageFinding(names: readonly string[], reason: string): Finding {
-  return registryCoverageFinding(
-    "SUP-SLOPSQUAT-00",
-    "Hallucinated-dependency (slopsquat) existence check",
-    "Coverage — npm-registry existence check not assessed",
-    "The registry 404 is the only deterministic proof that a dependency name was never published. Without it, a hallucinated package name in this manifest would draw no finding — a disclosed coverage gap, NOT a finding that every dependency exists.",
-    names,
-    reason,
-  );
+  return coverageFinding({
+    id: "SUP-SLOPSQUAT-00",
+    title: `Hallucinated-dependency (slopsquat) existence check did not run for ${names.length} dependenc${names.length === 1 ? "y" : "ies"}`,
+    taxonomy: "Coverage — npm-registry existence check not assessed",
+    evidence: `${reason} Not assessed: ${sampleNames(names)}.`,
+    impact:
+      "The registry 404 is the only deterministic proof that a dependency name was never published. Without it, a hallucinated package name in this manifest would draw no finding — a disclosed coverage gap, NOT a finding that every dependency exists.",
+    fix: REGISTRY_FIX,
+  });
 }
 
-export function licenseCoverageFinding(names: readonly string[], reason: string): Finding {
-  return registryCoverageFinding(
-    "SUP-LICENSE-00",
-    "Dependency license-compliance check",
-    "Coverage — dependency license not assessed",
-    "License classification reads the registry's own `license` field; without it no copyleft or unlicensed dependency can be identified. The absence of license findings for these packages is a disclosed coverage gap, NOT a clean license bill.",
-    names,
-    reason,
-  );
+// #1213: this row used to be scoped to the DIRECT dependencies whose registry lookup failed, which
+// made the defect it was supposed to disclose invisible — the transitive tree was not merely
+// unassessed, it was never a candidate, and the row said nothing about it. It now always states the
+// scope it worked over (how many resolved packages, how many declared vs transitive-only, and which
+// lockfile they came from) and fires even with zero indeterminate names whenever that scope is
+// itself incomplete — a manifest-only fallback means the whole transitive tier went unexamined, and
+// an unstated limitation reads as a clean license bill.
+export function licenseCoverageFinding(names: readonly string[], reason: string, scope?: LicenseScope): Finding {
+  const scopeSentence = scope
+    ? `License scope: ${scope.candidates.length} package${scope.candidates.length === 1 ? "" : "s"} (${scope.direct} declared in a manifest, ${scope.transitive} reached only through the resolved tree) from ${scope.source}.` +
+      (scope.completeness === "complete" ? "" : ` The dependency inventory itself is ${scope.completeness}: ${scope.note}`)
+    : undefined;
+  const treeIncomplete = scope !== undefined && scope.completeness !== "complete";
+  return coverageFinding({
+    id: "SUP-LICENSE-00",
+    title:
+      names.length === 0
+        ? "Dependency license-compliance check could not see the whole dependency tree"
+        : `Dependency license-compliance check did not run for ${names.length} package${names.length === 1 ? "" : "s"}`,
+    taxonomy: "Coverage — dependency license not assessed",
+    evidence: [scopeSentence, reason, names.length > 0 ? `Not assessed: ${sampleNames(names)}.` : undefined].filter(Boolean).join(" "),
+    impact:
+      "License classification reads the license the lockfile or the registry records; without it no copyleft or unlicensed dependency can be identified. The absence of license findings for these packages is a disclosed coverage gap, NOT a clean license bill.",
+    fix: treeIncomplete
+      ? `Commit a lockfile Harvey can parse (package-lock.json, pnpm-lock.yaml or yarn.lock) so the transitive tree is in scope. ${REGISTRY_FIX}`
+      : REGISTRY_FIX,
+  });
 }
 
 export const NETWORK_SKIPPED_REASON =
-  "The two live npm-registry checks were deliberately skipped for this pass (skipNetworkChecks), so no registry lookup was made at all.";
+  "The live npm-registry existence check was deliberately skipped for this pass (skipNetworkChecks), so no registry lookup was made at all.";
+
+// #1213: the license check's OWN half of the skip above. It is no longer all-or-nothing, because a
+// package-lock.json target answers most of the tree offline (MEASURED 2026-07-27 on
+// targets/calibration: 390 of 395 components carry a `license`) — only the registry FALLBACK is
+// nondeterministic. So the classification runs and the packages the lockfile cannot answer are
+// disclosed, instead of the whole tier going silent.
+const REGISTRY_SKIPPED_REASON =
+  "the live npm-registry fallback was deliberately skipped for this pass (skipNetworkChecks), so packages whose license the lockfile does not record could not be classified";
 
 // Live npm-registry existence cross-check (P-SLOPSQUAT): an AI coding assistant can hallucinate
 // a plausible-looking package name that was never published. A 404 from the registry is
@@ -367,15 +395,26 @@ function extractLicenseId(pkg: NpmPackument, version?: string): string | undefin
   return (versioned && extractLicenseFrom(versioned)) ?? extractLicenseFrom(pkg);
 }
 
-// License lookup. `lockfileLicenses` (#1079) is the resolved-tree license map from
-// src/sbom.ts's lockfile parse — package-lock.json records `license` on essentially every entry
-// (MEASURED 2026-07-26 on targets/calibration: 421 of 426), so the registry call is only made for
-// names the lockfile does not answer. That matters twice over: it is the version actually
-// installed rather than the registry's latest, and it removes one live request per dependency.
+// #1213: a registry lookup costs one live request per package, and the candidate set is now the
+// whole resolved tree — for a pnpm target, whose lockfile format records no `license` at all, that
+// is EVERY package. Unbounded, a large monorepo would issue thousands of requests. Bounded, some
+// packages go unclassified — which is fine only because the cap is DISCLOSED in SUP-LICENSE-00 by
+// name, and because candidates are ordered declared-first so the budget is never starved by the
+// transitive tail.
+const REGISTRY_LOOKUP_CAP = 300;
+
+// License lookup over the RESOLVED DEPENDENCY TREE (src/sbom.ts's `licenseScope`, the same parse
+// the SBOM uses). package-lock.json records `license` on essentially every entry (MEASURED
+// 2026-07-27 on targets/calibration: 390 of 395), so for that format the classification is entirely
+// offline and the registry is queried only for the remainder; pnpm-lock.yaml and yarn.lock record
+// none, so for those every candidate needs the network fallback and the cap above binds.
 //
 // The network path keeps its old trust boundary, same as checkSlopsquat above: a name-only request
-// (no code egress). A network failure or non-OK status leaves that package's license indeterminate
-// — which is not the same as "no license", and since #1067 is not the same as silence either: the
+// (no code egress). It asks for the INSTALLED version's own manifest (`/<name>/<version>`) when the
+// tree resolved one — the version's license, not the latest publish's (#1099), and a few KB instead
+// of a whole packument — falling back to the packument when the version is unknown or that route
+// answers non-OK. A network failure or non-OK status leaves that package's license indeterminate —
+// which is not the same as "no license", and since #1067 is not the same as silence either: the
 // indeterminate names are counted into SUP-LICENSE-00. `licenseTier` on each returned finding is
 // "high" for a copyleft match (the SPDX id itself is deterministic, self-declared registry data)
 // and "review" for an unknown/missing/UNLICENSED license (the `license` field can be simply absent
@@ -383,52 +422,56 @@ function extractLicenseId(pkg: NpmPackument, version?: string): string | undefin
 // Non-grading regardless of tier (src/quick-scan.ts) — a license conflict is a legal judgment, not
 // a security verdict.
 export async function checkLicenseCompliance(
-  deps: DependencyMap,
-  fetchImpl: typeof fetch = fetch,
-  lockfileLicenses: Readonly<Record<string, string>> = {},
-  // #1099: the resolved-tree version map, same source/keying as `lockfileLicenses` (src/sbom.ts's
-  // lockfile parse) — lets the registry fallback below ask for the INSTALLED version's license
-  // (`versions[<v>]`) instead of always reading the top-level (latest-publish) snapshot.
-  lockfileVersions: Readonly<Record<string, string>> = {},
+  scope: LicenseScope,
+  opts: { fetchImpl?: typeof fetch; skipRegistry?: boolean } = {},
 ): Promise<Finding[]> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
   const findings: Finding[] = [];
   const indeterminate: string[] = [];
   const reasons = new Set<string>();
-  for (const name of Object.keys(deps)) {
-    let licenseId = lockfileLicenses[name];
+  let lookups = 0;
+  const ordered = [...scope.candidates].sort((a, b) => Number(b.direct) - Number(a.direct));
+  for (const candidate of ordered) {
+    const { name, version } = candidate;
+    const coordinate = version ? `${name}@${version}` : name;
+    let licenseId = candidate.license;
     let source = "the lockfile";
     if (licenseId === undefined) {
-      let body: NpmPackument;
-      try {
-        const res = await fetchImpl(`${NPM_REGISTRY}/${encodeURIComponent(name)}`);
-        if (!res.ok) {
-          indeterminate.push(name);
-          reasons.add(`registry returned HTTP ${res.status}`);
-          continue;
-        }
-        body = (await res.json()) as NpmPackument;
-      } catch (err) {
-        indeterminate.push(name);
-        reasons.add(`registry unreachable (${err instanceof Error ? err.message : String(err)})`);
+      if (opts.skipRegistry) {
+        indeterminate.push(coordinate);
+        reasons.add(REGISTRY_SKIPPED_REASON);
         continue;
       }
-      licenseId = extractLicenseId(body, lockfileVersions[name]);
+      if (lookups >= REGISTRY_LOOKUP_CAP) {
+        indeterminate.push(coordinate);
+        reasons.add(`the per-run registry-lookup cap of ${REGISTRY_LOOKUP_CAP} packages was reached (declared dependencies are looked up first)`);
+        continue;
+      }
+      lookups++;
+      const meta = await fetchLicenseMeta(fetchImpl, name, version);
+      if ("error" in meta) {
+        indeterminate.push(coordinate);
+        reasons.add(meta.error);
+        continue;
+      }
+      licenseId = extractLicenseId(meta.body, version);
       source = "the npm registry";
     }
     const cls = classifyLicense(licenseId);
     if (cls === "permissive") continue;
+    const reach = candidate.direct ? "declared in a manifest" : "reached only through the resolved dependency tree";
     if (cls === "unknown") {
       findings.push(
         mechanicalFinding({
-          id: `SUP-LICENSE-UNKNOWN-${name}`,
-          title: `Dependency "${name}" has no clear license — review`,
+          id: `SUP-LICENSE-UNKNOWN-${coordinate}`,
+          title: `Dependency "${coordinate}" has no clear license — review`,
           severity: "Low",
           category: "License compliance",
           taxonomy: "Unknown/missing dependency license",
-          location: `package.json (${name})`,
+          location: `package.json (${coordinate})`,
           evidence: licenseId
-            ? `${source} reports license "${licenseId}" for "${name}", which does not resolve to a recognized SPDX identifier.`
-            : `${source} has no license field for "${name}".`,
+            ? `${source} reports license "${licenseId}" for "${coordinate}" (${reach}), which does not resolve to a recognized SPDX identifier.`
+            : `${source} has no license field for "${coordinate}" (${reach}).`,
           impact: "A dependency with no confirmed license (missing, ambiguous, or npm's UNLICENSED marker) carries no confirmed grant to use, modify, or redistribute it — a legal exposure in a distributed/commercial product, distinct from a security bug.",
           fix: `Confirm "${name}"'s actual license (its repository/README, or the maintainer directly) and record the finding; replace it if no usable license exists.`,
           precisionTier: "review",
@@ -438,23 +481,44 @@ export async function checkLicenseCompliance(
     }
     findings.push(
       mechanicalFinding({
-        id: `SUP-LICENSE-COPYLEFT-${name}`,
-        title: `Dependency "${name}" is licensed ${licenseId} — possible copyleft conflict`,
+        id: `SUP-LICENSE-COPYLEFT-${coordinate}`,
+        title: `Dependency "${coordinate}" is licensed ${licenseId} — possible copyleft conflict`,
         severity: "Medium",
         category: "License compliance",
         taxonomy: "Copyleft license conflict",
-        location: `package.json (${name})`,
-        evidence: `${source} reports "${name}" under "${licenseId}" (SPDX), a strong-copyleft license.`,
+        location: `package.json (${coordinate})`,
+        evidence: `${source} reports "${coordinate}" under "${licenseId}" (SPDX), a strong-copyleft license. This package is ${reach}.`,
         impact: "Strong-copyleft licenses (GPL/AGPL/LGPL and similar) impose reciprocal source-disclosure obligations that typically conflict with a closed/proprietary distribution — this needs a legal review before shipping, not just a code fix.",
         fix: `Confirm the actual distribution/linking model with counsel, or replace "${name}" with a permissively-licensed alternative.`,
         precisionTier: "high",
       }),
     );
   }
-  if (indeterminate.length > 0) {
-    findings.push(licenseCoverageFinding(indeterminate, `The dependency license lookup could not reach a verdict: ${[...reasons].join("; ")}.`));
+  if (indeterminate.length > 0 || scope.completeness !== "complete") {
+    const reason = indeterminate.length > 0 ? `The dependency license lookup could not reach a verdict: ${[...reasons].join("; ")}.` : "";
+    findings.push(licenseCoverageFinding(indeterminate, reason, scope));
   }
   return findings;
+}
+
+// `/<name>/<version>` returns that release's own manifest — the license of the version actually
+// installed, in a few KB rather than a whole packument. Not every registry mirror serves it, so a
+// non-OK answer falls back to the packument rather than being recorded as a coverage gap.
+async function fetchLicenseMeta(fetchImpl: typeof fetch, name: string, version?: string): Promise<{ body: NpmPackument } | { error: string }> {
+  const base = `${NPM_REGISTRY}/${encodeURIComponent(name)}`;
+  const urls = version ? [`${base}/${encodeURIComponent(version)}`, base] : [base];
+  let lastStatus = 0;
+  for (const url of urls) {
+    let res: Response;
+    try {
+      res = await fetchImpl(url);
+    } catch (err) {
+      return { error: `registry unreachable (${err instanceof Error ? err.message : String(err)})` };
+    }
+    if (res.ok) return { body: (await res.json()) as NpmPackument };
+    lastStatus = res.status;
+  }
+  return { error: `registry returned HTTP ${lastStatus}` };
 }
 
 export function checkLockfilePresence(projectDir: string, label = projectDir): Finding[] {

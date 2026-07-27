@@ -2290,6 +2290,33 @@
     }
   },
   {
+    "id": "DEP-OSV-GHSA-f88m-g3jw-g9cj-sharp@0.34.5",
+    "title": "sharp@0.34.5: sharp inherited vulnerabilities in libvips: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591 (fixed in 0.35.0)",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "package-lock.json (sharp@0.34.5)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-f88m-g3jw-g9cj against sharp@0.34.5. Rated High from the advisory's own HIGH rating. The advisory's affected range is fixed in 0.35.0.",
+    "impact": "sharp inherited vulnerabilities in libvips: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591 — A number of vulnerabilities, two rated as \"High\" severity using CVSSv4, have been discovered and fixed in the upstream libvips dependency.",
+    "fix": "Upgrade sharp to 0.35.0 or later (see GHSA-f88m-g3jw-g9cj).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-1395"
+    ],
+    "dependency": "sharp",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "sharp is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
     "id": "DEP-CVE-2025-29927",
     "title": "next@14.2.5 vulnerable to CVE-2025-29927 (middleware auth bypass)",
     "severity": "Critical",
@@ -11206,32 +11233,68 @@
   {
     "id": "SUP-SLOPSQUAT-00",
     "title": "Hallucinated-dependency (slopsquat) existence check did not run for 11 dependencies",
+    "taxonomy": "Coverage — npm-registry existence check not assessed",
+    "evidence": "The live npm-registry existence check was deliberately skipped for this pass (skipNetworkChecks), so no registry lookup was made at all. Not assessed: @supabase/supabase-js, expres, left-pad, lodash, next, pg, react, react-dom, react-supabase-helpers, zod, webpack.",
+    "impact": "The registry 404 is the only deterministic proof that a dependency name was never published. Without it, a hallucinated package name in this manifest would draw no finding — a disclosed coverage gap, NOT a finding that every dependency exists.",
+    "fix": "Re-run the scan from a machine with direct access to https://registry.npmjs.org (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.",
     "severity": "Info",
     "confidence": "N/A",
     "category": "Supply chain",
-    "taxonomy": "Coverage — npm-registry existence check not assessed",
     "location": "package.json",
     "status": "Open",
-    "evidence": "The two live npm-registry checks were deliberately skipped for this pass (skipNetworkChecks), so no registry lookup was made at all. Not assessed: @supabase/supabase-js, expres, left-pad, lodash, next, pg, react, react-dom, react-supabase-helpers, zod, webpack.",
-    "impact": "The registry 404 is the only deterministic proof that a dependency name was never published. Without it, a hallucinated package name in this manifest would draw no finding — a disclosed coverage gap, NOT a finding that every dependency exists.",
-    "fix": "Re-run the scan from a machine with direct access to https://registry.npmjs.org (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.",
     "value": 1,
     "ease": 4,
     "safety": 5,
     "mechanical": true
   },
   {
+    "id": "SUP-LICENSE-COPYLEFT-@img/sharp-libvips-linux-riscv64@1.2.4",
+    "title": "Dependency \"@img/sharp-libvips-linux-riscv64@1.2.4\" is licensed LGPL-3.0-or-later — possible copyleft conflict",
+    "severity": "Medium",
+    "confidence": "Confirmed",
+    "category": "License compliance",
+    "taxonomy": "Copyleft license conflict",
+    "location": "package.json (@img/sharp-libvips-linux-riscv64@1.2.4)",
+    "status": "Open",
+    "evidence": "the lockfile reports \"@img/sharp-libvips-linux-riscv64@1.2.4\" under \"LGPL-3.0-or-later\" (SPDX), a strong-copyleft license. This package is reached only through the resolved dependency tree.",
+    "impact": "Strong-copyleft licenses (GPL/AGPL/LGPL and similar) impose reciprocal source-disclosure obligations that typically conflict with a closed/proprietary distribution — this needs a legal review before shipping, not just a code fix.",
+    "fix": "Confirm the actual distribution/linking model with counsel, or replace \"@img/sharp-libvips-linux-riscv64\" with a permissively-licensed alternative.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high"
+  },
+  {
+    "id": "SUP-LICENSE-UNKNOWN-caniuse-lite@1.0.30001803",
+    "title": "Dependency \"caniuse-lite@1.0.30001803\" has no clear license — review",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "License compliance",
+    "taxonomy": "Unknown/missing dependency license",
+    "location": "package.json (caniuse-lite@1.0.30001803)",
+    "status": "Open",
+    "evidence": "the lockfile reports license \"CC-BY-4.0\" for \"caniuse-lite@1.0.30001803\" (reached only through the resolved dependency tree), which does not resolve to a recognized SPDX identifier.",
+    "impact": "A dependency with no confirmed license (missing, ambiguous, or npm's UNLICENSED marker) carries no confirmed grant to use, modify, or redistribute it — a legal exposure in a distributed/commercial product, distinct from a security bug.",
+    "fix": "Confirm \"caniuse-lite\"'s actual license (its repository/README, or the maintainer directly) and record the finding; replace it if no usable license exists.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review"
+  },
+  {
     "id": "SUP-LICENSE-00",
-    "title": "Dependency license-compliance check did not run for 11 dependencies",
+    "title": "Dependency license-compliance check did not run for 8 packages",
+    "taxonomy": "Coverage — dependency license not assessed",
+    "evidence": "License scope: 398 packages (11 declared in a manifest, 387 reached only through the resolved tree) from package-lock.json. The dependency license lookup could not reach a verdict: the live npm-registry fallback was deliberately skipped for this pass (skipNetworkChecks), so packages whose license the lockfile does not record could not be classified. Not assessed: expres, left-pad, react-supabase-helpers, busboy@1.6.0, console-browserify@1.2.0, enhanced-resolve@4.5.0, querystring-es3@0.2.1, streamsearch@1.1.0.",
+    "impact": "License classification reads the license the lockfile or the registry records; without it no copyleft or unlicensed dependency can be identified. The absence of license findings for these packages is a disclosed coverage gap, NOT a clean license bill.",
+    "fix": "Re-run the scan from a machine with direct access to https://registry.npmjs.org (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.",
     "severity": "Info",
     "confidence": "N/A",
     "category": "Supply chain",
-    "taxonomy": "Coverage — dependency license not assessed",
     "location": "package.json",
     "status": "Open",
-    "evidence": "The two live npm-registry checks were deliberately skipped for this pass (skipNetworkChecks), so no registry lookup was made at all. Not assessed: @supabase/supabase-js, expres, left-pad, lodash, next, pg, react, react-dom, react-supabase-helpers, zod, webpack.",
-    "impact": "License classification reads the registry's own `license` field; without it no copyleft or unlicensed dependency can be identified. The absence of license findings for these packages is a disclosed coverage gap, NOT a clean license bill.",
-    "fix": "Re-run the scan from a machine with direct access to https://registry.npmjs.org (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.",
     "value": 1,
     "ease": 4,
     "safety": 5,
@@ -11790,6 +11853,30 @@
     ]
   },
   {
+    "id": "AUTH-inmemory-rate-limit-src-owasp-mt-rate-limit-not-per-tenant-ts",
+    "title": "src/owasp-mt/rate-limit-not-per-tenant.ts rate-limits with process-local state, which does not limit on a serverless host",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Leftover auth",
+    "taxonomy": "In-memory rate limiter (per-instance, resets on cold start)",
+    "location": "src/owasp-mt/rate-limit-not-per-tenant.ts",
+    "status": "Open",
+    "evidence": "Rate-limit intent plus a module-scope Map/Set/object counter store, and no shared-store (Redis/KV/DB) hint anywhere in src/owasp-mt/rate-limit-not-per-tenant.ts.",
+    "impact": "Each serverless instance keeps its own counter and every cold start resets it, so the real budget is the limit times the number of live instances — and an attacker who paces requests never hits it at all.",
+    "fix": "Move the counter to a store shared across instances (Redis/Upstash, Vercel KV, or a database row with an atomic increment).",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-307: Improper Restriction of Excessive Authentication Attempts"
+    ],
+    "owasp": [
+      "A07:2021 - Identification and Authentication Failures"
+    ]
+  },
+  {
     "id": "AUTH-upload-no-limit-src-owasp-mt-storage-path-no-tenant-ts",
     "title": "src/owasp-mt/storage-path-no-tenant.ts writes an upload to storage with no size/MIME limit",
     "severity": "High",
@@ -12099,13 +12186,157 @@
     ]
   },
   {
-    "id": "AUTH-client-supplied-tenant-tenantId-src-owasp-mt-client-supplied-tenant-ts-510",
+    "id": "AUTH-client-supplied-tenant-tenant_id-pages-api-billing-invoice-js-848",
+    "title": "pages/api/billing/invoice.js — tenant scope `tenant_id` is populated from the request (`req.body.tenantId`)",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Broken access control",
+    "taxonomy": "Object-level authorization gap: tenant predicate populated from the request",
+    "location": "pages/api/billing/invoice.js:14",
+    "status": "Open",
+    "evidence": "Heuristic \"client-supplied-tenant\": `.eq(\"tenant_id\", …)` scopes on `tenant_id`, and that value traces to `req.body.tenantId` through same-function assignments. The query carries a tenant predicate and looks correctly scoped; the caller chooses which tenant it selects.",
+    "impact": "The tenant discriminator is attacker-controlled, so the isolation gate is set by the request it is supposed to constrain: any authenticated caller reads or mutates another tenant's rows by editing one field. Because the predicate is present and names the right column, this passes code review and every detector that checks whether a tenant filter exists.",
+    "fix": "Derive `tenant_id` from the verified session on the server (`session.user.tenant_id` / the JWT claim), never from the request. If the caller must name a tenant — a multi-tenant admin or account switcher — compare the supplied value against the session's tenant membership and reject a mismatch before the query runs.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "AUTH-client-supplied-tenant-tenant_id-pages-api-counter-increment-js-539",
+    "title": "pages/api/counter/increment.js — tenant scope `tenant_id` is populated from the request (`req.body`)",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Broken access control",
+    "taxonomy": "Object-level authorization gap: tenant predicate populated from the request",
+    "location": "pages/api/counter/increment.js:11",
+    "status": "Open",
+    "evidence": "Heuristic \"client-supplied-tenant\": `.eq(\"tenant_id\", …)` scopes on `tenant_id`, and that value traces to `req.body` through same-function assignments. The query carries a tenant predicate and looks correctly scoped; the caller chooses which tenant it selects.",
+    "impact": "The tenant discriminator is attacker-controlled, so the isolation gate is set by the request it is supposed to constrain: any authenticated caller reads or mutates another tenant's rows by editing one field. Because the predicate is present and names the right column, this passes code review and every detector that checks whether a tenant filter exists.",
+    "fix": "Derive `tenant_id` from the verified session on the server (`session.user.tenant_id` / the JWT claim), never from the request. If the caller must name a tenant — a multi-tenant admin or account switcher — compare the supplied value against the session's tenant membership and reject a mismatch before the query runs.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "AUTH-client-supplied-tenant-tenant_id-pages-api-counter-increment-js-726",
+    "title": "pages/api/counter/increment.js — tenant scope `tenant_id` is populated from the request (`req.body`)",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Broken access control",
+    "taxonomy": "Object-level authorization gap: tenant predicate populated from the request",
+    "location": "pages/api/counter/increment.js:20",
+    "status": "Open",
+    "evidence": "Heuristic \"client-supplied-tenant\": `.eq(\"tenant_id\", …)` scopes on `tenant_id`, and that value traces to `req.body` through same-function assignments. The query carries a tenant predicate and looks correctly scoped; the caller chooses which tenant it selects.",
+    "impact": "The tenant discriminator is attacker-controlled, so the isolation gate is set by the request it is supposed to constrain: any authenticated caller reads or mutates another tenant's rows by editing one field. Because the predicate is present and names the right column, this passes code review and every detector that checks whether a tenant filter exists.",
+    "fix": "Derive `tenant_id` from the verified session on the server (`session.user.tenant_id` / the JWT claim), never from the request. If the caller must name a tenant — a multi-tenant admin or account switcher — compare the supplied value against the session's tenant membership and reject a mismatch before the query runs.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "AUTH-client-supplied-tenant-tenant_id-pages-api-permissions-purge-js-610",
+    "title": "pages/api/permissions/purge.js — tenant scope `tenant_id` is populated from the request (`req.body.tenantId`)",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Broken access control",
+    "taxonomy": "Object-level authorization gap: tenant predicate populated from the request",
+    "location": "pages/api/permissions/purge.js:10",
+    "status": "Open",
+    "evidence": "Heuristic \"client-supplied-tenant\": `.eq(\"tenant_id\", …)` scopes on `tenant_id`, and that value traces to `req.body.tenantId` through same-function assignments. The query carries a tenant predicate and looks correctly scoped; the caller chooses which tenant it selects.",
+    "impact": "The tenant discriminator is attacker-controlled, so the isolation gate is set by the request it is supposed to constrain: any authenticated caller reads or mutates another tenant's rows by editing one field. Because the predicate is present and names the right column, this passes code review and every detector that checks whether a tenant filter exists.",
+    "fix": "Derive `tenant_id` from the verified session on the server (`session.user.tenant_id` / the JWT claim), never from the request. If the caller must name a tenant — a multi-tenant admin or account switcher — compare the supplied value against the session's tenant membership and reject a mismatch before the query runs.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "AUTH-client-supplied-tenant-tenant_id-pages-api-permissions-revoke-js-867",
+    "title": "pages/api/permissions/revoke.js — tenant scope `tenant_id` is populated from the request (`req.body.tenantId`)",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Broken access control",
+    "taxonomy": "Object-level authorization gap: tenant predicate populated from the request",
+    "location": "pages/api/permissions/revoke.js:13",
+    "status": "Open",
+    "evidence": "Heuristic \"client-supplied-tenant\": `.eq(\"tenant_id\", …)` scopes on `tenant_id`, and that value traces to `req.body.tenantId` through same-function assignments. The query carries a tenant predicate and looks correctly scoped; the caller chooses which tenant it selects.",
+    "impact": "The tenant discriminator is attacker-controlled, so the isolation gate is set by the request it is supposed to constrain: any authenticated caller reads or mutates another tenant's rows by editing one field. Because the predicate is present and names the right column, this passes code review and every detector that checks whether a tenant filter exists.",
+    "fix": "Derive `tenant_id` from the verified session on the server (`session.user.tenant_id` / the JWT claim), never from the request. If the caller must name a tenant — a multi-tenant admin or account switcher — compare the supplied value against the session's tenant membership and reject a mismatch before the query runs.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "AUTH-client-supplied-tenant-customer_id-pages-api-webhooks-inbound-js-324",
+    "title": "pages/api/webhooks/inbound.js — tenant scope `customer_id` is populated from the request (`req.body`)",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Broken access control",
+    "taxonomy": "Object-level authorization gap: tenant predicate populated from the request",
+    "location": "pages/api/webhooks/inbound.js:7",
+    "status": "Open",
+    "evidence": "Heuristic \"client-supplied-tenant\": `.eq(\"customer_id\", …)` scopes on `customer_id`, and that value traces to `req.body` through same-function assignments. The query carries a tenant predicate and looks correctly scoped; the caller chooses which tenant it selects.",
+    "impact": "The tenant discriminator is attacker-controlled, so the isolation gate is set by the request it is supposed to constrain: any authenticated caller reads or mutates another tenant's rows by editing one field. Because the predicate is present and names the right column, this passes code review and every detector that checks whether a tenant filter exists.",
+    "fix": "Derive `customer_id` from the verified session on the server (`session.user.customer_id` / the JWT claim), never from the request. If the caller must name a tenant — a multi-tenant admin or account switcher — compare the supplied value against the session's tenant membership and reject a mismatch before the query runs.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "AUTH-client-supplied-tenant-tenantId-src-owasp-mt-client-supplied-tenant-ts-553",
     "title": "src/owasp-mt/client-supplied-tenant.ts — tenant scope `tenantId` is populated from the request (`req.json()`)",
     "severity": "High",
     "confidence": "Confirmed",
     "category": "Broken access control",
     "taxonomy": "Object-level authorization gap: tenant predicate populated from the request",
-    "location": "src/owasp-mt/client-supplied-tenant.ts:10",
+    "location": "src/owasp-mt/client-supplied-tenant.ts:11",
     "status": "Open",
     "evidence": "Heuristic \"client-supplied-tenant\": `prisma.invoice.findMany` scopes on `tenantId`, and that value traces to `req.json()` through same-function assignments. The query carries a tenant predicate and looks correctly scoped; the caller chooses which tenant it selects.",
     "impact": "The tenant discriminator is attacker-controlled, so the isolation gate is set by the request it is supposed to constrain: any authenticated caller reads or mutates another tenant's rows by editing one field. Because the predicate is present and names the right column, this passes code review and every detector that checks whether a tenant filter exists.",
@@ -12123,13 +12354,13 @@
     ]
   },
   {
-    "id": "AUTH-client-supplied-tenant-tenantId-src-owasp-mt-client-supplied-tenant-ts-707",
+    "id": "AUTH-client-supplied-tenant-tenantId-src-owasp-mt-client-supplied-tenant-ts-750",
     "title": "src/owasp-mt/client-supplied-tenant.ts — tenant scope `tenantId` is populated from the request (`searchParams.get(\"org\")`)",
     "severity": "High",
     "confidence": "Confirmed",
     "category": "Broken access control",
     "taxonomy": "Object-level authorization gap: tenant predicate populated from the request",
-    "location": "src/owasp-mt/client-supplied-tenant.ts:15",
+    "location": "src/owasp-mt/client-supplied-tenant.ts:16",
     "status": "Open",
     "evidence": "Heuristic \"client-supplied-tenant\": `prisma.ledgerEntry.findMany` scopes on `tenantId`, and that value traces to `searchParams.get(\"org\")` through same-function assignments. The query carries a tenant predicate and looks correctly scoped; the caller chooses which tenant it selects.",
     "impact": "The tenant discriminator is attacker-controlled, so the isolation gate is set by the request it is supposed to constrain: any authenticated caller reads or mutates another tenant's rows by editing one field. Because the predicate is present and names the right column, this passes code review and every detector that checks whether a tenant filter exists.",
@@ -12139,6 +12370,174 @@
     "safety": 4,
     "mechanical": true,
     "precisionTier": "high",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "AUTH-client-supplied-tenant-tenant_id-src-owasp-mt-client-supplied-tenant-ts-1088",
+    "title": "src/owasp-mt/client-supplied-tenant.ts — tenant scope `tenant_id` is populated from the request (`req.json()`)",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Broken access control",
+    "taxonomy": "Object-level authorization gap: tenant predicate populated from the request",
+    "location": "src/owasp-mt/client-supplied-tenant.ts:23",
+    "status": "Open",
+    "evidence": "Heuristic \"client-supplied-tenant\": `.eq(\"tenant_id\", …)` scopes on `tenant_id`, and that value traces to `req.json()` through same-function assignments. The query carries a tenant predicate and looks correctly scoped; the caller chooses which tenant it selects.",
+    "impact": "The tenant discriminator is attacker-controlled, so the isolation gate is set by the request it is supposed to constrain: any authenticated caller reads or mutates another tenant's rows by editing one field. Because the predicate is present and names the right column, this passes code review and every detector that checks whether a tenant filter exists.",
+    "fix": "Derive `tenant_id` from the verified session on the server (`session.user.tenant_id` / the JWT claim), never from the request. If the caller must name a tenant — a multi-tenant admin or account switcher — compare the supplied value against the session's tenant membership and reject a mismatch before the query runs.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "TENANT-guc-set-not-local-src-owasp-mt-tenant-guc-session-scoped-ts-13",
+    "title": "src/owasp-mt/tenant-guc-session-scoped.ts:13 — tenant GUC set with SET, not SET LOCAL",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Tenant GUC set with SET rather than SET LOCAL, leaking across a pooled connection",
+    "location": "src/owasp-mt/tenant-guc-session-scoped.ts:13",
+    "status": "Open",
+    "evidence": "Heuristic \"tenant-guc-scope\" matched `SET app.current_tenant =` in a query call in src/owasp-mt/tenant-guc-session-scoped.ts:13. No LOCAL / third `true` argument was found on the same line.",
+    "impact": "Under transaction-mode pooling this setting outlives the transaction and stays on the connection when it returns to the pool, so the next request to borrow that connection is evaluated against the PREVIOUS tenant's identifier — a cross-tenant read that leaves the RLS policy, schema and application code all looking correct.",
+    "fix": "Use `SET LOCAL <guc> = …` or `set_config('<guc>', …, true)` so the setting is scoped to the current transaction and cannot outlive it in the pool.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-668: Exposure of Resource to Wrong Sphere"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "CACHE-key-no-tenant-src-owasp-mt-cache-key-no-tenant-ts-520",
+    "title": "src/owasp-mt/cache-key-no-tenant.ts — cache key has no tenant discriminator, though `tenantId` is in scope",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Cache key without a tenant discriminator (cross-tenant cache poisoning)",
+    "location": "src/owasp-mt/cache-key-no-tenant.ts:11",
+    "status": "Open",
+    "evidence": "Heuristic \"cache-tenant-scope\" matched a .get/.set read-through cache pair keyed on ``dashboard:${boardId}``, which does not mention the in-scope tenant parameter `tenantId`.",
+    "impact": "The first tenant to populate this cache entry serves its rows to every other tenant that requests the same resource id — OWASP's 'Shared Resource Poisoning' risk.",
+    "fix": "Prefix the cache key with the tenant discriminator, e.g. `t:${tenantId}:...`, or use a per-tenant cache namespace.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-668: Exposure of Resource to Wrong Sphere"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "STORAGE-path-no-tenant-upload-pages-api-upload-safe-js-546",
+    "title": "pages/api/upload-safe.js — storage upload() path has no tenant prefix or ownership check",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Storage object path without a tenant prefix (cross-tenant object read/overwrite)",
+    "location": "pages/api/upload-safe.js:14",
+    "status": "Open",
+    "evidence": "Heuristic \"storage-tenant-scope\" matched `storage.from(...).upload(req.query.name, …)`, whose path does not mention a tenant/org discriminator or a session accessor.",
+    "impact": "In a shared bucket, one tenant can overwrite or read another tenant's object by supplying the same filename — the path is the only isolation gate and it carries no tenant scope.",
+    "fix": "Prefix the object path with the tenant/org id from the verified session (e.g. `${session.user.tenantId}/${filename}`), and validate the caller owns that prefix before serving a download.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "STORAGE-path-no-tenant-upload-pages-api-upload-js-330",
+    "title": "pages/api/upload.js — storage upload() path has no tenant prefix or ownership check",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Storage object path without a tenant prefix (cross-tenant object read/overwrite)",
+    "location": "pages/api/upload.js:7",
+    "status": "Open",
+    "evidence": "Heuristic \"storage-tenant-scope\" matched `storage.from(...).upload(req.query.name, …)`, whose path does not mention a tenant/org discriminator or a session accessor.",
+    "impact": "In a shared bucket, one tenant can overwrite or read another tenant's object by supplying the same filename — the path is the only isolation gate and it carries no tenant scope.",
+    "fix": "Prefix the object path with the tenant/org id from the verified session (e.g. `${session.user.tenantId}/${filename}`), and validate the caller owns that prefix before serving a download.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "STORAGE-path-no-tenant-upload-src-owasp-mt-storage-path-no-tenant-ts-440",
+    "title": "src/owasp-mt/storage-path-no-tenant.ts — storage upload() path has no tenant prefix or ownership check",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Storage object path without a tenant prefix (cross-tenant object read/overwrite)",
+    "location": "src/owasp-mt/storage-path-no-tenant.ts:9",
+    "status": "Open",
+    "evidence": "Heuristic \"storage-tenant-scope\" matched `storage.from(...).upload(filename, …)`, whose path does not mention a tenant/org discriminator or a session accessor.",
+    "impact": "In a shared bucket, one tenant can overwrite or read another tenant's object by supplying the same filename — the path is the only isolation gate and it carries no tenant scope.",
+    "fix": "Prefix the object path with the tenant/org id from the verified session (e.g. `${session.user.tenantId}/${filename}`), and validate the caller owns that prefix before serving a download.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "STORAGE-path-no-tenant-download-src-owasp-mt-storage-path-no-tenant-ts-574",
+    "title": "src/owasp-mt/storage-path-no-tenant.ts — storage download() path has no tenant prefix or ownership check",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Broken access control",
+    "taxonomy": "Storage object path without a tenant prefix (cross-tenant object read/overwrite)",
+    "location": "src/owasp-mt/storage-path-no-tenant.ts:13",
+    "status": "Open",
+    "evidence": "Heuristic \"storage-tenant-scope\" matched `storage.from(...).download(filename, …)`, whose path does not mention a tenant/org discriminator or a session accessor.",
+    "impact": "In a shared bucket, one tenant can overwrite or read another tenant's object by supplying the same filename — the path is the only isolation gate and it carries no tenant scope.",
+    "fix": "Prefix the object path with the tenant/org id from the verified session (e.g. `${session.user.tenantId}/${filename}`), and validate the caller owns that prefix before serving a download.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
     "cwe": [
       "CWE-639: Authorization Bypass Through User-Controlled Key"
     ],

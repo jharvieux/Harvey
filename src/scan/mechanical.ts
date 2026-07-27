@@ -18,6 +18,9 @@ import { scanPgIdor } from "./pg-idor.js";
 import { scanPrismaTenantScope } from "./prisma-tenant-scope.js";
 import { scanDrizzleTenantScope } from "./drizzle-tenant-scope.js";
 import { scanClientSuppliedTenant } from "./client-supplied-tenant.js";
+import { scanTenantGucScope } from "./tenant-guc-scope.js";
+import { scanCacheTenantScope } from "./cache-tenant-scope.js";
+import { scanStorageTenantScope } from "./storage-tenant-scope.js";
 import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
@@ -58,13 +61,18 @@ import {
   inferAuthMethodsFromSource,
   type TenancyOverride,
 } from "./supabase-static.js";
-import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, licenseCoverageFinding, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, type DependencyMap } from "./supply-chain.js";
+import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, type DependencyMap } from "./supply-chain.js";
 import { checkWebExtensionManifest } from "./webext-manifest.js";
-import { lockfileLicenses, lockfileVersions } from "../sbom.js";
+import { licenseScope } from "../sbom.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
   devDependencies?: DependencyMap;
+  // #1213: license candidates only. The other manifest checks keep the narrower prod+dev set —
+  // a peer range is deliberately wide, so feeding it to checkUnpinnedDependencies would be a
+  // false positive, and widening them is tracked separately.
+  optionalDependencies?: DependencyMap;
+  peerDependencies?: DependencyMap;
   scripts?: Record<string, string>;
 }
 
@@ -119,11 +127,14 @@ interface MechanicalScanOptions {
   // Opt-in: the free-report path (quick-scan) wants them; the calibration gate and the other
   // M1-scoring callers keep the M1-only default so their answer keys stay one-question keys.
   handrolledIndicators?: boolean;
-  // Skip checkLicenseCompliance/checkSlopsquat — the only two live npm-registry calls in this
-  // scan. Default false (real engagements always run both). The deterministic dry-run harness
-  // (src/cli/dry-run.ts) is the one caller that opts in: its committed findings.json is supposed
-  // to be reproducible across machines, and a registry-reachability dependency would let it drift
-  // on an offline/blipped CI run for reasons that have nothing to do with the scanner's own code.
+  // Make no live npm-registry request: skip checkSlopsquat entirely and pin off
+  // checkLicenseCompliance's registry FALLBACK (#1213 — that check classifies from the lockfile
+  // with no network, so skipping the whole tier would hide a real copyleft detection rather than a
+  // nondeterministic one). Default false (real engagements always run both in full). The
+  // deterministic dry-run harness (src/cli/dry-run.ts) is the one caller that opts in: its
+  // committed findings.json is supposed to be reproducible across machines, and a
+  // registry-reachability dependency would let it drift on an offline/blipped CI run for reasons
+  // that have nothing to do with the scanner's own code.
   skipNetworkChecks?: boolean;
 }
 
@@ -327,17 +338,20 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkInstallScripts(pkg.scripts ?? {}));
       if (skipNetworkChecks) {
         // #1067 — a deliberately skipped tier is still an unassessed tier. The committed dry-run
-        // artifact has to SAY these two never ran, or its silence reads as two clean verdicts.
+        // artifact has to SAY this never ran, or its silence reads as a clean verdict.
         findings.push(slopsquatCoverageFinding(Object.keys(allDeps), NETWORK_SKIPPED_REASON));
-        findings.push(licenseCoverageFinding(Object.keys(allDeps), NETWORK_SKIPPED_REASON));
       } else {
         findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
-        // #456 — license compliance (SPDX + copyleft/unknown flags). #1079: the lockfile Harvey
-        // already parses for the SBOM answers most of these, so pass it in — the registry is only
-        // queried for names it does not cover. #1099: also pass the resolved-version map so a
-        // registry fallback reads the INSTALLED version's license, not the latest publish's.
-        findings.push(...(await checkLicenseCompliance(allDeps, fetch, lockfileLicenses(scanDir), lockfileVersions(scanDir))));
       }
+      // #456 — license compliance (SPDX + copyleft/unknown flags). #1213: the candidate set is the
+      // RESOLVED TREE, not the manifest — a copyleft package reached only transitively was
+      // previously never submitted to the check — plus the manifest's optional/peer deps, which
+      // are exactly where a package's platform binaries (the ATC `@img/sharp-*` case) live.
+      // The classification itself is offline for a lockfile that records licenses, so unlike
+      // checkSlopsquat it still runs under skipNetworkChecks; only the registry fallback is pinned
+      // off, and the packages that leaves unclassified are named in SUP-LICENSE-00.
+      const licenseNames = Object.keys({ ...allDeps, ...pkg.optionalDependencies, ...pkg.peerDependencies });
+      findings.push(...(await checkLicenseCompliance(licenseScope(scanDir, licenseNames), { skipRegistry: skipNetworkChecks })));
     }
     findings.push(...checkLockfilePresence(scanDir));
 
@@ -374,6 +388,22 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // predicate is PRESENT and names the right column, and its VALUE comes from the request. OWASP
     // Multi-Tenant CS section 1 ("Never trust client-supplied tenant IDs").
     findings.push(...scanClientSuppliedTenant(scanDir));
+
+    // #1195 — a tenant GUC set with SET rather than SET LOCAL / set_config(..., true): the setting
+    // outlives its transaction under transaction-mode pooling, so a later request on that reused
+    // connection is evaluated against the previous tenant's identifier.
+    findings.push(...scanTenantGucScope(scanDir));
+
+    // #1196 — a cache key derived from the resource id alone, with no tenant discriminator, in a
+    // function that already has one in scope: the first tenant to populate the entry serves its
+    // rows to every other tenant asking for the same resource id.
+    findings.push(...scanCacheTenantScope(scanDir));
+
+    // #1198 — a Supabase storage object path built from the caller-supplied filename alone, with no
+    // tenant prefix or ownership check: one tenant overwrites and reads another's objects in a
+    // shared bucket. Distinct from AUTH-upload-no-limit (leftover-auth.ts), which fires on the same
+    // shape for an unrelated defect (no size/MIME limit).
+    findings.push(...scanStorageTenantScope(scanDir));
 
     // #664 — service_role key hardcoded as a JWT literal (same-file or cross-file const) and
     // passed to createClient. Real base64 decode + role/iss claim check, incl. plain .js.

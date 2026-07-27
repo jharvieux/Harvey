@@ -131,6 +131,13 @@ describe("classifyLeftoverAuth", () => {
     expect(has(classifyLeftoverAuth({ path: "lib/memo.js", content: cache }), INMEM)).toBe(false);
   });
 
+  // #1197: `new Map<string, number>()` — a generic value type, the idiomatic TS form — missed
+  // entirely before the class-name regex admitted a `<...>` type argument.
+  it("flags a limiter whose counter is a Map with an explicit generic type", () => {
+    const generic = "const hits = new Map<string, number>();\nexport function allowRequest(route: string): boolean { const n = (hits.get(route) ?? 0) + 1; hits.set(route, n); return n < 1000; }";
+    expect(has(classifyLeftoverAuth({ path: "lib/limit.ts", content: generic }), INMEM)).toBe(true);
+  });
+
   it("does not flag a limiter-named helper with no module-scope store (the counter lives elsewhere)", () => {
     const perRequest = "export function rateLimit(req) { const attempts = new Map(); return attempts.size <= 10; }";
     expect(has(classifyLeftoverAuth({ path: "lib/limit.js", content: perRequest }), INMEM)).toBe(false);
