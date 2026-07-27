@@ -273,7 +273,15 @@ async function vitalsDrift(): Promise<never> {
       const seed = join(repoRoot, "src/__fixtures__/vitals-recapture/seed.py");
       const outFile = join(mkdtempSync(join(tmpdir(), "harvey-vitals-drift-")), "vitals-report.json");
       try {
-        execFileSync("python3", [seed, "--out", outFile], { encoding: "utf8", stdio: ["ignore", "ignore", "inherit"] });
+        try {
+          execFileSync("python3", [seed, "--out", outFile], { encoding: "utf8", stdio: ["ignore", "ignore", "inherit"] });
+        } catch (err) {
+          // The seed's stderr is inherited, so its own failure message is already in the log
+          // directly above. What the bare throw added was a Node stack plus `stdout: null,
+          // stderr: null` on the error object — which reads as "python3 itself blew up", and
+          // #1206 was filed on exactly that misreading. Point at the real output instead.
+          fail("vitals", `the re-capture seed ${relative(repoRoot, seed)} exited non-zero — ITS OWN OUTPUT IS IMMEDIATELY ABOVE THIS LINE and is the evidence to read. (${(err as Error).message})`);
+        }
         const parsed = JSON.parse(readFileSync(outFile, "utf8")) as VitalsReport & { _note?: string };
         delete parsed._note;
         return { parsed, summary: `vitals ${version} over the seeded M3 corpus — ${parsed.hotspots.length} hotspot(s), ${parsed.knowledge_risk.length} truck-factor row(s), ${parsed.coupling.length} coupling edge(s)` };

@@ -126,8 +126,26 @@ def git(repo, *args, author=None, when=None):
         env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = email
     if when is not None:
         env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = f"@{when} +0000"
-    subprocess.run(["git", "-C", repo, *args], check=True, env=env,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Output is CAPTURED, not discarded (#1206). This used to be stderr=DEVNULL, and when a
+    # `commit` here started failing intermittently in CI the job log carried only a Python
+    # traceback and `returned non-zero exit status 1` — git's own message, the one piece of
+    # evidence that would name the cause, had been thrown away. 85 runs across macOS and
+    # ubuntu:24.04 (loaded and unloaded, 2026-07-27) did not reproduce it, so the next CI
+    # occurrence is the only remaining source of evidence and it has to arrive readable.
+    # `git status` is dumped alongside because exit 1 is git's code for "nothing to commit",
+    # which would mean the preceding `add` staged nothing — that is the hypothesis to confirm
+    # or kill, not a conclusion.
+    r = subprocess.run(["git", "-C", repo, *args], env=env,
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        status = subprocess.run(["git", "-C", repo, "status", "--porcelain"],
+                                capture_output=True, text=True)
+        sys.exit(
+            f"git {' '.join(args)} failed (exit {r.returncode}) in {repo}\n"
+            f"--- git stdout ---\n{r.stdout}"
+            f"--- git stderr ---\n{r.stderr}"
+            f"--- git status --porcelain ---\n{status.stdout}{status.stderr}"
+        )
 
 
 def write_file(repo, path, body, rev):
