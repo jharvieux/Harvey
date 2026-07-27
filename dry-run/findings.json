@@ -14424,6 +14424,246 @@
     ]
   },
   {
+    "id": "SEC-POWERED-BY-lib-express-cors-nocreds-js-358",
+    "title": "Express app never disables the X-Powered-By response header",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Information disclosure",
+    "taxonomy": "Framework version disclosed via X-Powered-By",
+    "location": "lib/express-cors-nocreds.js:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no `disable(\"x-powered-by\")`, `set(\"x-powered-by\", false)`, `removeHeader(\"X-Powered-By\")` or helmet use appears anywhere in lib/express-cors-nocreds.js — Express therefore sets `X-Powered-By: Express` on every response this app serves. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. A disable applied in another module that imports this app, or a header stripped at a reverse proxy, CDN or ingress in front of it, is OUTSIDE what this pass can see — so a live response may well not carry the header. Confirm against the deployed response before treating this as present.",
+    "impact": "Every response names the server framework, which lets an attacker skip fingerprinting and go straight to Express- and middleware-specific exploits when a CVE lands. Low on its own; it is reconnaissance that shortens the path to a real finding.",
+    "fix": "Call `app.disable(\"x-powered-by\")` immediately after creating the app (or mount `helmet()`, whose hidePoweredBy default removes it). If the header is already stripped at a proxy or CDN, keep the app-level disable anyway so the app is not dependent on the edge staying configured.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEC-POWERED-BY-lib-express-cors-origintrue-nocreds-js-355",
+    "title": "Express app never disables the X-Powered-By response header",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Information disclosure",
+    "taxonomy": "Framework version disclosed via X-Powered-By",
+    "location": "lib/express-cors-origintrue-nocreds.js:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no `disable(\"x-powered-by\")`, `set(\"x-powered-by\", false)`, `removeHeader(\"X-Powered-By\")` or helmet use appears anywhere in lib/express-cors-origintrue-nocreds.js — Express therefore sets `X-Powered-By: Express` on every response this app serves. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. A disable applied in another module that imports this app, or a header stripped at a reverse proxy, CDN or ingress in front of it, is OUTSIDE what this pass can see — so a live response may well not carry the header. Confirm against the deployed response before treating this as present.",
+    "impact": "Every response names the server framework, which lets an attacker skip fingerprinting and go straight to Express- and middleware-specific exploits when a CVE lands. Low on its own; it is reconnaissance that shortens the path to a real finding.",
+    "fix": "Call `app.disable(\"x-powered-by\")` immediately after creating the app (or mount `helmet()`, whose hidePoweredBy default removes it). If the header is already stripped at a proxy or CDN, keep the app-level disable anyway so the app is not dependent on the edge staying configured.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEC-POWERED-BY-lib-express-cors-origintrue-js-524",
+    "title": "Express app never disables the X-Powered-By response header",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Information disclosure",
+    "taxonomy": "Framework version disclosed via X-Powered-By",
+    "location": "lib/express-cors-origintrue.js:9",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no `disable(\"x-powered-by\")`, `set(\"x-powered-by\", false)`, `removeHeader(\"X-Powered-By\")` or helmet use appears anywhere in lib/express-cors-origintrue.js — Express therefore sets `X-Powered-By: Express` on every response this app serves. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. A disable applied in another module that imports this app, or a header stripped at a reverse proxy, CDN or ingress in front of it, is OUTSIDE what this pass can see — so a live response may well not carry the header. Confirm against the deployed response before treating this as present.",
+    "impact": "Every response names the server framework, which lets an attacker skip fingerprinting and go straight to Express- and middleware-specific exploits when a CVE lands. Low on its own; it is reconnaissance that shortens the path to a real finding.",
+    "fix": "Call `app.disable(\"x-powered-by\")` immediately after creating the app (or mount `helmet()`, whose hidePoweredBy default removes it). If the header is already stripped at a proxy or CDN, keep the app-level disable anyway so the app is not dependent on the edge staying configured.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEC-POWERED-BY-lib-express-cors-safe-js-366",
+    "title": "Express app never disables the X-Powered-By response header",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Information disclosure",
+    "taxonomy": "Framework version disclosed via X-Powered-By",
+    "location": "lib/express-cors-safe.js:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no `disable(\"x-powered-by\")`, `set(\"x-powered-by\", false)`, `removeHeader(\"X-Powered-By\")` or helmet use appears anywhere in lib/express-cors-safe.js — Express therefore sets `X-Powered-By: Express` on every response this app serves. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. A disable applied in another module that imports this app, or a header stripped at a reverse proxy, CDN or ingress in front of it, is OUTSIDE what this pass can see — so a live response may well not carry the header. Confirm against the deployed response before treating this as present.",
+    "impact": "Every response names the server framework, which lets an attacker skip fingerprinting and go straight to Express- and middleware-specific exploits when a CVE lands. Low on its own; it is reconnaissance that shortens the path to a real finding.",
+    "fix": "Call `app.disable(\"x-powered-by\")` immediately after creating the app (or mount `helmet()`, whose hidePoweredBy default removes it). If the header is already stripped at a proxy or CDN, keep the app-level disable anyway so the app is not dependent on the edge staying configured.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEC-POWERED-BY-lib-express-cors-js-343",
+    "title": "Express app never disables the X-Powered-By response header",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Information disclosure",
+    "taxonomy": "Framework version disclosed via X-Powered-By",
+    "location": "lib/express-cors.js:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no `disable(\"x-powered-by\")`, `set(\"x-powered-by\", false)`, `removeHeader(\"X-Powered-By\")` or helmet use appears anywhere in lib/express-cors.js — Express therefore sets `X-Powered-By: Express` on every response this app serves. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. A disable applied in another module that imports this app, or a header stripped at a reverse proxy, CDN or ingress in front of it, is OUTSIDE what this pass can see — so a live response may well not carry the header. Confirm against the deployed response before treating this as present.",
+    "impact": "Every response names the server framework, which lets an attacker skip fingerprinting and go straight to Express- and middleware-specific exploits when a CVE lands. Low on its own; it is reconnaissance that shortens the path to a real finding.",
+    "fix": "Call `app.disable(\"x-powered-by\")` immediately after creating the app (or mount `helmet()`, whose hidePoweredBy default removes it). If the header is already stripped at a proxy or CDN, keep the app-level disable anyway so the app is not dependent on the edge staying configured.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEC-POWERED-BY-src-owasp-node-hpp-param-normalized-ts-258",
+    "title": "Express app never disables the X-Powered-By response header",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Information disclosure",
+    "taxonomy": "Framework version disclosed via X-Powered-By",
+    "location": "src/owasp-node/hpp-param-normalized.ts:6",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no `disable(\"x-powered-by\")`, `set(\"x-powered-by\", false)`, `removeHeader(\"X-Powered-By\")` or helmet use appears anywhere in src/owasp-node/hpp-param-normalized.ts — Express therefore sets `X-Powered-By: Express` on every response this app serves. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. A disable applied in another module that imports this app, or a header stripped at a reverse proxy, CDN or ingress in front of it, is OUTSIDE what this pass can see — so a live response may well not carry the header. Confirm against the deployed response before treating this as present.",
+    "impact": "Every response names the server framework, which lets an attacker skip fingerprinting and go straight to Express- and middleware-specific exploits when a CVE lands. Low on its own; it is reconnaissance that shortens the path to a real finding.",
+    "fix": "Call `app.disable(\"x-powered-by\")` immediately after creating the app (or mount `helmet()`, whose hidePoweredBy default removes it). If the header is already stripped at a proxy or CDN, keep the app-level disable anyway so the app is not dependent on the edge staying configured.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEC-POWERED-BY-src-owasp-node-hpp-param-pollution-ts-447",
+    "title": "Express app never disables the X-Powered-By response header",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Information disclosure",
+    "taxonomy": "Framework version disclosed via X-Powered-By",
+    "location": "src/owasp-node/hpp-param-pollution.ts:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no `disable(\"x-powered-by\")`, `set(\"x-powered-by\", false)`, `removeHeader(\"X-Powered-By\")` or helmet use appears anywhere in src/owasp-node/hpp-param-pollution.ts — Express therefore sets `X-Powered-By: Express` on every response this app serves. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. A disable applied in another module that imports this app, or a header stripped at a reverse proxy, CDN or ingress in front of it, is OUTSIDE what this pass can see — so a live response may well not carry the header. Confirm against the deployed response before treating this as present.",
+    "impact": "Every response names the server framework, which lets an attacker skip fingerprinting and go straight to Express- and middleware-specific exploits when a CVE lands. Low on its own; it is reconnaissance that shortens the path to a real finding.",
+    "fix": "Call `app.disable(\"x-powered-by\")` immediately after creating the app (or mount `helmet()`, whose hidePoweredBy default removes it). If the header is already stripped at a proxy or CDN, keep the app-level disable anyway so the app is not dependent on the edge staying configured.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEC-POWERED-BY-src-owasp-node-no-request-size-limit-ts-323",
+    "title": "Express app never disables the X-Powered-By response header",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Information disclosure",
+    "taxonomy": "Framework version disclosed via X-Powered-By",
+    "location": "src/owasp-node/no-request-size-limit.ts:6",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no `disable(\"x-powered-by\")`, `set(\"x-powered-by\", false)`, `removeHeader(\"X-Powered-By\")` or helmet use appears anywhere in src/owasp-node/no-request-size-limit.ts — Express therefore sets `X-Powered-By: Express` on every response this app serves. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. A disable applied in another module that imports this app, or a header stripped at a reverse proxy, CDN or ingress in front of it, is OUTSIDE what this pass can see — so a live response may well not carry the header. Confirm against the deployed response before treating this as present.",
+    "impact": "Every response names the server framework, which lets an attacker skip fingerprinting and go straight to Express- and middleware-specific exploits when a CVE lands. Low on its own; it is reconnaissance that shortens the path to a real finding.",
+    "fix": "Call `app.disable(\"x-powered-by\")` immediately after creating the app (or mount `helmet()`, whose hidePoweredBy default removes it). If the header is already stripped at a proxy or CDN, keep the app-level disable anyway so the app is not dependent on the edge staying configured.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEC-POWERED-BY-src-owasp-node-request-size-limit-set-ts-229",
+    "title": "Express app never disables the X-Powered-By response header",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Information disclosure",
+    "taxonomy": "Framework version disclosed via X-Powered-By",
+    "location": "src/owasp-node/request-size-limit-set.ts:6",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no `disable(\"x-powered-by\")`, `set(\"x-powered-by\", false)`, `removeHeader(\"X-Powered-By\")` or helmet use appears anywhere in src/owasp-node/request-size-limit-set.ts — Express therefore sets `X-Powered-By: Express` on every response this app serves. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. A disable applied in another module that imports this app, or a header stripped at a reverse proxy, CDN or ingress in front of it, is OUTSIDE what this pass can see — so a live response may well not carry the header. Confirm against the deployed response before treating this as present.",
+    "impact": "Every response names the server framework, which lets an attacker skip fingerprinting and go straight to Express- and middleware-specific exploits when a CVE lands. Low on its own; it is reconnaissance that shortens the path to a real finding.",
+    "fix": "Call `app.disable(\"x-powered-by\")` immediately after creating the app (or mount `helmet()`, whose hidePoweredBy default removes it). If the header is already stripped at a proxy or CDN, keep the app-level disable anyway so the app is not dependent on the edge staying configured.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEC-POWERED-BY-src-owasp-node-x-powered-by-exposed-ts-401",
+    "title": "Express app never disables the X-Powered-By response header",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Information disclosure",
+    "taxonomy": "Framework version disclosed via X-Powered-By",
+    "location": "src/owasp-node/x-powered-by-exposed.ts:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no `disable(\"x-powered-by\")`, `set(\"x-powered-by\", false)`, `removeHeader(\"X-Powered-By\")` or helmet use appears anywhere in src/owasp-node/x-powered-by-exposed.ts — Express therefore sets `X-Powered-By: Express` on every response this app serves. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. A disable applied in another module that imports this app, or a header stripped at a reverse proxy, CDN or ingress in front of it, is OUTSIDE what this pass can see — so a live response may well not carry the header. Confirm against the deployed response before treating this as present.",
+    "impact": "Every response names the server framework, which lets an attacker skip fingerprinting and go straight to Express- and middleware-specific exploits when a CVE lands. Low on its own; it is reconnaissance that shortens the path to a real finding.",
+    "fix": "Call `app.disable(\"x-powered-by\")` immediately after creating the app (or mount `helmet()`, whose hidePoweredBy default removes it). If the header is already stripped at a proxy or CDN, keep the app-level disable anyway so the app is not dependent on the edge staying configured.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
     "id": "SEC-RAW-BODY-src-owasp-node-no-request-size-limit-ts-430",
     "title": "req.on(\"data\", ...) accumulates the request body with no size limit",
     "severity": "Medium",

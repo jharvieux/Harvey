@@ -179,6 +179,10 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Batch send stamped after dispatch instead of claimed before": ["362", null],
   "External send without a deterministic idempotency key": ["837", null],
   "Idempotency row written before the dispatched handler": ["754", null],
+  // #1204: X-Powered-By names the server framework to any caller. MEASURED against MITRE's own
+  // CWE-200 page (cwe.mitre.org/data/definitions/200.html, 2026-07-27): Memberships lists "OWASP
+  // Top Ten 2021 Category A01:2021 - Broken Access Control".
+  "Framework version disclosed via X-Powered-By": ["200", "A01"],
 };
 
 // Non-security taxonomies: recorded as no-clean-CWE WITH A REASON rather than left unclassified.

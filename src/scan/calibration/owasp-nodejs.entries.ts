@@ -30,12 +30,17 @@
 //     with unsafe-inline, cookie HttpOnly/Secure/SameSite, session cookie flags. All in b5-headers
 //     above. Checking the header an app actually sets is the right test; an app that sets them by
 //     hand instead of through helmet is correct and must not be flagged.
-//   UNDECIDED, and openly so — "use helmet" and "remove X-Powered-By" (P-OWASP-NODE-POWERED-BY
-//     below). These are library-adoption and version-disclosure items rather than defects, and the
-//     recommendation on the table is to decline them as a disclosed scope boundary. That is a
-//     PRODUCT RULING, not an engineering call, so it is not made here: it is an open operator
-//     decision in #1204. The entry stays gapKind "measured-gap" until it is ruled on — calling it
-//     "by-design" before anyone decided it is by design would be the misreport types.ts warns about.
+//   RULED ON 2026-07-27 (#1204), and the two halves of that sheet line went OPPOSITE ways, which is
+//     why they are now two entries rather than one. "Remove or obfuscate X-Powered-By" is DETECTED
+//     (P-OWASP-NODE-POWERED-BY, review tier, src/scan/express-powered-by.ts) — it is a real, if
+//     small, version disclosure, and the two things a static pass cannot see (a disable applied in
+//     another module, a strip at a reverse proxy/CDN/ingress) are stated IN the emitted finding
+//     rather than in a comment nobody downstream reads. "Use helmet middleware" is DECLINED
+//     (P-OWASP-NODE-HELMET, gapKind "by-design") — an app that sets the same headers by hand is
+//     correct, so flagging the missing import would be a false positive on working code, and the
+//     headers themselves are already checked by effect in b5-headers. The decline is a recorded
+//     decisional reason in src/scan/express-powered-by.ts; the detected half carries no gapKind at
+//     all, because it is no longer a gap of any kind.
 //
 // MEASURED 2026-07-26 (`quick-scan --dir targets/calibration`, 472 findings): of the eight
 // recommendations planted here, ZERO were detected as the recommendation under test.
@@ -49,9 +54,10 @@
 // by detectSyncIoInHandler (src/detectors/perf-code.ts), so it is tagged `module: "M7"` below and
 // excluded from THIS gate's M1 mechanical scoring — see its own note and
 // calibration.test.ts's "#1203 M7 blocking-loop" block for how it's actually proven caught.
-// POWERED-BY is untouched by this round (out of scope for #1200-#1203) — still recorded
-// gapKind "measured-gap" below, as it was; the scope-boundary re-tier its own note suggests is a
-// separate call for whoever picks that row up, not folded in here.
+// POWERED-BY was untouched by that round (out of scope for #1200-#1203) and is now closed by #1204,
+// which split it: the X-Powered-By half is caught at review tier (re-measured after the rule landed,
+// `quick-scan --dir targets/calibration`, 2026-07-27), the helmet half is a declined boundary. That
+// makes all eight of the original recommendations accounted for — seven detected, one by design.
 //
 // THREE OF THE EIGHT FIXTURES DID PRODUCE FINDINGS — FOR DIFFERENT DEFECTS. This is the single most
 // important thing in this file, and it is why every entry below carries a scoped `match`:
@@ -191,12 +197,32 @@ export const owaspNodejsEntries: CorpusEntry[] = [
   {
     id: "P-OWASP-NODE-POWERED-BY",
     kind: "positive",
-    cls: "Express app with neither helmet nor x-powered-by disabled",
+    cls: "Express app whose constructing module never disables X-Powered-By",
     location: "src/owasp-node/x-powered-by-exposed.ts",
-    match: ["x-powered-by", "helmet"],
+    // NOT "x-powered-by" — that string is in the fixture's own PATH, so it matches any finding on
+    // this file regardless of which rule produced it (the header note's self-match footgun). Nor
+    // "helmet", which is the OTHER half of this sheet line and is deliberately not detected.
+    match: ["version disclosed"],
+    expectedTier: "review",
+    note: "Sheet, Server Security: 'Remove or obfuscate X-Powered-By header.' Was MEASURED zero findings (2026-07-26). #1204 ruled DETECT: src/scan/express-powered-by.ts flags an Express app whose constructing module has no `disable(\"x-powered-by\")` / `set(\"x-powered-by\", false)` / `removeHeader` / helmet use, re-measured caught at review tier 2026-07-27. Review tier is the honest tier and the finding says why: a disable in a module this pass did not read, or a strip at a reverse proxy/CDN/ingress, is invisible to it — that bound is in the emitted evidence, not only here. The 'use helmet middleware' half of the same sheet line is a separate entry (P-OWASP-NODE-HELMET) and is declined by design.",
+  },
+  {
+    id: "N-OWASP-NODE-POWERED-BY-DISABLED",
+    kind: "negative",
+    cls: "Express app that disables X-Powered-By in the same module",
+    location: "src/owasp-node/x-powered-by-disabled.ts",
+    match: ["version disclosed"],
+    note: "#1204 negative: identical app shape to the positive plus `app.disable(\"x-powered-by\")`, which clears the check. Regression guard that the rule keys on the absent disable and not merely on `express()`.",
+  },
+  {
+    id: "P-OWASP-NODE-HELMET",
+    kind: "positive",
+    cls: "Express app that adopts no header middleware and sets the same headers by hand",
+    location: "src/owasp-node/security-headers-by-hand.ts",
+    match: ["helmet"],
     expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, Server Security: 'Remove or obfuscate X-Powered-By header' and 'Use helmet middleware to set appropriate security headers.' MEASURED: zero findings. WORTH A SCOPE DECISION RATHER THAN A DETECTOR: b5-headers already covers the headers that matter (HSTS, X-Frame-Options, nosniff, CSP) by their effect, and 'helmet is not imported' is a library-adoption check, not a defect — an app setting the same headers by hand is correct and would be a false positive. Version disclosure is Info at best. Recommend recording this as a deliberate, DISCLOSED scope boundary and re-tiering to gapKind 'by-design'. That is an operator ruling, not ours to make, and it is open in #1204; until it is made the entry stays a measured-gap, because a gap nobody has ruled on is not yet by design.",
+    gapKind: "by-design",
+    note: "Sheet, Server Security: 'Use helmet middleware to set appropriate security headers.' DECLINED by the #1204 operator ruling, and by-design rather than a measured gap: 'helmet is not imported' is a library-adoption check, not a defect. This fixture is the case that proves it — it sets HSTS, nosniff and X-Frame-Options by hand and is CORRECT, so a helmet-adoption rule would be a false positive on working code. The headers helmet would have set are checked by their effect instead (b5-headers), which is agnostic to which package set them. The reason block is recorded in src/scan/express-powered-by.ts (KIND: decisional, OWNER: operator, DECISION: #1204). Any rule that ever fires on this fixture fails the gate loud — that is the point of scoring a declined boundary rather than deleting the row.",
   },
   {
     id: "P-OWASP-NODE-SENSITIVE-CACHE",
