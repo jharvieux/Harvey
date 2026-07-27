@@ -749,6 +749,16 @@ rules:
       - *request_source
     pattern-sanitizers:
       - pattern: path.basename(...)
+      # #1240: A VALUE USED AS A QUERY FILTER DOES NOT TAINT THE QUERY'S RESULT. Once the Server
+      # Component / route-handler `params` prop became a source, semgrep — which has no notion of a
+      # database boundary — propagated request taint through `.eq("id", params.jobId)` into the row
+      # that came BACK, and then into a storage path built from that row's column. MEASURED
+      # 2026-07-27 on targets/calibration: that is precisely the false positive N-STORAGE-DB-PATH
+      # exists to charge for (#1220 — a real ATC route an external tool flagged and Harvey correctly
+      # did not). A WHERE value selects rows; it never becomes one. Nothing is lost by cutting it:
+      # the STORED variant of this class is a separate rule that takes the DB read as its SOURCE.
+      - pattern: $Q.eq(...)
+      - pattern: $Q.match(...)
       # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that
       # returns on failure, not transformed. Matched as a whole STATEMENT (test AND early return),
       # by-side-effect on the guarded variable. Soundness constraints, each with a calibration
