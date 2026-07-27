@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, join } from "node:path";
 import { verifySuggestedFix } from "../trackers/fix-diff.js";
 import { blastRadiusOf, checkBlastRadius, parseDiffFacts, type DiffCap } from "./rails.js";
+import type { DetectorRun } from "./verify.js";
 
 // "diff-verified" is the only success, and it still means an INERT diff on disk — never an applied
 // fix. Everything else names why not, so a caller cannot mistake silence for success.
@@ -33,6 +34,10 @@ export interface FixExecution {
   railViolations: string[];
   verification?: string; // how verifySuggestedFix decided, verbatim
   abortReason?: string;
+  // Present only when `detectorAfter` was supplied AND the diff verified: the finding's own detector
+  // re-run against the applied worktree (§2.3). Absent ⇒ the detector was never re-run here (no hook,
+  // or the diff didn't clear the apply gate) — a caller must treat that as not-clean, never as green.
+  detectorAfter?: DetectorRun;
 }
 
 interface ExecuteOptions {
@@ -43,6 +48,11 @@ interface ExecuteOptions {
   // Optional ground-truth check run inside the worktree after the diff applies (§2.2). Absent ⇒
   // apply-clean is the only gate, and the record says so.
   effectCommand?: string[];
+  // Optional detector-after re-run (§2.3): once the diff applies clean, apply it into the worktree and
+  // re-run the finding's own detector against the FIXED source. The interactive implementer (#1056)
+  // uses this to score green from the same disposable worktree — the untrusted operator diff has to
+  // make the detector stop firing, not just apply. Absent ⇒ apply-clean is the whole gate.
+  detectorAfter?: (worktreeDir: string) => DetectorRun;
 }
 
 // stderr is piped, not inherited: the client repo's git chatter ("Preparing worktree…", a failed
@@ -98,7 +108,16 @@ export function executeFixDiff(findingId: string, diff: string, opts: ExecuteOpt
   try {
     git(opts.targetDir, ["worktree", "add", "--detach", worktree, opts.baselineCommit]);
     const result = verifySuggestedFix(diff, { targetDir: worktree, effectCommand: opts.effectCommand });
-    return { ...base, outcome: result.verified ? "diff-verified" : "verify-failed", verification: result.detail };
+    if (!result.verified) return { ...base, outcome: "verify-failed", verification: result.detail };
+    // Detector-after (§2.3): verifySuggestedFix only `git apply --check`s, so the worktree is still at
+    // baseline. Apply the diff for real, then re-run the detector against the fixed source. The worktree
+    // is disposed in the finally, so no revert is needed.
+    let detectorAfter: DetectorRun | undefined;
+    if (opts.detectorAfter) {
+      execFileSync("git", ["-C", worktree, "apply", "-"], { input: diff, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      detectorAfter = opts.detectorAfter(worktree);
+    }
+    return { ...base, outcome: "diff-verified", verification: result.detail, ...(detectorAfter ? { detectorAfter } : {}) };
   } finally {
     disposeWorktree(opts.targetDir, worktree);
   }

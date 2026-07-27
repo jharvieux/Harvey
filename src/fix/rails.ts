@@ -31,7 +31,7 @@ export interface DiffCap {
 }
 
 // §3.1 rule 4 default; operator-tunable per engagement, never per finding.
-const DEFAULT_DIFF_CAP: DiffCap = { maxLines: 300, maxFiles: 10 };
+export const DEFAULT_DIFF_CAP: DiffCap = { maxLines: 300, maxFiles: 10 };
 
 function normalize(path: string): string {
   return path.replace(/^\.\//, "").replace(/\\/g, "/");
