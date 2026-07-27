@@ -2,7 +2,46 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-27 (afternoon) — **the conservation gate is now a REQUIRED check (#1205 closed)** and the OWASP ack-watch was found BROKEN and rebuilt in CI. 3 PRs merged. Newest block first._
+_Last updated: 2026-07-27 (evening) — **external-scanner comparison (Akido vs Harvey on ATC)**: 6 Harvey issues + 1 ATC security issue filed, 2 of my own claims measured FALSE. Newest block first._
+
+## 2026-07-27 (evening) — Akido-vs-Harvey comparison on ATC: taint SOURCE drift across 21 rules
+
+Operator supplied two screenshots of an external SAST tool's (Akido) findings on ATC and asked why Harvey did not report them. Everything below is MEASURED (semgrep 1.164.0, 2026-07-27), every probe run with a control expected to fire.
+
+### Filed — Harvey
+- **#1213** license compliance only checks DIRECT deps (`mechanical.ts:321`). ATC: 0 manifests declare `sharp`, 82 `@img/sharp` entries in `pnpm-lock.yaml`. Also: `optionalDependencies`/`peerDependencies` unmerged; `parsePnpmLock` never sets `license`; the `SUP-LICENSE-00` disclosure is scoped to direct deps so the transitive tier is never mentioned.
+- **#1221** ⭐ the big one — taint SOURCE vocabulary drift: **17/21 server rules blind to `await req.json()`, 19/21 to `searchParams.get()`**. 12 rules share a byte-identical stale block; `ssrf-fetch` is the only complete one. Accidental drift from #570/#984/#987/#601 landing non-uniformly.
+- **#1220** Supabase Storage is an unmodeled path-sink surface (`createSignedUrl`/`download`/`upload`/…), plus `fs/promises`. Gap 1 of it folded into #1221.
+- **#1222** `harvey-lib-*` captures App Router handlers (`export function $F($P,...)`), so some blind spots yield a finding **from the wrong rule at Medium instead of High**, messaged "an exported library function's parameter" for a public HTTP route. The #1062 masking shape via rule precedence. **Sequence AFTER #1221** — fixing attribution first converts wrong-severity into silence.
+- **#1223** DOM-XSS: `location.hash`/`location.search` not sources in xss.yml.
+- **#1224** per-rule judgment split from #1221 (prototype-pollution, unsafe-deserialization, crlf).
+
+### Filed — ATC (operator's own repo)
+- **jharvieux/ATC#2050** `imports/source-file/route.ts`: request-controlled `?path=` → **service-role** client (RLS bypassed) → `createSignedUrl`, guarded only by ``path.startsWith(`${ctx.tenant_id}/`)``. A prefix check is not containment: `<tenant>/../<other>/doc.pdf` passes. **NOT verified: whether Supabase Storage normalizes `../` in an object key** — needs a local-stack test, deliberately not asserted either way. The guard is wrong on its own terms regardless.
+
+### ⚠️ Two of my own claims measured FALSE — both the same harness error
+1. "Harvey has no detector for unpinned GitHub Actions" — **FALSE**. Harvey's full invocation finds **68** `github-actions-mutable-action-tag` on ATC's 17 workflows (incl. `prod-drift-check.yml`, which Akido named). Every ATC action is on a mutable `@v4`-style tag, **zero SHA pins**; the rule enforces the SHA bar. Recorded on #1212.
+2. "CI workflows are undisclosed" — **FALSE**. `src/scan/semgrep.ts:126` documents that CI config is deliberately excluded from the #903 infra disclosure *because Harvey does assess it*.
+
+**Root cause of both: a partial semgrep config fails silently and is indistinguishable from a coverage gap.** `--config p/security-audit` alone = 0 findings on YAML (2 of 225 rules are multilang, none GHA). The GHA rules come from the OTHER packs. Earlier the same day a relative `--config` after a `cd` loaded ZERO rules. **Always re-measure with the full invocation from `src/scan/semgrep.ts` (~831 loaded / 65 run) and check the stderr rule counts — and always include a control you expect to FIRE.** Method warning recorded on #1212 and #1221.
+
+### ⚠️ #1198's acceptance criteria would pin the vulnerable pattern as SAFE
+It says *"Silent on an upload whose path is prefixed with a session-derived tenant id."* ATC#2050 is exactly that and is still escapable. Commented there: the distinction is **path-CONSTRUCTED (safe) vs path-VALIDATED (still a finding)**, not whether a tenant id appears in the guard. Fix before implementing #1198.
+
+### Do NOT copy ssrf-fetch's source list when doing #1221 — measured FP blowup
+Bare `$SP.get(...)` fires on `Map.get`/`Headers.get`/`config.get`/`FormData.get` even with ssrf's `^(?!(https?|axios)$)` guard. Independently re-verified safe set (4/4 real shapes fire, 0/4 benign):
+```yaml
+- pattern: $U.searchParams.get(...)
+- pattern: $U.searchParams
+- pattern: await $REQ.json()
+```
+Also switch injection.yml's literal `req.` to the metavariable `$REQ.` form (headers.yml already does; it is why that rule catches a handler whose param is named `request`). YAML anchors work for DRY but resolve **per-file** — no cross-file shared source list without codegen.
+
+### Open — needs a run, not an argument
+The last assembled ATC deliverable (`reports/atc/findings.atc-2026-07-17.json`, 20 curated findings, "Tiers in scope: source") has **zero** CI/workflow and zero license rows, while the detector produces 68 CI rows today. That artifact is curated and predates the conservation work, so this is **not** proof of a drop — but "produces 68, delivers 0" is the produced-vs-delivered shape. **One fresh full run against ATC would settle it.** Deliberately not filed as an issue without the run.
+
+### CLAUDE.md relays owed from this block
+None. Checked — the infra-scope paragraph and the coverage-guard family are accurate as written.
 
 ## 2026-07-27 (afternoon) — resume: #1205 landed, and the ack-watch was not watching
 
