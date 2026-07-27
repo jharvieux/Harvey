@@ -50,10 +50,14 @@ type BoundMarker = { readonly name: string; readonly re: RegExp };
 
 // Deliberately narrow. The four in #1317's spec (NOTE:/LIMITATION:/does not cover/not assessed)
 // plus the close cousins actually in use in this repo's rule files. A broad net catches pattern
-// mechanics rather than bounds — "does not match" was measured on 2026-07-27 to fire 12 times here,
-// every one of them a description of correct NON-firing ("a short TTL (e.g. 300) does not match"),
-// which is the rule's intended edge and not an unassessed class. A gate that cries wolf gets an
-// ignore list, and an ignore list is the invisibility this gate exists to remove.
+// mechanics rather than bounds — the negated form of "match" was measured on 2026-07-27 to hit 16
+// comment lines across 15 rules (20 lines counting the file-header comments no rule owns), every
+// one of them a description of correct NON-firing ("a short TTL (e.g. 300) does not match"), which
+// is the rule's intended edge and not an unassessed class. A gate that cries wolf gets an ignore
+// list, and an ignore list is the invisibility this gate exists to remove. Re-measure rather than
+// trusting the number — the PR that added this gate quoted 12, which was wrong:
+//   grep -hiE "^ *#.*(does not|doesn't|do not|don't|cannot|can't|will not|won't) match\b" \
+//     src/scan/rules/semgrep/*.yml | wc -l    # 20 on 2026-07-27; 16 of them owned by a rule
 const NEGATED = String.raw`(do(es)? not|do(es)? ?n[o']t|will not|wo ?n[o']t|cannot|ca ?n[o']t)`;
 export const BOUND_MARKERS: readonly BoundMarker[] = [
   { name: "NOTE:", re: /\bNOTE:/ },
