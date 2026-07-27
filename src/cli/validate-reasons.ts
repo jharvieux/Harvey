@@ -5,13 +5,19 @@
 //   • STRUCTURAL (always, no commands run) — every reason block is well-formed: it declares whether
 //     it is empirical or decisional, carries a MEASURED/TRIED/ASSUMED provenance tag with a date,
 //     and — if empirical — carries the command that would falsify it. Fast enough to run in CI and
-//     locked by src/recorded-reasons.repo.test.ts so `pnpm verify` enforces it.
+//     locked by src/recorded-reasons.test.ts so `pnpm verify` enforces it.
 //   • --revalidate (runs each empirical falsifier) — a falsifier that now EXITS 0 means the blocker
 //     it describes is gone while the text still asserts it. That is a failing row, not a note.
 //     Decisional reasons are excluded from this pass entirely; they await a human, not a command.
 //
 // Also reports subsystem drift for reasons that declare TOUCHES: commits on the referenced paths
 // after the reason's date. Advisory — it is a prompt to re-read, not a verdict.
+//
+// A live-tier falsifier names its target as a `<placeholder>` because the target is stood up outside
+// the repo. Bind each one in the environment on the run that has the tier — `<crapi-gateway>` reads
+// HARVEY_FALSIFIER_CRAPI_GATEWAY — e.g.
+//   HARVEY_FALSIFIER_SUPERREDHAT_CLONE=/clones/superredhat pnpm validate-reasons --revalidate --tier secbench
+// An unbound placeholder is reported UNVERIFIABLE and the command is not run (#1072).
 
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
@@ -20,6 +26,7 @@ import {
   DEFAULT_ROOTS,
   KNOWN_FALSIFIER_TIERS,
   collectReasons,
+  placeholderEnvVar,
   reasonKind,
   revalidateReasons,
   subsystemDrift,
@@ -91,7 +98,7 @@ if (process.argv.includes("--revalidate")) {
   }
   const availableTiers = process.argv.includes("--live") ? new Set(KNOWN_FALSIFIER_TIERS) : new Set(requestedTiers);
 
-  const rows = revalidateReasons(empirical, runFalsifier, availableTiers);
+  const rows = revalidateReasons(empirical, runFalsifier, availableTiers, (placeholder) => process.env[placeholderEnvVar(placeholder)]);
   const skippedLive = rows.filter((row) => row.status === "SKIPPED-LIVE");
   const broken = rows.filter((row) => row.status === "STALE" || row.status === "UNVERIFIABLE");
   const ran = rows.length - skippedLive.length;

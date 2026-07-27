@@ -111,6 +111,20 @@ describe("validateRecordedReason — the empirical/decisional split is structura
   it("REFUSES FALSIFIER-TIER on a decisional reason — it qualifies a FALSIFIER the reason must not carry", () => {
     expect(validateRecordedReason(one([...DECISIONAL, FALSIFIER_TIER])).join()).toContain("FALSIFIER-TIER: refused on a decisional reason");
   });
+
+  it("rejects a <placeholder> in an offline falsifier — the shell reads it as a redirect, so it can never exit 0 (#1072)", () => {
+    const errors = validateRecordedReason(one([CLAIM, EMPIRICAL_KIND, PROVENANCE, "FALSIFIER: pnpm quick-scan --dir <some-clone> | grep -q csrf"])).join();
+    expect(errors).toContain("HARVEY_FALSIFIER_SOME_CLONE");
+    expect(errors).toContain("input redirect");
+  });
+
+  it("allows a <placeholder> once the reason declares the tier that supplies it", () => {
+    expect(validateRecordedReason(one([CLAIM, EMPIRICAL_KIND, PROVENANCE, "FALSIFIER: pnpm quick-scan --dir <some-clone>", FALSIFIER_TIER]))).toEqual([]);
+  });
+
+  it("does not mistake shell syntax for a placeholder", () => {
+    expect(validateRecordedReason(one([CLAIM, EMPIRICAL_KIND, PROVENANCE, "FALSIFIER: grep -q x src/a.ts < /dev/null 2>&1"]))).toEqual([]);
+  });
 });
 
 describe("revalidateReasons — seeded proof that the gate fires on a reason whose blocker is gone", () => {
@@ -148,6 +162,35 @@ describe("revalidateReasons — seeded proof that the gate fires on a reason who
     const available = new Set(["lighthouse"]);
     expect(statuses(revalidateReasons([one(LIVE_EMPIRICAL)], () => ({ code: 1, output: "" }), available))).toEqual(["holds"]);
     expect(statuses(revalidateReasons([one(LIVE_EMPIRICAL)], () => ({ code: 0, output: "" }), available))).toEqual(["STALE"]);
+  });
+
+  describe("<placeholder> bindings on a live-tier falsifier (#1072)", () => {
+    const PLACEHOLDER_FALSIFIER = [CLAIM, EMPIRICAL_KIND, PROVENANCE, "FALSIFIER: pnpm quick-scan --dir <some-clone> | grep -q csrf", FALSIFIER_TIER];
+    const available = new Set(["lighthouse"]);
+
+    it("refuses to run an unbound placeholder — executing it verbatim exits non-zero and reads as 'the blocker holds'", () => {
+      const rows = revalidateReasons([one(PLACEHOLDER_FALSIFIER)], () => {
+        throw new Error("an unbound placeholder must not reach the shell");
+      }, available);
+      expect(statuses(rows)).toEqual(["UNVERIFIABLE"]);
+      expect(rows[0]?.detail).toContain("HARVEY_FALSIFIER_SOME_CLONE");
+    });
+
+    it("substitutes the binding and runs the resolved command", () => {
+      let ran = "";
+      const rows = revalidateReasons([one(PLACEHOLDER_FALSIFIER)], (c) => {
+        ran = c;
+        return { code: 1, output: "" };
+      }, available, () => "/clones/superredhat");
+      expect(ran).toBe("pnpm quick-scan --dir /clones/superredhat | grep -q csrf");
+      expect(statuses(rows)).toEqual(["holds"]);
+    });
+
+    it("names the bindings the live run will need when the tier is unavailable", () => {
+      const rows = revalidateReasons([one(PLACEHOLDER_FALSIFIER)], () => ({ code: 1, output: "" }));
+      expect(statuses(rows)).toEqual(["SKIPPED-LIVE"]);
+      expect(rows[0]?.detail).toContain("HARVEY_FALSIFIER_SOME_CLONE");
+    });
   });
 });
 

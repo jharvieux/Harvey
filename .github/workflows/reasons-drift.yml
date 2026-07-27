@@ -13,16 +13,27 @@
 # against files already in this checkout) — no mechanical scanner binaries required — so this needs
 # nothing beyond `pnpm install`, unlike dry-run-drift.yml/conservation.yml.
 #
-# The four live tiers are NOT exercised anywhere in CI. Every FALSIFIER-TIER command in the repo
-# today targets a placeholder outside this checkout (a live crAPI gateway, a served target URL, an
-# external superredhat/vandyand clone, a paired supabase-security-labs variant) that no CI job
-# stands up — wiring that is future work, not silently claimed here. Run those by hand where the
-# tier exists: `pnpm validate-reasons --revalidate --tier <name>` (or `--live` for all four).
+# The four live tiers are NOT exercised anywhere in CI: every FALSIFIER-TIER command targets
+# something no CI job stands up (a live crAPI gateway, a served target URL, an external
+# superredhat/vandyand clone, a paired supabase-security-labs variant). They are run by hand where
+# the tier exists — `pnpm validate-reasons --revalidate --tier <name>`, or `--live` for all four —
+# and each names its target as a `<placeholder>` bound from the environment on that run
+# (`<superredhat-clone>` reads HARVEY_FALSIFIER_SUPERREDHAT_CLONE). Before that binding existed the
+# placeholder went to `sh -c` verbatim, where `<` is an input redirect: the command died on "No such
+# file or directory", exited 1, and the gate read that as "the blocker still holds". All five live
+# falsifiers were unfalsifiable-by-construction and reported green (measured 2026-07-27); an unbound
+# placeholder is now UNVERIFIABLE and the command is not run at all.
 #
 # Scheduled rather than per-PR: a falsifier goes stale on ANY commit that removes the blocker it
 # describes, not only on edits to the reason's own file, so a path-filtered pull_request trigger
 # would miss most of what this exists to catch (the same reasoning dry-run-drift.yml gives for why
 # IT has no path filter — except this job is not a required check, so a plain schedule is enough).
+#
+# THE NEGATIVE CONTROLS ARE PART OF THE JOB (conservation.yml's posture, #1065's lesson): the check
+# step above passes on a repo where every reason is sound, which is also what a gate that can no
+# longer fire looks like. The three control steps plant reasons that MUST be rejected — a stale one,
+# a malformed one, and an unbound live-tier placeholder — so a green run means "passed AND can still
+# fail". They run on the planted fixture only; the repo's own reasons are untouched.
 
 name: reasons-drift
 
@@ -61,6 +72,58 @@ jobs:
         name: Re-validate every recorded reason (structural + offline falsifiers)
         run: pnpm validate-reasons --revalidate 2>&1 | tee reasons-drift.log
 
+      - name: Plant the negative-control corpus
+        env:
+          FIXTURE: ${{ runner.temp }}/reasons-control
+        run: |
+          set -euo pipefail
+          mkdir -p "$FIXTURE"
+          cat > "$FIXTURE/stale.ts" <<'EOF'
+          // REASON: nothing in this repo can do the thing (planted; its falsifier succeeds)
+          // KIND: empirical
+          // PROVENANCE: ASSUMED 2026-07-27
+          // FALSIFIER: true
+          EOF
+          cat > "$FIXTURE/malformed.md" <<'EOF'
+          REASON: planted claim with no way to re-test it
+          KIND: empirical
+          PROVENANCE: ASSUMED 2026-07-27
+          EOF
+          cat > "$FIXTURE/unbound.ts" <<'EOF'
+          // REASON: planted live-tier claim whose target is supplied by whoever stands the tier up
+          // KIND: empirical
+          // PROVENANCE: MEASURED 2026-07-27
+          // FALSIFIER: true <served-target>
+          // FALSIFIER-TIER: lighthouse
+          EOF
+
+      - name: Negative control — a reason whose falsifier now exits 0 must FAIL the gate
+        env:
+          FIXTURE: ${{ runner.temp }}/reasons-control
+        run: |
+          if pnpm validate-reasons --root "$FIXTURE/stale.ts" --revalidate; then
+            echo "::error::A planted reason whose falsifier exits 0 was not reported STALE. The re-validation pass cannot fail, so the PASS above means nothing (#1065)."
+            exit 1
+          fi
+
+      - name: Negative control — an empirical reason with no falsifier must FAIL the structural pass
+        env:
+          FIXTURE: ${{ runner.temp }}/reasons-control
+        run: |
+          if pnpm validate-reasons --root "$FIXTURE/malformed.md"; then
+            echo "::error::A planted empirical reason carrying no FALSIFIER was accepted. The structural half of the gate is not asserting anything (#1033)."
+            exit 1
+          fi
+
+      - name: Negative control — an unbound live-tier placeholder must FAIL rather than read as 'holds'
+        env:
+          FIXTURE: ${{ runner.temp }}/reasons-control
+        run: |
+          if pnpm validate-reasons --root "$FIXTURE/unbound.ts" --revalidate --tier lighthouse; then
+            echo "::error::A live-tier falsifier with an unbound <placeholder> did not report UNVERIFIABLE. Run verbatim it dies on a shell redirect and exits non-zero, which the gate would read as 'the blocker still holds' (#1072)."
+            exit 1
+          fi
+
       # Scheduled runs go red on a branch nobody watches (#1128/#1138's precedent, applied here as
       # in corpus-drift.yml/conservation.yml). On a scheduled failure, find-or-update ONE tracking
       # issue by the marker label: comment on the open one if it exists, otherwise create it. Never
@@ -75,7 +138,7 @@ jobs:
           set -euo pipefail
           gh label create "$MARKER" --color B60205 \
             --description "Auto-opened when the scheduled reasons-drift CI run fails" 2>/dev/null || true
-          body="The scheduled \`reasons-drift\` run failed (run: $RUN_URL). Either a reason block is malformed or an empirical falsifier now exits 0 (STALE — the blocker it describes is gone, but the recorded reason still asserts it, per CLAUDE.md's recorded-reasons-decay doctrine). See the job log for which row. Re-read the claim, correct or retire it, and close this issue once green."
+          body="The scheduled \`reasons-drift\` run failed (run: $RUN_URL). Either a reason block is malformed, an empirical falsifier now exits 0 (STALE — the blocker it describes is gone, but the recorded reason still asserts it, per CLAUDE.md's recorded-reasons-decay doctrine), or a negative control stopped failing (the gate itself broke — fix that before trusting the pass). See the job log for which step and which row. Re-read the claim, correct or retire it, and close this issue once green."
           existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"

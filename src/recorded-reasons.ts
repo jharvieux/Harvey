@@ -40,6 +40,29 @@ const KNOWN = new Set<string>(KEYS);
 // always-skipped — this is the single place a new live tier is registered (like #341's OWNERS map).
 export const KNOWN_FALSIFIER_TIERS = new Set(["m2-stack", "lighthouse", "secbench", "supabase-labs"]);
 
+// #1072 — a live-only falsifier cannot name its target in the repo: the crAPI gateway URL, the
+// external clone path, the served origin are all supplied by whoever stands the tier up. All five
+// were written as `<crapi-gateway>`-style angle-bracket prose, and `sh -c` reads `<` as an INPUT
+// REDIRECT — so `--tier secbench` did not re-test anything, it died on "No such file or directory"
+// and exited 1, which this file's contract reads as "the blocker still holds". Five of five live
+// falsifiers were unfalsifiable by construction and reported green (measured 2026-07-27). So a
+// placeholder is now a declared BINDING: substituted from HARVEY_FALSIFIER_<NAME> on the run that
+// has the tier, and UNVERIFIABLE — never executed — when unbound. Lowercase-and-hyphens only, so a
+// real redirect (`< /dev/null`, `2>&1`, `<<EOF`) is not mistaken for one.
+const PLACEHOLDER_TOKEN = /<([a-z][a-z0-9-]*)>/g;
+
+function falsifierPlaceholders(command: string): string[] {
+  return [...new Set([...command.matchAll(PLACEHOLDER_TOKEN)].map((m) => m[1] as string))];
+}
+
+export function placeholderEnvVar(name: string): string {
+  return `HARVEY_FALSIFIER_${name.toUpperCase().replaceAll("-", "_")}`;
+}
+
+function bindingHint(names: string[]): string {
+  return names.map((n) => `<${n}> → ${placeholderEnvVar(n)}`).join(", ");
+}
+
 export interface ParsedReason {
   file: string;
   /** 1-based line of the block's REASON: key. */
@@ -147,6 +170,10 @@ export function validateRecordedReason(r: ParsedReason): string[] {
     else if (PLACEHOLDER.test(f.FALSIFIER)) errors.push(`FALSIFIER: "${f.FALSIFIER}" is a placeholder, not a command — it would satisfy this gate while re-testing nothing`);
     if (f.OWNER) errors.push("OWNER: belongs on a decisional reason (who makes the ruling); an empirical reason is settled by its FALSIFIER, not by a person");
     if (tier !== undefined && !KNOWN_FALSIFIER_TIERS.has(tier)) errors.push(`FALSIFIER-TIER: "${tier}" is not a registered live tier — a typo would make this falsifier silently always-skipped. Known tiers: ${[...KNOWN_FALSIFIER_TIERS].join(", ")} (register a new one in KNOWN_FALSIFIER_TIERS, #1072)`);
+    const unbindable = f.FALSIFIER ? falsifierPlaceholders(f.FALSIFIER) : [];
+    if (unbindable.length > 0 && tier === undefined) {
+      errors.push(`FALSIFIER: names placeholder(s) ${bindingHint(unbindable)} but declares no FALSIFIER-TIER. Offline the command is run as written, where the shell reads \`<${unbindable[0]}>\` as an input redirect — it exits non-zero without testing anything, which reads as "the blocker holds" forever. Either write real paths, or tag the tier so the placeholders become run-time bindings (#1072).`);
+    }
   }
   if (kind === "decisional") {
     if (f.FALSIFIER) errors.push("FALSIFIER: refused on a decisional reason — a human ruling is not re-testable by command, and sweeping it into the re-validation gate produces noise that discredits the gate (#1033)");
@@ -194,24 +221,40 @@ export interface FalsifierResult {
 // FALSIFIER-TIER whose tier is not available is SKIPPED-LIVE — disclosed and counted, not run and
 // not a failure. Skipping it silently, or failing it as UNVERIFIABLE, would recreate the #1072
 // defect this field exists to fix.
-export function revalidateReasons(reasons: ParsedReason[], run: (command: string) => FalsifierResult, availableTiers: Set<string> = new Set()): RevalidationRow[] {
+//
+// `binding` resolves a `<placeholder>` in the command to the operator-supplied path/URL for this
+// run. An unbound placeholder is UNVERIFIABLE rather than executed, because running it as written
+// produces a non-zero exit indistinguishable from "the blocker holds".
+export function revalidateReasons(
+  reasons: ParsedReason[],
+  run: (command: string) => FalsifierResult,
+  availableTiers: Set<string> = new Set(),
+  binding: (placeholder: string) => string | undefined = () => undefined,
+): RevalidationRow[] {
   return reasons.flatMap((r): RevalidationRow[] => {
     if (reasonKind(r) !== "empirical") return [];
     const command = r.fields.FALSIFIER;
     if (!command) return [];
     const base = { file: r.file, line: r.line, claim: r.fields.REASON ?? "" };
     const tier = r.fields["FALSIFIER-TIER"];
+    const placeholders = falsifierPlaceholders(command);
     if (tier !== undefined && !availableTiers.has(tier)) {
-      return [{ ...base, status: "SKIPPED-LIVE" as const, detail: `live-only falsifier not run — its tier "${tier}" is not available on this run. Re-run where that tier exists: \`--tier ${tier}\` (or \`--live\`). \`${command}\`` }];
+      const bindings = placeholders.length > 0 ? ` That run must also bind ${bindingHint(placeholders)}.` : "";
+      return [{ ...base, status: "SKIPPED-LIVE" as const, detail: `live-only falsifier not run — its tier "${tier}" is not available on this run. Re-run where that tier exists: \`--tier ${tier}\` (or \`--live\`).${bindings} \`${command}\`` }];
     }
-    const { code, output } = run(command);
+    const unbound = placeholders.filter((p) => binding(p) === undefined);
+    if (unbound.length > 0) {
+      return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier has unbound placeholder(s) — set ${bindingHint(unbound)} and re-run. It was NOT executed: as written the shell reads \`<${unbound[0]}>\` as an input redirect and exits non-zero, which is indistinguishable from the blocker still holding. \`${command}\`` }];
+    }
+    const resolved = placeholders.reduce((c, p) => c.replaceAll(`<${p}>`, binding(p) as string), command);
+    const { code, output } = run(resolved);
     if (code === null || code === 127) {
-      return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier could not be run (${code === null ? "signal/timeout" : "command not found"}): \`${command}\` — a reason whose re-test cannot execute is as unguarded as one with no re-test at all. ${output.trim().slice(0, 200)}` }];
+      return [{ ...base, status: "UNVERIFIABLE" as const, detail: `falsifier could not be run (${code === null ? "signal/timeout" : "command not found"}): \`${resolved}\` — a reason whose re-test cannot execute is as unguarded as one with no re-test at all. ${output.trim().slice(0, 200)}` }];
     }
     if (code === 0) {
-      return [{ ...base, status: "STALE" as const, detail: `FALSIFIED: \`${command}\` now exits 0, which by this reason's own contract means the blocker is GONE — the text says otherwise. Re-verify, then delete the reason and do the work it was deferring, or correct the claim. ${output.trim().slice(0, 200)}` }];
+      return [{ ...base, status: "STALE" as const, detail: `FALSIFIED: \`${resolved}\` now exits 0, which by this reason's own contract means the blocker is GONE — the text says otherwise. Re-verify, then delete the reason and do the work it was deferring, or correct the claim. ${output.trim().slice(0, 200)}` }];
     }
-    return [{ ...base, status: "holds" as const, detail: `\`${command}\` exits ${code} — reason still holds` }];
+    return [{ ...base, status: "holds" as const, detail: `\`${resolved}\` exits ${code} — reason still holds` }];
   });
 }
 
