@@ -2,6 +2,14 @@
 
 **Positioning:** the free scan runs on source alone — no database, no credentials, no contact with production. It surfaces what the code *indicates* is wrong and explains it, building trust before the customer hands over any access. The paid tiers then confirm against production and prove exploitability.
 
+## Indicated vs proved — the honest free-tier claim (and the upsell)
+
+The free (mechanical) tier produces **indicators, not verdicts.** It reads source and reports what the code *indicates* — it does not, and structurally cannot, prove that a finding is reachable or exploitable in production. That gap between **indicated** (free, mechanical) and **proved** (paid: semantic cross-file review, connected read-only confirmation, dynamic pen-test) is the product's spine, not a disclaimer to bury.
+
+**This is measured, not asserted.** `docs/design/free-tier-recall-measurement.md` (2026-07-26) records the free mechanical tier's recall against answer keys other people wrote. The honest form is a **range, not a single number**: mechanical recall against independent keys is **shape-dependent** — strong when a target matches the org-tenant / Supabase-Auth / App-Router / migration-SQL shapes the rules are written against, and low when it doesn't (the extreme case, a target engineered to defeat linters, asserts none of its planted flaws mechanically and is carried entirely by the paid semantic tier). Even on our own fixtures, only a fraction of request→sink source bugs fire at the high-confidence tier; the rest surface as lower-confidence indicators. Quote the measurement doc's dated range, never a number from memory.
+
+**What this means for how the free report reads:** a strong free result is a genuine head start; a thin free result on an evasive target is **not a clean bill of health** — it is exactly where the paid tiers earn their keep. The free scan's job is to be honestly useful and to make that boundary legible, so "static analysis indicates X; confirm it by…" is the natural bridge to paid confirmation, not a hedge. Where the free tier is silent on a whole class — cross-file authorization, live RLS effect, exploitability — it is silent because it could not look, and it says so (see the ceiling and reserved-for-paid sections below). **The mechanically-impossible classes are not gaps to apologize for; they are the paid tier's remit** — the concrete "indicated vs proved" upsell for each is spelled out in *Explicitly reserved for paid*.
+
 ## Onboarding (the whole point: no credentials)
 
 - **Preferred:** read-only access to the repository **with git history** (a read-only GitHub invite / deploy key, or a mirror).
@@ -39,6 +47,8 @@ the ledger matters.
 Most of our custom semgrep rules are syntactic patterns; a minority use taint mode, and the OSS engine does not follow a tainted value out of the function it was read in. Measured in this repo 2026-07-23: request input reaching `exec()` inside the same function is caught; the identical flow is missed the moment it passes through a helper — whether that helper is in the same file or another one. (Re-derive the split by counting `mode: taint` in `src/scan/rules/semgrep/*.yml`; `pnpm detector-census` gives the per-module detector counts. Don't quote a stored number.)
 
 That is the ceiling, and it is where real authorization bypasses live: middleware admits the route, the handler trusts the caller, the repository issues an unscoped query. No single function contains the bug. Mechanical misses of that class are **not fixable rule gaps** — they route by design to the paid semantic (LLM) pass, which reads across files, and to the dynamic pen-test, which proves the bypass from the outside. Where a free report is silent on cross-file authorization, it is silent because it could not look — not because it looked and found nothing.
+
+**Not every mechanical miss is the ceiling, though.** Some are *closeable* rule gaps — a single-function shape a new detector could catch — and those are tracked as improvement issues, not framed as paid-only (measurement docs' per-target gap analyses distinguish the two; the closeable ones filed under #868 are the storage-bucket, PII-aware `USING(true)`, and verbose-error passes). The upsell is only for what an AST *structurally cannot decide* — intent, cross-file reachability, and live/exploitability — never for a mechanization we simply haven't shipped.
 
 ## Explicitly reserved for paid
 
