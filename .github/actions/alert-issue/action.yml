@@ -116,28 +116,33 @@ runs:
         \`\`\`"
 
         url=$(gh issue create --title "${TITLE}${SUFFIX}" --label "$MARKER" --body "$drill_body")
+        num="${url##*/}"
 
-        # `gh issue list --label` reads a label index that lags `issue create` by a second or two —
-        # measured, not assumed: the first drill run of #1287 created issue #1334 and found nothing
-        # 2.5s later, while the identical query returned it from a laptop moments after. Retry
-        # rather than sleep blindly, and still fail loud if it never shows up.
-        num=""
+        # The number comes from the create, never from the lookup, and the lookup then has to AGREE
+        # with it. Deriving it from the lookup is how run 30313030133 reported PROVED while proving
+        # nothing: `gh issue list --label` reads an index that lags by seconds, so it still returned
+        # the stale drill issue this run had just closed. The drill commented on and closed THAT
+        # one — which already had a comment, so a `>= 1` check passed — and left the issue it had
+        # actually created untouched and open.
+        found=""
         for _ in 1 2 3 4 5 6 7 8 9 10; do
-          num=$(find_open drill)
-          [ -n "$num" ] && break
+          found=$(find_open drill)
+          [ "$found" = "$num" ] && break
           sleep 2
         done
-        if [ -z "$num" ]; then
-          echo "::error::the drill created $url, but 10 lookups over 20s never found it. The find half of find-or-update is broken — a second failure would open a duplicate issue instead of updating this one."
+        if [ "$found" != "$num" ]; then
+          echo "::error::the drill created #$num ($url) but find-or-update returned '${found:-nothing}' after 10 lookups over 20s. The find half is broken — a second real failure would open a duplicate issue instead of updating the first."
           exit 1
         fi
 
-        # The update half is the branch a create-only proof never reaches, and it is the one that
-        # runs on every alert after the first.
+        # The update half is the branch a create-only proof never reaches, and the one that runs on
+        # every alert after the first. Assert the count GREW: an absolute threshold is satisfiable by
+        # a comment that was already there.
+        before=$(gh issue view "$num" --json comments --jq '.comments | length')
         gh issue comment "$num" --body "Drill pass 2: find-or-update located this issue and commented on it rather than opening a second one."
-        comments=$(gh issue view "$num" --json comments --jq '.comments | length')
-        if [ "$comments" -lt 1 ]; then
-          echo "::error::drill pass 2 exited 0 but issue #$num has no comments — the update half of find-or-update raised nothing."
+        after=$(gh issue view "$num" --json comments --jq '.comments | length')
+        if [ "$after" -le "$before" ]; then
+          echo "::error::drill pass 2 exited 0 but issue #$num still has $after comment(s) — the update half of find-or-update raised nothing."
           exit 1
         fi
 
@@ -148,7 +153,7 @@ runs:
           echo ""
           echo "- marker label exists (this step creates it if absent)"
           echo "- create: $url"
-          echo "- find-or-update: located #$num and commented ($comments comment(s))"
+          echo "- find-or-update: located #$num and commented ($before → $after comments)"
           echo "- closed again — tracker left clean"
           echo ""
           echo "Re-run: \`gh workflow run \"$WORKFLOW\" -f alert_drill=true\`"
