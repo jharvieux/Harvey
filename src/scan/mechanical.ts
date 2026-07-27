@@ -30,6 +30,7 @@ import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachabili
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./framework-detect.js";
 import { checkHostingConfigHeaders } from "./hosting-headers.js";
+import { checkWorkflowPermissions } from "./gha-permissions.js";
 import { checkInfrastructureScope } from "./infra-scope.js";
 import { scanJobTenantScope } from "./job-tenant-scope.js";
 import { checkUnanalysedLanguages } from "./language-coverage.js";
@@ -58,6 +59,7 @@ import {
   checkMigrationRlsInitplanStatic,
   checkMigrationRlsBypass,
   checkMigrationRlsStatic,
+  checkMigrationStorageBuckets,
   checkOpenSignupConfig,
   inferAuthMethodsFromSource,
   type TenancyOverride,
@@ -308,6 +310,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       findings.push(...checkMigrationDefinerAnonGrant(scanDir));
       findings.push(...checkMigrationDynamicSqlInjection(scanDir));
       findings.push(...checkMigrationRlsInitplanStatic(scanDir));
+      findings.push(...checkMigrationStorageBuckets(scanDir));
       findings.push(...checkEdgeFunctionVerifyJwt(scanDir));
       // #671 — gate the email-confirmation advisor on whether email auth is actually used (source
       // heuristic): an OAuth-only app gets a conditional note, not an asserted Medium.
@@ -327,6 +330,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #886 — Dockerfiles/Terraform/K8s manifests are out of scope by decision, not by oversight
     // (docs/design/infrastructure-out-of-scope.md). Say so when the target has them.
     findings.push(...checkInfrastructureScope(scanDir));
+
+    // #1212 — GITHUB_TOKEN scope. GHA is NOT covered by the infra-scope decision above: Harvey
+    // already ships four registry GHA classes and a non-grading category built for them. The
+    // missing-block half is an absence check, which no pattern rule can express.
+    findings.push(...checkWorkflowPermissions(scanDir));
 
     // Supply chain.
     if (pkg) {

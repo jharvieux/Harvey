@@ -514,6 +514,11 @@ interface ParsedPolicy {
   cmd: string;
   qual: string | null;
   withCheck: string | null;
+  // The `TO <role>[, …]` grantees, lower-cased and unquoted. Postgres applies a policy to PUBLIC
+  // when the clause is omitted, so an absent TO parses as ["public"] — the permissive default, not
+  // an empty set. #1182 reads this to tell a storage.objects policy open to anon from one that only
+  // reaches authenticated callers.
+  roles: string[];
 }
 
 // A `create policy` we located but could not extract clauses from — an unbalanced/unterminated
@@ -584,6 +589,17 @@ function statementText(sql: string, start: number): string | null {
 const FOR_CMD = /\bfor\s+(all|select|insert|update|delete)\b/i;
 const USING_AT = /\busing\s*\(/i;
 const WITH_CHECK_AT = /\bwith\s+check\s*\(/i;
+// `TO role[, role…]`, which Postgres's grammar places after FOR and before USING/WITH CHECK. Read
+// only from that header span so a `to` inside a USING expression (a cast, a column named `to_…`)
+// cannot be mistaken for the grantee list.
+const TO_ROLES = /\bto\s+([a-z0-9_"\s,]+?)\s*(?:\busing\b|\bwith\s+check\b|$)/i;
+
+function policyRoles(stmt: string): string[] {
+  const header = stmt.slice(0, Math.min(...[USING_AT, WITH_CHECK_AT].map((re) => re.exec(stmt)?.index ?? stmt.length)));
+  const m = TO_ROLES.exec(header);
+  if (!m) return ["public"];
+  return m[1]!.split(",").map((r) => r.replace(/"/g, "").trim().toLowerCase()).filter(Boolean);
+}
 
 function clauseAt(stmt: string, marker: RegExp): { value: string | null; failed: boolean } {
   const m = marker.exec(stmt);
@@ -622,6 +638,7 @@ export function parsePolicies(sql: string): ParsedPolicySet {
       cmd: (FOR_CMD.exec(stmt)?.[1] ?? "ALL").toUpperCase(),
       qual: qual.value,
       withCheck: withCheck.value,
+      roles: policyRoles(stmt),
     });
   }
 

@@ -49,6 +49,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/sfc-coverage.ts": "M1", // #919 — cross-cutting coverage disclosure (M5/M6/M7/M9 + M1 AST), filed under M1 same as the language-coverage.ts precedent it mirrors
   "src/scan/ext-coverage.ts": "M1", // #1065 — the extension half of the same disclosure family, filed under M1 with its siblings
   "src/scan/infra-scope.ts": "M1",
+  "src/scan/gha-permissions.ts": "M1", // #1212 — GITHUB_TOKEN scope; GHA is in scope (see infra-scope.ts's sibling decision)
   "src/scan/secrets.ts": "M1",
   "src/scan/dependencies.ts": "M1",
   "src/scan/dep-reachability.ts": "M1", // #874 — CVE reachability ordering + its not-assessed disclosure

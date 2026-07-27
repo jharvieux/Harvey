@@ -295,6 +295,13 @@ rules:
   # A caught error's .stack or .message is echoed straight into the JSON response — leaks stack
   # traces / internal paths / library versions to the client. Review — some apps intentionally
   # surface .message in dev, and this is common enough to need triage rather than an auto-Critical.
+  #
+  # #1184 (cipherx CX-18): the original four patterns were all Express-shaped and single-argument,
+  # so the App Router form — `NextResponse.json(body, { status: 500 })` — matched none of them.
+  # `$RES.json(…, ...)` covers res.json, NextResponse.json and Response.json in one, and the
+  # trailing `...` admits the init argument (MEASURED 2026-07-27: without it the two-argument call
+  # does not match, and with it the one-argument call still does). The key is a metavariable now:
+  # the leak is the .stack VALUE reaching the body, whatever field it is filed under.
   - id: harvey-verbose-error
     languages: [javascript, typescript]
     severity: WARNING
@@ -310,10 +317,48 @@ rules:
       server-side and return a generic error to the client.
     patterns:
       - pattern-either:
-          - pattern: '$RES.json({ ..., stack: $ERR.stack, ... })'
-          - pattern: '$RES.status($CODE).json({ ..., stack: $ERR.stack, ... })'
-          - pattern: '$RES.json({ ..., error: $ERR.message, ... })'
+          - pattern: '$RES.json({ ..., $K: $ERR.stack, ... }, ...)'
+          - pattern: '$RES.status($CODE).json({ ..., $K: $ERR.stack, ... })'
+          - pattern: '$RES.json({ ..., error: $ERR.message, ... }, ...)'
           - pattern: '$RES.status($CODE).json({ ..., error: $ERR.message, ... })'
+
+  # #1184 (cipherx CX-18) — the other half of that endpoint: server internals returned in a response
+  # body that are not an error object at all. `process.env` dumps every secret the process holds
+  # (service-role keys, DB URLs, third-party tokens); `process.cwd()` discloses the deploy path and
+  # with it the hosting layout. cipherx's src/app/api/debug/route.ts returned both, and mechanical
+  # caught only the connection string that happened to be embedded in the dump.
+  #
+  # Scoped to a RESPONSE position, which is the whole precision argument: reading process.env to
+  # configure a client is the normal way to use it, and logging process.cwd() server-side is
+  # unremarkable — putting either in the body is the bug. Deliberately matches the object as a
+  # WHOLE (`process.env`), not a single read (`process.env.NEXT_PUBLIC_URL`), so echoing one
+  # already-public config value back to the client does not fire.
+  - id: harvey-internal-state-response
+    languages: [javascript, typescript]
+    severity: WARNING
+    metadata:
+      # CWE-497 (Exposure of Sensitive System Information) is the tighter label, but it is not in
+      # the #493-verified official CWE→Top-10-2021 mapping table and asserting a category for it
+      # would be a guess. Its parent CWE-200 IS in that table, under A01.
+      cwe: ["CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"]
+      owasp: ["A01:2021 - Broken Access Control"]
+      confidence: HIGH
+      category: security
+      harveySeverity: Medium
+    message: >
+      The response body includes process.env or process.cwd() — this returns the server's
+      environment (every secret it holds) or its filesystem layout to the caller. Return only
+      the fields the client needs, and keep debug endpoints out of deployed builds.
+    patterns:
+      - pattern-either:
+          - pattern: '$RES.json({ ..., $K: process.env, ... }, ...)'
+          - pattern: '$RES.json({ ..., $K: process.cwd(), ... }, ...)'
+          - pattern: '$RES.status($CODE).json({ ..., $K: process.env, ... })'
+          - pattern: '$RES.status($CODE).json({ ..., $K: process.cwd(), ... })'
+          - pattern: '$RES.send({ ..., $K: process.env, ... })'
+          - pattern: '$RES.send({ ..., $K: process.cwd(), ... })'
+          - pattern: 'new Response(JSON.stringify({ ..., $K: process.env, ... }), ...)'
+          - pattern: 'new Response(JSON.stringify({ ..., $K: process.cwd(), ... }), ...)'
 
   # The raw Postgres/PostgREST error object (conventionally named `error`, matching Supabase-js's
   # `{ data, error } = await supabase...` destructure) is echoed straight into the JSON response
