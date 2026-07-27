@@ -4,6 +4,7 @@ import {
   commentBounds,
   loadSemgrepRules,
   parseSemgrepRules,
+  scopeSentence,
   verdict,
   type SemgrepRule,
 } from "./disclosure-venue.js";
@@ -73,11 +74,30 @@ describe("verdict", () => {
     );
   });
 
-  it("fails a scope sentence with nothing of the declared bound in it — the sticker is not the disclosure", () => {
+  // Shaped like a real rule message, not a one-sentence stub: the descriptive half reuses the
+  // comment's vocabulary, exactly as a genuine finding's does. A stub message shares no words with
+  // the comment and so passes this test for the wrong reason — it never exercises the scoping.
+  it("fails a scope sentence with nothing of the declared bound in it, even when the DESCRIPTIVE half reuses the comment's words — the sticker is not the disclosure", () => {
     expect(
       verdictOf(
         "NOTE: does not cover the interpolated form.",
-        "A value reaches a sink. SCOPE OF THIS CHECK: nothing worth naming.",
+        "An interpolated value reaches the sink on this line, so the string it builds is" +
+          " attacker-controlled at runtime. SCOPE OF THIS CHECK: nothing worth naming.",
+      ),
+    ).toBe("unrelated-scope-sentence");
+  });
+
+  // The other direction, pinned so it is a known bound rather than a surprise: correspondence is a
+  // keyword overlap, so a faultless paraphrase sharing no term with the comment is refused. Stated
+  // in disclosure-venue.ts's SCOPE block. If this test ever goes red, an adjudicator replaced the
+  // overlap — update that block rather than deleting this.
+  it("over-refuses a correct paraphrase that shares no wording with the comment — a stated bound of the overlap approach", () => {
+    expect(
+      verdictOf(
+        "LIMITATION: dynamically-interpolated selectors are unhandled by the shape below.",
+        "An untrusted value reaches a DOM sink. SCOPE OF THIS CHECK: only a string literal written" +
+          " inline is examined; a value built at runtime from concatenation or a template is outside" +
+          " what this rule can see, so silence there is not a clean result.",
       ),
     ).toBe("unrelated-scope-sentence");
   });
@@ -118,5 +138,22 @@ describe("the committed semgrep rules", () => {
   it("states every recorded bound in the finding it bounds", () => {
     const violations = auditDisclosureVenue(rules);
     expect(violations.map((v) => `${v.id} (${v.verdict})`)).toEqual([]);
+  });
+
+  // The population-level negative control, and the one that measured the defect. A fixture proves
+  // the gate CAN reject a contentless sticker; only this proves it rejects one on the rules it
+  // actually guards. Measured 2026-07-27 against the whole message: 9 of 13 still passed.
+  it("rejects a contentless sticker substituted for the real disclosure on EVERY bounded rule", () => {
+    const bounded = rules.filter((r) => commentBounds(r).length > 0);
+    const stillPassing = bounded
+      .map((r) => {
+        const scope = scopeSentence(r.message);
+        if (scope === null) throw new Error(`${r.id} passes the gate with no scope sentence`);
+        const prefix = r.message.slice(0, r.message.length - scope.length);
+        return { ...r, message: `${prefix}SCOPE OF THIS CHECK: nothing worth naming.` };
+      })
+      .filter((r) => verdict(r, commentBounds(r)) === "stated")
+      .map((r) => r.id);
+    expect(stillPassing).toEqual([]);
   });
 });

@@ -10,13 +10,35 @@
 // The mechanism: a semgrep rule whose attached comments declare a bound must carry a scope sentence
 // in its own `message`, because `message` is the only text in a rule that reaches the deliverable.
 //
-// SCOPE OF THIS GATE, stated here so its own silence is not read as coverage: it matches a fixed
-// vocabulary of bound-declaring phrases (BOUND_MARKERS) over `src/scan/rules/semgrep/*.yml`, and a
-// bound phrased outside that vocabulary is invisible to it. "Corresponding" is approximated: a
-// marker in the message PLUS at least one distinctive term shared with the comment that declared
-// the bound — enough to reject a contentless "SCOPE: none", not enough to judge whether the
-// sentence describes the same bound. A lower bound on the defect, not a census of it. The TS/AST
-// detectors and the conditional-scan (`scanLocal`) shape are #1317's 4b, tracked separately.
+// SCOPE OF THIS GATE, stated here so its own silence is not read as coverage. Three bounds:
+//
+// 1. VOCABULARY. It matches a fixed set of bound-declaring phrases (BOUND_MARKERS) over
+//    `src/scan/rules/semgrep/*.yml`, and a bound phrased outside that vocabulary is invisible to
+//    it. This is not hypothetical: an independent census on 2026-07-27 found ~9 rules stating a
+//    real unassessed class in prose the markers do not recognise (`harvey-open-url-sink` states
+//    the same bound as its file-neighbour `harvey-href-js-url`, which was caught only because its
+//    comment happened to contain "scoped to"). Tracked as #1342. Also structural: 382 comment
+//    lines belong to no rule at all — file headers and the shared `req_source` YAML anchor above
+//    the first `- id:`, 10 of them already carrying a bound marker. A bound on a shared anchor
+//    applies to every rule using it and is outside what a per-rule gate can see.
+//
+// 2. CORRESPONDENCE IS APPROXIMATED, NOT JUDGED — a marker in the message PLUS at least one
+//    distinctive term shared with the comment that declared the bound, tested against the SCOPE
+//    SENTENCE only (see scopeSentence). It is a keyword overlap, so it OVER-REFUSES in one
+//    direction: a complete, correct, client-legible paraphrase that happens to share no 5-letter
+//    term with the comment is rejected as `unrelated-scope-sentence`. Measured example — comment
+//    "LIMITATION: dynamically-interpolated selectors are unhandled by the shape below", message
+//    "...SCOPE OF THIS CHECK: only a string literal written inline is examined; a value built at
+//    runtime from concatenation or a template is outside what this rule can see" — a faultless
+//    disclosure, refused. No mechanical overlap rule can pass it, so the gate does not pretend to.
+//    An author hitting this should NOT parrot a word to appease the gate: reword the COMMENT to
+//    the plain terms the message uses (the comment is the internal note; the message is the
+//    deliverable, and the message should win). Judging same-bound-ness needs an adjudicator.
+//
+// 3. SEMGREP ONLY. The TS/AST detectors and the conditional-scan (`scanLocal`) shape are #1317's
+//    4b, tracked separately as #1330.
+//
+// A lower bound on the defect, not a census of it.
 
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -141,11 +163,27 @@ export function commentBounds(rule: SemgrepRule): MarkerHit[] {
 
 type VenueVerdict = "no-bound-recorded" | "stated" | "no-scope-sentence" | "unrelated-scope-sentence";
 
+// A finding's message has two halves: what the rule found, written before anyone thought about
+// bounds, and the scope sentence added to disclose one. Only the second half is the disclosure, so
+// only the second half may be evidence of it. Measured 2026-07-27: testing correspondence against
+// the WHOLE message let a literally contentless "SCOPE OF THIS CHECK: nothing worth naming" pass on
+// 9 of the 13 bounded rules, because some unrelated word in the descriptive half supplied the
+// shared term. The marker's own position is where the disclosure starts.
+export function scopeSentence(message: string): string | null {
+  let at = -1;
+  for (const m of BOUND_MARKERS) {
+    const hit = m.re.exec(message);
+    if (hit && (at === -1 || hit.index < at)) at = hit.index;
+  }
+  return at === -1 ? null : message.slice(at);
+}
+
 export function verdict(rule: SemgrepRule, hits: readonly MarkerHit[]): VenueVerdict {
   if (hits.length === 0) return "no-bound-recorded";
-  if (!BOUND_MARKERS.some((m) => m.re.test(rule.message))) return "no-scope-sentence";
+  const scope = scopeSentence(rule.message);
+  if (scope === null) return "no-scope-sentence";
   const declared = distinctiveTerms(hits.map((h) => h.text).join(" "));
-  const stated = distinctiveTerms(rule.message);
+  const stated = distinctiveTerms(scope);
   return [...declared].some((t) => stated.has(t)) ? "stated" : "unrelated-scope-sentence";
 }
 

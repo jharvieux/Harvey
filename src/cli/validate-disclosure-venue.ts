@@ -24,6 +24,13 @@ import {
 
 // One seed per way the gate can fail. Seeding only the first would leave the correspondence half
 // unproven — a gate whose second branch has never been seen firing is a gate with one branch.
+//
+// The second seed is shaped like a REAL rule message on purpose: a descriptive half that reuses
+// the comment's vocabulary, then a contentless sticker where the disclosure belongs. A one-sentence
+// descriptive half made that seed weaker than the population it guards — measured 2026-07-27, the
+// contentless sticker substituted on all 13 committed bounded rules still PASSED on 9 of them,
+// because a word in the descriptive half supplied the overlap. This seed fails only because
+// correspondence is now tested against the scope sentence alone.
 export const SEEDED_RULES: readonly SemgrepRule[] = [
   {
     file: `${RULES_DIR}/__seeded__.yml`,
@@ -37,7 +44,9 @@ export const SEEDED_RULES: readonly SemgrepRule[] = [
     id: "harvey-seeded-unrelated-scope-sentence",
     line: 2,
     comments: [{ line: 2, text: "NOTE: this rule does not cover the interpolated form." }],
-    message: "A seeded finding. SCOPE OF THIS CHECK: nothing worth naming.",
+    message:
+      "A seeded finding: an interpolated value reaches the sink on this line, so the string it builds" +
+      " is attacker-controlled at runtime. SCOPE OF THIS CHECK: nothing worth naming.",
   },
 ];
 
@@ -81,9 +90,11 @@ function main(): void {
 
   console.log(
     `\n✓ every rule with a recorded bound states it in its message.` +
-      `\n  Lower bound, not a census: the gate matches ${BOUND_MARKERS.length} bound-declaring phrases, so a bound` +
-      `\n  phrased outside that vocabulary is invisible to it, and "corresponding" is approximated by a shared` +
-      `\n  distinctive term rather than judged (see src/disclosure-venue.ts).`,
+      `\n  Lower bound, not a census — this number is about ${BOUND_MARKERS.length} bound-declaring phrases, not about the` +
+      `\n  rule set. A bound phrased outside that vocabulary is invisible here; ~9 such rules are known` +
+      `\n  and named in #1342. "Corresponding" is a shared distinctive term in the SCOPE SENTENCE, not a` +
+      `\n  judgement, so it over-refuses a correct paraphrase that shares no wording with the comment` +
+      `\n  (reword the comment to the message's plain terms; do not parrot a word). See src/disclosure-venue.ts.`,
   );
 }
 
