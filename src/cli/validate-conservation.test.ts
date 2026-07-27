@@ -2,16 +2,15 @@
 // targets/calibration and the real assembler. src/audit-conservation.test.ts proves the gate's
 // logic fires on each seeded violation shape; this proves the gate is actually plugged into a run.
 //
-// ONE orchestrator run, not two, and it carries both directions: the seeded module fails while
-// every other module passes in the same output, so a gate that failed on everything (or on nothing)
-// is equally visible. The second run was dropped deliberately — each is a ~30-50s synchronous
-// execFileSync that blocks its vitest worker for the duration.
+// ONE orchestrator run per test, not two per test: each of the three `it` blocks below runs the
+// real ten-module orchestrator once via the CLI, so the seeded module fails while every other
+// module passes in the same output — a gate that failed on everything (or on nothing) is equally
+// visible.
 //
-// #1105: even one such block running as part of `pnpm verify`'s default project, alongside this
-// suite's other heavy child-process files, intermittently starved the worker RPC channel back to
-// the main process (`[vitest-worker]: Timeout calling "onTaskUpdate"`, exit 1 with zero failing
-// tests — MEASURED 2026-07-26: reproduced in 1 of 5 consecutive `pnpm verify` runs on a clean
-// main). Vitest exposes no config knob for that RPC timeout (checked
+// #1105: even isolated in its own CI step (not sharing a worker with the rest of the suite), a
+// single one of these runs can still block its vitest worker long enough to starve the RPC channel
+// back to the main process (`[vitest-worker]: Timeout calling "onTaskUpdate"`, exit 1 with zero
+// failing tests). Vitest exposes no config knob for that RPC timeout (checked
 // node_modules/vitest/dist/chunks/index.B521nVV-.js — DEFAULT_TIMEOUT is hardcoded to 60s), and
 // vitest's file `exclude` also blocks an explicitly-named path from running at all (TRIED
 // 2026-07-26: `pnpm exec vitest run src/cli/validate-conservation.test.ts` on an excluded path
@@ -22,8 +21,18 @@
 // it. Run it locally the same way: HARVEY_CONSERVATION_E2E=1 pnpm exec vitest run
 // src/cli/validate-conservation.test.ts. The clean-pass direction is measured in
 // docs/design/conservation-of-findings.md and is what `--seed-loss` is measured against.
+//
+// #1168: isolation alone was not enough. MEASURED 2026-07-26 — reproduced by running this file
+// under artificial CPU load (8 busy-loop processes saturating all cores, approximating a loaded CI
+// runner): 2 of 2 runs failed on the exact `onTaskUpdate` signature (85.9s and 106.0s total; a clean
+// unloaded run is ~56s). The three `it` blocks each drove `runGate` through a synchronous
+// `execFileSync`, and each individually blocks the worker's event loop for ~20-30s unloaded, more
+// under load — the same mechanism #1120/#1133 found in run-audit.test.ts's beforeAll (a single
+// blocking window approaching or exceeding the hardcoded 60s ack window). `runGate` now spawns the
+// CLI and awaits it instead, so the event loop stays free for the RPC ack during each run — the
+// fix #1133 applied to run-audit.test.ts, applied here to the same failure mode.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -89,19 +98,27 @@ if (!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !VITALS_PRESE
 
 // Exit code AND output, because a gate that fails for an unrelated reason (a crash, a bad flag) is
 // indistinguishable from one that caught the seeded defect if only the code is checked.
-function runGate(args: string[]): { code: number; output: string } {
-  try {
-    return { code: 0, output: execFileSync("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
-  } catch (err) {
-    const e = err as { status?: number; stdout?: string; stderr?: string };
-    return { code: e.status ?? -1, output: `${e.stdout ?? ""}${e.stderr ?? ""}` };
-  }
+//
+// spawn + await, NOT execFileSync (#1168, mirroring #1120/#1133's run-audit.test.ts fix):
+// execFileSync blocks the vitest worker's event loop for the run's full duration, and a blocked
+// worker cannot service the birpc ack for the task update it already sent — that ack has the
+// hardcoded 60s window. Awaiting a spawned child leaves the loop free, so the ack lands regardless
+// of how long the child itself takes.
+function runGate(args: string[]): Promise<{ code: number; output: string }> {
+  return new Promise((res, rej) => {
+    const child = spawn("node_modules/.bin/tsx", [CLI, ...args], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
+    child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
+    child.on("error", rej);
+    child.on("close", (code) => res({ code: code ?? -1, output }));
+  });
 }
 
 describe.skipIf(!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !VITALS_PRESENT)("validate-conservation CLI — end-to-end against targets/calibration", () => {
   // 240s: a full ten-module run of the real orchestrator as a child process.
-  it("FAILS on a seeded loss and only on it — every unseeded module still delivers its plant", () => {
-    const { code, output } = runGate(["--seed-loss", "M7"]);
+  it("FAILS on a seeded loss and only on it — every unseeded module still delivers its plant", async () => {
+    const { code, output } = await runGate(["--seed-loss", "M7"]);
     expect(code).toBe(1);
     expect(output).toContain("GATE FAIL — M7 produced NOTHING");
     // The gate reads each module's OWN probe attribution (findingsByModule), not the merged
@@ -126,8 +143,8 @@ describe.skipIf(!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !
 
   // #1146, the 4b seam: a finding dropped during baseline application produces a ledger row and a
   // non-zero exit — the guard against silently deleting a NEW finding after assembly.
-  it("FAILS when the baseline diff drops a finding (--seed-baseline-loss)", () => {
-    const { code, output } = runGate(["--seed-baseline-loss"]);
+  it("FAILS when the baseline diff drops a finding (--seed-baseline-loss)", async () => {
+    const { code, output } = await runGate(["--seed-baseline-loss"]);
     expect(code).toBe(1);
     expect(output).toContain("BASELINE LEDGER FAIL");
     expect(output).toMatch(/DELETED\s+\S+/);
@@ -135,8 +152,8 @@ describe.skipIf(!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !
 
   // #1146, the 4a seam: a disposition column credited against a finding that still ships fails —
   // the producer path for suppressed/capped/not-applicable cannot close the arithmetic on a fiction.
-  it("FAILS when a disposition is declared against a still-delivered finding (--seed-misdeclared)", () => {
-    const { code, output } = runGate(["--seed-misdeclared"]);
+  it("FAILS when a disposition is declared against a still-delivered finding (--seed-misdeclared)", async () => {
+    const { code, output } = await runGate(["--seed-misdeclared"]);
     expect(code).toBe(1);
     expect(output).toContain("did not actually go missing");
   }, 240000);

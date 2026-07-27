@@ -104,6 +104,16 @@ Two separate causes, both real:
    against"* rather than a finding, because `family_id`/`owner_user_id` are not in the recognised
    tenant-key list. This is the fail-loud design working (silence would be worse), but it means the
    headline planted bug is not caught at this tier.
+
+   Cause 1 is the durable, still-standing half of the byte-identical result (cause 2 is CLOSED by #937
+   below); recorded per #1072 with the live-tier falsifier that would retire it:
+
+   > REASON: at the M1 STATIC (mechanical) tier, quick-scan cannot distinguish the broken supabase-security-labs lab from its fix on the planted RLS class — the USING(true) SELECT bug is disclosed as an Info indicator, not detected as a counted finding, because family_id/owner_user_id are not in the recognised tenant-key list (cause 1); cause 2, cumulative-migration reading, is separately CLOSED by #937 below
+   > KIND: empirical
+   > PROVENANCE: MEASURED 2026-07-24 (the paired quick-scan in Step 3; TENANT_KEY_CANDIDATES in src/scan/supabase-static.ts re-read 2026-07-26 and still omits family_id/owner_user_id, so cause 1 holds — cause 2 was closed by #937 the same day, so the live divergence question is now purely cause 1)
+   > FALSIFIER: pnpm quick-scan --dir <ssl-broken-variant> --findings-out /tmp/ssl-b.json && pnpm quick-scan --dir <ssl-fixed-variant> --findings-out /tmp/ssl-f.json && ! diff -q /tmp/ssl-b.json /tmp/ssl-f.json
+   > FALSIFIER-TIER: supabase-labs
+   > TOUCHES: src/scan/supabase-static.ts
 2. **Migrations are read cumulatively with no `drop policy` tracking** (was documented in the
    `checkMigrationRlsInitplanStatic` header of `src/scan/supabase-static.ts`). The fixed variant's text
    still *contains* the broken policies, so the static reviewer sees them there too. This is the more

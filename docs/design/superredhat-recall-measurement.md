@@ -188,6 +188,14 @@ pipeline proved 2 findings live.)
   recall pass over this target, or `grep -n "pattern-inside" src/scan/rules/semgrep/headers.yml`
   to see the Server-Action scope.)*
 
+The corrected F-11 claim, recorded per #1072 with the live-tier falsifier that would retire it:
+
+> REASON: F-11 (CSRF / no rate limiting) is MISSED by the M1 static tier on superredhat — harvey-csrf-missing (src/scan/rules/semgrep/headers.yml) and the rate-limit detectors (src/scan/leftover-auth.ts) both EXIST, but neither REACHES F-11's shape: the CSRF rule matches only a 'use server' Server Action and the rate-limit ones only an auth endpoint, while F-11 sits on plain App Router route handlers
+> KIND: empirical
+> PROVENANCE: MEASURED 2026-07-25 (#1033 sweep corrected the earlier "no static detector at all"; the two detectors' scope re-read in headers.yml / leftover-auth.ts and confirmed not to reach a plain App Router route handler)
+> FALSIFIER: pnpm quick-scan --dir <superredhat-clone> --findings-out /tmp/srh.json && grep -Eiq "csrf|rate.?limit" /tmp/srh.json
+> FALSIFIER-TIER: secbench
+
 **Every mechanical detector that does NOT depend on request-taint fired** (secrets, RLS-off migration,
 XSS sink, crypto primitives, vulnerable dependencies). **Every rule that depends on tracing tainted
 request input** (IDOR, mass-assignment, SSRF, SSTI) **went dark**, because their sources are written
