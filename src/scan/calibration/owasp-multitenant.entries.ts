@@ -125,10 +125,10 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     kind: "positive",
     cls: "Cache key derived from the resource id with no tenant discriminator",
     location: "src/owasp-mt/cache-key-no-tenant.ts",
-    match: ["cache", "dashboard:"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "GAP. Sheet section 4 ('Prefix all cache keys with tenant identifier'). The first tenant to populate `dashboard:${boardId}` serves its rows to every other tenant requesting the same id. MEASURED: zero findings. Higher FP risk than the others — a tenant-agnostic cache is legitimate for genuinely global data — so any detector needs the negative below to stay silent, which is why the pair is planted together. Tracked in #1196.",
+    match: ["cache-tenant-scope"],
+    expectedTier: "review",
+    expectedSeverity: "Medium",
+    note: "Sheet section 4 ('Prefix all cache keys with tenant identifier'). The first tenant to populate `dashboard:${boardId}` serves its rows to every other tenant requesting the same id. WAS a measured gap (MEASURED 2026-07-26: zero findings). CLOSED by #1196's cache-tenant-scope.ts, narrowed two ways to hold the FP risk down: only a function that ALREADY has a tenant/org-like parameter in scope is considered (a cache with no tenant context at all may be intentionally global), and only a .get/.set read-through PAIR sharing the identical key counts, not a bare write. Confirmed by running the scanner over the fixture (not by inspection) — the negative below is the pair's other half.",
   },
   {
     id: "P-OWASP-MT-RATE-LIMIT",
@@ -184,7 +184,7 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     kind: "negative",
     cls: "Cache key carrying the tenant discriminator",
     location: "src/owasp-mt/cache-key-tenant-scoped.ts",
-    note: "`t:${tenantId}:dashboard:${boardId}` — the correct form from sheet section 4. Trivially silent today because no cache-key detector exists; the entry exists so that whoever builds one for P-OWASP-MT-CACHE-KEY inherits a negative it must clear, rather than shipping a rule that flags every cache in every codebase.",
+    note: "`t:${tenantId}:dashboard:${boardId}` — the correct form from sheet section 4. Confirmed silent by #1196's cache-tenant-scope.ts: the key mentions the in-scope tenantId parameter, so the read-through pair clears.",
   },
   {
     id: "N-OWASP-MT-GUC-LOCAL",

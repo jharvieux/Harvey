@@ -19,6 +19,7 @@ import { scanPrismaTenantScope } from "./prisma-tenant-scope.js";
 import { scanDrizzleTenantScope } from "./drizzle-tenant-scope.js";
 import { scanClientSuppliedTenant } from "./client-supplied-tenant.js";
 import { scanTenantGucScope } from "./tenant-guc-scope.js";
+import { scanCacheTenantScope } from "./cache-tenant-scope.js";
 import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
@@ -380,6 +381,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // outlives its transaction under transaction-mode pooling, so a later request on that reused
     // connection is evaluated against the previous tenant's identifier.
     findings.push(...scanTenantGucScope(scanDir));
+
+    // #1196 — a cache key derived from the resource id alone, with no tenant discriminator, in a
+    // function that already has one in scope: the first tenant to populate the entry serves its
+    // rows to every other tenant asking for the same resource id.
+    findings.push(...scanCacheTenantScope(scanDir));
 
     // #664 — service_role key hardcoded as a JWT literal (same-file or cross-file const) and
     // passed to createClient. Real base64 decode + role/iss claim check, incl. plain .js.
