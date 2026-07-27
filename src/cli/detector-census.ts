@@ -44,6 +44,11 @@ const OWNERS: Record<string, string> = {
   "src/scan/tenant-guc-scope.ts": "M1",
   "src/scan/cache-tenant-scope.ts": "M1",
   "src/scan/storage-tenant-scope.ts": "M1",
+  "src/scan/audit-log-tenant.ts": "M1", // #1242 — audit entry with an actor but no tenant discriminator
+  "src/scan/webhook-signature.ts": "M1", // #1230 / D-091 item 12 — signature decoded with the wrong encoding
+  "src/scan/migration-column-drift.ts": "M1", // #1230 / D-091 item 13 — app code reads a dropped column
+  "src/scan/idempotency.ts": "M1", // #1230 / D-091 items 10, 22, 24 — retry-safety orderings
+  "src/scan/stale-quota-read.ts": "M1", // #1230 / D-091 item 6 — quota gate consumed across a loop
   "src/scan/secret-rotation.ts": "M1",
   "src/scan/ssr-sanitizer.ts": "M1", // #1239 — browser-only sanitizer (dompurify) called in a server-rendered module
   "src/scan/env-schema.ts": "M1",

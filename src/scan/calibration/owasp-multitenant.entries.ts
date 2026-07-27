@@ -172,10 +172,10 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     kind: "positive",
     cls: "Audit log records actor and action but no tenant context",
     location: "src/owasp-mt/audit-log-no-tenant.ts",
-    match: ["tenant"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "GAP, and the weakest candidate of the set — now tracked in #1242, which was the last of this corpus's eight gaps without an owner. Sheet section 8 ('Include tenant context in all log entries'). A cross-tenant access cannot be reconstructed afterwards, which undercuts the sheet's own detective control. MEASURED: zero findings. Detecting 'this log line omits a field' needs to know which fields matter for this app, so it is a plausible review-tier question and a poor mechanical rule; kept here so the recommendation is accounted for either way.",
+    match: ["Audit log entry without a tenant discriminator"],
+    expectedTier: "review",
+    expectedSeverity: "Medium",
+    note: "Sheet section 8 ('Include tenant context in all log entries'). WAS the corpus's last measured gap and the weakest candidate of the set — CLOSED by #1242's audit-log-tenant.ts. The doubt on file was that 'this log line omits a field' needs to know which fields matter for the app; the shippable narrowing turned out to be requiring the entry to be AUDIT-SHAPED (logger-like sink, an actor-id parameter that the entry names, a mutation verb, and no tenant token) rather than requiring a tenant already in scope the way #1196 could. `match` is the exact taxonomy phrase so this entry cannot be satisfied by another rule firing on the same file — the #1062 masking shape. Confirmed by running the scanner over the fixture.",
   },
 
   // ---------------------------------------------------------------------------------------------
@@ -226,5 +226,12 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     location: "src/owasp-mt/storage-path-no-tenant.ts",
     match: ["uploadAttachmentScoped"],
     note: "uploadAttachmentScoped's `${session.user.tenantId}/${filename}` path, the negative #1198's storage-tenant-scope.ts had to clear to ship. Confirmed silent: the path resolves (through the local `path` binding) to text mentioning `session`/`tenantId`, which clears the finding.",
+  },
+  {
+    id: "N-OWASP-MT-LOG-TENANT-PRESENT",
+    kind: "negative",
+    cls: "Audit entries carrying tenant context, plus the two lookalikes an audit-log rule must not fire on",
+    location: "src/owasp-mt/audit-log-with-tenant.ts",
+    note: "Three shapes, all silent, and #1242's detector does not ship without them: (1) the same deletion record logged with `{ tenantId, userId, action }` — the sheet's own remedy; (2) a diagnostic breadcrumb naming an actor but no state change, which is where an unnarrowed rule would fire on every log line in every codebase; (3) a state change with no actor, a weaker signal deliberately left alone. Confirmed silent by running the scanner over the fixture.",
   },
 ];

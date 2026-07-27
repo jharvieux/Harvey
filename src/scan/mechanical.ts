@@ -21,6 +21,11 @@ import { scanClientSuppliedTenant } from "./client-supplied-tenant.js";
 import { scanTenantGucScope } from "./tenant-guc-scope.js";
 import { scanCacheTenantScope } from "./cache-tenant-scope.js";
 import { scanStorageTenantScope } from "./storage-tenant-scope.js";
+import { scanAuditLogTenant } from "./audit-log-tenant.js";
+import { scanWebhookSignature } from "./webhook-signature.js";
+import { scanMigrationColumnDrift } from "./migration-column-drift.js";
+import { scanIdempotency } from "./idempotency.js";
+import { scanStaleQuotaRead } from "./stale-quota-read.js";
 import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanSsrSanitizer } from "./ssr-sanitizer.js";
@@ -442,6 +447,27 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // shared bucket. Distinct from AUTH-upload-no-limit (leftover-auth.ts), which fires on the same
     // shape for an unrelated defect (no size/MIME limit).
     findings.push(...scanStorageTenantScope(scanDir));
+
+    // #1242 — an audit entry that names the actor and a state change but no tenant: a cross-tenant
+    // access cannot be reconstructed afterwards, which undercuts the sheet's own detective control.
+    findings.push(...scanAuditLogTenant(scanDir));
+
+    // #1230 / D-091 item 12 — a webhook signature decoded with an encoding the provider does not
+    // use: every genuine delivery fails verification and the handler is silently inoperative.
+    findings.push(...scanWebhookSignature(scanDir));
+
+    // #1230 / D-091 item 13 — app code names a column the migration history already dropped.
+    // Column names are strings inside the query chain, so tsc cannot see the break.
+    findings.push(...scanMigrationColumnDrift(scanDir));
+
+    // #1230 / D-091 items 10, 22, 24 — three retry-safety orderings: a dedup row written before
+    // the handler it guards, a batch send stamped after dispatch instead of claimed before, and an
+    // external send from a retryable job with no idempotency key.
+    findings.push(...scanIdempotency(scanDir));
+
+    // #1230 / D-091 item 6 — a budget/limit gate read once and then consumed across a loop of
+    // operations without re-reading, so the cap is enforced against a stale value.
+    findings.push(...scanStaleQuotaRead(scanDir));
 
     // #664 — service_role key hardcoded as a JWT literal (same-file or cross-file const) and
     // passed to createClient. Real base64 decode + role/iss claim check, incl. plain .js.
