@@ -1,0 +1,33 @@
+{
+  "files": [
+    "src/fix/acceptance.ts",
+    "src/fix/escalation.ts",
+    "src/fix/materialize-calibration.ts",
+    "src/fix/verify-harness.ts",
+    "src/pentest/calibration-fixture.ts"
+  ],
+  "exports": [
+    "src/audit-completeness.ts:completenessStatement",
+    "src/coverage-scorecard.ts:statusFromDynamicProbe",
+    "src/dynamic-validate.ts:runDynamicValidation",
+    "src/epic-builder/state-machine.ts:canTransition",
+    "src/fix/detector-rerun.ts:resolvesToDetector",
+    "src/fix/schedule.ts:detectLateConflict",
+    "src/fix/schedule.ts:runScheduled",
+    "src/fix/verify.ts:discoverVerifyCommands",
+    "src/fix/verify.ts:runCommand",
+    "src/migration-sql-parse.ts:parseCheckInConstraints",
+    "src/migration-sql-parse.ts:parseColumns",
+    "src/pentest/active-exploit.ts:ACTIVE_EXPLOIT_PROBE_IDS",
+    "src/pentest/auth-attack.ts:AUTH_ATTACK_PROBE_IDS",
+    "src/pentest/business-logic.ts:BUSINESS_LOGIC_PROBE_IDS",
+    "src/pentest/race-toctou.ts:RACE_TOCTOU_PROBE_ID",
+    "src/pentest/session-lifecycle.ts:SESSION_LIFECYCLE_PROBE_IDS",
+    "src/pentest/upload-attack.ts:UPLOAD_ATTACK_PROBE_IDS",
+    "src/pentest/verify.ts:applyVerifyResults",
+    "src/quality-scan.ts:matchesJscpdIgnoreGlob",
+    "src/quick-scan.ts:selectGradedFindings",
+    "src/recorded-reasons.ts:collectReasons"
+  ],
+  "types": []
+}
