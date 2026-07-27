@@ -2,7 +2,33 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-27 (early hours) — **OWASP thread executed**: 2 upstream proposals filed, ack-watch scheduled, 2 of 3 coverage corpora BUILT AND MERGED, 3 Harvey bugs found and fixed, 12 issues filed. Newest block first._
+_Last updated: 2026-07-27 (morning) — resumed the queue: #1206 diagnosed-and-corrected + merged, #1194 (the top detector gap) shipped, **an OWASP maintainer replied to #2308**. Newest block first._
+
+## 2026-07-27 (morning) — resume: conservation flake, the #1194 detector, OWASP maintainer contact
+
+Picked the documented queue back up. Re-ordered #1206 ahead of #1192 because it unblocks an OPERATOR action item (#1205) — you can act on that while work continues.
+
+### ⚠️ OPERATOR: an OWASP maintainer engaged — but do NOT start drafting
+**[jmanico](https://github.com/OWASP/CheatSheetSeries/issues/2308#issuecomment-) (Jim Manico, OWASP project leader) commented "I like this idea" on #2308** (the new Next.js Security cheat sheet) at 2026-07-27T01:59Z. #2309 (Multi-Tenant update) is still untouched: 0 labels, 0 comments.
+
+**This is NOT the formal ack.** In that project the ack IS a label (`ACK_WAITING` → `ACK_OBTAINED`) and #2308 still carries **0 labels**. The recorded rule stands — do not draft either sheet before `ACK_OBTAINED`; #543 (React) is the cautionary tale (ACK'd in 2 days, then stalled 3 years, PR #2196 open with 89 review comments).
+
+**The ack-watch routine did not report this.** `trig_01UD5yXDN8jMghazEBZnCGrV` runs daily 12:00 UTC and should open an `owasp-ack-alert` issue on any change from the 0-labels/0-comments baseline. Checked 12:20 UTC 2026-07-27 (i.e. after its window): the comment exists, **no `owasp-ack-alert` issue exists**. Either it has not run since the change or it is broken — its first test run was never observed either (recorded in the block below). **Verify it before trusting it as the watch.**
+
+### Merged
+- **PR #1208 → #1206** — conservation vitals flake. **The issue's premise was substantially false**, corrected on the issue before any code: of the 4 recent failures only **1** was the vitals step; the other **3** were `[vitest-worker]: Timeout calling "onTaskUpdate"` (3 passed / 0 failed, exit 1) — and that half was **already fixed by #1168** (`dc118ec`, 00:28Z) before #1206 was filed; every run since is green on it. The one real failure (`git commit` exit 1 in `seed.py`) **did not reproduce in 85 runs** (macOS + ubuntu:24.04, loaded and unloaded), so no root cause is claimed. Both evidence-discarding layers fixed instead — the real one was `seed.py`'s `git()` using `stderr=DEVNULL`, NOT the `stdio` the issue blamed (python's traceback did reach the log). Next occurrence now prints git's stderr + `git status --porcelain`. Negative control included. **#1206 stays OPEN** — cause unnamed, and its acceptance wants 5 consecutive green runs.
+
+### In flight
+- **PR #1209 → #1194** — the highest-value gap the OWASP corpus found: a tenant predicate that is PRESENT and correct-looking but populated FROM THE REQUEST (`where: { tenantId: body.tenantId }`). #760/#901 both ask whether a predicate EXISTS, so both read this as correctly scoped. New `src/scan/client-supplied-tenant.ts` asks where the value CAME FROM — request sources propagated through same-function bindings into a tenant column, Prisma object-`where` + Drizzle `.where(eq(…))`. **High tier** (the AST proves a PRESENCE, not an absence unseen middleware might fill). Session-comparison clears it; membership checks deliberately do NOT (existence ≠ ownership — #989's rule, shipped as an adversarial positive test). Measured: calibration **GATE PASS** (`P-OWASP-MT-CLIENT-TENANT` caught at high, severity ✓; M1 TP 247 FN 3 FP 0 TN 226), precision **GATE PASS** (M1 TP 1 FN 0 FP 0 TN 7 — **the new detector is now held to the three MIT tenant-scoping libraries, 0 false fires**), dry-run +2 over 472 both on the intended fixture. Filed **#1210** for the Supabase `.eq()` remainder, with the RLS-boundary rationale stated rather than quietly dropped.
+
+### Next, in order
+1. **#1192 React corpus** — still not started. Source is the UNMERGED PR #2196: pin a commit SHA, open a post-merge reconciliation follow-up.
+2. **#1206 → #1205** — accumulate 5 green conservation runs on the fixed `main`, then the operator adds the required check.
+3. Verify the ack-watch routine actually works (above).
+4. Declared-set follow-up: `Database_Security_Cheat_Sheet.md` + `Authorization_Cheat_Sheet.md` belong in the corpus set — picking only flattering sheets destroys the independent-answer-key property.
+
+### CLAUDE.md
+Nothing falsified this session. Nothing owed.
 
 ## 2026-07-27 (early) — OWASP corpora EXECUTED: 2 PRs merged, 3 Harvey bugs fixed, 12 issues filed
 
