@@ -74,9 +74,57 @@ The queue said "verify the ack-watch routine." Verified. **It was not working.**
 
 **Lesson worth keeping — a stub can manufacture a green.** The pre-merge local harness stubbed the `gh issue` writes so it wouldn't create issues. Five scenarios passed. The first real run then read upstream perfectly and died on `not a git repository` at the write. It proved the LOGIC and not the WIRING — the produced-vs-delivered split (#1040/#1062/#1064) reached through a test stub instead of a producer seam. Fixed with `GH_REPO` (#1217).
 
-### ⚠️ CLAUDE.md RELAYS OWED — I did not edit the file (no explicit request naming it)
-1. **Line 48, "Git and PRs":** "with BOTH required checks green (`verify`, and since #1107 …)" is now FALSE — there are **three**. Recommended: *"with ALL THREE required checks green (`verify`; since #1107 `regenerate dry-run findings + diff committed artifact` — the `dry-run-drift` gate; and since #1205 `plant → deliverable, and the produced/delivered arithmetic` — the conservation gate)"*.
-2. **Line 39, conservation bullet:** "it runs on a schedule of its own (…, daily + on pipeline PRs, #1142)" is now stale. Recommended: *"daily and on EVERY PR — since #1205 it is a required status check, so its `paths:` filter moved inside the job as a short-circuit that still reports green (the #1107 deadlock rule)"*.
+### Conservation cost review (operator: "are we running it where it isn't providing value?")
+
+**Yes — one place, fixed in PR #1226.** Measured a real full run (290s): the seven captured-fixture
+drift checks cost ~45s. They re-run a pinned external tool and assert the FRESH output still
+satisfies the committed contract, so what they detect is an UPSTREAM release moving a tool's output
+schema — a function of TIME, not of the diff. Over the last 50 commits on `main`, 21 would run the
+full job and only 11 touch anything that makes those checks meaningful: **10 ran all seven for no
+possible signal.** The filter now has two tiers (`relevant` = the gate, change-based; `drift` = the
+seven checks, fixtures/contracts/drift-CLI or any non-PR event). The daily schedule still runs all
+of them — nothing retired, only moved off the path where it was uninformative.
+
+**The bigger reason: it takes #1206's UNRESOLVED flake off the merge path**, now that the job is a
+required check.
+
+**Checked and deliberately NOT changed:** the 110s vitest wiring test is NOT redundant with the
+three direct CLI invocations — it covers `--seed-baseline-loss` and `--seed-misdeclared`, which the
+negative controls do not. `targets/calibration/*` stays on the gate tier (the plants live there).
+
+**Incidental gap closed:** `src/cli/osv-fixture-drift.ts` was in no filter list, so changing the OSV
+drift CLI didn't trigger the job that runs it.
+
+**Honest limit, worth remembering before optimizing this again:** `heavy-cli` runs ~4min on every
+code PR in parallel, so PR latency has a ~4min floor. This takes conservation ~5m0s → ~4m15s. **If
+PR latency is the goal, `heavy-cli` is the target, not conservation.**
+
+### #1206 — first real evidence since filing, and it FALSIFIES the recorded symptom
+
+The flake fired on PR #1226 itself (run 30273745542, 14:10Z) and blocked it as a required check.
+
+**It was NOT `git commit` exiting 1** — #1208's instrumentation stayed silent because no git command
+in `seed.py` failed. Instead, the diagnostic split:
+
+```
+=== hotspot ranking ===      EMPTY      <- git-derived
+=== knowledge_risk ===       EMPTY      <- git-derived
+=== coupling ===             EMPTY      <- git-derived
+=== provenance.ai_files ===  POPULATED  <- sqlite-derived
+```
+
+**Everything vitals derives from GIT HISTORY came back empty; the section it reads from the seeded
+`.vitals/store.db` was fully populated.** That localizes the fault to vitals' git-scope resolution —
+and `seed.py`'s own header already documents "a mismatch empties the file scope" as a known failure
+mode of this tool (for the macOS symlink cause, already guarded). No root cause claimed. Two
+falsifiable questions recorded on the issue, the sharper one being: **does `vitals report --json`
+exit 0 when its git scope resolves empty?** If so, `run_vitals` cannot detect it and a hand
+re-capture would silently commit an empty fixture. **#1206 stays OPEN** — the mitigation removes the
+blast radius, not the bug. Rerun was green, confirming flake not regression.
+
+### ✅ CLAUDE.md RELAYS — APPLIED (operator granted CLAUDE.md edit authority mid-session)
+Both applied in ONE pass against the final state, per the file's own rule. (1) "BOTH required checks" → **ALL THREE**, naming the conservation context. (2) the conservation bullet's "daily + on pipeline PRs" → daily + **required on EVERY PR**, with the #1107 deadlock rule and the new two-tier filter (#1226) spelled out.
+
 
 ### Next, in order
 1. **#1192 React corpus** — unchanged; prerequisite done, source pinned to `anuragnedunuri/CheatSheetSeries@4332c39c`, inventory deliberately un-bucketed (buckets must be MEASURED by running the scanner, per #1191).
