@@ -17,6 +17,7 @@ import type { Finding } from "./findings.js";
 
 const CWE: Record<string, string> = {
   "200": "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor",
+  "248": "CWE-248: Uncaught Exception",
   "250": "CWE-250: Execution with Unnecessary Privileges",
   "269": "CWE-269: Improper Privilege Management",
   "287": "CWE-287: Improper Authentication",
@@ -59,6 +60,9 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Object-level authorization gap: Drizzle query filtered by primary key with no tenant scope": ["639", "A01"],
   "Object-level authorization gap: Prisma query filtered by primary key with no tenant scope": ["639", "A01"],
   "Object-level authorization gap: tenant predicate populated from the request": ["639", "A01"],
+  "Tenant GUC set with SET rather than SET LOCAL, leaking across a pooled connection": ["668", "A01"],
+  "Cache key without a tenant discriminator (cross-tenant cache poisoning)": ["668", "A01"],
+  "Storage object path without a tenant prefix (cross-tenant object read/overwrite)": ["639", "A01"],
   "Service-role query in a background-job path with no tenant predicate": ["639", "A01"],
   "Unscoped service-role UPDATE/DELETE (no WHERE)": ["639", "A01"],
   // Server trusting client-side security enforcement.
@@ -143,6 +147,11 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Over-broad WebExtension permissions": ["250", null],
   // Race condition — CWE clean, not in a Top-10-2021 category.
   "Non-atomic read-modify-write race condition": ["362", null],
+  // #1202: an EventEmitter 'error' emit with no listener crashes the process — a remote DoS if
+  // reachable from a request. MEASURED against MITRE's own CWE-248 page (cwe.mitre.org/data/
+  // definitions/248.html, 2026-07-27): Memberships lists OWASP Top Ten 2004 A9 and 2025 A10:2025,
+  // no 2021 category — clean CWE, OWASP omitted.
+  "EventEmitter emits 'error' with no registered listener": ["248", null],
 };
 
 // Non-security taxonomies: recorded as no-clean-CWE WITH A REASON rather than left unclassified.

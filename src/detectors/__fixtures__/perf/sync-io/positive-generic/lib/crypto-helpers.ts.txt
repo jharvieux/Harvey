@@ -1,0 +1,12 @@
+import { pbkdf2Sync } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+// #1203: NOT a route.ts/pages/api file — an ordinary application module. Both calls sit inside
+// EXPORTED functions, so the broadened (non-handler-path) tier should still flag them, Review.
+export function verifyPassword(password: string, salt: string): string {
+  return pbkdf2Sync(password, salt, 600_000, 64, "sha512").toString("hex");
+}
+
+export function loadTemplate(name: string): string {
+  return readFileSync(`./templates/${name}.html`, "utf8");
+}

@@ -2508,3 +2508,59 @@ app-surface exploitability). `saml-integration-test.yml` keeps its own `N-SAML-T
 entry, keyed on a disjoint `match` term (`private-key`), so the two answer-key rows on that file
 cannot cross-attribute. A workflow file with no `jobs:` key is skipped outright: a reusable fragment
 has no token to scope.
+
+## The three OWASP corpora (#1190 / #1191 / #1192) — an answer key we did not write
+
+Every other section of this document describes fixtures planted against `briefs/anti-patterns.md`, a
+catalog this repo wrote and *then* wrote detectors for. That measures internal consistency: we cannot
+fail a check authored to match what we already catch. The three OWASP cheat sheets are third-party,
+pinned by commit, and not editable by us, so a miss against them is **evidence** rather than an
+oversight. Operator ruling 2026-07-26: the purpose is finding real gaps to improve the product, **not
+producing a coverage percentage**. There is deliberately no percentage anywhere in this section.
+
+| corpus | entries file | fixtures | pinned source |
+|---|---|---|---|
+| Multi-Tenant | `src/scan/calibration/owasp-multitenant.entries.ts` | `src/owasp-mt/*`, `supabase/migrations/20260726000002_owasp_mt_isolation.sql` | `cheatsheets/Multi_Tenant_Security_Cheat_Sheet.md` @ `46f8d0456686f4d1ef523c7cc65be58bd221ffed` |
+| Node.js | `src/scan/calibration/owasp-nodejs.entries.ts` | `src/owasp-node/*` | `cheatsheets/Nodejs_Security_Cheat_Sheet.md` @ `da089462b18d27ed893ca1052ebd740cfe460175` |
+| React (draft) | `src/scan/calibration/owasp-react.entries.ts` | `src/owasp-react/*` | `cheatsheets_draft/React_Security_Cheat_Sheet.md` @ `4332c39c799d5d0ac835082ebf88c4a0a2e31cb3` — head of the **open, unmerged** OWASP/CheatSheetSeries PR #2196 |
+
+The React pin is a PR head on a fork, and it is still reproducible: GitHub keeps a PR's head commit
+reachable from the base repo, so `GET /repos/OWASP/CheatSheetSeries/commits/4332c39c…` resolves even
+if the fork is deleted or the branch force-pushed (verified 2026-07-27). Reconciling that revision
+against the merged sheet is tracked in #1241, not left implicit.
+
+### What each corpus produced
+
+The multi-tenant sheet was the productive one, and its yield had a shape worth remembering: **three
+of its gaps were cases where Harvey checked whether a control EXISTED and not whether it was VOID.**
+An answer key we wrote could not have surfaced that, because we wrote the fixtures to match the rules
+we had. All eight of its gaps now have detectors (#1194–#1198, #1210) except the audit-log one, which
+is tracked in #1242.
+
+The Node.js sheet's honest result is that most of it was **already covered** by batches that predate
+it — headers, cookies, injection, dependency currency — and its residue is eight measured gaps
+(#1200–#1204). Its lasting contribution is a methodological one recorded in its header: **three of
+eight fixtures produced findings for entirely different defects** (path traversal, XSS, excessive
+data exposure), every finding correct, and an unscoped `match` would have recorded all three gaps as
+COVERED. That is the #1062 masking shape reached through a corpus instead of a producer seam.
+
+The React sheet is thirteen recommendations already covered, six measured gaps (#1237–#1240), and
+seven out-of-universe. One gap is a **facet** gap rather than a class gap: we do detect SSRF, but the
+detector is anchored on the route-handler shape and misses the Server Component `{ params }` form the
+sheet's own example uses. "We detect SSRF" would have been a true claim that still missed it.
+
+### The scope control, and why one exists (2026-07-27)
+
+`src/owasp-react/scope-control-innerhtml.tsx` (`P-OWASP-REACT-SCOPE-CONTROL`) is **not** a sheet
+recommendation. It plants a class Harvey is already known to catch — `router.query.q` into
+`ref.current.innerHTML`, the same shape as `P-DOM-XSS-INNERHTML` — inside the React fixture directory,
+and it must fire at high tier.
+
+It exists because the first measurement run for this corpus recorded six gaps against a directory the
+scanner had **never read**. The scan walks a git-tracked scratch copy of the target, so an unstaged
+fixture is invisible to it and reports zero findings — output that is indistinguishable from a fixture
+that was scanned and missed. Without the control, "six measured gaps" is an unfalsifiable claim.
+
+**If this row ever goes quiet, every React gap row is unproven and must be re-measured before it is
+believed.** The same reasoning is why `M1-EXT-00` (#1065) reports files LOADED against files PRESENT:
+a scan that silently shrinks looks exactly like a codebase that is clean.

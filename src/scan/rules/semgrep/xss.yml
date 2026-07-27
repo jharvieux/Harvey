@@ -11,6 +11,59 @@
 # ships in base.yml; this file adds the DB-sourced (stored) variant and the DOM/client sinks.
 #
 # Exercised against targets/calibration by `pnpm validate:calibration`; see GROUND-TRUTH.md §B4.
+#
+# ---------------------------------------------------------------------------------------------
+# THE CANONICAL DOM/CLIENT SOURCE BLOCK (#1223). The client-side sibling of base.yml's
+# request-source block, and it exists for the same reason: the five client sink rules below each
+# carried their own hand-copied list and they had drifted apart. MEASURED 2026-07-27
+# (semgrep 1.164.0), with paired controls firing on the same sinks —
+# `harvey-open-url-sink`, `harvey-set-attribute-xss` and `harvey-href-js-url` were all silent on
+# `location.hash` and `location.search` while `harvey-dom-innerhtml` and `harvey-document-write`
+# already declared both.
+#
+# The fragment is the source that matters most here and the one that was missing: `location.hash`
+# never reaches the server, so it is invisible to every server-side control, and it is the shape
+# most client-side XSS proofs-of-concept use.
+#
+# `useSearchParams()` is kept even though `$SP.get(...)` subsumes the common read — unifying on the
+# UNION is the conservative move, and the defect being fixed is the divergence, not the redundancy.
+x-dom-source: &dom_source
+  pattern-either:
+    - pattern: location.hash
+    - pattern: location.search
+    - pattern: router.query.$K
+    - pattern: $RT.query.$K
+    - pattern: $SP.get(...)
+    - pattern: useSearchParams()
+#
+# The guard these URL/HTML sinks clear on: the repo's standard (a2) validator guard — an ANCHORED,
+# POSITIVE-class regex test or an exact-match allowlist, each with an early return. Same soundness
+# constraints as every other (a2) arm in this directory: an unanchored regex matches a prefix, a
+# negated class is a denylist, and a failure branch that does not return leaves the value live.
+# Both early-return spellings are matched — client handlers write the braceless form constantly.
+x-dom-url-guard: &dom_url_guard
+  by-side-effect: true
+  patterns:
+    - pattern-either:
+        - patterns:
+            - pattern-either:
+                - pattern: |
+                    if (!$RE.test($X)) { ... return; }
+                - pattern: |
+                    if (!$RE.test($X)) return ...;
+            - metavariable-regex:
+                metavariable: $RE
+                regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+        - pattern: |
+            if (!$ARR.includes($X)) { ... return; }
+        - pattern: |
+            if (!$ARR.includes($X)) return ...;
+        - pattern: |
+            if (!$SET.has($X)) { ... return; }
+        - pattern: |
+            if (!$SET.has($X)) return ...;
+    - focus-metavariable: $X
+# ---------------------------------------------------------------------------------------------
 
 rules:
   # DOM XSS via .innerHTML / insertAdjacentHTML assigned a request/URL-controlled value. High —
@@ -32,12 +85,7 @@ rules:
       A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS.
       Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.
     pattern-sources:
-      - pattern: router.query.$K
-      - pattern: $RT.query.$K
-      - pattern: location.hash
-      - pattern: location.search
-      - pattern: $SP.get(...)
-      - pattern: useSearchParams()
+      - *dom_source
     pattern-sanitizers:
       - pattern: DOMPurify.sanitize(...)
       - pattern: sanitizeHtml(...)
@@ -129,11 +177,7 @@ rules:
       executes any script in its argument). Remove document.write, or sanitize and use a safe
       DOM API (textContent / a sanitized innerHTML assignment).
     pattern-sources:
-      - pattern: location.hash
-      - pattern: location.search
-      - pattern: $SP.get(...)
-      - pattern: router.query.$K
-      - pattern: $RT.query.$K
+      - *dom_source
     pattern-sinks:
       - patterns:
           - pattern: document.write($VAL)
@@ -297,10 +341,9 @@ rules:
       A request-controlled value reaches an <a href> with no scheme allowlist — an attacker can
       supply javascript: to run script in the victim's session (XSS) on click.
     pattern-sources:
-      - pattern: router.query.$K
-      - pattern: $RT.query.$K
-      - pattern: $SP.get(...)
-      - pattern: useSearchParams()
+      - *dom_source
+    pattern-sanitizers:
+      - *dom_url_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -326,10 +369,9 @@ rules:
       attacker-chosen javascript:/data: value can execute script, and any URL enables
       phishing/open-redirect. Validate against a host allowlist first.
     pattern-sources:
-      - pattern: $SP.get(...)
-      - pattern: router.query.$K
-      - pattern: $RT.query.$K
-      - pattern: useSearchParams()
+      - *dom_source
+    pattern-sanitizers:
+      - *dom_url_guard
     pattern-sinks:
       - patterns:
           - pattern-either:
@@ -354,9 +396,9 @@ rules:
       A request-controlled value is passed to setAttribute("href"/"src", ...) with no scheme
       allowlist — an attacker can supply a javascript: URL that runs script on click/load.
     pattern-sources:
-      - pattern: router.query.$K
-      - pattern: $RT.query.$K
-      - pattern: $SP.get(...)
+      - *dom_source
+    pattern-sanitizers:
+      - *dom_url_guard
     pattern-sinks:
       - patterns:
           - pattern-either:

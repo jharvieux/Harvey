@@ -21,6 +21,42 @@
 # (complete) route objects coexist in the same next.config.js without disturbing it.
 #
 # Exercised against targets/calibration by `pnpm validate:calibration`; see GROUND-TRUTH.md §B5.
+#
+# Byte-equal copy of base.yml's canonical request-taint source block (#1221) — YAML anchors resolve
+# at parse time and do not cross documents, so each file needs its own. Rationale and the FP
+# measurement that fixed its shape: base.yml. `semgrep-shared-sources.test.ts` fails loud on drift.
+x-request-source: &request_source
+  pattern-either:
+    # Express / Pages-Router accessors, plus the App Router handler parameter.
+    - patterns:
+        - pattern-either:
+            - pattern: $REQ.query
+            - pattern: $REQ.body
+            - pattern: $REQ.params
+            # #984: cookies/headers are attacker-controllable request sources (session tokens,
+            # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+            - pattern: $REQ.cookies
+            - pattern: $REQ.headers
+            # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+            # destructured/bracket/aliased/multi-hop forms propagate through semgrep's taint
+            # dataflow once the base object is a source; the method form is a distinct call shape.
+            - pattern: $REQ.get(...)
+            - pattern: $REQ.header(...)
+        - metavariable-regex:
+            metavariable: $REQ
+            regex: ^_?(req|request|nextReq|nextRequest|httpReq|incoming)$
+    # #1221: the App Router query string. `$U.searchParams` subsumes `req.nextUrl.searchParams`
+    # AND the split `const u = new URL(req.url); u.searchParams.get(…)` form, so neither needs its
+    # own pattern; the `.get(...)` arm carries the inline `new URL(req.url).searchParams.get(…)`
+    # call. A BARE `$SP.get(...)` is deliberately NOT used — measured to fire on Map/Headers/
+    # config/FormData `.get()` even behind the `^(?!(https?|axios)$)` http-client guard.
+    - pattern: $U.searchParams.get(...)
+    - pattern: $U.searchParams
+    # #1221: the App Router request body — the shape 17 of 21 rules were blind to.
+    - pattern: await $REQ.json()
+    # #984: App Router next/headers request sources.
+    - pattern: cookies()
+    - pattern: headers()
 
 rules:
   # Reflected-origin CORS: Access-Control-Allow-Origin is set to the request's own Origin header
@@ -482,15 +518,18 @@ rules:
       A request-controlled value is written into a response header (res.setHeader) with no CR/LF
       stripping — an attacker can inject additional headers or split the response (CRLF injection).
       Strip CR/LF (or reject the value) before setting the header.
+    # #1224 judgment: adopt the canonical block WHOLESALE. The weakness is CR/LF reaching a
+    # response-header value, so every attacker-controlled STRING is in class and no source in the
+    # block is out of it — there is nothing to weigh. The eight patterns this replaces are all
+    # subsumed: `$REQ.query` covers `$REQ.query.$K`, and `$REQ.headers` covers both the dotted and
+    # bracket forms, through taint propagation once the base object is a source.
+    #
+    # This also NARROWS the rule, which is the point: the old free `$REQ.` metavariable made
+    # `upstream.headers.etag` a source. The canonical block name-constrains it, so the change is a
+    # recall gain (searchParams, the JSON body, cookies()/headers(), the method-form accessors) and
+    # a precision gain at once.
     pattern-sources:
-      - pattern: $REQ.query.$K
-      - pattern: $REQ.query
-      - pattern: $REQ.body.$K
-      - pattern: $REQ.body
-      - pattern: $REQ.params.$K
-      - pattern: $REQ.params
-      - pattern: $REQ.headers[$H]
-      - pattern: $REQ.headers.$H
+      - *request_source
     pattern-sanitizers:
       - pattern: $S.replace(...)
       # #989: (a2) validator-guard sanitizer — the value is GATED by a control-flow check that

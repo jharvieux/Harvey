@@ -17,6 +17,8 @@ import { knownPublicCredsEntries } from "./calibration/known-public-creds.entrie
 import { m9AuthzEntries } from "./calibration/m9-authz.entries.js";
 import { m9CheckEntries } from "./calibration/m9-checks.entries.js";
 import { m9PortEntries } from "./calibration/m9-ports.entries.js";
+import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
+import { detectPerfCodeFindings } from "../detectors/perf-code.js";
 import type { TargetFramework } from "./framework-detect.js";
 import type { SourceInput } from "../detectors/app-router.js";
 import { secretsEntries } from "./calibration/secrets.entries.js";
@@ -459,7 +461,8 @@ describe("Batch B12 next-config/client-surface corpus (recorded semgrep + public
   // 5 ERROR+HIGH Semgrep rules (wildcard remotePatterns, productionBrowserSourceMaps, '*' Server
   // Actions origin, excessive createSignedUrl TTL, '*' postMessage) + the checkPublicDirSensitive
   // filesystem check (the 6th high), and 5 WARNING+MEDIUM heuristics (auth token in Web Storage, CDN
-  // script no SRI, ISR revalidate no secret, CRLF header injection ×2 incl. the multi-hop source,
+  // script no SRI, ISR revalidate no secret, CRLF header injection ×3 incl. the multi-hop source
+  // and the #1224 App Router searchParams one,
   // 'message' listener no origin). The eleven negative fixtures draw nothing, so no rows here.
   const error = (id: string, path: string): SemgrepResult => ({
     check_id: `src.scan.rules.semgrep.${id}`, path, start: { line: 8 },
@@ -480,6 +483,7 @@ describe("Batch B12 next-config/client-surface corpus (recorded semgrep + public
     warning("harvey-isr-revalidate-nosecret", "pages/api/isr-rebuild.js"),
     warning("harvey-crlf-header-injection", "pages/api/download.js"),
     warning("harvey-crlf-header-injection", "pages/api/crlf-multihop.js"),
+    warning("harvey-crlf-header-injection", "app/api/ar-crlf-search/route.ts"),
     warning("harvey-postmessage-no-origin", "components/MessageListener.jsx"),
   ];
 
@@ -504,12 +508,12 @@ describe("Batch B12 next-config/client-surface corpus (recorded semgrep + public
     }
   });
 
-  it("promotes only the exact config-parse / literal / filesystem sinks to the free count (6 high, 6 review)", () => {
+  it("promotes only the exact config-parse / literal / filesystem sinks to the free count (6 high, 7 review)", () => {
     const m = buildCoverageMatrix(findings, b12NextconfigEntries);
     const positives = b12NextconfigEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
     expect(m.positivesCaughtHigh).toBe(6);
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(6);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(7);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });
@@ -1082,5 +1086,31 @@ describe("#374 static auth_rls_initplan corpus (live checkMigrationRlsInitplanSt
     const flagged = findings.map((f) => f.location);
     expect(flagged.some((l) => l.includes("perf_orders_select_own"))).toBe(true);
     expect(flagged.every((l) => !l.includes("perf_events_select_own"))).toBe(true);
+  });
+});
+
+describe("#1203 M7 blocking-loop (live detectPerfCodeFindings over the committed OWASP fixture)", () => {
+  // P-OWASP-NODE-BLOCKING-LOOP is tagged module: "M7" in owasp-nodejs.entries.ts, which excludes
+  // it from validate-calibration.ts's M1 mechanical scoring (mechanicalCorpus) — this block is
+  // where it is actually proven caught, same shape as the #221/#374 blocks above: the REAL
+  // detector against the REAL committed fixture, so the answer key can't drift from what the
+  // scanner emits.
+  const entry = owaspNodejsEntries.find((e) => e.id === "P-OWASP-NODE-BLOCKING-LOOP");
+  if (!entry) throw new Error("P-OWASP-NODE-BLOCKING-LOOP missing from owasp-nodejs.entries.ts");
+  const findings = detectPerfCodeFindings([
+    { path: entry.location, text: readFileSync(join(import.meta.dirname, "../../targets/calibration", entry.location), "utf8") },
+  ]);
+
+  it("catches pbkdf2Sync and readFileSync in blocking-event-loop.ts at review tier", () => {
+    const row = scoreEntry(entry, findings);
+    expect(row.pass, row.detail).toBe(true);
+    expect(row.caughtTier).toBe(entry.expectedTier);
+  });
+
+  it("fires both calls, each at Review confidence with the reachability caveat disclosed", () => {
+    const hits = findings.filter((f) => f.taxonomy === "M7 — Blocking sync I/O in request handler");
+    expect(hits).toHaveLength(2);
+    expect(hits.every((f) => f.confidence === "Review")).toBe(true);
+    expect(hits.every((f) => f.evidence.includes("reachability"))).toBe(true);
   });
 });

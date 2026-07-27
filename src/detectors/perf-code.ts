@@ -1166,15 +1166,35 @@ function detectMiddlewareFetch(sources: Map<string, ts.SourceFile>, nextId: Next
 
 const SYNC_CALL = /^(readFileSync|readdirSync|writeFileSync|appendFileSync|statSync|execSync|execFileSync|spawnSync|pbkdf2Sync|scryptSync|generateKeyPairSync|gzipSync|gunzipSync|deflateSync|inflateSync|brotliCompressSync|brotliDecompressSync)$/;
 const HANDLER_PATH = /(\/route\.[cm]?[jt]sx?$)|((^|\/)pages\/api\/)/;
+// #1203: files that are never on a request path regardless of what they export — build/tooling
+// scripts, config files, migrations/seeds, tests. Excluded from the broader (non-route-file)
+// tier below so cold-start/dev-time code doesn't get flagged as a request-path blocker.
+const NON_REQUEST_PATH = /(^|\/)(scripts|bin|migrations?|seeds?|__tests__|__mocks__)\/|\.(test|spec)\.[cm]?[jt]sx?$|\.config\.[cm]?[jt]sx?$/;
+
+function isExportedFunctionLike(n: ts.Node): boolean {
+  if (ts.isFunctionDeclaration(n)) return !!n.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+  if (ts.isArrowFunction(n) || ts.isFunctionExpression(n)) {
+    const decl = n.parent;
+    const stmt = ts.isVariableDeclaration(decl) ? decl.parent.parent : undefined;
+    return !!stmt && ts.isVariableStatement(stmt) && !!stmt.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+  }
+  return false;
+}
 
 function detectSyncIoInHandler(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
-    if (!HANDLER_PATH.test(path)) continue;
+    const onHandlerPath = HANDLER_PATH.test(path);
+    if (!onHandlerPath && NON_REQUEST_PATH.test(path)) continue;
     // Only flag calls inside a function body — module-scope sync reads run once at cold
     // start (an accepted pattern), not per request.
-    const visit = (n: ts.Node, inFunction: boolean) => {
-      if (inFunction && ts.isCallExpression(n)) {
+    const visit = (n: ts.Node, inFunction: boolean, inExportedFn: boolean) => {
+      // #1203: on a recognised handler file, any function body counts (existing behavior). Off
+      // one, only an EXPORTED function's own sync call counts — a private/unexported helper is
+      // far less likely to sit on a live call path, and this is the only proxy available
+      // without cross-file call-graph reachability.
+      const onCandidatePath = onHandlerPath ? inFunction : inExportedFn;
+      if (onCandidatePath && ts.isCallExpression(n)) {
         const callee = n.expression;
         const name = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isIdentifier(callee) ? callee.text : "";
         if (SYNC_CALL.test(name)) {
@@ -1182,10 +1202,12 @@ function detectSyncIoInHandler(sources: Map<string, ts.SourceFile>, nextId: Next
             makeFinding(nextId, {
               title: `Blocking \`${name}\` on the request path`,
               severity: "Perf",
-              confidence: "Likely",
+              confidence: onHandlerPath ? "Likely" : "Review",
               taxonomy: "M7 — Blocking sync I/O in request handler",
               location: loc(path, sf, n),
-              evidence: `\`${n.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` runs inside a request handler in ${path} — it blocks the event loop for its full duration.`,
+              evidence: onHandlerPath
+                ? `\`${n.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` runs inside a request handler in ${path} — it blocks the event loop for its full duration.`
+                : `\`${n.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` blocks the event loop for its full duration and runs inside an exported function in ${path} — not itself a route/handler file, so this flags on the call shape alone; reachability from an actual request was not proven statically (no cross-file call-graph analysis).`,
               impact: "While it runs, the process serves nothing else — one slow call stalls every concurrent request on that instance; CPU-bound sync crypto is the classic tail-latency source.",
               fix: `Use the async form (\`${name.replace(/Sync$/, "")}\`) or hoist a run-once read to module scope.`,
               value: 4,
@@ -1196,9 +1218,14 @@ function detectSyncIoInHandler(sources: Map<string, ts.SourceFile>, nextId: Next
         }
       }
       const enters = ts.isFunctionDeclaration(n) || ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isMethodDeclaration(n);
-      ts.forEachChild(n, (c) => visit(c, inFunction || enters));
+      // OR-propagate like inFunction: once true it must stay true for every descendant, not just
+      // the immediate function-like node — recomputing from `enters` alone at each recursion
+      // step (rather than carrying the incoming flag forward) silently reset it back to false one
+      // level down (#1203 self-review caught this before it shipped).
+      const nextInExportedFn = inExportedFn || (enters && isExportedFunctionLike(n));
+      ts.forEachChild(n, (c) => visit(c, inFunction || enters, nextInExportedFn));
     };
-    visit(sf, false);
+    visit(sf, false, false);
   }
   return findings;
 }

@@ -11,8 +11,25 @@
 // REAL GAPS to improve the product, NOT producing a coverage percentage.
 //
 // It also carries a forcing function. We filed OWASP/CheatSheetSeries#2309 proposing three additions
-// to this sheet; two of them are asserted below as fixtures, so a regression in our own detection of
-// what we publicly told OWASP mattered fails this gate.
+// to this sheet. #1190 asked that all three be checked and the answer stated plainly either way, so:
+//
+//   #2309 item 1 — FORCE ROW LEVEL SECURITY does not stop a BYPASSRLS/superuser connection.
+//     DETECTED. P-OWASP-MT-BYPASSRLS below, at high tier. It was NOT detected before this corpus;
+//     checkMigrationRlsBypass was written for it.
+//   #2309 item 2 — a session-scoped tenant GUC can leak across a transaction-mode connection pool.
+//     DETECTED. P-OWASP-MT-GUC-SESSION below, at review tier (the syntax is visible; whether the pool
+//     is actually in transaction mode is not). Also NOT detected before this corpus; #1195 built it.
+//   #2309 item 3 — the sheet gives no guidance on VERIFYING isolation.
+//     NOT A DETECTION CLAIM, and it would be dishonest to score it as one. It is an argument about
+//     what the sheet omits, not a defect a scanner can find in a target's source: there is no code
+//     shape that means "this team never tested their isolation". Harvey's answer to item 3 is a
+//     PRODUCT, not a rule — the M2 dynamic tier stands up two tenants and probes cross-tenant reads
+//     for real, which is precisely the verification the sheet does not describe. Recorded here as
+//     out-of-universe for the same reason as the eleven operational items below, and stated rather
+//     than left as a silent two-of-three.
+//
+// So a regression in our own detection of what we publicly told OWASP mattered fails this gate for
+// items 1 and 2, and item 3 is not gate-able by construction.
 //
 // TRANSLATION CAVEAT (per #1190). The sheet's examples are Python/SQLAlchemy; M1's rules are JS/TS
 // only (that is what M1-LANG-00 exists for). Every recommendation below was translated to its JS/TS
@@ -101,44 +118,54 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     note: "The sheet's single most important rule ('Never trust client-supplied tenant IDs' / 'Bind tenant context to authenticated user sessions', section 1) and arguably Harvey's core differentiator. WAS a measured gap (MEASURED 2026-07-26: zero findings) — the root cause was a SHAPE ASSUMPTION in the existing tenant-scope detectors (prisma-tenant-scope.ts #760, drizzle-tenant-scope.ts #901): they look for a query with NO tenant predicate, and here the predicate is PRESENT and correct-looking (`where: { tenantId: body.tenantId }`) while its VALUE is attacker-controlled, so both read it as properly scoped. CLOSED by #1194's client-supplied-tenant.ts, which asks where the predicate's value came from rather than whether it exists — both call sites in the fixture (a `req.json()` body and a `searchParams.get()` query param) now fire at high tier. High tier, unlike its two review-tier siblings, because the AST proves a PRESENCE (the request value reaches the predicate) rather than an ABSENCE that unseen middleware might fill in. Paired with N-OWASP-MT-SESSION-TENANT, which must stay silent.",
   },
   {
+    id: "P-OWASP-MT-CLIENT-TENANT-SUPABASE",
+    kind: "positive",
+    cls: "Supabase/PostgREST .eq() tenant predicate populated from the request",
+    location: "src/owasp-mt/client-supplied-tenant.ts",
+    match: [".eq(\"tenant_id\""],
+    expectedTier: "high",
+    expectedSeverity: "High",
+    note: "The #1194 remainder (#1210): the same defect as P-OWASP-MT-CLIENT-TENANT, through the PostgREST builder idiom `.eq(\"tenant_id\", body.tenant_id)` rather than a Prisma/Drizzle object key — a string-literal-first-argument sink the original detector did not cover. WAS a measured gap. CLOSED by extending client-supplied-tenant.ts with a supabaseHits matcher (also covers .in()/.match()/.filter()). match is scoped to the exact sink phrase (only present in THIS finding's evidence, not the Prisma-sourced ones sharing the file) so the two do not mask each other. Paired with the Supabase case added to N-OWASP-MT-SESSION-TENANT, which must stay silent.",
+  },
+  {
     id: "P-OWASP-MT-GUC-SESSION",
     kind: "positive",
     cls: "Tenant GUC set with SET rather than SET LOCAL, so it outlives its transaction under pooling",
     location: "src/owasp-mt/tenant-guc-session-scoped.ts",
-    match: ["current_tenant", "SET LOCAL", "pool"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "GAP. Our OWASP/CheatSheetSeries#2309 item 2. The sheet's own policy reads current_setting('app.current_tenant') and never mentions SET LOCAL or transaction-mode pooling. `SET app.current_tenant = …` on a pooled connection persists after release, so a later request is evaluated against the PREVIOUS tenant's id — a cross-tenant read in which policy, schema and application code all still look correct. MEASURED: zero findings. Tractable as a mechanical rule (SET vs SET LOCAL on a pooled client is syntactic), which is why it is filed rather than accepted. Tracked in #1195.",
+    match: ["current_tenant"],
+    expectedTier: "review",
+    expectedSeverity: "High",
+    note: "Our OWASP/CheatSheetSeries#2309 item 2. The sheet's own policy reads current_setting('app.current_tenant') and never mentions SET LOCAL or transaction-mode pooling. `SET app.current_tenant = …` on a pooled connection persists after release, so a later request is evaluated against the PREVIOUS tenant's id — a cross-tenant read in which policy, schema and application code all still look correct. WAS a measured gap (MEASURED 2026-07-26: zero findings). CLOSED by #1195's tenant-guc-scope.ts — a line-scoped grep for a query call whose SET/set_config text names a tenant/org GUC with no LOCAL / no third `true` argument. Review tier: it cannot see whether the pool is actually in transaction mode, only that the syntax is the risky one. Tracked in #1195.",
   },
   {
     id: "P-OWASP-MT-CACHE-KEY",
     kind: "positive",
     cls: "Cache key derived from the resource id with no tenant discriminator",
     location: "src/owasp-mt/cache-key-no-tenant.ts",
-    match: ["cache", "dashboard:"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "GAP. Sheet section 4 ('Prefix all cache keys with tenant identifier'). The first tenant to populate `dashboard:${boardId}` serves its rows to every other tenant requesting the same id. MEASURED: zero findings. Higher FP risk than the others — a tenant-agnostic cache is legitimate for genuinely global data — so any detector needs the negative below to stay silent, which is why the pair is planted together. Tracked in #1196.",
+    match: ["cache-tenant-scope"],
+    expectedTier: "review",
+    expectedSeverity: "Medium",
+    note: "Sheet section 4 ('Prefix all cache keys with tenant identifier'). The first tenant to populate `dashboard:${boardId}` serves its rows to every other tenant requesting the same id. WAS a measured gap (MEASURED 2026-07-26: zero findings). CLOSED by #1196's cache-tenant-scope.ts, narrowed two ways to hold the FP risk down: only a function that ALREADY has a tenant/org-like parameter in scope is considered (a cache with no tenant context at all may be intentionally global), and only a .get/.set read-through PAIR sharing the identical key counts, not a bare write. Confirmed by running the scanner over the fixture (not by inspection) — the negative below is the pair's other half.",
   },
   {
     id: "P-OWASP-MT-RATE-LIMIT",
     kind: "positive",
     cls: "Rate limiter backed by a module-level Map, so it is per-instance and not per-tenant",
     location: "src/owasp-mt/rate-limit-not-per-tenant.ts",
-    match: ["rate", "limit", "hits"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "GAP. Sheet section 5 ('per-tenant rate limiting and quotas') and the sheet's 'Noisy Neighbor' risk. This is ALSO briefs/anti-patterns.md D-091 item 19, which was a surprise: the catalogued pattern has no Harvey detector, because D-091 #19's stated guard (`pnpm check:rate-limit-store`) is ATC's OWN CI check, not something Harvey ships. Verified 2026-07-26: no `harvey-*` semgrep rule matches /rate/ at all. So a documented anti-pattern reached the taxonomy without a detector — worth noting as a class, since D-091 is described as the M1 taxonomy source. MEASURED: zero findings. Tracked in #1197, which also asks for a D-091 detector-coverage audit.",
+    match: ["resets on cold start"],
+    expectedTier: "review",
+    expectedSeverity: "Medium",
+    note: "Sheet section 5 ('per-tenant rate limiting and quotas') and the sheet's 'Noisy Neighbor' risk. This is ALSO briefs/anti-patterns.md D-091 item 19. WAS a measured gap (MEASURED 2026-07-26: zero findings) — but NOT because no detector existed: AUTH-inmemory-rate-limit (#1046, leftover-auth.ts) already covers exactly this class, and was silent here for an unrelated reason — its PROCESS_LOCAL_STORE regex required `new Map(` with no generic type argument, and the fixture's idiomatic `new Map<string, number>()` did not match. #1197 fixed the regex (`(?:<[^>]*>)?` after the class name); the D-091-coverage audit this issue also asked for is recorded separately (see docs note below). Confirmed by running the scanner over the fixture.",
   },
   {
     id: "P-OWASP-MT-STORAGE-PATH",
     kind: "positive",
     cls: "Storage object path is the caller-supplied filename, with no tenant prefix or ownership check",
     location: "src/owasp-mt/storage-path-no-tenant.ts",
-    match: ["tenant-prefix", "tenant scope", "tenant_id"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "GAP. Sheet section 6 ('tenant-prefixed paths', 'validate tenant ownership before serving files'). One tenant overwrites and reads another's objects in a shared bucket. MEASURED: zero findings FOR THIS CLASS — note that AUTH-upload-no-limit DOES fire on this file at High, but for an unrelated defect (no size/MIME limit), which is why `match` is scoped to tenant wording: without it the adjacent finding would satisfy the relevance check and mask the gap. That masking is the #1062 shape, in miniature. Tracked in #1198.",
+    match: ["without a tenant prefix"],
+    expectedTier: "review",
+    expectedSeverity: "High",
+    note: "Sheet section 6 ('tenant-prefixed paths', 'validate tenant ownership before serving files'). One tenant overwrites and reads another's objects in a shared bucket. WAS a measured gap (MEASURED 2026-07-26: zero findings FOR THIS CLASS — AUTH-upload-no-limit DID fire on this file at High, but for an unrelated defect, no size/MIME limit). CLOSED by #1198's storage-tenant-scope.ts, own taxonomy 'Storage object path without a tenant prefix (cross-tenant object read/overwrite)' — `match` is scoped to that exact phrase so this entry cannot be satisfied by AUTH-upload-no-limit's finding on the same file, which is the #1062 masking shape this corpus already warns about. Confirmed by running the scanner over the fixture.",
   },
   {
     id: "P-OWASP-MT-LOG-TENANT",
@@ -148,7 +175,7 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     match: ["tenant"],
     expectedTier: "none",
     gapKind: "measured-gap",
-    note: "GAP, and the weakest candidate of the set — recorded rather than filed. Sheet section 8 ('Include tenant context in all log entries'). A cross-tenant access cannot be reconstructed afterwards, which undercuts the sheet's own detective control. MEASURED: zero findings. Detecting 'this log line omits a field' needs to know which fields matter for this app, so it is a plausible review-tier question and a poor mechanical rule; kept here so the recommendation is accounted for either way.",
+    note: "GAP, and the weakest candidate of the set — now tracked in #1242, which was the last of this corpus's eight gaps without an owner. Sheet section 8 ('Include tenant context in all log entries'). A cross-tenant access cannot be reconstructed afterwards, which undercuts the sheet's own detective control. MEASURED: zero findings. Detecting 'this log line omits a field' needs to know which fields matter for this app, so it is a plausible review-tier question and a poor mechanical rule; kept here so the recommendation is accounted for either way.",
   },
 
   // ---------------------------------------------------------------------------------------------
@@ -167,13 +194,37 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     kind: "negative",
     cls: "Tenant discriminator derived from the verified session, and the caller-supplied form guarded against it",
     location: "src/owasp-mt/session-derived-tenant.ts",
-    note: "The correct form of P-OWASP-MT-CLIENT-TENANT, and the negative #1194's detector had to clear to ship. Three shapes, all silent, all measured 2026-07-27: (1) `where: { tenantId: session.user.tenantId }` — never touches the request; (2) a caller-supplied tenantId COMPARED against the session's before the query, which is the sheet's own remedy for an account switcher; (3) `where: { id: body.id, tenantId: … }` — a primary key from the request is the ordinary IDOR class that prisma-tenant-scope.ts and bola-owner.ts already own, and this detector must not double-report it. Without (1) and (2) a rule for this class would flag every tenant-scoped query in every multi-tenant codebase, which is the failure mode that makes such a rule unshippable.",
+    note: "The correct form of P-OWASP-MT-CLIENT-TENANT, and the negative #1194's detector had to clear to ship. Four shapes, all silent: (1) `where: { tenantId: session.user.tenantId }` — never touches the request; (2) a caller-supplied tenantId COMPARED against the session's before the query, which is the sheet's own remedy for an account switcher; (3) `where: { id: body.id, tenantId: … }` — a primary key from the request is the ordinary IDOR class that prisma-tenant-scope.ts and bola-owner.ts already own, and this detector must not double-report it; (4) added by #1210, the Supabase `.eq(\"tenant_id\", session.user.tenantId)` builder form. Without (1)/(2)/(4) a rule for this class would flag every tenant-scoped query in every multi-tenant codebase, which is the failure mode that makes such a rule unshippable.",
   },
   {
     id: "N-OWASP-MT-CACHE-SCOPED",
     kind: "negative",
     cls: "Cache key carrying the tenant discriminator",
     location: "src/owasp-mt/cache-key-tenant-scoped.ts",
-    note: "`t:${tenantId}:dashboard:${boardId}` — the correct form from sheet section 4. Trivially silent today because no cache-key detector exists; the entry exists so that whoever builds one for P-OWASP-MT-CACHE-KEY inherits a negative it must clear, rather than shipping a rule that flags every cache in every codebase.",
+    note: "`t:${tenantId}:dashboard:${boardId}` — the correct form from sheet section 4. Confirmed silent by #1196's cache-tenant-scope.ts: the key mentions the in-scope tenantId parameter, so the read-through pair clears.",
+  },
+  {
+    id: "N-OWASP-MT-GUC-LOCAL",
+    kind: "negative",
+    cls: "Tenant GUC set with SET LOCAL, scoped correctly to the current transaction",
+    location: "src/owasp-mt/tenant-guc-session-scoped.ts",
+    match: ["withTenantLocal"],
+    note: "withTenantLocal's `SET LOCAL app.current_tenant = …`, the negative #1195's tenant-guc-scope.ts had to clear to ship. Confirmed silent: the SET_NOT_LOCAL regex's negative lookahead excludes LOCAL explicitly. match scoped to this function's name so the entry isn't spuriously satisfied by the sibling positive's finding sharing this file.",
+  },
+  {
+    id: "N-OWASP-MT-GUC-SET-CONFIG-TRUE",
+    kind: "negative",
+    cls: "Tenant GUC set via set_config with is_local=true, scoped correctly to the current transaction",
+    location: "src/owasp-mt/tenant-guc-session-scoped.ts",
+    match: ["withTenantSetConfig"],
+    note: "withTenantSetConfig's `set_config('app.current_tenant', $1, true)`, the function-form negative. Confirmed silent: SET_CONFIG_UNSAFE only matches a literal `false` third argument.",
+  },
+  {
+    id: "N-OWASP-MT-STORAGE-PATH-SCOPED",
+    kind: "negative",
+    cls: "Storage object path prefixed with the tenant id off the verified session",
+    location: "src/owasp-mt/storage-path-no-tenant.ts",
+    match: ["uploadAttachmentScoped"],
+    note: "uploadAttachmentScoped's `${session.user.tenantId}/${filename}` path, the negative #1198's storage-tenant-scope.ts had to clear to ship. Confirmed silent: the path resolves (through the local `path` binding) to text mentioning `session`/`tenantId`, which clears the finding.",
   },
 ];

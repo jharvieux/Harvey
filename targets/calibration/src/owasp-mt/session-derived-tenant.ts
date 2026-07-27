@@ -1,5 +1,6 @@
 import { prisma } from "../db/client";
 import { auth } from "../auth";
+import { supabase } from "../db/supabase";
 
 // OWASP Multi-Tenant CS section 1, done CORRECTLY — the negative for client-supplied-tenant.ts.
 // Same query, same column, same-looking `where` clause. The only difference is where the value
@@ -26,4 +27,10 @@ export async function exportLedger(req: Request) {
 export async function getInvoice(req: Request) {
   const body = (await req.json()) as { id: string };
   return prisma.invoice.findUnique({ where: { id: body.id, tenantId: (await auth()).user.tenantId } });
+}
+
+// #1210 — the Supabase/PostgREST negative. Same `.eq()` sink, session-derived value: must stay silent.
+export async function listInvoicesSupabase() {
+  const session = await auth();
+  return supabase.from("invoices").select("*").eq("tenant_id", session.user.tenantId);
 }
