@@ -37,6 +37,7 @@ import { b21SilentFailureEntries } from "./calibration/b21-silent-failure.entrie
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { owaspMultiTenantEntries } from "./calibration/owasp-multitenant.entries.js";
 import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
+import { owaspReactEntries } from "./calibration/owasp-react.entries.js";
 import { rlsStaticSemanticsEntries } from "./calibration/rls-static-semantics.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
 import { m7Entries } from "./calibration/m7.entries.js";
@@ -83,6 +84,7 @@ export const CORPUS: CorpusEntry[] = [
   ...knownPublicCredsEntries,
   ...owaspMultiTenantEntries,
   ...owaspNodejsEntries,
+  ...owaspReactEntries,
   ...rlsStaticSemanticsEntries,
   ...m9AuthzEntries,
   ...m9CheckEntries,

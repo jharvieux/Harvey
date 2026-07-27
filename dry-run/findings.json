@@ -1261,9 +1261,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1309,9 +1310,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1357,9 +1359,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1405,9 +1408,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1453,9 +1457,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1501,9 +1506,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1549,9 +1555,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1597,9 +1604,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1645,9 +1653,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1694,9 +1703,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1742,9 +1752,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1790,9 +1801,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1838,9 +1850,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1887,9 +1900,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1935,9 +1949,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1983,9 +1998,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -2031,9 +2047,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -2079,9 +2096,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -2127,9 +2145,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -2175,9 +2194,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -2356,9 +2376,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -2401,9 +2422,10 @@
         "pages/api/preview/enable.js",
         "pages/post.js",
         "pages/search-results.js",
-        "src/owasp-node/sensitive-response-cached.ts"
+        "src/owasp-node/sensitive-response-cached.ts",
+        "src/owasp-react/scope-control-innerhtml.tsx"
       ],
-      "justification": "next is imported in 19 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +16 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 20 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +17 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -10253,6 +10275,30 @@
   },
   {
     "id": "SEM-327",
+    "title": "src.scan.rules.semgrep.harvey-dom-innerhtml: A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS. Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-dom-innerhtml",
+    "location": "src/owasp-react/scope-control-innerhtml.tsx:8",
+    "status": "Open",
+    "evidence": "A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS. Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.\n",
+    "impact": "A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS. Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
+  },
+  {
+    "id": "SEM-328",
     "title": "src.scan.rules.semgrep.harvey-edgefn-secret-fallback: A secret read from Deno.env falls back to a hardcoded secret-shaped string literal — the literal ships in the deployed function bundle and its git history. Fail closed (throw) when the env var is absent; never embed a fallback secret.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -10276,7 +10322,7 @@
     ]
   },
   {
-    "id": "SEM-328",
+    "id": "SEM-329",
     "title": "generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash: bcrypt hash detected",
     "severity": "High",
     "confidence": "Review",
@@ -10304,7 +10350,7 @@
     ]
   },
   {
-    "id": "SEM-329",
+    "id": "SEM-330",
     "title": "javascript.lang.security.detect-child-process.detect-child-process: Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed.",
     "severity": "High",
     "confidence": "Review",
@@ -10333,7 +10379,7 @@
     ]
   },
   {
-    "id": "SEM-330",
+    "id": "SEM-331",
     "title": "src.scan.rules.semgrep.harvey-command-injection: Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn with an argument array and no shell, and validate the input against an allowlist.",
     "severity": "Critical",
     "confidence": "Confirmed",
