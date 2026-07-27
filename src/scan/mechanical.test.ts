@@ -91,6 +91,62 @@ describe("runMechanicalScan skipNetworkChecks", () => {
   });
 });
 
+// #1232: in a monorepo the root lockfile already resolves every member's packages, so widening the
+// DECLARED set is not a coverage change — it is a labelling one, and the label is load-bearing
+// twice over. It orders the capped registry-lookup budget (declared-first), and it decides whether
+// a copyleft row tells the client "you chose this" or "something you depend on chose this". Before
+// this, an app's own 200 dependencies were both.
+describe("runMechanicalScan over a workspace monorepo (#1232)", () => {
+  let dir: string;
+  const member = (rel: string, body: object): void => {
+    mkdirSync(join(dir, rel), { recursive: true });
+    writeFileSync(join(dir, rel, "package.json"), JSON.stringify(body));
+  };
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "harvey-monorepo-test-"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "monorepo", devDependencies: { typescript: "5.8.0" } }));
+    writeFileSync(join(dir, "pnpm-workspace.yaml"), "packages:\n  - 'apps/*'\n");
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({
+        packages: {
+          "node_modules/typescript": { version: "5.8.0", license: "Apache-2.0" },
+          "node_modules/react": { version: "18.2.0", license: "MIT" },
+          "node_modules/tiny-transitive": { version: "1.0.0", license: "MIT" },
+        },
+      }),
+    );
+    // Declared by the member, not the root — the case the root-only read mislabelled.
+    member("apps/web", { name: "web", dependencies: { react: "^18.2.0" } });
+    // Not a workspace member: an unlisted fixture root whose pinned deps are deliberately wrong.
+    member("examples/demo", { name: "demo", dependencies: { "flatmap-stream": "0.1.1" } });
+    checkLicenseCompliance.mockClear();
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("labels a workspace member's own dependency declared, not transitive", async () => {
+    await runMechanicalScan({ dir, skipNetworkChecks: true });
+    const [scope] = checkLicenseCompliance.mock.calls[0] as unknown as [{ candidates: { name: string; direct: boolean }[] }];
+    expect(scope.candidates.find((c) => c.name === "react")?.direct).toBe(true);
+    expect(scope.candidates.find((c) => c.name === "tiny-transitive")?.direct).toBe(false);
+  });
+
+  it("flags the member's unpinned range, naming the member's manifest", async () => {
+    const findings = await runMechanicalScan({ dir, skipNetworkChecks: true });
+    const unpinned = findings.find((f) => f.id === "SUP-UNPINNED");
+    expect(unpinned?.evidence).toContain(`react@^18.2.0 (${join("apps", "web", "package.json")})`);
+  });
+
+  // The trap #1232 names: a blind sweep for every package.json would read examples/demo and report
+  // its IOC-feed dependency as one the application declared.
+  it("does not read an unlisted examples/ manifest as the application's own", async () => {
+    const findings = await runMechanicalScan({ dir, skipNetworkChecks: true });
+    expect(findings.some((f) => f.id === "SUP-IOC-flatmap-stream")).toBe(false);
+    expect(findings.find((f) => f.id === "SUP-SCOPE-00")?.evidence).toContain("2 manifests (pnpm-workspace.yaml)");
+  });
+});
+
 // #757 (part of #756): on a Prisma/Postgres app the Supabase-specific migration/RLS detectors have
 // no DB-level surface, so they must record N/A-by-architecture (the M1-ARCH-PRISMA disclosure) and
 // never fire — while a real Supabase app's RLS detectors must still fire unchanged. secrets/semgrep

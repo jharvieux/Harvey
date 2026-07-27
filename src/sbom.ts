@@ -25,11 +25,13 @@
 // ── What the BOM carries per component ───────────────────────────────────────────────────────────
 // name, version, purl, dev scope, plus (#1079) CycloneDX `licenses[]` and `hashes[]` — the two
 // fields an enterprise buyer's checklist actually looks for. Both come from the lockfile Harvey
-// already parses (MEASURED 2026-07-27 on targets/calibration/package-lock.json: 395 resolved
-// components, 390 with `license`, 395 with `integrity`), so they cost nothing and require no network.
+// already parses (MEASURED 2026-07-27 on targets/calibration/package-lock.json: 396 resolved
+// components, 390 with `license`, 395 with `integrity` — the single entry carrying neither is
+// #1231's deliberately name-only `crossenv` IOC plant), so they cost nothing and require no network.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { collectWorkspaceManifests } from "./workspaces.js";
 
 const SPEC_VERSION = "1.5";
 
@@ -276,6 +278,8 @@ export interface LicenseScope {
   note: string;
   direct: number;
   transitive: number;
+  /** #1232 — how the DECLARED half of the scope was resolved, so a monorepo can say so. */
+  declaredFrom: { manifests: number; source: string; unresolvedGlobs: string[]; unreadable: string[] };
 }
 
 // #1213: the candidate set for checkLicenseCompliance, from the same parse the SBOM uses — so the
@@ -290,9 +294,19 @@ export interface LicenseScope {
 // A manifest-declared name the tree never resolved is still a candidate (no lockfile at all, or an
 // optionalDependency the lockfile skipped); it carries no version and no license, so it falls
 // through to the registry lookup exactly as it did before.
-export function licenseScope(dir: string, directNames: readonly string[]): LicenseScope {
+//
+// #1232: the DECLARED half now comes from every workspace member's manifest, not the root's alone.
+// That is not a coverage change — the root lockfile already resolves each member's packages, so
+// they were candidates either way — but it fixes the two things that follow from the label: the
+// registry-lookup budget is spent declared-first, so a monorepo's own 200 dependencies no longer
+// lose the cap to the transitive tail, and a copyleft row no longer tells a client a package they
+// directly chose was "reached only through the resolved dependency tree".
+export function licenseScope(dir: string): LicenseScope {
   const deps = collectDependencies(dir);
-  const declared = new Set(directNames);
+  const workspace = collectWorkspaceManifests(dir);
+  const declared = new Set(
+    workspace.manifests.flatMap((m) => Object.keys({ ...m.dependencies, ...m.devDependencies, ...m.optionalDependencies, ...m.peerDependencies })),
+  );
   const candidates: LicenseCandidate[] = [];
   const resolved = new Set<string>();
   for (const c of deps.components) {
@@ -314,6 +328,12 @@ export function licenseScope(dir: string, directNames: readonly string[]): Licen
     note: deps.note,
     direct: candidates.filter((c) => c.direct).length,
     transitive: candidates.filter((c) => !c.direct).length,
+    declaredFrom: {
+      manifests: workspace.manifests.length,
+      source: workspace.source,
+      unresolvedGlobs: workspace.unresolvedGlobs,
+      unreadable: workspace.unreadable,
+    },
   };
 }
 
