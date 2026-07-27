@@ -180,7 +180,12 @@ const repoProse = prose.filter((c) => !c.file.startsWith("issue #"));
 const census = claimCensusByFile(repoProse);
 const breaches = claimRatchetBreaches(CLAIM_BASELINE, census);
 
-if (process.argv.includes("--update-baseline")) {
+// The baseline describes DEFAULT_ROOTS. Scored against a caller-narrowed --root it would compare
+// two different populations, so it is skipped — and said out loud, because a silently skipped gate
+// is the thing this whole file is against.
+if (roots.length > 0) {
+  console.log(`\nRatchet (#1318): not scored — --root narrowed the census to ${roots.join(", ")}, and the committed baseline describes the default roots. Run without --root to score it.`);
+} else if (process.argv.includes("--update-baseline")) {
   writeFileSync(resolve(REPO_ROOT, "src/unstructured-claims-baseline.ts"), renderBaseline(census));
   console.log(`\n✓ baseline rewritten: ${claimTotal(census)} claim line(s) across ${Object.keys(census).length} file(s). Commit it — a raised number needs a human to see it.`);
 } else {

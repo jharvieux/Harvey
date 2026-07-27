@@ -227,7 +227,7 @@ export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]):
 // Deliberately no exemption list. Suppressing a file recreates exactly the invisibility this exists
 // to remove; the way past a breach is to write the claim as a falsifiable block, or to bump that
 // file's baseline in a diff a human reads.
-export type ClaimBaseline = Record<string, number>;
+type ClaimBaseline = Record<string, number>;
 
 export function claimCensusByFile(claims: { file: string }[]): ClaimBaseline {
   const out: ClaimBaseline = {};
@@ -235,7 +235,7 @@ export function claimCensusByFile(claims: { file: string }[]): ClaimBaseline {
   return out;
 }
 
-export interface RatchetBreach {
+interface RatchetBreach {
   file: string;
   baseline: number;
   now: number;

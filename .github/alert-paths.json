@@ -48,15 +48,6 @@
       }
     },
     {
-      "workflow": ".github/workflows/alert-paths.yml",
-      "marker": "ci-alert-paths-alert",
-      "provenBy": {
-        "run": "PENDING",
-        "issue": 0,
-        "at": "PENDING"
-      }
-    },
-    {
       "workflow": ".github/workflows/owasp-ack-watch.yml",
       "marker": "ci-owasp-watch-alert",
       "provenBy": {
@@ -78,6 +69,10 @@
     }
   ],
   "scheduledWithoutAlertPath": [
+    {
+      "workflow": ".github/workflows/alert-paths.yml",
+      "tracking": 1333
+    },
     {
       "workflow": ".github/workflows/dry-run-drift.yml",
       "tracking": 1333

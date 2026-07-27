@@ -26,7 +26,6 @@ import { checkAlertPaths, expectedLabels, workflowFacts, type AlertPathRegistry 
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WORKFLOWS = join(REPO_ROOT, ".github", "workflows");
-const REGISTRY = join(REPO_ROOT, ".github", "alert-paths.json");
 
 export function loadFacts(root = REPO_ROOT): ReturnType<typeof workflowFacts>[] {
   const dir = join(root, ".github", "workflows");

@@ -22,8 +22,8 @@
 
 import { parse } from "yaml";
 
-export const ALERT_ACTION = "./.github/actions/alert-issue";
-export const DRILL_INPUT = "alert_drill";
+const ALERT_ACTION = "./.github/actions/alert-issue";
+const DRILL_INPUT = "alert_drill";
 
 export interface AlertStep {
   marker: string;
@@ -84,7 +84,7 @@ export function workflowFacts(workflow: string, text: string): WorkflowFacts {
   };
 }
 
-export interface Violation {
+interface Violation {
   workflow: string;
   detail: string;
 }
