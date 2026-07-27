@@ -34,16 +34,37 @@ function levenshtein(a: string, b: string): number {
   return dp[a.length]![b.length]!;
 }
 
+// #1231 — the resolved-tree half of a widened check's input: which of the submitted names a
+// manifest actually declares, and which lockfile the rest were reached through. Omitted entirely by
+// a caller that only has a manifest, in which case every name is treated as declared.
+interface TreeScope {
+  declared: ReadonlySet<string>;
+  source: string;
+}
+
+function reachedThroughTree(name: string, tree: TreeScope | undefined): string | undefined {
+  return tree && !tree.declared.has(name) ? tree.source : undefined;
+}
+
 // Flags a dependency name that's edit-distance 1 from a popular package but not an exact
 // match — the classic typosquat/slopsquat shape ("expres", "raect", "zodd"). Offline corpus
 // match, not a live-registry lookup → always "review" precision.
-export function checkTyposquat(depNames: string[]): Finding[] {
+//
+// #1231 WIDENED TO THE RESOLVED TREE. The stated worry was review-tier noise over a few hundred
+// transitive packages. MEASURED 2026-07-27 over three real resolved trees — targets/calibration
+// (363 unique names), this repo's own pnpm-lock.yaml (495) and the AoP app's (336) — the widening
+// produced ZERO additional rows beyond the planted `expres`. An edit-distance-1 collision with a
+// 44-package popular corpus is simply rare. The declared/transitive distinction is carried into the
+// finding anyway, because a typosquat a client can fix by editing their own manifest and one buried
+// in someone else's dependency are different remediations.
+export function checkTyposquat(depNames: readonly string[], tree?: TreeScope): Finding[] {
   const findings: Finding[] = [];
   const popularSet = new Set(POPULAR_PACKAGES);
   for (const name of depNames) {
     if (popularSet.has(name)) continue;
     const closest = POPULAR_PACKAGES.find((p) => levenshtein(name, p) === 1);
     if (closest) {
+      const via = reachedThroughTree(name, tree);
       findings.push(
         mechanicalFinding({
           id: `SUP-TYPO-${name}`,
@@ -51,10 +72,14 @@ export function checkTyposquat(depNames: string[]): Finding[] {
           severity: "High",
           category: "Supply chain",
           taxonomy: "Possible typosquat/slopsquat",
-          location: "package.json",
-          evidence: `"${name}" has Levenshtein distance 1 from "${closest}" (offline corpus match, not a live-registry lookup).`,
+          location: via ? `${via} (${name})` : "package.json",
+          evidence:
+            `"${name}" has Levenshtein distance 1 from "${closest}" (offline corpus match, not a live-registry lookup).` +
+            (via ? ` It is reached only through the resolved dependency tree in ${via}, not declared in any manifest.` : ""),
           impact: "If this is a typosquat, install pulls attacker-controlled code with full build/runtime access.",
-          fix: `Confirm "${name}" is the package you intend; if not, replace with "${closest}".`,
+          fix: via
+            ? `Confirm "${name}" is the package the depending dependency intends; it is not yours to edit, so trace which package pulls it in (npm ls ${name}) before acting.`
+            : `Confirm "${name}" is the package you intend; if not, replace with "${closest}".`,
           precisionTier: "review",
         }),
       );
@@ -73,19 +98,28 @@ const NPM_REGISTRY = "https://registry.npmjs.org";
 // ship when a lookup is deliberately skipped — a skipped tier is still an unassessed tier.
 const NAME_SAMPLE = 20;
 
+// #1213: a registry lookup costs one live request per package, and the license candidate set is now
+// the whole resolved tree — for a pnpm target, whose lockfile format records no `license` at all,
+// that is EVERY package. Unbounded, a large monorepo would issue thousands of requests. Bounded,
+// some packages go unclassified — which is fine only because the cap is DISCLOSED by name in
+// SUP-LICENSE-00 / SUP-SLOPSQUAT-00, and because candidates are ordered declared-first so the
+// budget is never starved by the transitive tail. #1231 applies the same bound to checkSlopsquat,
+// whose input widened from the root manifest to every workspace member's.
+const REGISTRY_LOOKUP_CAP = 300;
+
 const REGISTRY_FIX = `Re-run the scan from a machine with direct access to ${NPM_REGISTRY} (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.`;
 
 function sampleNames(names: readonly string[]): string {
   return names.length <= NAME_SAMPLE ? names.join(", ") : `${names.slice(0, NAME_SAMPLE).join(", ")} … and ${names.length - NAME_SAMPLE} more`;
 }
 
-function coverageFinding(args: { id: string; title: string; taxonomy: string; evidence: string; impact: string; fix: string }): Finding {
+function coverageFinding(args: { id: string; title: string; taxonomy: string; evidence: string; impact: string; fix: string; location?: string }): Finding {
   return {
+    location: "package.json",
     ...args,
     severity: "Info",
     confidence: "N/A",
     category: "Supply chain",
-    location: "package.json",
     status: "Open",
     value: 1,
     ease: 4,
@@ -116,6 +150,7 @@ export function slopsquatCoverageFinding(names: readonly string[], reason: strin
 export function licenseCoverageFinding(names: readonly string[], reason: string, scope?: LicenseScope): Finding {
   const scopeSentence = scope
     ? `License scope: ${scope.candidates.length} package${scope.candidates.length === 1 ? "" : "s"} (${scope.direct} declared in a manifest, ${scope.transitive} reached only through the resolved tree) from ${scope.source}.` +
+      ` The declared half was read from ${describeManifestSources(scope.declaredFrom)}.` +
       (scope.completeness === "complete" ? "" : ` The dependency inventory itself is ${scope.completeness}: ${scope.note}`)
     : undefined;
   const treeIncomplete = scope !== undefined && scope.completeness !== "complete";
@@ -135,12 +170,69 @@ export function licenseCoverageFinding(names: readonly string[], reason: string,
   });
 }
 
+// #1232: a monorepo whose globs Harvey could not resolve degrades silently to the root manifest —
+// same coverage either way (the root lockfile already resolves every member's packages), but the
+// declared/transitive LABEL flips, which is what orders the registry-lookup budget and what the
+// finding text tells the client. So the manifest count, and any glob that resolved to nothing, are
+// stated rather than inferred from a number that looks plausible for a single-package repo.
+function describeManifestSources(from: LicenseScope["declaredFrom"]): string {
+  return (
+    `${from.manifests} manifest${from.manifests === 1 ? "" : "s"} (${from.source})` +
+    (from.unresolvedGlobs.length > 0 ? `; ${from.unresolvedGlobs.length} declared workspace glob(s) matched no package.json and were skipped: ${from.unresolvedGlobs.join(", ")}` : "") +
+    (from.unreadable.length > 0 ? `; ${from.unreadable.length} manifest(s) could not be parsed and contributed nothing: ${from.unreadable.join(", ")}` : "")
+  );
+}
+
+// #1231 — the scope every supply-chain check actually worked over, always emitted. The six checks
+// #1213 left behind do not want one widening: two ask about a declared RANGE that no lockfile
+// records, one asks a question a lockfile entry's integrity hash already answers, and one would
+// double-report osv-scanner. Those are defensible decisions and they are recorded in the code where
+// each check lives — but a decision that only exists in a comment is, from the deliverable's side,
+// indistinguishable from an oversight. #1213's lesson exactly: a manifest-scoped check whose
+// disclosure row does not admit the limit reads as a clean bill of health.
+export function supplyChainScopeFinding(s: {
+  license: LicenseScope;
+  treeNames: number;
+  declaredNames: number;
+  osvRan: boolean;
+}): Finding {
+  const treeWide = ["SUP-TYPO-* (typosquat)", "SUP-IOC-* (known-malicious names)", "SUP-LICENSE-* (license compliance)"];
+  const manifestOnly = [
+    "SUP-UNPINNED and SUP-NON-REGISTRY, which read the declared version RANGE — a lockfile records the version that resolved, never the range that was declared, so the resolved tree cannot answer the question they ask",
+    `SUP-SLOPSQUAT-* over ${s.declaredNames} declared name${s.declaredNames === 1 ? "" : "s"}, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves`,
+    "SUP-INSTALL-SCRIPT, since a lifecycle script only ever exists in a manifest",
+  ];
+  if (s.osvRan) {
+    manifestOnly.push("DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows");
+  } else {
+    treeWide.push("DEP-CVE-* (the curated offline CVE table), widened for this pass because osv-scanner did not run");
+  }
+  return coverageFinding({
+    id: "SUP-SCOPE-00",
+    title: `Supply-chain checks: ${treeWide.length} read the whole resolved dependency tree, ${manifestOnly.length} are limited to declared manifests`,
+    taxonomy: "Coverage — supply-chain check scope",
+    // Not "package.json": this row is a statement about every manifest AND the lockfile, and a
+    // package.json location makes it substring-match the corpus entries keyed to that file — it
+    // tripped P-UNPINNED-DEP's `match: ["unpinned"]` on its own "SUP-UNPINNED" mention.
+    location: "(repo-wide)",
+    evidence:
+      `Declared set: ${s.declaredNames} package name${s.declaredNames === 1 ? "" : "s"} from ${describeManifestSources(s.license.declaredFrom)}. ` +
+      `Resolved tree: ${s.treeNames} package name${s.treeNames === 1 ? "" : "s"} from ${s.license.source}. ` +
+      `Read the whole resolved tree: ${treeWide.join("; ")}. ` +
+      `Limited to the declared manifests: ${manifestOnly.join("; ")}.`,
+    impact:
+      "A manifest-scoped check cannot see a package reached only through the resolved dependency tree. The absence of its findings across that tree is a disclosed scope boundary, NOT a verdict that the tree is clean.",
+    fix:
+      "Nothing to fix for the range-based checks — SUP-UNPINNED and SUP-NON-REGISTRY ask about a declared range, which only a manifest carries. For the rest, commit a lockfile Harvey can parse (package-lock.json, pnpm-lock.yaml or yarn.lock) and declare every workspace member in pnpm-workspace.yaml / package.json#workspaces, so no member's manifest is missed.",
+  });
+}
+
 export const NETWORK_SKIPPED_REASON =
   "The live npm-registry existence check was deliberately skipped for this pass (skipNetworkChecks), so no registry lookup was made at all.";
 
 // #1213: the license check's OWN half of the skip above. It is no longer all-or-nothing, because a
 // package-lock.json target answers most of the tree offline (MEASURED 2026-07-27 on
-// targets/calibration: 390 of 395 components carry a `license`) — only the registry FALLBACK is
+// targets/calibration: 390 of 396 components carry a `license`) — only the registry FALLBACK is
 // nondeterministic. So the classification runs and the packages the lockfile cannot answer are
 // disclosed, instead of the whole tier going silent.
 const REGISTRY_SKIPPED_REASON =
@@ -154,11 +246,27 @@ const REGISTRY_SKIPPED_REASON =
 // rather than risk a false positive on a real dependency; typo/edit-distance-to-a-real-package
 // detection (the "review" half of P-SLOPSQUAT's tier split) stays in checkTyposquat above, not
 // duplicated here.
-export async function checkSlopsquat(depNames: string[], fetchImpl: typeof fetch = fetch): Promise<Finding[]> {
+//
+// #1231 NOT WIDENED TO THE RESOLVED TREE, on the premise rather than the cost. A package that the
+// lockfile resolved carries an integrity hash against a published tarball — it has, by
+// construction, been published, so a registry HEAD over the transitive tree spends thousands of
+// live requests confirming what the lockfile already proves. The names where the premise still
+// holds are the DECLARED ones (a hallucinated name can sit in a manifest that was never installed),
+// and those now come from every workspace member, not the root alone. That set is still unbounded
+// in principle, so it takes the same cap-and-disclose treatment #1213 gave licensing: the cap is
+// named in SUP-SLOPSQUAT-00 and the caller orders the root manifest's names first.
+export async function checkSlopsquat(depNames: readonly string[], fetchImpl: typeof fetch = fetch): Promise<Finding[]> {
   const findings: Finding[] = [];
   const indeterminate: string[] = [];
   const reasons = new Set<string>();
+  let lookups = 0;
   for (const name of depNames) {
+    if (lookups >= REGISTRY_LOOKUP_CAP) {
+      indeterminate.push(name);
+      reasons.add(`the per-run registry-lookup cap of ${REGISTRY_LOOKUP_CAP} packages was reached (the root manifest's dependencies are looked up first)`);
+      continue;
+    }
+    lookups++;
     let res: Response;
     try {
       res = await fetchImpl(`${NPM_REGISTRY}/${encodeURIComponent(name)}`, { method: "HEAD" });
@@ -197,11 +305,37 @@ export async function checkSlopsquat(depNames: string[], fetchImpl: typeof fetch
 
 export type DependencyMap = Record<string, string>;
 
+// #1231 — one declared dependency, carrying the manifest that declared it. The two checks below ask
+// about the RANGE STRING, which only a manifest has, so their input is a flat list across every
+// workspace member rather than the root manifest's name→range map.
+interface DeclaredDependency {
+  manifest: string;
+  name: string;
+  range: string;
+}
+
+function declaredLabel({ manifest, name, range }: DeclaredDependency): string {
+  return manifest === "package.json" ? `${name}@${range}` : `${name}@${range} (${manifest})`;
+}
+
+// A finding aggregated over several manifests cannot claim one file as its location, and it must
+// not silently claim the root's either — a monorepo reader would look in the wrong file.
+function manifestLocation(deps: readonly DeclaredDependency[]): string {
+  const manifests = [...new Set(deps.map((d) => d.manifest))];
+  return manifests.length === 1 ? manifests[0]! : `${manifests.length} workspace manifests`;
+}
+
 // Unpinned = the declared range can resolve to more than one published version. Syntactic
 // check on the range string → deterministic, "high" precision (whether an unpinned range is
 // *acceptable* is a severity/triage judgment, not this check's confidence).
-export function checkUnpinnedDependencies(deps: DependencyMap): Finding[] {
-  const unpinned = Object.entries(deps).filter(([, range]) => {
+//
+// #1231 NOT WIDENED TO THE RESOLVED TREE, by construction rather than by cost: a lockfile records
+// the version that RESOLVED, never the range that was declared, so the tree cannot answer the
+// question this check asks. What it is widened to is every workspace member's manifest — the real
+// gap the root-only read left. (peerDependencies stay out for the #1213 reason: a peer range is
+// deliberately wide, so feeding it here is a false positive by design.)
+export function checkUnpinnedDependencies(deps: readonly DeclaredDependency[]): Finding[] {
+  const unpinned = deps.filter(({ range }) => {
     const r = range.trim();
     return r === "" || /^[\^~*]/.test(r) || /latest$/i.test(r) || /x$/i.test(r);
   });
@@ -213,8 +347,8 @@ export function checkUnpinnedDependencies(deps: DependencyMap): Finding[] {
       severity: "Low",
       category: "Supply chain",
       taxonomy: "Unpinned dependency",
-      location: "package.json",
-      evidence: `Unpinned: ${unpinned.map(([n, r]) => `${n}@${r}`).join(", ")}.`,
+      location: manifestLocation(unpinned),
+      evidence: `Unpinned: ${unpinned.map(declaredLabel).join(", ")}.`,
       impact: "A compromised upstream publish (or the next semver-compatible release) can land in installs without review, unless a lockfile is committed and enforced in CI.",
       fix: "Pin exact versions, or rely on a committed, CI-enforced lockfile (frozen install) as the actual pin.",
       precisionTier: "high",
@@ -229,8 +363,10 @@ export function checkUnpinnedDependencies(deps: DependencyMap): Finding[] {
 // vibe-code risk: an AI pastes `npm install some-git-url`, bypassing registry auditing entirely.
 const NON_REGISTRY_RANGE = /^(git\+|git:|git@|ssh:|https?:|file:|github:|gitlab:|bitbucket:)/i;
 
-export function checkNonRegistryDependencies(deps: DependencyMap): Finding[] {
-  const nonRegistry = Object.entries(deps).filter(([, range]) => NON_REGISTRY_RANGE.test(range.trim()));
+// #1231: same construction as checkUnpinnedDependencies above — the protocol prefix lives in the
+// declared range, which no lockfile records, so this widens across workspace manifests, not the tree.
+export function checkNonRegistryDependencies(deps: readonly DeclaredDependency[]): Finding[] {
+  const nonRegistry = deps.filter(({ range }) => NON_REGISTRY_RANGE.test(range.trim()));
   if (nonRegistry.length === 0) return [];
   return [
     mechanicalFinding({
@@ -239,8 +375,8 @@ export function checkNonRegistryDependencies(deps: DependencyMap): Finding[] {
       severity: "Medium",
       category: "Supply chain",
       taxonomy: "Non-registry dependency source",
-      location: "package.json",
-      evidence: `Non-registry: ${nonRegistry.map(([n, r]) => `${n}@${r}`).join(", ")}.`,
+      location: manifestLocation(nonRegistry),
+      evidence: `Non-registry: ${nonRegistry.map(declaredLabel).join(", ")}.`,
       impact: "A git/url/file dependency bypasses the npm registry's auditing and integrity checks and is unpinned by default — a compromised or rewritten upstream lands in installs without review.",
       fix: "Prefer a registry-published, version-pinned dependency; if a git source is required, pin it to a commit SHA and vendor-review it.",
       precisionTier: "review",
@@ -254,18 +390,23 @@ export function checkNonRegistryDependencies(deps: DependencyMap): Finding[] {
 // not proof of malice (many legit packages build native addons here) → always "review" tier.
 const INSTALL_SCRIPT_HOOKS = ["preinstall", "install", "postinstall"];
 
-export function checkInstallScripts(scripts: Record<string, string>): Finding[] {
-  const present = INSTALL_SCRIPT_HOOKS.filter((h) => typeof scripts[h] === "string");
+// #1231: a lifecycle script only ever exists in a manifest, so there is no tree to widen to — but a
+// workspace member's postinstall runs on the same `pnpm install` as the root's, and the root-only
+// read never saw it. Aggregated into the one row because the id is fixed.
+export function checkInstallScripts(manifests: readonly { label: string; scripts?: Record<string, string> }[]): Finding[] {
+  const present = manifests.flatMap((m) => INSTALL_SCRIPT_HOOKS.filter((h) => typeof m.scripts?.[h] === "string").map((h) => ({ manifest: m.label, hook: h, cmd: m.scripts![h]! })));
   if (present.length === 0) return [];
+  const hooks = [...new Set(present.map((p) => p.hook))];
+  const declaring = [...new Set(present.map((p) => p.manifest))];
   return [
     mechanicalFinding({
       id: "SUP-INSTALL-SCRIPT",
-      title: `package.json defines install lifecycle script(s): ${present.join(", ")}`,
+      title: `package.json defines install lifecycle script(s): ${hooks.join(", ")}`,
       severity: "Medium",
       category: "Supply chain",
       taxonomy: "Install lifecycle script",
-      location: "package.json (scripts)",
-      evidence: present.map((h) => `${h}: ${scripts[h]}`).join("; "),
+      location: declaring.length === 1 ? `${declaring[0]} (scripts)` : `${declaring.length} workspace manifests (scripts)`,
+      evidence: present.map((p) => (p.manifest === "package.json" ? `${p.hook}: ${p.cmd}` : `${p.manifest} → ${p.hook}: ${p.cmd}`)).join("; "),
       impact: "Install-time scripts run on every `npm install` before any code review — the standard execution foothold for supply-chain worms (Shai-Hulud). Confirm each is expected.",
       fix: "Confirm the script is intentional; install with --ignore-scripts in CI where the build doesn't need it.",
       precisionTier: "review",
@@ -295,10 +436,16 @@ const KNOWN_MALICIOUS_PACKAGES = new Set([
   "node-fabric", // same 2017 campaign.
 ]);
 
-export function checkKnownIoc(depNames: string[], manifestPath = "package.json"): Finding[] {
+// #1231 WIDENED TO THE RESOLVED TREE — the highest-value widening of the six, and the cheapest: an
+// exact name match against a curated feed, offline, with no false-positive surface to grow. The
+// event-stream incident is the canonical shape and it is a TRANSITIVE one: nobody declared
+// flatmap-stream, event-stream pulled it in. Restricting the feed match to the root manifest looks
+// for the payload in the one place the delivery mechanism does not put it.
+export function checkKnownIoc(depNames: readonly string[], manifestPath = "package.json", tree?: TreeScope): Finding[] {
   const findings: Finding[] = [];
   for (const name of depNames) {
     if (!KNOWN_MALICIOUS_PACKAGES.has(name)) continue;
+    const via = reachedThroughTree(name, tree);
     findings.push(
       mechanicalFinding({
         id: `SUP-IOC-${name}`,
@@ -306,10 +453,14 @@ export function checkKnownIoc(depNames: string[], manifestPath = "package.json")
         severity: "Critical",
         category: "Supply chain",
         taxonomy: "Known-malicious dependency",
-        location: `${manifestPath} (${name})`,
-        evidence: `"${name}" matches a curated indicator-of-compromise feed of packages published as malware (credential/crypto stealers). Any version is malicious.`,
+        location: `${via ?? manifestPath} (${name})`,
+        evidence:
+          `"${name}" matches a curated indicator-of-compromise feed of packages published as malware (credential/crypto stealers). Any version is malicious.` +
+          (via ? ` It is reached only through the resolved dependency tree in ${via}, not declared in any manifest — the event-stream delivery shape.` : ""),
         impact: "This package's install/runtime code exfiltrates secrets or wallet keys. Its presence in the manifest is a confirmed compromise, not a heuristic guess.",
-        fix: `Remove "${name}" immediately, rotate any secrets reachable from the build/runtime, and audit for the real package this was meant to be.`,
+        fix: via
+          ? `Trace which dependency pulls "${name}" in (npm ls ${name}), remove or pin around it, and rotate any secrets reachable from the build/runtime.`
+          : `Remove "${name}" immediately, rotate any secrets reachable from the build/runtime, and audit for the real package this was meant to be.`,
         precisionTier: "high",
       }),
     );
@@ -395,17 +546,9 @@ function extractLicenseId(pkg: NpmPackument, version?: string): string | undefin
   return (versioned && extractLicenseFrom(versioned)) ?? extractLicenseFrom(pkg);
 }
 
-// #1213: a registry lookup costs one live request per package, and the candidate set is now the
-// whole resolved tree — for a pnpm target, whose lockfile format records no `license` at all, that
-// is EVERY package. Unbounded, a large monorepo would issue thousands of requests. Bounded, some
-// packages go unclassified — which is fine only because the cap is DISCLOSED in SUP-LICENSE-00 by
-// name, and because candidates are ordered declared-first so the budget is never starved by the
-// transitive tail.
-const REGISTRY_LOOKUP_CAP = 300;
-
 // License lookup over the RESOLVED DEPENDENCY TREE (src/sbom.ts's `licenseScope`, the same parse
 // the SBOM uses). package-lock.json records `license` on essentially every entry (MEASURED
-// 2026-07-27 on targets/calibration: 390 of 395), so for that format the classification is entirely
+// 2026-07-27 on targets/calibration: 390 of 396), so for that format the classification is entirely
 // offline and the registry is queried only for the remainder; pnpm-lock.yaml and yarn.lock record
 // none, so for those every candidate needs the network fallback and the cap above binds.
 //

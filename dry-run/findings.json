@@ -972,6 +972,33 @@
     }
   },
   {
+    "id": "DEP-OSV-GHSA-c2m4-w5hm-vqjw-crossenv@0.0.0-synthetic",
+    "title": "crossenv@0.0.0-synthetic: crossenv is malware",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Dependency CVE",
+    "taxonomy": "Known-vulnerable dependency",
+    "location": "package-lock.json (crossenv@0.0.0-synthetic)",
+    "status": "Open",
+    "evidence": "OSV-Scanner matched GHSA-c2m4-w5hm-vqjw (aliases: CVE-2017-16074) against crossenv@0.0.0-synthetic. Rated High from the advisory's own HIGH rating. The advisory names no fixed version. Advisory: https://nvd.nist.gov/vuln/detail/CVE-2017-16074, https://github.com/advisories/GHSA-c2m4-w5hm-vqjw.",
+    "impact": "crossenv is malware — The `crossenv` package is a piece of malware that steals environment variables and sends them to attacker controlled locations.",
+    "fix": "No fixed version is published for crossenv in GHSA-c2m4-w5hm-vqjw — remove or replace the dependency, or apply the advisory's mitigation.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-506"
+    ],
+    "dependency": "crossenv",
+    "reachability": {
+      "status": "transitive-only",
+      "rank": 3,
+      "justification": "crossenv is not a direct dependency and no scanned source file imports it — it is pulled in by another package. Your own code does not call it directly, but the package that does may. De-prioritizes the row, does not clear it."
+    }
+  },
+  {
     "id": "DEP-OSV-GHSA-848j-6mx2-7j84-elliptic@6.6.1",
     "title": "elliptic@6.6.1: Elliptic Uses a Cryptographic Primitive with a Risky Implementation",
     "severity": "Low",
@@ -12507,6 +12534,24 @@
     "precisionTier": "review"
   },
   {
+    "id": "SUP-IOC-crossenv",
+    "title": "Dependency \"crossenv\" is a known-malicious package (IOC feed match)",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "category": "Supply chain",
+    "taxonomy": "Known-malicious dependency",
+    "location": "package-lock.json (crossenv)",
+    "status": "Open",
+    "evidence": "\"crossenv\" matches a curated indicator-of-compromise feed of packages published as malware (credential/crypto stealers). Any version is malicious. It is reached only through the resolved dependency tree in package-lock.json, not declared in any manifest — the event-stream delivery shape.",
+    "impact": "This package's install/runtime code exfiltrates secrets or wallet keys. Its presence in the manifest is a confirmed compromise, not a heuristic guess.",
+    "fix": "Trace which dependency pulls \"crossenv\" in (npm ls crossenv), remove or pin around it, and rotate any secrets reachable from the build/runtime.",
+    "value": 5,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high"
+  },
+  {
     "id": "SUP-UNPINNED",
     "title": "6 dependencies declared with an unpinned version range",
     "severity": "Low",
@@ -12561,6 +12606,7 @@
     "precisionTier": "review"
   },
   {
+    "location": "package.json",
     "id": "SUP-SLOPSQUAT-00",
     "title": "Hallucinated-dependency (slopsquat) existence check did not run for 11 dependencies",
     "taxonomy": "Coverage — npm-registry existence check not assessed",
@@ -12570,7 +12616,6 @@
     "severity": "Info",
     "confidence": "N/A",
     "category": "Supply chain",
-    "location": "package.json",
     "status": "Open",
     "value": 1,
     "ease": 4,
@@ -12614,16 +12659,33 @@
     "precisionTier": "review"
   },
   {
+    "location": "package.json",
     "id": "SUP-LICENSE-00",
-    "title": "Dependency license-compliance check did not run for 8 packages",
+    "title": "Dependency license-compliance check did not run for 9 packages",
     "taxonomy": "Coverage — dependency license not assessed",
-    "evidence": "License scope: 398 packages (11 declared in a manifest, 387 reached only through the resolved tree) from package-lock.json. The dependency license lookup could not reach a verdict: the live npm-registry fallback was deliberately skipped for this pass (skipNetworkChecks), so packages whose license the lockfile does not record could not be classified. Not assessed: expres, left-pad, react-supabase-helpers, busboy@1.6.0, console-browserify@1.2.0, enhanced-resolve@4.5.0, querystring-es3@0.2.1, streamsearch@1.1.0.",
+    "evidence": "License scope: 399 packages (11 declared in a manifest, 388 reached only through the resolved tree) from package-lock.json. The declared half was read from 1 manifest (no workspace globs declared). The dependency license lookup could not reach a verdict: the live npm-registry fallback was deliberately skipped for this pass (skipNetworkChecks), so packages whose license the lockfile does not record could not be classified. Not assessed: expres, left-pad, react-supabase-helpers, busboy@1.6.0, console-browserify@1.2.0, crossenv@0.0.0-synthetic, enhanced-resolve@4.5.0, querystring-es3@0.2.1, streamsearch@1.1.0.",
     "impact": "License classification reads the license the lockfile or the registry records; without it no copyleft or unlicensed dependency can be identified. The absence of license findings for these packages is a disclosed coverage gap, NOT a clean license bill.",
     "fix": "Re-run the scan from a machine with direct access to https://registry.npmjs.org (no proxy interception, no rate limit in effect) so this tier reports a verdict instead of a coverage gap.",
     "severity": "Info",
     "confidence": "N/A",
     "category": "Supply chain",
-    "location": "package.json",
+    "status": "Open",
+    "value": 1,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true
+  },
+  {
+    "location": "(repo-wide)",
+    "id": "SUP-SCOPE-00",
+    "title": "Supply-chain checks: 3 read the whole resolved dependency tree, 4 are limited to declared manifests",
+    "taxonomy": "Coverage — supply-chain check scope",
+    "evidence": "Declared set: 11 package names from 1 manifest (no workspace globs declared). Resolved tree: 364 package names from package-lock.json. Read the whole resolved tree: SUP-TYPO-* (typosquat); SUP-IOC-* (known-malicious names); SUP-LICENSE-* (license compliance). Limited to the declared manifests: SUP-UNPINNED and SUP-NON-REGISTRY, which read the declared version RANGE — a lockfile records the version that resolved, never the range that was declared, so the resolved tree cannot answer the question they ask; SUP-SLOPSQUAT-* over 11 declared names, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves; SUP-INSTALL-SCRIPT, since a lifecycle script only ever exists in a manifest; DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows.",
+    "impact": "A manifest-scoped check cannot see a package reached only through the resolved dependency tree. The absence of its findings across that tree is a disclosed scope boundary, NOT a verdict that the tree is clean.",
+    "fix": "Nothing to fix for the range-based checks — SUP-UNPINNED and SUP-NON-REGISTRY ask about a declared range, which only a manifest carries. For the rest, commit a lockfile Harvey can parse (package-lock.json, pnpm-lock.yaml or yarn.lock) and declare every workspace member in pnpm-workspace.yaml / package.json#workspaces, so no member's manifest is missed.",
+    "severity": "Info",
+    "confidence": "N/A",
+    "category": "Supply chain",
     "status": "Open",
     "value": 1,
     "ease": 4,

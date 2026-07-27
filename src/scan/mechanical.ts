@@ -65,19 +65,14 @@ import {
   inferAuthMethodsFromSource,
   type TenancyOverride,
 } from "./supabase-static.js";
-import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, type DependencyMap } from "./supply-chain.js";
+import { checkInstallScripts, checkKnownIoc, checkLicenseCompliance, checkLockfilePresence, checkNonRegistryDependencies, checkSlopsquat, checkTyposquat, checkUnpinnedDependencies, NETWORK_SKIPPED_REASON, slopsquatCoverageFinding, supplyChainScopeFinding, type DependencyMap } from "./supply-chain.js";
 import { checkWebExtensionManifest } from "./webext-manifest.js";
 import { licenseScope } from "../sbom.js";
+import { collectWorkspaceManifests } from "../workspaces.js";
 
 interface PackageJson {
   dependencies?: DependencyMap;
   devDependencies?: DependencyMap;
-  // #1213: license candidates only. The other manifest checks keep the narrower prod+dev set —
-  // a peer range is deliberately wide, so feeding it to checkUnpinnedDependencies would be a
-  // false positive, and widening them is tracked separately.
-  optionalDependencies?: DependencyMap;
-  peerDependencies?: DependencyMap;
-  scripts?: Record<string, string>;
 }
 
 function readPackageJson(dir: string): PackageJson | null {
@@ -337,21 +332,45 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // missing-block half is an absence check, which no pattern rule can express.
     findings.push(...checkWorkflowPermissions(scanDir));
 
-    // Supply chain.
+    // Supply chain. #1231/#1232 — the checks below split by what question each one asks, not by a
+    // single scope: a name-match check reads the RESOLVED TREE (where the malicious or typosquatted
+    // package actually arrives), a range-check reads the DECLARED MANIFESTS of every workspace
+    // member (a lockfile has no ranges to read). Each split is argued at the check itself and stated
+    // in the output by SUP-SCOPE-00 — a scope decision that lives only in a comment is, from the
+    // deliverable's side, indistinguishable from an oversight.
     if (pkg) {
-      const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
-      findings.push(...checkTyposquat(Object.keys(allDeps)));
-      findings.push(...checkKnownIoc(Object.keys(allDeps)));
-      findings.push(...checkKnownDependencyCVEs(allDeps));
-      findings.push(...checkUnpinnedDependencies(allDeps));
-      findings.push(...checkNonRegistryDependencies(allDeps));
-      findings.push(...checkInstallScripts(pkg.scripts ?? {}));
+      const workspace = collectWorkspaceManifests(scanDir);
+      // prod+dev only: a peer range is deliberately wide and would false-positive SUP-UNPINNED.
+      const declared = workspace.manifests.flatMap((m) =>
+        Object.entries({ ...m.dependencies, ...m.devDependencies }).map(([name, range]) => ({ manifest: m.label, name, range })),
+      );
+      const license = licenseScope(scanDir);
+      const declaredNames = [...new Set(declared.map((d) => d.name))];
+      // Root manifest first (workspace.manifests is root-first), then members, then the tree — so
+      // any capped registry budget is spent on the packages the client actually chose.
+      const allNames = [...new Set([...declaredNames, ...license.candidates.map((c) => c.name)])];
+      const tree = { declared: new Set(declaredNames), source: license.source };
+
+      findings.push(...checkTyposquat(allNames, tree));
+      findings.push(...checkKnownIoc(allNames, "package.json", tree));
+      // The curated CVE table is the OFFLINE FALLBACK for the tier osv-scanner owns. When
+      // osv-scanner ran it already walked the whole lockfile, so widening this to the tree would
+      // double-report its rows against a second id; when it did not, the tree is otherwise
+      // unassessed for CVEs and the curated table is all there is. A declared range wins over the
+      // resolved version for a name that has both, so a manifest-scoped row is unchanged.
+      const curatedCveDeps: DependencyMap = {};
+      if (osv.failure) for (const c of license.candidates) if (c.version) curatedCveDeps[c.name] ??= c.version;
+      for (const d of declared) curatedCveDeps[d.name] = d.range;
+      findings.push(...checkKnownDependencyCVEs(curatedCveDeps));
+      findings.push(...checkUnpinnedDependencies(declared));
+      findings.push(...checkNonRegistryDependencies(declared));
+      findings.push(...checkInstallScripts(workspace.manifests));
       if (skipNetworkChecks) {
         // #1067 — a deliberately skipped tier is still an unassessed tier. The committed dry-run
         // artifact has to SAY this never ran, or its silence reads as a clean verdict.
-        findings.push(slopsquatCoverageFinding(Object.keys(allDeps), NETWORK_SKIPPED_REASON));
+        findings.push(slopsquatCoverageFinding(declaredNames, NETWORK_SKIPPED_REASON));
       } else {
-        findings.push(...(await checkSlopsquat(Object.keys(allDeps))));
+        findings.push(...(await checkSlopsquat(declaredNames)));
       }
       // #456 — license compliance (SPDX + copyleft/unknown flags). #1213: the candidate set is the
       // RESOLVED TREE, not the manifest — a copyleft package reached only transitively was
@@ -360,8 +379,15 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
       // The classification itself is offline for a lockfile that records licenses, so unlike
       // checkSlopsquat it still runs under skipNetworkChecks; only the registry fallback is pinned
       // off, and the packages that leaves unclassified are named in SUP-LICENSE-00.
-      const licenseNames = Object.keys({ ...allDeps, ...pkg.optionalDependencies, ...pkg.peerDependencies });
-      findings.push(...(await checkLicenseCompliance(licenseScope(scanDir, licenseNames), { skipRegistry: skipNetworkChecks })));
+      findings.push(...(await checkLicenseCompliance(license, { skipRegistry: skipNetworkChecks })));
+      findings.push(
+        supplyChainScopeFinding({
+          license,
+          treeNames: new Set(license.candidates.map((c) => c.name)).size,
+          declaredNames: declaredNames.length,
+          osvRan: osv.failure === undefined,
+        }),
+      );
     }
     findings.push(...checkLockfilePresence(scanDir));
 
