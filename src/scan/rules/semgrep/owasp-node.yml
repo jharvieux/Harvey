@@ -187,4 +187,12 @@ rules:
     message: >
       Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking
       (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length.
+      SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health:
+      it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex
+      ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or
+      compiled from user input — is NOT assessed by this rule, and neither is a catastrophic
+      pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match,
+      not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a
+      known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover
+      regexes written here.
     pattern-regex: /[^/\n]*\([^()\n]*[+*][^()\n]*\)\s*[+*][^/\n]*/
