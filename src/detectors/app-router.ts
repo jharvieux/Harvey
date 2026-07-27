@@ -76,9 +76,27 @@ function isPagesRouterOnly(files: SourceInput[]): boolean {
   return !files.some((f) => APP_DIR_PATTERN.test(f.path)) && files.some((f) => PAGES_DIR_PATTERN.test(f.path));
 }
 
+// #1238: a whole row does not have to arrive through a Supabase/Drizzle `.from().select()` chain.
+// An app on Prisma, or on a hand-rolled repository module, binds it from a MODEL READ —
+// `await db.getUser(id)`, `await prisma.user.findUnique(…)` — and the server→client leak check was
+// blind to every one of them, which is how the OWASP React fixture (P-OWASP-REACT-RSC-BOUNDARY)
+// reported zero. Bounded on BOTH halves so this stays "a row read" rather than "any awaited call":
+// the receiver's root must be a database handle by name, and the method a row-returning verb.
+const DB_HANDLE = /^(db|prisma|orm|knex|sql|database)$|(Repo|Repository|Dao)$/;
+const ROW_READ_VERB = /^(get|find|fetch|load|select|query|read)([A-Z]|$)/;
+
+function isRowReadCall(node: ts.Expression): boolean {
+  if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return false;
+  if (!ROW_READ_VERB.test(node.expression.name.text)) return false;
+  const recv = node.expression.expression;
+  // `db.getUser(…)` and Prisma's `prisma.user.findUnique(…)` — one level of model in between.
+  const root = ts.isIdentifier(recv) ? recv : ts.isPropertyAccessExpression(recv) && ts.isIdentifier(recv.expression) ? recv.expression : undefined;
+  return root !== undefined && DB_HANDLE.test(root.text);
+}
+
 function isDbQueryChain(node: ts.Expression): boolean {
   const names = callChainNames(node);
-  return names.includes("from") && names.includes("select");
+  return (names.includes("from") && names.includes("select")) || isRowReadCall(node);
 }
 
 function isDbMutationChain(text: string): boolean {

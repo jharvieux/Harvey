@@ -23,6 +23,7 @@ import { scanCacheTenantScope } from "./cache-tenant-scope.js";
 import { scanStorageTenantScope } from "./storage-tenant-scope.js";
 import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
+import { scanSsrSanitizer } from "./ssr-sanitizer.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { scanEmitterUnhandledError } from "./emitter-error.js";
@@ -447,6 +448,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #1202 — EventEmitter emits 'error' with no same-file listener; disclosed same-file-only
     // limitation (a listener attached by an importing module is invisible to this pass).
     findings.push(...scanEmitterUnhandledError(scanDir));
+
+    // #1239 — `dompurify` (browser-only) called in a server-rendered module. Its own pass because
+    // every dangerouslySetInnerHTML rule EXCLUDES an import-bound sanitizer wrap, so the semgrep
+    // layer is structurally blind to it.
+    findings.push(...scanSsrSanitizer(scanDir));
 
     // #681 — service-role query in a background-job path (Inngest/cron/queue/worker) with no
     // tenant predicate at all. AST dataflow, incl. plain .js.

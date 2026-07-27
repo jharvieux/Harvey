@@ -11355,6 +11355,54 @@
   },
   {
     "id": "SEM-366",
+    "title": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection: An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added).",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection",
+    "location": "src/owasp-react/prop-spread-injection.tsx:11",
+    "status": "Open",
+    "evidence": "An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added).\n",
+    "impact": "An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added).\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
+  },
+  {
+    "id": "SEM-367",
+    "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-ssrf-fetch",
+    "location": "src/owasp-react/rsc-fetch-unvalidated.tsx:10",
+    "status": "Open",
+    "evidence": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching.\n",
+    "impact": "A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-918: Server-Side Request Forgery (SSRF)"
+    ],
+    "owasp": [
+      "A10:2021 - Server-Side Request Forgery (SSRF)"
+    ]
+  },
+  {
+    "id": "SEM-368",
     "title": "src.scan.rules.semgrep.harvey-dom-innerhtml: A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS. Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -11378,7 +11426,31 @@
     ]
   },
   {
-    "id": "SEM-367",
+    "id": "SEM-369",
+    "title": "src.scan.rules.semgrep.harvey-secret-in-url-param: A secret is passed as a URL query parameter (api_key/access_token/token/secret). Secrets in URLs leak into logs, proxies, browser history, and Referer headers. Send it in an Authorization header instead.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-secret-in-url-param",
+    "location": "src/owasp-react/sensitive-data-in-url.tsx:10",
+    "status": "Open",
+    "evidence": "A secret is passed as a URL query parameter (api_key/access_token/token/secret). Secrets in URLs leak into logs, proxies, browser history, and Referer headers. Send it in an Authorization header instead.\n",
+    "impact": "A secret is passed as a URL query parameter (api_key/access_token/token/secret). Secrets in URLs leak into logs, proxies, browser history, and Referer headers. Send it in an Authorization header instead.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-598: Use of GET Request Method With Sensitive Query Strings"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
+  },
+  {
+    "id": "SEM-370",
     "title": "src.scan.rules.semgrep.harvey-edgefn-secret-fallback: A secret read from Deno.env falls back to a hardcoded secret-shaped string literal — the literal ships in the deployed function bundle and its git history. Fail closed (throw) when the env var is absent; never embed a fallback secret.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -11402,7 +11474,7 @@
     ]
   },
   {
-    "id": "SEM-368",
+    "id": "SEM-371",
     "title": "generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash: bcrypt hash detected",
     "severity": "High",
     "confidence": "Review",
@@ -11430,7 +11502,7 @@
     ]
   },
   {
-    "id": "SEM-369",
+    "id": "SEM-372",
     "title": "javascript.lang.security.detect-child-process.detect-child-process: Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed.",
     "severity": "High",
     "confidence": "Review",
@@ -11459,7 +11531,7 @@
     ]
   },
   {
-    "id": "SEM-370",
+    "id": "SEM-373",
     "title": "src.scan.rules.semgrep.harvey-command-injection: Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn with an argument array and no shell, and validate the input against an allowlist.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -13956,6 +14028,30 @@
     "precisionTier": "review",
     "cwe": [
       "CWE-248: Uncaught Exception"
+    ]
+  },
+  {
+    "id": "XSS-ssr-browser-sanitizer-src-owasp-react-ssr-browser-sanitizer-tsx-13",
+    "title": "src/owasp-react/ssr-browser-sanitizer.tsx — browser-only sanitizer runs on the server",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Next.js/web footgun",
+    "taxonomy": "Browser-only sanitizer in a server-rendered component",
+    "location": "src/owasp-react/ssr-browser-sanitizer.tsx:13",
+    "status": "Open",
+    "evidence": "`DOMPurify.sanitize(article.body)` — `dompurify` is imported here and `ArticleBody` is an async component — React has no async Client Components, so it renders on the server. DOMPurify depends on browser DOM APIs it does not have in Node.",
+    "impact": "The sanitizer call reads as protection to reviewers and to every dangerouslySetInnerHTML rule (all of them exclude an import-bound sanitizer wrap), but on the server it throws or returns the input unchanged. The raw HTML renders during SSR — before hydration, and before any client-side guard can run.",
+    "fix": "Swap `dompurify` for a server-compatible sanitizer (`isomorphic-dompurify` or `sanitize-html`), or construct DOMPurify against a supplied DOM (`createDOMPurify(new JSDOM('').window)`).",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
     ]
   },
   {
