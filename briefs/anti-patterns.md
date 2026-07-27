@@ -400,6 +400,61 @@ Vendored from ATC's canonical catalog (there numbered 27–28) @ commit `04a565d
 
 ---
 
+## Harvey detector-coverage audit (#1197, 2026-07-27)
+
+This catalog is described elsewhere (CLAUDE.md) as "also the M1 taxonomy source," which reads as
+though every item has a Harvey detector behind it. #1197 found that item 19 did NOT (a regex bug,
+since fixed) and asked for a systematic pass: which of the 29 items does Harvey actually ship a
+detector for, versus only ATC's own CI gate (`pnpm check:*`, an ESLint rule, or a doctrine line)?
+Measured by grepping Harvey's semgrep rule ids, TS detector `taxonomy:` strings, and the pentest
+(M2 dynamic) probes for each item's theme — not by assuming the prevention column above implies a
+Harvey detector, since most of those are ATC-repo-local mechanisms Harvey never shipped.
+
+**Covered (Harvey ships a detector or probe)**: 1 (M5 unused-parameter, slop.ts), 2
+(`harvey-fail-open`), 3 (`harvey-unchecked-mutation`), 4 (`harvey-secret-in-url-param`), 5 (service-
+role/RLS family — service-role-literal.ts, job-tenant-scope.ts, checkMigrationRlsBypass and
+siblings), 7 (`harvey-zero-row-update`), 8 (`harvey-void-async`), 16 (`harvey-db-error-disclosure`),
+17 (`harvey-ssrf-fetch` static + `ACTIVE-SSRF` M2 dynamic — the SSRF risk class, not the specific
+`z.string().url()`-vs-`safeUrl` schema distinction), 18 (counter-race.ts), 19
+(`AUTH-inmemory-rate-limit`, #1046 — fixed by #1197 to match a generic-typed `new Map<K, V>()`), 21
+(`detectClientSuppliedOwnerId`, app-router.ts), 26 (M7 "Unbounded select" — framed as a performance
+finding, but the same shape), 28 (definer-review.ts / definer-classifier.ts / SECURITY DEFINER
+checks in supabase-static.ts), 29 (env-schema.ts #679 mechanical half; rotation-pair half is an
+honest reviewer-enforced limitation, same as ATC's own).
+
+**Partially covered**: 11 (untrusted state-machine input) — only a live M2 dynamic workflow-bypass
+probe (`business-logic.ts`'s `BIZLOGIC-WORKFLOW`), no static/mechanical detector for the AST shape
+(`progressTo`/`revertTo` called with a non-literal). 15 (admin route missing platform-admin) —
+`AUTH-sensitive-route` (leftover-auth.ts) catches an admin/debug/seed route with NO auth-call hint
+at all, but not specifically "authenticated but at the wrong authority level," which needs to know
+the app's own authority model.
+
+**Not covered — real gaps, no Harvey detector at all**: 6 (TOCTOU stale-read across a loop of
+operations — distinct from item 18's single-file select-then-update shape, which counter-race.ts
+already owns), 10 (idempotency row written before dispatch), 12 (webhook signature encoding
+mismatch — needs a per-provider expected-encoding table Harvey doesn't have), 13 (destructive
+migration ships before the read-switchover — needs migration history + app-code cross-reference
+over time), 22 (claim-before-send in batch jobs), 23 (collectively-atomic multi-writes), 24
+(deterministic idempotency keys on external sends), 25 (DB uniqueness wherever app code assumes
+it), 27 (webhook state-application ordering). Every one of these is a cross-statement or
+cross-time dataflow question a mechanical AST/semgrep pass is a poor fit for — plausible semantic-
+or LLM-tier candidates, not mechanical-tier gaps, and none was silently dropped: this paragraph is
+that disclosure.
+
+**Not covered — ATC-specific, not portable**: 9 (wrong `assertPermission` action for multi-
+operation routes) and 14 (`assertPermission` pair missing from `permission-grants.ts`) both name
+ATC's own auth-helper API and grants-file convention; a generic multi-tenant target has no
+equivalent for Harvey to check against.
+
+**Already a documented by-design gap, not new**: 20 (webhook replay protection) — `WEBHOOK-REPLAY`
+already exists in the calibration corpus (`b17-race-unscoped.entries.ts`, #353/#425) as a measured
+LLM-tier class with no mechanical rule by design, and flips the gate loud if one ever fires.
+
+Follow-up: Harvey#1230 tracks the 9 real gaps above as detector candidates, prioritized by how
+mechanically tractable each is.
+
+---
+
 ## How this catalog gets used
 
 - **At authoring time**: the CLAUDE.md doctrine lines (added to the "Things to be wary of" section) shape what gets written. Re-read every session.

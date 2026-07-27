@@ -461,7 +461,8 @@ describe("Batch B12 next-config/client-surface corpus (recorded semgrep + public
   // 5 ERROR+HIGH Semgrep rules (wildcard remotePatterns, productionBrowserSourceMaps, '*' Server
   // Actions origin, excessive createSignedUrl TTL, '*' postMessage) + the checkPublicDirSensitive
   // filesystem check (the 6th high), and 5 WARNING+MEDIUM heuristics (auth token in Web Storage, CDN
-  // script no SRI, ISR revalidate no secret, CRLF header injection ×2 incl. the multi-hop source,
+  // script no SRI, ISR revalidate no secret, CRLF header injection ×3 incl. the multi-hop source
+  // and the #1224 App Router searchParams one,
   // 'message' listener no origin). The eleven negative fixtures draw nothing, so no rows here.
   const error = (id: string, path: string): SemgrepResult => ({
     check_id: `src.scan.rules.semgrep.${id}`, path, start: { line: 8 },
@@ -482,6 +483,7 @@ describe("Batch B12 next-config/client-surface corpus (recorded semgrep + public
     warning("harvey-isr-revalidate-nosecret", "pages/api/isr-rebuild.js"),
     warning("harvey-crlf-header-injection", "pages/api/download.js"),
     warning("harvey-crlf-header-injection", "pages/api/crlf-multihop.js"),
+    warning("harvey-crlf-header-injection", "app/api/ar-crlf-search/route.ts"),
     warning("harvey-postmessage-no-origin", "components/MessageListener.jsx"),
   ];
 
@@ -506,12 +508,12 @@ describe("Batch B12 next-config/client-surface corpus (recorded semgrep + public
     }
   });
 
-  it("promotes only the exact config-parse / literal / filesystem sinks to the free count (6 high, 6 review)", () => {
+  it("promotes only the exact config-parse / literal / filesystem sinks to the free count (6 high, 7 review)", () => {
     const m = buildCoverageMatrix(findings, b12NextconfigEntries);
     const positives = b12NextconfigEntries.filter((e) => e.kind === "positive");
     expect(m.positivesCaught).toBe(positives.length);
     expect(m.positivesCaughtHigh).toBe(6);
-    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(6);
+    expect(positives.filter((e) => e.expectedTier === "review")).toHaveLength(7);
     expect(m.negativesCleared).toBe(m.negativesTotal);
     expect(m.ok).toBe(true);
   });

@@ -50,23 +50,44 @@ describe("runMechanicalScan skipNetworkChecks", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("skips the live npm-registry checks when set", async () => {
+  it("skips the live registry existence check when set", async () => {
     await runMechanicalScan({ dir, skipNetworkChecks: true });
     expect(checkSlopsquat).not.toHaveBeenCalled();
-    expect(checkLicenseCompliance).not.toHaveBeenCalled();
+  });
+
+  // #1213: the license check is no longer all-or-nothing. Classification off a lockfile needs no
+  // network, so the tier still RUNS under skipNetworkChecks — only its registry fallback is pinned
+  // off, which keeps the committed dry-run artifact deterministic while leaving the copyleft
+  // detection exercised by the gate rather than silent.
+  it("still classifies licenses under skipNetworkChecks, with only the registry fallback pinned off", async () => {
+    await runMechanicalScan({ dir, skipNetworkChecks: true });
+    expect(checkLicenseCompliance).toHaveBeenCalledWith(expect.objectContaining({ source: "package.json" }), { skipRegistry: true });
   });
 
   it("still runs the live npm-registry checks by default", async () => {
     await runMechanicalScan({ dir });
     expect(checkSlopsquat).toHaveBeenCalledWith(["react"]);
-    // #1079/#1099: the lockfile-derived license and resolved-version maps are passed in so the
-    // registry is only queried for names it does not answer, and (#1099) reads the INSTALLED
-    // version's license rather than the packument's top-level snapshot. This fixture has no
-    // lockfile, so collectDependencies degrades to the manifest fallback: no `license` field
-    // (empty map), but the declared version string still populates the version map — a RANGE in
-    // general, which harmlessly fails to match any `versions[<v>]` key and falls through to the
-    // top-level snapshot exactly as before #1099.
-    expect(checkLicenseCompliance).toHaveBeenCalledWith({ react: "18.2.0" }, fetch, {}, { react: "18.2.0" });
+    // #1213: the candidate set is the resolved tree, not the manifest. This fixture has no
+    // lockfile, so collectDependencies degrades to the manifest fallback — which is exactly why
+    // the scope is `incomplete`, and why SUP-LICENSE-00 has to say the transitive tier was never
+    // in scope rather than staying silent.
+    expect(checkLicenseCompliance).toHaveBeenCalledWith(
+      expect.objectContaining({ candidates: [{ name: "react", version: "18.2.0", direct: true }], completeness: "incomplete" }),
+      { skipRegistry: undefined },
+    );
+  });
+
+  // #1213: `@img/sharp-*` are optionalDependencies of `sharp`, so even a DIRECT `sharp` would not
+  // have surfaced its platform binaries — the manifest's optional/peer sections were never merged.
+  it("submits optional and peer dependencies to the license check", async () => {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "fixture", dependencies: { react: "18.2.0" }, optionalDependencies: { fsevents: "2.3.3" }, peerDependencies: { next: "14.2.5" } }),
+    );
+    await runMechanicalScan({ dir });
+    const [scope] = checkLicenseCompliance.mock.calls[0] as unknown as [{ candidates: { name: string }[] }];
+    const names = scope.candidates.map((c) => c.name);
+    expect(names).toEqual(["react", "fsevents", "next"]);
   });
 });
 

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildSbom, collectDependencies, lockfileLicenses, lockfileVersions, parsePackageLock, parsePnpmLock, parseYarnLock } from "./sbom.js";
+import { buildSbom, collectDependencies, licenseScope, parsePackageLock, parsePnpmLock, parseYarnLock } from "./sbom.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the BOM is emitted as plain JSON; tests read it as a consumer would.
 const bomOf = (dir: string): any => buildSbom(dir, { targetName: "t", timestamp: "2026-07-23T00:00:00.000Z" }).bom;
@@ -159,24 +159,43 @@ describe("CycloneDX document", () => {
   });
 });
 
-// #1099: lockfileVersions is checkLicenseCompliance's other half of #1079's lockfileLicenses — the
-// resolved-tree VERSION map, so a registry fallback can ask for the version actually installed
-// (`versions[<v>].license`) instead of always reading the npm packument's top-level, latest-publish
-// license snapshot.
-describe("lockfileLicenses / lockfileVersions (#1079/#1099)", () => {
+// #1213: licenseScope is checkLicenseCompliance's candidate set, and the whole point is that it is
+// the RESOLVED TREE — the manifest-scoped list it replaced (#1079/#1099) could never submit a
+// transitively-reached copyleft package to the check at all.
+describe("licenseScope (#1213)", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "sbom-"));
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("keys both maps by name, from the same resolved-tree parse", () => {
+  it("carries the whole tree, marking which packages a manifest actually declared", () => {
     writeFileSync(
       join(dir, "package-lock.json"),
-      JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2", license: "MIT" }, "node_modules/@next/env": { version: "14.2.35" } } }),
+      JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2", license: "MIT" }, "node_modules/@img/sharp-libvips": { version: "1.2.4", license: "LGPL-3.0-or-later" } } }),
     );
-    expect(lockfileLicenses(dir)).toEqual({ axios: "MIT" });
-    expect(lockfileVersions(dir)).toEqual({ axios: "1.7.2", "@next/env": "14.2.35" });
+    const scope = licenseScope(dir, ["axios"]);
+    expect(scope.candidates).toEqual([
+      { name: "axios", version: "1.7.2", license: "MIT", direct: true },
+      { name: "@img/sharp-libvips", version: "1.2.4", license: "LGPL-3.0-or-later", direct: false },
+    ]);
+    expect([scope.direct, scope.transitive]).toEqual([1, 1]);
+    expect(scope.completeness).toBe("complete");
+  });
+
+  it("keeps two versions of one package apart instead of letting the later parse win", () => {
+    writeFileSync(
+      join(dir, "package-lock.json"),
+      JSON.stringify({ packages: { "node_modules/dep": { version: "1.0.0", license: "MIT" }, "node_modules/other/node_modules/dep": { version: "2.0.0", license: "GPL-3.0" } } }),
+    );
+    expect(licenseScope(dir, []).candidates.map((c) => `${c.name}@${c.version}=${c.license}`)).toEqual(["dep@1.0.0=MIT", "dep@2.0.0=GPL-3.0"]);
+  });
+
+  // An optionalDependency the lockfile skipped, or any manifest name on a target with no lockfile,
+  // still has to reach the registry fallback rather than dropping out of the candidate set.
+  it("keeps a manifest-declared name the tree never resolved", () => {
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ packages: { "node_modules/axios": { version: "1.7.2" } } }));
+    expect(licenseScope(dir, ["axios", "fsevents"]).candidates).toContainEqual({ name: "fsevents", direct: true });
   });
 });
 

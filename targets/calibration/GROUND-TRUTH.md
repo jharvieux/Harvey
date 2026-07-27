@@ -285,11 +285,35 @@ name, so slopsquat stays silent while `checkNonRegistryDependencies` fires).
 | P-DEP-CVE-CRITICAL | `fixtures/legacy-app/package.json` (`minimist@1.2.5`) | `checkKnownDependencyCVEs` (new) — CVE-2021-44906 (< 1.2.6, CVSS 9.8); crisp single-boundary range → the curated critical-CVE promotion path OSV lacked | high |
 | P-MISSING-LOCKFILE | `fixtures/legacy-app` (no lockfile) | `checkLockfilePresence` — standalone project root shipping no lockfile | high |
 | P-KNOWN-IOC-PKG | `fixtures/legacy-app/package.json` (`flatmap-stream@0.1.1`) | `checkKnownIoc` (new) — curated IOC-feed name match (2018 event-stream malware); slopsquat not re-run on the fixture | high |
+| P-LICENSE-COPYLEFT-TRANSITIVE | `package-lock.json` (`@img/sharp-libvips-linux-riscv64@1.2.4`) | `checkLicenseCompliance` — LGPL-3.0-or-later on a package NO manifest declares (#1213) | high |
+
+### B2 transitive-copyleft plant (#1213)
+
+`package-lock.json` carries two entries that appear in NO `package.json` anywhere in this target:
+`sharp@0.34.5` (Apache-2.0) and its optional platform binary
+`@img/sharp-libvips-linux-riscv64@1.2.4` (LGPL-3.0-or-later). Both are real published releases with
+their real integrity hashes, verified against the npm registry 2026-07-27 — DATA ONLY, this target
+is never installed. They model the case Harvey missed against ATC: no manifest in that workspace
+declares `sharp`, yet its platform binaries fill the lockfile and three are LGPL-3.0-or-later.
+
+The plant only fails a scanner whose license candidates come from the resolved TREE. Against the
+manifest-scoped list used before #1213 neither package was ever a candidate, so the class scored
+silent — MEASURED here 2026-07-27 by running `runMechanicalScan` on this target at the pre-fix
+commit: the only license findings were `SUP-LICENSE-UNKNOWN-expres` and `SUP-LICENSE-00`, and
+nothing mentioned `sharp`. Both entries carry the lockfile's own `license` field, so they score
+identically on the offline dry-run path and on the live registry-backed gate.
+
+Side effect, recorded rather than left to surprise the next reader: `sharp@0.34.5` also draws a real
+OSV row (`DEP-OSV-GHSA-f88m-g3jw-g9cj-sharp@0.34.5`, review tier — inherited libvips CVEs, fixed in
+0.35.0). It is correct and is left in place; the version was chosen to match the ATC report the
+plant models, not to add a CVE. It is not corpus-keyed, for the same reason `P-NEXT-CVE-CACHE`
+is keyed on the class and not on a specific advisory id: OSV advisory data moves.
 
 ### B2 negatives — benign lookalikes (must NOT be flagged in the free count)
 
 | id | location | why benign / suppression |
 |---|---|---|
+| N-LICENSE-PERMISSIVE-TRANSITIVE | `package-lock.json` (`sharp@0.34.5`) | Apache-2.0, and exactly as transitive as the LGPL binary it pulls in — the FP a "the tree is unreviewed, flag it" rule throws once the candidate set widened from ~11 manifest names to the whole resolved tree. A permissive SPDX id draws no license finding however deep it sits. |
 | N-DEP-PINNED | `package.json` (`lodash@4.17.11`) | Exact-pinned, registry-sourced — never appears in the SUP-UNPINNED or SUP-NON-REGISTRY evidence. The pinned-dep FP a naive "any dependency is unpinned" rule throws. Doubles as the registry-source negative for `P-NONREGISTRY-DEP`. Its OSV CVE finding lives at the lockfile location (not `package.json`), so it can't be mis-attributed here. |
 | N-SLOPSQUAT-REAL | `package.json` (`@supabase/supabase-js`) | A real, popular, scoped package (exact-match in the typosquat popular set; a 200 from the slopsquat registry HEAD) — the FP a name-shape heuristic throws on a legitimate scoped dep. Draws no slopsquat/typosquat finding. |
 | N-NEXT-SUPPORTED | `fixtures/supported-app/package.json` (`next@15.5.16`) | A current, fully-patched Next version — `checkNextVersionCVEs` draws nothing (no EOL, no 29927/RSC/WS-SSRF). The supported-version half of the EOL pair, resolved by living in its own fixture root. |
@@ -2343,3 +2367,59 @@ tests (verified to fail first against the pre-#1136 heuristic, then pass against
 committed dry-run artifact (`dry-run/findings.json`) is the standing regression gate: if this
 heuristic regresses, `P-M6-LONGLINE-JSONEQ`'s finding silently disappears from the artifact and
 `dry-run-drift` goes red.
+
+## The three OWASP corpora (#1190 / #1191 / #1192) — an answer key we did not write
+
+Every other section of this document describes fixtures planted against `briefs/anti-patterns.md`, a
+catalog this repo wrote and *then* wrote detectors for. That measures internal consistency: we cannot
+fail a check authored to match what we already catch. The three OWASP cheat sheets are third-party,
+pinned by commit, and not editable by us, so a miss against them is **evidence** rather than an
+oversight. Operator ruling 2026-07-26: the purpose is finding real gaps to improve the product, **not
+producing a coverage percentage**. There is deliberately no percentage anywhere in this section.
+
+| corpus | entries file | fixtures | pinned source |
+|---|---|---|---|
+| Multi-Tenant | `src/scan/calibration/owasp-multitenant.entries.ts` | `src/owasp-mt/*`, `supabase/migrations/20260726000002_owasp_mt_isolation.sql` | `cheatsheets/Multi_Tenant_Security_Cheat_Sheet.md` @ `46f8d0456686f4d1ef523c7cc65be58bd221ffed` |
+| Node.js | `src/scan/calibration/owasp-nodejs.entries.ts` | `src/owasp-node/*` | `cheatsheets/Nodejs_Security_Cheat_Sheet.md` @ `da089462b18d27ed893ca1052ebd740cfe460175` |
+| React (draft) | `src/scan/calibration/owasp-react.entries.ts` | `src/owasp-react/*` | `cheatsheets_draft/React_Security_Cheat_Sheet.md` @ `4332c39c799d5d0ac835082ebf88c4a0a2e31cb3` — head of the **open, unmerged** OWASP/CheatSheetSeries PR #2196 |
+
+The React pin is a PR head on a fork, and it is still reproducible: GitHub keeps a PR's head commit
+reachable from the base repo, so `GET /repos/OWASP/CheatSheetSeries/commits/4332c39c…` resolves even
+if the fork is deleted or the branch force-pushed (verified 2026-07-27). Reconciling that revision
+against the merged sheet is tracked in #1241, not left implicit.
+
+### What each corpus produced
+
+The multi-tenant sheet was the productive one, and its yield had a shape worth remembering: **three
+of its gaps were cases where Harvey checked whether a control EXISTED and not whether it was VOID.**
+An answer key we wrote could not have surfaced that, because we wrote the fixtures to match the rules
+we had. All eight of its gaps now have detectors (#1194–#1198, #1210) except the audit-log one, which
+is tracked in #1242.
+
+The Node.js sheet's honest result is that most of it was **already covered** by batches that predate
+it — headers, cookies, injection, dependency currency — and its residue is eight measured gaps
+(#1200–#1204). Its lasting contribution is a methodological one recorded in its header: **three of
+eight fixtures produced findings for entirely different defects** (path traversal, XSS, excessive
+data exposure), every finding correct, and an unscoped `match` would have recorded all three gaps as
+COVERED. That is the #1062 masking shape reached through a corpus instead of a producer seam.
+
+The React sheet is thirteen recommendations already covered, six measured gaps (#1237–#1240), and
+seven out-of-universe. One gap is a **facet** gap rather than a class gap: we do detect SSRF, but the
+detector is anchored on the route-handler shape and misses the Server Component `{ params }` form the
+sheet's own example uses. "We detect SSRF" would have been a true claim that still missed it.
+
+### The scope control, and why one exists (2026-07-27)
+
+`src/owasp-react/scope-control-innerhtml.tsx` (`P-OWASP-REACT-SCOPE-CONTROL`) is **not** a sheet
+recommendation. It plants a class Harvey is already known to catch — `router.query.q` into
+`ref.current.innerHTML`, the same shape as `P-DOM-XSS-INNERHTML` — inside the React fixture directory,
+and it must fire at high tier.
+
+It exists because the first measurement run for this corpus recorded six gaps against a directory the
+scanner had **never read**. The scan walks a git-tracked scratch copy of the target, so an unstaged
+fixture is invisible to it and reports zero findings — output that is indistinguishable from a fixture
+that was scanned and missed. Without the control, "six measured gaps" is an unfalsifiable claim.
+
+**If this row ever goes quiet, every React gap row is unproven and must be re-measured before it is
+believed.** The same reasoning is why `M1-EXT-00` (#1065) reports files LOADED against files PRESENT:
+a scan that silently shrinks looks exactly like a codebase that is clean.
