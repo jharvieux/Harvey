@@ -649,14 +649,90 @@ rules:
                   ...
                   if (!$P.success) { ... return; }
                   ...
+      # #1220: (a2) CONTAINMENT guard — resolve-then-re-verify. Widening the sink set to
+      # fs/promises and Supabase Storage newly reaches the shape CORRECT code uses, so it is
+      # modelled in the same change that created the exposure rather than shipped as noise.
+      #
+      # Anchored the way #1027's schema arm is: the sanitizer is the `path.resolve(...)` EXPRESSION,
+      # cleared only inside a scope where the resolved variable is prefix-tested with an early
+      # return. path.resolve alone is not a defence — it collapses `..` but confines nothing — so
+      # the guard has to be part of the pattern, not adjacent to it.
+      #
+      # What makes it sound is a property of path.resolve specifically: the string it returns IS
+      # the path the filesystem will open, so a prefix test on THAT value confines the read. The
+      # same test on the RAW input confines nothing — `<tenant>/../<other>/f` starts with
+      # `<tenant>/` (jharvieux/ATC#2050) — and P-STORAGE-TRAVERSAL is the positive wearing exactly
+      # that guard which must keep firing. path.normalize is deliberately absent: it does not make
+      # the path absolute, so a prefix test against an absolute base says nothing.
+      #
+      # Both early-return spellings are matched. MEASURED 2026-07-27: the block form alone
+      # (`{ ... return; }`, which every other (a2) arm in this directory uses) missed this fixture
+      # outright — App Router handlers overwhelmingly write the braceless
+      # `if (!ok) return Response.json(...)`. Whether the shipped (a2) arms have the same hole is
+      # a separate soundness question, tracked rather than widened here.
+      - patterns:
+          - pattern: path.resolve($BASE, $X)
+          - pattern-either:
+              - pattern-inside: |
+                  $R = path.resolve($BASE, $X);
+                  ...
+                  if (!$R.startsWith($PREFIX)) { ... return; }
+                  ...
+              - pattern-inside: |
+                  $R = path.resolve($BASE, $X);
+                  ...
+                  if (!$R.startsWith($PREFIX)) return $EARLY;
+                  ...
     pattern-sinks:
+      # #1220: the five modelled sinks were all callback/sync `fs.*` spelled with a LITERAL `fs.`
+      # prefix, so `import { readFile } from "node:fs/promises"` — the idiomatic App Router form —
+      # reached none of them. The prefix is a metavariable now (picking up `fsp.`/`fsPromises.`
+      # aliases) and the bare-call arm carries the named-import form. `open` is deliberately
+      # prefixed-only: a bare `open(x)` is far more often a UI call than a file handle.
       - patterns:
           - pattern-either:
-              - pattern: fs.readFile($P, ...)
-              - pattern: fs.readFileSync($P, ...)
-              - pattern: fs.createReadStream($P, ...)
-              - pattern: fs.writeFile($P, ...)
-              - pattern: fs.writeFileSync($P, ...)
+              - pattern: $FS.readFile($P, ...)
+              - pattern: $FS.readFileSync($P, ...)
+              - pattern: $FS.createReadStream($P, ...)
+              - pattern: $FS.createWriteStream($P, ...)
+              - pattern: $FS.writeFile($P, ...)
+              - pattern: $FS.writeFileSync($P, ...)
+              - pattern: $FS.appendFile($P, ...)
+              - pattern: $FS.open($P, ...)
+              - pattern: $FS.copyFile($P, ...)
+              - pattern: $FS.rename($P, ...)
+              - pattern: $FS.unlink($P, ...)
+              - pattern: $FS.rm($P, ...)
+              - pattern: $FS.readdir($P, ...)
+              - pattern: readFile($P, ...)
+              - pattern: readFileSync($P, ...)
+              - pattern: createReadStream($P, ...)
+              - pattern: writeFile($P, ...)
+              - pattern: writeFileSync($P, ...)
+              - pattern: appendFile($P, ...)
+              - pattern: copyFile($P, ...)
+              - pattern: unlink($P, ...)
+              - pattern: readdir($P, ...)
+          - focus-metavariable: $P
+      # #1220: Supabase Storage as a PATH sink. For a Supabase-specialist audit this was the
+      # notable hole — storage is a first-class tenant-data surface and no rule treated an object
+      # key as a path, so a real cross-tenant storage route produced zero findings from any rule.
+      #
+      # The sanitizer set deliberately does NOT gain a `startsWith` prefix test, which is the guard
+      # the real route wore: a PREFIX check is not a CONTAINMENT check, and
+      # `<tenant>/../<other-tenant>/file` satisfies it (jharvieux/ATC#2050). Adding it would have
+      # encoded the vulnerable pattern as the safe one.
+      - patterns:
+          - pattern-either:
+              - pattern: $C.storage.from($B).createSignedUrl($P, ...)
+              - pattern: $C.storage.from($B).createSignedUrls($P, ...)
+              - pattern: $C.storage.from($B).download($P, ...)
+              - pattern: $C.storage.from($B).upload($P, ...)
+              - pattern: $C.storage.from($B).update($P, ...)
+              - pattern: $C.storage.from($B).remove($P, ...)
+              - pattern: $C.storage.from($B).copy($P, ...)
+              - pattern: $C.storage.from($B).move($P, ...)
+              - pattern: $C.storage.from($B).getPublicUrl($P, ...)
           - focus-metavariable: $P
 
   # Zip-slip: an archive entry name joined into a write path with no containment check — a
