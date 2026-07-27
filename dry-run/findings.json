@@ -1258,9 +1258,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1303,9 +1304,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1348,9 +1350,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1393,9 +1396,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1438,9 +1442,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1483,9 +1488,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1528,9 +1534,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1573,9 +1580,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1618,9 +1626,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1664,9 +1673,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1709,9 +1719,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1754,9 +1765,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1799,9 +1811,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1845,9 +1858,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1890,9 +1904,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1935,9 +1950,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -1980,9 +1996,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -2025,9 +2042,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -2070,9 +2088,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -2115,9 +2134,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -2266,9 +2286,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -2308,9 +2329,10 @@
         "pages/api/preview/enable-safe.js",
         "pages/api/preview/enable.js",
         "pages/post.js",
-        "pages/search-results.js"
+        "pages/search-results.js",
+        "src/owasp-node/sensitive-response-cached.ts"
       ],
-      "justification": "next is imported in 16 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +13 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
+      "justification": "next is imported in 17 source file(s): app/actions-auth.ts, app/actions.ts, app/admin/page-safe.tsx, +14 more. Import-level reachability only — it does not prove the vulnerable function is called. Ordering signal, not a verdict."
     }
   },
   {
@@ -9318,6 +9340,107 @@
   },
   {
     "id": "SEM-292",
+    "title": "src.scan.rules.semgrep.harvey-lib-path-traversal: A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-lib-path-traversal",
+    "location": "src/owasp-node/blocking-event-loop.ts:13",
+    "status": "Open",
+    "evidence": "A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.\n",
+    "impact": "A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEM-293",
+    "title": "src.scan.rules.semgrep.harvey-client-trusted-role: A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-client-trusted-role",
+    "location": "src/owasp-node/hpp-param-pollution.ts:10",
+    "status": "Open",
+    "evidence": "A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.\n",
+    "impact": "A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-602: Client-Side Enforcement of Server-Side Security"
+    ],
+    "owasp": [
+      "A04:2021 - Insecure Design"
+    ]
+  },
+  {
+    "id": "SEM-294",
+    "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-html-template-literal",
+    "location": "src/owasp-node/hpp-param-pollution.ts:12",
+    "status": "Open",
+    "evidence": "Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.\n",
+    "impact": "Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A03:2021 - Injection"
+    ]
+  },
+  {
+    "id": "SEM-295",
+    "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "javascript.express.security.audit.xss.direct-response-write.direct-response-write",
+    "location": "src/owasp-node/hpp-param-pollution.ts:12",
+    "status": "Open",
+    "evidence": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
+    "impact": "Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
+    "fix": "Review the matched code path against the rule's remediation guidance: https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html, https://semgrep.dev/r/javascript.express.security.audit.xss.direct-response-write.direct-response-write.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
+    ],
+    "owasp": [
+      "A07:2017 - Cross-Site Scripting (XSS)",
+      "A03:2021 - Injection",
+      "A05:2025 - Injection"
+    ],
+    "references": [
+      "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html"
+    ]
+  },
+  {
+    "id": "SEM-296",
     "title": "src.scan.rules.semgrep.harvey-edgefn-secret-fallback: A secret read from Deno.env falls back to a hardcoded secret-shaped string literal — the literal ships in the deployed function bundle and its git history. Fail closed (throw) when the env var is absent; never embed a fallback secret.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -9341,7 +9464,7 @@
     ]
   },
   {
-    "id": "SEM-293",
+    "id": "SEM-297",
     "title": "generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash: bcrypt hash detected",
     "severity": "High",
     "confidence": "Review",
@@ -9369,7 +9492,7 @@
     ]
   },
   {
-    "id": "SEM-294",
+    "id": "SEM-298",
     "title": "javascript.lang.security.detect-child-process.detect-child-process: Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed.",
     "severity": "High",
     "confidence": "Review",
@@ -9398,7 +9521,7 @@
     ]
   },
   {
-    "id": "SEM-295",
+    "id": "SEM-299",
     "title": "src.scan.rules.semgrep.harvey-command-injection: Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn with an argument array and no shell, and validate the input against an allowlist.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -11020,6 +11143,24 @@
     "location": "lib/express-pg-resjson-spread.js:8",
     "status": "Open",
     "evidence": "Heuristic \"pg-resjson-exposure-spread\": an Express handler's res.json(...) spreads a same-function variable (\"refreshToken\" is one of its literal fields) into the object it returns instead of an explicit safe projection.",
+    "impact": "The client receives internal columns it was never meant to see — credential material, tokens, or other PII riding along with the rest of the row.",
+    "fix": "Build an explicit response DTO that lists only the fields the client needs, rather than returning the fetched row/object (or a spread of it) as-is.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review"
+  },
+  {
+    "id": "SEC-PG-RESJSON-src-owasp-node-sensitive-response-cached-ts-498",
+    "title": "src/owasp-node/sensitive-response-cached.ts — res.json(...) names the curated-sensitive field \"ssn\" as a direct property of the object it returns",
+    "severity": "High",
+    "confidence": "Review",
+    "category": "Sensitive data exposure",
+    "taxonomy": "Excessive data exposure: res.json(...) names the curated-sensitive field \"ssn\" as a direct property of the object it returns (pg-resjson-exposure-direct)",
+    "location": "src/owasp-node/sensitive-response-cached.ts:9",
+    "status": "Open",
+    "evidence": "Heuristic \"pg-resjson-exposure-direct\": an Express handler's res.json(...) names the curated-sensitive field \"ssn\" as a direct property of the object it returns instead of an explicit safe projection.",
     "impact": "The client receives internal columns it was never meant to see — credential material, tokens, or other PII riding along with the rest of the row.",
     "fix": "Build an explicit response DTO that lists only the fields the client needs, rather than returning the fetched row/object (or a spread of it) as-is.",
     "value": 4,

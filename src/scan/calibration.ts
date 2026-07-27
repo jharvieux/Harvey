@@ -36,6 +36,7 @@ import { b20DrizzleTenantScopeEntries } from "./calibration/b20-drizzle-tenant-s
 import { b21SilentFailureEntries } from "./calibration/b21-silent-failure.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { owaspMultiTenantEntries } from "./calibration/owasp-multitenant.entries.js";
+import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
 import { rlsStaticSemanticsEntries } from "./calibration/rls-static-semantics.entries.js";
 import { m3Entries } from "./calibration/m3.entries.js";
 import { m7Entries } from "./calibration/m7.entries.js";
@@ -81,6 +82,7 @@ export const CORPUS: CorpusEntry[] = [
   ...b21SilentFailureEntries,
   ...knownPublicCredsEntries,
   ...owaspMultiTenantEntries,
+  ...owaspNodejsEntries,
   ...rlsStaticSemanticsEntries,
   ...m9AuthzEntries,
   ...m9CheckEntries,
