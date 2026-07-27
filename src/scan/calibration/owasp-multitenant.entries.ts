@@ -101,6 +101,16 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     note: "The sheet's single most important rule ('Never trust client-supplied tenant IDs' / 'Bind tenant context to authenticated user sessions', section 1) and arguably Harvey's core differentiator. WAS a measured gap (MEASURED 2026-07-26: zero findings) — the root cause was a SHAPE ASSUMPTION in the existing tenant-scope detectors (prisma-tenant-scope.ts #760, drizzle-tenant-scope.ts #901): they look for a query with NO tenant predicate, and here the predicate is PRESENT and correct-looking (`where: { tenantId: body.tenantId }`) while its VALUE is attacker-controlled, so both read it as properly scoped. CLOSED by #1194's client-supplied-tenant.ts, which asks where the predicate's value came from rather than whether it exists — both call sites in the fixture (a `req.json()` body and a `searchParams.get()` query param) now fire at high tier. High tier, unlike its two review-tier siblings, because the AST proves a PRESENCE (the request value reaches the predicate) rather than an ABSENCE that unseen middleware might fill in. Paired with N-OWASP-MT-SESSION-TENANT, which must stay silent.",
   },
   {
+    id: "P-OWASP-MT-CLIENT-TENANT-SUPABASE",
+    kind: "positive",
+    cls: "Supabase/PostgREST .eq() tenant predicate populated from the request",
+    location: "src/owasp-mt/client-supplied-tenant.ts",
+    match: [".eq(\"tenant_id\""],
+    expectedTier: "high",
+    expectedSeverity: "High",
+    note: "The #1194 remainder (#1210): the same defect as P-OWASP-MT-CLIENT-TENANT, through the PostgREST builder idiom `.eq(\"tenant_id\", body.tenant_id)` rather than a Prisma/Drizzle object key — a string-literal-first-argument sink the original detector did not cover. WAS a measured gap. CLOSED by extending client-supplied-tenant.ts with a supabaseHits matcher (also covers .in()/.match()/.filter()). match is scoped to the exact sink phrase (only present in THIS finding's evidence, not the Prisma-sourced ones sharing the file) so the two do not mask each other. Paired with the Supabase case added to N-OWASP-MT-SESSION-TENANT, which must stay silent.",
+  },
+  {
     id: "P-OWASP-MT-GUC-SESSION",
     kind: "positive",
     cls: "Tenant GUC set with SET rather than SET LOCAL, so it outlives its transaction under pooling",
@@ -167,7 +177,7 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     kind: "negative",
     cls: "Tenant discriminator derived from the verified session, and the caller-supplied form guarded against it",
     location: "src/owasp-mt/session-derived-tenant.ts",
-    note: "The correct form of P-OWASP-MT-CLIENT-TENANT, and the negative #1194's detector had to clear to ship. Three shapes, all silent, all measured 2026-07-27: (1) `where: { tenantId: session.user.tenantId }` — never touches the request; (2) a caller-supplied tenantId COMPARED against the session's before the query, which is the sheet's own remedy for an account switcher; (3) `where: { id: body.id, tenantId: … }` — a primary key from the request is the ordinary IDOR class that prisma-tenant-scope.ts and bola-owner.ts already own, and this detector must not double-report it. Without (1) and (2) a rule for this class would flag every tenant-scoped query in every multi-tenant codebase, which is the failure mode that makes such a rule unshippable.",
+    note: "The correct form of P-OWASP-MT-CLIENT-TENANT, and the negative #1194's detector had to clear to ship. Four shapes, all silent: (1) `where: { tenantId: session.user.tenantId }` — never touches the request; (2) a caller-supplied tenantId COMPARED against the session's before the query, which is the sheet's own remedy for an account switcher; (3) `where: { id: body.id, tenantId: … }` — a primary key from the request is the ordinary IDOR class that prisma-tenant-scope.ts and bola-owner.ts already own, and this detector must not double-report it; (4) added by #1210, the Supabase `.eq(\"tenant_id\", session.user.tenantId)` builder form. Without (1)/(2)/(4) a rule for this class would flag every tenant-scoped query in every multi-tenant codebase, which is the failure mode that makes such a rule unshippable.",
   },
   {
     id: "N-OWASP-MT-CACHE-SCOPED",

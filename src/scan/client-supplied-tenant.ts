@@ -31,6 +31,11 @@
 // Existence in a list is not ownership by the caller, so clearing on it would silently drop real
 // findings — the #989 lesson that a guard model must be justified by an adversarial positive, not
 // merely by a negative it quiets. Such a call still reports.
+//
+// #1210 (the #1194 remainder) added a THIRD sink shape: the Supabase/PostgREST builder idiom
+// `.eq("tenant_id", <request value>)` and its `.match()`/`.in()`/`.filter()` siblings. Unlike the
+// Prisma object key or the Drizzle `eq(table.col, …)` call, the column here is a STRING LITERAL
+// first argument, not a property access — a different matcher (supabaseHits), same taint machinery.
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
@@ -304,6 +309,59 @@ function builderHits(whereCall: ts.CallExpression, tainted: Map<string, string>)
   return hits;
 }
 
+// Is this call chained (anywhere down its receiver) off a `.from(...)` call? Restricts the sink
+// below to the PostgREST query-builder idiom rather than any object that happens to expose an
+// `.eq`/`.in`/`.match`/`.filter` method.
+function chainMentionsFrom(node: ts.Expression): boolean {
+  let current: ts.Expression = node;
+  for (;;) {
+    if (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
+      if (current.expression.name.text === "from") return true;
+      current = current.expression.expression;
+      continue;
+    }
+    if (ts.isPropertyAccessExpression(current)) {
+      current = current.expression;
+      continue;
+    }
+    return false;
+  }
+}
+
+const SUPABASE_SINK_METHOD = /^(eq|in|match|filter)$/;
+
+// Supabase/PostgREST idiom: `supabase.from("invoices").select("*").eq("tenant_id", <request value>)`,
+// plus `.in("tenant_id", […])`, `.filter("tenant_id", "eq", …)` and `.match({ tenant_id: … })`.
+function supabaseHits(call: ts.CallExpression, tainted: Map<string, string>): Hit[] {
+  if (!ts.isPropertyAccessExpression(call.expression) || !chainMentionsFrom(call.expression.expression)) return [];
+  const method = call.expression.name.text;
+  const hits: Hit[] = [];
+
+  const record = (col: string, value: ts.Expression) => {
+    if (!TENANT_SCOPE_COLUMN.test(col)) return;
+    const taint = taintOf(value, tainted);
+    if (taint) hits.push({ node: call, column: col, source: taint.source, root: taint.root, sink: `.${method}("${col}", …)` });
+  };
+
+  if (method === "eq" || method === "in") {
+    const [col, value] = call.arguments;
+    if (col && value && ts.isStringLiteralLike(col)) record(col.text, value);
+  } else if (method === "filter") {
+    const [col, , value] = call.arguments;
+    if (col && value && ts.isStringLiteralLike(col)) record(col.text, value);
+  } else if (method === "match") {
+    const [obj] = call.arguments;
+    if (obj && ts.isObjectLiteralExpression(obj)) {
+      for (const prop of obj.properties) {
+        const key = propertyKeyName(prop);
+        const value = propertyValue(prop);
+        if (key && value) record(key, value);
+      }
+    }
+  }
+  return hits;
+}
+
 function isFunctionLike(n: ts.Node): boolean {
   return (
     ts.isFunctionDeclaration(n) ||
@@ -349,10 +407,13 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
       // request inline and declares nothing, so a "are there any tainted locals?" gate would have
       // skipped the most direct form of the defect.
       const tainted = taintFor(chain);
+      const method = ts.isPropertyAccessExpression(n.expression) ? n.expression.name.text : undefined;
       const hits =
-        ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "where"
+        method === "where"
           ? builderHits(n, tainted)
-          : prismaHits(n, tainted);
+          : method && SUPABASE_SINK_METHOD.test(method)
+            ? supabaseHits(n, tainted)
+            : prismaHits(n, tainted);
       for (const hit of hits) {
         if (comparedAgainstSession(chain[0] ?? sf, sf, hit.root)) continue;
         const start = hit.node.getStart(sf);
