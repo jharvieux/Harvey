@@ -20,6 +20,29 @@
 // and the pinned revision must be reconciled against the merged sheet afterwards. That reconciliation
 // is tracked in #1241, not left implicit.
 //
+// AND #1241 IS WIRED TO AN ALARM RATHER THAN A LABEL. It was first parked by labelling the issue
+// `deferred`, which makes future sweeps skip it at fetch time — so the merge upstream would have
+// waited for a human to happen to check GitHub. That is this repo's own silent-omission shape
+// relocated to the issue tracker: nothing notices when an external blocker clears. The mechanism that
+// does notice is the #1033 recorded reason below, because `.github/workflows/reasons-drift.yml` runs
+// `pnpm validate-reasons --revalidate` daily and fails loud on any falsifier that now exits 0. The
+// block has to live HERE and not in the issue: that job deliberately never executes a falsifier found
+// in an issue body, which is attacker-writable input.
+//
+// The falsifier is written so a BROKEN LOOKUP cannot masquerade as "still blocked". `gh api` exits
+// non-zero on an auth failure, a network failure or a missing binary, and under the contract a
+// non-zero exit means the blocker holds — so the command traps that case and exits 127, which the
+// gate reports as UNVERIFIABLE and fails on. A daily run that could not read upstream therefore goes
+// red rather than green, at the cost of a transient network blip filing a tracking issue; that trade
+// is the one #1072 was written to force. Reading a third-party repo with the workflow's `github.token`
+// is proven, not assumed — owasp-ack-watch.yml does exactly that against this same upstream repo.
+//
+// REASON: the reconciliation #1241 owes cannot be done — OWASP/CheatSheetSeries PR #2196 is still open, so there is no merged React sheet to diff the pinned revision against, no merged commit to re-pin to, and no way to tell which entries here were built on paragraphs review cut
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-07-27 — `gh api repos/OWASP/CheatSheetSeries/pulls/2196 --jq .merged` returns `false`, and the falsifier below exits 1. Exercised in all four directions: 1 on this open PR, 0 with the number swapped for merged #2305, 127 with no credential, 127 with the API unreachable.
+// FALSIFIER: m=$(gh api repos/OWASP/CheatSheetSeries/pulls/2196 --jq .merged) || exit 127; [ "$m" = true ]
+// TOUCHES: src/scan/calibration/owasp-react.entries.ts
+//
 // HOW THE BUCKETS WERE ASSIGNED — MEASURED, NOT INSPECTED (2026-07-27,
 // `pnpm exec tsx src/cli/quick-scan.ts --dir targets/calibration --findings-out …`, 493 findings):
 // every fixture was planted first and the scanner run second.
