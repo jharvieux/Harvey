@@ -2,7 +2,7 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-27 (morning) — resumed the queue: #1206 diagnosed-and-corrected + merged, #1194 (the top detector gap) shipped, **an OWASP maintainer replied to #2308**. Newest block first._
+_Last updated: 2026-07-27 (midday) — resume complete: 3 PRs merged, #1205 UNBLOCKED and awaiting an operator action, a new GHA gap found from an operator question, **an OWASP maintainer replied to #2308**. Newest block first._
 
 ## 2026-07-27 (morning) — resume: conservation flake, the #1194 detector, OWASP maintainer contact
 
@@ -18,14 +18,29 @@ Picked the documented queue back up. Re-ordered #1206 ahead of #1192 because it 
 ### Merged
 - **PR #1208 → #1206** — conservation vitals flake. **The issue's premise was substantially false**, corrected on the issue before any code: of the 4 recent failures only **1** was the vitals step; the other **3** were `[vitest-worker]: Timeout calling "onTaskUpdate"` (3 passed / 0 failed, exit 1) — and that half was **already fixed by #1168** (`dc118ec`, 00:28Z) before #1206 was filed; every run since is green on it. The one real failure (`git commit` exit 1 in `seed.py`) **did not reproduce in 85 runs** (macOS + ubuntu:24.04, loaded and unloaded), so no root cause is claimed. Both evidence-discarding layers fixed instead — the real one was `seed.py`'s `git()` using `stderr=DEVNULL`, NOT the `stdio` the issue blamed (python's traceback did reach the log). Next occurrence now prints git's stderr + `git status --porcelain`. Negative control included. **#1206 stays OPEN** — cause unnamed, and its acceptance wants 5 consecutive green runs.
 
-### In flight
+### Merged (cont.)
 - **PR #1209 → #1194** — the highest-value gap the OWASP corpus found: a tenant predicate that is PRESENT and correct-looking but populated FROM THE REQUEST (`where: { tenantId: body.tenantId }`). #760/#901 both ask whether a predicate EXISTS, so both read this as correctly scoped. New `src/scan/client-supplied-tenant.ts` asks where the value CAME FROM — request sources propagated through same-function bindings into a tenant column, Prisma object-`where` + Drizzle `.where(eq(…))`. **High tier** (the AST proves a PRESENCE, not an absence unseen middleware might fill). Session-comparison clears it; membership checks deliberately do NOT (existence ≠ ownership — #989's rule, shipped as an adversarial positive test). Measured: calibration **GATE PASS** (`P-OWASP-MT-CLIENT-TENANT` caught at high, severity ✓; M1 TP 247 FN 3 FP 0 TN 226), precision **GATE PASS** (M1 TP 1 FN 0 FP 0 TN 7 — **the new detector is now held to the three MIT tenant-scoping libraries, 0 false fires**), dry-run +2 over 472 both on the intended fixture. Filed **#1210** for the Supabase `.eq()` remainder, with the RLS-boundary rationale stated rather than quietly dropped.
 
+### ⚠️ OPERATOR ACTION READY — #1205, the merge-path hole
+**5 consecutive green conservation runs achieved** (10:53 scheduled, 2 PR runs, 2 dispatched on main — table on #1206). The vitest-RPC class has ZERO recurrences in 8 runs since #1168. #1206's flakiness precondition is satisfied, so **#1205 can proceed**: add the context `plant → deliverable, and the produced/delivered arithmetic` to `main`'s required checks.
+
+**Prerequisite, do NOT skip:** `conservation.yml` still has a `paths:` filter, and a path-filtered required check **deadlocks every PR outside its filter** (#1107 hit exactly this — the filter must move INSIDE the job as a short-circuit that still reports green). That edit touches `.github/workflows/`, a sensitive path needing an explicit request naming the file — it is NOT done. Ask for it and it takes one PR.
+
+Root cause of the one vitals failure is still UNNAMED (85 local runs, no repro) — 5 green runs mean the flake is rare, not fixed. The next occurrence now prints git's stderr + `git status --porcelain` and will close #1206 properly.
+
+### New this session, from operator questions
+- **#1212 (filed)** — "do we check overly broad GitHub Actions permissions?" MEASURED with Harvey's exact semgrep config over a planted hostile workflow: **5 findings, none on `permissions: write-all`**. GHA *is* scanned (mutable action tags, `pull_request_target`+head-checkout, run-shell-injection, curl|sh) but all four come from the registry `p/security-audit` pack, not a `harvey-*` rule, and the token-permission class is absent. Sharp edge: we report `pull_request_target`+checkout and NOT the `write-all` token that turns it into repo compromise. Also flags that **GitHub Actions is evidently NOT covered by the infrastructure-out-of-scope decision** — worth stating in that doc.
+- **License risk: already covered** (asked and answered, no issue needed). `checkLicenseCompliance` — copyleft → Medium/high-tier, unknown/missing → Low/review-tier, `SUP-LICENSE-00` counts+discloses registry-unreachable names. Non-grading by design (legal judgment, not a security verdict).
+
 ### Next, in order
-1. **#1192 React corpus** — still not started. Source is the UNMERGED PR #2196: pin a commit SHA, open a post-merge reconciliation follow-up.
-2. **#1206 → #1205** — accumulate 5 green conservation runs on the fixed `main`, then the operator adds the required check.
-3. Verify the ack-watch routine actually works (above).
-4. Declared-set follow-up: `Database_Security_Cheat_Sheet.md` + `Authorization_Cheat_Sheet.md` belong in the corpus set — picking only flattering sheets destroys the independent-answer-key property.
+1. **#1192 React corpus** — not started, but the prerequisite is DONE and recorded on the issue: source pinned to `anuragnedunuri/CheatSheetSeries@4332c39c` at `cheatsheets_draft/React_Security_Cheat_Sheet.md` (350 lines, 5 sections), plus a full recommendation inventory **deliberately left un-bucketed** (buckets must be MEASURED by running the scanner, per #1191's lesson). Note two of its items overlap our own #2308 proposal and Harvey's existing `P-MW-SOLE-AUTHZ`.
+2. **#1205** — operator action above.
+3. **Verify the ack-watch routine** — it did not report the jmanico comment; its first test run was never observed either.
+4. **#1212** and the other OWASP-corpus gap issues (#1195–#1198, #1200–#1203).
+5. Declared-set follow-up: `Database_Security_Cheat_Sheet.md` + `Authorization_Cheat_Sheet.md` belong in the corpus set — picking only flattering sheets destroys the independent-answer-key property.
+
+### Measured this session (dated; re-run, never quote)
+`validate-calibration` GATE PASS — M1 TP 247 FN 3 FP 0 TN 226, precision 100.0%, recall 98.8%. `validate-precision` GATE PASS — M1 TP 1/0/0/7, M7 22/0/0/32, M8 11/0/0/11. `detector-census` — M1 188, TOTAL 384. dry-run 472 findings. corpus-drift on main green 10:33Z; a LOCAL run without `--install` disagrees on M5-knip for 7 targets (expected — `--install` is what lets knip resolve target config), free-tier rows all pass.
 
 ### CLAUDE.md
 Nothing falsified this session. Nothing owed.
