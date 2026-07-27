@@ -429,17 +429,71 @@ probe (`business-logic.ts`'s `BIZLOGIC-WORKFLOW`), no static/mechanical detector
 at all, but not specifically "authenticated but at the wrong authority level," which needs to know
 the app's own authority model.
 
-**Not covered — real gaps, no Harvey detector at all**: 6 (TOCTOU stale-read across a loop of
-operations — distinct from item 18's single-file select-then-update shape, which counter-race.ts
-already owns), 10 (idempotency row written before dispatch), 12 (webhook signature encoding
-mismatch — needs a per-provider expected-encoding table Harvey doesn't have), 13 (destructive
-migration ships before the read-switchover — needs migration history + app-code cross-reference
-over time), 22 (claim-before-send in batch jobs), 23 (collectively-atomic multi-writes), 24
-(deterministic idempotency keys on external sends), 25 (DB uniqueness wherever app code assumes
-it), 27 (webhook state-application ordering). Every one of these is a cross-statement or
-cross-time dataflow question a mechanical AST/semgrep pass is a poor fit for — plausible semantic-
-or LLM-tier candidates, not mechanical-tier gaps, and none was silently dropped: this paragraph is
-that disclosure.
+**Was "not covered" — nine items, re-measured and mostly closed (#1230, 2026-07-27)**: items 6, 10,
+12, 13, 22, 23, 24, 25 and 27 were recorded here as having no Harvey detector, with the blanket
+explanation that "every one of these is a cross-statement or cross-time dataflow question a
+mechanical AST/semgrep pass is a poor fit for". **That blanket claim was wrong for six of the
+nine.** It was written at the moment the work stopped, was never re-tested, and reads in MEASURED's
+register while being ASSUMED — the shape CLAUDE.md's recorded-reason doctrine exists to catch. What
+the re-check found: the cross-TIME part is the failure mode (a crash, a retry, an overlapping run,
+a later deploy), but the DEFECT in six of them is an ordering or naming fact between statements
+already in the tree, which is exactly what an AST reads.
+
+**Now covered (shipped by #1230)**: 6 (`stale-quota-read.ts` — an allowance bound from a
+`.from(…).select(…)` read, compared inside a loop that awaits work and never re-reads; the DB-read
+requirement is what clears the running-total-against-a-ceiling FP class), 10 and 22 and 24
+(`idempotency.ts` — a dedup row inserted before the handler it guards; a batch send stamped after
+dispatch instead of CAS-claimed before; an external send from a retryable path with no idempotency
+key), 12 (`webhook-signature.ts` — the "per-provider expected-encoding table Harvey doesn't have"
+turned out to be five documented rows keyed on the signature HEADER NAME, which carries the
+provider), 13 (`migration-column-drift.ts` — "needs migration history over time" was false: the
+migration files ARE the history and are checked in, so it folds to a single-snapshot pass with no
+VCS archaeology). Corpus: `src/scan/calibration/b23-d091-gaps.entries.ts`, one planted positive and
+one benign lookalike per class.
+
+**Still not covered, and why — the three that survived the re-check.** Each is planted in the same
+corpus at `expectedTier: "none"` so the gate holds it: a rule firing on one is a GATE FAIL, and the
+gap cannot quietly graduate into a claimed catch.
+
+- Item 23 (collectively-atomic multi-writes) — M1 semantic pass.
+
+  > REASON: No mechanical rule for collectively-atomic multi-writes; two dependent writes are indistinguishable from two unrelated writes without knowing what the rows mean.
+  > KIND: decisional
+  > PROVENANCE: MEASURED 2026-07-27
+  > OWNER: Harvey product
+  > DECISION: #1230
+  > TOUCHES: src/scan/idempotency.ts targets/calibration/src/d091/atomic-multi-write.ts
+
+  A rule keyed on "two writes in one function with no RPC/transaction wrapper" fires on every
+  multi-entity create handler in every codebase. Whether the rows form ONE invariant is a judgement
+  about domain meaning, not an AST fact — the same unshippability that keeps item 20 at LLM tier.
+
+- Item 27 (webhook state-application ordering) — M1 semantic pass, mirroring item 20.
+
+  > REASON: No mechanical rule for webhook ordering protection; the rule would have to prove the ABSENCE of a version/timestamp comparison anywhere reachable from the handler, including through an imported wrapper.
+  > KIND: decisional
+  > PROVENANCE: MEASURED 2026-07-27
+  > OWNER: Harvey product
+  > DECISION: #1230
+  > TOUCHES: targets/calibration/src/d091/webhook-ordering.ts
+
+  Item 20 (`WEBHOOK-REPLAY`, #353/#425) is already a documented by-design LLM-tier gap for exactly
+  this reason, and 27 extends 20. Shipping a mechanical 27 while 20 stays at LLM tier would be
+  inconsistent, not thorough.
+
+- Item 25 (DB uniqueness wherever app code assumes it) — **outstanding work, not a boundary.**
+
+  > REASON: Does Harvey detect a SELECT-then-INSERT dedup whose predicate columns have no UNIQUE constraint in the migrations?
+  > KIND: empirical
+  > PROVENANCE: MEASURED 2026-07-27
+  > FALSIFIER: grep -q "d091/dedup-without-unique" dry-run/findings.json
+
+  Re-checked against #1230's "cross-time dataflow" framing and it is neither cross-time nor out of
+  reach: the dedup predicate is in the app code and the constraint set is in the migrations — the
+  same fold `migration-column-drift.ts` already ships. It is uncaught because this pass ran out of
+  scope, and saying otherwise would relabel outstanding work as a boundary. The fixture
+  (`src/d091/dedup-without-unique.ts` + `d091_contacts` in
+  `20260727000003_d091_column_drift.sql`) plants both halves so the answer key is complete.
 
 **Not covered — ATC-specific, not portable**: 9 (wrong `assertPermission` action for multi-
 operation routes) and 14 (`assertPermission` pair missing from `permission-grants.ts`) both name
@@ -450,8 +504,9 @@ equivalent for Harvey to check against.
 already exists in the calibration corpus (`b17-race-unscoped.entries.ts`, #353/#425) as a measured
 LLM-tier class with no mechanical rule by design, and flips the gate loud if one ever fires.
 
-Follow-up: Harvey#1230 tracks the 9 real gaps above as detector candidates, prioritized by how
-mechanically tractable each is.
+Item 19's regex bug and the eight OWASP multi-tenant gaps are closed; #1242 closed the ninth
+(audit log entries without tenant context, `src/scan/audit-log-tenant.ts`). Of the nine listed
+above, six shipped in #1230 and item 25 remains — tracked in that PR's remainder issue.
 
 ---
 

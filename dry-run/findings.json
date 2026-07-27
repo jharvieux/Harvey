@@ -10875,6 +10875,210 @@
   },
   {
     "id": "SEM-346",
+    "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-unchecked-mutation",
+    "location": "src/d091/batch-send-claim.ts:12",
+    "status": "Open",
+    "evidence": "Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.\n",
+    "impact": "Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-252: Unchecked Return Value"
+    ]
+  },
+  {
+    "id": "SEM-347",
+    "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-unchecked-mutation",
+    "location": "src/d091/webhook-dedup-order-safe.ts:10",
+    "status": "Open",
+    "evidence": "Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.\n",
+    "impact": "Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-252: Unchecked Return Value"
+    ]
+  },
+  {
+    "id": "SEM-348",
+    "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-unchecked-mutation",
+    "location": "src/d091/webhook-dedup-order-safe.ts:16",
+    "status": "Open",
+    "evidence": "Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.\n",
+    "impact": "Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-252: Unchecked Return Value"
+    ]
+  },
+  {
+    "id": "SEM-349",
+    "title": "src.scan.rules.semgrep.harvey-unchecked-mutation: Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-unchecked-mutation",
+    "location": "src/d091/webhook-dedup-order.ts:9",
+    "status": "Open",
+    "evidence": "Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.\n",
+    "impact": "Awaited Supabase mutation whose { error } result is discarded. Supabase JS v2 does not throw on a database error, so this write can fail silently and the handler still returns success. Destructure { error } and return a non-2xx response when it is truthy.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-252: Unchecked Return Value"
+    ]
+  },
+  {
+    "id": "SEM-350",
+    "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-missing-server-only",
+    "location": "src/d091/webhook-sig-encoding-safe.ts:9",
+    "status": "Open",
+    "evidence": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "impact": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEM-351",
+    "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-missing-server-only",
+    "location": "src/d091/webhook-sig-encoding-safe.ts:16",
+    "status": "Open",
+    "evidence": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "impact": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEM-352",
+    "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-missing-server-only",
+    "location": "src/d091/webhook-sig-encoding-safe.ts:23",
+    "status": "Open",
+    "evidence": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "impact": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEM-353",
+    "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-missing-server-only",
+    "location": "src/d091/webhook-sig-encoding-safe.ts:31",
+    "status": "Open",
+    "evidence": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "impact": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEM-354",
+    "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
+    "severity": "Low",
+    "confidence": "Review",
+    "category": "Next.js/web footgun",
+    "taxonomy": "src.scan.rules.semgrep.harvey-missing-server-only",
+    "location": "src/d091/webhook-sig-encoding.ts:11",
+    "status": "Open",
+    "evidence": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "impact": "This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.\n",
+    "fix": "Review the matched code path against the rule's remediation guidance.",
+    "value": 2,
+    "ease": 4,
+    "safety": 5,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-200: Exposure of Sensitive Information to an Unauthorized Actor"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEM-355",
     "title": "src.scan.rules.semgrep.harvey-dangerously-allow-browser: An LLM client is constructed with dangerouslyAllowBrowser: true — this runs in the browser and exposes the API key to every visitor (the key is inlined into the bundle). Call the LLM from a server-side route/function and keep the key server-only; never ship it to the client.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -10898,7 +11102,7 @@
     ]
   },
   {
-    "id": "SEM-347",
+    "id": "SEM-356",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -10922,7 +11126,7 @@
     ]
   },
   {
-    "id": "SEM-348",
+    "id": "SEM-357",
     "title": "src.scan.rules.semgrep.harvey-vite-service-role-in-client: A Supabase service-role key is read from import.meta.env.VITE_* — Vite inlines every VITE_-prefixed variable into the browser bundle, so this ships full RLS-bypass credentials to every visitor. Never expose a service-role key with the VITE_ prefix; move service-role work to a server-side function and keep only the anon/publishable key in the client.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -10946,7 +11150,7 @@
     ]
   },
   {
-    "id": "SEM-349",
+    "id": "SEM-358",
     "title": "src.scan.rules.semgrep.harvey-missing-server-only: This module reads a server secret from process.env but has no \"import 'server-only'\" guard — nothing stops it from being imported into a Client Component by mistake, which would ship the secret to the browser bundle. Add import \"server-only\" as the first line of the module.",
     "severity": "Low",
     "confidence": "Review",
@@ -10970,7 +11174,7 @@
     ]
   },
   {
-    "id": "SEM-350",
+    "id": "SEM-359",
     "title": "src.scan.rules.semgrep.harvey-lib-path-traversal: A library entry-point parameter (a raw http/https server request, or an exported function's argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the intended directory). Confine the path with path.basename and a base-directory containment check.",
     "severity": "High",
     "confidence": "Review",
@@ -10994,7 +11198,7 @@
     ]
   },
   {
-    "id": "SEM-351",
+    "id": "SEM-360",
     "title": "src.scan.rules.semgrep.harvey-client-trusted-role: A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.",
     "severity": "High",
     "confidence": "Review",
@@ -11018,7 +11222,7 @@
     ]
   },
   {
-    "id": "SEM-352",
+    "id": "SEM-361",
     "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.",
     "severity": "High",
     "confidence": "Review",
@@ -11042,7 +11246,7 @@
     ]
   },
   {
-    "id": "SEM-353",
+    "id": "SEM-362",
     "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11071,7 +11275,7 @@
     ]
   },
   {
-    "id": "SEM-354",
+    "id": "SEM-363",
     "title": "src.scan.rules.semgrep.harvey-client-trusted-role: A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.",
     "severity": "High",
     "confidence": "Review",
@@ -11095,7 +11299,7 @@
     ]
   },
   {
-    "id": "SEM-355",
+    "id": "SEM-364",
     "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.",
     "severity": "High",
     "confidence": "Review",
@@ -11119,7 +11323,7 @@
     ]
   },
   {
-    "id": "SEM-356",
+    "id": "SEM-365",
     "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11148,7 +11352,7 @@
     ]
   },
   {
-    "id": "SEM-357",
+    "id": "SEM-366",
     "title": "src.scan.rules.semgrep.harvey-client-trusted-role: A privilege/role value is read directly from a client-supplied request field (req.body/req.query/req.params). If it gates authorization or is persisted, any caller can escalate their own privileges by adding the field to the request. Derive role/admin status from the verified session, never from the request.",
     "severity": "High",
     "confidence": "Review",
@@ -11172,7 +11376,7 @@
     ]
   },
   {
-    "id": "SEM-358",
+    "id": "SEM-367",
     "title": "src.scan.rules.semgrep.harvey-hpp-query-cast: HTTP parameter pollution: req.query.<param> is cast `as string`, then tested with .includes()/.indexOf(). Express turns a repeated query parameter into a string[], so a value like ?role=user&role=admin makes the cast a lie and silently changes the check from substring containment to array membership. Normalize first (Array.isArray(v) ? v[0] : v, or a schema parse) before testing.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11196,7 +11400,7 @@
     ]
   },
   {
-    "id": "SEM-359",
+    "id": "SEM-368",
     "title": "src.scan.rules.semgrep.harvey-html-template-literal: Request input is interpolated into an HTML template literal and sent with res.send — reflected XSS. Escape the value, or render through a template engine with autoescaping on.",
     "severity": "High",
     "confidence": "Review",
@@ -11220,7 +11424,7 @@
     ]
   },
   {
-    "id": "SEM-360",
+    "id": "SEM-369",
     "title": "javascript.express.security.audit.xss.direct-response-write.direct-response-write: Detected directly writing to a Response object from user-defined input. This bypasses any HTML escaping and may expose your application to a Cross-Site-scripting (XSS) vulnerability. Instead, use 'resp.render()' to render safely escaped HTML.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11249,7 +11453,7 @@
     ]
   },
   {
-    "id": "SEM-361",
+    "id": "SEM-370",
     "title": "src.scan.rules.semgrep.harvey-body-parser-no-limit: A body-parsing middleware has no `limit` option — the framework default applies and one request body can exhaust process memory. Set an explicit size limit (e.g. express.json({ limit: \"100kb\" })) sized to what the route legitimately needs.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11270,7 +11474,7 @@
     ]
   },
   {
-    "id": "SEM-362",
+    "id": "SEM-371",
     "title": "src.scan.rules.semgrep.harvey-redos-literal: Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11291,7 +11495,7 @@
     ]
   },
   {
-    "id": "SEM-363",
+    "id": "SEM-372",
     "title": "src.scan.rules.semgrep.harvey-redos-literal: Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11312,7 +11516,7 @@
     ]
   },
   {
-    "id": "SEM-364",
+    "id": "SEM-373",
     "title": "src.scan.rules.semgrep.harvey-sensitive-response-cached: This handler reads an identity/session signal and marks its response publicly cacheable (Cache-Control: public / a positive max-age or s-maxage). A shared proxy or CDN can serve one user's response to the next requester. Use private, no-store (or no-cache) for any response that varies by identity.",
     "severity": "High",
     "confidence": "Review",
@@ -11333,7 +11537,7 @@
     ]
   },
   {
-    "id": "SEM-365",
+    "id": "SEM-374",
     "title": "src.scan.rules.semgrep.harvey-vm-unsafe-sandbox: vm.runInNewContext/runInThisContext evaluates a dynamically-built script. Node's own documentation is explicit that the vm module is NOT a security sandbox — treat any value reaching it as capable of reaching the host realm. Do not use vm to run untrusted or dynamically-assembled code.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -11354,7 +11558,7 @@
     ]
   },
   {
-    "id": "SEM-366",
+    "id": "SEM-375",
     "title": "src.scan.rules.semgrep.harvey-jsx-prop-spread-injection: An attacker-controlled object is spread into a component's props — the caller chooses which props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that never names one. Filter the object against an explicit allowlist of prop names before spreading it, and never use a blocklist (new dangerous props keep being added).",
     "severity": "High",
     "confidence": "Review",
@@ -11378,7 +11582,7 @@
     ]
   },
   {
-    "id": "SEM-367",
+    "id": "SEM-376",
     "title": "src.scan.rules.semgrep.harvey-ssrf-fetch: A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate the host against an allowlist and block internal/link-local ranges before fetching.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11402,7 +11606,7 @@
     ]
   },
   {
-    "id": "SEM-368",
+    "id": "SEM-377",
     "title": "src.scan.rules.semgrep.harvey-dom-innerhtml: A request/URL-controlled value is assigned to .innerHTML / insertAdjacentHTML — DOM XSS. Sanitize (e.g. DOMPurify.sanitize) before assigning, or use textContent for plain text.",
     "severity": "High",
     "confidence": "Confirmed",
@@ -11426,7 +11630,7 @@
     ]
   },
   {
-    "id": "SEM-369",
+    "id": "SEM-378",
     "title": "src.scan.rules.semgrep.harvey-secret-in-url-param: A secret is passed as a URL query parameter (api_key/access_token/token/secret). Secrets in URLs leak into logs, proxies, browser history, and Referer headers. Send it in an Authorization header instead.",
     "severity": "Medium",
     "confidence": "Review",
@@ -11450,7 +11654,7 @@
     ]
   },
   {
-    "id": "SEM-370",
+    "id": "SEM-379",
     "title": "src.scan.rules.semgrep.harvey-edgefn-secret-fallback: A secret read from Deno.env falls back to a hardcoded secret-shaped string literal — the literal ships in the deployed function bundle and its git history. Fail closed (throw) when the env var is absent; never embed a fallback secret.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -11474,7 +11678,7 @@
     ]
   },
   {
-    "id": "SEM-371",
+    "id": "SEM-380",
     "title": "generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash: bcrypt hash detected",
     "severity": "High",
     "confidence": "Review",
@@ -11502,7 +11706,7 @@
     ]
   },
   {
-    "id": "SEM-372",
+    "id": "SEM-381",
     "title": "javascript.lang.security.detect-child-process.detect-child-process: Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed.",
     "severity": "High",
     "confidence": "Review",
@@ -11531,7 +11735,7 @@
     ]
   },
   {
-    "id": "SEM-373",
+    "id": "SEM-382",
     "title": "src.scan.rules.semgrep.harvey-command-injection: Request input flows into a shell command (child_process exec/execSync). Use execFile/spawn with an argument array and no shell, and validate the input against an allowlist.",
     "severity": "Critical",
     "confidence": "Confirmed",
@@ -12049,7 +12253,7 @@
     "taxonomy": "M1 — Multi-tenant security",
     "location": "supabase/migrations/",
     "status": "Open",
-    "evidence": "The static policy review inferred tenancy PER TABLE by looking for one of the known tenant-key columns (tenant_id, org_id, organization_id, workspace_id, account_id, company_id). Reviewed as per-tenant: profiles → per-tenant on \"tenant_id\"; notes → per-tenant on \"tenant_id\"; counters → per-tenant on \"tenant_id\"; documents → per-tenant on \"tenant_id\"; invoices → per-tenant on \"tenant_id\"; pii_calibration_fixture → per-tenant on \"tenant_id\"; perf_orders → per-tenant on \"tenant_id\"; perf_events → per-tenant on \"tenant_id\"; internal_notes → per-tenant on \"tenant_id\"; support_tickets → per-tenant on \"tenant_id\"; tenant_reports → per-tenant on \"tenant_id\"; tautology_articles → per-tenant on \"tenant_id\"; audit_events → per-tenant on \"tenant_id\"; patient_billing → per-tenant on \"tenant_id\"; mt_ledger → per-tenant on \"tenant_id\"; mt_contracts → per-tenant on \"tenant_id\". Reviewed as per-user (no recognised tenant column — a row bound to auth.uid() is treated as the isolation boundary): tenants, perf_line_items, perf_shipments, objects, plans, widgets, gadgets, newsletter_subscribers, support_categories. NOT RECOGNISED — these tables declare a scoping column that is not on the known list, so they were reviewed as per-user and any cross-tenant policy bug in them WAS NOT LOOKED FOR: perf_line_items (declares order_id); perf_shipments (declares order_id); widgets (declares site). Coverage note: the scoping-column scan above names a column when it ends in \"_id\" OR is a foreign key to a tenant-shaped table (tenants/orgs/accounts/workspaces/companies). A bare tenant column with NEITHER signal — an off-list name (e.g. \"tenant\", \"site\", \"region_slug\") and no FK to a tenant table — is still reviewed as per-user and will not be named. An empty list above is not proof that no such column exists.",
+    "evidence": "The static policy review inferred tenancy PER TABLE by looking for one of the known tenant-key columns (tenant_id, org_id, organization_id, workspace_id, account_id, company_id). Reviewed as per-tenant: profiles → per-tenant on \"tenant_id\"; notes → per-tenant on \"tenant_id\"; counters → per-tenant on \"tenant_id\"; documents → per-tenant on \"tenant_id\"; invoices → per-tenant on \"tenant_id\"; pii_calibration_fixture → per-tenant on \"tenant_id\"; perf_orders → per-tenant on \"tenant_id\"; perf_events → per-tenant on \"tenant_id\"; internal_notes → per-tenant on \"tenant_id\"; support_tickets → per-tenant on \"tenant_id\"; tenant_reports → per-tenant on \"tenant_id\"; tautology_articles → per-tenant on \"tenant_id\"; audit_events → per-tenant on \"tenant_id\"; patient_billing → per-tenant on \"tenant_id\"; mt_ledger → per-tenant on \"tenant_id\"; mt_contracts → per-tenant on \"tenant_id\"; d091_quotes → per-tenant on \"tenant_id\"; d091_bookings → per-tenant on \"tenant_id\"; d091_contacts → per-tenant on \"tenant_id\". Reviewed as per-user (no recognised tenant column — a row bound to auth.uid() is treated as the isolation boundary): tenants, perf_line_items, perf_shipments, objects, plans, widgets, gadgets, newsletter_subscribers, support_categories. NOT RECOGNISED — these tables declare a scoping column that is not on the known list, so they were reviewed as per-user and any cross-tenant policy bug in them WAS NOT LOOKED FOR: perf_line_items (declares order_id); perf_shipments (declares order_id); widgets (declares site). Coverage note: the scoping-column scan above names a column when it ends in \"_id\" OR is a foreign key to a tenant-shaped table (tenants/orgs/accounts/workspaces/companies). A bare tenant column with NEITHER signal — an off-list name (e.g. \"tenant\", \"site\", \"region_slug\") and no FK to a tenant table — is still reviewed as per-user and will not be named. An empty list above is not proof that no such column exists.",
     "impact": "This is the review's central assumption, not a defect. If a table listed as per-user is really tenant-scoped under a name the list does not know (e.g. site_id), its policies were judged against the wrong model and cross-tenant findings were silently missed — a failed inference is indistinguishable from a clean result unless it is stated.",
     "fix": "Confirm the assumed model above. If a table is tenant-scoped under a column not listed, re-run this scan with `--tenant-key <column>` (quick-scan / mechanical scan, or detect-deeper at the connected tier) — the reviewer uses the declared column for any table that has it instead of guessing from the built-in list. Use `--tenant-mode per-user` instead if the app is genuinely single-tenant end to end. Until re-run, treat the per-user verdict for any unlisted table as not assessed.",
     "value": 1,
@@ -13935,6 +14139,177 @@
     ],
     "owasp": [
       "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "AUDIT-log-no-tenant-src-owasp-mt-audit-log-no-tenant-ts-425",
+    "title": "src/owasp-mt/audit-log-no-tenant.ts — audit log entry records the actor but no tenant",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Logging and monitoring",
+    "taxonomy": "Audit log entry without a tenant discriminator",
+    "location": "src/owasp-mt/audit-log-no-tenant.ts:9",
+    "status": "Open",
+    "evidence": "Heuristic \"audit-log-tenant\" matched a `logger` entry that names the actor `userId` and a state change, with no tenant/organisation/workspace discriminator in its arguments. Assumes a multi-tenant target and a sink that does not inject the tenant upstream — a bound child logger is invisible to a static pass, so confirm before acting.",
+    "impact": "A cross-tenant access cannot be reconstructed or alerted on after the fact: the trail records who and what, but not which tenant's data was touched, so entries cannot be grouped or scoped per tenant during an investigation.",
+    "fix": "Include the tenant identifier in every audit entry — as a structured field (`logger.info({ tenantId, userId, action })`) or via a per-request child logger bound with the tenant — and keep audit trails tenant-isolated.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-778: Insufficient Logging"
+    ],
+    "owasp": [
+      "A09:2021 - Security Logging and Monitoring Failures"
+    ]
+  },
+  {
+    "id": "WEBHOOK-sig-encoding-src-d091-webhook-sig-encoding-ts-793",
+    "title": "src/d091/webhook-sig-encoding.ts — webhook signature decoded as hex, but Svix (Resend/Clerk) sends base64",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Broken access control",
+    "taxonomy": "Webhook signature decoded with the wrong encoding",
+    "location": "src/d091/webhook-sig-encoding.ts:13",
+    "status": "Open",
+    "evidence": "Heuristic \"webhook-signature-encoding\" matched the `svix-signature` header (Svix (Resend/Clerk), documented encoding `base64`) verified with `hex` and no `base64` decode anywhere in the same function.",
+    "impact": "Every genuine delivery fails signature verification, so the handler never runs and everything it enforces is inoperative — silently, since a mismatch produces no error and unit tests built on the same wrong decode still pass.",
+    "fix": "Decode the `svix-signature` signature as `base64`, and add a verification test built from a real recorded delivery from Svix (Resend/Clerk) rather than a self-generated mock.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-345: Insufficient Verification of Data Authenticity"
+    ],
+    "owasp": [
+      "A08:2021 - Software and Data Integrity Failures"
+    ]
+  },
+  {
+    "id": "SCHEMA-dropped-column-read-d091_quotes-legacy_grade-src-d091-dropped-column-reader-ts",
+    "title": "src/d091/dropped-column-reader.ts — reads `d091_quotes.legacy_grade`, a column the migrations already removed",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Configuration",
+    "taxonomy": "App code reads a column the migrations dropped",
+    "location": "src/d091/dropped-column-reader.ts:10",
+    "status": "Open",
+    "evidence": "Heuristic \"migration-column-drift\" matched `legacy_grade` named as a string inside a `.from(\"d091_quotes\")` chain, on a column dropped by supabase/migrations/20260727000003_d091_column_drift.sql:38 and never re-added by a later migration.",
+    "impact": "The query fails at runtime the first time this path is exercised. Column names are strings inside the query chain, so the type checker cannot see the break and happy-path tests written against the new schema still pass — the contract migration shipped before the readers were switched over.",
+    "fix": "Switch this reader off `legacy_grade` and deploy that first; expand-migrate-contract is three separate merges, and the drop belongs only in the third, after every reader is live on the new column.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high"
+  },
+  {
+    "id": "RETRY-stamp-after-send-src-d091-batch-send-claim-ts-560",
+    "title": "src/d091/batch-send-claim.ts — batch job stamps the row after sending, not before",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Business logic",
+    "taxonomy": "Batch send stamped after dispatch instead of claimed before",
+    "location": "src/d091/batch-send-claim.ts:12",
+    "status": "Open",
+    "evidence": "Heuristic \"claim-before-send\" matched `sendReminder(…)` inside a loop, followed by an `.update()` setting a sent-style timestamp on `d091_reminders` — the row is marked sent only after the send returns.",
+    "impact": "A retry, or a second overlapping run of the same job, re-sends every row whose stamp had not yet landed. A single-run test passes: the double send needs a crash inside the send window or two concurrent runs.",
+    "fix": "CAS-claim the row before sending — `.update({ sent_at: … }).is('sent_at', null).select('id')` — and skip the send when zero rows were claimed.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-362: Concurrent Execution using Shared Resource with Improper Synchronization ('Race Condition')"
+    ]
+  },
+  {
+    "id": "RETRY-dedup-before-dispatch-src-d091-webhook-dedup-order-ts-489",
+    "title": "src/d091/webhook-dedup-order.ts — idempotency row written before the handler it guards",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Business logic",
+    "taxonomy": "Idempotency row written before the dispatched handler",
+    "location": "src/d091/webhook-dedup-order.ts:9",
+    "status": "Open",
+    "evidence": "Heuristic \"dedup-before-dispatch\" matched an insert into `d091_webhook_events` followed by `handleSubscriptionEvent(…)` — the dedup row lands before the work it guards runs.",
+    "impact": "A crash between the insert and the handler makes the provider's genuine retry look like a duplicate, so the work never completes and nothing reports it: the row says 'processed' when it means 'received'.",
+    "fix": "Write the idempotency row AFTER the dispatched handler completes, so its existence means 'fully processed'. Track in-flight work with a separate `processing_started_at` if reconciliation needs it.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-754: Improper Check for Unusual or Exceptional Conditions"
+    ]
+  },
+  {
+    "id": "RETRY-no-idempotency-key-src-inngest-external-send-idempotency-ts-485",
+    "title": "src/inngest/external-send-idempotency.ts — external send from a retryable job carries no idempotency key",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Business logic",
+    "taxonomy": "External send without a deterministic idempotency key",
+    "location": "src/inngest/external-send-idempotency.ts:9",
+    "status": "Open",
+    "evidence": "Heuristic \"external-send-idempotency\" matched a call to Stripe paymentIntents.create from a retryable path (`src/inngest/external-send-idempotency.ts`) whose options carry no idempotency key.",
+    "impact": "The platform retries this step on any failure after the call was already accepted, so the operation lands twice. The provider's dedup window is minutes to hours and single-run tests never retry, so the duplicate only appears in production.",
+    "fix": "Pass an idempotency key derived from immutable identifiers (`sha256(tenant_id|entity_id|operation|version)`) — the Stripe SDK's `idempotencyKey` request option, or an `Idempotency-Key` header on the REST call.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
+  },
+  {
+    "id": "RETRY-no-idempotency-key-src-inngest-external-send-idempotency-ts-665",
+    "title": "src/inngest/external-send-idempotency.ts — external send from a retryable job carries no idempotency key",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Business logic",
+    "taxonomy": "External send without a deterministic idempotency key",
+    "location": "src/inngest/external-send-idempotency.ts:17",
+    "status": "Open",
+    "evidence": "Heuristic \"external-send-idempotency\" matched a call to https://api.resend.com from a retryable path (`src/inngest/external-send-idempotency.ts`) whose options carry no idempotency key.",
+    "impact": "The platform retries this step on any failure after the call was already accepted, so the operation lands twice. The provider's dedup window is minutes to hours and single-run tests never retry, so the duplicate only appears in production.",
+    "fix": "Pass an idempotency key derived from immutable identifiers (`sha256(tenant_id|entity_id|operation|version)`) — the Stripe SDK's `idempotencyKey` request option, or an `Idempotency-Key` header on the REST call.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-837: Improper Enforcement of a Single, Unique Action"
+    ]
+  },
+  {
+    "id": "RACE-stale-quota-read-budget-src-d091-budget-gate-stale-ts-673",
+    "title": "src/d091/budget-gate-stale.ts — allowance `budget` read once, then consumed across a loop without re-reading",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Business logic",
+    "taxonomy": "Quota gate consumed across a loop without re-reading",
+    "location": "src/d091/budget-gate-stale.ts:17",
+    "status": "Open",
+    "evidence": "Heuristic \"stale-quota-read\" matched `budget`, bound from `supabase .from(\"d091_budgets\") .select(\"remaining_cents\") .eq(\"tenant_id\", tenantId) .single()`, compared inside a loop whose body awaits work and contains no re-read of that value.",
+    "impact": "From the second iteration on, the cap is enforced against a value that stopped being true. Two overlapping runs, or a long enough batch, overrun the budget without any error — sequential single-run tests pass because a single iteration is always within the cap.",
+    "fix": "Re-read the allowance between consuming operations, or make the gate atomic at the database level — an advisory lock, or a transactional reserve-row that debits the allowance in the same statement that checks it.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition"
     ]
   },
   {

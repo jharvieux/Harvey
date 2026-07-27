@@ -35,6 +35,7 @@ import { b19PrismaTenantScopeEntries } from "./calibration/b19-prisma-tenant-sco
 import { b20DrizzleTenantScopeEntries } from "./calibration/b20-drizzle-tenant-scope.entries.js";
 import { b21SilentFailureEntries } from "./calibration/b21-silent-failure.entries.js";
 import { b22GhaPermissionsEntries } from "./calibration/b22-gha-permissions.entries.js";
+import { b23D091GapEntries } from "./calibration/b23-d091-gaps.entries.js";
 import { knownPublicCredsEntries } from "./calibration/known-public-creds.entries.js";
 import { owaspMultiTenantEntries } from "./calibration/owasp-multitenant.entries.js";
 import { owaspNodejsEntries } from "./calibration/owasp-nodejs.entries.js";
@@ -83,6 +84,7 @@ export const CORPUS: CorpusEntry[] = [
   ...b20DrizzleTenantScopeEntries,
   ...b21SilentFailureEntries,
   ...b22GhaPermissionsEntries,
+  ...b23D091GapEntries,
   ...knownPublicCredsEntries,
   ...owaspMultiTenantEntries,
   ...owaspNodejsEntries,

@@ -24,6 +24,7 @@ const CWE: Record<string, string> = {
   "307": "CWE-307: Improper Restriction of Excessive Authentication Attempts",
   "345": "CWE-345: Insufficient Verification of Data Authenticity",
   "362": "CWE-362: Concurrent Execution using Shared Resource with Improper Synchronization ('Race Condition')",
+  "367": "CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition",
   "434": "CWE-434: Unrestricted Upload of File with Dangerous Type",
   "521": "CWE-521: Weak Password Requirements",
   "532": "CWE-532: Insertion of Sensitive Information into Log File",
@@ -36,8 +37,10 @@ const CWE: Record<string, string> = {
   "668": "CWE-668: Exposure of Resource to Wrong Sphere",
   "693": "CWE-693: Protection Mechanism Failure",
   "732": "CWE-732: Incorrect Permission Assignment for Critical Resource",
+  "754": "CWE-754: Improper Check for Unusual or Exceptional Conditions",
   "778": "CWE-778: Insufficient Logging",
   "798": "CWE-798: Use of Hard-coded Credentials",
+  "837": "CWE-837: Improper Enforcement of a Single, Unique Action",
   "862": "CWE-862: Missing Authorization",
   "89": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
   "79": "CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
@@ -162,6 +165,15 @@ const SECURITY: Record<string, [string, string | null]> = {
   // control exists but does not record enough to reconstruct the access. CWE-778 is A09:2021's
   // canonical member, the same basis as "Sensitive value logged to console" → 532/A09 above.
   "Audit log entry without a tenant discriminator": ["778", "A09"],
+  // #1230 / D-091 item 12: the signature check is present and wrong, so it is the same weakness
+  // class as a missing one — matching the 345/A08 mapping the two webhook rows above already use.
+  "Webhook signature decoded with the wrong encoding": ["345", "A08"],
+  // #1230 / D-091 items 6, 22, 24, 10 — retry/concurrency integrity. None is placed under a
+  // Top-10-2021 category by OWASP's mapping, so owasp is omitted rather than forced.
+  "Quota gate consumed across a loop without re-reading": ["367", null],
+  "Batch send stamped after dispatch instead of claimed before": ["362", null],
+  "External send without a deterministic idempotency key": ["837", null],
+  "Idempotency row written before the dispatched handler": ["754", null],
 };
 
 // Non-security taxonomies: recorded as no-clean-CWE WITH A REASON rather than left unclassified.
@@ -176,6 +188,10 @@ const NO_CWE: { match: (t: string) => boolean; reason: string }[] = [
   { match: (t) => t.startsWith("Architecture —"), reason: "architecture-disclosure row (ORM/RLS posture) — a not-assessed disclosure, not a CWE finding" },
   { match: (t) => t.startsWith("Coverage —"), reason: "coverage disclosure (a scope not assessed) — a not-assessed row, not a finding with a CWE" },
   { match: (t) => t.startsWith("Env var"), reason: "environment-variable hygiene/completeness signal — configuration correctness, not a security weakness class" },
+  // #1230 / D-091 item 13: the reader 500s because the schema moved under it. A deployment-ordering
+  // correctness defect (expand-migrate-contract done out of order), not a weakness an attacker
+  // reaches — forcing it into an availability CWE would overstate it.
+  { match: (t) => t === "App code reads a column the migrations dropped", reason: "schema/app deployment-ordering correctness defect — the query breaks for everyone, not a weakness class an attacker exercises" },
   { match: (t) => t.endsWith("— coverage not assessed") || t.endsWith("— reachability not assessed"), reason: "coverage/reachability disclosure — a not-assessed row, not a finding with a CWE" },
   // #1078: both are scope statements about the secret sweep, not detections. The first counts
   // matches deliberately not graded (public-by-design keys, sample/template paths); the second
