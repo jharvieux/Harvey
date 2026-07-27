@@ -285,11 +285,35 @@ name, so slopsquat stays silent while `checkNonRegistryDependencies` fires).
 | P-DEP-CVE-CRITICAL | `fixtures/legacy-app/package.json` (`minimist@1.2.5`) | `checkKnownDependencyCVEs` (new) — CVE-2021-44906 (< 1.2.6, CVSS 9.8); crisp single-boundary range → the curated critical-CVE promotion path OSV lacked | high |
 | P-MISSING-LOCKFILE | `fixtures/legacy-app` (no lockfile) | `checkLockfilePresence` — standalone project root shipping no lockfile | high |
 | P-KNOWN-IOC-PKG | `fixtures/legacy-app/package.json` (`flatmap-stream@0.1.1`) | `checkKnownIoc` (new) — curated IOC-feed name match (2018 event-stream malware); slopsquat not re-run on the fixture | high |
+| P-LICENSE-COPYLEFT-TRANSITIVE | `package-lock.json` (`@img/sharp-libvips-linux-riscv64@1.2.4`) | `checkLicenseCompliance` — LGPL-3.0-or-later on a package NO manifest declares (#1213) | high |
+
+### B2 transitive-copyleft plant (#1213)
+
+`package-lock.json` carries two entries that appear in NO `package.json` anywhere in this target:
+`sharp@0.34.5` (Apache-2.0) and its optional platform binary
+`@img/sharp-libvips-linux-riscv64@1.2.4` (LGPL-3.0-or-later). Both are real published releases with
+their real integrity hashes, verified against the npm registry 2026-07-27 — DATA ONLY, this target
+is never installed. They model the case Harvey missed against ATC: no manifest in that workspace
+declares `sharp`, yet its platform binaries fill the lockfile and three are LGPL-3.0-or-later.
+
+The plant only fails a scanner whose license candidates come from the resolved TREE. Against the
+manifest-scoped list used before #1213 neither package was ever a candidate, so the class scored
+silent — MEASURED here 2026-07-27 by running `runMechanicalScan` on this target at the pre-fix
+commit: the only license findings were `SUP-LICENSE-UNKNOWN-expres` and `SUP-LICENSE-00`, and
+nothing mentioned `sharp`. Both entries carry the lockfile's own `license` field, so they score
+identically on the offline dry-run path and on the live registry-backed gate.
+
+Side effect, recorded rather than left to surprise the next reader: `sharp@0.34.5` also draws a real
+OSV row (`DEP-OSV-GHSA-f88m-g3jw-g9cj-sharp@0.34.5`, review tier — inherited libvips CVEs, fixed in
+0.35.0). It is correct and is left in place; the version was chosen to match the ATC report the
+plant models, not to add a CVE. It is not corpus-keyed, for the same reason `P-NEXT-CVE-CACHE`
+is keyed on the class and not on a specific advisory id: OSV advisory data moves.
 
 ### B2 negatives — benign lookalikes (must NOT be flagged in the free count)
 
 | id | location | why benign / suppression |
 |---|---|---|
+| N-LICENSE-PERMISSIVE-TRANSITIVE | `package-lock.json` (`sharp@0.34.5`) | Apache-2.0, and exactly as transitive as the LGPL binary it pulls in — the FP a "the tree is unreviewed, flag it" rule throws once the candidate set widened from ~11 manifest names to the whole resolved tree. A permissive SPDX id draws no license finding however deep it sits. |
 | N-DEP-PINNED | `package.json` (`lodash@4.17.11`) | Exact-pinned, registry-sourced — never appears in the SUP-UNPINNED or SUP-NON-REGISTRY evidence. The pinned-dep FP a naive "any dependency is unpinned" rule throws. Doubles as the registry-source negative for `P-NONREGISTRY-DEP`. Its OSV CVE finding lives at the lockfile location (not `package.json`), so it can't be mis-attributed here. |
 | N-SLOPSQUAT-REAL | `package.json` (`@supabase/supabase-js`) | A real, popular, scoped package (exact-match in the typosquat popular set; a 200 from the slopsquat registry HEAD) — the FP a name-shape heuristic throws on a legitimate scoped dep. Draws no slopsquat/typosquat finding. |
 | N-NEXT-SUPPORTED | `fixtures/supported-app/package.json` (`next@15.5.16`) | A current, fully-patched Next version — `checkNextVersionCVEs` draws nothing (no EOL, no 29927/RSC/WS-SSRF). The supported-version half of the EOL pair, resolved by living in its own fixture root. |
