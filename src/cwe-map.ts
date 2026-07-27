@@ -59,6 +59,9 @@ const SECURITY: Record<string, [string, string | null]> = {
   "Object-level authorization gap: Drizzle query filtered by primary key with no tenant scope": ["639", "A01"],
   "Object-level authorization gap: Prisma query filtered by primary key with no tenant scope": ["639", "A01"],
   "Object-level authorization gap: tenant predicate populated from the request": ["639", "A01"],
+  "Tenant GUC set with SET rather than SET LOCAL, leaking across a pooled connection": ["668", "A01"],
+  "Cache key without a tenant discriminator (cross-tenant cache poisoning)": ["668", "A01"],
+  "Storage object path without a tenant prefix (cross-tenant object read/overwrite)": ["639", "A01"],
   "Service-role query in a background-job path with no tenant predicate": ["639", "A01"],
   "Unscoped service-role UPDATE/DELETE (no WHERE)": ["639", "A01"],
   // Server trusting client-side security enforcement.

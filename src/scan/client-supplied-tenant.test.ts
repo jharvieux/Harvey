@@ -78,6 +78,27 @@ describe("client-supplied-tenant — fires when the tenant value comes from the 
   // The #989 lesson: a guard model has to be justified by an adversarial POSITIVE, not only by the
   // negatives it quiets. Membership in a list is existence, not ownership by THIS caller, so it
   // must NOT clear — a rule that accepted it would silently drop the real bug below.
+  it("catches the Supabase .eq() builder idiom", () => {
+    const out = scan(`
+      export async function GET(req: Request) {
+        const body = await req.json();
+        return supabase.from("invoices").select("*").eq("tenant_id", body.tenant_id);
+      }
+    `);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.evidence).toContain('.eq("tenant_id"');
+  });
+
+  it("catches the Supabase .match() builder idiom", () => {
+    const out = scan(`
+      export async function GET(req: Request) {
+        const body = await req.json();
+        return supabase.from("invoices").select("*").match({ tenant_id: body.tenant_id });
+      }
+    `);
+    expect(out).toHaveLength(1);
+  });
+
   it("still fires when the request value is merely checked for existence in a list", () => {
     const out = scan(`
       export async function GET(req: Request) {
@@ -121,6 +142,28 @@ describe("client-supplied-tenant — silent on the correct forms", () => {
         export async function GET(req: Request) {
           const body = await req.json();
           return prisma.invoice.findUnique({ where: { id: body.id } });
+        }
+      `),
+    ).toHaveLength(0);
+  });
+
+  it("is silent on the Supabase .eq() builder when the value comes off the session", () => {
+    expect(
+      scan(`
+        export async function GET() {
+          const session = await auth();
+          return supabase.from("invoices").select("*").eq("tenant_id", session.user.tenantId);
+        }
+      `),
+    ).toHaveLength(0);
+  });
+
+  it("does not treat an .eq() call unrelated to a .from(...) chain as a sink", () => {
+    expect(
+      scan(`
+        export async function GET(req: Request) {
+          const body = await req.json();
+          return someMap.eq("tenant_id", body.tenant_id);
         }
       `),
     ).toHaveLength(0);
