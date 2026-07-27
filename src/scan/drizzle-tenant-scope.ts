@@ -33,7 +33,7 @@ const CLIENT_NAME = /^(db|tx|client|drizzle|database)$/i;
 // Drizzle comparison operators — the column being filtered is always their FIRST argument. `and`/
 // `or`/`not` are combinators (no direct column) and are descended THROUGH by the tree walk below,
 // not listed here.
-const COMPARISON_OPS = new Set([
+export const COMPARISON_OPS = new Set([
   "eq",
   "ne",
   "gt",

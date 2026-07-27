@@ -11314,6 +11314,54 @@
     ]
   },
   {
+    "id": "AUTH-client-supplied-tenant-tenantId-src-owasp-mt-client-supplied-tenant-ts-510",
+    "title": "src/owasp-mt/client-supplied-tenant.ts — tenant scope `tenantId` is populated from the request (`req.json()`)",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Broken access control",
+    "taxonomy": "Object-level authorization gap: tenant predicate populated from the request",
+    "location": "src/owasp-mt/client-supplied-tenant.ts:10",
+    "status": "Open",
+    "evidence": "Heuristic \"client-supplied-tenant\": `prisma.invoice.findMany` scopes on `tenantId`, and that value traces to `req.json()` through same-function assignments. The query carries a tenant predicate and looks correctly scoped; the caller chooses which tenant it selects.",
+    "impact": "The tenant discriminator is attacker-controlled, so the isolation gate is set by the request it is supposed to constrain: any authenticated caller reads or mutates another tenant's rows by editing one field. Because the predicate is present and names the right column, this passes code review and every detector that checks whether a tenant filter exists.",
+    "fix": "Derive `tenantId` from the verified session on the server (`session.user.tenantId` / the JWT claim), never from the request. If the caller must name a tenant — a multi-tenant admin or account switcher — compare the supplied value against the session's tenant membership and reject a mismatch before the query runs.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "AUTH-client-supplied-tenant-tenantId-src-owasp-mt-client-supplied-tenant-ts-707",
+    "title": "src/owasp-mt/client-supplied-tenant.ts — tenant scope `tenantId` is populated from the request (`searchParams.get(\"org\")`)",
+    "severity": "High",
+    "confidence": "Confirmed",
+    "category": "Broken access control",
+    "taxonomy": "Object-level authorization gap: tenant predicate populated from the request",
+    "location": "src/owasp-mt/client-supplied-tenant.ts:15",
+    "status": "Open",
+    "evidence": "Heuristic \"client-supplied-tenant\": `prisma.ledgerEntry.findMany` scopes on `tenantId`, and that value traces to `searchParams.get(\"org\")` through same-function assignments. The query carries a tenant predicate and looks correctly scoped; the caller chooses which tenant it selects.",
+    "impact": "The tenant discriminator is attacker-controlled, so the isolation gate is set by the request it is supposed to constrain: any authenticated caller reads or mutates another tenant's rows by editing one field. Because the predicate is present and names the right column, this passes code review and every detector that checks whether a tenant filter exists.",
+    "fix": "Derive `tenantId` from the verified session on the server (`session.user.tenantId` / the JWT claim), never from the request. If the caller must name a tenant — a multi-tenant admin or account switcher — compare the supplied value against the session's tenant membership and reject a mismatch before the query runs.",
+    "value": 4,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-639: Authorization Bypass Through User-Controlled Key"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
     "id": "SEC-SRL-lib-admin-js-767",
     "title": "lib/admin.js — service_role key hardcoded as a JWT literal and passed to createClient",
     "severity": "Critical",

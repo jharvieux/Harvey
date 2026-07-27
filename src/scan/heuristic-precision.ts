@@ -32,6 +32,7 @@ import { detectVitestIntentFindings } from "../detectors/vitest-intent.js";
 import type { Finding } from "../findings.js";
 import { detectionMetrics, type DetectionMetrics } from "./detection-metrics.js";
 import { detectPrismaTenantScopeFindings } from "./prisma-tenant-scope.js";
+import { detectClientSuppliedTenantFindings } from "./client-supplied-tenant.js";
 import { m1TenantScopeEntries } from "./calibration/m1-tenant-scope.entries.js";
 import { m7CodeEntries } from "./calibration/m7-code.entries.js";
 import { m8IntentEntries } from "./calibration/m8-intent.entries.js";
@@ -70,7 +71,11 @@ const COMPILER_ON: SourceInput = {
 
 function runDetectors(entry: HeuristicEntry): Finding[] {
   const files = loadFixtureDir(entry.dir);
-  if (entry.module === "M1") return detectPrismaTenantScopeFindings(files);
+  // #1194 joins #760 here rather than getting its own gate: the M1 negatives are distilled from
+  // three MIT libraries whose PURPOSE is correct tenant scoping, which is the hardest available
+  // test of a rule that reads tenant predicates — a new tenant-scope detector that is not held to
+  // them is not measured against anything it did not already expect.
+  if (entry.module === "M1") return [...detectPrismaTenantScopeFindings(files), ...detectClientSuppliedTenantFindings(files)];
   if (entry.module === "M7") {
     return detectPerfCodeFindings(entry.compilerOn ? [...files, COMPILER_ON] : files, entry.framework);
   }
