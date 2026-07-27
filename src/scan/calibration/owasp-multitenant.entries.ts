@@ -11,8 +11,25 @@
 // REAL GAPS to improve the product, NOT producing a coverage percentage.
 //
 // It also carries a forcing function. We filed OWASP/CheatSheetSeries#2309 proposing three additions
-// to this sheet; two of them are asserted below as fixtures, so a regression in our own detection of
-// what we publicly told OWASP mattered fails this gate.
+// to this sheet. #1190 asked that all three be checked and the answer stated plainly either way, so:
+//
+//   #2309 item 1 — FORCE ROW LEVEL SECURITY does not stop a BYPASSRLS/superuser connection.
+//     DETECTED. P-OWASP-MT-BYPASSRLS below, at high tier. It was NOT detected before this corpus;
+//     checkMigrationRlsBypass was written for it.
+//   #2309 item 2 — a session-scoped tenant GUC can leak across a transaction-mode connection pool.
+//     DETECTED. P-OWASP-MT-GUC-SESSION below, at review tier (the syntax is visible; whether the pool
+//     is actually in transaction mode is not). Also NOT detected before this corpus; #1195 built it.
+//   #2309 item 3 — the sheet gives no guidance on VERIFYING isolation.
+//     NOT A DETECTION CLAIM, and it would be dishonest to score it as one. It is an argument about
+//     what the sheet omits, not a defect a scanner can find in a target's source: there is no code
+//     shape that means "this team never tested their isolation". Harvey's answer to item 3 is a
+//     PRODUCT, not a rule — the M2 dynamic tier stands up two tenants and probes cross-tenant reads
+//     for real, which is precisely the verification the sheet does not describe. Recorded here as
+//     out-of-universe for the same reason as the eleven operational items below, and stated rather
+//     than left as a silent two-of-three.
+//
+// So a regression in our own detection of what we publicly told OWASP mattered fails this gate for
+// items 1 and 2, and item 3 is not gate-able by construction.
 //
 // TRANSLATION CAVEAT (per #1190). The sheet's examples are Python/SQLAlchemy; M1's rules are JS/TS
 // only (that is what M1-LANG-00 exists for). Every recommendation below was translated to its JS/TS
@@ -158,7 +175,7 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     match: ["tenant"],
     expectedTier: "none",
     gapKind: "measured-gap",
-    note: "GAP, and the weakest candidate of the set — recorded rather than filed. Sheet section 8 ('Include tenant context in all log entries'). A cross-tenant access cannot be reconstructed afterwards, which undercuts the sheet's own detective control. MEASURED: zero findings. Detecting 'this log line omits a field' needs to know which fields matter for this app, so it is a plausible review-tier question and a poor mechanical rule; kept here so the recommendation is accounted for either way.",
+    note: "GAP, and the weakest candidate of the set — now tracked in #1242, which was the last of this corpus's eight gaps without an owner. Sheet section 8 ('Include tenant context in all log entries'). A cross-tenant access cannot be reconstructed afterwards, which undercuts the sheet's own detective control. MEASURED: zero findings. Detecting 'this log line omits a field' needs to know which fields matter for this app, so it is a plausible review-tier question and a poor mechanical rule; kept here so the recommendation is accounted for either way.",
   },
 
   // ---------------------------------------------------------------------------------------------
