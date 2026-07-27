@@ -22,13 +22,20 @@ export const HEAVY_CLI_TESTS = [
   "src/cli/lighthouse-scan.test.ts",
 ];
 
-// Seconds, MEASURED from CI run 30272315745 (2026-07-27). A BALANCE HINT ONLY — correctness never
-// depends on these being current. They drift as tests are added, and a stale number costs a few
-// seconds of imbalance, never a dropped file. A file absent from this table is deliberately treated
-// as the heaviest known (see shardHeavyTests): an unweighted newcomer gets placed first and alone
-// rather than silently padding an already-full shard.
+// Seconds, MEASURED from CI. A BALANCE HINT ONLY — correctness never depends on these being
+// current. They drift as tests are added, and a stale number costs a few seconds of imbalance,
+// never a dropped file. A file absent from this table is deliberately treated as the heaviest known
+// (see shardHeavyTests): an unweighted newcomer gets placed first and alone rather than silently
+// padding an already-full shard.
+//
+// run-audit carries its HIGH observation, not its average, and that is deliberate. Two runs:
+// 58.3s (run 30272315745) and ~87s (run 30276431912, the first sharded run — shard 1 spent 102s on
+// run-audit + lighthouse). It is both the longest file and by far the most variable, and it sets
+// the wall-clock floor no matter how many shards there are. Weighting it high makes LPT give it a
+// shard to itself, so its variance stops pushing a second file's cost onto the critical path —
+// which is exactly what made that first sharded run land at 141s against a 104s prediction.
 const WEIGHT_HINT_SECONDS: Record<string, number> = {
-  "src/cli/run-audit.test.ts": 58.3,
+  "src/cli/run-audit.test.ts": 87.0,
   "src/fix/calibration-acceptance.test.ts": 37.7,
   "src/cli/quick-scan.test.ts": 28.4,
   "src/fix/detector-rerun.test.ts": 25.9,

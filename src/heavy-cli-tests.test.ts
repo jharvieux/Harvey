@@ -31,14 +31,17 @@ describe("heavy CLI test sharding", () => {
     expect(shardHeavyTests(3)).toEqual(shardHeavyTests(3));
   });
 
-  it("keeps the heaviest file alone at the width CI uses, so wall-clock is bounded by it", () => {
-    // run-audit is the longest single file (58s of the 205s serial total, MEASURED 2026-07-27).
-    // This is the whole point of sharding: the floor is the slowest file, so it must not be
-    // stacked behind another one at the width ci.yml actually runs.
+  it("gives run-audit a shard to ITSELF at the width CI uses", () => {
+    // run-audit is both the longest single file and the most variable (58.3s and ~87s across two
+    // CI runs), so it sets the wall-clock floor. Stacking anything behind it puts that variance on
+    // the critical path — measured: the first sharded run landed at 141s against a 104s prediction
+    // precisely because lighthouse sat behind it. Alone, its variance costs only itself.
     const shards = shardHeavyTests(3);
     const withRunAudit = shards.find((s) => s.includes("src/cli/run-audit.test.ts"));
     expect(withRunAudit, "run-audit.test.ts is not in any shard").toBeDefined();
-    expect(withRunAudit!.length, "run-audit is sharing a shard with 2+ other files").toBeLessThanOrEqual(2);
+    expect(withRunAudit, "run-audit must not share a shard — it is the wall-clock floor").toEqual([
+      "src/cli/run-audit.test.ts",
+    ]);
   });
 
   it("rejects a nonsensical shard count rather than silently returning nothing", () => {
