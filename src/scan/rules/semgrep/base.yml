@@ -104,22 +104,36 @@ rules:
       # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
       # #1066: the FLAG group is [isuvy], not [a-z] -- /m makes ^ and $ match at line breaks, so
       # /^[a-z0-9]+$/m.test("abc\n' OR 1=1 --") is TRUE and the anchoring guard above is void.
+      # #1236: BOTH early-return spellings are matched. The block form alone missed
+      # `if (!ok) return Response.json(...)` — the dominant App Router idiom, and the only
+      # spelling open to a handler that must RETURN its error response, so correct code read as
+      # vulnerable. A bare `return;`/`return <expr>;` leaves the function exactly as a block
+      # containing only that return does; the block form's `...` merely permits statements BEFORE
+      # it. The consequent must still BE a return — a braceless statement that isn't one is not a
+      # guard (P-SQLI-GUARD-BRACELESS-NO-RETURN).
       - by-side-effect: true
         patterns:
           - pattern-either:
               - patterns:
-                  - pattern: |
-                      if (!$RE.test($X)) { ... return; }
+                  - pattern-either:
+                      - pattern: |
+                          if (!$RE.test($X)) { ... return; }
+                      - pattern: |
+                          if (!$RE.test($X)) return ...;
                   - metavariable-regex:
                       metavariable: $RE
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
+              - pattern: |
+                  if (!$ARR.includes($X)) return ...;
               # #1027: a Set-backed allowlist is the same exact-match membership test as
               # `.includes` on an array, so it carries exactly the same soundness — and the same
               # dependence on the allowlist itself being correct.
               - pattern: |
                   if (!$SET.has($X)) { ... return; }
+              - pattern: |
+                  if (!$SET.has($X)) return ...;
           - focus-metavariable: $X
       # #1027: (a2) SCHEMA-validator guard — zod/valibot `safeParse` + an early return on
       # `!result.success`. Measured as the largest unmodeled sub-population in the #989 census and
@@ -132,15 +146,23 @@ rules:
       # calibration positive that must still fire: an ANCHORED, POSITIVE-class `.regex(...)`, or a
       # `.enum([...])` membership list; and a failure branch that RETURNS. A guard on one variable
       # while the sink reads another (`$P.data` never used) is untouched by construction.
+      # #1236: the braceless `if (!$P.success) return ...;` spelling is matched too — see the
+      # (a2) block above.
       - patterns:
           - pattern: $P.data
           - pattern-either:
               - patterns:
-                  - pattern-inside: |
-                      $P = $Z.regex($RE).safeParse(...);
-                      ...
-                      if (!$P.success) { ... return; }
-                      ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) { ... return; }
+                          ...
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) return ...;
+                          ...
                   - metavariable-regex:
                       metavariable: $RE
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
@@ -148,6 +170,11 @@ rules:
                   $P = $Z.enum([...]).safeParse(...);
                   ...
                   if (!$P.success) { ... return; }
+                  ...
+              - pattern-inside: |
+                  $P = $Z.enum([...]).safeParse(...);
+                  ...
+                  if (!$P.success) return ...;
                   ...
     pattern-sinks:
       - patterns:
@@ -205,6 +232,10 @@ rules:
       # Only `.hostname`/`.host` qualify: a `.pathname`/`.protocol` allowlist says nothing about
       # where the value goes. The allowlist's own contents are trusted, exactly as in the shipped
       # `.includes`/`.has` arms.
+      # #1236: both early-return spellings are matched here too. The two exclusions the widening
+      # touches keep their alarms in the braceless form (P-REDIRECT-HOST-AFFIX-BRACELESS,
+      # P-REDIRECT-HOST-BRACELESS-NO-RETURN); the three that key on the PROJECTION rather than the
+      # consequent are unaffected by it.
       - by-side-effect: true
         patterns:
           - pattern-either:
@@ -217,7 +248,15 @@ rules:
                   ...
               - pattern-inside: |
                   ...
+                  if (!$ALLOW.includes($HOST)) return ...;
+                  ...
+              - pattern-inside: |
+                  ...
                   if (!$ALLOW.has($HOST)) { ... return; }
+                  ...
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.has($HOST)) return ...;
                   ...
           - focus-metavariable: $X
     pattern-sinks:
@@ -274,22 +313,36 @@ rules:
       # a denylist, not an allowlist); a failure branch that does not return leaves the value live.
       # #1066: the FLAG group is [isuvy], not [a-z] -- /m makes ^ and $ match at line breaks, so
       # /^[a-z0-9]+$/m.test("abc\n' OR 1=1 --") is TRUE and the anchoring guard above is void.
+      # #1236: BOTH early-return spellings are matched. The block form alone missed
+      # `if (!ok) return Response.json(...)` — the dominant App Router idiom, and the only
+      # spelling open to a handler that must RETURN its error response, so correct code read as
+      # vulnerable. A bare `return;`/`return <expr>;` leaves the function exactly as a block
+      # containing only that return does; the block form's `...` merely permits statements BEFORE
+      # it. The consequent must still BE a return — a braceless statement that isn't one is not a
+      # guard (P-SQLI-GUARD-BRACELESS-NO-RETURN).
       - by-side-effect: true
         patterns:
           - pattern-either:
               - patterns:
-                  - pattern: |
-                      if (!$RE.test($X)) { ... return; }
+                  - pattern-either:
+                      - pattern: |
+                          if (!$RE.test($X)) { ... return; }
+                      - pattern: |
+                          if (!$RE.test($X)) return ...;
                   - metavariable-regex:
                       metavariable: $RE
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
               - pattern: |
                   if (!$ARR.includes($X)) { ... return; }
+              - pattern: |
+                  if (!$ARR.includes($X)) return ...;
               # #1027: a Set-backed allowlist is the same exact-match membership test as
               # `.includes` on an array, so it carries exactly the same soundness — and the same
               # dependence on the allowlist itself being correct.
               - pattern: |
                   if (!$SET.has($X)) { ... return; }
+              - pattern: |
+                  if (!$SET.has($X)) return ...;
           - focus-metavariable: $X
       # #1027: (a2) SCHEMA-validator guard — zod/valibot `safeParse` + an early return on
       # `!result.success`. Measured as the largest unmodeled sub-population in the #989 census and
@@ -302,15 +355,23 @@ rules:
       # calibration positive that must still fire: an ANCHORED, POSITIVE-class `.regex(...)`, or a
       # `.enum([...])` membership list; and a failure branch that RETURNS. A guard on one variable
       # while the sink reads another (`$P.data` never used) is untouched by construction.
+      # #1236: the braceless `if (!$P.success) return ...;` spelling is matched too — see the
+      # (a2) block above.
       - patterns:
           - pattern: $P.data
           - pattern-either:
               - patterns:
-                  - pattern-inside: |
-                      $P = $Z.regex($RE).safeParse(...);
-                      ...
-                      if (!$P.success) { ... return; }
-                      ...
+                  - pattern-either:
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) { ... return; }
+                          ...
+                      - pattern-inside: |
+                          $P = $Z.regex($RE).safeParse(...);
+                          ...
+                          if (!$P.success) return ...;
+                          ...
                   - metavariable-regex:
                       metavariable: $RE
                       regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
@@ -318,6 +379,11 @@ rules:
                   $P = $Z.enum([...]).safeParse(...);
                   ...
                   if (!$P.success) { ... return; }
+                  ...
+              - pattern-inside: |
+                  $P = $Z.enum([...]).safeParse(...);
+                  ...
+                  if (!$P.success) return ...;
                   ...
     pattern-sinks:
       - patterns:
@@ -568,7 +634,15 @@ rules:
                   ...
               - pattern-inside: |
                   ...
+                  if (!$ALLOW.includes($HOST)) return ...;
+                  ...
+              - pattern-inside: |
+                  ...
                   if (!$ALLOW.has($HOST)) { ... return; }
+                  ...
+              - pattern-inside: |
+                  ...
+                  if (!$ALLOW.has($HOST)) return ...;
                   ...
           - focus-metavariable: $X
     pattern-sinks:
