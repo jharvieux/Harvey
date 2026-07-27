@@ -99,3 +99,13 @@ recognized tenant column (`org_id`/`tenant_id`/...). In this schema that is `pro
 outside the probe surface — so M2 structurally cannot reach #1 or #2 (both caught by M1 static
 instead). `invoices` and `documents` WERE probed and correctly did NOT leak (true negatives — their
 0001 policies are correct), a good precision signal.
+
+This is an empirical claim about M2's seed structure, recorded per #1072 with the live-tier falsifier
+that would retire it:
+
+> REASON: M2 structurally cannot reach vandyand #1 (orgs, the tenant-parent table) or #2 (line_items, keyed by invoice_id with no org/owner column) — the generic two-tenant seed only manufactures rows for tables carrying a recognised tenant column, a per-user owner column, or an FK to a principal table, so neither is in the probed leak surface (both are caught by M1 static instead)
+> KIND: empirical
+> PROVENANCE: MEASURED 2026-07-18 (the dynamic-validate run scored above; TENANT_COL/owner/FK-graph seeding re-read in src/pentest/two-tenant-seed.ts 2026-07-26 — line_items FKs invoices not a principal, orgs is a tenant parent, so both remain unscoped)
+> FALSIFIER: pnpm dynamic-validate <vandyand-clone> --execute --out /tmp/vandyand-m2 && grep -Eq "line_items|public.orgs" /tmp/vandyand-m2/M2.pass.json
+> FALSIFIER-TIER: m2-stack
+> TOUCHES: src/pentest/two-tenant-seed.ts
