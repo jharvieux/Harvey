@@ -36,6 +36,7 @@ const CWE: Record<string, string> = {
   "668": "CWE-668: Exposure of Resource to Wrong Sphere",
   "693": "CWE-693: Protection Mechanism Failure",
   "732": "CWE-732: Incorrect Permission Assignment for Critical Resource",
+  "770": "CWE-770: Allocation of Resources Without Limits or Throttling",
   "798": "CWE-798: Use of Hard-coded Credentials",
   "862": "CWE-862: Missing Authorization",
   "89": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
@@ -153,6 +154,10 @@ const SECURITY: Record<string, [string, string | null]> = {
   // definitions/248.html, 2026-07-27): Memberships lists OWASP Top Ten 2004 A9 and 2025 A10:2025,
   // no 2021 category — clean CWE, OWASP omitted.
   "EventEmitter emits 'error' with no registered listener": ["248", null],
+  // #1200: an unbounded request-body accumulator. Same weakness class as the missing
+  // `express.json({ limit })` option the semgrep half of this issue already tags CWE-770; OWASP
+  // does not place CWE-770 under a Top-10-2021 category.
+  "Request body accumulated with no size limit": ["770", null],
   // #1239: a browser-only sanitizer on the server. CWE-79 rather than CWE-693 (Protection Mechanism
   // Failure): the mechanism does not merely fail, it never runs, and what ships is unsanitized HTML
   // rendered into the page — which is CWE-79's definition, and the class the OWASP sheet names.
