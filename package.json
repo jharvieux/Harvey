@@ -50,6 +50,7 @@
     "pii-classify": "tsx tools/pii-classify.mjs",
     "epic": "tsx src/cli/epic.ts",
     "validate-reasons": "tsx src/cli/validate-reasons.ts",
+    "validate-acceptance": "tsx src/cli/validate-acceptance.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip && pnpm test-only-exports"
   },
   "devDependencies": {
