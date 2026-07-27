@@ -48,6 +48,7 @@
     "fix-interactive": "tsx src/cli/fix-interactive.ts",
     "pii-classify": "tsx tools/pii-classify.mjs",
     "epic": "tsx src/cli/epic.ts",
+    "validate-reasons": "tsx src/cli/validate-reasons.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip"
   },
   "devDependencies": {

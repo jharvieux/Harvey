@@ -398,22 +398,22 @@ describe("parseOsvFindings over a captured osv-scanner report", () => {
 
   it("rates each advisory from its own severity band instead of collapsing to Medium (#1063)", () => {
     const byId = new Map(parseOsvFindings(capturedOsvReport).map((f) => [f.id, f.severity]));
-    expect(byId.get("DEP-OSV-GHSA-jf85-cpcp-j695")).toBe("Critical"); // lodash, CRITICAL
-    expect(byId.get("DEP-OSV-GHSA-5c6j-r48x-rmvq")).toBe("High"); // serialize-javascript, HIGH
-    expect(byId.get("DEP-OSV-GHSA-89xv-2m56-2m9x")).toBe("High"); // next, HIGH, CVSS_V4 only
-    expect(byId.get("DEP-OSV-GHSA-952p-6rrq-rcjv")).toBe("Medium"); // micromatch, MODERATE
-    expect(byId.get("DEP-OSV-GHSA-848j-6mx2-7j84")).toBe("Low"); // elliptic, LOW
+    expect(byId.get("DEP-OSV-GHSA-jf85-cpcp-j695-lodash@4.17.11")).toBe("Critical"); // lodash, CRITICAL
+    expect(byId.get("DEP-OSV-GHSA-5c6j-r48x-rmvq-serialize-javascript@4.0.0")).toBe("High"); // serialize-javascript, HIGH
+    expect(byId.get("DEP-OSV-GHSA-89xv-2m56-2m9x-next@14.2.35")).toBe("High"); // next, HIGH, CVSS_V4 only
+    expect(byId.get("DEP-OSV-GHSA-952p-6rrq-rcjv-micromatch@3.1.10")).toBe("Medium"); // micromatch, MODERATE
+    expect(byId.get("DEP-OSV-GHSA-848j-6mx2-7j84-elliptic@6.6.1")).toBe("Low"); // elliptic, LOW
   });
 
   it("drops the hit whose id matches an already-curated advisory (dedup)", () => {
     const ids = parseOsvFindings(capturedOsvReport).map((f) => f.id);
     // GHSA-c4j6-fc7j-m34r (CVE-2026-44578) is in the captured report AND in CURATED_ADVISORY_IDS.
-    expect(ids).not.toContain("DEP-OSV-GHSA-c4j6-fc7j-m34r");
+    expect(ids).not.toContain("DEP-OSV-GHSA-c4j6-fc7j-m34r-next@14.2.35");
     expect(ids.length).toBe(capturedVulns.length - 1);
   });
 
   it("names what the rating came from, so a reader can tell a real rating from a default", () => {
-    const critical = parseOsvFindings(capturedOsvReport).find((f) => f.id === "DEP-OSV-GHSA-jf85-cpcp-j695");
+    const critical = parseOsvFindings(capturedOsvReport).find((f) => f.id === "DEP-OSV-GHSA-jf85-cpcp-j695-lodash@4.17.11");
     expect(critical?.evidence).toContain("Rated Critical from the advisory's own CRITICAL rating");
   });
 
@@ -561,8 +561,67 @@ describe("curated + OSV dedup (issue #73)", () => {
     const merged = [...curated, ...parseOsvFindings(osvResult)];
     const ids = merged.map((f) => f.id);
     expect(ids).toContain("DEP-CVE-2026-44578");
-    expect(ids).toContain("DEP-OSV-GHSA-aaaa-bbbb-cccc");
+    expect(ids).toContain("DEP-OSV-GHSA-aaaa-bbbb-cccc-next@14.2.35");
     expect(merged).toHaveLength(2);
+  });
+});
+
+// #1175: found live on cipherx during the #1174 disclosure re-scan — a single OSV advisory
+// against two different packages produced two findings with the SAME id ("DEP-OSV-<GHSA>" was
+// derived from the advisory alone), and validateFindings' unique-id check refused to export the
+// whole document. Both findings are real and both must reach the deliverable.
+describe("one advisory affecting two packages gets two distinct, delivered findings (#1175)", () => {
+  const sharedAdvisory: OsvScanResult = {
+    results: [
+      {
+        source: { path: "package-lock.json" },
+        packages: [
+          {
+            package: { name: "pkg-a", version: "1.0.0" },
+            vulnerabilities: [{ id: "GHSA-shared-0001-aaaa", summary: "shared advisory hits pkg-a" }],
+          },
+          {
+            package: { name: "pkg-b", version: "2.0.0" },
+            vulnerabilities: [{ id: "GHSA-shared-0001-aaaa", summary: "shared advisory hits pkg-b" }],
+          },
+        ],
+      },
+    ],
+  };
+
+  it("gives each affected package its own id instead of colliding on the shared GHSA", () => {
+    const findings = parseOsvFindings(sharedAdvisory);
+    expect(findings).toHaveLength(2);
+    const ids = findings.map((f) => f.id);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids).toContain("DEP-OSV-GHSA-shared-0001-aaaa-pkg-a@1.0.0");
+    expect(ids).toContain("DEP-OSV-GHSA-shared-0001-aaaa-pkg-b@2.0.0");
+  });
+
+  it("still collapses a genuine duplicate — same advisory, same package, same version", () => {
+    const trueDuplicate: OsvScanResult = {
+      results: [
+        {
+          source: { path: "package-lock.json" },
+          packages: [
+            {
+              package: { name: "pkg-a", version: "1.0.0" },
+              // Same advisory reported twice for the identical package/version — a byte-identical
+              // repeat, not two distinct findings.
+              vulnerabilities: [
+                { id: "GHSA-shared-0001-aaaa", summary: "shared advisory hits pkg-a" },
+                { id: "GHSA-shared-0001-aaaa", summary: "shared advisory hits pkg-a" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const findings = parseOsvFindings(trueDuplicate);
+    expect(findings).toHaveLength(2); // parseOsvFindings itself doesn't dedupe...
+    expect(new Set(findings.map((f) => f.id)).size).toBe(1); // ...but the id is identical...
+    expect(JSON.stringify(findings[0])).toBe(JSON.stringify(findings[1])); // ...and so is the content,
+    // which is exactly what audit-report.ts's dedupeFindings (byte-identical, not id-only) collapses.
   });
 });
 

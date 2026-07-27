@@ -1,0 +1,160 @@
+# Library-internal parameter-sourced taint (#946). The request-sourced taint rules in injection.yml
+# model the APP-LAYER shape: an HTTP request (req.query/body/params/cookies/headers, App-Router
+# searchParams) flowing to a sink. That leaves a whole axis dark — the SAME injection sinks reached
+# from a LIBRARY ENTRY POINT with no request layer: an exported function whose PARAMETER is the
+# untrusted value, or a raw node http/https server whose request callback parameter is. This is the
+# axis the SecBench.js corpus exercises (measured 0/600 through the request rules — see
+# docs/design/secbench-recall-measurement.md), and the operator scoped it in on 2026-07-26:
+# library-internal parameter-sourced taint IS in Harvey's whole-codebase remit.
+#
+# Two source shapes, both a PARAMETER treated as taint:
+#   A — a raw node http/https server callback request param (`http.createServer((req,res)=>…)`), the
+#       dominant SecBench path-traversal shape (`var p = "./" + req.url; fs.readFile(p)`);
+#   B — an EXPORTED library function's first parameter (module.exports / exports.x / export fn /
+#       export default), the canonical "library entry point" the issue names.
+#
+# PRECISION POSTURE. A function parameter is a far broader source than a request object, so every
+# rule here is WARNING + MEDIUM confidence — REVIEW tier, never the free/high count (semgrep.ts maps
+# high = ERROR + confidence HIGH). The source is deliberately gated to the PUBLIC API surface
+# (exported functions + server request callbacks), not every internal parameter, so a private helper
+# that happens to touch a param does not fire; and taint mode still requires the param to REACH a
+# sink, unsanitized. path.basename remains the containment sanitizer, as in harvey-path-traversal.
+# Recall is bounded by OSS Semgrep's intra-procedural taint (#873): a param that reaches the sink
+# only after crossing a helper-function boundary (SecBench's aaptjs list()→promistify()→exec) is not
+# followed — that limitation is measured, not worked around. Scored by targets/calibration
+# (b3-injection.entries.ts P-LIB-*/N-LIB-*) and, on real CVEs, by the library-source pathway of
+# validate-secbench.ts.
+
+rules:
+  # Path traversal from a library entry point: a request-callback param (raw http/https server) or an
+  # exported-function param joined into a filesystem path and read/written. path.basename confines it.
+  - id: harvey-lib-path-traversal
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+      cwe: ["CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"]
+      owasp: ["A01:2021 - Broken Access Control"]
+    message: >
+      A library entry-point parameter (a raw http/https server request, or an exported function's
+      argument) reaches a filesystem read/write unsanitized — path traversal (../ escapes the
+      intended directory). Confine the path with path.basename and a base-directory containment check.
+    pattern-sources:
+      # Shape A — raw node http/https server request callback parameter.
+      - patterns:
+          - pattern-either:
+              - pattern: http.createServer(function ($REQ, $RES) { ... })
+              - pattern: http.createServer(($REQ, $RES) => { ... })
+              - pattern: https.createServer(function ($REQ, $RES) { ... })
+              - pattern: https.createServer(($REQ, $RES) => { ... })
+              - pattern: http.createServer($OPT, function ($REQ, $RES) { ... })
+              - pattern: http.createServer($OPT, ($REQ, $RES) => { ... })
+              - pattern: https.createServer($OPT, function ($REQ, $RES) { ... })
+              - pattern: https.createServer($OPT, ($REQ, $RES) => { ... })
+          - focus-metavariable: $REQ
+      # Shape B — exported library function parameter (public API surface).
+      - patterns:
+          - pattern-either:
+              - pattern: module.exports = function $F($P, ...) { ... }
+              - pattern: module.exports = ($P, ...) => { ... }
+              - pattern: module.exports.$N = function ($P, ...) { ... }
+              - pattern: module.exports.$N = ($P, ...) => { ... }
+              - pattern: exports.$N = function ($P, ...) { ... }
+              - pattern: exports.$N = ($P, ...) => { ... }
+              - pattern: export function $F($P, ...) { ... }
+              - pattern: export const $F = ($P, ...) => { ... }
+              - pattern: export default function ($P, ...) { ... }
+          - focus-metavariable: $P
+    pattern-sanitizers:
+      - pattern: path.basename(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fs.readFile($P, ...)
+              - pattern: fs.readFileSync($P, ...)
+              - pattern: fs.createReadStream($P, ...)
+              - pattern: fs.writeFile($P, ...)
+              - pattern: fs.writeFileSync($P, ...)
+              - pattern: fs.createWriteStream($P, ...)
+              - pattern: $FS.readFile($P, ...)
+              - pattern: $FS.readFileSync($P, ...)
+              - pattern: $FS.createReadStream($P, ...)
+          - focus-metavariable: $P
+
+  # OS command injection from a library entry point: an exported-function param reaches a shell-string
+  # exec/execSync. Same CWE-78 shell-STRING sink as harvey-command-injection, request layer removed.
+  - id: harvey-lib-command-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Critical
+      cwe: ["CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"]
+      owasp: ["A03:2021 - Injection"]
+    message: >
+      An exported library function's parameter flows into a shell command (child_process exec/
+      execSync) — OS command injection. Use execFile/spawn with an argument array and no shell, and
+      validate the argument against an allowlist.
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: module.exports = function $F($P, ...) { ... }
+              - pattern: module.exports = ($P, ...) => { ... }
+              - pattern: module.exports.$N = function ($P, ...) { ... }
+              - pattern: module.exports.$N = ($P, ...) => { ... }
+              - pattern: exports.$N = function ($P, ...) { ... }
+              - pattern: exports.$N = ($P, ...) => { ... }
+              - pattern: export function $F($P, ...) { ... }
+              - pattern: export const $F = ($P, ...) => { ... }
+              - pattern: export default function ($P, ...) { ... }
+          - focus-metavariable: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: exec($CMD, ...)
+              - pattern: execSync($CMD, ...)
+              - pattern: child_process.exec($CMD, ...)
+              - pattern: child_process.execSync($CMD, ...)
+              - pattern: $CP.exec($CMD, ...)
+              - pattern: $CP.execSync($CMD, ...)
+          - focus-metavariable: $CMD
+
+  # Code injection from a library entry point: an exported-function param reaches eval / new Function.
+  - id: harvey-lib-code-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      confidence: MEDIUM
+      category: security
+      harveySeverity: Critical
+      cwe: ["CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"]
+      owasp: ["A03:2021 - Injection"]
+    message: >
+      An exported library function's parameter reaches eval()/new Function() — arbitrary code
+      execution. Parse the argument as data (e.g. JSON.parse) or dispatch against an allowlist; never
+      evaluate an untrusted argument.
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: module.exports = function $F($P, ...) { ... }
+              - pattern: module.exports = ($P, ...) => { ... }
+              - pattern: module.exports.$N = function ($P, ...) { ... }
+              - pattern: module.exports.$N = ($P, ...) => { ... }
+              - pattern: exports.$N = function ($P, ...) { ... }
+              - pattern: exports.$N = ($P, ...) => { ... }
+              - pattern: export function $F($P, ...) { ... }
+              - pattern: export const $F = ($P, ...) => { ... }
+              - pattern: export default function ($P, ...) { ... }
+          - focus-metavariable: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: eval($C)
+              - pattern: new Function(..., $C)
+          - focus-metavariable: $C
