@@ -19,9 +19,9 @@ function plant(files: Record<string, string>): string {
   return dir;
 }
 
-function gate(root: string, ...args: string[]): { code: number; out: string } {
+function gate(root: string, args: string[] = [], env: NodeJS.ProcessEnv = {}): { code: number; out: string } {
   try {
-    return { code: 0, out: execFileSync("node_modules/.bin/tsx", [CLI, "--root", root, ...args], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) };
+    return { code: 0, out: execFileSync("node_modules/.bin/tsx", [CLI, "--root", root, ...args], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } }) };
   } catch (e) {
     const err = e as { status: number; stdout: string; stderr: string };
     return { code: err.status, out: `${err.stdout}${err.stderr}` };
@@ -60,26 +60,37 @@ const LIVE_TIER_REASON = [
   "// FALSIFIER-TIER: lighthouse",
 ].join("\n");
 
+// The shape that made all five live falsifiers unfalsifiable until #1072's second half: `true <x>`
+// would exit 0 (STALE) if the placeholder were bound, and exit 1 unrun — reading as "holds" — if it
+// reached the shell verbatim. Which of those the gate reports is the whole point.
+const PLACEHOLDER_REASON = [
+  "// REASON: only a live Lighthouse pass can re-test this, against an operator-supplied target",
+  "// KIND: empirical",
+  "// PROVENANCE: MEASURED 2026-07-27",
+  "// FALSIFIER: true <served-target>",
+  "// FALSIFIER-TIER: lighthouse",
+].join("\n");
+
 describe("validate-reasons CLI", () => {
   it("skips a live-only falsifier offline — disclosed, not run, not a failure — and runs it under --live (#1072)", () => {
     const dir = plant({ "live-tier.ts": LIVE_TIER_REASON });
-    const offline = gate(dir, "--revalidate");
+    const offline = gate(dir, ["--revalidate"]);
     expect(offline.code).toBe(0);
     expect(offline.out).toContain("SKIPPED-LIVE");
     expect(offline.out).toContain("live-only skipped");
-    const live = gate(dir, "--revalidate", "--live");
+    const live = gate(dir, ["--revalidate", "--live"]);
     expect(live.code).toBe(1);
     expect(live.out).toContain("STALE");
   });
 
   it("refuses an unknown --tier rather than silently enabling nothing", () => {
-    const { code, out } = gate(plant({ "live-tier.ts": LIVE_TIER_REASON }), "--revalidate", "--tier", "made-up");
+    const { code, out } = gate(plant({ "live-tier.ts": LIVE_TIER_REASON }), ["--revalidate", "--tier", "made-up"]);
     expect(code).toBe(1);
     expect(out).toContain("unknown --tier");
   });
 
   it("fails loud on a planted reason whose falsifier now succeeds, and leaves the still-true one alone", () => {
-    const { code, out } = gate(plant({ "stale.ts": STALE_REASON, "live.ts": LIVE_REASON }), "--revalidate");
+    const { code, out } = gate(plant({ "stale.ts": STALE_REASON, "live.ts": LIVE_REASON }), ["--revalidate"]);
     expect(code).toBe(1);
     expect(out).toContain("STALE");
     expect(out).toContain("planted; its falsifier succeeds");
@@ -87,15 +98,28 @@ describe("validate-reasons CLI", () => {
   });
 
   it("passes when every falsifier still exits non-zero", () => {
-    const { code, out } = gate(plant({ "live.ts": LIVE_REASON }), "--revalidate");
+    const { code, out } = gate(plant({ "live.ts": LIVE_REASON }), ["--revalidate"]);
     expect(code).toBe(0);
     expect(out).toContain("no reason has outlived its truth");
   });
 
   it("excludes decisional reasons from the re-validation pass instead of re-testing a human ruling", () => {
-    const { code, out } = gate(plant({ "d.md": DECISIONAL_REASON }), "--revalidate");
+    const { code, out } = gate(plant({ "d.md": DECISIONAL_REASON }), ["--revalidate"]);
     expect(code).toBe(0);
     expect(out).toContain("Re-validated 0 empirical falsifier(s); 0 live-only skipped; 1 decisional reason(s) excluded by kind");
+  });
+
+  it("reports an unbound live-tier placeholder UNVERIFIABLE instead of letting the shell eat it as a redirect (#1072)", () => {
+    const dir = plant({ "placeholder.ts": PLACEHOLDER_REASON });
+    const unbound = gate(dir, ["--revalidate", "--tier", "lighthouse"]);
+    expect(unbound.code).toBe(1);
+    expect(unbound.out).toContain("UNVERIFIABLE");
+    expect(unbound.out).toContain("HARVEY_FALSIFIER_SERVED_TARGET");
+
+    const bound = gate(dir, ["--revalidate", "--tier", "lighthouse"], { HARVEY_FALSIFIER_SERVED_TARGET: "/dev/null" });
+    expect(bound.code).toBe(1);
+    expect(bound.out).toContain("STALE");
+    expect(bound.out).toContain("true /dev/null");
   });
 
   it("fails structurally — with no command run — on an empirical reason carrying no falsifier", () => {
