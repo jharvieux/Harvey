@@ -59,7 +59,11 @@ const RATE_LIMIT_HINT = /(rateLimit|ratelimit|Ratelimit|limiter\.)/;
 // a memo cache whose own comment says "not a rate limiter", which un-stripped content reads as intent.
 const RATE_LIMIT_IDENTIFIER = /(rate.?limit|ratelimit|throttle|attempts?\b|quota|token.?bucket|\bhits\b)/i;
 const ADMISSION_GATE = /(\b429\b|too.?many.?requests|[<>]=?\s*\d+|\d+\s*[<>]=?)/i;
-const PROCESS_LOCAL_STORE = /^\s*(?:(?:export\s+)?(?:const|let|var)\s+[\w$]+|globalThis\.[\w$]+)\s*=\s*(?:new\s+(?:Map|Set|WeakMap)\s*\(|\{\s*\}|\[\s*\])/m;
+// #1197: `new Map<string, number>()` — a generic type argument between the class name and the
+// call parens — did not match here, so a module-scope counter declared with an explicit value
+// type (the idiomatic TS form the fixture and most real code use) silently missed this detector
+// entirely. `(?:<[^>]*>)?` admits it without weakening the Map/Set/WeakMap requirement.
+const PROCESS_LOCAL_STORE = /^\s*(?:(?:export\s+)?(?:const|let|var)\s+[\w$]+|globalThis\.[\w$]+)\s*=\s*(?:new\s+(?:Map|Set|WeakMap)\s*(?:<[^>]*>)?\s*\(|\{\s*\}|\[\s*\])/m;
 const SHARED_STORE_HINT = /(redis|upstash|@vercel\/kv|\bkv\.|memcach|dynamo|durable ?object|cloudflare|\.rpc\(|supabase|prisma|\bsql`|\bpool\.query|\bdb\.query)/i;
 
 // Comments and the inside of `//`-style URLs are prose, not behaviour. Line comments are stripped
