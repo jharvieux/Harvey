@@ -10,12 +10,18 @@ import {
   classifyColumn,
   classifyMigrationSql,
   classifyPrismaSchema,
+  classifySampledValues,
   classifyWithFallback,
   createAnthropicSemanticClassifier,
   dataMapToFindings,
   DEFAULT_SEMANTIC_MODEL,
   gatherProtectionFacts,
   resolveSemanticClassifier,
+  resolveValueSampling,
+  runValueSampling,
+  valueSample,
+  valueSampleCandidates,
+  valueSamplingToFindings,
 } from "./pii-classify.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -1056,5 +1062,183 @@ describe("pii-classify --schema CLI — multiple targets (#770)", () => {
     expect(() =>
       execFileSync("node_modules/.bin/tsx", [CLI, "--schema", "/does/not/exist.sql"], { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
     ).toThrow();
+  });
+});
+
+// #893 — the value-sampling (content-reading) tier. The name/type dictionary is structurally blind
+// to a generically-named column whose VALUES hold regulated data; value-sampling reads a bounded,
+// LOCAL sample and classifies by content. Gated (opt-in flag + live tier), off by default, and
+// never persists a raw value — the properties proven below.
+describe("classifySampledValues — content detectors over real values (#893)", () => {
+  it("classifies emails, SSNs, credit cards (Luhn-valid), phones, and IPs by content, with per-infotype match counts", () => {
+    const { scanned, hits } = classifySampledValues([
+      "please contact alice@example.com about this",
+      "ref 123-45-6789 on file",
+      "card 4242 4242 4242 4242 charged",
+      "call 415-555-1234",
+      "seen from 192.168.1.10",
+      null, // nulls are skipped, not scanned
+    ]);
+    expect(scanned).toBe(5);
+    const byType = Object.fromEntries(hits.map((h) => [h.infotype, h]));
+    expect(byType.EMAIL).toMatchObject({ category: "PII", matches: 1 });
+    expect(byType.US_SSN).toMatchObject({ category: "SENSITIVE_PII", matches: 1 });
+    expect(byType.CREDIT_CARD).toMatchObject({ category: "PCI", matches: 1 });
+    expect(byType.PHONE).toMatchObject({ category: "PII", matches: 1 });
+    expect(byType.IP).toMatchObject({ category: "PII", matches: 1 });
+  });
+
+  it("stays quiet on genuinely non-PII content — product copy, slugs, and non-Luhn digit runs", () => {
+    const { hits } = classifySampledValues([
+      "The ACME Widget ships in three colors and two sizes.",
+      "order-2026-000123",
+      "1234567890123456", // 16 digits but NOT Luhn-valid → not a card
+      "status: shipped",
+    ]);
+    expect(hits).toEqual([]);
+  });
+
+  it("catches PII embedded inside a long free-text value (the notes/description case)", () => {
+    const { hits } = classifySampledValues([
+      "Customer called in a panic; after verifying identity they gave their SSN 987-65-4320 and a callback number.",
+    ]);
+    expect(hits.map((h) => h.infotype)).toContain("US_SSN");
+  });
+});
+
+describe("valueSampleCandidates — samples the name-blind columns, not the ones already asserted (#893)", () => {
+  const columns = [
+    { table_name: "users", column_name: "email", data_type: "text" }, // dictionary asserts EMAIL → NOT a candidate
+    { table_name: "users", column_name: "cvv", data_type: "text" }, // asserts CVV → NOT a candidate
+    { table_name: "tickets", column_name: "notes", data_type: "text" }, // FREE_TEXT_REVIEW (low) → candidate
+    { table_name: "events", column_name: "data", data_type: "jsonb" }, // name NONE, json type → candidate
+    { table_name: "events", column_name: "internal_ref", data_type: "text" }, // name NONE, text → candidate
+    { table_name: "events", column_name: "created_at", data_type: "timestamp" }, // non-sampleable type → NOT a candidate
+    { table_name: "events", column_name: "row_count", data_type: "integer" }, // non-sampleable type → NOT a candidate
+  ];
+
+  it("selects only free-text/json columns the name/type classifier missed or only review-flagged", () => {
+    const picked = valueSampleCandidates(columns).map((c) => `${c.table_name}.${c.column_name}`);
+    expect(picked.sort()).toEqual(["events.data", "events.internal_ref", "tickets.notes"]);
+  });
+});
+
+describe("valueSample — finds name-hidden PII and redacts the raw values (#893)", () => {
+  // A deterministic in-process sampler stands in for the live read-only LIMIT query, so the fixture
+  // needs no database (mirrors the injected-sql / injected-fetch pattern the rest of this file uses).
+  const HIDDEN_EMAIL = "alice@example.com";
+  const HIDDEN_SSN = "123-45-6789";
+  const columns = [
+    { table_name: "tickets", column_name: "notes", data_type: "text" }, // name → FREE_TEXT_REVIEW; values hold PII
+    { table_name: "products", column_name: "description", data_type: "text" }, // genuinely non-PII column
+    { table_name: "users", column_name: "email", data_type: "text" }, // already asserted → never sampled
+  ];
+  const values: Record<string, string[]> = {
+    "tickets.notes": [`reach the customer at ${HIDDEN_EMAIL}`, `their SSN ${HIDDEN_SSN} is on file`, "no PII here"],
+    "products.description": ["A durable stainless-steel water bottle.", "Ships in 2 business days."],
+    "users.email": ["should-never-be-read@example.com"],
+  };
+  const sampleFn = vi.fn(async (table: string, column: string) => values[`${table}.${column}`] ?? []);
+
+  it("fires on a column whose NAME misses PII but whose VALUES contain it, and stays quiet on a non-PII column", async () => {
+    const out = await valueSample(columns, sampleFn);
+    // email column was never sampled (dictionary already classifies it)
+    expect(sampleFn).not.toHaveBeenCalledWith("users", "email", expect.anything());
+    // products.description matched nothing → not a result; tickets.notes matched EMAIL + SSN
+    expect(out.results.map((r) => `${r.table}.${r.column}`)).toEqual(["tickets.notes"]);
+    const notes = out.results[0]!;
+    expect(notes.scanned).toBe(3);
+    expect(notes.hits.map((h) => h.infotype).sort()).toEqual(["EMAIL", "US_SSN"]);
+    expect(notes.nameInfotype).toBe("FREE_TEXT_REVIEW"); // name-vs-value divergence is recorded
+  });
+
+  it("never lets a raw sampled value into the result structure — only classifications and counts", async () => {
+    const out = await valueSample(columns, sampleFn);
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain(HIDDEN_EMAIL);
+    expect(serialized).not.toContain(HIDDEN_SSN);
+    expect(serialized).not.toContain("water bottle");
+  });
+
+  it("counts and skips a column whose sample read throws, never aborting the whole pass", async () => {
+    const throwing = vi.fn(async (table: string, column: string) => {
+      if (column === "notes") throw new Error("permission denied");
+      return values[`${table}.${column}`] ?? [];
+    });
+    const out = await valueSample(columns, throwing);
+    expect(out.errorCount).toBe(1);
+    expect(out.results).toEqual([]); // description is the only other candidate and it has no PII
+  });
+});
+
+describe("runValueSampling / resolveValueSampling — the opt-in gate, off by default (#893)", () => {
+  it("reads ZERO values when the gate is closed — a null config never calls the sampler", async () => {
+    const sampleFn = vi.fn(async () => ["alice@example.com"]);
+    const out = await runValueSampling([{ table_name: "t", column_name: "notes", data_type: "text" }], sampleFn, null);
+    expect(out).toBeNull();
+    expect(sampleFn).not.toHaveBeenCalled();
+  });
+
+  it("samples when a config is present", async () => {
+    const sampleFn = vi.fn(async () => ["alice@example.com"]);
+    const out = await runValueSampling([{ table_name: "t", column_name: "notes", data_type: "text" }], sampleFn, { rowCap: 5 });
+    expect(sampleFn).toHaveBeenCalledWith("t", "notes", 5);
+    expect(out?.results[0]?.hits.map((h) => h.infotype)).toEqual(["EMAIL"]);
+  });
+
+  it("returns null without the --value-sampling flag — opt-in only", () => {
+    expect(resolveValueSampling({ argv: ["node", "pii-classify.mjs"], env: {} })).toBeNull();
+  });
+
+  it("returns a config with the --value-sampling flag, honoring the row-cap override (flag over env, clamped)", () => {
+    expect(resolveValueSampling({ argv: ["node", "pii-classify.mjs", "--value-sampling"], env: {} })).toEqual({ rowCap: 20, minMatches: 1 });
+    expect(resolveValueSampling({ argv: ["node", "pii-classify.mjs", "--value-sampling", "--value-sample-rows", "50"], env: { PII_VALUE_SAMPLE_ROWS: "5" } })).toMatchObject({ rowCap: 50 });
+    expect(resolveValueSampling({ argv: ["node", "pii-classify.mjs", "--value-sampling"], env: { PII_VALUE_SAMPLE_ROWS: "7" } })).toMatchObject({ rowCap: 7 });
+    expect(resolveValueSampling({ argv: ["node", "pii-classify.mjs", "--value-sampling", "--value-sample-rows", "99999"], env: {} })).toMatchObject({ rowCap: 1000 });
+  });
+});
+
+describe("valueSamplingToFindings — report-schema findings with disagreement + redaction (#893)", () => {
+  it("emits an M10-VS-00 disclosure and one valid finding per name-hidden column, naming the name-vs-value disagreement, without any raw value", async () => {
+    const sampling = await valueSample(
+      [
+        { table_name: "tickets", column_name: "notes", data_type: "text" },
+        { table_name: "audit", column_name: "age", data_type: "text" }, // name → AGE (low); values are actually SSNs
+      ],
+      async (table, column) => {
+        if (table === "tickets" && column === "notes") return ["ping alice@example.com", "SSN 123-45-6789"];
+        if (table === "audit" && column === "age") return ["987-65-4320", "111-22-3333"];
+        return [];
+      },
+    );
+    const findings = valueSamplingToFindings(sampling);
+    expect(validateFindings({ meta: FINDINGS_META, findings })).toEqual({ ok: true, errors: [] });
+
+    const disclosure = findings.find((f) => f.id === "M10-VS-00")!;
+    expect(disclosure.confidence).toBe("N/A");
+    expect(disclosure.evidence).toMatch(/NOT sent anywhere, persisted, or logged/);
+
+    const audit = findings.find((f) => f.location === "audit.age")!;
+    expect(audit.title).toMatch(/contains US_SSN by content/);
+    expect(audit.evidence).toMatch(/Name vs\. values DISAGREE/);
+    expect(audit.confidence).toBe("Review");
+    expect(audit.precisionTier).toBe("review");
+
+    // the redaction guarantee holds all the way to the assembled findings
+    const serialized = JSON.stringify(findings);
+    expect(serialized).not.toContain("alice@example.com");
+    expect(serialized).not.toContain("123-45-6789");
+    expect(serialized).not.toContain("987-65-4320");
+  });
+
+  it("emits only the disclosure row (never a phantom finding) on a zero-hit run", async () => {
+    const sampling = await valueSample([{ table_name: "products", column_name: "description", data_type: "text" }], async () => ["a nice product"]);
+    const findings = valueSamplingToFindings(sampling);
+    expect(findings.map((f) => f.id)).toEqual(["M10-VS-00"]);
+    expect(findings[0]?.impact).toMatch(/No candidate column's sampled values matched/);
+  });
+
+  it("returns nothing when value-sampling did not run (null) — schema tier stays byte-identical", () => {
+    expect(valueSamplingToFindings(null)).toEqual([]);
   });
 });

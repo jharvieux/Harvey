@@ -1,0 +1,84 @@
+# CI-wiring remainder of #1072 (item 5): the #1033 recorded-reasons gate's STRUCTURAL half already
+# runs under `pnpm verify` (src/recorded-reasons.test.ts, every PR). What it does NOT check on any
+# cadence is DECAY: `--revalidate` actually RUNS each empirical falsifier, and an exit 0 means the
+# blocker the reason describes is gone while the prose still asserts it (a STALE row) — see
+# docs/design/recorded-reasons.md. Before this workflow, that pass ran on demand only, so a reason
+# could go stale indefinitely between the (rare) sessions that happened to pass `--revalidate` by
+# hand — the exact self-sealing shape CLAUDE.md's "recorded reasons decay" doctrine warns about.
+#
+# This job runs the OFFLINE half only: no `--live`/`--tier`, so every falsifier tagged
+# FALSIFIER-TIER (m2-stack, lighthouse, secbench, supabase-labs, #1167) is SKIPPED-LIVE — disclosed
+# in the log, not silently dropped — and every other empirical falsifier actually executes. As of
+# this writing every non-tier-gated falsifier is a local, offline command (grep/test/ls/node/tsx
+# against files already in this checkout) — no mechanical scanner binaries required — so this needs
+# nothing beyond `pnpm install`, unlike dry-run-drift.yml/conservation.yml.
+#
+# The four live tiers are NOT exercised anywhere in CI. Every FALSIFIER-TIER command in the repo
+# today targets a placeholder outside this checkout (a live crAPI gateway, a served target URL, an
+# external superredhat/vandyand clone, a paired supabase-security-labs variant) that no CI job
+# stands up — wiring that is future work, not silently claimed here. Run those by hand where the
+# tier exists: `pnpm validate-reasons --revalidate --tier <name>` (or `--live` for all four).
+#
+# Scheduled rather than per-PR: a falsifier goes stale on ANY commit that removes the blocker it
+# describes, not only on edits to the reason's own file, so a path-filtered pull_request trigger
+# would miss most of what this exists to catch (the same reasoning dry-run-drift.yml gives for why
+# IT has no path filter — except this job is not a required check, so a plain schedule is enough).
+
+name: reasons-drift
+
+on:
+  schedule:
+    - cron: "0 8 * * *" # Daily 08:00 UTC — after dry-run-drift (Mon 07:00) and conservation (07:30)
+  workflow_dispatch:
+
+concurrency:
+  group: reasons-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  reasons-drift:
+    name: recorded-reasons offline re-validation (#1072)
+    runs-on: ubuntu-latest
+    # issues: write so a scheduled failure can find-or-update its tracking issue, mirroring
+    # corpus-drift.yml/conservation.yml/ci.yml's heavy-cli job (#1138/#1142).
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - id: check
+        name: Re-validate every recorded reason (structural + offline falsifiers)
+        run: pnpm validate-reasons --revalidate 2>&1 | tee reasons-drift.log
+
+      # Scheduled runs go red on a branch nobody watches (#1128/#1138's precedent, applied here as
+      # in corpus-drift.yml/conservation.yml). On a scheduled failure, find-or-update ONE tracking
+      # issue by the marker label: comment on the open one if it exists, otherwise create it. Never
+      # fires on workflow_dispatch — a manual run's failure is already visible to whoever ran it.
+      - name: Open or update the reasons-drift tracking issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MARKER: ci-reasons-alert
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create "$MARKER" --color B60205 \
+            --description "Auto-opened when the scheduled reasons-drift CI run fails" 2>/dev/null || true
+          body="The scheduled \`reasons-drift\` run failed (run: $RUN_URL). Either a reason block is malformed or an empirical falsifier now exits 0 (STALE — the blocker it describes is gone, but the recorded reason still asserts it, per CLAUDE.md's recorded-reasons-decay doctrine). See the job log for which row. Re-read the claim, correct or retire it, and close this issue once green."
+          existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "reasons-drift scheduled run failing" --label "$MARKER" --body "$body"
+          fi

@@ -105,10 +105,29 @@ export default function ResponsibleDisclosure() {
                 courtesy in reverse. A dedicated security contact address is being finalized; until it is published
                 here, use the contact route on the site and mark it &quot;security.&quot;
               </p>
+              <p>
+                <b>Scope.</b> In scope: the <code>harvey-qa.com</code> marketing/scan-request site and Harvey&apos;s
+                publicly available scanning tooling. Out of scope: any client&apos;s codebase, infrastructure, or data
+                that Harvey has accessed as part of an engagement — that belongs to the client, and a report about it
+                should go to the client directly, not to us. Also out of scope: automated volume scanning that degrades
+                the site for other visitors, and any form of social engineering against our operator.
+              </p>
+              <p>
+                <b>Safe harbor.</b> We will not pursue legal action against a good-faith researcher who stays within
+                this scope, avoids privacy violations, data destruction, and service disruption, and reports what they
+                find privately before any public disclosure. We ask for the same coordinated-disclosure courtesy
+                described above in return.
+              </p>
+              <p>
+                <b>Response time.</b> Our target is to acknowledge a report within <b>5 business days</b>. We are a
+                small operation, so this is a target, not a guaranteed SLA, and it is one of the items awaiting
+                operator confirmation below.
+              </p>
               <div className="notice">
                 <b>Operator / legal review pending.</b> This policy describes how Harvey intends to operate and reflects
                 standard coordinated-disclosure practice. It is not a contract and has not been reviewed by counsel. The
-                security contact address and the final disclosure window are subject to confirmation before launch.
+                security contact address, the acknowledgment-time target, and the final disclosure window are subject
+                to confirmation before launch.
               </div>
             </div>
 
