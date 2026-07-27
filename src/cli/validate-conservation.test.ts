@@ -113,8 +113,9 @@ describe.skipIf(!CONSERVATION_E2E_REQUESTED || !MECHANICAL_BINARIES_PRESENT || !
     // either way — the produced/delivered split is what's asserted, not the delivered count.
     expect(output).toMatch(/GONE\s+M7\s+produced=0\s+delivered=0/);
     // The other direction, in the same run: a gate that fails on everything proves nothing, so the
-    // eight unseeded plants must all have travelled probe → deliverable intact.
-    for (const module of ["M1", "M3", "M4", "M5", "M6", "M8", "M9", "M10"]) {
+    // nine unseeded plants must all have travelled probe → deliverable intact (M2's offline plant,
+    // the injected #416 dynamic-pass artifact, included since #1155).
+    for (const module of ["M1", "M2", "M3", "M4", "M5", "M6", "M8", "M9", "M10"]) {
       expect(output).toMatch(new RegExp(`PASS\\s+${module}\\s+produced=[1-9]`));
     }
     expect(output).not.toContain("GATE FAIL — M1");

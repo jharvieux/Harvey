@@ -28,6 +28,8 @@
 
 import { AUDIT_MODULES, type AuditModule, type ModuleCoverage, type ModuleStatus } from "./audit-coverage.js";
 import type { Finding } from "./findings.js";
+import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
+import { mechanicalFinding } from "./scan/common.js";
 
 // A defect planted in the fixture, and the signature that identifies its finding. Anchored on
 // taxonomy AND location so the row names an actual planted bug: a taxonomy-only match would be
@@ -46,6 +48,15 @@ interface ModulePlant {
 // nobody has watched fire is a claim, not a control.
 export const CALIBRATION_PLANTS: ModulePlant[] = [
   { module: "M1", plant: "an RLS SELECT policy with a USING (true) tautology on public.documents", taxonomy: "M1 — Multi-tenant security", location: "documents_select_all" },
+  // M2 has no offline DETECTOR — its findings enter every real engagement through ONE seam: a live
+  // pen-test writes a dynamic-pass artifact (#416/#448) and run-audit's m2 probe reads it via
+  // findFreshPass. That artifact-CONSUMPTION seam is offline and is exactly where #1042 silently
+  // dropped six modules' recorded passes. So M2's "plant" is a fresh dynamic-pass artifact the gate
+  // injects (writeM2ConservationPlant) — asserting its finding is produced by the m2 probe AND
+  // delivered spans that consume→assemble seam. What this does NOT cover is the LIVE pentest→artifact
+  // seam (verify verdicts → findings → M2.pass.json): that needs a stood-up two-tenant stack, so it
+  // stays live-only (docs/runbooks/m2-pentest-ops.md) and was traced by hand under #1155.
+  { module: "M2", plant: "a recorded M2 dynamic-pass artifact carrying an authenticated cross-tenant BOLA finding, consumed by the m2 probe via the #416/#1042 pass-artifact seam", taxonomy: "M2 — App-route / cross-tenant (BOLA)", location: "/api/teams/harvey-seed-b/documents" },
   // M3's signal is git-derived, so its "plant" is the fixture's own authorship history rather than
   // anything written into a file — the only shape a hotspot ranking can be planted in.
   // It asserts M3's FULL tier: knowledge-risk (truck-factor) comes from the `vitals` plugin, and the
@@ -73,18 +84,45 @@ export const CALIBRATION_PLANTS: ModulePlant[] = [
   { module: "M10", plant: "a table of regulated columns (public.profiles) in the migration schema", taxonomy: "M10 — Data classification (PII/PHI/PCI)", location: "profiles" },
 ];
 
-// REASON: M2 cannot be plant-and-asserted offline — its probes drive a stood-up two-tenant Supabase stack over HTTP, which this gate does not and must not provision, so targets/calibration carries no M2 plant to assert
-// KIND: empirical
-// PROVENANCE: MEASURED 2026-07-26 (ran the gate on targets/calibration: M2's probe reports requires-live-run with 0 findings while all nine other modules produced and delivered their plant)
-// FALSIFIER: pnpm exec tsx src/cli/validate-conservation.ts --require M2
-// TOUCHES: src/audit-runners.ts src/cli/pentest.ts
-export const UNEXERCISED: { module: AuditModule; reason: string }[] = [
-  {
-    module: "M2",
-    reason:
-      "M2 probes a running two-tenant stack (pnpm exec tsx src/cli/pentest.ts against a stood-up local Supabase, docs/runbooks/m2-pentest-ops.md). This gate is offline, so there is no M2 plant in targets/calibration to assert. Falsifier: `pnpm exec tsx src/cli/validate-conservation.ts --require M2` — it exits 0 the day M2 delivers findings from this fixture.",
-  },
-];
+// #1155 falsified M2's UNEXERCISED reason: the recorded blocker claimed M2 "cannot be plant-and-
+// asserted offline" because its probes drive a live stack. True of the LIVE pentest→artifact seam —
+// but the seam through which M2 findings actually reach the deliverable in the orchestrator (the
+// #416 dynamic-pass artifact → findFreshPass → assembled document) IS offline, and is now planted
+// above. So M2 moves to CALIBRATION_PLANTS and this list is empty, mirroring UNTYPED_PROBES. It is
+// kept as the landing slot for a future module that genuinely has no offline seam, which must arrive
+// with a tagged reason + a `--require` falsifier rather than silently rejoining the exercised set.
+export const UNEXERCISED: { module: AuditModule; reason: string }[] = [];
+
+// The M2 plant's finding — a stand-in for the authenticated cross-tenant BOLA (#787) a live pen-test
+// would record. Anchored on the taxonomy + a team-scoped route location the CALIBRATION_PLANTS M2
+// row matches. `target` threads the audited dir into the location so the pass artifact's finding is
+// self-consistent with the target findFreshPass checks it against.
+function m2ConservationPlantFinding(target: string): Finding {
+  return mechanicalFinding({
+    id: "M2-APP-XTENANT-BOLA",
+    title: "Authenticated cross-tenant BOLA on a team-scoped app route",
+    severity: "High",
+    confidence: "Confirmed",
+    category: "Dynamic pen-test (M2)",
+    taxonomy: "M2 — App-route / cross-tenant (BOLA)",
+    location: `${target}/api/teams/harvey-seed-b/documents`,
+    evidence: "Conservation plant: a recorded M2 dynamic-pass artifact in which team A's authenticated session read team B's documents (status 200) — the #787 cross-tenant BOLA shape. Injected so the offline gate spans the #416 pass-artifact consumption seam (#1042/#1155).",
+    impact: "Stand-in for a real M2 dynamic finding; its presence in the assembled deliverable proves the m2 probe's dynamic-pass-artifact consumption reaches the document.",
+    fix: "N/A — conservation plant.",
+    precisionTier: "high",
+  });
+}
+
+// Write the M2 dynamic-pass plant a live pen-test would have written, so run-audit's m2 probe derives
+// `ran` from it and folds its finding into the deliverable — the offline half of the M2 delivery path.
+// generatedAt is passed in (the gate's clock) so it is fresh against findFreshPass's freshness window.
+export function writeM2ConservationPlant(artifactsDir: string, target: string, generatedAt: string): void {
+  writePassArtifact(artifactsDir, buildPassArtifact({
+    module: "M2", target, pass: "dynamic", generatedAt,
+    summary: "conservation plant — recorded M2 dynamic pass (#1155)",
+    findings: [m2ConservationPlantFinding(target)],
+  }));
+}
 
 // A module in NEITHER list would be silently outside the gate — the omission this whole file
 // exists to make impossible. Checked at module load so the failure arrives before any run does.
