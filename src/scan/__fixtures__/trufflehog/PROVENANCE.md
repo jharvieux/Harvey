@@ -49,6 +49,7 @@ REASON: A TruffleHog `Verified: true` record cannot be captured offline — veri
 KIND: empirical
 PROVENANCE: MEASURED 2026-07-26
 FALSIFIER: test -f src/scan/__fixtures__/trufflehog/trufflehog-3.96.0-git-verified.json
+TOUCHES: src/scan/secrets.ts src/scan/__fixtures__/trufflehog
 
 The falsifier exits 0 once a real live-verified capture is committed at that path (captured against a
 revocable provider token with network up), which is the concrete point at which the offline-impossibility

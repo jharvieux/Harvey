@@ -11,7 +11,27 @@
 # in the log, not silently dropped — and every other empirical falsifier actually executes. As of
 # this writing every non-tier-gated falsifier is a local, offline command (grep/test/ls/node/tsx
 # against files already in this checkout) — no mechanical scanner binaries required — so this needs
-# nothing beyond `pnpm install`, unlike dry-run-drift.yml/conservation.yml.
+# nothing beyond `pnpm install` and the runner's preinstalled `gh`, unlike
+# dry-run-drift.yml/conservation.yml.
+#
+# `--issues` is on this cadence too (#1246): `collectReasons` reads FILES, so a blocker recorded in a
+# GitHub issue body or comment is gated by nothing at all — and #1254 found one (on #1163) that the
+# code had already falsified on the day it was posted, with nothing anywhere able to say so.
+# `--issues` folds the open issues' bodies/comments in as extra surfaces for the structural half.
+# Two properties this step must keep:
+#
+#   • Their FALSIFIERs are NOT executed, and adding `--issues` to a `--revalidate` run does not
+#     change that — the CLI filters issue-recorded reasons out of the re-validation pass and reports
+#     each as `ℹ NOT RE-TESTED` instead. An issue body is input anyone with comment access can write;
+#     running its commands on a schedule with the repo checked out would be a remote-execution
+#     surface. The remedy the row names is to MIRROR the block into the file it constrains, which
+#     puts it under `--revalidate` on this same job.
+#   • It fails loud when `gh` cannot read (the fourth negative control below plants exactly that).
+#     Reporting "0 issue-recorded claims" from a fetch that never worked is the silent pass this
+#     whole family exists to prevent.
+#
+# No new permission is needed for it: the job already holds `issues: write` for its tracking issue,
+# which subsumes the read `gh issue list` does. It does need GH_TOKEN in the step env.
 #
 # The four live tiers are NOT exercised anywhere in CI: every FALSIFIER-TIER command targets
 # something no CI job stands up (a live crAPI gateway, a served target URL, an external
@@ -31,9 +51,15 @@
 #
 # THE NEGATIVE CONTROLS ARE PART OF THE JOB (conservation.yml's posture, #1065's lesson): the check
 # step above passes on a repo where every reason is sound, which is also what a gate that can no
-# longer fire looks like. The three control steps plant reasons that MUST be rejected — a stale one,
-# a malformed one, and an unbound live-tier placeholder — so a green run means "passed AND can still
-# fail". They run on the planted fixture only; the repo's own reasons are untouched.
+# longer fire looks like. Four control steps plant a condition that MUST be rejected — a stale
+# reason, a malformed one, an unbound live-tier placeholder, and an `--issues` fetch with no usable
+# credential — so a green run means "passed AND can still fail". The first three run on the planted
+# fixture only and DELIBERATELY omit `--issues`: pointed at the real issue tracker, any unrelated
+# malformed issue block would make all three exit non-zero for the wrong reason and they would pass
+# vacuously. For the same reason nothing here may make a reason field mandatory that the planted
+# fixtures do not carry (`TOUCHES:` is the live example — see docs/design/recorded-reasons.md);
+# doing so turns all three green-by-accident while proving nothing. The repo's own reasons are
+# untouched by every control.
 
 name: reasons-drift
 
@@ -69,8 +95,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - id: check
-        name: Re-validate every recorded reason (structural + offline falsifiers)
-        run: pnpm validate-reasons --revalidate 2>&1 | tee reasons-drift.log
+        name: Re-validate every recorded reason, in the repo and in open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm validate-reasons --revalidate --issues 2>&1 | tee reasons-drift.log
 
       - name: Plant the negative-control corpus
         env:
@@ -124,6 +152,26 @@ jobs:
             exit 1
           fi
 
+      # The other three controls plant a bad reason; this one plants a broken SURFACE. A fetch that
+      # returns nothing is indistinguishable in the output from a tracker with no recorded blockers,
+      # so the failure has to be asserted, not assumed. Checking the message too — the other three
+      # accept any non-zero exit, which is a weaker control (#1253 item 2).
+      - name: Negative control — an --issues fetch with no usable credential must FAIL, not report zero
+        env:
+          GH_TOKEN: not-a-real-token
+        run: |
+          set -uo pipefail
+          if out=$(pnpm validate-reasons --issues 2>&1); then
+            printf '%s\n' "$out"
+            echo "::error::--issues accepted an unusable gh credential and reported an issue-recorded claim count anyway. A fetch that quietly returns nothing reads exactly like a tracker with no recorded blockers, so the PASS above proves nothing (#1065/#1246)."
+            exit 1
+          fi
+          printf '%s\n' "$out"
+          if ! printf '%s\n' "$out" | grep -qF 'gh issue list'; then
+            echo "::error::--issues exited non-zero, but not for the unauthenticated-gh reason this control plants. A control that passes on any failure is not a control."
+            exit 1
+          fi
+
       # Scheduled runs go red on a branch nobody watches (#1128/#1138's precedent, applied here as
       # in corpus-drift.yml/conservation.yml). On a scheduled failure, find-or-update ONE tracking
       # issue by the marker label: comment on the open one if it exists, otherwise create it. Never
@@ -138,7 +186,7 @@ jobs:
           set -euo pipefail
           gh label create "$MARKER" --color B60205 \
             --description "Auto-opened when the scheduled reasons-drift CI run fails" 2>/dev/null || true
-          body="The scheduled \`reasons-drift\` run failed (run: $RUN_URL). Either a reason block is malformed, an empirical falsifier now exits 0 (STALE — the blocker it describes is gone, but the recorded reason still asserts it, per CLAUDE.md's recorded-reasons-decay doctrine), or a negative control stopped failing (the gate itself broke — fix that before trusting the pass). See the job log for which step and which row. Re-read the claim, correct or retire it, and close this issue once green."
+          body="The scheduled \`reasons-drift\` run failed (run: $RUN_URL). Either a reason block is malformed — **in the repo OR in an open issue's body/comment, which \`--issues\` now folds in (#1246); the log names the row as \`issue #N\`** — or an empirical falsifier now exits 0 (STALE — the blocker it describes is gone, but the recorded reason still asserts it, per CLAUDE.md's recorded-reasons-decay doctrine), or \`gh issue list\` could not read the tracker (the issue surface went ungated; fix the credential, do not drop the flag), or a negative control stopped failing (the gate itself broke — fix that before trusting the pass). See the job log for which step and which row. Re-read the claim, correct or retire it, and close this issue once green."
           existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
