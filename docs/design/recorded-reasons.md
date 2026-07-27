@@ -84,6 +84,62 @@ this is what it did; ASSUMED means inferred, never tested.
 shape is `grep -q <the thing that must not exist>`. A reason with no falsifier is unfalsifiable and
 therefore permanent, which is exactly what made the four wrong claims survive.
 
+### A budget limit must not borrow impossibility's vocabulary (#1319)
+
+Four claims recorded in this repo asserted that the *world* forecloses something while describing the
+author's remaining afternoon:
+
+| claim | falsified |
+|---|---|
+| #951 — "a full pull is out of budget" | the next executor pulled the whole stack and shipped a merged live proof **26 minutes** later, and the capture found a real bug the guess would have missed |
+| #957 — "genuinely out of reach for a mechanical assembly" | landed **3h25m** later: 98 lines, no new dependency, no API key |
+| #52 — "correctly NOT mechanically detectable" | detectors now exist for all three named classes |
+| #873 — "our mechanical tier structurally cannot see that shape" | `buildImportGraph` had shipped a week earlier and M9 already used it |
+
+A budget claim invites the next person to just do it. An impossibility claim closes the file — and
+closes it *silently*, because by construction nobody exercises a path recorded as foreclosed.
+
+`PROVENANCE:` already records whether anyone went and looked, so this is checkable rather than
+exhortation: **impossibility vocabulary in a `REASON:` whose provenance is `ASSUMED` is a structural
+error**, of either kind. Three honest exits, all one line — go look and re-tag it `MEASURED`/`TRIED`;
+name the real constraint (*"not attempted this round; the pull is ~20s, the stand-up is documented in
+X"*); or ask it as a question (*"does the token store expose non-owner reads?"*), which invites the
+next person to test it where an assertion ends the file. The vocabulary is the same list the
+untriaged-claim census uses, so the two cannot drift apart; it is matched literally, including inside
+a denial (*"not technically impossible"*), because re-tagging a denial as `MEASURED` is cheaper than
+teaching a regex to read sentences.
+
+**What stays prose.** The rule also applies to PR bodies and issue comments, which this gate cannot
+reach — `collectSources` reads files, and `--issues` fetches issue text but nothing renders a PR
+description. That half is doctrine, not a check, and is recorded here so the next reader does not
+mistake it for an oversight. #1318 (Gate 6) is where a wider claim ratchet would live.
+
+### A supervised path produces a relay, not a silent close (#1319)
+
+**No executor has ever recorded "asked the operator, was refused."** Grants, meanwhile, are routine
+and on the record — #1141 carries a verbatim *"Workflow changed approved"*, #1205 promoted a check to
+required, #1216 moved a watch into CI. Yet "that path is supervised" silently terminated acceptance
+criteria in #945 (*"the gate runs in CI"* — unmet, unmentioned), #1056, #472 and #381.
+
+Supervision is not a fact a command can re-test; it is a question awaiting a human. So a `REASON:`
+that **cites a supervised path as its blocker** must be `decisional`, and its `DECISION:` must name
+the venue where the operator was actually asked — an issue ref or a decision-record path. A
+`DECISION:` with neither is a relay with no venue, which is the silent close wearing a field name.
+
+Both halves must match before the rule fires: the claim names a supervised path (`.github/workflows`,
+`CLAUDE.md`, `report-template/findings.*`, `docs/**/*.md` — mirroring CLAUDE.md's *Sensitive paths*
+list, which is the authority) **and** cites supervision as the reason. A claim that merely *mentions*
+`.github/workflows/ci.yml` is describing CI, which is what both reasons at the head of
+`src/cli/validate-conservation.test.ts` legitimately do.
+
+`package.json` and `pnpm-lock.yaml` are deliberately **absent** from that list — operator ruling
+2026-07-27, after a folk belief that they were supervised was found blocking five separate pieces of
+work. Adding a dependency is an ordinary change.
+
+The rest of the doctrine — that a supervised-path blocker is a `relayed` disposition on the issue
+rather than a closed criterion — is enforced by Gate 1 (#1315), not here. This gate only reaches the
+reason registry.
+
 **FALSIFIER-TIER — for a falsifier that can only run against a live environment (#1072).** Some
 empirical blockers are only re-testable on a tier that is not present on a normal offline run: a
 two-tenant M2 stack, a Lighthouse/CWV pass, a SecBench run, the paired Supabase security labs.
@@ -142,6 +198,14 @@ green job whose own controls no longer prove anything is precisely the false gre
 exists to kill. The rule generalises past `TOUCHES:`: **no new mandatory field may be added to a
 reason block without first adding it to those three planted heredocs.**
 
+**Open weakening, recorded rather than left silent (#1319).** The second planted heredoc reads
+`REASON: planted claim with no way to re-test it` / `PROVENANCE: ASSUMED 2026-07-27`, which now trips
+the impossibility-register rule as well as the missing-`FALSIFIER:` rule it was planted for. That
+control asserts only a non-zero exit, so it still fails — but it no longer *isolates* the rule it
+names. `.github/workflows/` is supervised, so the one-word fix (`no way to re-test it` → `nothing
+here re-tests it`) needs an operator pass; until then the isolation is asserted by
+`src/cli/validate-reasons.test.ts`'s own planted corpus instead.
+
 Instead the paths are **derived from the falsifier the author already wrote** (#1246): a token in the
 `FALSIFIER:` naming a path that exists in this checkout is a subsystem the claim depends on.
 Existence is the entire filter, which is why an unbound `<placeholder>`, a `/tmp` scratch file and a
@@ -171,9 +235,13 @@ pnpm validate-reasons --root <dir> --list
 ```
 
 - **Structural pass** — every block declares its kind, carries a dated provenance tag, and (if
-  empirical) a falsifier that is a command rather than a placeholder. Enforced under `pnpm verify` by
-  `src/recorded-reasons.test.ts`, which also asserts the repo carries reasons of **both** kinds so the
-  gate cannot pass on an empty set (the `requires-live-run: 0` failure of #345).
+  empirical) a falsifier that is a command rather than a placeholder; since #1319 it also refuses
+  impossibility vocabulary over an `ASSUMED` provenance, and refuses a supervised-path blocker
+  recorded as anything but a decisional reason with a named relay venue. Enforced under `pnpm verify`
+  by `src/recorded-reasons.test.ts`, which also asserts the repo carries reasons of **both** kinds so
+  the gate cannot pass on an empty set (the `requires-live-run: 0` failure of #345). Each #1319 rule
+  additionally has a **child-process negative control** in `src/cli/validate-reasons.test.ts` — a
+  planted violation must take the real CLI to a non-zero exit, or the rule is unit-tested prose.
 - **`--revalidate`** — runs each empirical falsifier. Exit 0 is a **STALE** row and a non-zero gate
   exit: the blocker is gone and the text still asserts it. A falsifier that cannot run (exit 127, a
   signal, a timeout) is **UNVERIFIABLE**, also failing — otherwise a mistyped command's non-zero exit

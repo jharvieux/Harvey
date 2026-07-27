@@ -131,6 +131,59 @@ describe("validateRecordedReason — the empirical/decisional split is structura
   });
 });
 
+// #1319 — the four falsified claims (#951, #957, #52, #873) were all impossibility assertions over
+// an untested basis. PROVENANCE already records whether anyone looked, so the rule is checkable.
+describe("a budget limit must not borrow impossibility's vocabulary (#1319)", () => {
+  const IMPOSSIBLE = "REASON: a full pull of the stack is out of reach for this pass";
+  const ASSUMED = "PROVENANCE: ASSUMED 2026-07-27";
+
+  it("REFUSES impossibility vocabulary on a reason nobody tested", () => {
+    const errors = validateRecordedReason(one([IMPOSSIBLE, EMPIRICAL_KIND, ASSUMED, FALSIFIER])).join();
+    expect(errors).toContain('says "out of reach" on an ASSUMED provenance');
+    expect(errors).toContain("ask it as a question");
+  });
+
+  it("catches it on a decisional reason too — the register is the defect, not the kind", () => {
+    expect(validateRecordedReason(one([IMPOSSIBLE, DECISIONAL_KIND, ASSUMED, OWNER, DECISION])).join()).toContain("#1319");
+  });
+
+  it("accepts the same claim once someone has gone and looked", () => {
+    expect(validateRecordedReason(one([IMPOSSIBLE, EMPIRICAL_KIND, PROVENANCE, FALSIFIER]))).toEqual([]);
+  });
+
+  it("accepts an untested reason that names the real constraint instead of asserting the world forbids it", () => {
+    const budget = "REASON: not attempted this round — the pull is ~20s and the stand-up is documented in docs/design/m7-chrome-provisioning.md";
+    expect(validateRecordedReason(one([budget, EMPIRICAL_KIND, ASSUMED, FALSIFIER]))).toEqual([]);
+  });
+});
+
+// #1319 — "that path is supervised" silently terminated acceptance criteria in #945/#1056/#472/#381,
+// while no executor has ever recorded being refused. Supervision awaits a human, so it is decisional,
+// and the DECISION must say where the human was asked.
+describe("a supervised path produces a relay, not a silent close (#1319)", () => {
+  const BLOCKED = "REASON: the CI wiring is not done because .github/workflows/ is supervised and needs operator approval";
+
+  it("REFUSES the blocker as empirical — no command re-tests whether the operator approved", () => {
+    expect(validateRecordedReason(one([BLOCKED, EMPIRICAL_KIND, PROVENANCE, FALSIFIER])).join()).toContain("produces a RELAY, never a silent stop");
+  });
+
+  it("REFUSES a DECISION that names no venue — a relay nobody can find is the silent close", () => {
+    expect(validateRecordedReason(one([BLOCKED, DECISIONAL_KIND, PROVENANCE, OWNER, "DECISION: asked the operator"])).join()).toContain("names no venue");
+  });
+
+  it("accepts the blocker once it is decisional and points at the issue the question is recorded on", () => {
+    expect(validateRecordedReason(one([BLOCKED, DECISIONAL_KIND, PROVENANCE, OWNER, "DECISION: #1319"]))).toEqual([]);
+  });
+
+  // The live false-positive this guard has to survive: src/cli/validate-conservation.test.ts's two
+  // reasons name .github/workflows/ci.yml while describing which job runs a file, not citing
+  // supervision at all.
+  it("leaves a reason that merely mentions a supervised path alone", () => {
+    const mentions = "REASON: this block needs HARVEY_CONSERVATION_E2E, which only .github/workflows/conservation.yml sets";
+    expect(validateRecordedReason(one([mentions, EMPIRICAL_KIND, PROVENANCE, FALSIFIER]))).toEqual([]);
+  });
+});
+
 describe("revalidateReasons — seeded proof that the gate fires on a reason whose blocker is gone", () => {
   it("flags a reason STALE when its falsifier now exits 0", () => {
     const rows = revalidateReasons([one(EMPIRICAL)], () => ({ code: 0, output: "src/detectors/load-sources.ts" }));

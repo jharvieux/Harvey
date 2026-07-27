@@ -142,6 +142,22 @@ describe("validate-reasons CLI", () => {
     expect(out).toContain("Subsystem drift watches 0/1 empirical reason(s)");
   });
 
+  // #1319's two rules reach the CLI, not just validateRecordedReason: the planted violations below
+  // must take the real gate to a non-zero exit, or the rules are unit-tested prose.
+  it("fails on impossibility vocabulary spent over an ASSUMED provenance (#1319)", () => {
+    const planted = STALE_REASON.replace("can do the thing", "is out of reach").replace("FALSIFIER: true", "FALSIFIER: false");
+    const { code, out } = gate(plant({ "budget.ts": planted }));
+    expect(code).toBe(1);
+    expect(out).toContain('says "out of reach" on an ASSUMED provenance');
+  });
+
+  it("fails on a supervised-path blocker recorded as empirical rather than relayed (#1319)", () => {
+    const planted = LIVE_REASON.replace("the blocker this one describes really is still standing", "not wired up: .github/workflows/ is supervised and needs operator approval");
+    const { code, out } = gate(plant({ "supervised.ts": planted }));
+    expect(code).toBe(1);
+    expect(out).toContain("produces a RELAY, never a silent stop");
+  });
+
   it("counts claim-shaped prose outside every block instead of reading well-formed as complete (#1246)", () => {
     const { code, out } = gate(plant({ "prose.md": "Harvey cannot analyse Elixir today.\n" }), ["--census"]);
     expect(code).toBe(0);

@@ -87,8 +87,10 @@ function routeLabel(key: string): string {
 // `server/app/**` so the request-serving runtime knows which client chunks to preload; that
 // runtime-consuming code is bundler-agnostic, so the manifest's existence and location don't
 // depend on which bundler produced the chunks it lists. UNVERIFIED against a live Turbopack
-// production build (no Next.js install in this repo to test against — package.json is
-// supervised); the parse below deliberately doesn't depend on the manifest's exact object
+// production build: no Next.js install in this repo to test against, and the recorded reason for
+// leaving it that way — that `package.json` is supervised — is FALSE (operator ruling 2026-07-27,
+// #1319). Verifying it is a budget call, not a path restriction. The parse below deliberately
+// doesn't depend on the manifest's exact object
 // shape (which has drifted across Next versions) — it only regex-extracts quoted
 // `static/chunks/*.js` paths from the file text, the one part of the contract that has to
 // stay stable (it's the real on-disk chunk location). If a future Next version stops writing
