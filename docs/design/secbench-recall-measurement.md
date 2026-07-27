@@ -31,9 +31,12 @@ engine only. Its 92 semgrep source rules detect ZERO of them — a measured 0/60
   at the pinned version. This is Harvey's actual SCA job (flag the known-vulnerable dependency).
 - **exact-CVE recall:** the reported advisory's id/aliases matched the specific CVE/GHSA SecBench
   curated. Lower because advisories get renumbered and some SecBench ids are Snyk-only.
-- **Source-pattern (semgrep) recall: 0/600.** Both Harvey's `harvey-*` custom rules AND the full
-  registry security packs (`p/owasp-top-ten`, `p/security-audit`, …) — the exact config
-  `runMechanicalScan` runs — fired on ZERO of the 600 exploit test files.
+- **Request-sourced (semgrep) recall over the exploit dirs: 0/600.** Both Harvey's `harvey-*` custom
+  rules AND the full registry security packs (`p/owasp-top-ten`, `p/security-audit`, …) — the exact
+  config `runMechanicalScan` runs — fired on ZERO of the 600 exploit test files. This is a property of
+  WHAT is scanned and WHERE the source is (below), not a detector gap that tuning the request rules
+  could close. **#946 opened the complementary axis — library-internal parameter-sourced taint over
+  the INSTALLED target-package source — which moves this number off 0; measured below.**
 
 ## Why the source rules score zero (the load-bearing portability finding)
 
@@ -48,10 +51,43 @@ entry: the payload is a constant, and the real sink is in `node_modules`, which 
 
 **The issue's hypothesis — "It exercises M1's injection / XSS / prototype-pollution / path-traversal
 / command-injection rules — the syntactic majority of our 92 rules" — is FALSIFIED by measurement.**
-SecBench is a **known-vulnerable-dependency (SCA) corpus**, not a source-taint corpus. It measures
-Harvey's dependency-CVE tier, which is the correct tier for it, and says nothing about the source
-rules. This is the same distinction the repo draws elsewhere between what a corpus covers and what
-a number claims.
+SecBench is a **known-vulnerable-dependency (SCA) corpus** for the REQUEST-sourced rules, not a
+request-source-taint corpus. It measures Harvey's dependency-CVE tier via those rules, and says
+nothing about them beyond "the app-layer request shape is absent." This is the same distinction the
+repo draws elsewhere between what a corpus covers and what a number claims.
+
+## Library-internal source recall (#946) — moving the 0 with parameter-sourced taint
+
+The zero above is a request-shape zero: the SOURCE in a SecBench entry is not an HTTP request, it is
+a **parameter of a library entry point** — either an exported function's argument (`@vivaxy/here`'s
+`read-file(file)`) or, for the dominant path-traversal population, a **raw node http/https server's
+request callback** (`http.createServer((req,res) => { var p = "./" + req.url; fs.readFile(p) })`).
+#946 added `src/scan/rules/semgrep/library-taint.yml` — three taint rules (`harvey-lib-path-traversal`,
+`harvey-lib-command-injection`, `harvey-lib-code-injection`) whose SOURCE is exactly those two
+parameter shapes, gated to the PUBLIC API surface (exported functions + server request callbacks) and
+review-tier (a function parameter is a far broader source than a request object, so never free-count).
+Scanning the **installed target-package source** (not the exploit dir) scores this axis.
+
+**Measured 2026-07-26** (semgrep 1.164.0) on an installable SUBSET — the target package of each entry
+installed via `npm install` into `<tree>/<class>/<slug>/node_modules/<pkg>`, then scanned with the
+`harvey-lib-*` rules through `validate-secbench.ts --library-source-tree`:
+
+| SecBench class | scanned | library-internal source recall |
+|----------------|--------:|-------------------------------:|
+| path-traversal      | 40 | 25/40 (62.5%) |
+| command-injection   | 27 |  4/27 (14.8%) |
+| code-injection      | 30 |  4/30 (13.3%) |
+| **subset ALL**      | **97** | **33/97 (34.0%)** |
+
+Up from a measured 0. path-traversal moves most because its dominant shape is the raw-http-server
+request-callback param, an intra-procedural `req.url → concat → fs.readFile` flow semgrep follows
+cleanly. command-injection and code-injection move least: their real flows are dominated by
+**cross-function** (`aaptjs.list()` builds the command string, hands it to a separate `promistify()`
+that runs `exec`) and **non-exported internal helpers** — both past OSS Semgrep's intra-procedural
+taint ceiling (#873), which parameter-sourcing extends but does not lift. This is a SUBSET measurement
+(97 entries, not the full 594 installable) because the source scan needs a per-entry `npm install`;
+the full-corpus number awaits building the whole `--library-source-tree` out of process. This number
+is REPORTED DISTINCTLY from the SCA number and the request-sourced 0 — never blended.
 
 ## The free/mechanical-tier answer for #868
 
@@ -91,15 +127,17 @@ would have inflated recall by shrinking the denominator, the exact trap #879 war
 ## The harness (committed) — loader + matcher + scorer, following the external-corpus pattern
 
 - `src/scan/secbench.ts` — pure loader (`loadSecbenchCorpus`), osv indexer (`indexOsvByEntry`),
-  per-entry matcher (`matchEntryOsv`, scoped to the entry's OWN target package), and scorer
-  (`scoreSecbench`). The scorer takes the **installable set separately** from the osv report,
-  because osv-scanner omits clean lockfiles from its JSON — using the report's own keys as the
-  denominator would drop every real miss and manufacture a higher number.
-- `src/cli/validate-secbench.ts` — the CLI that joins the three inputs and prints the per-class
-  table above. Runs the semgrep source pass live (or reads a precomputed `--semgrep-json`).
+  per-entry matcher (`matchEntryOsv`, scoped to the entry's OWN target package), and scorers
+  (`scoreSecbench` for SCA; `scoreLibrarySource` for the #946 library-internal source axis). Each
+  takes its denominator set separately (installable / scanned) from the report, because a clean entry
+  is absent from the tool's JSON — using the report's own keys as the denominator would drop every
+  real miss and manufacture a higher number.
+- `src/cli/validate-secbench.ts` — the CLI that joins the inputs and prints the per-class tables.
+  Runs the request-sourced semgrep pass live (or reads a precomputed `--semgrep-json`); runs the
+  #946 library-internal `harvey-lib-*` pass over `--library-source-tree` when provided.
 - `src/scan/secbench.test.ts` — offline Layer-1 test (in `pnpm verify`, no clone, no network):
   proves the loader, the target-package scoping, the transitive-dep exclusion, and the denominator
-  honesty (an installable-but-clean entry is a MISS, not dropped).
+  honesty of BOTH scorers (an installable/scanned-but-clean entry is a MISS, not dropped).
 
 No `pnpm` script alias was added (`package.json` is a supervised path); invoke via
 `pnpm exec tsx src/cli/validate-secbench.ts`, the same convention as `validate-precision.ts`.
@@ -122,6 +160,14 @@ osv-scanner --format json -r <work> > osv-report.json     # exits 1 when vulns a
 # 4. Score (semgrep run live over the clone's class dirs, or pass a precomputed --semgrep-json):
 pnpm exec tsx src/cli/validate-secbench.ts \
     --dir SecBench.js --osv-report osv-report.json --lockfile-tree <work>
+
+# 5. (#946, library-internal source axis) For each entry, ACTUALLY install its target package into
+#    <libtree>/<class>/<slug>/node_modules/<pkg> (a real `npm install`, not --package-lock-only), then:
+pnpm exec tsx src/cli/validate-secbench.ts \
+    --dir SecBench.js --osv-report osv-report.json --lockfile-tree <work> \
+    --library-source-tree <libtree>
+#    The --library-source-tree pass scans each installed target-package source with the harvey-lib-*
+#    parameter-sourced rules and prints the per-class library-internal source recall.
 ```
 
 ## Guardrail honored

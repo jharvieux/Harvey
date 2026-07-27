@@ -224,3 +224,35 @@ export function scoreSecbench(
 export function recallPct(caught: number, denom: number): string {
   return denom === 0 ? "n/a" : `${((caught / denom) * 100).toFixed(1)}%`;
 }
+
+// #946: LIBRARY-INTERNAL SOURCE recall — the pathway the request-sourced semgrep pass (semgrepHits
+// above) cannot measure. SecBench's vulnerability lives inside the target package's own source (the
+// `sink` field points at e.g. lib/read-file.js in the dependency), which is in node_modules and NOT
+// in the scanned exploit dir — so the request rules score 0/600 by construction. The library-taint
+// rules (harvey-lib-*) treat a PARAMETER of a public library entry point as the taint source, so
+// scanning the INSTALLED target-package source scores this axis. Denominator is the entries whose
+// target-package source was present to scan (`scannedKeys`), mirroring the SCA installable/flagged
+// split — an installed-but-unflagged entry is a MISS, never dropped.
+interface LibrarySourceRecall {
+  cls: SecbenchClass | "ALL";
+  scanned: number; // entries whose target-package source was present to scan
+  libFlagged: number; // of those, whose source drew a harvey-lib-* finding
+}
+
+export function scoreLibrarySource(
+  entries: SecbenchEntry[],
+  scannedKeys: Set<string>,
+  libHitKeys: Set<string>,
+): { perClass: LibrarySourceRecall[]; all: LibrarySourceRecall } {
+  const blank = (cls: SecbenchClass | "ALL"): LibrarySourceRecall => ({ cls, scanned: 0, libFlagged: 0 });
+  const byCls = new Map<SecbenchClass, LibrarySourceRecall>();
+  for (const cls of SECBENCH_CLASSES) byCls.set(cls, blank(cls));
+  const all = blank("ALL");
+  for (const e of entries) {
+    if (!scannedKeys.has(e.key)) continue;
+    const row = byCls.get(e.cls)!;
+    row.scanned += 1; all.scanned += 1;
+    if (libHitKeys.has(e.key)) { row.libFlagged += 1; all.libFlagged += 1; }
+  }
+  return { perClass: [...byCls.values()], all };
+}

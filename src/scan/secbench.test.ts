@@ -11,6 +11,7 @@ import {
   indexOsvByEntry,
   loadSecbenchCorpus,
   matchEntryOsv,
+  scoreLibrarySource,
   scoreSecbench,
   type SecbenchEntry,
 } from "./secbench.js";
@@ -142,5 +143,23 @@ describe("scoreSecbench denominator honesty", () => {
     const installable = new Set(entries.map((e) => e.key));
     const { all } = scoreSecbench(entries, index, installable, new Set(["redos/x_1.0.0"]));
     expect(all.semgrepHits).toBe(1);
+  });
+});
+
+describe("scoreLibrarySource (#946)", () => {
+  const entries = loadSecbenchCorpus("/sb", fakeFs);
+
+  it("scores only entries whose target-package source was present, unflagged = MISS", () => {
+    // 3 of 5 entries had their source installed; only aaptjs's source drew a harvey-lib-* finding.
+    const scanned = new Set(["command-injection/aaptjs_1.3.1", "path-traversal/basic-static_2.0.2", "code-injection/y_2.0.0"]);
+    const hits = new Set(["command-injection/aaptjs_1.3.1"]);
+    const { all, perClass } = scoreLibrarySource(entries, scanned, hits);
+    expect(all.scanned).toBe(3); // denominator is scanned, not all entries
+    expect(all.libFlagged).toBe(1); // the 2 unflagged scanned entries are MISSES, not dropped
+    const cmd = perClass.find((r) => r.cls === "command-injection")!;
+    expect(cmd.scanned).toBe(1);
+    expect(cmd.libFlagged).toBe(1);
+    const redos = perClass.find((r) => r.cls === "redos")!;
+    expect(redos.scanned).toBe(0); // its source was not in the tree — excluded from the denominator
   });
 });
