@@ -1,0 +1,64 @@
+// The seven heavy child-process test files, and how they are split across CI runners.
+//
+// The list lives here rather than in vitest.config.ts so that BOTH consumers read the same array:
+// the vitest config (which excludes them from `pnpm verify` and includes them in the heavy run) and
+// src/cli/heavy-shard.ts (which tells each CI shard what to run). The alternative — writing the
+// file names into .github/workflows/ci.yml — would mean an eighth heavy file could be added to the
+// config and run in NO shard, passing CI by being invisible. That is the silent-omission shape
+// CLAUDE.md ranks as worse than a wrong status, so the shard assignment is DERIVED, never declared.
+//
+// Why sharding is sound despite `poolOptions.forks.maxForks: 1`: that constraint is about
+// contention on ONE machine — the files starve vitest's worker→main birpc ack channel when they
+// overlap (measured in vitest.config.ts's header, #1120/#1133). Separate GitHub runners are
+// separate machines, so a shard still runs its own files one at a time while shards run
+// concurrently. The constraint is preserved exactly, not relaxed.
+export const HEAVY_CLI_TESTS = [
+  "src/cli/run-audit.test.ts",
+  "src/fix/calibration-acceptance.test.ts",
+  "src/cli/quick-scan.test.ts",
+  "src/fix/detector-rerun.test.ts",
+  "src/cli/mutation-scan.test.ts",
+  "src/cli/quality-scan.test.ts",
+  "src/cli/lighthouse-scan.test.ts",
+];
+
+// Seconds, MEASURED from CI run 30272315745 (2026-07-27). A BALANCE HINT ONLY — correctness never
+// depends on these being current. They drift as tests are added, and a stale number costs a few
+// seconds of imbalance, never a dropped file. A file absent from this table is deliberately treated
+// as the heaviest known (see shardHeavyTests): an unweighted newcomer gets placed first and alone
+// rather than silently padding an already-full shard.
+const WEIGHT_HINT_SECONDS: Record<string, number> = {
+  "src/cli/run-audit.test.ts": 58.3,
+  "src/fix/calibration-acceptance.test.ts": 37.7,
+  "src/cli/quick-scan.test.ts": 28.4,
+  "src/fix/detector-rerun.test.ts": 25.9,
+  "src/cli/mutation-scan.test.ts": 21.1,
+  "src/cli/quality-scan.test.ts": 18.9,
+  "src/cli/lighthouse-scan.test.ts": 15.0,
+};
+
+/**
+ * Longest-processing-time bin packing: every file lands in exactly one shard, heaviest first onto
+ * whichever shard is currently lightest. Deterministic — ties break on path — so shard N holds the
+ * same files on every run and a failure is reproducible from the shard index alone.
+ */
+export function shardHeavyTests(shardCount: number): string[][] {
+  if (!Number.isInteger(shardCount) || shardCount < 1) {
+    throw new Error(`shardHeavyTests: shardCount must be a positive integer, got ${shardCount}`);
+  }
+  const heaviestKnown = Math.max(...Object.values(WEIGHT_HINT_SECONDS));
+  const weightOf = (f: string) => WEIGHT_HINT_SECONDS[f] ?? heaviestKnown;
+
+  const ordered = [...HEAVY_CLI_TESTS].sort(
+    (a, b) => weightOf(b) - weightOf(a) || a.localeCompare(b),
+  );
+  const shards: string[][] = Array.from({ length: shardCount }, () => []);
+  const load: number[] = new Array<number>(shardCount).fill(0);
+  for (const file of ordered) {
+    let lightest = 0;
+    for (let i = 1; i < shardCount; i++) if ((load[i] ?? 0) < (load[lightest] ?? 0)) lightest = i;
+    shards[lightest]?.push(file);
+    load[lightest] = (load[lightest] ?? 0) + weightOf(file);
+  }
+  return shards;
+}

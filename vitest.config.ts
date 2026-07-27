@@ -1,4 +1,7 @@
 import { configDefaults, defineConfig } from "vitest/config";
+// HEAVY_CLI_TESTS lives in src/ (#1228) so the CI shard assignment can be DERIVED from it rather
+// than restated in ci.yml — see the note above the list's use below.
+import { HEAVY_CLI_TESTS } from "./src/heavy-cli-tests.js";
 
 // M8 (#72 §M8) added targets/calibration/test-quality/ — a real Stryker mutation-testing
 // fixture with its own isolated npm project and, deliberately, one weak test
@@ -74,15 +77,10 @@ const BASE_EXCLUDE = [
 // PROVENANCE: TRIED 2026-07-26 — read the branch that sets the exit code (node_modules/vitest/dist/chunks/cli-api.DWGBtMmz.js: `if (errors.length && !this.config.dangerouslyIgnoreUnhandledErrors) process.exitCode = 1`); it takes no predicate, so there is no way to ignore the RPC timeout alone. Not enabled.
 // OWNER: Harvey doctrine
 // DECISION: CLAUDE.md — "Fail loud": a suite that cannot report an unhandled rejection is a silent omission, which the doctrine ranks as worse than a wrong status.
-const HEAVY_CLI_TESTS = [
-  "src/cli/run-audit.test.ts",
-  "src/fix/calibration-acceptance.test.ts",
-  "src/cli/quick-scan.test.ts",
-  "src/fix/detector-rerun.test.ts",
-  "src/cli/mutation-scan.test.ts",
-  "src/cli/quality-scan.test.ts",
-  "src/cli/lighthouse-scan.test.ts",
-];
+// The list itself is imported at the top of this file from src/heavy-cli-tests.ts (#1228): the CI
+// shard assignment is DERIVED from that one array rather than restated in ci.yml, because a second
+// copy would let an eighth heavy file be added here and run in NO shard — passing CI by being
+// invisible, which is the silent-omission shape CLAUDE.md ranks worse than a wrong status.
 
 const heavyRun = process.env.HARVEY_HEAVY_CLI_TESTS === "1";
 
