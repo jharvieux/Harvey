@@ -45,6 +45,7 @@
     "file-findings": "tsx src/cli/file-findings.ts",
     "fix-dry-run": "tsx src/cli/fix-dry-run.ts",
     "fix-execute": "tsx src/cli/fix-execute.ts",
+    "fix-interactive": "tsx src/cli/fix-interactive.ts",
     "pii-classify": "tsx tools/pii-classify.mjs",
     "epic": "tsx src/cli/epic.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip"
