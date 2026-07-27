@@ -147,6 +147,7 @@ REASON: PostgREST / GoTrue HTTP response and error literals cannot be captured o
 KIND: empirical
 PROVENANCE: MEASURED 2026-07-26
 FALSIFIER: test -f src/pentest/__fixtures__/postgrest-gotrue-live-responses.json
+TOUCHES: src/pentest/live-standup.ts
 
 The PostgREST falsifier exits 0 once the M2 stack is brought up and its real responses are captured
 and committed at that path, at which point the ~20 inline response literals across

@@ -68,13 +68,11 @@ rules:
       - pattern-not: 'express.text({ ..., limit: $L, ... })'
       - pattern-not: 'bodyParser.json({ ..., limit: $L, ... })'
       - pattern-not: 'bodyParser.urlencoded({ ..., limit: $L, ... })'
-  # NOTE (disclosed, not silent): the OWASP fixture's SECOND shape — a raw `req.on("data", ...)`
-  # accumulator with no byte ceiling — is not separately covered. A generic "no size check
-  # anywhere in this callback" rule needs the same-block-sequence idiom below and reliably
-  # excluding every legitimate size-check shape (early-return, destroy(), a running total checked
-  # in a different handler) proved too failure-prone to ship at this precision bar; the rule above
-  # already satisfies this corpus row (one relevant finding is enough), so this is scope, not a
-  # silent gap.
+  # The OWASP fixture's SECOND shape — a raw `req.on("data", ...)` accumulator with no byte ceiling
+  # — is covered by src/scan/raw-body-limit.ts, a TS/AST pass rather than a rule here: excluding the
+  # legitimate size-check shapes (a running total compared against a max, destroy()/pause(), a named
+  # limit constant) needs to read the whole enclosing handler, which the AST gives directly. Its
+  # single-handler bound is stated inside the finding it emits, not only here.
 
   # P-OWASP-NODE-SENSITIVE-CACHE: an identity/session-reading handler sets Cache-Control to
   # public or a positive max-age/s-maxage — a shared proxy/CDN can serve one user's response to
@@ -187,4 +185,12 @@ rules:
     message: >
       Regex literal with a nested quantifier ((x+)+ / (x*)* style) — catastrophic backtracking
       (ReDoS) on adversarial input. Rewrite without nested quantifiers, or bound input length.
+      SCOPE OF THIS CHECK (#1201), so its silence elsewhere is not read as a clean bill of health:
+      it matches the nested-quantifier motif in a regex LITERAL written in the source. A regex
+      ASSEMBLED AT RUNTIME — built by concatenation, interpolated from a variable or config, or
+      compiled from user input — is NOT assessed by this rule, and neither is a catastrophic
+      pattern whose shape does not reduce to a literal (...)[+*] motif; this is a structural match,
+      not a backtracking-complexity analyser. Separately, Harvey reports ReDoS reachable through a
+      known-vulnerable DEPENDENCY as a CVE finding — that is a different check and does not cover
+      regexes written here.
     pattern-regex: /[^/\n]*\([^()\n]*[+*][^()\n]*\)\s*[+*][^/\n]*/
