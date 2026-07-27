@@ -677,9 +677,12 @@ rules:
       # the remedy it recommends. Same soundness constraints as the #989 block — an ANCHORED,
       # POSITIVE-class regex (an unanchored allowlist matches a prefix), or exact membership — plus a
       # failure branch that actually terminates the flow. THROW is admitted alongside return, and
-      # both are spelled braced AND braceless, because MEASURED 2026-07-27 (semgrep 1.164.0)
-      # `{ ... throw $E; }` does not match a braceless `if (…) throw new Error(…);` — the shape a
-      # Server Component uses, since a bare `return` there renders an empty page instead of erroring.
+      # both are spelled braced AND braceless (the braceless spelling per #1236's convention),
+      # because MEASURED 2026-07-27 (semgrep 1.164.0) `{ ... throw $E; }` does not match a braceless
+      # `if (…) throw new Error(…);` — the shape a Server Component uses, since a bare `return` there
+      # renders an empty page instead of erroring. This is #1248's class (throw-based guards read as
+      # vulnerable) closed for ONE rule where the widened source made it urgent; #1248 stays open for
+      # the other twenty.
       #
       # `pattern-inside` + a consistency-bound `pattern: $X`, NOT `by-side-effect` like the #989
       # copies: the guarded value here is a PROPERTY ACCESS (`params.id`), not a variable, and
@@ -696,7 +699,7 @@ rules:
                           if (!$RE.test($X)) { ... throw $E; }
                           ...
                       - pattern-inside: |
-                          if (!$RE.test($X)) return;
+                          if (!$RE.test($X)) return ...;
                           ...
                       - pattern-inside: |
                           if (!$RE.test($X)) throw $E;
@@ -711,7 +714,7 @@ rules:
                   if (!$ALLOW.includes($X)) { ... throw $E; }
                   ...
               - pattern-inside: |
-                  if (!$ALLOW.includes($X)) return;
+                  if (!$ALLOW.includes($X)) return ...;
                   ...
               - pattern-inside: |
                   if (!$ALLOW.includes($X)) throw $E;
@@ -723,7 +726,7 @@ rules:
                   if (!$ALLOW.has($X)) { ... throw $E; }
                   ...
               - pattern-inside: |
-                  if (!$ALLOW.has($X)) return;
+                  if (!$ALLOW.has($X)) return ...;
                   ...
               - pattern-inside: |
                   if (!$ALLOW.has($X)) throw $E;
