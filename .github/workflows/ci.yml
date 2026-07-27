@@ -88,11 +88,33 @@ jobs:
   # required check until this change, and moving required coverage to a non-blocking job would be
   # the silent-omission failure this repo's coverage guard exists to prevent.
   heavy-cli:
-    name: heavy CLI tests (serialized, real binaries)
+    # Sharded across runners (#1228). The files still run ONE AT A TIME within a shard
+    # (poolOptions.forks.maxForks: 1) — that constraint is about contention on a single machine,
+    # where these files starve vitest's worker RPC channel (#1120/#1133). Separate runners are
+    # separate machines, so sharding preserves it exactly rather than relaxing it.
+    #
+    # MEASURED (CI run 30272315745, 2026-07-27): serialized on one runner the seven files take 205s
+    # of a 236s job, and because they are serial that is the SUM, not the max — run-audit 58.3s,
+    # calibration-acceptance 37.7s, quick-scan 28.4s, detector-rerun 25.9s, mutation-scan 21.1s,
+    # quality-scan 18.9s, lighthouse-scan 15.0s. Three shards brings wall-clock to ~104s. The floor
+    # is the longest single file (run-audit, 58.3s), so a fourth shard buys only ~15s more and pays
+    # a whole extra runner's setup for it.
+    #
+    # The shard's file list is DERIVED, never written here: src/cli/heavy-shard.ts reads the same
+    # array vitest.config.ts uses. Listing names in this file would let an eighth heavy test be
+    # added to the suite and run in no shard — green CI, silently reduced coverage.
+    # src/heavy-cli-tests.test.ts asserts the partition for every width.
+    name: heavy CLI tests (shard ${{ matrix.shard }}/3, real binaries)
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      # Every shard runs even when one fails — a red shard 1 must not hide a different failure in
+      # shard 3, which would turn two bugs into one round trip.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     # issues: write so a scheduled failure can find-or-update its tracking issue (#1138). A
     # job-level block replaces the default token perms, so contents: read is restated for checkout.
     permissions:
@@ -136,10 +158,21 @@ jobs:
             command -v "$b" >/dev/null || { echo "::error::$b is not on PATH — the heavy tests would skip silently"; exit 1; }
           done
 
+      # `tsx` directly, not `pnpm exec tsx`: pnpm writes "Already up to date / Done in ..." to
+      # STDOUT, which would be fed to vitest as filenames. The heavy tests spawn tsx the same way.
+      - name: Resolve this shard's files
+        id: shard
+        run: |
+          set -euo pipefail
+          files=$(node_modules/.bin/tsx src/cli/heavy-shard.ts --shard '${{ matrix.shard }}' --of 3)
+          test -n "$files"   # an empty shard would make vitest exit non-zero for the wrong reason
+          echo "This shard runs:"; echo "$files"
+          echo "files=$(echo "$files" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+
       - name: Heavy CLI tests
         env:
           HARVEY_HEAVY_CLI_TESTS: "1"
-        run: pnpm exec vitest run
+        run: pnpm exec vitest run ${{ steps.shard.outputs.files }}
 
       # A scheduled heavy-cli failure (#1138) means a regression from something no PR touched. It
       # goes red on main with no PR to surface it, so find-or-update ONE tracking issue by the marker
@@ -155,7 +188,7 @@ jobs:
           set -euo pipefail
           gh label create "$MARKER" --color B60205 \
             --description "Auto-opened when the scheduled heavy-cli CI run fails" 2>/dev/null || true
-          body="The scheduled heavy-cli run failed (run: $RUN_URL). This job runs the seven heavy child-process test files with the real mechanical binaries (semgrep/trufflehog/gitleaks/osv-scanner). A failure here with no code change points at an environment regression — a transitive dep bump, a runner-image change, or a scanner-binary drift. Investigate the run, then close this issue once green."
+          body="The scheduled heavy-cli run failed (run: $RUN_URL, shard ${{ matrix.shard }} of 3). This job runs the heavy child-process test files with the real mechanical binaries (semgrep/trufflehog/gitleaks/osv-scanner). A failure here with no code change points at an environment regression — a transitive dep bump, a runner-image change, or a scanner-binary drift. Investigate the run, then close this issue once green."
           existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
