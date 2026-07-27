@@ -21,6 +21,7 @@ import { scanClientSuppliedTenant } from "./client-supplied-tenant.js";
 import { scanTenantGucScope } from "./tenant-guc-scope.js";
 import { scanCacheTenantScope } from "./cache-tenant-scope.js";
 import { scanStorageTenantScope } from "./storage-tenant-scope.js";
+import { scanAuditLogTenant } from "./audit-log-tenant.js";
 import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanSsrSanitizer } from "./ssr-sanitizer.js";
@@ -440,6 +441,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // shared bucket. Distinct from AUTH-upload-no-limit (leftover-auth.ts), which fires on the same
     // shape for an unrelated defect (no size/MIME limit).
     findings.push(...scanStorageTenantScope(scanDir));
+
+    // #1242 — an audit entry that names the actor and a state change but no tenant: a cross-tenant
+    // access cannot be reconstructed afterwards, which undercuts the sheet's own detective control.
+    findings.push(...scanAuditLogTenant(scanDir));
 
     // #664 — service_role key hardcoded as a JWT literal (same-file or cross-file const) and
     // passed to createClient. Real base64 decode + role/iss claim check, incl. plain .js.

@@ -36,6 +36,7 @@ const CWE: Record<string, string> = {
   "668": "CWE-668: Exposure of Resource to Wrong Sphere",
   "693": "CWE-693: Protection Mechanism Failure",
   "732": "CWE-732: Incorrect Permission Assignment for Critical Resource",
+  "778": "CWE-778: Insufficient Logging",
   "798": "CWE-798: Use of Hard-coded Credentials",
   "862": "CWE-862: Missing Authorization",
   "89": "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
@@ -157,6 +158,10 @@ const SECURITY: Record<string, [string, string | null]> = {
   // Failure): the mechanism does not merely fail, it never runs, and what ships is unsanitized HTML
   // rendered into the page — which is CWE-79's definition, and the class the OWASP sheet names.
   "Browser-only sanitizer in a server-rendered component": ["79", "A03"],
+  // #1242: an audit trail that cannot be scoped to a tenant is the A09 class — the detective
+  // control exists but does not record enough to reconstruct the access. CWE-778 is A09:2021's
+  // canonical member, the same basis as "Sensitive value logged to console" → 532/A09 above.
+  "Audit log entry without a tenant discriminator": ["778", "A09"],
 };
 
 // Non-security taxonomies: recorded as no-clean-CWE WITH A REASON rather than left unclassified.

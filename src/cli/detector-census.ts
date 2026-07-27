@@ -42,6 +42,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/tenant-guc-scope.ts": "M1",
   "src/scan/cache-tenant-scope.ts": "M1",
   "src/scan/storage-tenant-scope.ts": "M1",
+  "src/scan/audit-log-tenant.ts": "M1", // #1242 — audit entry with an actor but no tenant discriminator
   "src/scan/secret-rotation.ts": "M1",
   "src/scan/ssr-sanitizer.ts": "M1", // #1239 — browser-only sanitizer (dompurify) called in a server-rendered module
   "src/scan/env-schema.ts": "M1",
