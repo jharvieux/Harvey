@@ -1,0 +1,30 @@
+{
+  "entry": [
+    "src/findings.ts",
+    "src/cli/*.ts",
+    "report-template/render.mjs",
+    "tools/*.mjs",
+    "epic-builder-web/app/**/*.{ts,tsx}",
+    "epic-builder-web/lib/*.ts"
+  ],
+  "project": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "report-template/*.mjs",
+    "tools/*.mjs",
+    "epic-builder-web/{app,lib}/**/*.{ts,tsx}"
+  ],
+  "vitest": false,
+  "ignoreExportsUsedInFile": true,
+  "rules": {
+    "dependencies": "off",
+    "devDependencies": "off",
+    "optionalPeerDependencies": "off",
+    "unlisted": "off",
+    "unresolved": "off",
+    "binaries": "off",
+    "duplicates": "off",
+    "enumMembers": "off",
+    "classMembers": "off"
+  }
+}

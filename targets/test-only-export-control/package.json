@@ -1,0 +1,5 @@
+{
+  "name": "test-only-export-control",
+  "private": true,
+  "type": "module"
+}
