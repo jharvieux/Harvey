@@ -1,8 +1,13 @@
 // OWASP Nodejs Security Cheat Sheet as an INDEPENDENT coverage corpus (#1191).
 //
-// PINNED SOURCE: cheatsheets/Nodejs_Security_Cheat_Sheet.md at OWASP/CheatSheetSeries master as read
-// 2026-07-26. Companion to owasp-multitenant.entries.ts (#1190); the rationale for using a
-// third-party checklist as an answer key is in that file's header and is not repeated here.
+// PINNED SOURCE: cheatsheets/Nodejs_Security_Cheat_Sheet.md at OWASP/CheatSheetSeries commit
+// da089462b18d27ed893ca1052ebd740cfe460175 ("Updated outdated contents", #2170) — the revision that
+// was current on master when this corpus was built and measured on 2026-07-26, resolved and recorded
+// 2026-07-27. It was originally written down as "master as read 2026-07-26", which is not a pin at
+// all: master moves, and an answer key that can change underneath us without the diff showing is the
+// exact property this corpus exists to avoid. Re-pin deliberately, never track HEAD.
+// Companion to owasp-multitenant.entries.ts (#1190); the rationale for using a third-party checklist
+// as an answer key is in that file's header and is not repeated here.
 //
 // ALREADY COVERED — accounted for, deliberately NOT re-planted. A large part of this sheet is already
 // in the corpus under batches that predate it, and duplicating those rows would inflate an apparent
@@ -18,6 +23,19 @@
 //   "Return only necessary fields from database queries" -> the #1057 projection guards.
 // That is the honest good-news half of this measurement and it is why this file is short: what is
 // left below is the residue the sheet asks for and Harvey does not do.
+//
+// THE HEADER/COOKIE GROUP, decided explicitly (#1191 asked for this, because "we don't check that"
+// and "we deliberately don't check that" look identical from the outside and only one is acceptable):
+//   DETECTED, by effect rather than by library — HSTS, X-Frame-Options, X-Content-Type-Options, CSP
+//     with unsafe-inline, cookie HttpOnly/Secure/SameSite, session cookie flags. All in b5-headers
+//     above. Checking the header an app actually sets is the right test; an app that sets them by
+//     hand instead of through helmet is correct and must not be flagged.
+//   UNDECIDED, and openly so — "use helmet" and "remove X-Powered-By" (P-OWASP-NODE-POWERED-BY
+//     below). These are library-adoption and version-disclosure items rather than defects, and the
+//     recommendation on the table is to decline them as a disclosed scope boundary. That is a
+//     PRODUCT RULING, not an engineering call, so it is not made here: it is an open operator
+//     decision in #1204. The entry stays gapKind "measured-gap" until it is ruled on — calling it
+//     "by-design" before anyone decided it is by design would be the misreport types.ts warns about.
 //
 // MEASURED 2026-07-26 (`quick-scan --dir targets/calibration`, 472 findings): of the eight
 // recommendations planted here, ZERO were detected as the recommendation under test.
@@ -114,7 +132,7 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     match: ["x-powered-by", "helmet"],
     expectedTier: "none",
     gapKind: "measured-gap",
-    note: "Sheet, Server Security: 'Remove or obfuscate X-Powered-By header' and 'Use helmet middleware to set appropriate security headers.' MEASURED: zero findings. WORTH A SCOPE DECISION RATHER THAN A DETECTOR: b5-headers already covers the headers that matter (HSTS, X-Frame-Options, nosniff, CSP) by their effect, and 'helmet is not imported' is a library-adoption check, not a defect — an app setting the same headers by hand is correct and would be a false positive. Version disclosure is Info at best. Recommend recording this as a deliberate, DISCLOSED scope boundary and re-tiering to gapKind 'by-design'; filed so that call is made explicitly rather than by silence.",
+    note: "Sheet, Server Security: 'Remove or obfuscate X-Powered-By header' and 'Use helmet middleware to set appropriate security headers.' MEASURED: zero findings. WORTH A SCOPE DECISION RATHER THAN A DETECTOR: b5-headers already covers the headers that matter (HSTS, X-Frame-Options, nosniff, CSP) by their effect, and 'helmet is not imported' is a library-adoption check, not a defect — an app setting the same headers by hand is correct and would be a false positive. Version disclosure is Info at best. Recommend recording this as a deliberate, DISCLOSED scope boundary and re-tiering to gapKind 'by-design'. That is an operator ruling, not ours to make, and it is open in #1204; until it is made the entry stays a measured-gap, because a gap nobody has ruled on is not yet by design.",
   },
   {
     id: "P-OWASP-NODE-SENSITIVE-CACHE",
