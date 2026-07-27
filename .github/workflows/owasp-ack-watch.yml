@@ -58,6 +58,13 @@ jobs:
       - name: Read both proposals and report any change from the filing baseline
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job deliberately has no actions/checkout — it reads a third-party API and writes
+          # an issue, and needs none of this repo's source. But `gh issue`/`gh label` infer their
+          # target repo from the git remote, so without a checkout they die on "not a git
+          # repository". GH_REPO supplies it directly, which is cheaper than cloning the repo to
+          # satisfy an inference step. `gh api` is unaffected: its paths are already absolute, so
+          # the upstream reads below still go to OWASP/CheatSheetSeries.
+          GH_REPO: ${{ github.repository }}
           UPSTREAM: OWASP/CheatSheetSeries
           MARKER: owasp-ack-alert
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -161,6 +168,7 @@ jobs:
         if: failure() && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }} # same reason as the step above — no checkout in this job
           MARKER: ci-owasp-watch-alert
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
