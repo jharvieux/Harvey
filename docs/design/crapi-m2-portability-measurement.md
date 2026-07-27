@@ -93,6 +93,14 @@ reasons below):
 > Falsify the crAPI-shape half by re-running the reproduction below through
 > `pentest.ts --mode=external --openapi openapi-spec/crapi-openapi-spec.json`.
 
+That remaining verification is an empirical claim, recorded per #1072 with its live-tier falsifier:
+
+> REASON: the #965 externalised-oracle + response-shape-aware IDOR-OBJECT fix is proven live on VAmPI (reached `proven`) and by offline control, but has NOT been re-run against a live crAPI stack — so crAPI's specific BOLA shapes (the {order,payment} envelope, the domain-named carId key) are covered by design and offline fixture, not yet by a live crAPI measurement
+> KIND: empirical
+> PROVENANCE: TRIED 2026-07-24 (VAmPI live re-run reached `proven`; the crAPI live re-run was not performed and is recorded above as the honest remaining verification)
+> FALSIFIER: pnpm exec tsx src/cli/pentest.ts --mode=external --app-url <crapi-gateway> --openapi openapi-spec/crapi-openapi-spec.json | grep -q "IDOR-OBJECT.*proven"
+> FALSIFIER-TIER: m2-stack
+
 **Gap 1 — IDOR-OBJECT foreign-id ACQUISITION is PostgREST-oracle-coupled. HOLDS IDENTICALLY.**
 `collectOwnedIds` (`src/pentest/verify.ts:459`) discovers the victim ids by reading
 `GET {apiUrl}/rest/v1/<table>` with the service-role oracle. crAPI has no PostgREST endpoint, so the

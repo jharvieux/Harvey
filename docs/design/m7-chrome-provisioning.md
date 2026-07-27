@@ -82,6 +82,16 @@ confirming the cache is actually being hit.
 `docs/design/portability-cold-target.md`, not edited here). Provisioning only fixes *whether a
 Lighthouse-compatible Chrome exists*, not the orchestrator wiring.
 
+The standing environment constraint below is an empirical claim, recorded per #1072 with the
+live-tier falsifier that would retire it:
+
+> REASON: measuring Core Web Vitals needs a Lighthouse-compatible Chrome — with system Chrome skipped and no network to provision the Chrome-for-Testing build, the M7 Lighthouse tier degrades to the M7L-00 disclosure rather than producing CWV scores; whether the bundled Playwright chromium NO_FCPs is environment/target-dependent (#840 captured a real FCP live), so it is not a guaranteed substitute
+> KIND: empirical
+> PROVENANCE: MEASURED 2026-07-18 (#840 live: bundled chromium captured a real FCP on a served next build; the provisioned Chrome-for-Testing scored 0.91, FCP 627ms — both re-checkable only on a machine that can run Lighthouse)
+> FALSIFIER: LIGHTHOUSE_SKIP_SYSTEM_CHROME=1 LIGHTHOUSE_SKIP_BUNDLED_CHROMIUM=1 HARVEY_CHROME_CACHE_DIR=/tmp/harvey-nochrome-$$ pnpm exec tsx src/cli/lighthouse-scan.ts --url <served-target> --out /tmp/lh.json && ! grep -q "M7L-00" /tmp/lh.json
+> FALSIFIER-TIER: lighthouse
+> TOUCHES: src/cli/lighthouse-scan.ts
+
 ## Part 2 — routing chrome-launcher's async 'error' event
 
 ### Root cause
