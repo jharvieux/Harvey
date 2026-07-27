@@ -1,0 +1,96 @@
+# Gate 1 + Gate 2 of the prevention program (#1315, #1316): a PR may not close an issue whose
+# acceptance criteria it did not meet, and a deferral may not point at a dead issue.
+#
+# Harvey has a conservation gate because a detector can work while its finding never reaches the
+# deliverable. The issue tracker has the identical defect one layer up: `Closes #N` fires on merge
+# with NOTHING verifying N's criteria. An audit of 562 closed issues on 2026-07-27 found ~60 closed
+# with unmet criteria, and in almost every case the executor was HONEST in the PR body and the merge
+# happened anyway — #1206's body was headed "## Does NOT close #1206" and it closed on merge.
+# Honesty in a PR body is not a gate. This is.
+#
+# NO `paths:` FILTER, DELIBERATELY. This job is intended as a required status check, and GitHub
+# waits forever for a required context that never reports — so a path-filtered required check
+# deadlocks every PR outside its filter (#1107, and why conservation.yml's filter had to move
+# in-job). There is also no job-level `if:`: a skipped job is not a reliable substitute for success
+# under required-check rules. The job therefore runs on every PR and always reports.
+#
+# THE RELEVANCE TEST LIVES INSIDE THE CLI, not in a bash step. It is not a change-based question —
+# a PR is in scope if its BODY carries a closing keyword or a `remainder:` line, which no file diff
+# can answer. Putting it in the CLI means the short-circuit uses the same parser the gate uses; a
+# second copy in YAML could disagree with it, and the disagreement would be silent. A PR that closes
+# nothing prints one line and exits 0.
+#
+# THE NEGATIVE CONTROL IS PART OF THE JOB (step 2). `--selftest` scores a hermetic scenario: one
+# healthy PR body that must PASS and four seeded violations — a dropped disposition, a `met`
+# hollowed out to a bare "done", a remainder pointing at a CLOSED issue, a remainder pointing at
+# one that does not exist — that must each FAIL. It needs no network and no live issue state, so
+# the proof that the gate can fail does not depend on whichever PR happens to be under test. A
+# green run therefore means "the gate passed AND the gate can still fail", which is a different and
+# much stronger claim: this repo has shipped a gate that could not fire twice (#1246's five recorded
+# falsifiers that exited non-zero on a shell redirect and read as "the blocker still holds", and
+# #1287's four alert paths that have never fired).
+#
+# `edited` is in the trigger list because the input this gate reads is the PR BODY. Without it,
+# fixing an unmapped bullet would need a dummy commit to re-run the check.
+#
+# On failure of step 1: the PR would close an issue with a criterion it did not account for, or it
+# defers to an issue that is closed or does not exist. Fix the PR body (map the bullet, or file and
+# cross-link the remainder), or drop the closing keyword. Never rebaseline — there is no baseline.
+# On failure of step 2: the gate itself stopped working. Fix it before trusting step 1.
+
+name: acceptance
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+# Only ever cancelled by a NEWER run on the same `github.ref` (`refs/pull/N/merge` for a PR), so the
+# superseding run reports against the same head commit branch protection evaluates. A `cancelled`
+# conclusion can therefore never be the latest result for a head SHA and cannot strand a merge —
+# the same posture ci.yml, dry-run-drift.yml and conservation.yml already take.
+concurrency:
+  group: acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: every closed issue's acceptance criteria are accounted for
+    runs-on: ubuntu-latest
+    # The gate reads the closed issues' bodies and comments (criteria, the `relayed` question, the
+    # remainder cross-link) and the PR's own body. Read-only: a gate reports, it does not act.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Acceptance conservation (must PASS)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          pnpm exec tsx src/cli/validate-acceptance.ts
+          --pr ${{ github.event.pull_request.number }}
+          --repo ${{ github.repository }}
+
+      # The CLI's own exit codes are three-valued so this distinction survives: 1 is "the gate
+      # failed", 2 is "the gate could not run". `--selftest` touches no network and so can only
+      # return 0 or 1 — it reports which of its five cases came out wrong.
+      - name: Negative control — every seeded violation must FAIL the gate
+        run: |
+          if ! pnpm exec tsx src/cli/validate-acceptance.ts --selftest; then
+            echo "::error::The acceptance gate's self-test did not hold: either the healthy body stopped passing, or a seeded violation stopped failing. A gate that cannot fail makes the PASS above meaningless (#350/#1065)."
+            exit 1
+          fi
