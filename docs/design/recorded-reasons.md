@@ -49,6 +49,32 @@ TOUCHES: <paths>            # optional; adds to the subsystem-drift paths derive
   against a product ruling is a category error, and since decisional was ~45% of the tracker, letting
   it into the re-test pass would generate the noise that trains people to ignore the gate.
 
+### Work parked on an external event needs a falsifier, not a `deferred` label (2026-07-27)
+
+An issue blocked on something outside this repo — an upstream PR merging, a third-party release, a
+service becoming available — is **empirical**, and labelling it `deferred` (or closing it) is the
+wrong parking place. `deferred` makes sweeps skip it at fetch time, so nothing notices when the
+blocker clears; it waits for a human to remember. That is this repo's silent-omission defect
+relocated to the issue tracker. A falsifier makes the external event **fire an alarm**: the daily
+`reasons-drift.yml` run executes it and fails loud the day it starts exiting 0.
+
+Three constraints on writing one:
+
+- **The block must live in a FILE.** The daily job never executes a falsifier found in an issue body
+  — that is attacker-writable input — so an issue-recorded block is reported `NOT RE-TESTED` and
+  guards nothing. Mirror it into the file the claim constrains.
+- **A lookup that fails must not read as "still blocked."** A remote query exits non-zero on an auth
+  failure, a network failure or a missing binary, which the one-way contract would read as the
+  blocker holding. Trap that case and `exit 127`, so the gate reports UNVERIFIABLE and fails rather
+  than passing green on a query that never ran.
+- **Exercise it in both directions before shipping it.** Confirm it exits non-zero today for the
+  right reason, and confirm it exits 0 against a state where the blocker is gone (swap in an
+  already-merged PR number, an already-published version). Worked example: the block at the head of
+  `src/scan/calibration/owasp-react.entries.ts`, wired for #1241 / OWASP/CheatSheetSeries#2196.
+
+A **decisional** deferral is different and stays a label: #920/#921 (cost with no current demand),
+#882 and #4 (operator go/no-go) wait on a human ruling, not on an event a command can observe.
+
 **PROVENANCE is the register.** The four blockers falsified on 2026-07-24 were all ASSUMED written in
 MEASURED's confident register; the tag makes the difference legible instead of leaving it to prose
 tone. MEASURED means a command was run (name it and date it); TRIED means something was attempted and
