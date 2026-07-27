@@ -127,4 +127,25 @@ describe("validate-reasons CLI", () => {
     expect(code).toBe(1);
     expect(out).toContain("unfalsifiable and therefore permanent");
   });
+
+  it("fails on a TOUCHES: path that is not in the checkout — a typo makes drift silent forever (#1246)", () => {
+    const { code, out } = gate(plant({ "typo.ts": `${LIVE_REASON}\n// TOUCHES: src/detectors/no-such-file.ts` }));
+    expect(code).toBe(1);
+    expect(out).toContain("is not a path in this checkout");
+  });
+
+  // Silence from a reason with nothing to watch looks exactly like silence from a quiet subsystem,
+  // so the two are separated in the output rather than left to be inferred (#1246).
+  it("counts the empirical reasons subsystem drift can and cannot watch", () => {
+    const { code, out } = gate(plant({ "unwatched.ts": LIVE_REASON }));
+    expect(code).toBe(0);
+    expect(out).toContain("Subsystem drift watches 0/1 empirical reason(s)");
+  });
+
+  it("counts claim-shaped prose outside every block instead of reading well-formed as complete (#1246)", () => {
+    const { code, out } = gate(plant({ "prose.md": "Harvey cannot analyse Elixir today.\n" }), ["--census"]);
+    expect(code).toBe(0);
+    expect(out).toContain("Untriaged claim-shaped prose lines");
+    expect(out).toContain("prose.md:1  Harvey cannot analyse Elixir today.");
+  });
 });

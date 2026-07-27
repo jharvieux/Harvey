@@ -67,6 +67,8 @@ export interface ParsedReason {
   file: string;
   /** 1-based line of the block's REASON: key. */
   line: number;
+  /** 1-based line of the block's last field, so the claim census can exclude what is already triaged. */
+  endLine: number;
   fields: Partial<Record<Key, string>>;
   /** Parse-time problems (unknown/duplicate field). Validation adds to these; it never mutates. */
   parseErrors: string[];
@@ -86,12 +88,12 @@ const FIELD = /^([A-Z][A-Z0-9-]{2,}):\s*(.*)$/;
  * needs a blank line before it, which is also what makes an unknown ALL-CAPS field a typo worth
  * reporting rather than ambiguous prose.
  */
-export function parseRecordedReasons(text: string, file: string): ParsedReason[] {
+export function parseRecordedReasons(text: string, file: string, fenced = file.endsWith(".md")): ParsedReason[] {
   const out: ParsedReason[] = [];
   let open: ParsedReason | undefined;
   // A fenced block in Markdown is documentation OF the convention (this file's own syntax template,
-  // for one), not a reason recorded IN it.
-  const fenced = file.endsWith(".md");
+  // for one), not a reason recorded IN it. GitHub issue bodies are Markdown too, so `--issues`
+  // passes `fenced` explicitly rather than inferring it from a pseudo-filename.
   let inFence = false;
   text.split("\n").forEach((raw, i) => {
     if (fenced && /^\s*(```|~~~)/.test(raw)) {
@@ -108,11 +110,12 @@ export function parseRecordedReasons(text: string, file: string): ParsedReason[]
     const key = match[1] ?? "";
     const value = (match[2] ?? "").trim();
     if (key === "REASON") {
-      open = { file, line: i + 1, fields: { REASON: value }, parseErrors: [] };
+      open = { file, line: i + 1, endLine: i + 1, fields: { REASON: value }, parseErrors: [] };
       out.push(open);
       return;
     }
     if (!open) return;
+    open.endLine = i + 1;
     if (!KNOWN.has(key)) open.parseErrors.push(`unknown field ${key}: (line ${i + 1}) — known fields are ${KEYS.join(", ")}`);
     else if (open.fields[key as Key] !== undefined) open.parseErrors.push(`duplicate field ${key}: (line ${i + 1})`);
     else open.fields[key as Key] = value;
@@ -141,10 +144,74 @@ function walk(abs: string, out: string[]): void {
   }
 }
 
-export function collectReasons(roots: string[], base: string): ParsedReason[] {
+export interface SourceText {
+  file: string;
+  text: string;
+}
+
+export function collectSources(roots: string[], base: string): SourceText[] {
   const files: string[] = [];
   for (const root of roots) walk(resolve(base, root), files);
-  return files.flatMap((abs) => parseRecordedReasons(readFileSync(abs, "utf8"), relative(base, abs)));
+  return files.map((abs) => ({ file: relative(base, abs), text: readFileSync(abs, "utf8") }));
+}
+
+export function collectReasons(roots: string[], base: string): ParsedReason[] {
+  return collectSources(roots, base).flatMap(({ file, text }) => parseRecordedReasons(text, file));
+}
+
+// #1246 — the gate's headline ("N blocks, all well-formed") reads as a clean bill of health over the
+// repo's claims, but well-formed is a statement about the blocks that EXIST. The #1033 inventory
+// measured 86 claim-shaped lines across 33 of 51 design docs that were never triaged into
+// empirical/decisional at all, and a claim outside a block is not re-tested by anything. So the
+// untriaged population is COUNTED on every run rather than quoted from a doc — an unstated
+// limitation reads as a clean bill of health, and a stored number stops being true.
+//
+// Deliberately a LOWER BOUND over a fixed vocabulary of standing-impossibility phrasings, and
+// prose-only: the same inventory measured docs/design carrying 2 provenance tags against src/'s 119,
+// so prose is the weak surface. Advisory, never a gate failure — a hard gate over a heuristic gets
+// argued down or suppressed, and what this needs to do is stay visible while the number shrinks.
+const CLAIM_VOCABULARY = /\b(cannot|can't|can not|impossible|no way to|not possible|unable to)\b/i;
+
+interface UntriagedClaim {
+  file: string;
+  line: number;
+  text: string;
+}
+
+// #1246 — collectReasons reads FILES, so a blocker recorded in a GitHub issue body or comment sits
+// outside every gate in this module. Three reason blocks were posted as issue comments on #920/#921/
+// #1163 (2026-07-26) and nothing re-validated them; by 2026-07-27 one had already decayed (#1163's
+// "a migrationsDir-less Prisma-7 target cannot stand up", retired by prismaV7ApplyArgs in
+// src/prisma-dynamic.ts) with nothing anywhere to say so. Rendering a fetched issue as the same
+// SourceText the file walk produces lets the structural pass and the claim census apply unchanged.
+export interface FetchedIssue {
+  number: number;
+  body: string;
+  comments?: { body: string }[];
+}
+
+export function issueSources(issues: FetchedIssue[]): SourceText[] {
+  return issues.flatMap((issue) => [
+    { file: `issue #${issue.number}`, text: issue.body ?? "" },
+    ...(issue.comments ?? []).map((c, i) => ({ file: `issue #${issue.number} (comment ${i + 1})`, text: c.body ?? "" })),
+  ]);
+}
+
+/** Callers pass the prose surfaces they want censused; the vocabulary is not tuned for code. */
+export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]): UntriagedClaim[] {
+  return sources.flatMap(({ file, text }) => {
+    const triaged = reasons.filter((r) => r.file === file);
+    const out: UntriagedClaim[] = [];
+    let inFence = false;
+    text.split("\n").forEach((raw, i) => {
+      if (/^\s*(```|~~~)/.test(raw)) inFence = !inFence;
+      if (inFence || !CLAIM_VOCABULARY.test(raw)) return;
+      const line = i + 1;
+      if (triaged.some((r) => line >= r.line && line <= r.endLine)) return;
+      out.push({ file, line, text: raw.trim() });
+    });
+    return out;
+  });
 }
 
 const PROVENANCE_FORM = /^(MEASURED|TRIED|ASSUMED) (\d{4}-\d{2}-\d{2})\b/;
@@ -152,7 +219,12 @@ const PROVENANCE_FORM = /^(MEASURED|TRIED|ASSUMED) (\d{4}-\d{2}-\d{2})\b/;
 // re-testing nothing.
 const PLACEHOLDER = /^(n\/?a|tbd|todo|none|unknown|\?+)$/i;
 
-export function validateRecordedReason(r: ParsedReason): string[] {
+/**
+ * `exists` answers "is this a path in the checkout" — injected so validation and derivation stay
+ * pure and testable. It defaults to accepting everything, so a caller with no filesystem gets the
+ * structural checks and simply skips the path-existence ones.
+ */
+export function validateRecordedReason(r: ParsedReason, exists: (path: string) => boolean = () => true): string[] {
   const errors = [...r.parseErrors];
   const f = r.fields;
   if (!f.REASON) errors.push("REASON: is empty");
@@ -181,6 +253,11 @@ export function validateRecordedReason(r: ParsedReason): string[] {
     if (!f.OWNER) errors.push("OWNER: missing — a decisional reason needs the person or role who makes the ruling");
     if (!f.DECISION) errors.push("DECISION: missing — point at the decision record (a doc path or issue ref) the ruling lives in");
   }
+  // A TOUCHES: path that does not exist is the subsystem-drift version of #1072's redirect bug:
+  // `git log -- <typo>` reports zero commits forever, so the reason looks watched and is not.
+  for (const p of declaredTouches(r)) {
+    if (!exists(p)) errors.push(`TOUCHES: "${p}" is not a path in this checkout — \`git log -- ${p}\` can only ever report zero commits, so this reason reads as drift-watched while nothing watches it`);
+  }
   return errors;
 }
 
@@ -193,8 +270,29 @@ function reasonDate(r: ParsedReason): string | undefined {
   return PROVENANCE_FORM.exec(r.fields.PROVENANCE ?? "")?.[2];
 }
 
-function touchedPaths(r: ParsedReason): string[] {
+function declaredTouches(r: ParsedReason): string[] {
   return (r.fields.TOUCHES ?? "").split(/[,\s]+/).filter(Boolean);
+}
+
+// #1246 — TOUCHES: was optional, so subsystemDrift — the half that catches the #1035 shape without
+// re-running anything — watched only the 9 of 15 empirical reasons whose author happened to declare
+// it (measured 2026-07-27). Making it MANDATORY was the other option and is rejected: the three
+// negative controls in .github/workflows/reasons-drift.yml plant reasons carrying no TOUCHES, so a
+// structural failure would make all three exit non-zero for the WRONG reason — a green job whose own
+// controls no longer prove anything is the false-green this whole family exists to kill.
+//
+// So the paths are DERIVED from the falsifier the author already wrote: a token naming a path that
+// exists in this checkout is a subsystem the claim depends on. Existence is the whole filter, which
+// is why a `<placeholder>`, a `/tmp` scratch file and a bare flag all drop out without a special
+// case; requiring a `/` keeps a bare `src/` (which would put every commit under every reason) out.
+const PATH_TOKEN = /[\w.@-]+(?:\/[\w.@*-]+)+/g;
+
+export function watchedPaths(r: ParsedReason, exists: (path: string) => boolean): string[] {
+  // node_modules is not in this repo's history, so a derived path under it would be watched in name
+  // only — `git log --` on it reports zero commits forever, which is what the unwatched count exists
+  // to distinguish from a genuinely quiet subsystem.
+  const derived = [...(r.fields.FALSIFIER ?? "").matchAll(PATH_TOKEN)].map((m) => m[0]).filter((p) => !p.startsWith("node_modules/") && exists(p));
+  return [...new Set([...declaredTouches(r), ...derived])];
 }
 
 type RevalidationStatus = "holds" | "STALE" | "UNVERIFIABLE" | "SKIPPED-LIVE";
@@ -271,9 +369,13 @@ interface SubsystemDriftRow {
 // subsystem had moved since the reason was recorded. Reported for review rather than as a failure:
 // a sibling commit is evidence to go look, not proof the claim died, and failing on it would make
 // the gate cry wolf on every merge.
-export function subsystemDrift(reasons: ParsedReason[], commitsSince: (paths: string[], since: string) => string[]): SubsystemDriftRow[] {
+export function subsystemDrift(
+  reasons: ParsedReason[],
+  commitsSince: (paths: string[], since: string) => string[],
+  exists: (path: string) => boolean = () => false,
+): SubsystemDriftRow[] {
   return reasons.flatMap((r) => {
-    const paths = touchedPaths(r);
+    const paths = watchedPaths(r, exists);
     const since = reasonDate(r);
     if (paths.length === 0 || !since) return [];
     const commits = commitsSince(paths, since);
