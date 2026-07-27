@@ -18,6 +18,15 @@
 // above with zero network calls. Model: `--semantic-model <id>` / PII_SEMANTIC_MODEL env,
 // default claude-sonnet-5.
 //
+// VALUE-SAMPLING content tier (#893, LIVE tier only): add `--value-sampling` on a live-DB run to
+// read a BOUNDED sample of real cell values from candidate columns and classify them by CONTENT —
+// catching regulated data hidden in a generically-named column (a `notes`/`data`/`payload` column
+// that actually holds emails/SSNs/cards) that name/type classification is structurally blind to.
+// Gated twice (the flag AND a live connection) and OFF by default: a run that doesn't opt in reads
+// zero values. Classification is LOCAL — sampled values are pattern-matched in-process and are never
+// sent anywhere, persisted, or logged; a finding records the classification + match counts, never a
+// raw value. Row cap: `--value-sample-rows N` / PII_VALUE_SAMPLE_ROWS env, default 20.
+//
 // The --schema path parses `CREATE TABLE` columns straight out of migration SQL (one or more
 // targets, each a directory of *.sql files or a single .sql file) via src/migration-sql-parse.ts's
 // parseColumns — the same under-extract-rather-than-mis-extract parser the M1 detect-deeper
@@ -224,8 +233,10 @@ const JSON_CONTAINER_NAME_PATTERN =
 // column with a narrative-shaped name gets a LOW-confidence FREE_TEXT_REVIEW flag — "review this
 // column's contents for unstructured PII/PHI", a flag, never an assertion (mirrors #377's json
 // container flag). This is the NAME-based visibility flag so the blind spot appears in the output;
-// #855's opt-in semantic pass reasons over names/types/table context but still never reads VALUES,
-// so a content-reading (value-sampling) tier remains deliberately out of scope. Type-gated (only
+// #855's opt-in semantic pass reasons over names/types/table context but still never reads VALUES.
+// The content-reading (value-sampling) tier that DOES read the values landed in #893 (opt-in, live
+// tier only — see the VALUE-SAMPLING section below); a FREE_TEXT_REVIEW column is one of its
+// candidate inputs. Type-gated (only
 // free-text-shaped types) and vocabulary-scoped so it doesn't flag every string column — still
 // FP-prone (an email `body`, a product `description`), which is exactly why it's low-confidence
 // review, not a classification. Checked LAST, so any higher-signal dictionary/type hit wins first.
@@ -610,6 +621,240 @@ export function dataMapToFindings(dataMap, { tier }) {
   });
 }
 
+// --- #893: value-sampling (content-reading) tier — OPT-IN, LIVE TIER ONLY ----------------------
+//
+// Everything above classifies by column NAME + declared TYPE (+ table/sibling context on the #855
+// semantic path) and never reads a cell. Value-sampling is the axis DSPM tools (BigID/Cyera/
+// Nightfall) classify on: it reads a BOUNDED sample of real values from a candidate column and
+// classifies by CONTENT, catching regulated data hidden in a generically-named column the name
+// dictionary is structurally blind to. Operator ruling 2026-07-26 authorised reading values; it is
+// gated twice (resolveValueSampling: the --value-sampling flag AND the live tier) and OFF by
+// default, so a run that doesn't opt in reads zero values.
+//
+// Privacy: classification is LOCAL. Sampled values are matched against the patterns below IN-PROCESS
+// and are NEVER sent over the network, persisted, or logged — a result records the CLASSIFICATION
+// and the match COUNT ("EMAIL matched 8/20 sampled values"), never a raw value, so a client's actual
+// data cannot land in findings.json, the data map, or stderr.
+
+const VALUE_SAMPLE_ROW_CAP = 20; // rows read per candidate column — bounded, LIMIT-capped
+const VALUE_SAMPLE_MAX_ROW_CAP = 1000; // upper bound on the --value-sample-rows override
+const VALUE_CHAR_CAP = 2000; // each sampled value truncated before scanning (bounds work, not privacy)
+const VALUE_MIN_MATCHES = 1; // one real SSN/card/email in a name-blind column is worth a review flag
+
+function luhnValid(digits) {
+  let sum = 0;
+  let alt = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let d = digits.charCodeAt(i) - 48;
+    if (alt && (d *= 2) > 9) d -= 9;
+    sum += d;
+    alt = !alt;
+  }
+  return sum % 10 === 0;
+}
+
+// Content detectors run over the TEXT of each sampled value (searched anywhere in the string, so an
+// email embedded in a free-text paragraph or a jsonb blob's ::text is caught). Deliberately high-
+// signal so a genuinely-non-PII column (product copy, slugs, status text) does not match: the SSN
+// and phone patterns require separators, and the card detector additionally requires a Luhn-valid
+// number so a 16-digit order/tracking id is not misread as a PAN.
+const VALUE_DETECTORS = [
+  { infotype: "EMAIL", category: "PII", matches: (v) => /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(v) },
+  { infotype: "US_SSN", category: "SENSITIVE_PII", matches: (v) => /\b\d{3}-\d{2}-\d{4}\b/.test(v) },
+  { infotype: "IP", category: "PII", matches: (v) => /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/.test(v) },
+  { infotype: "PHONE", category: "PII", matches: (v) => /(?:\+?\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b/.test(v) },
+  {
+    infotype: "CREDIT_CARD",
+    category: "PCI",
+    matches: (v) =>
+      (v.match(/\b(?:\d[ -]?){13,19}\b/g) ?? []).some((s) => {
+        const d = s.replace(/\D/g, "");
+        return d.length >= 13 && d.length <= 19 && luhnValid(d);
+      }),
+  },
+];
+
+/**
+ * Classify a bounded array of sampled cell values by CONTENT. Returns the count of scanned (non-null)
+ * values and, per matched infotype, how many of them matched — never the values themselves.
+ * @param {unknown[]} values
+ * @returns {{scanned: number, hits: {infotype: string, category: string, matches: number}[]}}
+ */
+export function classifySampledValues(values, { valueCharCap = VALUE_CHAR_CAP } = {}) {
+  const counts = new Map();
+  let scanned = 0;
+  for (const raw of values) {
+    if (raw === null || raw === undefined) continue;
+    const v = String(raw).slice(0, valueCharCap);
+    scanned++;
+    for (const d of VALUE_DETECTORS) {
+      if (!d.matches(v)) continue;
+      const cur = counts.get(d.infotype) ?? { category: d.category, matches: 0 };
+      cur.matches++;
+      counts.set(d.infotype, cur);
+    }
+  }
+  return { scanned, hits: [...counts].map(([infotype, c]) => ({ infotype, category: c.category, matches: c.matches })) };
+}
+
+// Only free-text / json-shaped columns can hide unstructured PII; a numeric/date/bool column can't.
+const VALUE_SAMPLEABLE_TYPE = /^(text|character varying|varchar|character|char|citext|string|jsonb?)/;
+
+/**
+ * The columns worth sampling: those the NAME/TYPE classifier MISSED (no hit), only REVIEW-FLAGGED
+ * (free-text / json container), or resolved at LOW confidence — exactly the blind spot value-
+ * sampling exists to cover. A column the dictionary already asserts (email, ssn, cvv) is NOT re-
+ * sampled: its class is known and reading its values would be gratuitous.
+ * @param {{table_name: string, column_name: string, data_type?: string}[]} columns
+ */
+export function valueSampleCandidates(columns) {
+  return columns.filter((col) => {
+    if (!col.data_type || !VALUE_SAMPLEABLE_TYPE.test(String(col.data_type).toLowerCase())) return false;
+    const hit = classifyColumn(col.column_name, col.data_type, col.table_name);
+    if (!hit) return true;
+    return REVIEW_FLAG_INFOTYPES.has(hit.infotype) || hit.confidence === "low";
+  });
+}
+
+/**
+ * Sample and content-classify every candidate column via an injected `sampleFn(table, column, cap)`
+ * — injectable so tests never need a database and the live sampler (a read-only LIMIT query) is the
+ * only value-reading code. A per-column sample failure is counted and skipped, never fatal. Returns
+ * counts + classifications only; no raw value ever enters the result.
+ * @param {{table_name: string, column_name: string, data_type?: string}[]} columns
+ * @param {(table: string, column: string, cap: number) => Promise<unknown[]>} sampleFn
+ */
+export async function valueSample(columns, sampleFn, { rowCap = VALUE_SAMPLE_ROW_CAP, minMatches = VALUE_MIN_MATCHES, onError } = {}) {
+  const candidates = valueSampleCandidates(columns);
+  const results = [];
+  let errorCount = 0;
+  for (const col of candidates) {
+    let values;
+    try {
+      values = await sampleFn(col.table_name, col.column_name, rowCap);
+    } catch (err) {
+      errorCount++;
+      onError?.(col, err);
+      continue;
+    }
+    const { scanned, hits } = classifySampledValues(values);
+    const asserted = hits.filter((h) => h.matches >= minMatches);
+    if (asserted.length === 0) continue;
+    const nameHit = classifyColumn(col.column_name, col.data_type, col.table_name);
+    results.push({
+      table: col.table_name,
+      column: col.column_name,
+      dataType: col.data_type,
+      scanned,
+      nameInfotype: nameHit?.infotype ?? null,
+      nameConfidence: nameHit?.confidence ?? null,
+      hits: asserted,
+    });
+  }
+  return { candidateCount: candidates.length, sampledCount: candidates.length - errorCount, errorCount, results };
+}
+
+/**
+ * The gate: with a null `config` the sampler is NEVER called — proving off-by-default reads zero
+ * values. resolveValueSampling (below) returns null unless --value-sampling was passed.
+ */
+export async function runValueSampling(columns, sampleFn, config) {
+  if (!config) return null;
+  return valueSample(columns, sampleFn, config);
+}
+
+/**
+ * The opt-in gate, mirroring resolveSemanticClassifier (#855): returns a config ONLY when
+ * --value-sampling is present, else null (off by default). Row cap: --value-sample-rows N, else
+ * PII_VALUE_SAMPLE_ROWS, else the default — clamped to VALUE_SAMPLE_MAX_ROW_CAP.
+ * @param {{argv?: string[], env?: Record<string, string|undefined>}} opts
+ */
+export function resolveValueSampling({ argv = process.argv, env = process.env } = {}) {
+  if (!argv.includes("--value-sampling")) return null;
+  const i = argv.indexOf("--value-sample-rows");
+  const raw = i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : env.PII_VALUE_SAMPLE_ROWS;
+  const rowCap = raw && /^\d+$/.test(raw) ? Math.min(Number(raw), VALUE_SAMPLE_MAX_ROW_CAP) : VALUE_SAMPLE_ROW_CAP;
+  return { rowCap, minMatches: VALUE_MIN_MATCHES };
+}
+
+// A value hit's confidence scales severity: matched in most of the sample → medium, a few → low.
+// The finding's own confidence is "Review" regardless — value-sampling is a triage input, like the
+// rest of M10, even though it SAW the data.
+const valueHitConfidence = (h, scanned) => (scanned > 0 && h.matches * 2 >= scanned ? "medium" : "low");
+
+/**
+ * Report-schema findings from a value-sampling result: an M10-VS-00 disclosure row (so a reader
+ * knows value-sampling ran, over how many columns, with the redaction guarantee — even on a zero-hit
+ * run) plus one M10-VS-nn finding per column whose stored VALUES hold regulated data its NAME did
+ * not reveal, calling out any name-vs-values disagreement. Raw values never appear.
+ * @param {Awaited<ReturnType<typeof valueSample>>|null} sampling
+ */
+export function valueSamplingToFindings(sampling) {
+  if (!sampling) return [];
+  const { candidateCount, sampledCount, errorCount, results } = sampling;
+  const disclosure = {
+    id: "M10-VS-00",
+    title: `Value-sampling ran over ${sampledCount} candidate column(s) — ${results.length} classified by content`,
+    severity: "Info",
+    confidence: "N/A",
+    category: "Data classification",
+    taxonomy: "M10 — Data classification (PII/PHI/PCI)",
+    location: "(engagement-wide)",
+    status: "Open",
+    evidence: `Value-sampling (#893) read a bounded per-column sample of real cell values from ${sampledCount} candidate column(s) whose NAME/TYPE the dictionary missed or only review-flagged, and classified them by content. ${candidateCount} candidate(s) selected, ${errorCount} unreadable and skipped. Classification is LOCAL: sampled values were matched in-process against email/phone/SSN/credit-card/IP patterns and were NOT sent anywhere, persisted, or logged — only the classification and match counts are recorded. [MEASURED — this run's live value-sampling pass.]`,
+    impact: results.length
+      ? "Each M10-VS-nn finding names a column whose stored VALUES contain regulated data its name did not reveal — the class name-only classification is structurally blind to."
+      : "No candidate column's sampled values matched a regulated-data pattern on this run.",
+    fix: "Review each M10-VS-nn column; give regulated data a first-class typed/named column so it is classified and protected explicitly.",
+    value: 1,
+    ease: 4,
+    safety: 5,
+    mechanical: true,
+  };
+
+  const findings = results.map((r, i) => {
+    const infos = [...new Set(r.hits.map((h) => h.infotype))];
+    const categories = [...new Set(r.hits.map((h) => h.category))];
+    const score = r.hits.reduce(
+      (sum, h) => sum + pointsFor({ infotype: h.infotype, category: h.category, confidence: valueHitConfidence(h, r.scanned) }),
+      0,
+    );
+    const severity = scoreToSeverity(score);
+    const nameSays = r.nameInfotype ? `name classified it ${r.nameInfotype} (${r.nameConfidence})` : "name/type classified it as NONE";
+    const disagreement = r.nameInfotype && !infos.includes(r.nameInfotype);
+    return {
+      id: `M10-VS-${String(i + 1).padStart(2, "0")}`,
+      title: `Value-sampling: \`${r.table}.${r.column}\` contains ${infos.join(", ")} by content — ${nameSays}`,
+      severity,
+      confidence: "Review",
+      category: "Data classification",
+      taxonomy: "M10 — Data classification (PII/PHI/PCI)",
+      location: `${r.table}.${r.column}`,
+      status: "Open",
+      evidence: `Sampled ${r.scanned} non-null value(s) from \`${r.table}.${r.column}\` (${r.dataType}); content matched: ${r.hits.map((h) => `${h.infotype} in ${h.matches}/${r.scanned}`).join(", ")}. ${disagreement ? `Name vs. values DISAGREE — ${nameSays}, but the values contain ${infos.join(", ")}. ` : ""}Raw values are NOT recorded — classification and match counts only (#893).`,
+      impact: `\`${r.table}.${r.column}\` stores ${categories.join("/")} data its column name did not reveal, so any over-broad read path on the table exposes regulated data a name-only inventory would have missed.`,
+      fix: "Confirm the content is intended; promote regulated data to a first-class typed column so it is classified and protected explicitly, and scope the table's RLS/grants to the owning tenant/user.",
+      value: SEVERITY_VALUE[severity] ?? 1,
+      ease: 3,
+      safety: 4,
+      mechanical: true,
+      precisionTier: "review",
+    };
+  });
+
+  return [disclosure, ...findings];
+}
+
+// The live sampler: a read-only, LIMIT-capped SELECT of one column's non-null values, cast to text
+// so a jsonb/enum column is scannable. Identifiers are passed through postgres.js's identifier
+// escaping (sql(...)), never string-interpolated. This is the ONLY code that reads cell values.
+function makeLiveSampler(sql) {
+  return async (table, column, cap) => {
+    const rows = await sql`SELECT ${sql(column)}::text AS v FROM ${sql("public")}.${sql(table)} WHERE ${sql(column)} IS NOT NULL LIMIT ${cap}`;
+    return rows.map((r) => r.v);
+  };
+}
+
 function flagPath(flag) {
   const i = process.argv.indexOf(flag);
   if (i < 0) return null;
@@ -750,7 +995,7 @@ const SCOPE_NOTE = {
   schema: "Scope: CREATE TABLE + ALTER TABLE ADD COLUMN columns only — views, materialized views, and generated columns are not parsed on the static tier (#853).",
 };
 
-function report(cols, dataMap, { tier = "schema", unknownType = [], semanticModel = null } = {}) {
+function report(cols, dataMap, { tier = "schema", unknownType = [], semanticModel = null, valueSampling = null } = {}) {
   const tables = Object.keys(dataMap);
   // #377/#850: review-flag hits ("look inside this column") are not asserted PII — they get their
   // own lists below and stay out of the asserted headline count.
@@ -785,6 +1030,16 @@ function report(cols, dataMap, { tier = "schema", unknownType = [], semanticMode
     );
     console.log(`\nSemantic pass (${semanticModel}) reviewed the dictionary-unresolved column names/types — no data values were sent (#855). ${semanticRefs.length} column(s) classified semantically (review-tier, never asserted):`);
     for (const ref of semanticRefs) console.log(`  ${ref}`);
+  }
+  // #893: when value-sampling ran, say so — including a zero-hit run, so a reader can tell "the
+  // content pass read the blind-spot columns and matched nothing" apart from "never ran". Raw
+  // values are never printed — only the classification and match counts.
+  if (valueSampling) {
+    const { candidateCount, sampledCount, errorCount, results } = valueSampling;
+    console.log(
+      `\nValue-sampling (#893) read a bounded sample of real values from ${sampledCount}/${candidateCount} candidate column(s) — content classification only, no raw values recorded${errorCount ? `; ${errorCount} unreadable` : ""}. ${results.length} column(s) classified by content:`,
+    );
+    for (const r of results) console.log(`  ${r.table}.${r.column} → ${r.hits.map((h) => `${h.infotype} (${h.matches}/${r.scanned})`).join(", ")}`);
   }
   // #851: fail loud — columns whose SQL type isn't recognized were classified by NAME only, so the
   // type-based signals that couldn't apply are visible rather than the columns silently vanishing.
@@ -866,11 +1121,11 @@ function protectionReview(dataMap, protection, tier) {
 
 // #855: the shared classify → report → emit tail for both CLI tiers. The semantic pass slots in
 // here (behind resolveSemanticClassifier's double gate) so live and schema runs get it identically.
-async function classifyReportAndEmit(cols, { tier, unknownType = [], protection = null }) {
+async function classifyReportAndEmit(cols, { tier, unknownType = [], protection = null, valueSampling = null }) {
   const semantic = resolveSemanticClassifier({ allColumns: cols });
   const dataMap = await classifyWithFallback(cols, semantic ?? undefined);
-  report(cols, dataMap, { tier, unknownType, semanticModel: semantic?.model ?? null });
-  writeFindingsOut(dataMap, tier, protectionReview(dataMap, protection, tier));
+  report(cols, dataMap, { tier, unknownType, semanticModel: semantic?.model ?? null, valueSampling });
+  writeFindingsOut(dataMap, tier, [...protectionReview(dataMap, protection, tier), ...valueSamplingToFindings(valueSampling)]);
   writeDataMapOut(dataMap);
 }
 
@@ -880,8 +1135,10 @@ async function inventory() {
   const cols =
     await sql`SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, ordinal_position`;
   const protection = await gatherProtectionFacts(sql);
+  const vsConfig = resolveValueSampling();
+  const valueSampling = await runValueSampling(cols, makeLiveSampler(sql), vsConfig);
   await sql.end();
-  await classifyReportAndEmit(cols, { tier: "live", protection });
+  await classifyReportAndEmit(cols, { tier: "live", protection, valueSampling });
 }
 
 /**
@@ -988,6 +1245,11 @@ function columnsForTarget(target) {
 }
 
 async function classifyFromSchema() {
+  // #893: value-sampling reads real cell values, which only exist on a live connection — a --schema
+  // run has none, so opting in here is disclosed as skipped rather than silently ignored.
+  if (resolveValueSampling()) {
+    console.error("⚠ --value-sampling requires a live database connection (connected tier); a --schema run reads no values — value-sampling skipped (#893).");
+  }
   const targets = schemaTargets();
   const missing = targets.filter((t) => !existsSync(t));
   if (targets.length === 0 || missing.length) {
