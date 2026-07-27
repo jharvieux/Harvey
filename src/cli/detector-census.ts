@@ -35,6 +35,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/pg-response-exposure.ts": "M1",
   "src/scan/service-role-literal.ts": "M1",
   "src/scan/emitter-error.ts": "M1", // #1202 — EventEmitter 'error' emit with no same-file listener
+  "src/scan/express-powered-by.ts": "M1", // #1204 — Express app whose module never disables X-Powered-By
   "src/scan/job-tenant-scope.ts": "M1",
   "src/scan/prisma-tenant-scope.ts": "M1",
   "src/scan/drizzle-tenant-scope.ts": "M1",

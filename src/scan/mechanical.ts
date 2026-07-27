@@ -27,6 +27,7 @@ import { scanSsrSanitizer } from "./ssr-sanitizer.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { scanEmitterUnhandledError } from "./emitter-error.js";
+import { scanExpressPoweredBy } from "./express-powered-by.js";
 import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachability.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./framework-detect.js";
@@ -448,6 +449,12 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // #1202 — EventEmitter emits 'error' with no same-file listener; disclosed same-file-only
     // limitation (a listener attached by an importing module is invisible to this pass).
     findings.push(...scanEmitterUnhandledError(scanDir));
+
+    // #1204 — an Express app whose constructing module never disables X-Powered-By. Review tier,
+    // and the finding itself states the two things a static pass cannot see (a disable in another
+    // module, a strip at the proxy/CDN). The "use helmet" half of the same OWASP line is declined
+    // by ruling — see the recorded reason in express-powered-by.ts.
+    findings.push(...scanExpressPoweredBy(scanDir));
 
     // #1239 — `dompurify` (browser-only) called in a server-rendered module. Its own pass because
     // every dangerouslySetInnerHTML rule EXCLUDES an import-bound sanitizer wrap, so the semgrep
