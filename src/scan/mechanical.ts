@@ -28,6 +28,7 @@ import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { scanEmitterUnhandledError } from "./emitter-error.js";
 import { scanExpressPoweredBy } from "./express-powered-by.js";
+import { scanRawBodyNoLimit } from "./raw-body-limit.js";
 import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachability.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
 import { detectOrm, ORM_LABELS, type TargetOrm } from "./framework-detect.js";
@@ -455,6 +456,10 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // module, a strip at the proxy/CDN). The "use helmet" half of the same OWASP line is declined
     // by ruling — see the recorded reason in express-powered-by.ts.
     findings.push(...scanExpressPoweredBy(scanDir));
+
+    // #1200 — a raw `req.on("data", …)` accumulator with no byte ceiling; disclosed
+    // single-handler limitation (a ceiling imposed by middleware elsewhere is invisible).
+    findings.push(...scanRawBodyNoLimit(scanDir));
 
     // #1239 — `dompurify` (browser-only) called in a server-rendered module. Its own pass because
     // every dangerouslySetInnerHTML rule EXCLUDES an import-bound sanitizer wrap, so the semgrep
