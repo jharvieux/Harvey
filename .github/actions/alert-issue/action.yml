@@ -41,7 +41,7 @@ inputs:
     required: false
     default: "false"
   token:
-    description: Token with issues::write. Pass ${{ github.token }} — the point is to prove the REAL job token works.
+    description: "Token with issues: write. Callers pass the job token — the point is to prove the REAL one works. (Written without expression syntax on purpose: an action manifest's `inputs` block is not an expression context, and a `github.*` reference here fails the whole action to load, which is how the first drill run of #1287 died.)"
     required: true
   repo:
     description: owner/name. Needed because `gh issue` infers its repo from a git remote, and some callers have no checkout.
