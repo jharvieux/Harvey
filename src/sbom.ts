@@ -25,8 +25,8 @@
 // ── What the BOM carries per component ───────────────────────────────────────────────────────────
 // name, version, purl, dev scope, plus (#1079) CycloneDX `licenses[]` and `hashes[]` — the two
 // fields an enterprise buyer's checklist actually looks for. Both come from the lockfile Harvey
-// already parses (MEASURED 2026-07-26 on targets/calibration/package-lock.json: 426 packages, 421
-// with `license`, 426 with `integrity`), so they cost nothing and require no network.
+// already parses (MEASURED 2026-07-27 on targets/calibration/package-lock.json: 395 resolved
+// components, 390 with `license`, 395 with `integrity`), so they cost nothing and require no network.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -257,28 +257,64 @@ export function collectDependencies(dir: string): DependencySource {
   };
 }
 
-// #1079: the resolved-tree license map for checkLicenseCompliance, from the same parse the SBOM
-// uses — so the BOM a client receives and the license findings can never disagree. Keyed by name
-// only, matching what that check consumes; when a tree holds two versions of a package under
-// different licenses the later entry wins, which is why the finding still names its source.
-export function lockfileLicenses(dir: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const c of collectDependencies(dir).components) {
-    if (c.license) out[c.name] = c.license;
-  }
-  return out;
+export interface LicenseCandidate {
+  name: string;
+  version?: string;
+  // The license the lockfile records, when its format has the field. package-lock.json does;
+  // pnpm-lock.yaml and yarn.lock do not, so for those every candidate needs a registry lookup.
+  license?: string;
+  // Declared in a manifest (any of dependencies/devDependencies/optionalDependencies/
+  // peerDependencies) rather than reached only through the resolved tree. Ordering, not
+  // filtering: the registry-lookup budget is spent on declared packages first.
+  direct: boolean;
 }
 
-// #1099: the resolved-tree VERSION map, same parse and keying as lockfileLicenses above — lets
-// checkLicenseCompliance's registry fallback ask the npm packument for the version actually
-// installed (`versions[<v>].license`) rather than always reading the top-level, latest-publish
-// license snapshot.
-export function lockfileVersions(dir: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const c of collectDependencies(dir).components) {
-    if (c.version) out[c.name] = c.version;
+export interface LicenseScope {
+  candidates: LicenseCandidate[];
+  source: string;
+  completeness: SbomCompleteness;
+  note: string;
+  direct: number;
+  transitive: number;
+}
+
+// #1213: the candidate set for checkLicenseCompliance, from the same parse the SBOM uses — so the
+// BOM a client receives and the license findings can never disagree. It is the RESOLVED TREE, not
+// the manifest: before #1213 the check read `{...dependencies, ...devDependencies}`, so a copyleft
+// package reached only transitively (measured on ATC 2026-07-27: `sharp` is declared by no manifest
+// in the workspace, yet `@img/sharp-*` appears 82 times in pnpm-lock.yaml, three of them
+// LGPL-3.0-or-later) was never submitted to the check at all.
+//
+// Keyed by name@version, so a tree holding two versions of one package under different licenses
+// yields both — the name-keyed map this replaced silently kept whichever entry parsed last.
+// A manifest-declared name the tree never resolved is still a candidate (no lockfile at all, or an
+// optionalDependency the lockfile skipped); it carries no version and no license, so it falls
+// through to the registry lookup exactly as it did before.
+export function licenseScope(dir: string, directNames: readonly string[]): LicenseScope {
+  const deps = collectDependencies(dir);
+  const declared = new Set(directNames);
+  const candidates: LicenseCandidate[] = [];
+  const resolved = new Set<string>();
+  for (const c of deps.components) {
+    resolved.add(c.name);
+    candidates.push({
+      name: c.name,
+      ...(c.version ? { version: c.version } : {}),
+      ...(c.license ? { license: c.license } : {}),
+      direct: declared.has(c.name),
+    });
   }
-  return out;
+  for (const name of declared) {
+    if (!resolved.has(name)) candidates.push({ name, direct: true });
+  }
+  return {
+    candidates,
+    source: deps.source,
+    completeness: deps.completeness,
+    note: deps.note,
+    direct: candidates.filter((c) => c.direct).length,
+    transitive: candidates.filter((c) => !c.direct).length,
+  };
 }
 
 // purl (package-URL) for an npm component. The scope's leading "@" is percent-encoded; the "/"
