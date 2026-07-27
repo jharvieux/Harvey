@@ -1,0 +1,146 @@
+# The find-or-update-issue path every scheduled gate uses when it goes red on a branch nobody
+# watches (#1138/#1142). Extracted by #1287 from five near-identical copies, which found that NONE
+# of the five had ever executed: `ci-conservation-alert`, `ci-reasons-alert` and
+# `ci-owasp-watch-alert` did not exist as labels, and every copy carries a self-healing
+# `gh label create` — so a MISSING MARKER LABEL IS MACHINE-CHECKABLE PROOF the path never ran. That
+# invariant is now asserted by src/cli/validate-alert-paths.ts rather than left to be noticed.
+#
+# WHY ONE ACTION AND NOT FIVE COPIES: an alert path that has never fired is indistinguishable from
+# one that cannot fire, so each copy needed its own liveness proof. Five copies means five proofs
+# that decay independently; one action means one drill, exercised by five callers.
+#
+# DRILL MODE is what makes each path re-provable by the next person, with one command:
+#
+#     gh workflow run <workflow name> -f alert_drill=true
+#
+# `drill: true` runs create AND find-or-update-comment AND close against a self-cleaning issue
+# titled `… — alert-path drill`, under the real job token, asserting each half actually happened.
+# It refuses to run while a REAL alert on the same marker is open, so a drill can never be mistaken
+# for — or silently overwrite — a live alarm.
+#
+# Registry of markers and their proof runs: .github/alert-paths.json.
+
+name: Alert issue (find-or-update)
+description: Find-or-update ONE tracking issue by marker label, with a drill mode that proves the path fires.
+
+inputs:
+  marker:
+    description: Marker label. One open issue per marker; the label doubles as proof the path has run.
+    required: true
+  label-description:
+    description: Description used when this step has to create the marker label.
+    required: true
+  title:
+    description: Issue title used when opening a new tracking issue.
+    required: true
+  body:
+    description: Issue body, posted on create and on every update comment.
+    required: true
+  drill:
+    description: "true = prove the path end-to-end against a self-cleaning drill issue instead of alerting."
+    required: false
+    default: "false"
+  token:
+    description: Token with issues::write. Pass ${{ github.token }} — the point is to prove the REAL job token works.
+    required: true
+  repo:
+    description: owner/name. Needed because `gh issue` infers its repo from a git remote, and some callers have no checkout.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Find or update the ${{ inputs.marker }} tracking issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ inputs.repo }}
+        MARKER: ${{ inputs.marker }}
+        LABEL_DESC: ${{ inputs.label-description }}
+        TITLE: ${{ inputs.title }}
+        BODY: ${{ inputs.body }}
+        DRILL: ${{ inputs.drill }}
+        WORKFLOW: ${{ github.workflow }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        SUFFIX=" — alert-path drill"
+
+        gh label create "$MARKER" --color B60205 --description "$LABEL_DESC" 2>/dev/null || true
+
+        # The `|| true` above swallows "already exists" — and would equally swallow a permissions
+        # failure, which is exactly how a path reports success while raising nothing. Assert.
+        if ! gh label list --limit 200 --json name --jq '.[].name' | grep -qxF "$MARKER"; then
+          echo "::error::marker label '$MARKER' does not exist and could not be created, so this alert cannot be labelled or found again. Check the job's issues: write permission (#1287)."
+          exit 1
+        fi
+
+        # $1 = drill|real. Partitions open issues on the marker by title so a drill and a live alarm
+        # can never be confused for one another.
+        find_open() {
+          gh issue list --state open --label "$MARKER" --json number,title \
+            | jq -r --arg s "$SUFFIX" --arg want "$1" \
+                '[.[] | select((.title | endswith($s)) == ($want == "drill"))] | .[0].number // empty'
+        }
+
+        if [ "$DRILL" != "true" ]; then
+          existing=$(find_open real)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$BODY"
+            echo "Commented on existing tracking issue #${existing}."
+          else
+            echo "Opened tracking issue $(gh issue create --title "$TITLE" --label "$MARKER" --body "$BODY")."
+          fi
+          exit 0
+        fi
+
+        real=$(find_open real)
+        if [ -n "$real" ]; then
+          echo "::error::a REAL $MARKER alert (#$real) is open — a drill run now would be indistinguishable from it. Resolve #$real, then re-run the drill."
+          exit 1
+        fi
+
+        stale=$(find_open drill)
+        if [ -n "$stale" ]; then
+          gh issue close "$stale" --comment "Superseded by a newer drill run: $RUN_URL"
+        fi
+
+        drill_body="**Alert-path liveness drill (#1287) — this is not a real failure.**
+
+        Opened, commented on and closed by ${RUN_URL} to prove the \`${MARKER}\` alert path executes end-to-end under the real job token. An alert path that has never fired is indistinguishable from one that cannot fire.
+
+        Re-run this proof at any time:
+
+        \`\`\`
+        gh workflow run \"${WORKFLOW}\" -f alert_drill=true
+        \`\`\`"
+
+        url=$(gh issue create --title "${TITLE}${SUFFIX}" --label "$MARKER" --body "$drill_body")
+        num=$(find_open drill)
+        if [ -z "$num" ]; then
+          echo "::error::the drill created $url, but the find step cannot see it. The find half of find-or-update is broken — a second failure would open a duplicate issue instead of updating this one."
+          exit 1
+        fi
+
+        # The update half is the branch a create-only proof never reaches, and it is the one that
+        # runs on every alert after the first.
+        gh issue comment "$num" --body "Drill pass 2: find-or-update located this issue and commented on it rather than opening a second one."
+        comments=$(gh issue view "$num" --json comments --jq '.comments | length')
+        if [ "$comments" -lt 1 ]; then
+          echo "::error::drill pass 2 exited 0 but issue #$num has no comments — the update half of find-or-update raised nothing."
+          exit 1
+        fi
+
+        gh issue close "$num" --comment "Drill complete. Closing so the tracker is left as clean as it was found."
+
+        {
+          echo "### Alert path \`$MARKER\` — PROVED"
+          echo ""
+          echo "- marker label exists (this step creates it if absent)"
+          echo "- create: $url"
+          echo "- find-or-update: located #$num and commented ($comments comment(s))"
+          echo "- closed again — tracker left clean"
+          echo ""
+          echo "Re-run: \`gh workflow run \"$WORKFLOW\" -f alert_drill=true\`"
+        } >> "$GITHUB_STEP_SUMMARY"
+        echo "PROVED $MARKER — $url"
