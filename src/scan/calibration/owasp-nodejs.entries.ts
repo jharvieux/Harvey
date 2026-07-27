@@ -22,6 +22,19 @@
 // MEASURED 2026-07-26 (`quick-scan --dir targets/calibration`, 472 findings): of the eight
 // recommendations planted here, ZERO were detected as the recommendation under test.
 //
+// Six of the eight gaps closed across three follow-up batches (issues #1200/#1201/#1202/#1203,
+// re-measured via `pnpm exec tsx src/cli/validate-calibration.ts` after each rule landed):
+// VM-SANDBOX, BODY-LIMIT, SENSITIVE-CACHE (new harvey-*.yml rules, src/scan/rules/semgrep/
+// owasp-node.yml), HPP and REDOS (same file), and EMITTER-ERROR (src/scan/emitter-error.ts, a
+// same-file-only TS/AST heuristic — see its own note below for the disclosed limitation).
+// BLOCKING-LOOP is closed too, but scored differently: it is an M7 (performance) class, produced
+// by detectSyncIoInHandler (src/detectors/perf-code.ts), so it is tagged `module: "M7"` below and
+// excluded from THIS gate's M1 mechanical scoring — see its own note and
+// calibration.test.ts's "#1203 M7 blocking-loop" block for how it's actually proven caught.
+// POWERED-BY is untouched by this round (out of scope for #1200-#1203) — still recorded
+// gapKind "measured-gap" below, as it was; the scope-boundary re-tier its own note suggests is a
+// separate call for whoever picks that row up, not folded in here.
+//
 // THREE OF THE EIGHT FIXTURES DID PRODUCE FINDINGS — FOR DIFFERENT DEFECTS. This is the single most
 // important thing in this file, and it is why every entry below carries a scoped `match`:
 //   hpp-param-pollution.ts       -> harvey-client-trusted-role + two XSS rules (the `role.includes`
@@ -62,9 +75,24 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     cls: "Repeated query parameter parsed as an array where the code assumes a string",
     location: "src/owasp-node/hpp-param-pollution.ts",
     match: ["parameter pollution"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, Application Security: 'Use hpp middleware to prevent HTTP Parameter Pollution attacks.' Express turns `?role=user&role=admin` into a string[], so `role.includes(\"admin\")` becomes array membership instead of substring containment and the guard changes meaning without changing shape. MEASURED: not detected as parameter pollution. Three OTHER findings fired on this file (see header) — match is scoped so they cannot mask this.",
+    expectedTier: "review",
+    note: "Sheet, Application Security: 'Use hpp middleware to prevent HTTP Parameter Pollution attacks.' Express turns `?role=user&role=admin` into a string[], so `role.includes(\"admin\")` becomes array membership instead of substring containment and the guard changes meaning without changing shape. Was MEASURED not detected as parameter pollution (2026-07-26); harvey-hpp-query-cast (src/scan/rules/semgrep/owasp-node.yml, #1202) now catches the `req.query.$P as string` cast reaching `.includes`/`.indexOf`, re-measured caught at review tier. Three OTHER findings still fire on this file too (see header) — match stays scoped so they cannot mask this one.",
+  },
+  {
+    id: "N-OWASP-NODE-HPP-ARRAY-NORMALIZED",
+    kind: "negative",
+    cls: "Repeated-parameter array normalized (first element taken) before use",
+    location: "src/owasp-node/hpp-param-normalized.ts",
+    match: ["parameter pollution", "hpp-query-cast", "query.<param>"],
+    note: "#1202 negative: `Array.isArray(v) ? v[0] : v` never takes the `as string` cast shape harvey-hpp-query-cast matches, so it stays silent.",
+  },
+  {
+    id: "N-OWASP-NODE-HPP-SCHEMA-VALIDATED",
+    kind: "negative",
+    cls: "Repeated-parameter value validated by a schema parse instead of a raw cast",
+    location: "src/owasp-node/hpp-param-normalized.ts",
+    match: ["parameter pollution", "hpp-query-cast", "query.<param>"],
+    note: "#1202 negative: `z.string().parse(req.query.role)` never takes the `as string` cast shape either — same file as the array-normalized negative, distinct function.",
   },
   {
     id: "P-OWASP-NODE-BODY-LIMIT",
@@ -72,9 +100,16 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     cls: "Body parser with no size limit plus an unbounded raw-stream handler",
     location: "src/owasp-node/no-request-size-limit.ts",
     match: ["size limit", "body limit", "payload"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, Application Security: 'Set request size limits via middleware for different content types.' `express.json()` without `limit`, and a raw `req.on(\"data\")` accumulator with no cap — one request can exhaust process memory. MEASURED: zero findings. Tractable mechanically (the missing `limit` option is syntactic), and the raw accumulator without a byte ceiling is a recognisable shape.",
+    expectedTier: "review",
+    note: "Sheet, Application Security: 'Set request size limits via middleware for different content types.' `express.json()` without `limit`, and a raw `req.on(\"data\")` accumulator with no cap — one request can exhaust process memory. Was MEASURED zero findings (2026-07-26); harvey-body-parser-no-limit (src/scan/rules/semgrep/owasp-node.yml, #1200) now catches the missing-`limit` shape, re-measured caught at review tier. DISCLOSED remaining scope: the raw `req.on(\"data\")` accumulator half is not separately covered (see the rule file's note) — this row is satisfied by the body-parser half alone, one relevant finding being enough.",
+  },
+  {
+    id: "N-OWASP-NODE-BODY-LIMIT-SET",
+    kind: "negative",
+    cls: "Body parser with an explicit size limit set",
+    location: "src/owasp-node/request-size-limit-set.ts",
+    match: ["size limit", "body limit", "payload"],
+    note: "#1200 negative: `express.json({ limit: \"100kb\" })` clears the missing-limit rule.",
   },
   {
     id: "P-OWASP-NODE-REDOS",
@@ -82,9 +117,16 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     cls: "Catastrophic-backtracking regex in application source",
     location: "src/owasp-node/redos-regex.ts",
     match: ["redos", "backtrack", "regular expression"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, Platform Security: 'Test regular expressions for ReDoS vulnerabilities.' `/^([a-zA-Z0-9]+)+@example\\.com$/` is a nested quantifier over an overlapping class; a long non-matching input pins the event loop. MEASURED: zero findings. Note the distinction — Harvey DOES catch ReDoS as a DEPENDENCY CVE (P-WS-REDOS-CVE in the deps batch), so a reader could mistake that for source-level ReDoS coverage. It is not the same check, and nothing covers the source-level one.",
+    expectedTier: "review",
+    note: "Sheet, Platform Security: 'Test regular expressions for ReDoS vulnerabilities.' `/^([a-zA-Z0-9]+)+@example\\.com$/` is a nested quantifier over an overlapping class; a long non-matching input pins the event loop. Was MEASURED zero findings (2026-07-26); harvey-redos-literal (src/scan/rules/semgrep/owasp-node.yml, #1201) now catches a bare regex LITERAL with a nested quantifier (harvey-redos already caught the same shape inside `new RegExp(\"...\")` — a different AST node, hence the separate rule), re-measured caught at review tier on both regexes in this fixture. DISCLOSED limitation (Option 1 from the issue): this is a textual/structural nested-quantifier match, not a backtracking-complexity analyser — it will miss a dangerous regex assembled dynamically (e.g. built from a variable) or one whose catastrophic shape doesn't reduce to a literal `(...)...[+*]` motif. Note the distinction from the DEPENDENCY-CVE ReDoS check — Harvey ALSO catches ReDoS as a known-vulnerable package version (P-WS-REDOS-CVE in the deps batch); that is a different check from this source-level one, and a reader should not mistake one for coverage of the other.",
+  },
+  {
+    id: "N-OWASP-NODE-REDOS-SAFE",
+    kind: "negative",
+    cls: "Linear-time regexes: a single quantified group with no nested quantifier, and an ordinary anchored regex with no groups",
+    location: "src/owasp-node/redos-regex-safe.ts",
+    match: ["redos", "backtrack", "regular expression"],
+    note: "#1201 negative: `/^(ab)+$/` (one quantifier, no NESTED quantifier inside the group) and `/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$/` (quantifiers, no groups at all) both clear harvey-redos-literal.",
   },
   {
     id: "P-OWASP-NODE-VM-SANDBOX",
@@ -92,19 +134,33 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     cls: "vm.runInNewContext used as a security boundary, with require/process handed in",
     location: "src/owasp-node/vm-no-sandbox.ts",
     match: ["vm", "sandbox", "runInNewContext"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, Platform Security: 'Use vm module only within secure sandboxes.' Node's own documentation is explicit that `vm` is not a security mechanism; this fixture also passes `require` and `process` into the context, so the guest reaches the host realm directly. MEASURED: zero findings. Should be a cheap, high-precision rule — `vm.runInNewContext`/`runInThisContext` on a non-literal argument has few benign forms.",
+    expectedTier: "high",
+    note: "Sheet, Platform Security: 'Use vm module only within secure sandboxes.' Node's own documentation is explicit that `vm` is not a security mechanism; this fixture also passes `require` and `process` into the context, so the guest reaches the host realm directly. Was MEASURED zero findings (2026-07-26); harvey-vm-unsafe-sandbox (src/scan/rules/semgrep/owasp-node.yml, #1200) now catches `vm.runInNewContext`/`runInThisContext` on a non-literal first argument, re-measured caught at high (free-count) tier — the cheap, high-precision rule the issue predicted.",
+  },
+  {
+    id: "N-OWASP-NODE-VM-LITERAL-SAFE",
+    kind: "negative",
+    cls: "vm.runInNewContext called with a fixed literal script",
+    location: "src/owasp-node/vm-literal-safe.ts",
+    match: ["vm", "sandbox", "runInNewContext"],
+    note: "#1200 negative: the script text is a hardcoded literal, not a dynamic expression, so it clears the non-literal-argument rule.",
   },
   {
     id: "P-OWASP-NODE-EMITTER-ERROR",
     kind: "positive",
     cls: "EventEmitter emits 'error' with no error listener registered",
     location: "src/owasp-node/unhandled-rejection.ts",
-    match: ["EventEmitter", "error event", "uncaughtException"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, Error & Exception Handling: 'Always listen to error events when using EventEmitter objects' and 'Bind to uncaughtException event and clean up resources before exit.' An emitted 'error' with no listener terminates the process — a remote crash if the emit is reachable from a request. MEASURED: zero findings. Weaker candidate than the others: proving no listener exists anywhere needs cross-file reasoning, so this may honestly belong at review tier.",
+    match: ["no registered listener"],
+    expectedTier: "review",
+    note: "Sheet, Error & Exception Handling: 'Always listen to error events when using EventEmitter objects' and 'Bind to uncaughtException event and clean up resources before exit.' An emitted 'error' with no listener terminates the process — a remote crash if the emit is reachable from a request. Was MEASURED zero findings (2026-07-26); src/scan/emitter-error.ts (#1202) now catches an `$E.emit(\"error\", ...)` with no same-file `$E.on(\"error\", ...)`/`.once(\"error\", ...)`, re-measured caught at review tier. DISCLOSED, chosen deliberately over declining: this is SAME-FILE ONLY — proving no listener exists ANYWHERE needs cross-file reasoning (a listener attached by whatever module imports this emitter is invisible to it), which is exactly the weaker-candidate caveat this entry originally recorded; review tier accounts for that blind spot rather than asserting certainty.",
+  },
+  {
+    id: "N-OWASP-NODE-EMITTER-ERROR-HANDLED",
+    kind: "negative",
+    cls: "EventEmitter emits 'error' with a same-file listener registered",
+    location: "src/owasp-node/emitter-error-handled.ts",
+    match: ["no registered listener"],
+    note: "#1202 negative: same emit shape as the positive, but a same-file `jobs.on(\"error\", ...)` listener clears it.",
   },
   {
     id: "P-OWASP-NODE-POWERED-BY",
@@ -122,18 +178,25 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     cls: "Authenticated response marked publicly cacheable",
     location: "src/owasp-node/sensitive-response-cached.ts",
     match: ["Cache-Control", "cacheable", "caching"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, Server Security: 'Disable caching for pages containing sensitive information.' `Cache-Control: public, max-age=600` on a per-user record lets a shared proxy or CDN serve one user's data to the next requester. MEASURED: not detected as a caching defect — SEC-PG-RESJSON fired on the same file for excessive data exposure, which is correct but a different finding, hence the scoped match. Mechanically tractable: `public` or a positive max-age set on a handler that reads an identity header or session.",
+    expectedTier: "review",
+    note: "Sheet, Server Security: 'Disable caching for pages containing sensitive information.' `Cache-Control: public, max-age=600` on a per-user record lets a shared proxy or CDN serve one user's data to the next requester. Was MEASURED not detected as a caching defect (2026-07-26) — SEC-PG-RESJSON fired on the same file for excessive data exposure, which is correct but a different finding, hence the scoped match. harvey-sensitive-response-cached (src/scan/rules/semgrep/owasp-node.yml, #1200) now catches `public`/a positive max-age set on a handler that also reads an identity header/cookie/session in the same function, re-measured caught at review tier.",
+  },
+  {
+    id: "N-OWASP-NODE-SENSITIVE-CACHE-SAFE",
+    kind: "negative",
+    cls: "Same identity-reading handler shape, but Cache-Control is private/no-store",
+    location: "src/owasp-node/sensitive-response-not-cached.ts",
+    match: ["Cache-Control", "cacheable", "caching"],
+    note: "#1200 negative: `Cache-Control: private, no-store` clears the public/positive-max-age check.",
   },
   {
     id: "P-OWASP-NODE-BLOCKING-LOOP",
     kind: "positive",
+    module: "M7",
     cls: "Synchronous CPU-bound and filesystem calls in a request path",
     location: "src/owasp-node/blocking-event-loop.ts",
     match: ["event loop"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "Sheet, Application Security: 'Avoid blocking the event loop with CPU-intensive operations.' `pbkdf2Sync` at 600k iterations and a `readFileSync` in a request path serialise every concurrent request behind them — a single-request denial of service. MEASURED: not detected as blocking — harvey-lib-path-traversal fired on the same file for the unvalidated template name, correctly and for a different reason, hence the scoped match. This one overlaps M7 (performance) more than M1; whichever module owns it, today neither does.",
+    expectedTier: "review",
+    note: "Sheet, Application Security: 'Avoid blocking the event loop with CPU-intensive operations.' `pbkdf2Sync` at 600k iterations and a `readFileSync` in a request path serialise every concurrent request behind them — a single-request denial of service. Was MEASURED not detected as blocking (2026-07-26) — harvey-lib-path-traversal fired on the same file for the unvalidated template name, correctly and for a different reason, hence the scoped match. #1203 filed this against M7 (performance), not M1, per CLAUDE.md's equal-weight doctrine: detectSyncIoInHandler (src/detectors/perf-code.ts) already flagged this shape by file path (App Router route.ts/pages/api); it now ALSO flags a sync call inside an EXPORTED function outside those recognised handler paths (this fixture is neither), tagged Review confidence with the reachability caveat disclosed in-finding. Retagged `module: \"M7\"` because detectSyncIoInHandler is not part of runMechanicalScan, so this entry is excluded from THIS gate's M1 scoring (see mechanicalCorpus) — proven caught instead by calibration.test.ts's dedicated \"#1203 M7 blocking-loop\" block (live detectPerfCodeFindings over this committed fixture) and by the m7-code.entries.ts heuristic-precision corpus (M7CODE-P-SYNC-IO-GENERIC / M7CODE-N-SYNC-IO-BUILD-SCRIPT).",
   },
 ];
