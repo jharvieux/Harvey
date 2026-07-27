@@ -183,6 +183,9 @@ rules:
     message: >
       This next.config.js headers() route does not set Strict-Transport-Security. Without HSTS
       a user's first request (or any downgraded request) can be intercepted over plain HTTP.
+      SCOPE OF THIS CHECK: it reads this repository's next.config.js only. A header legitimately
+      set at the CDN/hosting layer, a proxy, or middleware is invisible to a source scan — confirm
+      at the edge before treating this as unmitigated.
     patterns:
       - pattern: '{ source: $S, headers: $ARR }'
       - pattern-not: '{ source: $S, headers: [..., { key: "Strict-Transport-Security", ... }, ...] }'
@@ -201,6 +204,9 @@ rules:
     message: >
       This next.config.js headers() route does not set X-Frame-Options (or a frame-ancestors
       CSP directive) — the page can be framed by any site and used for clickjacking.
+      SCOPE OF THIS CHECK: it reads this repository's next.config.js only. A header legitimately
+      set at the CDN/hosting layer, a proxy, or middleware is invisible to a source scan — confirm
+      at the edge before treating this as unmitigated.
     patterns:
       - pattern: '{ source: $S, headers: $ARR }'
       - pattern-not: '{ source: $S, headers: [..., { key: "X-Frame-Options", ... }, ...] }'
@@ -219,6 +225,9 @@ rules:
     message: >
       This next.config.js headers() route does not set X-Content-Type-Options: nosniff — a
       browser may MIME-sniff the response into an executable content type.
+      SCOPE OF THIS CHECK: it reads this repository's next.config.js only. A header legitimately
+      set at the CDN/hosting layer, a proxy, or middleware is invisible to a source scan — confirm
+      at the edge before treating this as unmitigated.
     patterns:
       - pattern: '{ source: $S, headers: $ARR }'
       - pattern-not: '{ source: $S, headers: [..., { key: "X-Content-Type-Options", ... }, ...] }'
@@ -374,7 +383,9 @@ rules:
     message: >
       The response body includes process.env or process.cwd() — this returns the server's
       environment (every secret it holds) or its filesystem layout to the caller. Return only
-      the fields the client needs, and keep debug endpoints out of deployed builds.
+      the fields the client needs, and keep debug endpoints out of deployed builds. SCOPE OF THIS
+      CHECK: it matches the whole object in a RESPONSE position only. Reading a single value
+      (process.env.NEXT_PUBLIC_URL) or configuring a client from process.env is not assessed.
     patterns:
       - pattern-either:
           - pattern: '$RES.json({ ..., $K: process.env, ... }, ...)'

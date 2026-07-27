@@ -456,7 +456,9 @@ rules:
       harveySeverity: Medium
     message: >
       A request-controlled value reaches an <a href> with no scheme allowlist — an attacker can
-      supply javascript: to run script in the victim's session (XSS) on click.
+      supply javascript: to run script in the victim's session (XSS) on click. SCOPE OF THIS
+      CHECK: the sink is a plain <a href>. next/link's <Link>, a router.push(), and a scheme
+      allowlist applied elsewhere before render are not assessed — review tier, confirm first.
     pattern-sources:
       - *dom_source
     pattern-sanitizers:

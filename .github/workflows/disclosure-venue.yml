@@ -1,0 +1,103 @@
+# Gate 4 of the #1320 prevention program (#1317): a bound recorded in a comment must appear in the
+# finding it bounds. A semgrep rule whose attached comments declare a limitation must state that
+# limitation in its own `message` — the only text in a rule that reaches the client's deliverable.
+# A bound that lives only in the YAML is, from the client's side, an unstated limitation, and an
+# unstated limitation reads as a clean bill of health.
+#
+# THE NEGATIVE CONTROL IS PART OF THE JOB. Step 2 runs `--seed-violation`, which appends two
+# synthetic bounded rules — one with no scope sentence at all, one with a contentless scope sentence
+# — and MUST exit non-zero. Both of the gate's failure branches are therefore proven to fire on
+# every green run. A gate only ever seen passing is indistinguishable from one that cannot fail;
+# #1065 found a guard that had been unable to fire for nine months.
+#
+# Why this exists as its own context when `pnpm verify` already runs the same logic
+# (src/disclosure-venue.test.ts): so the operator has a check to mark required that names THIS
+# invariant, and so the negative control runs as a visible step rather than only as an assertion
+# inside a test file. The duplication is a few seconds of CI and is deliberate.
+#
+# No `schedule:` — unlike the captured-fixture drift checks, nothing here is a function of time.
+# The gate reads only committed files and no external tool, so only a diff can change its verdict.
+# For the same reason there is no tracking-issue step: this job cannot go red on a branch nobody
+# is watching.
+#
+# NO `paths:` FILTER on `pull_request`, because this is intended as a REQUIRED status check and
+# GitHub waits forever for a required context that never reports — a path-filtered required check
+# deadlocks every PR outside its filter (#1107, and why conservation.yml's filter moved in-job in
+# #1205). The filter lives INSIDE the job: it always runs, always reports, and short-circuits to a
+# green no-op when the change set cannot have altered the verdict.
+
+name: disclosure-venue
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+# A cancellation here is only ever caused by a NEWER run on the same `github.ref` — for a PR that
+# is `refs/pull/N/merge`, so the superseding run reports against the newer head commit, which is
+# the commit branch protection actually evaluates. Same posture as conservation.yml.
+concurrency:
+  group: disclosure-venue-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  disclosure-venue:
+    name: a recorded bound reaches the finding it bounds
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # fetch-depth: 0 is what lets the filter step diff against the PR base.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        name: Does this change set touch a rule's comments, its message, or the gate itself?
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only '${{ github.event.pull_request.base.sha }}' HEAD)
+          echo "Changed files:"
+          echo "$files"
+          relevant=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            # `case` patterns, not pathspecs: in `case` a `*` matches `/` too.
+            case "$f" in
+              src/scan/rules/semgrep/*) relevant=true ;;
+              src/disclosure-venue.ts) relevant=true ;;
+              src/disclosure-venue.test.ts) relevant=true ;;
+              src/cli/validate-disclosure-venue.ts) relevant=true ;;
+              .github/workflows/disclosure-venue.yml) relevant=true ;;
+            esac
+          done <<< "$files"
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          if [ "$relevant" = "false" ]; then
+            echo "GREEN NO-OP: no rule file and no part of the gate is in this diff, so nothing that can emit a bound changed and no rule's comments or message can have moved. A docs-only or CI-only PR costs this gate nothing. Reporting success so a required context is never silent (#1107)."
+          fi
+
+      - uses: pnpm/action-setup@v4
+        if: steps.filter.outputs.relevant == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.filter.outputs.relevant == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        if: steps.filter.outputs.relevant == 'true'
+
+      - name: Disclosure-venue gate (must PASS)
+        if: steps.filter.outputs.relevant == 'true'
+        run: pnpm exec tsx src/cli/validate-disclosure-venue.ts --list
+
+      - name: Negative control — two seeded comment-only bounds must FAIL the gate
+        if: steps.filter.outputs.relevant == 'true'
+        run: |
+          if pnpm exec tsx src/cli/validate-disclosure-venue.ts --seed-violation; then
+            echo "::error::--seed-violation appended a rule with a NOTE:-declared bound and no scope sentence, plus one with a contentless scope sentence, and the gate still exited 0. The gate cannot fail, so its PASS above means nothing (#350/#1065)."
+            exit 1
+          fi
