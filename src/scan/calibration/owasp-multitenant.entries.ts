@@ -33,10 +33,13 @@
 //                                  gap, recorded so it cannot silently become a claimed catch",
 //                                  not as "by design".
 //
-// TWO DETECTORS WERE BUILT FROM THIS CORPUS (both in src/scan/supabase-static.ts,
-// checkMigrationRlsBypass): SB-RLS-BYPASSRLS-* and SB-RLS-NOFORCE-ROLLUP. Before them, Harvey caught
-// a table with NO row security and nothing about a table whose correct-looking policies are void for
-// a privileged role.
+// THREE DETECTORS HAVE BEEN BUILT FROM THIS CORPUS. Two in src/scan/supabase-static.ts
+// (checkMigrationRlsBypass): SB-RLS-BYPASSRLS-* and SB-RLS-NOFORCE-ROLLUP — before them, Harvey
+// caught a table with NO row security and nothing about a table whose correct-looking policies are
+// void for a privileged role. The third is src/scan/client-supplied-tenant.ts (#1194), which closed
+// P-OWASP-MT-CLIENT-TENANT: a tenant predicate that is present and correct-looking but populated
+// from the request. All three share a shape — Harvey checked whether a control EXISTED and not
+// whether it was VOID — which is the kind of blind spot an answer key we wrote could not surface.
 //
 // OUT-OF-UNIVERSE recommendations (code-invisible; recorded, not dropped). These are deployment,
 // process or operational controls with no static source signal, so they are not CorpusEntry rows at
@@ -93,9 +96,9 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     cls: "Tenant discriminator taken from the request body/query and used as the query scope",
     location: "src/owasp-mt/client-supplied-tenant.ts",
     match: ["tenant"],
-    expectedTier: "none",
-    gapKind: "measured-gap",
-    note: "GAP, not by-design — the sheet's single most important rule ('Never trust client-supplied tenant IDs' / 'Bind tenant context to authenticated user sessions', section 1) and arguably Harvey's core differentiator. MEASURED 2026-07-26: zero findings. Root cause is a SHAPE ASSUMPTION in the existing tenant-scope detectors (prisma-tenant-scope.ts, drizzle equivalents): they look for a query with NO tenant predicate. Here the predicate is PRESENT and correct-looking — `where: { tenantId: body.tenantId }` — but its VALUE is attacker-controlled, so every current detector reads this as properly scoped. The detector needs to ask where the predicate's value came from, not whether it exists. Tracked in #1194.",
+    expectedTier: "high",
+    expectedSeverity: "High",
+    note: "The sheet's single most important rule ('Never trust client-supplied tenant IDs' / 'Bind tenant context to authenticated user sessions', section 1) and arguably Harvey's core differentiator. WAS a measured gap (MEASURED 2026-07-26: zero findings) — the root cause was a SHAPE ASSUMPTION in the existing tenant-scope detectors (prisma-tenant-scope.ts #760, drizzle-tenant-scope.ts #901): they look for a query with NO tenant predicate, and here the predicate is PRESENT and correct-looking (`where: { tenantId: body.tenantId }`) while its VALUE is attacker-controlled, so both read it as properly scoped. CLOSED by #1194's client-supplied-tenant.ts, which asks where the predicate's value came from rather than whether it exists — both call sites in the fixture (a `req.json()` body and a `searchParams.get()` query param) now fire at high tier. High tier, unlike its two review-tier siblings, because the AST proves a PRESENCE (the request value reaches the predicate) rather than an ABSENCE that unseen middleware might fill in. Paired with N-OWASP-MT-SESSION-TENANT, which must stay silent.",
   },
   {
     id: "P-OWASP-MT-GUC-SESSION",
@@ -158,6 +161,13 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     location: "20260726000002_owasp_mt_isolation.sql",
     match: ["mt_contracts"],
     note: "public.mt_contracts does all three: enable, tenant policy, force. Confirmed silent 2026-07-26 — it is absent from SB-RLS-NOFORCE-ROLLUP's table list while mt_ledger (same file, no force) is present, so the rollup is discriminating on the force statement and not merely counting tenant tables.",
+  },
+  {
+    id: "N-OWASP-MT-SESSION-TENANT",
+    kind: "negative",
+    cls: "Tenant discriminator derived from the verified session, and the caller-supplied form guarded against it",
+    location: "src/owasp-mt/session-derived-tenant.ts",
+    note: "The correct form of P-OWASP-MT-CLIENT-TENANT, and the negative #1194's detector had to clear to ship. Three shapes, all silent, all measured 2026-07-27: (1) `where: { tenantId: session.user.tenantId }` — never touches the request; (2) a caller-supplied tenantId COMPARED against the session's before the query, which is the sheet's own remedy for an account switcher; (3) `where: { id: body.id, tenantId: … }` — a primary key from the request is the ordinary IDOR class that prisma-tenant-scope.ts and bola-owner.ts already own, and this detector must not double-report it. Without (1) and (2) a rule for this class would flag every tenant-scoped query in every multi-tenant codebase, which is the failure mode that makes such a rule unshippable.",
   },
   {
     id: "N-OWASP-MT-CACHE-SCOPED",

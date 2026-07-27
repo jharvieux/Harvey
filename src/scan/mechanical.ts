@@ -17,6 +17,7 @@ import { scanCounterRace } from "./counter-race.js";
 import { scanPgIdor } from "./pg-idor.js";
 import { scanPrismaTenantScope } from "./prisma-tenant-scope.js";
 import { scanDrizzleTenantScope } from "./drizzle-tenant-scope.js";
+import { scanClientSuppliedTenant } from "./client-supplied-tenant.js";
 import { scanPgResponseExposure } from "./pg-response-exposure.js";
 import { scanSecretRotation } from "./secret-rotation.js";
 import { scanServiceRoleLiteral } from "./service-role-literal.js";
@@ -368,6 +369,11 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // read/write filtered by primary key alone, with no tenant/owner column. Same app-layer class as
     // #760 for a different query builder — a Drizzle app has no RLS, so the where is the only gate.
     findings.push(...scanDrizzleTenantScope(scanDir));
+
+    // #1194 — the OTHER half of tenant scoping, which #760/#901 structurally cannot see: the tenant
+    // predicate is PRESENT and names the right column, and its VALUE comes from the request. OWASP
+    // Multi-Tenant CS section 1 ("Never trust client-supplied tenant IDs").
+    findings.push(...scanClientSuppliedTenant(scanDir));
 
     // #664 — service_role key hardcoded as a JWT literal (same-file or cross-file const) and
     // passed to createClient. Real base64 decode + role/iss claim check, incl. plain .js.

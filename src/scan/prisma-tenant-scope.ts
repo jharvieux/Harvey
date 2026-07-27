@@ -94,12 +94,14 @@ function hasIdKey(where: ts.ObjectLiteralExpression): boolean {
 }
 
 // The `prisma.<model>.<verb>` shape: a call whose callee is `<clientAccess>.<model>.<verb>`, with a
-// client-named root. Returns the model name when it matches, else undefined.
-function prismaModelVerb(node: ts.CallExpression): { model: string; verb: string } | undefined {
+// client-named root. Returns the model and verb when it matches, else undefined. NO verb filter —
+// which verbs count is the caller's question: this detector wants the row-selecting ones
+// (SCOPED_VERBS), while client-supplied-tenant.ts (#1194) wants any verb that takes a `where`,
+// `findMany` included.
+export function prismaModelCall(node: ts.CallExpression): { model: string; verb: string } | undefined {
   const verbAccess = node.expression;
   if (!ts.isPropertyAccessExpression(verbAccess)) return undefined;
   const verb = verbAccess.name.text;
-  if (!SCOPED_VERBS.has(verb)) return undefined;
 
   const modelAccess = verbAccess.expression;
   if (!ts.isPropertyAccessExpression(modelAccess)) return undefined;
@@ -117,7 +119,8 @@ function detectFile(path: string, sf: ts.SourceFile): Finding[] {
   const findings: Finding[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node)) {
-      const shape = prismaModelVerb(node);
+      const call = prismaModelCall(node);
+      const shape = call && SCOPED_VERBS.has(call.verb) ? call : undefined;
       const arg = node.arguments[0];
       if (shape && arg && ts.isObjectLiteralExpression(arg)) {
         const whereProp = arg.properties.find((p) => propertyKeyName(p) === "where");
