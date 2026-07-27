@@ -17,10 +17,13 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import type { OsvScanResult } from "../scan/dependencies.js";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import {
   indexOsvByEntry,
   loadSecbenchCorpus,
   recallPct,
+  scoreLibrarySource,
   scoreSecbench,
   SECBENCH_CLASSES,
   SECBENCH_PIN,
@@ -150,8 +153,54 @@ if (notInstallable) {
   );
 }
 
+// --- Library-internal SOURCE pathway (#946) --------------------------------------------------
+// The semgrep pass above scans the EXPLOIT DIRS with the request-sourced rules and scores 0 by
+// construction (the vuln is in the target package's own source, under node_modules, not scanned).
+// The harvey-lib-* rules (library-taint.yml) treat a public library entry-point PARAMETER as the
+// taint source, so they score the axis SecBench actually exercises — but they must scan the INSTALLED
+// TARGET-PACKAGE SOURCE. That source is a heavy, network-bound `npm install` per entry, run OUT of
+// this process into <tree>/<class>/<slug>/node_modules/<pkg> (the same off-band shape as --osv-report
+// / --lockfile-tree). Optional: only runs when --library-source-tree is provided.
+const libTree = arg("--library-source-tree");
+if (libTree && existsSync(libTree)) {
+  const libRules = join(dirname(fileURLToPath(import.meta.url)), "..", "scan", "rules", "semgrep", "library-taint.yml");
+  const scannedKeys = new Set<string>();
+  const libHitKeys = new Set<string>();
+  for (const e of entries) {
+    if (!e.pkg) continue; // multi-dep entries have no single target-package source to scope to
+    const pkgDir = join(libTree, e.cls, e.slug, "node_modules", ...e.pkg.split("/"));
+    if (!existsSync(pkgDir)) continue;
+    scannedKeys.add(e.key);
+    let out: string;
+    try {
+      out = execFileSync("semgrep", ["--config", libRules, "--exclude", "node_modules", "--json", "--quiet", pkgDir], { encoding: "utf8", maxBuffer: 1024 * 1024 * 128 });
+    } catch (err) {
+      const se = err as { stdout?: string };
+      if (typeof se.stdout === "string" && se.stdout.length > 0) out = se.stdout;
+      else throw err;
+    }
+    if (((JSON.parse(out) as SemgrepJson).results ?? []).length > 0) libHitKeys.add(e.key);
+  }
+  const lib = scoreLibrarySource(entries, scannedKeys, libHitKeys);
+  console.log(`\nLibrary-internal SOURCE pathway (#946) — harvey-lib-* parameter-sourced taint over each entry's INSTALLED target-package source:`);
+  console.log(pad("class", 20) + pad("scanned", 9) + "lib-source recall");
+  for (const r of [...lib.perClass, lib.all]) {
+    if (r.cls !== "ALL" && r.scanned === 0) continue;
+    const label = r.cls === "ALL" ? "── ALL ──" : r.cls;
+    console.log(pad(label, 20) + pad(String(r.scanned), 9) + `${r.libFlagged}/${r.scanned} (${recallPct(r.libFlagged, r.scanned)})`);
+  }
+  console.log(
+    `  This is the LIBRARY-INTERNAL source axis (#946), REPORTED DISTINCTLY from the SCA number and the\n` +
+      `  request-sourced 0/${entries.length} above. Recall is bounded by OSS Semgrep's intra-procedural taint (#873):\n` +
+      `  a param reaching the sink only across a helper-function boundary is not followed.`,
+  );
+} else if (libTree) {
+  console.log(`\n--library-source-tree ${libTree} does not exist — skipping the library-internal source pathway (#946).`);
+}
+
 console.log(
   `\nFREE/MECHANICAL-TIER RECALL (for #868): the mechanical tier's SecBench recall is the SCA number\n` +
-    `above — ${all.scaFlagged}/${all.installable} (${recallPct(all.scaFlagged, all.installable)}) of installable entries flagged as known-vulnerable. The source-detector\n` +
-    `recall is a MEASURED 0/${entries.length}. These are separate tiers and must not be blended.`,
+    `above — ${all.scaFlagged}/${all.installable} (${recallPct(all.scaFlagged, all.installable)}) of installable entries flagged as known-vulnerable. The request-sourced\n` +
+    `detector recall is a MEASURED 0/${entries.length}; the LIBRARY-INTERNAL source recall (#946) is reported above when\n` +
+    `--library-source-tree is provided. These are separate tiers and must not be blended.`,
 );
