@@ -1,0 +1,17 @@
+{
+  "entry": ["src/entry.ts"],
+  "project": ["src/**/*.ts", "!src/**/*.test.ts"],
+  "vitest": false,
+  "ignoreExportsUsedInFile": true,
+  "rules": {
+    "dependencies": "off",
+    "devDependencies": "off",
+    "optionalPeerDependencies": "off",
+    "unlisted": "off",
+    "unresolved": "off",
+    "binaries": "off",
+    "duplicates": "off",
+    "enumMembers": "off",
+    "classMembers": "off"
+  }
+}

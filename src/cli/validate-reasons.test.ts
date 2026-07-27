@@ -28,6 +28,9 @@ function gate(root: string, args: string[] = [], env: NodeJS.ProcessEnv = {}): {
   }
 }
 
+/** The per-block validation errors the gate printed, so a control can assert it tripped ONE rule. */
+const errors = (out: string): string[] => [...out.matchAll(/^ *• (.*)$/gm)].map((m) => m[1] ?? "");
+
 const STALE_REASON = [
   "// REASON: nothing in this repo can do the thing (planted; its falsifier succeeds)",
   "// KIND: empirical",
@@ -40,6 +43,15 @@ const LIVE_REASON = [
   "// KIND: empirical",
   "// PROVENANCE: MEASURED 2026-07-25",
   "// FALSIFIER: false",
+].join("\n");
+
+// A supervised-path blocker correctly routed to a human — everything but the relay venue, which each
+// control below supplies, so the DECISION: line is the only thing under test.
+const RELAYED_REASON = [
+  "// REASON: not wired up: .github/workflows/ is supervised and needs operator approval",
+  "// KIND: decisional",
+  "// PROVENANCE: MEASURED 2026-07-27",
+  "// OWNER: operator",
 ].join("\n");
 
 const DECISIONAL_REASON = [
@@ -140,6 +152,53 @@ describe("validate-reasons CLI", () => {
     const { code, out } = gate(plant({ "unwatched.ts": LIVE_REASON }));
     expect(code).toBe(0);
     expect(out).toContain("Subsystem drift watches 0/1 empirical reason(s)");
+  });
+
+  // #1319's rules reach the CLI, not just validateRecordedReason: the planted violations below must
+  // take the real gate to a non-zero exit, or the rules are unit-tested prose. Each asserts EXACTLY
+  // ONE error — a control that trips two rules at once no longer proves the rule it is named for.
+  it("fails on impossibility vocabulary spent over an ASSUMED provenance (#1319)", () => {
+    const planted = STALE_REASON.replace("can do the thing", "is out of reach").replace("FALSIFIER: true", "FALSIFIER: false");
+    const { code, out } = gate(plant({ "budget.ts": planted }));
+    expect(code).toBe(1);
+    expect(errors(out)).toEqual([expect.stringContaining('says "out of reach" on an ASSUMED provenance')]);
+  });
+
+  it("fails on a supervised-path blocker recorded as empirical rather than relayed (#1319)", () => {
+    const planted = LIVE_REASON.replace("the blocker this one describes really is still standing", "not wired up: .github/workflows/ is supervised and needs operator approval");
+    const { code, out } = gate(plant({ "supervised.ts": planted }));
+    expect(code).toBe(1);
+    expect(errors(out)).toEqual([expect.stringContaining("produces a RELAY, never a silent stop")]);
+  });
+
+  // The venue rule shipped as /#\d+|\//, where any slash satisfied it. A relay with no findable venue
+  // is the silent close wearing a field name, so a bare "go/no-go" must not buy one.
+  it("fails on a supervised-path relay whose DECISION names no findable venue (#1319)", () => {
+    const planted = [RELAYED_REASON, "// DECISION: pending a go/no-go"].join("\n");
+    const { code, out } = gate(plant({ "no-venue.ts": planted }));
+    expect(code).toBe(1);
+    expect(errors(out)).toEqual([expect.stringContaining("names no venue for a supervised-path blocker")]);
+  });
+
+  it("passes the same relay once the DECISION points at the issue or the decision record (#1319)", () => {
+    for (const venue of ["#1319", "docs/design/recorded-reasons.md"]) {
+      const { code, out } = gate(plant({ "relay.ts": [RELAYED_REASON, `// DECISION: ${venue}`].join("\n") }));
+      expect(errors(out)).toEqual([]);
+      expect(code).toBe(0);
+    }
+  });
+
+  // The negative control for the supervised-path rule's precision: this reason CITES a supervised
+  // path as the record of a ruling rather than naming it as the blocker, and both vocabularies are
+  // present one clause apart. Refusing it would be the gate crying wolf on a legitimate reason.
+  it("passes an empirical reason that merely cites a supervised path as its reference (#1319)", () => {
+    const planted = LIVE_REASON.replace(
+      "the blocker this one describes really is still standing",
+      "the source loader does not read .svelte files; the scope rationale and the operator ruling behind it are recorded in docs/design/infrastructure-out-of-scope.md",
+    );
+    const { code, out } = gate(plant({ "cites.ts": planted }));
+    expect(errors(out)).toEqual([]);
+    expect(code).toBe(0);
   });
 
   it("counts claim-shaped prose outside every block instead of reading well-formed as complete (#1246)", () => {

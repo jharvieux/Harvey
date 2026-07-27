@@ -1,0 +1,86 @@
+// #1307 — "shipped but never called" gate. Runs knip a SECOND time with tests removed from the
+// entry set (knip.production.json) and ratchets the result against a committed baseline.
+//
+//   pnpm test-only-exports                    # the gate, as `pnpm verify` runs it
+//   pnpm test-only-exports --list             # also enumerate the whole known backlog
+//   pnpm test-only-exports --update-baseline  # re-record the backlog after wiring something up
+//
+// Why a second config instead of `knip --production`: MEASURED 2026-07-27, `knip --production
+// --debug` still lists `entry:**/*.{bench,test,test-d,spec,spec-d}.?(c|m)[jt]s?(x)
+// (vitest.config.ts)` — production mode does not drop the Vitest plugin's test entry glob, so it
+// reported nothing for all four functions named in #1307. knip.production.json turns that plugin
+// off and negates `src/**/*.test.ts` out of `project`.
+//
+// Exit 1 on a NEW row or a STALE baseline row. Exit 0 prints the backlog COUNT anyway — an
+// unstated limitation reads as a clean bill of health (CLAUDE.md, "fail loud").
+
+import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { arg, assertKnownFlags } from "./args.js";
+import { collect, compare, exportedNames, toBaseline, type Baseline, type Unreferenced } from "../test-only-exports.js";
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+assertKnownFlags(["--dir", "--config", "--baseline", "--list", "--update-baseline"]);
+
+const dir = resolve(arg("--dir") ?? REPO_ROOT);
+const config = arg("--config") ?? "knip.production.json";
+const baselinePath = resolve(dir, arg("--baseline") ?? "test-only-exports.baseline.json");
+const listAll = process.argv.includes("--list");
+
+const knip = spawnSync(join(REPO_ROOT, "node_modules", ".bin", "knip"), ["--directory", dir, "--config", config, "--no-config-hints", "--reporter", "json"], {
+  encoding: "utf8",
+  maxBuffer: 64 * 1024 * 1024,
+});
+// knip exits 1 whenever it found anything, which is the normal case here; only a crash (no JSON on
+// stdout) is an error, and it must not be mistaken for "nothing unreferenced".
+let rows: Unreferenced[];
+try {
+  rows = collect(JSON.parse(knip.stdout ?? ""));
+} catch {
+  console.error(`knip did not produce a JSON report (exit ${knip.status}). stderr:\n${knip.stderr ?? knip.error?.message ?? ""}`);
+  process.exit(2);
+}
+
+if (process.argv.includes("--update-baseline")) {
+  writeFileSync(baselinePath, `${JSON.stringify(toBaseline(rows), null, 2)}\n`);
+  console.log(`Recorded ${rows.length} unreferenced rows to ${baselinePath}`);
+  process.exit(0);
+}
+
+const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline;
+const { added, stale } = compare(rows, baseline);
+const count = (kind: Unreferenced["kind"]): number => rows.filter((r) => r.kind === kind).length;
+
+// A `file` row means NOTHING in it is reachable, so name what is inside it — otherwise the
+// strongest rows in the report are also the least specific.
+const line = (r: Unreferenced): string => {
+  if (r.kind !== "file") return `${r.kind.padEnd(6)} ${r.id}`;
+  const names = exportedNames(r.id, readFileSync(resolve(dir, r.id), "utf8"));
+  return `file   ${r.id} — every export unreachable: ${names.join(", ")}`;
+};
+
+console.log("test-only-exports gate (#1307) — production reachability, tests are NOT entry points");
+console.log(`  analysed ${dir} with ${config}`);
+console.log(`  unreferenced outside tests: ${count("file")} files, ${count("export")} exports, ${count("type")} types (${rows.length} total)`);
+console.log(`  known backlog recorded in ${baselinePath} — triage tracked in #1328, not authorised for deletion`);
+if (listAll) for (const r of rows) console.log(`    ${line(r)}`);
+
+if (added.length > 0) {
+  console.log(`\nNEW — shipped with no production caller (${added.length}):`);
+  for (const r of added) console.log(`  ${line(r)}`);
+  console.log("Wire it up, or record a reason per docs/design/recorded-reasons.md and re-run with --update-baseline.");
+}
+if (stale.length > 0) {
+  console.log(`\nSTALE baseline rows — now reachable from production, so the ratchet must drop them (${stale.length}):`);
+  for (const r of stale) console.log(`  ${r.kind.padEnd(6)} ${r.id}`);
+  console.log("Re-run with --update-baseline.");
+}
+
+if (added.length > 0 || stale.length > 0) {
+  console.log(`\nGATE FAIL — ${added.length} new, ${stale.length} stale.`);
+  process.exit(1);
+}
+console.log(`\nGATE PASS — no capability shipped without a production caller since the baseline (${rows.length} still on it).`);

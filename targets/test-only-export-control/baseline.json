@@ -1,0 +1,11 @@
+{
+  "files": [
+    "src/orphan.ts"
+  ],
+  "exports": [
+    "src/lib.ts:testOnlyExport"
+  ],
+  "types": [
+    "src/lib.ts:TestOnlyType"
+  ]
+}
