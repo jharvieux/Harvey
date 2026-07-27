@@ -8,7 +8,7 @@ instead of degrading through the M7L-00 disclosure. Both are closed here.
 
 ### The constraint
 
-`package.json`/`pnpm-lock.yaml` are supervised (never a runtime dependency for this). `@puppeteer
+`package.json`/`pnpm-lock.yaml` are **NOT supervised** (operator ruling 2026-07-27); the reason this is not a runtime dependency is a design choice, not a path restriction. `@puppeteer
 /browsers` (the standard tool for fetching a pinned Chrome-for-Testing build) can't be added there.
 
 ### The approach: runtime install, not a repo dependency

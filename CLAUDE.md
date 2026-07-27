@@ -85,6 +85,8 @@ Automated agents (issue-sweep or any batch pipeline) must never modify these wit
 - `.github/workflows/` — CI definitions.
 - `CLAUDE.md` — this file.
 
+**`package.json` and `pnpm-lock.yaml` are NOT on this list** (operator ruling 2026-07-27). Five documents had come to assert they were, and that folk constraint was blocking at least five separate pieces of work (#802's JWT verifier, #199-201's LLM adjudicator, Chrome provisioning, a pnpm script alias, #1304's bundle-analyzer verification). Adding a dependency is an ordinary change; justify it on the merits, not on a path restriction that does not exist.
+
 ## Model-tier labels
 
 Issues carry one of `haiku` / `sonnet` / `opus` / `fable` to tell automated sweeps which model tier the task needs: `haiku` = mechanical/small, `sonnet` = standard implementation, `opus` = design-heavy or security-sensitive, `fable` = hardest architecture / product-shape / top-tier reasoning (above opus). Unlabeled issues default to `sonnet`.

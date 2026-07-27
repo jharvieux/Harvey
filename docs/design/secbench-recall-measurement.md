@@ -207,7 +207,7 @@ would have inflated recall by shrinking the denominator, the exact trap #879 war
   proves the loader, the target-package scoping, the transitive-dep exclusion, and the denominator
   honesty of BOTH scorers (an installable/scanned-but-clean entry is a MISS, not dropped).
 
-No `pnpm` script alias was added (`package.json` is a supervised path); invoke via
+No `pnpm` script alias was added — the recorded reason was that `package.json` is supervised, which is FALSE (operator ruling 2026-07-27). Invoke via
 `pnpm exec tsx src/cli/validate-secbench.ts`, the same convention as `validate-precision.ts`.
 
 ## Reproduction (exact commands, 2026-07-24)

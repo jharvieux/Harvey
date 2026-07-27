@@ -180,5 +180,5 @@ reproduces the specific per-branch assertions, or a tool this environment does n
   specific threshold bands; a real capture is feasible but requires purpose-built clone/dead-code
   source and updating the downstream assertions to the tool's real counts.
 - **Row 13 (Stryker 9.6.1)** — `@stryker-mutator/*` is NOT installed in this environment; a real
-  capture requires installing it (touches the supervised `package.json`/lockfile) plus a mutation
+  capture requires installing it (touches `package.json`/lockfile — **NOT supervised**, operator ruling 2026-07-27) plus a mutation
   target and a ~15-min run.
