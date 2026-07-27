@@ -16,3 +16,25 @@ export async function withTenant<T>(tenantId: string, run: () => Promise<T>): Pr
     client.release();
   }
 }
+
+// #1195 negatives — the two correct forms, which must stay silent. Both scope the GUC to the
+// current transaction, so it cannot outlive the connection when it returns to the pool.
+export async function withTenantLocal<T>(tenantId: string, run: () => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query(`SET LOCAL app.current_tenant = '${tenantId}'`);
+    return await run();
+  } finally {
+    client.release();
+  }
+}
+
+export async function withTenantSetConfig<T>(tenantId: string, run: () => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("SELECT set_config('app.current_tenant', $1, true)", [tenantId]);
+    return await run();
+  } finally {
+    client.release();
+  }
+}
