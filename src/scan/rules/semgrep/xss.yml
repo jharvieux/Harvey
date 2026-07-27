@@ -27,6 +27,69 @@
 #
 # `useSearchParams()` is kept even though `$SP.get(...)` subsumes the common read — unifying on the
 # UNION is the conservative move, and the defect being fixed is the divergence, not the redundancy.
+# The canonical request-taint source block (#1221) — see base.yml for the rationale, which is not
+# repeated here. Copied because YAML anchors resolve at parse time and do not cross documents;
+# shared-sources.test.ts fails loud if any copy drifts. xss.yml needs it for harvey-jsx-prop-spread-
+# injection (#1237), whose sink lives on BOTH sides of the server/client boundary.
+x-request-source: &request_source
+  pattern-either:
+    # Express / Pages-Router accessors, plus the App Router handler parameter.
+    - patterns:
+        - pattern-either:
+            - pattern: $REQ.query
+            - pattern: $REQ.body
+            - pattern: $REQ.params
+            # #984: cookies/headers are attacker-controllable request sources (session tokens,
+            # X-Forwarded-*, User-Agent, custom headers) — a well-known injection entry point.
+            - pattern: $REQ.cookies
+            - pattern: $REQ.headers
+            # #987: method-form request accessors (Express req.get('X-…')/req.header('X-…')). The
+            # destructured/bracket/aliased/multi-hop forms propagate through semgrep's taint
+            # dataflow once the base object is a source; the method form is a distinct call shape.
+            - pattern: $REQ.get(...)
+            - pattern: $REQ.header(...)
+        - metavariable-regex:
+            metavariable: $REQ
+            regex: ^_?(req|request|nextReq|nextRequest|httpReq|incoming)$
+    # #1221: the App Router query string. `$U.searchParams` subsumes `req.nextUrl.searchParams`
+    # AND the split `const u = new URL(req.url); u.searchParams.get(…)` form, so neither needs its
+    # own pattern; the `.get(...)` arm carries the inline `new URL(req.url).searchParams.get(…)`
+    # call. A BARE `$SP.get(...)` is deliberately NOT used — measured to fire on Map/Headers/
+    # config/FormData `.get()` even behind the `^(?!(https?|axios)$)` http-client guard.
+    - pattern: $U.searchParams.get(...)
+    - pattern: $U.searchParams
+    # #1221: the App Router request body — the shape 17 of 21 rules were blind to.
+    - pattern: await $REQ.json()
+    # #984: App Router next/headers request sources.
+    - pattern: cookies()
+    - pattern: headers()
+    # #1240: the App Router SERVER COMPONENT request props. A page/layout receives its dynamic route
+    # segments and query string as DESTRUCTURED PARAMETERS — `{ params }` / `{ searchParams }` — and
+    # never as a `req` object, so every arm above is blind to the idiomatic RSC page. Found through
+    # the SSRF facet (P-OWASP-REACT-RSC-SSRF), but the gap was never SSRF's: the shared block did not
+    # model the source, so all 21 rules missed it.
+    #
+    # Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS
+    # (TRIED 2026-07-27, semgrep 1.164.0 — `function $C({ ..., $P, ... }, ...) { ... }` and three
+    # variants matched nothing on a file the equivalent name-based rule matched twice). The
+    # `pattern-not-inside` is what makes the name safe: a locally-ASSIGNED `params`/`searchParams` is
+    # an options bag, a URLSearchParams the module built itself, or a Map alias — never a request
+    # prop, because a destructured parameter is never assigned. MEASURED against five benign probes
+    # (options object, axios config, locally-built URLSearchParams, Map alias, RPC argument bag): the
+    # bare name-constrained access fired on THREE of five; with the not-inside it fires on none,
+    # while all four RSC positives still fire. `await $RSCPROP` carries the Next 15 shape, where
+    # `params` is a Promise the component awaits before destructuring.
+    - patterns:
+        - pattern-either:
+            - pattern: $RSCPROP.$RSCFIELD
+            - pattern: await $RSCPROP
+        - metavariable-regex:
+            metavariable: $RSCPROP
+            regex: ^(params|searchParams)$
+        - pattern-not-inside: |
+            $RSCPROP = ...
+            ...
+#
 x-dom-source: &dom_source
   pattern-either:
     - pattern: location.hash
@@ -574,3 +637,49 @@ rules:
       - pattern-not: <script src=$SRC integrity=$I />
       - pattern-not: <script src=$SRC integrity=$I crossOrigin=$C></script>
       - pattern-not: <script src=$SRC integrity=$I crossOrigin=$C />
+
+  # #1237 — PROP INJECTION VIA THE SPREAD OPERATOR. OWASP React Security CS (draft), XSS Prevention:
+  # `<Field {...userInput} />` where the object is attacker-controlled lets the caller supply props
+  # the component never meant to accept — including `dangerouslySetInnerHTML` itself. The XSS sink is
+  # reached WITHOUT THE SOURCE EVER NAMING A SINK, which is precisely why every dangerouslySetInnerHTML
+  # rule above stays dark on it: they key on the attribute, and here the attribute is data.
+  #
+  # Both source vocabularies, because this sink lives on both sides of the boundary: a Client
+  # Component spreads a value off the URL (*dom_source), a Server Component spreads one off the
+  # request (*request_source). Review tier, not free count — the shippability of this rule rests
+  # entirely on the sanitizer below, and a heuristic sanitizer is not a ~100%-precision boundary.
+  #
+  # THE SANITIZER IS THE RULE. Without it this fires on every spread in every React codebase and is
+  # unshippable; with a LOOSE one it repeats #1066, where a sanitizer that does nothing read as
+  # protection. So the allowlist must be a real membership test: MEASURED 2026-07-27, the bare
+  # `Object.fromEntries(Object.entries($O).filter(...))` shape also cleared a planted
+  # `.filter(() => true)` no-op, and constraining the predicate to `.has`/`.includes` rejects it
+  # while still clearing the sheet's own remedy. `pick($O, …)` is an allowlist by construction.
+  - id: harvey-jsx-prop-spread-injection
+    languages: [javascript, typescript]
+    mode: taint
+    severity: WARNING
+    metadata:
+      cwe: ["CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"]
+      owasp: ["A03:2021 - Injection"]
+      confidence: MEDIUM
+      category: security
+      harveySeverity: High
+    message: >
+      An attacker-controlled object is spread into a component's props — the caller chooses which
+      props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that
+      never names one. Filter the object against an explicit allowlist of prop names before
+      spreading it, and never use a blocklist (new dangerous props keep being added).
+    pattern-sources:
+      - *dom_source
+      - *request_source
+    pattern-sanitizers:
+      - pattern: Object.fromEntries(Object.entries($O).filter((...) => $ALLOW.has(...)))
+      - pattern: Object.fromEntries(Object.entries($O).filter((...) => $ALLOW.includes(...)))
+      - pattern: pick($O, ...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: <$EL {...$X} />
+              - pattern: <$EL {...$X}>...</$EL>
+          - focus-metavariable: $X
