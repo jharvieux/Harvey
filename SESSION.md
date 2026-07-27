@@ -2,7 +2,41 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-26 (night) — **OWASP contribution thread**: two cheat-sheet proposals filed upstream, an ack-watch routine scheduled, and three coverage-corpus issues opened to measure Harvey against an answer key we did not author. Newest block first._
+_Last updated: 2026-07-27 (early hours) — **OWASP thread executed**: 2 upstream proposals filed, ack-watch scheduled, 2 of 3 coverage corpora BUILT AND MERGED, 3 Harvey bugs found and fixed, 12 issues filed. Newest block first._
+
+## 2026-07-27 (early) — OWASP corpora EXECUTED: 2 PRs merged, 3 Harvey bugs fixed, 12 issues filed
+
+Operator: "power through, immediately execute fixes for any harvey bugs found, then improvements to detectors." Docs/CLAUDE.md/workflows authorized. Ran to context exhaustion; **#1192 (React) NOT started** — see Next.
+
+### Merged (both squash-merged to main, all required checks green)
+- **PR #1193 → #1190** — OWASP Multi-Tenant corpus (pinned CheatSheetSeries `46f8d04`), 11 entries, + **2 new detectors**: `SB-RLS-BYPASSRLS-*` (Critical, 1 hit / 0 false fires) and `SB-RLS-NOFORCE-ROLLUP`. Backs our own upstream claim in CheatSheetSeries#2309.
+- **PR #1199 → #1191** — OWASP Node.js corpus, 8 entries. Most of that sheet turned out **already covered** (b5-headers, b3-injection, deps, #1057 projections) and is cross-referenced, not re-planted.
+
+### 3 Harvey bugs FOUND AND FIXED (the operator's actual ask)
+1. **Silent wrong-tree scan (in #1193).** No CLI validated unknown flags, and five read `--dir` with a `?? process.cwd()` fallback. `quick-scan --target <dir>` — the spelling `dry-run.ts` documents — was IGNORED and scanned the repo root: **650 findings, 188 in Harvey's own source, exit 0, no warning.** `validate-calibration --target <dir>` would have printed a recall number for a tree nobody asked about. New `src/cli/args.ts` (`assertKnownFlags` exits 2; `--target` accepted as alias), 11 tests.
+2. **Non-deterministic committed artifact (in #1193).** `resolveBundleScan` probes the ORIGINAL dir, not the scratch copy, so it found a gitignored `.next/static` locally and omitted `SEC-BUNDLE-00` that CI emits — `dry-run-drift` failed on a correctly-regenerated artifact. New `skipBundleScan`, set on the dry-run path only.
+3. **Gate misreported real gaps as "by design".** `expectedTier: "none"` covered two different things and printed one label. New `CorpusEntry.gapKind` (`by-design` vs `measured-gap`).
+
+### ⚠️ MERGE-PATH HOLE FOUND — operator action needed (#1205)
+**The conservation gate is NOT a required check.** PR #1199 squash-merged while "plant → deliverable" was RED; only `verify` and `dry-run-drift` are required. A gate built to stop silent drops is itself advisory on the merge path. It cannot just be made required yet: its vitals `fixture-drift` step is **flaky in CI** (4 of last 8 runs, unrelated branches; passes locally — **#1206**, which also discards python3's stderr so the cause is invisible). Sequence: fix #1206 → operator adds the required check → confirm negative controls still fire.
+
+### Issues filed (12)
+- **Multi-tenant gaps:** #1194 (**highest value** — a tenant predicate populated FROM THE REQUEST reads as correctly scoped; existing detectors check whether a predicate EXISTS, not where its value came from), #1195 (`SET` vs `SET LOCAL` GUC under pooling — our own #2309 item 2), #1196 (cache key without tenant), #1197 (module-level rate limiter — **and D-091 #19's guard turns out to be ATC's CI check, not a Harvey detector, so at least one catalogued anti-pattern has no detector; asks for a full D-091 audit**), #1198 (storage path without tenant prefix).
+- **Node.js gaps:** #1200 (3 cheap rules: vm-as-sandbox, body limit, cacheable authed response), #1201 (source-level ReDoS — distinct from the dep-CVE row that looks like coverage), #1202 (HPP + EventEmitter error), #1203 (M7: sync calls blocking the event loop), #1204 (`awaiting-decision`: X-Powered-By/helmet — recommend decline + DISCLOSE).
+- **CI:** #1205, #1206 above.
+
+### Upstream (unchanged, awaiting ack)
+[CheatSheetSeries#2308](https://github.com/OWASP/CheatSheetSeries/issues/2308) (new Next.js sheet) · [#2309](https://github.com/OWASP/CheatSheetSeries/issues/2309) (Multi-Tenant update). Both still **unlabelled** — `gh issue create` bypasses the template's auto-labels. Ack-watch routine `trig_01UD5yXDN8jMghazEBZnCGrV` runs daily 12:00 UTC and opens an `owasp-ack-alert` issue on any change. **Its first test run's output was never observed — confirm it.** Do NOT draft either sheet before `ACK_OBTAINED`.
+
+### Next, in order
+1. **#1192 React corpus** — not started. Source is the UNMERGED PR #2196: pin a commit SHA, open a post-merge reconciliation follow-up.
+2. **#1194** — the most valuable detector gap found.
+3. **#1206 → #1205** — make the conservation gate actually block.
+4. Declared-set follow-up: `Database_Security_Cheat_Sheet.md` + `Authorization_Cheat_Sheet.md` also belong in the corpus set — picking only flattering sheets destroys the independent-answer-key property.
+
+### CLAUDE.md — APPLIED this session (operator granted docs+CLAUDE.md authority)
+Two edits: the dry-run determinism sentence now names `skipBundleScan` alongside `skipNetworkChecks` with the "pin any new uncontrolled input" rule; and a new "an answer key we wrote cannot measure our coverage" bullet recording the OWASP corpora, the bucket-by-running rule, the `match`-against-evidence footgun, and `gapKind`. Nothing in the file was falsified — both are additions/completions.
+
 
 ## 2026-07-26 (night) — OWASP upstream contributions + independent coverage corpora
 
