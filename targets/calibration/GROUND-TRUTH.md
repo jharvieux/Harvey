@@ -286,6 +286,7 @@ name, so slopsquat stays silent while `checkNonRegistryDependencies` fires).
 | P-MISSING-LOCKFILE | `fixtures/legacy-app` (no lockfile) | `checkLockfilePresence` — standalone project root shipping no lockfile | high |
 | P-KNOWN-IOC-PKG | `fixtures/legacy-app/package.json` (`flatmap-stream@0.1.1`) | `checkKnownIoc` (new) — curated IOC-feed name match (2018 event-stream malware); slopsquat not re-run on the fixture | high |
 | P-LICENSE-COPYLEFT-TRANSITIVE | `package-lock.json` (`@img/sharp-libvips-linux-riscv64@1.2.4`) | `checkLicenseCompliance` — LGPL-3.0-or-later on a package NO manifest declares (#1213) | high |
+| P-KNOWN-IOC-TRANSITIVE | `package-lock.json` (`crossenv`) | `checkKnownIoc` — curated IOC-feed name match on a package NO manifest declares (#1231) | high |
 
 ### B2 transitive-copyleft plant (#1213)
 
@@ -309,11 +310,41 @@ OSV row (`DEP-OSV-GHSA-f88m-g3jw-g9cj-sharp@0.34.5`, review tier — inherited l
 plant models, not to add a CVE. It is not corpus-keyed, for the same reason `P-NEXT-CVE-CACHE`
 is keyed on the class and not on a specific advisory id: OSV advisory data moves.
 
+### B2 transitive-IOC plant (#1231)
+
+`package-lock.json` also carries `crossenv`, declared by no `package.json` in this target. It models
+the canonical delivery shape for a malicious dependency, which is transitive: nobody declared
+`flatmap-stream` in the 2018 event-stream incident — `event-stream` pulled it in. Before #1231,
+`checkKnownIoc` read the root manifest's prod+dev names only, so it looked for the payload in the
+one place the delivery mechanism does not put it.
+
+**This entry is deliberately SYNTHETIC, and that is the honest option here.** npm took `crossenv`
+down in 2017, so there is no real release to cite and no real integrity hash to commit. The entry
+therefore carries the NAME and nothing else — no `resolved` URL, no `integrity`, no `license`, and
+the plainly-fake version `0.0.0-synthetic`. The name is the only field `checkKnownIoc` reads (the
+feed's own premise is that any version of such a package is malicious), so nothing about the plant
+is fabricated in a field a check depends on. Contrast the #1213 plant above, which models a license
+claim and therefore had to use real published releases with real hashes.
+
+Two side effects, recorded rather than left to surprise the next reader.
+
+1. The entry has no `license`, so it joins `SUP-LICENSE-00`'s indeterminate list on the offline
+   path. That is correct — a lockfile entry with no license field genuinely cannot be classified —
+   and it moves the SBOM license coverage for this target to 390 of 396 components.
+2. osv-scanner independently matches the name and emits
+   `DEP-OSV-GHSA-c2m4-w5hm-vqjw-crossenv@0.0.0-synthetic` (review tier). That is welcome
+   corroboration — a third party we do not control agrees this name is malware, which is the one
+   thing a synthetic entry cannot assert for itself — and it is left in place. It is deliberately
+   NOT corpus-keyed, for the same reason `P-NEXT-CVE-CACHE` is keyed on its class rather than an
+   advisory id: OSV advisory data moves. `P-KNOWN-IOC-TRANSITIVE` keys on the IOC row's own
+   "indicator-of-compromise" wording, which no OSV row carries, so the two cannot be confused.
+
 ### B2 negatives — benign lookalikes (must NOT be flagged in the free count)
 
 | id | location | why benign / suppression |
 |---|---|---|
 | N-LICENSE-PERMISSIVE-TRANSITIVE | `package-lock.json` (`sharp@0.34.5`) | Apache-2.0, and exactly as transitive as the LGPL binary it pulls in — the FP a "the tree is unreviewed, flag it" rule throws once the candidate set widened from ~11 manifest names to the whole resolved tree. A permissive SPDX id draws no license finding however deep it sits. |
+| N-IOC-TRANSITIVE-CLEAN | `package-lock.json` (`crypto-browserify@3.12.1`) | An ordinary transitive dependency sitting beside the `crossenv` plant, on no malware feed and not edit-distance 1 from any popular package — the FP a "the transitive tree is unreviewed, flag it" rule throws once #1231 widened `checkKnownIoc`/`checkTyposquat` from ~11 manifest names to the whole resolved tree. Doubles as the typosquat boundary for that widening. |
 | N-DEP-PINNED | `package.json` (`lodash@4.17.11`) | Exact-pinned, registry-sourced — never appears in the SUP-UNPINNED or SUP-NON-REGISTRY evidence. The pinned-dep FP a naive "any dependency is unpinned" rule throws. Doubles as the registry-source negative for `P-NONREGISTRY-DEP`. Its OSV CVE finding lives at the lockfile location (not `package.json`), so it can't be mis-attributed here. |
 | N-SLOPSQUAT-REAL | `package.json` (`@supabase/supabase-js`) | A real, popular, scoped package (exact-match in the typosquat popular set; a 200 from the slopsquat registry HEAD) — the FP a name-shape heuristic throws on a legitimate scoped dep. Draws no slopsquat/typosquat finding. |
 | N-NEXT-SUPPORTED | `fixtures/supported-app/package.json` (`next@15.5.16`) | A current, fully-patched Next version — `checkNextVersionCVEs` draws nothing (no EOL, no 29927/RSC/WS-SSRF). The supported-version half of the EOL pair, resolved by living in its own fixture root. |

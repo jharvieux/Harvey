@@ -64,6 +64,32 @@ x-request-source: &request_source
     # #984: App Router next/headers request sources.
     - pattern: cookies()
     - pattern: headers()
+    # #1240: the App Router SERVER COMPONENT request props. A page/layout receives its dynamic route
+    # segments and query string as DESTRUCTURED PARAMETERS — `{ params }` / `{ searchParams }` — and
+    # never as a `req` object, so every arm above is blind to the idiomatic RSC page. Found through
+    # the SSRF facet (P-OWASP-REACT-RSC-SSRF), but the gap was never SSRF's: the shared block did not
+    # model the source, so all 21 rules missed it.
+    #
+    # Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS
+    # (TRIED 2026-07-27, semgrep 1.164.0 — `function $C({ ..., $P, ... }, ...) { ... }` and three
+    # variants matched nothing on a file the equivalent name-based rule matched twice). The
+    # `pattern-not-inside` is what makes the name safe: a locally-ASSIGNED `params`/`searchParams` is
+    # an options bag, a URLSearchParams the module built itself, or a Map alias — never a request
+    # prop, because a destructured parameter is never assigned. MEASURED against five benign probes
+    # (options object, axios config, locally-built URLSearchParams, Map alias, RPC argument bag): the
+    # bare name-constrained access fired on THREE of five; with the not-inside it fires on none,
+    # while all four RSC positives still fire. `await $RSCPROP` carries the Next 15 shape, where
+    # `params` is a Promise the component awaits before destructuring.
+    - patterns:
+        - pattern-either:
+            - pattern: $RSCPROP.$RSCFIELD
+            - pattern: await $RSCPROP
+        - metavariable-regex:
+            metavariable: $RSCPROP
+            regex: ^(params|searchParams)$
+        - pattern-not-inside: |
+            $RSCPROP = ...
+            ...
 # ---------------------------------------------------------------------------------------------
 
 rules:
@@ -645,6 +671,67 @@ rules:
                   if (!$ALLOW.has($HOST)) return ...;
                   ...
           - focus-metavariable: $X
+      # #1240: (a2) validator-guard on the value the fetch RECEIVES, which the projection guard
+      # above structurally cannot see. Needed once the RSC `{ params }` source landed: the sheet's
+      # own correct form validates the route segment itself, so without this the rule would fire on
+      # the remedy it recommends. Same soundness constraints as the #989 block — an ANCHORED,
+      # POSITIVE-class regex (an unanchored allowlist matches a prefix), or exact membership — plus a
+      # failure branch that actually terminates the flow. THROW is admitted alongside return, and
+      # both are spelled braced AND braceless (the braceless spelling per #1236's convention),
+      # because MEASURED 2026-07-27 (semgrep 1.164.0) `{ ... throw $E; }` does not match a braceless
+      # `if (…) throw new Error(…);` — the shape a Server Component uses, since a bare `return` there
+      # renders an empty page instead of erroring. This is #1248's class (throw-based guards read as
+      # vulnerable) closed for ONE rule where the widened source made it urgent; #1248 stays open for
+      # the other twenty.
+      #
+      # `pattern-inside` + a consistency-bound `pattern: $X`, NOT `by-side-effect` like the #989
+      # copies: the guarded value here is a PROPERTY ACCESS (`params.id`), not a variable, and
+      # by-side-effect tracks assignment to an lvalue — MEASURED 2026-07-27, the by-side-effect form
+      # left the validated fixture firing. The guard opens the region, so only uses AFTER it clear.
+      - patterns:
+          - pattern-either:
+              - patterns:
+                  - pattern-either:
+                      - pattern-inside: |
+                          if (!$RE.test($X)) { ... return; }
+                          ...
+                      - pattern-inside: |
+                          if (!$RE.test($X)) { ... throw $E; }
+                          ...
+                      - pattern-inside: |
+                          if (!$RE.test($X)) return ...;
+                          ...
+                      - pattern-inside: |
+                          if (!$RE.test($X)) throw $E;
+                          ...
+                  - metavariable-regex:
+                      metavariable: $RE
+                      regex: ^/\^(?:[^\[]|\[[^^\]][^\]]*\])*\$/[isuvy]*$
+              - pattern-inside: |
+                  if (!$ALLOW.includes($X)) { ... return; }
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.includes($X)) { ... throw $E; }
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.includes($X)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.includes($X)) throw $E;
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.has($X)) { ... return; }
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.has($X)) { ... throw $E; }
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.has($X)) return ...;
+                  ...
+              - pattern-inside: |
+                  if (!$ALLOW.has($X)) throw $E;
+                  ...
+          - pattern: $X
     pattern-sinks:
       - patterns:
           - pattern-either:
