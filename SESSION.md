@@ -2,7 +2,40 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-26 (later) — issue-sweep IN PROGRESS: **15 of 16 batches merged, 20 issues closed**, last PR (#1144, fixture inventory) in the merge train. See the block immediately below. The prior 24-PR block follows it._
+_Last updated: 2026-07-26 (late) — after the conservation sweep, a **producer→deliverable VERIFICATION wave** + operator-ruling wave. The sweep found real dropped findings everywhere it looked; all fixed. Newest block first; the sweep block and the 24-PR block follow._
+
+## 2026-07-26 (late) — verification wave + operator rulings → ~30 more PRs, real drops found & fixed
+
+After the conservation sweep, the operator pushed: "are we finding all the issues", "were results getting dropped in reports", "actually test, stop procrastinating." So we ran a **producer→deliverable verification** of the blind spots and worked the operator's ruling list. It found real dropped findings, as feared.
+
+### Real defects the verification FOUND and FIXED (the point)
+- **M2 dropped findings on live scans (#1155/#1164):** the app-route probe only delivered `proven` verdicts — **7 of 12 app-route verdicts (clean + not-assessed) were invisible** in the deliverable. Third instance of the #1091/#1123 seam. Fixed (`M2-APP-ROUTE-COVERAGE`), verified live, + **built the offline M2 conservation plant → all 10 modules now planted, `UNEXERCISED` empty.**
+- **M7's conservation coverage was FAKE (#1084/#1162):** the monorepo double-count fix removed M9's unfiltered capture, which exposed that M9 had been silently re-delivering M7's planted finding — the gate thought M7 was covered when M7's own probe wasn't delivering. The exact #1062 masking. Fixed M7's own delivery; gate now green legitimately.
+- **semgrep engine had more fiction fixtures + a severity under-map (#1156/#1166):** captured both semgrep+gitleaks fixtures from real runs; `SEVERITY_FROM_SEMGREP` under-mapped MEDIUM/HIGH/CRITICAL to the Medium default (the #1063 class) — fixed with a fail-loud throw on any unmapped severity.
+- **Clean-and-guarded:** dedup + renderer deliver every finding (#1158), severities match ground truth (#1157) — both got new fail-loud gates.
+
+### Disclosure re-scan (#1174 — operator: "don't trust those reports")
+Re-ran all six disclosure targets on the fixed scanner. **All six original findings still reproduce (valid), but the current scanner found ~15 finding-groups the old scans missed** — notably **9 High Prisma BOLA on boxyhq** (invisible pre-#1163) and real Critical dep-CVE severities #1063 had buried. Each #774–779 updated with the dated delta. Found another export bug (#1175, DEP-OSV dup id) — fixed.
+
+### Operator rulings actioned (2026-07-26)
+- **#904 NO** (prod probing out of scope — liability) → CLOSED.
+- **#946 YES** → library-internal parameter-taint shipped: **SecBench 0 → 34%** on the installable subset (path-traversal 62%), FP-guarded, gates held.
+- **#893 values authorized** → M10 value-sampling tier shipped: live-tier-only, opt-in, classification LOCAL, raw values never persisted/logged, off by default; catches name-hidden PII.
+- **#888 GO** → non-destructive RLS write-probe: measured PostgREST eval-order (RLS before not-null), empty-body INSERT can't persist; `Prefer: tx=rollback` is NOT a safety net.
+- **#868** measured (free mechanical tier = shape-dependent **0/9 to 11/12**, ~20% high-confidence source detection; the "100%" is a union the PAID tier clears) → operator chose the **"indicated vs proved" paid-upsell framing** (applied to `free-tier-scope.md`); 4 mechanical-recall-improvement issues filed (**#1182/#1183/#1184/#1185**), truly-impossible cases classified as paid remit.
+- **#1072** FALSIFIER-TIER mechanism + docs + daily `reasons-drift.yml` CI wired.
+- **#1056** operator will run the fix-implementer INTERACTIVELY on their subscription — built prompt-emit + diff-ingest through the existing rails (computeGreen, draft-PR-on-green), **no SDK, no API key**.
+- **#743** trust pages verified/extended (already existed), DRAFT, counsel + #11 still gate go-live.
+
+### Still genuinely operator-blocked (real inputs needed, not procrastination)
+- **#1069** counsel (liability wording) · **#742** needs a real client engagement · **#740/#899/#900** corpus approval + disclosure/publish sign-off · **disclosures #774–779** operator SENDS them (deltas now accurate) · GTM/business **#722/#728–731/#10–13** · EPICs **#2/#632**.
+- **`deferred`-labelled:** #921/#920 (SFC parse), #882 (benchmark), #4 (Tier-2).
+
+### Follow-ups filed, open (executable, not yet worked)
+- **#1182/#1183/#1184/#1185** (mechanical-recall improvements, from #868) · **#1072** items 2/3/4 (claim-population triage, mandatory TOUCHES).
+
+### Merge-train lesson (worth keeping)
+Post-merge PRs go BEHIND and their required checks re-run fresh; a status poll can catch `verify` transiently as `none` (tier-router pending) and skip the merge. Drive PRs ONE at a time with update-branch → generous wait → settle merge-state before merging. NEVER run two merge loops concurrently — they race the shared checkout's `git checkout main`.
 
 ## 2026-07-26 (later) — issue-sweep: conservation/CI-hardening → 15 PRs merged so far (LIVE)
 
