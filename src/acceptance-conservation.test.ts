@@ -7,11 +7,13 @@ import { describe, expect, it } from "vitest";
 import {
   checkAcceptance,
   evidenceProblems,
+  issueDoesNotExist,
   formatAcceptance,
   parseAcceptanceCriteria,
   parseBody,
   SELFTEST_BODY,
   SELFTEST_LOOKUP,
+  SELFTEST_WORLD,
   seedBareEvidence,
   seedDropDisposition,
   seedRemainder,
@@ -27,7 +29,8 @@ const issue = (over: Partial<IssueRecord> & { number: number }): IssueRecord => 
   ...over,
 });
 
-const lookupOf = (...records: IssueRecord[]): IssueLookup => (n) => records.find((r) => r.number === n);
+/** Same-repo records only; the `crossRepo` lookup in "holds a cross-repo issue to its own acceptance criteria" is the one that distinguishes the repo. */
+const lookupOf = (...records: IssueRecord[]): IssueLookup => (n, repo) => (repo ? undefined : records.find((r) => r.number === n));
 
 const problems = (body: string, lookup: IssueLookup): string[] => {
   const r = checkAcceptance(body, lookup);
@@ -84,22 +87,45 @@ describe("parseAcceptanceCriteria", () => {
 });
 
 describe("closing-keyword detection", () => {
+  const numbers = (body: string, repo?: string): number[] => parseBody(body, repo).closes.map((c) => c.number);
+
   it("is negation-blind exactly as GitHub is — `## Does NOT close #1206` still closes #1206", () => {
-    expect(parseBody("## Does NOT close #1206\n").closes).toEqual([1206]);
+    expect(numbers("## Does NOT close #1206\n")).toEqual([1206]);
   });
 
   it("reads every closing keyword form GitHub honours", () => {
-    expect(parseBody("Closes #1\nfixed #2\nResolve #3\ncloses: #4\n").closes).toEqual([1, 2, 3, 4]);
+    expect(numbers("Closes #1\nfixed #2\nResolve #3\ncloses: #4\n")).toEqual([1, 2, 3, 4]);
   });
 
   it("does not treat a bare cross-reference as a close", () => {
-    expect(parseBody("part of #7, refs #8\n").closes).toEqual([]);
+    expect(numbers("part of #7, refs #8\n")).toEqual([]);
   });
 
-  it("discloses a closing reference it cannot resolve rather than dropping it", () => {
-    const r = checkAcceptance("Closes other/repo#5\n", lookupOf());
-    expect(r.unresolvableCloses).toEqual(["other/repo#5"]);
-    expect(formatAcceptance(r)).toContain("NOT ASSESSED");
+  // The gate used to print `NOT ASSESSED` here. `gh issue view 2196 --repo OWASP/CheatSheetSeries`
+  // exits 0 (measured 2026-07-27), so being repo-scoped was a property of the LOOKUP, not of the
+  // reference — the #1320 bounds audit falsified the recorded limitation.
+  it("resolves a cross-repo closing reference to its owner and number", () => {
+    expect(parseBody("Closes other/repo#5\n").closes).toEqual([{ repo: "other/repo", number: 5, ref: "other/repo#5" }]);
+  });
+
+  it("resolves a URL-form closing reference", () => {
+    expect(parseBody("Fixes https://github.com/other/repo/issues/9\n").closes)
+      .toEqual([{ repo: "other/repo", number: 9, ref: "https://github.com/other/repo/issues/9" }]);
+  });
+
+  it("normalises a cross-repo form naming THIS repo, so one issue is not fetched and reported twice", () => {
+    expect(parseBody("Closes #5\nalso closes owner/harvey#5\n", "owner/harvey").closes).toHaveLength(1);
+  });
+
+  it("holds a cross-repo issue to its own acceptance criteria", () => {
+    const crossRepo: IssueLookup = (n, repo) =>
+      repo === "other/repo" && n === 5 ? issue({ number: 5 }) : undefined;
+    const r = checkAcceptance("Closes other/repo#5\n\nACCEPTANCE #5.1 met: src/foo.ts:12 now throws\n", crossRepo);
+    expect(formatAcceptance(r)).toContain("other/repo#5");
+    expect(problems("Closes other/repo#5\n", crossRepo)).toEqual([
+      expect.stringContaining("UNMAPPED"),
+      expect.stringContaining("UNMAPPED"),
+    ]);
   });
 });
 
@@ -224,6 +250,137 @@ describe("evidence, not assertion", () => {
   });
 });
 
+// The gate shipped asserting it "cannot tell a real command from an invented one" — true only of
+// the shapes it never checked. Measured over the last 60 merged PRs' `met` lines (#1320 bounds
+// audit, 2026-07-27): 16/16 cited repo paths exist, 3/3 `pnpm <script>` names are real scripts,
+// 6/9 quoted spans are real test titles, and `"it all looks great"` is none of them.
+describe("evidence checked for TRUTH, not only shape", () => {
+  const world = {
+    topLevelEntries: new Set(["src", "docs"]),
+    pathExists: (p: string) => ["src/acceptance-conservation.ts", "src/cli/validate-acceptance.ts"].includes(p),
+    scripts: new Set(["verify", "validate-reasons"]),
+    testNames: new Set(["a dropped disposition leaves an UNMAPPED bullet"]),
+  };
+
+  it("NEGATIVE CONTROL: a cited repo path that does not exist is evidence pointing at nothing", () => {
+    expect(evidenceProblems("src/invented-module.ts:12 now throws", world)).toEqual([
+      expect.stringContaining("does not exist in this checkout"),
+    ]);
+  });
+
+  it("NEGATIVE CONTROL: `pnpm <script>` naming no script in package.json is an invented command", () => {
+    expect(evidenceProblems("`pnpm validate-everything` — all green", world)).toEqual([
+      expect.stringContaining("not a script in package.json"),
+    ]);
+  });
+
+  it("NEGATIVE CONTROL: a quoted sentence is not a quoted test name once the suite can be asked", () => {
+    expect(evidenceProblems('the reviewer said "it all looks great" about this', world)).toEqual([
+      expect.stringContaining("names none of"),
+    ]);
+    // The doc's own example passes the shape-only floor, which is why it was disclosed as loose.
+    expect(evidenceProblems('the reviewer said "it all looks great" about this')).toEqual([]);
+  });
+
+  it("accepts the real thing on all three: an existing path, a real script, a real test title", () => {
+    for (const detail of [
+      "src/acceptance-conservation.ts:120",
+      "`pnpm verify` — 25 files, 0 failures",
+      'the test "a dropped disposition leaves an UNMAPPED bullet"',
+    ]) {
+      expect(evidenceProblems(detail, world)).toEqual([]);
+    }
+  });
+
+  it("leaves a path outside this repo's top level alone rather than failing on a foreign tree", () => {
+    expect(evidenceProblems("upstream/lib/parser.ts:44 is the culprit", world)).toEqual([]);
+  });
+
+  it("does not read `pnpm exec <binary>` as a script name", () => {
+    expect(evidenceProblems("`pnpm exec tsx src/cli/validate-acceptance.ts --selftest` exits 0", world)).toEqual([]);
+  });
+
+  // The over-refusal these fix: the old shape read the next token after `pnpm` as a script name
+  // whatever it was, so a correct workspace command was reported to its author as an invention.
+  it("NEGATIVE CONTROL: a flag is not a script name, and a workspace command is not an invention", () => {
+    for (const detail of [
+      "`pnpm --filter site build` — 0 errors",
+      "`pnpm -F site build` — 0 errors",
+      "`pnpm -r build` across the workspace",
+      "`pnpm i` then `pnpm verify` — green",
+    ]) {
+      expect(evidenceProblems(detail, world), detail).toEqual([]);
+    }
+  });
+
+  it("NEGATIVE CONTROL: prose mentioning pnpm is not a script reference", () => {
+    expect(evidenceProblems("ran pnpm and it worked, see src/acceptance-conservation.ts:1", world)).toEqual([]);
+  });
+
+  it("SCOPE CONTROL: a genuinely invented script inside backticks still fails", () => {
+    expect(evidenceProblems("`pnpm --silent validate-everything` — all green", world)).toEqual([
+      expect.stringContaining("not a script in package.json"),
+    ]);
+  });
+
+  // 2 of the 9 quoted spans measured over the last 60 merged PRs are real titles truncated at the
+  // title's em-dash; exact set membership scored both as misses.
+  it("counts a quoted span that is a real test title truncated at the em-dash", () => {
+    const truncating = { ...world, testNames: new Set(["NEGATIVE CONTROL: a remainder pointing at a CLOSED issue fails — the #715 → #161 shape"]) };
+    expect(evidenceProblems('the test "NEGATIVE CONTROL: a remainder pointing at a CLOSED issue fails"', truncating)).toEqual([]);
+  });
+
+  it("NEGATIVE CONTROL: prefix tolerance does not accept a quote that no title starts with", () => {
+    const truncating = { ...world, testNames: new Set(["NEGATIVE CONTROL: a remainder pointing at a CLOSED issue fails — the #715 → #161 shape"]) };
+    expect(evidenceProblems('the reviewer said "a remainder pointing at a CLOSED issue"', truncating)).toEqual([
+      expect.stringContaining("names none of"),
+    ]);
+  });
+});
+
+describe("a closing reference this gate cannot resolve is disclosed, not thrown", () => {
+  const MALFORMED = "Closes https://github.com/orgs/acme/projects/1/issues/5\n";
+
+  it("NEGATIVE CONTROL: an issue URL with extra path segments no longer kills the run", () => {
+    expect(() => parseBody(MALFORMED)).not.toThrow();
+    expect(parseBody(MALFORMED)).toMatchObject({ closes: [], unresolvedCloses: ["https://github.com/orgs/acme/projects/1/issues/5"] });
+  });
+
+  it("prints a NOT ASSESSED row rather than reporting a green no-op", () => {
+    const r = checkAcceptance(MALFORMED, lookupOf());
+    expect(r.noop).toBe(false);
+    const out = formatAcceptance(r);
+    expect(out).toContain("ℹ NOT ASSESSED  closing reference `https://github.com/orgs/acme/projects/1/issues/5`");
+    expect(out).not.toContain("carries no closing keyword");
+  });
+
+  it("still resolves the three forms GitHub honours, so the disclosure is not a catch-all", () => {
+    expect(parseBody("Closes #5\nFixes owner/repo#6\nResolves https://github.com/owner/repo/issues/7\n").unresolvedCloses).toEqual([]);
+  });
+});
+
+// `undefined` from a lookup means DOES NOT EXIST. The cross-repo work widened the CLI's sentinel to
+// `repository`, which reports a repo the token cannot READ as one that does not EXIST.
+describe("issueDoesNotExist — the only gh failure that may become `does not exist`", () => {
+  it("reads an issue that resolved to nothing", () => {
+    expect(issueDoesNotExist("GraphQL: Could not resolve to an Issue with the number of 99999. (repository.issue)")).toBe(true);
+  });
+
+  it("NEGATIVE CONTROL: a repository that does not resolve is UNREADABLE, not absent", () => {
+    expect(issueDoesNotExist("GraphQL: Could not resolve to a Repository with the name 'acme/private'. (repository)")).toBe(false);
+  });
+
+  it("NEGATIVE CONTROL: an auth failure is not an absent issue either", () => {
+    expect(issueDoesNotExist("gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable")).toBe(false);
+  });
+
+  it("says so when no checkout was supplied, rather than looking like a verified run", () => {
+    const r = checkAcceptance("Closes #10\n\nACCEPTANCE #10.1 met: src/nope.ts:1\nACCEPTANCE #10.2 met: src/nope.ts:2\n", lookupOf(issue({ number: 10 })));
+    expect(r.evidenceVerified).toBe(false);
+    expect(formatAcceptance(r)).toContain("checked for SHAPE only");
+  });
+});
+
 describe("Gate 2 — remainder liveness", () => {
   const original = issue({ number: 40, body: "## Acceptance\n- one\n", comments: ["Remainder filed as #41."] });
 
@@ -241,6 +398,16 @@ describe("Gate 2 — remainder liveness", () => {
   it("NEGATIVE CONTROL: a remainder pointing at a nonexistent issue fails", () => {
     const body = seedRemainder("Closes #40\n\nACCEPTANCE #40.1 met: src/foo.ts:1\n", 9999);
     expect(problems(body, lookupOf(original))).toEqual([expect.stringContaining("#9999 does not exist")]);
+  });
+
+  // PINS THE DISCLOSED BOUND, and is the falsifier for the reason block beside `checkRemainder`:
+  // when a rule lands that refuses the #1316 → #1260 shape, this test FAILS and the falsifier exits
+  // 0, which is the signal the recorded bound has outlived its truth. Do not "fix" it by loosening
+  // the assertion — replace it with the tighter rule's own control.
+  it("a historical aside satisfies cross-linked — the bound Gate 2 discloses, pinned so it cannot change silently", () => {
+    const aside = issue({ number: 40, body: "## Acceptance\n- one\n\nRecovered only by this audit, 16 days later, as #41.\n" });
+    const r = checkAcceptance("Closes #40\n\nACCEPTANCE #40.1 split: #41\n", lookupOf(aside, issue({ number: 41 })));
+    expect(r.remainders[0]!.conditions.find((c) => c.name === "cross-linked")!.status).toBe("pass");
   });
 
   it("fails when the original never cross-links the remainder — the deferral is discoverable only from the PR", () => {
@@ -308,7 +475,7 @@ describe("the green no-op", () => {
 describe("the hermetic self-test CI runs", () => {
   it("scores exactly as the CLI's --selftest asserts, so CI and `pnpm verify` share one fixture", () => {
     for (const c of selftestCases()) {
-      expect(checkAcceptance(c.body, SELFTEST_LOOKUP).ok, c.name).toBe(c.expect === "pass");
+      expect(checkAcceptance(c.body, SELFTEST_LOOKUP, undefined, SELFTEST_WORLD).ok, c.name).toBe(c.expect === "pass");
     }
   });
 

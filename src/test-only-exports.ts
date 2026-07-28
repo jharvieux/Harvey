@@ -11,6 +11,25 @@
 // authorise deletion. Today's backlog is enumerated in a committed baseline; anything NEW fails,
 // and a baseline row that has since gained a production caller fails too, so the list can only
 // shrink.
+//
+// WHAT THE RATCHET CANNOT SEE, recorded here rather than in an issue body the reason registry
+// cannot reach. `knip.production.json` sets `ignoreExportsUsedInFile: true`, deliberately: without
+// it the same run reports 272 rows instead of 26 (MEASURED 2026-07-27 — copy the config, delete the
+// key, `node_modules/.bin/knip --config <copy> --no-config-hints --reporter json`; recorded as 264
+// the day before, so quote the run, not this line), because every `src/scan/**` detector is exported
+// for its own test while being called by a sibling in the same file, and a gate firing on that
+// pattern would fire on nearly every new detector. The cost is a real blind spot with two MEASURED
+// instances, not a hypothetical one: `src/fix/schedule.ts:114 DEFAULT_CAPS` and
+// `src/fix/verify.ts:52 scrubSecrets` are each dead outside tests and invisible to the count of 26,
+// because their only in-file consumer is itself on the baseline. #1328 carries the compensating
+// check (triage only the rows whose in-file consumer is itself on the baseline) as an acceptance
+// bullet.
+//
+// REASON: a symbol exported AND used inside its own file is invisible to this ratchet even when the in-file use is itself dead, so the row count understates the dead surface — two instances measured (src/fix/schedule.ts DEFAULT_CAPS, src/fix/verify.ts scrubSecrets)
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-07-27 — `pnpm test-only-exports --list` reports 26 rows with the flag set; the same analysis with `ignoreExportsUsedInFile` deleted reports 272, and both named symbols appear only in the second run.
+// FALSIFIER: grep -q '"ignoreExportsUsedInFile": true' knip.production.json && exit 1 || exit 0
+// TOUCHES: knip.production.json
 
 import ts from "typescript";
 import { parse } from "./detectors/common.js";

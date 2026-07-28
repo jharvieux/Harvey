@@ -30,6 +30,11 @@ on:
   schedule:
     - cron: "0 7 * * *" # daily 07:00 UTC (#1138: was weekly "0 7 * * 1")
   workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-corpus-drift-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
   pull_request:
     paths:
       - "src/scan/external-corpus.ts"
@@ -60,6 +65,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      # Before the six clones and installs on purpose: the drill proves the ALERT path, not the
+      # corpus, so it must not pay 30 minutes to reach it. Everything below is skipped once it fails.
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a corpus-drift failure."
+          exit 1
+
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -107,22 +121,18 @@ jobs:
           if-no-files-found: warn
 
       # Scheduled runs go red on a branch nobody watches (#1128/#1138). On a scheduled failure,
-      # find-or-update ONE tracking issue by the marker label: comment on the open one if it exists,
-      # otherwise create it. Never fires on PR/push — those failures are already visible on the PR.
+      # find-or-update ONE tracking issue by the marker label. Still never fires on PR/push — those
+      # failures are already visible on the PR — but `workflow_dispatch` is now permanently in the
+      # condition (#1287), because this path had never executed once and a cron-only alert cannot be
+      # proven to work.
       - name: Open or update the drift tracking issue
-        if: failure() && github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          MARKER: ci-corpus-drift-alert
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          gh label create "$MARKER" --color B60205 \
-            --description "Auto-opened when the scheduled corpus-drift CI run fails" 2>/dev/null || true
-          body="The scheduled \`corpus-drift\` run failed (run: $RUN_URL). A baseline drifted or the job errored — see the corpus-drift-scorecard artifact for the per-module, per-target table. Either rebaseline the drifted target in src/scan/external-corpus.ts with a measured note, or fix the scanner regression. Close this issue once green."
-          existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            gh issue create --title "corpus-drift scheduled run failing" --label "$MARKER" --body "$body"
-          fi
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-corpus-drift-alert
+          label-description: Auto-opened when the scheduled corpus-drift CI run fails
+          title: corpus-drift scheduled run failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The scheduled `corpus-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). A baseline drifted or the job errored — see the corpus-drift-scorecard artifact for the per-module, per-target table. Either rebaseline the drifted target in src/scan/external-corpus.ts with a measured note, or fix the scanner regression. Close this issue once green."

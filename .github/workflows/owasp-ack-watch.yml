@@ -38,6 +38,11 @@ on:
   schedule:
     - cron: "0 12 * * *" # Daily 12:00 UTC / 08:00 ET — same slot the retired routine held
   workflow_dispatch: # so a human can run it and SEE the output; the routine's first run never was
+    inputs:
+      alert_drill:
+        description: "Prove the ci-owasp-watch-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
 
 concurrency:
   group: owasp-ack-watch
@@ -55,6 +60,19 @@ jobs:
       issues: write
     timeout-minutes: 10
     steps:
+      # This job wants no source (see the GH_REPO note below), but the shared alert action is a
+      # local `uses:` and local actions are resolved from the checkout. Sparse: `.github/actions`
+      # only, so the "don't clone the repo to satisfy an inference step" reasoning still holds.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287): failing on purpose so the watch-broken tracking-issue step runs under the real job token. Upstream was NOT checked on this run."
+          exit 1
+
       - name: Read both proposals and report any change from the filing baseline
         env:
           GH_TOKEN: ${{ github.token }}
@@ -164,21 +182,18 @@ jobs:
       # A watch that breaks silently is worse than no watch, because it manufactures the false
       # confidence that someone is looking. Distinct marker from `owasp-ack-alert` so "upstream
       # moved" and "we went blind" can never be mistaken for each other in the issue list.
+      # `workflow_dispatch` is permanently in the condition (#1287). The file header above records a
+      # predecessor watchdog that raised nothing for real; this step had the identical defect one
+      # level down — `ci-owasp-watch-alert` did not exist as a label, which is machine-checkable
+      # proof it had never executed. #1287 counted two missing marker labels; this was the third.
       - name: Open or update the watch-broken tracking issue
-        if: failure() && github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }} # same reason as the step above — no checkout in this job
-          MARKER: ci-owasp-watch-alert
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          gh label create "$MARKER" --color B60205 \
-            --description "Auto-opened when the scheduled OWASP ack-watch run fails" 2>/dev/null || true
-          body="The scheduled \`owasp-ack-watch\` run FAILED (run: $RUN_URL), so the OWASP proposals #2308/#2309 were **not** checked today. Treat this as 'we are blind', never as 'no change' — the ack we are waiting for is a silent label change. Check the two issues by hand until this is green again. Close this issue once green."
-          existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            gh issue create --title "owasp-ack-watch scheduled run failing" --label "$MARKER" --body "$body"
-          fi
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-owasp-watch-alert
+          label-description: Auto-opened when the scheduled OWASP ack-watch run fails
+          title: owasp-ack-watch scheduled run failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The scheduled `owasp-ack-watch` run FAILED (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}), so the OWASP proposals #2308/#2309 were **not** checked today. Treat this as 'we are blind', never as 'no change' — the ack we are waiting for is a silent label change. Check the two issues by hand until this is green again. Close this issue once green."

@@ -1,0 +1,89 @@
+{
+  "_why": [
+    "#1287 (Gate 5 of epic #1320). Every CI alert path in this repo was unfired, and three marker",
+    "labels did not exist — `ci-conservation-alert`, `ci-reasons-alert`, `ci-owasp-watch-alert`.",
+    "Each alert step carries a self-healing `gh label create`, so a MISSING MARKER LABEL IS PROOF",
+    "the path never executed. An alert path that has never fired is indistinguishable from one that",
+    "cannot fire, so this file records the run that PROVED each one, and src/cli/validate-alert-paths.ts",
+    "refuses a path with no proof. Re-prove any of them with:",
+    "    gh workflow run <workflow name> -f alert_drill=true",
+    "which opens, comments on and then closes a self-cleaning `… — alert-path drill` issue under the",
+    "real job token."
+  ],
+  "paths": [
+    {
+      "workflow": ".github/workflows/conservation.yml",
+      "marker": "ci-conservation-alert",
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313133260",
+        "issue": 1337,
+        "at": "2026-07-27"
+      }
+    },
+    {
+      "workflow": ".github/workflows/corpus-drift.yml",
+      "marker": "ci-corpus-drift-alert",
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313134292",
+        "issue": 1338,
+        "at": "2026-07-27"
+      }
+    },
+    {
+      "workflow": ".github/workflows/reasons-drift.yml",
+      "marker": "ci-reasons-alert",
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313132177",
+        "issue": 1336,
+        "at": "2026-07-27"
+      }
+    },
+    {
+      "workflow": ".github/workflows/ci.yml",
+      "marker": "ci-heavy-cli-alert",
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313136499",
+        "issue": 1340,
+        "at": "2026-07-27"
+      }
+    },
+    {
+      "workflow": ".github/workflows/owasp-ack-watch.yml",
+      "marker": "ci-owasp-watch-alert",
+      "provenBy": {
+        "run": "https://github.com/jharvieux/Harvey/actions/runs/30313135460",
+        "issue": 1339,
+        "at": "2026-07-27"
+      }
+    }
+  ],
+  "unconverted": [
+    {
+      "workflow": ".github/workflows/owasp-ack-watch.yml",
+      "marker": "owasp-ack-alert",
+      "why": "The news path, not a failure path: it fires when upstream MOVES, so it has no failure branch to drill. It is also the one alerting path that has demonstrably run — it opened issue #1218 under the real job token on a manual dispatch, 2026-07-27. Its find-or-update is inlined rather than using the shared action because it stamps the last-reported state into the issue body for idempotence, which the shared action does not model.",
+      "provenBy": {
+        "run": "manual workflow_dispatch, 2026-07-27",
+        "issue": 1218
+      }
+    }
+  ],
+  "scheduledWithoutAlertPath": [
+    {
+      "workflow": ".github/workflows/alert-paths.yml",
+      "tracking": 1333
+    },
+    {
+      "workflow": ".github/workflows/dry-run-drift.yml",
+      "tracking": 1333
+    },
+    {
+      "workflow": ".github/workflows/osv-staleness.yml",
+      "tracking": 1333
+    },
+    {
+      "workflow": ".github/workflows/corpus-m8.yml",
+      "tracking": 1333
+    }
+  ]
+}
