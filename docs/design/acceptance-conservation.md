@@ -49,15 +49,33 @@ This list is meant to be **complete**, and the file header of `src/acceptance-co
 here rather than restating a subset. Gate 4 (#1317) ships the rule that *a bound recorded in a comment
 must appear in the finding it bounds*; a gate owes its own design doc the same.
 
-- The evidence check proves the **shape** of evidence, not its truth. It separates "done" from
-  "`pnpm verify` — 25 files, 0 failures"; it cannot tell a real command from an invented one. It
-  raises the floor; it is not a reviewer.
+**Every bound below was re-tested on 2026-07-27 by the #1320 bounds audit, which asked the only
+question that matters about a list like this: is each one really a limitation?** Three were not, and
+are struck through with the mechanism that replaced them. The audit's own standing rule applies to
+what remains: a bound stated as an assertion closes the file, so an untested one is now a question.
+
+- ~~The evidence check proves the **shape** of evidence, not its truth … it cannot tell a real
+  command from an invented one.~~ **FALSIFIED 2026-07-27.** Three of the five shapes name something
+  whose existence is a lookup, and the gate now performs it (`EvidenceWorld` in
+  `src/acceptance-conservation.ts`): a cited repo-relative path is stat'd, a `pnpm <script>`
+  reference is checked against `package.json`, and a quoted span counts as a test name only when the
+  suite contains that title. Measured over the `met` lines of the last 60 merged PRs: **16/16** cited
+  paths exist, **3/3** `pnpm <script>` names are real scripts, **6/9** quoted spans are real test
+  titles — so the real thing passes and an invention does not. What survives is narrower and true: a
+  `met` naming a command with no `pnpm` script (`node …`, `docker …`, a shell pipeline) is still
+  checked for shape only, and no shape check reads a command's OUTPUT. The gate raises the floor; it
+  is still not a reviewer. When the checkout is unavailable the run prints a `NOT ASSESSED` line
+  saying evidence was checked for shape only, rather than looking like a verified run.
 - **Per-shape looseness, and what the 2026-07-27 narrowing changed.** Three of the five shapes were
-  found accepting plain prose; two were narrowed and one is deliberately left as it is:
-  - **The quoted shape** accepts any 8+ characters between double quotes, so `"it all looks great"`
-    passes as "a quoted test name". Nothing mechanical distinguishes a quoted test name from a quoted
-    sentence, and requiring a nearby word like *test* would reject a bare, correct test name. Left
-    loose on purpose.
+  found accepting plain prose; two were narrowed and one was left loose and has since been closed:
+  - ~~**The quoted shape** accepts any 8+ characters between double quotes … Nothing mechanical
+    distinguishes a quoted test name from a quoted sentence.~~ **FALSIFIED 2026-07-27** — the suite
+    is a list of test names, so asking it is mechanical. A quoted span now counts as *a quoted test
+    name* only when the suite contains that title; `"it all looks great"` does not, and a real test
+    title does. A quote that is not a test name does not fail the line by itself — the line simply
+    has to carry one of the other four shapes, which every `met` line measured already did. The
+    original objection (*requiring a nearby word like "test" would reject a bare, correct test
+    name*) was right about that mechanism and was generalised to all of them.
   - **The backticked shape** was `` `[^`]{4,}` ``, which accepted `` `all good` ``. It now requires the
     span to be a single token (a path, a flag, an identifier) **or** to contain a character English
     prose does not use, so a backticked English phrase no longer passes. A single backticked English
@@ -80,7 +98,9 @@ must appear in the finding it bounds*; a gate owes its own design doc the same.
   and reported nothing, so two bullets were dropped with no row in the output — silent omission inside
   the gate whose subject is silent omission. Measured against the 200 most recent issues on
   2026-07-27, 156 of which carry an acceptance section, the change moved **zero** of them; it closes a
-  latent gap rather than reinterpreting real bodies. The residual bound: a genuine sub-section under
+  latent gap rather than reinterpreting real bodies. (Re-run the same afternoon by the bounds audit:
+  **159** of 200 — the tracker moved by three issues in a day, which is the reason a stored number is
+  not an argument's premise. `gh issue list --state all --limit 200` is the input.) The residual bound: a genuine sub-section under
   the acceptance heading now contributes its bullets as criteria, which fails LOUD rather than
   dropping them. When the acceptance heading is itself bold, the next bold line still ends it.
 - **A green `cross-linked` row proves the remainder number is discoverable from the original — nothing
@@ -91,15 +111,54 @@ must appear in the finding it bounds*; a gate owes its own design doc the same.
   prints `✓ cross-linked: #1316 references #1260` and exits 0. So a reader **can** conclude the
   number appears on the
   original and a human following the issue would see it; they **cannot** conclude the sentence around
-  it describes this deferral, or that the remainder covers the split-out work. Tightening it would
-  mean parsing intent from prose, which is the judgement call this gate deliberately does not make.
+  it describes this deferral, or that the remainder covers the split-out work.
+
+  ~~Tightening it would mean parsing intent from prose.~~ **Mischaracterised — corrected
+  2026-07-27.** The obvious tightening is not intent-parsing, it is *vocabulary*: require the mention
+  to sit in a sentence carrying a deferral word. Measured against five real pairs, that rule is right
+  on **3 of 5** — it correctly refuses the recorded false accept (#1316 → #1260, a historical aside)
+  and correctly passes #1317 → #1330 and #1307 → #1328, but wrongly refuses #1317 → #1342, whose
+  cross-link reads *"Gate 4a residual filed as #1342"* — deferral vocabulary the list did not happen
+  to contain. That is the identical defect #1342 records against Gate 4's own `BOUND_MARKERS`: a
+  check whose coverage turns on which words an engineer reached for. So the bound is real, and the
+  reason is a **measured false-refusal rate**, not a category boundary. The open question, rather
+  than an assertion: *is there a rule that refuses the #1260-style aside without depending on a
+  vocabulary list?* Nobody has tested one.
+
+  The fifth pair is a live finding, not a hypothetical: **#1315 → #1341 fails the condition today**
+  — `gh issue view 1315` mentions #1341 nowhere in its body or comments, so Gate 1's own remainder is
+  not discoverable from the issue it was split out of.
 - The parser is **negation-blind, exactly as GitHub is**: `does not close #19` closes #19. A gate that
-  read the negation would wave through the exact PR bodies the audit found.
-- A cross-repo or URL-form closing reference cannot be resolved by a repo-scoped lookup. It gets a
-  named `NOT ASSESSED` row, not silence.
+  read the negation would wave through the exact PR bodies the audit found. Re-verified 2026-07-27:
+  `gh api repos/:owner/:repo/issues/1206/timeline` shows `closed 2026-07-27T12:00:24Z` on a PR whose
+  body was headed *"## Does NOT close #1206"*. (It shows `reopened 2026-07-27T20:31:22Z` too, so a
+  reader checking the issue today finds it OPEN — the close is in the timeline, not the state.)
+- ~~A cross-repo or URL-form closing reference cannot be resolved by a repo-scoped lookup. It gets a
+  named `NOT ASSESSED` row, not silence.~~ **FALSIFIED 2026-07-27** — near-circular, and the
+  circularity was hiding a choice: the lookup was repo-scoped because it was written that way.
+  `gh issue view 2196 --repo OWASP/CheatSheetSeries` exits 0, and so does the URL form (both run
+  2026-07-27). `owner/repo#N` and `https://…/issues/N` now resolve to an owner and a number, are
+  fetched with `--repo`, and are held to their own acceptance criteria; a cross-repo form naming
+  *this* repo is normalised so one issue is not fetched twice. The `NOT ASSESSED` row is gone
+  because there is nothing left unassessed. Population at the time of the change: **0** of the last
+  60 merged PRs carried such a reference — the row was disclosing a limit nobody had hit, which is
+  precisely how a false one survives.
 - The gate reads the PR **body**. A criterion met by a bare click — closing the issue in the GitHub UI
   or from the Development sidebar, with no closing keyword to parse — never reaches it. Tracked as
   **#1341**; not addressed here.
+
+  <!--
+  REASON: does a Development-sidebar link close an issue on merge with no closing keyword in the PR body, so that the gate never runs against it?
+  KIND: empirical
+  PROVENANCE: ASSUMED 2026-07-27 — recorded in #1341 from reading GitHub's documented behaviour. Nobody has linked an issue by the sidebar and merged to watch what the gate does, which is the whole reason it is written here as a question.
+  FALSIFIER: gh api repos/:owner/:repo/issues/1341 --jq .state > /tmp/harvey-1341.state 2>/dev/null || exit 127; grep -q CLOSED /tmp/harvey-1341.state && exit 0 || exit 1
+  TOUCHES: src/acceptance-conservation.ts
+  -->
+
+  The falsifier above is deliberately weak and says so: it fires when **#1341 itself is closed**,
+  which is the event that means somebody went and settled the question. There is no offline command
+  that observes GitHub's merge-time close behaviour, and inventing one that re-tests nothing is the
+  #1246 failure this convention exists to prevent.
 
 ## Negative control
 

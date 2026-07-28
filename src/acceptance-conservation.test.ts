@@ -12,6 +12,7 @@ import {
   parseBody,
   SELFTEST_BODY,
   SELFTEST_LOOKUP,
+  SELFTEST_WORLD,
   seedBareEvidence,
   seedDropDisposition,
   seedRemainder,
@@ -27,7 +28,8 @@ const issue = (over: Partial<IssueRecord> & { number: number }): IssueRecord => 
   ...over,
 });
 
-const lookupOf = (...records: IssueRecord[]): IssueLookup => (n) => records.find((r) => r.number === n);
+/** Same-repo records only; `crossRepoLookupOf` below is the one that distinguishes the repo. */
+const lookupOf = (...records: IssueRecord[]): IssueLookup => (n, repo) => (repo ? undefined : records.find((r) => r.number === n));
 
 const problems = (body: string, lookup: IssueLookup): string[] => {
   const r = checkAcceptance(body, lookup);
@@ -84,22 +86,45 @@ describe("parseAcceptanceCriteria", () => {
 });
 
 describe("closing-keyword detection", () => {
+  const numbers = (body: string, repo?: string): number[] => parseBody(body, repo).closes.map((c) => c.number);
+
   it("is negation-blind exactly as GitHub is — `## Does NOT close #1206` still closes #1206", () => {
-    expect(parseBody("## Does NOT close #1206\n").closes).toEqual([1206]);
+    expect(numbers("## Does NOT close #1206\n")).toEqual([1206]);
   });
 
   it("reads every closing keyword form GitHub honours", () => {
-    expect(parseBody("Closes #1\nfixed #2\nResolve #3\ncloses: #4\n").closes).toEqual([1, 2, 3, 4]);
+    expect(numbers("Closes #1\nfixed #2\nResolve #3\ncloses: #4\n")).toEqual([1, 2, 3, 4]);
   });
 
   it("does not treat a bare cross-reference as a close", () => {
-    expect(parseBody("part of #7, refs #8\n").closes).toEqual([]);
+    expect(numbers("part of #7, refs #8\n")).toEqual([]);
   });
 
-  it("discloses a closing reference it cannot resolve rather than dropping it", () => {
-    const r = checkAcceptance("Closes other/repo#5\n", lookupOf());
-    expect(r.unresolvableCloses).toEqual(["other/repo#5"]);
-    expect(formatAcceptance(r)).toContain("NOT ASSESSED");
+  // The gate used to print `NOT ASSESSED` here. `gh issue view 2196 --repo OWASP/CheatSheetSeries`
+  // exits 0 (measured 2026-07-27), so being repo-scoped was a property of the LOOKUP, not of the
+  // reference — the #1320 bounds audit falsified the recorded limitation.
+  it("resolves a cross-repo closing reference to its owner and number", () => {
+    expect(parseBody("Closes other/repo#5\n").closes).toEqual([{ repo: "other/repo", number: 5, ref: "other/repo#5" }]);
+  });
+
+  it("resolves a URL-form closing reference", () => {
+    expect(parseBody("Fixes https://github.com/other/repo/issues/9\n").closes)
+      .toEqual([{ repo: "other/repo", number: 9, ref: "https://github.com/other/repo/issues/9" }]);
+  });
+
+  it("normalises a cross-repo form naming THIS repo, so one issue is not fetched and reported twice", () => {
+    expect(parseBody("Closes #5\nalso closes owner/harvey#5\n", "owner/harvey").closes).toHaveLength(1);
+  });
+
+  it("holds a cross-repo issue to its own acceptance criteria", () => {
+    const crossRepo: IssueLookup = (n, repo) =>
+      repo === "other/repo" && n === 5 ? issue({ number: 5 }) : undefined;
+    const r = checkAcceptance("Closes other/repo#5\n\nACCEPTANCE #5.1 met: src/foo.ts:12 now throws\n", crossRepo);
+    expect(formatAcceptance(r)).toContain("other/repo#5");
+    expect(problems("Closes other/repo#5\n", crossRepo)).toEqual([
+      expect.stringContaining("UNMAPPED"),
+      expect.stringContaining("UNMAPPED"),
+    ]);
   });
 });
 
@@ -224,6 +249,63 @@ describe("evidence, not assertion", () => {
   });
 });
 
+// The gate shipped asserting it "cannot tell a real command from an invented one" — true only of
+// the shapes it never checked. Measured over the last 60 merged PRs' `met` lines (#1320 bounds
+// audit, 2026-07-27): 16/16 cited repo paths exist, 3/3 `pnpm <script>` names are real scripts,
+// 6/9 quoted spans are real test titles, and `"it all looks great"` is none of them.
+describe("evidence checked for TRUTH, not only shape", () => {
+  const world = {
+    topLevelEntries: new Set(["src", "docs"]),
+    pathExists: (p: string) => ["src/acceptance-conservation.ts", "src/cli/validate-acceptance.ts"].includes(p),
+    scripts: new Set(["verify", "validate-reasons"]),
+    testNames: new Set(["a dropped disposition leaves an UNMAPPED bullet"]),
+  };
+
+  it("NEGATIVE CONTROL: a cited repo path that does not exist is evidence pointing at nothing", () => {
+    expect(evidenceProblems("src/invented-module.ts:12 now throws", world)).toEqual([
+      expect.stringContaining("does not exist in this checkout"),
+    ]);
+  });
+
+  it("NEGATIVE CONTROL: `pnpm <script>` naming no script in package.json is an invented command", () => {
+    expect(evidenceProblems("`pnpm validate-everything` — all green", world)).toEqual([
+      expect.stringContaining("not a script in package.json"),
+    ]);
+  });
+
+  it("NEGATIVE CONTROL: a quoted sentence is not a quoted test name once the suite can be asked", () => {
+    expect(evidenceProblems('the reviewer said "it all looks great" about this', world)).toEqual([
+      expect.stringContaining("names none of"),
+    ]);
+    // The doc's own example passes the shape-only floor, which is why it was disclosed as loose.
+    expect(evidenceProblems('the reviewer said "it all looks great" about this')).toEqual([]);
+  });
+
+  it("accepts the real thing on all three: an existing path, a real script, a real test title", () => {
+    for (const detail of [
+      "src/acceptance-conservation.ts:120",
+      "`pnpm verify` — 25 files, 0 failures",
+      'the test "a dropped disposition leaves an UNMAPPED bullet"',
+    ]) {
+      expect(evidenceProblems(detail, world)).toEqual([]);
+    }
+  });
+
+  it("leaves a path outside this repo's top level alone rather than failing on a foreign tree", () => {
+    expect(evidenceProblems("upstream/lib/parser.ts:44 is the culprit", world)).toEqual([]);
+  });
+
+  it("does not read `pnpm exec <binary>` as a script name", () => {
+    expect(evidenceProblems("`pnpm exec tsx src/cli/validate-acceptance.ts --selftest` exits 0", world)).toEqual([]);
+  });
+
+  it("says so when no checkout was supplied, rather than looking like a verified run", () => {
+    const r = checkAcceptance("Closes #10\n\nACCEPTANCE #10.1 met: src/nope.ts:1\nACCEPTANCE #10.2 met: src/nope.ts:2\n", lookupOf(issue({ number: 10 })));
+    expect(r.evidenceVerified).toBe(false);
+    expect(formatAcceptance(r)).toContain("checked for SHAPE only");
+  });
+});
+
 describe("Gate 2 — remainder liveness", () => {
   const original = issue({ number: 40, body: "## Acceptance\n- one\n", comments: ["Remainder filed as #41."] });
 
@@ -308,7 +390,7 @@ describe("the green no-op", () => {
 describe("the hermetic self-test CI runs", () => {
   it("scores exactly as the CLI's --selftest asserts, so CI and `pnpm verify` share one fixture", () => {
     for (const c of selftestCases()) {
-      expect(checkAcceptance(c.body, SELFTEST_LOOKUP).ok, c.name).toBe(c.expect === "pass");
+      expect(checkAcceptance(c.body, SELFTEST_LOOKUP, undefined, SELFTEST_WORLD).ok, c.name).toBe(c.expect === "pass");
     }
   });
 
