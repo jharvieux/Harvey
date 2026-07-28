@@ -33,7 +33,7 @@ export function arg(flag: string, argv: string[] = process.argv): string | undef
  * preceding known flag, so `--out --dir` (a missing value) is reported rather than mistaken for one.
  */
 export function assertKnownFlags(known: readonly string[], argv: string[] = process.argv.slice(2)): void {
-  const valueless = new Set(["--json", "--real", "--mechanical", "--functions", "--supabase", "--list", "--update-baseline"]);
+  const valueless = new Set(["--json", "--real", "--mechanical", "--functions", "--supabase", "--list", "--update-baseline", "--print-pin"]);
   const unknown: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];

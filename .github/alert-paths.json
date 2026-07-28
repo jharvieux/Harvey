@@ -13,7 +13,14 @@
     "hand-written parallel branch sharing only the label-create step and the raw gh primitives — see",
     "the action's own header). The five proof runs below were re-taken against that fix, on one",
     "branch back to back, and a negative control (breaking find_or_update's `gh issue comment` call)",
-    "was run live and confirmed red (run 30331463282, jharvieux/Harvey#1391) before being reverted."
+    "was run live and confirmed red (run 30331463282, jharvieux/Harvey#1391) before being reverted.",
+    "",
+    "#1288 (2026-07-28) added `pendingProof` — the one disclosed way a path may sit here unproven.",
+    "A drill can only be dispatched against a workflow that is ALREADY on the default branch, so a",
+    "brand-new alerting workflow cannot be proven before it merges; without a hatch, no new alert",
+    "path could ever be added. It is built to fail loud, not open: `tracking` must name an OPEN",
+    "issue (re-read by --labels), the marker label is excluded from expectedLabels while pending",
+    "BECAUSE its absence is the evidence, and pendingProof and provenBy are mutually exclusive."
   ],
   "paths": [
     {
@@ -59,6 +66,15 @@
         "run": "https://github.com/jharvieux/Harvey/actions/runs/30331547885",
         "issue": 1394,
         "at": "2026-07-28"
+      }
+    },
+    {
+      "workflow": ".github/workflows/secbench.yml",
+      "marker": "ci-secbench-alert",
+      "pendingProof": {
+        "why": "The proof is `gh workflow run secbench -f alert_drill=true`, and GitHub only dispatches a workflow that already exists on the DEFAULT branch — so this path cannot be drilled until secbench.yml is on main. Requiring the proof first would mean no new alert path could ever be added: a genuine circularity, not an unspent afternoon. Operator ruling 2026-07-28: land it unproven, take the drill immediately after merge, record the run id here and delete this hatch. The marker label `ci-secbench-alert` therefore does NOT exist yet, and is excluded from expectedLabels until it does — that absence IS the evidence the path has not run, and creating the label by hand to quiet the gate would be manufacturing the proof.",
+        "tracking": 1288,
+        "since": "2026-07-28"
       }
     }
   ],

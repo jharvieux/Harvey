@@ -21,6 +21,7 @@
     "validate:precision": "tsx src/cli/validate-precision.ts",
     "validate:source-recall": "tsx src/cli/validate-source-recall.ts",
     "validate:secbench": "tsx src/cli/validate-secbench.ts",
+    "secbench-tree": "tsx src/cli/secbench-tree.ts",
     "validate:semantic": "tsx src/cli/validate-semantic.ts",
     "osv-fixture-drift": "tsx src/cli/osv-fixture-drift.ts",
     "jscpd-fixture-drift": "tsx src/cli/fixture-drift.ts --tool jscpd",

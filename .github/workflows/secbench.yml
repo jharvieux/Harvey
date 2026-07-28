@@ -1,0 +1,202 @@
+# The SecBench.js SCA recall gate on a cadence (#1288, operator-authorised 2026-07-28).
+#
+# `validate-secbench` scores Harvey's mechanical tier against ~600 REAL npm CVEs — the repo's only
+# held-out corpus of real vulnerabilities, as opposed to the planted fixtures every other gate reads
+# (#879). It had run three times ever, each by hand, and in no workflow at all. #1288's own header
+# recorded that as a blocker; it was a COST, and the cost was measured rather than guessed.
+#
+# MEASURED 2026-07-28 on the authoring machine, end to end: pinned tarball 3s / 25MB, 594 of 600
+# lockfiles generated in 39s at concurrency 12, one recursive osv-scanner pass 3.4s, scoring 5.5s.
+# The ~6 minutes extrapolated on #1288 was a serial-install estimate; the real number is under a
+# minute of work plus the runner's cold npm cache. This job is budgeted at 30 minutes anyway,
+# because it depends on the npm registry and on GitHub for the clone.
+#
+# MONTHLY, not daily. Nothing in this repo moves this number — its inputs are the pinned SecBench
+# commit (fixed) and the OSV advisory database (external, and slow-moving over a 2018–2022 corpus).
+# A daily run would re-measure the same figure 30 times to catch one change. What it IS good for is
+# catching a Harvey-side breakage that no PR-level fixture covers, and a month is a fine latency for
+# that given the PR trigger below covers the code that could break it.
+#
+# WHAT MAKES IT ABLE TO GO RED, which a reporting tool is not. `validate-secbench` printed its
+# tables and exited 0 no matter what it found, so putting it on a schedule would have bought a
+# monthly green tick that means nothing — the same defect as an alert path that has never fired.
+# `--min-sca-recall` is the floor, and its scope is stated where it is implemented: it catches the
+# SCA pathway BREAKING (loader, target-package scoping, an empty osv report), not a few points of
+# advisory-database drift. `secbench-tree` carries the other half — an entry with no lockfile is
+# excluded from the recall DENOMINATOR, so a registry outage would raise the score rather than lower
+# it, and that tool refuses to hand over a tree with more than 5% missing.
+
+name: secbench
+
+on:
+  # 05:00 UTC on the 1st. Ahead of ci (06:00), corpus-drift (07:00), conservation (07:30) and
+  # reasons-drift (08:00) so the scheduled jobs do not stack on one hour.
+  schedule:
+    - cron: "0 5 1 * *"
+  workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-secbench-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
+  # The monthly schedule is the point of this workflow; the PR trigger exists so a change to the
+  # harness is exercised by the harness. Without it the first evidence that a refactor of the
+  # loader/scorer/tree-builder broke the pipeline would arrive up to a month later, on a branch
+  # nobody is watching. Not a required status check (#1379 is where that decision lives).
+  pull_request:
+    paths:
+      - "src/cli/validate-secbench.ts"
+      - "src/cli/secbench-tree.ts"
+      - "src/scan/secbench.ts"
+      - ".github/workflows/secbench.yml"
+
+concurrency:
+  group: secbench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  secbench-recall:
+    name: SecBench.js SCA recall (~600 real npm CVEs)
+    runs-on: ubuntu-latest
+    # issues: write so a scheduled failure can find-or-update its tracking issue, mirroring
+    # corpus-drift.yml / conservation.yml / reasons-drift.yml (#1138/#1142). A job-level block
+    # replaces the top-level one, so contents: read is restated.
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Before the clone and the 594 installs on purpose: the drill proves the ALERT path, not the
+      # corpus, and must not pay for the corpus to reach it (corpus-drift.yml's ordering).
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a SecBench recall failure."
+          exit 1
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install the two scanner binaries this gate shells out to
+        run: |
+          set -euo pipefail
+          # semgrep: validate-secbench runs the request-sourced pass live over the exploit dirs.
+          # Without it the CLI throws — it does not degrade to "found nothing", which is the right
+          # behaviour for a recall gate and the reason this step is not optional.
+          pipx install semgrep
+          # Pinned to the v2 line every recorded measurement used (2.3.8). v1 and v2 differ on the
+          # CLI surface and the asset carries no version in its name, so an unpinned URL would drift
+          # the toolchain under the score without anyone choosing to (corpus-drift.yml's note).
+          curl -sSfL -o "$HOME/.local/bin/osv-scanner" \
+            https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_amd64
+          chmod +x "$HOME/.local/bin/osv-scanner"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # The commit-SHA tarball rather than `git clone` + `checkout`: same pin, one request, no
+      # history. SECBENCH_PIN/SECBENCH_REPO are read out of the source so the workflow cannot drift
+      # away from the pin the loader and every recorded measurement are scoped to.
+      - name: Fetch SecBench.js at the pinned commit
+        run: |
+          set -euo pipefail
+          # Filtered rather than eval'd raw: `pnpm run` prints a banner line, and eval'ing that
+          # would be a shell error at best. The emptiness check below is what makes a failed pin
+          # read fail loud instead of fetching nothing and scoring it.
+          eval "$(pnpm --silent secbench-tree --print-pin | grep -E '^SECBENCH_(REPO|PIN)=')"
+          if [ -z "${SECBENCH_REPO:-}" ] || [ -z "${SECBENCH_PIN:-}" ]; then
+            echo "::error::--print-pin produced no pin. Fetching some other tree and scoring it as this corpus is worse than not scoring at all."
+            exit 1
+          fi
+          echo "Pin: $SECBENCH_REPO @ $SECBENCH_PIN"
+          mkdir -p "$RUNNER_TEMP/secbench"
+          curl -sSfL "https://codeload.github.com/$SECBENCH_REPO/tar.gz/$SECBENCH_PIN" \
+            | tar -xz -C "$RUNNER_TEMP/secbench"
+          mv "$RUNNER_TEMP/secbench/"*-"$SECBENCH_PIN" "$RUNNER_TEMP/secbench/checkout"
+
+      # SecBench ships no lockfiles, so osv-scanner has nothing to read until this runs. Fails loud
+      # past a 5% miss rate — see the tool's header for why a quiet partial tree INFLATES recall.
+      - name: Generate the per-entry lockfile tree
+        run: |
+          pnpm secbench-tree \
+            --dir "$RUNNER_TEMP/secbench/checkout" \
+            --out "$RUNNER_TEMP/secbench/work" \
+            --concurrency 12
+
+      # osv-scanner exits 1 when it finds vulnerabilities, which on this corpus is the SUCCESS case
+      # — every entry pins a known-vulnerable version. Only 0 and 1 are accepted; anything else is a
+      # real tool failure and must not be laundered into an empty report, which would score as a
+      # total recall collapse and be indistinguishable from a detector regression.
+      - name: Scan the lockfile tree with osv-scanner
+        run: |
+          set -uo pipefail
+          # `|| status=$?` rather than a bare call then `$?`: the default step shell is `bash -e`, so
+          # the expected exit 1 would abort the step before the next line ever ran. Verified under
+          # `bash -e -c` before it was written this way.
+          status=0
+          osv-scanner --format json -r "$RUNNER_TEMP/secbench/work" > "$RUNNER_TEMP/osv-report.json" || status=$?
+          if [ "$status" -gt 1 ]; then
+            echo "::error::osv-scanner exited $status (not 0 = clean or 1 = vulnerabilities found). The report cannot be trusted; refusing to score against it."
+            exit "$status"
+          fi
+          echo "osv-scanner exited $status; report is $(wc -c < "$RUNNER_TEMP/osv-report.json") bytes."
+
+      # The floor: 65%. Measured on this pin at 72.9% (433/594) on 2026-07-24, 2026-07-27 and again
+      # 2026-07-28 — three runs, three identical numbers, so the score is stable and the gap to the
+      # floor is deliberate slack for OSV's database, not for a Harvey regression. See the CLI for
+      # what the floor is and is not scoped to catch.
+      - name: Score SecBench recall
+        run: |
+          pnpm validate:secbench \
+            --dir "$RUNNER_TEMP/secbench/checkout" \
+            --osv-report "$RUNNER_TEMP/osv-report.json" \
+            --lockfile-tree "$RUNNER_TEMP/secbench/work" \
+            --min-sca-recall 65 \
+            2>&1 | tee "$RUNNER_TEMP/secbench-recall.log"
+          exit "${PIPESTATUS[0]}"
+
+      # The score itself is the thing worth keeping off a run that is otherwise 30 days from being
+      # repeated, pass or fail: the per-class table is what tells a reader WHICH pathway moved.
+      - name: Upload the recall report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: secbench-recall
+          path: ${{ runner.temp }}/secbench-recall.log
+          if-no-files-found: warn
+
+      - name: Summarise the score in the run summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/secbench-recall.log" ]; then
+            {
+              echo '### SecBench.js recall'
+              echo ''
+              echo '```'
+              cat "$RUNNER_TEMP/secbench-recall.log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # A scheduled run goes red on a branch nobody watches (#1128/#1138). workflow_dispatch is in
+      # the condition permanently, not as a convenience: a cron-only alert path cannot be proven to
+      # work, which is how #1287 found five of them shipped unfired. Never fires on the PR trigger —
+      # that failure is already on the PR.
+      - name: Open or update the SecBench tracking issue
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-secbench-alert
+          label-description: Auto-opened when the monthly SecBench recall CI run fails
+          title: SecBench recall gate failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The monthly `secbench` recall run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). One of: SCA recall fell under the `--min-sca-recall` floor (read the per-class table in the `secbench-recall` artifact — a floor breach means the SCA pathway BROKE, since the floor sits well under the measured score on purpose), or the lockfile tree came back more than 5% short (a registry outage, which INFLATES recall by shrinking the denominator — never rebaseline around it), or osv-scanner/semgrep failed outright, or the pinned SecBench tarball no longer fetches. Do not lower the floor to make this green: `pnpm secbench-tree` + `pnpm validate:secbench` reproduce the whole run locally in about a minute. Close this issue once green."

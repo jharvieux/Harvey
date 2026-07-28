@@ -47,8 +47,40 @@ export interface ProvenBy {
   at?: string;
 }
 
+// REASON: a brand-new alerting workflow's drill is not dispatchable until the workflow file is on the DEFAULT branch, so its alert path has no way to be proven before it merges — which is why `pendingProof` exists at all rather than every new path simply being drilled first
+// KIND: empirical
+// PROVENANCE: TRIED 2026-07-28 — `gh workflow run secbench.yml --ref feature/secbench-cadence -f alert_drill=true` against a pushed-but-unmerged branch, recorded in the PR for #1288. Operator ruling the same day: land the path unproven, drill immediately after merge, record the run id and delete the hatch.
+// FALSIFIER: command -v gh >/dev/null 2>&1 || exit 127; gh api repos/jharvieux/Harvey >/dev/null 2>&1 || exit 127; gh api "repos/jharvieux/Harvey/contents/.github/workflows/secbench.yml?ref=main" >/dev/null 2>&1 && exit 0 || exit 1
+// TOUCHES: .github/alert-paths.json .github/workflows/secbench.yml
+//
+// The falsifier above is deliberately self-retiring: the day secbench.yml lands on main it exits 0,
+// reasons-drift reports this row STALE, and the remedy is the drill run this hatch was opened for.
+//
+/**
+ * The one disclosed way an alert path may sit on `main` unproven (#1288, operator ruling
+ * 2026-07-28) — see the reason block above for the circularity it exists to answer.
+ *
+ * It is a hatch, so it is built to fail loud rather than to fail open:
+ *   • `tracking` must name an OPEN issue, re-read by `--labels` (checkDisclosureTracking). The day
+ *     that issue closes with no proof recorded, the gate goes red — the same posture as
+ *     scheduledWithoutAlertPath, whose disclosure used to fail open (#1287).
+ *   • the marker label is EXCLUDED from expectedLabels while pending. A pending path's label does
+ *     not exist yet, and that absence is the evidence; creating it by hand to keep the gate quiet
+ *     would be manufacturing the proof this whole module exists to demand.
+ *   • pendingProof and provenBy are mutually exclusive, so a recorded proof REPLACES the hatch
+ *     instead of sitting beside it, where it would re-authorise skipping the next one.
+ */
+export interface PendingProof {
+  /** Why the proof is still outstanding, in the words someone re-reading this will need. */
+  why: string;
+  /** Open issue carrying the outstanding proof run. */
+  tracking: number;
+  /** When the path landed unproven, so an old hatch is visible as old. */
+  since: string;
+}
+
 export interface AlertPathRegistry {
-  paths: { workflow: string; marker: string; provenBy: ProvenBy }[];
+  paths: { workflow: string; marker: string; provenBy?: ProvenBy; pendingProof?: PendingProof }[];
   unconverted: { workflow: string; marker: string; why: string; provenBy: ProvenBy }[];
   scheduledWithoutAlertPath: { workflow: string; tracking: number }[];
 }
@@ -115,6 +147,18 @@ export function checkAlertPaths(facts: WorkflowFacts[], registry: AlertPathRegis
         });
       } else if (entry.workflow !== f.workflow) {
         out.push({ workflow: f.workflow, detail: `alert path '${step.marker}' is registered against ${entry.workflow}.` });
+      } else if (entry.pendingProof && entry.provenBy) {
+        out.push({
+          workflow: f.workflow,
+          detail: `alert path '${step.marker}' carries BOTH a recorded proof run and a pendingProof hatch. Drop the hatch — a proven path with an open exemption re-opens the door the proof just closed.`,
+        });
+      } else if (entry.pendingProof) {
+        if (!entry.pendingProof.why?.trim() || !(entry.pendingProof.tracking > 0) || !entry.pendingProof.since?.trim()) {
+          out.push({
+            workflow: f.workflow,
+            detail: `alert path '${step.marker}' declares pendingProof but not all of why/tracking/since. An exemption with no reason, no tracker and no date is indistinguishable from a forgotten one.`,
+          });
+        }
       } else if (!entry.provenBy?.run || entry.provenBy.run === "PENDING" || !entry.provenBy.issue) {
         out.push({
           workflow: f.workflow,
@@ -149,9 +193,16 @@ export function checkAlertPaths(facts: WorkflowFacts[], registry: AlertPathRegis
   return out;
 }
 
-/** Every marker the gate expects to exist as a label: converted paths plus the inlined ones. */
+/**
+ * Every marker the gate expects to exist as a label: converted paths plus the inlined ones.
+ *
+ * A path with a pendingProof hatch is EXCLUDED, and that exclusion is the point rather than a
+ * concession: its label has not been created because its alert step has never run, which is exactly
+ * the machine-checkable evidence #1287 was built on. Demanding the label before the drill would
+ * leave one remedy — creating it by hand — and a hand-made label is a forged proof of liveness.
+ */
 export function expectedLabels(registry: AlertPathRegistry): string[] {
-  return [...registry.paths.map((p) => p.marker), ...registry.unconverted.map((u) => u.marker)].sort();
+  return [...registry.paths.filter((p) => !p.pendingProof).map((p) => p.marker), ...registry.unconverted.map((u) => u.marker)].sort();
 }
 
 /**
@@ -164,14 +215,20 @@ export function expectedLabels(registry: AlertPathRegistry): string[] {
  * caller must not fold it in with "the issue is closed" (#1246).
  */
 export function checkDisclosureTracking(registry: AlertPathRegistry, state: (issue: number) => string | undefined): Violation[] {
-  return registry.scheduledWithoutAlertPath.flatMap((w) => {
-    const s = state(w.tracking);
+  const rows = [
+    ...registry.scheduledWithoutAlertPath.map((w) => ({ workflow: w.workflow, tracking: w.tracking, what: "is disclosed as having no alert path" })),
+    // Same hatch, same failure mode: a pendingProof whose tracker closes has quietly become a
+    // permanent exemption from the proof requirement (#1288).
+    ...registry.paths.filter((p) => p.pendingProof).map((p) => ({ workflow: p.workflow, tracking: p.pendingProof!.tracking, what: `has an UNPROVEN alert path '${p.marker}'` })),
+  ];
+  return rows.flatMap((row) => {
+    const s = state(row.tracking);
     if (s === "OPEN") return [];
     return [{
-      workflow: w.workflow,
+      workflow: row.workflow,
       detail: s === undefined
-        ? `is disclosed as having no alert path, tracked by #${w.tracking} — which could not be read. An unreadable tracker is no measurement, not a clean one.`
-        : `is disclosed as having no alert path, tracked by #${w.tracking} — which is ${s}. The disclosure now points at nothing, so a scheduled failure here raises no alarm and appears in no tally. Give it an alert path or re-point the disclosure.`,
+        ? `${row.what}, tracked by #${row.tracking} — which could not be read. An unreadable tracker is no measurement, not a clean one.`
+        : `${row.what}, tracked by #${row.tracking} — which is ${s}. The disclosure now points at nothing, so a scheduled failure here raises no alarm and appears in no tally. Give it an alert path or re-point the disclosure.`,
     }];
   });
 }
