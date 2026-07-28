@@ -684,6 +684,107 @@ export function formatAcceptance(report: AcceptanceReport): string {
 }
 
 // ---------------------------------------------------------------------------------------------
+// #1341 — the residual Gate 1 leaves open: it reads PR BODIES, and an issue can close with no PR
+// body to read. Two paths, both live in this repo. A BARE CLICK in the UI touches no PR and no
+// merge, so nothing runs at all (11 of the last 120 closed issues closed this way, measured
+// 2026-07-28; 4 of them opened by a human, #1130 and #1155 with stated criteria and no disposition
+// anywhere). The DEVELOPMENT SIDEBAR links a PR to an issue without a closing keyword in the body,
+// so the issue closes on merge and the body-reading gate sees nothing to check — the worse of the
+// two, because it looks like a normal PR-driven close.
+//
+// WHERE THE DISPOSITION LIVES FOR A NON-PR CLOSE (the decision #1341 asks to be recorded): an issue
+// COMMENT in the same `ACCEPTANCE #<issue>.<n> <disposition>: <detail>` format. It is the only
+// venue that exists on every close path — there is no PR on a bare click — it is where the operator
+// already reads, and it survives the close, which a PR body archived at merge does not. So this
+// check reads ONE surface set: every linked PR's body plus every comment on the issue, and holds
+// the union to exactly the rules a PR body is held to. A PR that already carries its dispositions
+// therefore passes here unchanged; nothing has to be written twice.
+
+interface ClosedIssueInput {
+  issue: number;
+  /** Bodies of the PRs GitHub links to this issue — `closedByPullRequestsReferences`, which is populated by the Development sidebar as well as by a closing keyword. */
+  linkedPrs: { ref: string; body: string }[];
+  comments: string[];
+  /**
+   * Bot-opened issues are the one exemption, and it is disclosed rather than silent: the alert-path
+   * drills (#1287) open, comment on and close a tracking issue under the job token, and 7 of the 11
+   * bare-click closes measured on 2026-07-28 were exactly that. They are not work items and state no
+   * criteria, so holding them to this gate would produce a standing false alarm on machinery whose
+   * whole purpose is alarms.
+   */
+  authorIsBot: boolean;
+}
+
+interface ClosedIssueReport {
+  issue: number;
+  /** Which surfaces supplied a disposition line — named, so a pass says where its evidence came from. */
+  contributed: string[];
+  surfacesRead: string[];
+  /** Set when the gate deliberately did not assess this close. */
+  notAssessed?: string;
+  report?: AcceptanceReport;
+  ok: boolean;
+}
+
+export function checkClosedIssue(input: ClosedIssueInput, lookup: IssueLookup, repo?: string, world?: EvidenceWorld): ClosedIssueReport {
+  const surfaces = [
+    ...input.linkedPrs.map((pr) => ({ label: `linked PR ${pr.ref}`, text: pr.body })),
+    ...input.comments.map((c, i) => ({ label: `issue comment ${i + 1}`, text: c })),
+  ];
+  const surfacesRead = surfaces.map((s) => s.label);
+
+  if (input.authorIsBot) {
+    return { issue: input.issue, contributed: [], surfacesRead, notAssessed: "opened by a bot — a tracking or drill issue, not a work item with acceptance criteria", ok: true };
+  }
+
+  // Only disposition-bearing lines cross over. A whole PR body would drag in its OTHER closing
+  // keywords and put unrelated issues on trial here; a whole comment would do the same for any
+  // `closes #N` written in passing.
+  const contributed: string[] = [];
+  const collected: string[] = [];
+  for (const s of surfaces) {
+    const found = lines(s.text).map((l) => strip(l).trim()).filter((l) => /^ACCEPTANCE\s+#\d/i.test(l) || REMAINDER_LINE.test(l));
+    if (found.length > 0) contributed.push(s.label);
+    collected.push(...found);
+  }
+
+  const body = [`Closes #${input.issue}`, "", ...collected].join("\n");
+  const report = checkAcceptance(body, lookup, repo, world);
+  return { issue: input.issue, contributed, surfacesRead, report, ok: report.ok };
+}
+
+export function formatClosedIssue(r: ClosedIssueReport): string {
+  const head = `Acceptance conservation on close (#1341) — #${r.issue}`;
+  if (r.notAssessed) return `${head}\n\nℹ NOT ASSESSED  ${r.notAssessed}`;
+  const where = r.contributed.length > 0
+    ? `● Dispositions read from: ${r.contributed.join(", ")}.`
+    : `○ No disposition record on any of the ${r.surfacesRead.length} surface(s) read${r.surfacesRead.length > 0 ? ` (${r.surfacesRead.join(", ")})` : " — this issue closed with no linked PR and no comments, i.e. a bare click"}.`;
+  return `${head}\n\n${where}\n\n${formatAcceptance(r.report!)}`;
+}
+
+/**
+ * What the workflow posts on the issue when the check fails. A gate whose failure is a red tick on a
+ * branch nobody watches is the alert path #1287 found four of — this one lands where the person who
+ * closed the issue will see it, and says the two ways out.
+ */
+export function closeFailureComment(r: ClosedIssueReport): string {
+  return [
+    "**Acceptance conservation (#1341): this issue closed with criteria nothing accounted for.**",
+    "",
+    "```",
+    formatClosedIssue(r),
+    "```",
+    "",
+    "Two ways to clear it, both one edit:",
+    "",
+    `- Comment on this issue with one \`ACCEPTANCE #${r.issue}.<n> <met|split|relayed>: <detail>\` line per criterion, then close it again.`,
+    "- Or close it through a PR whose body carries those lines, which Gate 1 already checks.",
+    "",
+    "Neither is a formality: an issue closed with an unmet criterion is the defect epic #1320 exists to close, and ~60 of 562 closed issues were found in exactly that state on 2026-07-27.",
+  ].join("\n");
+}
+
+// ---------------------------------------------------------------------------------------------
 // Negative controls (#1315/#1316 both require one). A gate that has only ever been seen passing is
 // indistinguishable from one that cannot fail — this repo has shipped exactly that twice. Each
 // seeder THROWS when it cannot plant its violation, because a seed that silently plants nothing
@@ -803,6 +904,51 @@ interface SelftestCase {
   name: string;
   body: string;
   expect: "pass" | "fail";
+}
+
+interface CloseSelftestCase {
+  name: string;
+  input: ClosedIssueInput;
+  expect: "pass" | "fail";
+}
+
+/**
+ * #1341's negative control, one case per close path in both directions. Hermetic, like the PR-body
+ * one above: it needs no network and no live issue state, so a green CI run means "this gate passed
+ * AND it can still fail" on a workflow run that had no failing close to look at.
+ */
+export function closeSelftestCases(): CloseSelftestCase[] {
+  const dispositions = [
+    "ACCEPTANCE #9001.1 met: `pnpm exec vitest run src/acceptance-conservation.test.ts` — all green",
+    "ACCEPTANCE #9001.2 split: #9002",
+    "ACCEPTANCE #9001.3 relayed: asked on the issue — should the gate read commit messages too?",
+  ];
+  const base = { issue: 9001, linkedPrs: [], comments: [], authorIsBot: false };
+  return [
+    { name: "BARE CLICK, no disposition anywhere — the #743 shape", input: { ...base }, expect: "fail" },
+    { name: "BARE CLICK with the dispositions recorded as issue comments", input: { ...base, comments: dispositions }, expect: "pass" },
+    {
+      name: "DEVELOPMENT SIDEBAR — a linked PR whose body carries no closing keyword and no dispositions",
+      input: { ...base, linkedPrs: [{ ref: "#9100", body: "Refactors the seeder. refs #9001" }] },
+      expect: "fail",
+    },
+    {
+      name: "DEVELOPMENT SIDEBAR with the dispositions in the linked PR's body",
+      input: { ...base, linkedPrs: [{ ref: "#9100", body: `Refactors the seeder. refs #9001\n\n${dispositions.join("\n")}` }] },
+      expect: "pass",
+    },
+    {
+      name: "a partial record — one criterion mapped, two left unaccounted",
+      input: { ...base, comments: [dispositions[0]!] },
+      expect: "fail",
+    },
+    {
+      name: "a `met` hollowed out to a bare assertion in an issue comment",
+      input: { ...base, comments: ["ACCEPTANCE #9001.1 met: done", ...dispositions.slice(1)] },
+      expect: "fail",
+    },
+    { name: "a bot-opened tracking issue is not assessed", input: { ...base, authorIsBot: true }, expect: "pass" },
+  ];
 }
 
 export function selftestCases(): SelftestCase[] {

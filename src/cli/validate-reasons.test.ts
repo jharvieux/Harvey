@@ -204,7 +204,18 @@ describe("validate-reasons CLI", () => {
   it("counts claim-shaped prose outside every block instead of reading well-formed as complete (#1246)", () => {
     const { code, out } = gate(plant({ "prose.md": "Harvey cannot analyse Elixir today.\n" }), ["--census"]);
     expect(code).toBe(0);
-    expect(out).toContain("Untriaged claim-shaped prose lines");
+    expect(out).toContain("Untriaged claim-shaped lines");
     expect(out).toContain("prose.md:1  Harvey cannot analyse Elixir today.");
+  });
+
+  // #1347 — the census read `.md` only until 2026-07-28, so a claim written as a source comment
+  // moved nothing. Through the CLI end-to-end, and paired with the code line beside it: a widening
+  // to whole-file `.ts` would light the second one, which is ordinary code prose.
+  it("censuses a claim in a .ts COMMENT and not the code line under it (#1347)", () => {
+    const src = '// Harvey cannot analyse Elixir today.\nthrow new Error("cannot parse");\n';
+    const { code, out } = gate(plant({ "loader.ts": src }), ["--census"]);
+    expect(code).toBe(0);
+    expect(out).toContain("loader.ts:1  // Harvey cannot analyse Elixir today.");
+    expect(out).not.toContain("loader.ts:2");
   });
 });
