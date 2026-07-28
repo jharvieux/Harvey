@@ -60,9 +60,11 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "docs/design/acceptance-conservation.md": [
     "for 16 days. That class **cannot be caught by reading the PR**: the deferral text is perfectly",
-    "\"`pnpm verify` — 25 files, 0 failures\"; it cannot tell a real command from an invented one. It",
+    "- ~~The evidence check proves the **shape** of evidence, not its truth … it cannot tell a real",
+    "- **A closing reference whose form this gate cannot resolve gets a NOT ASSESSED row, and the run",
     "original and a human following the issue would see it; they **cannot** conclude the sentence around",
-    "- A cross-repo or URL-form closing reference cannot be resolved by a repo-scoped lookup. It gets a",
+    "- ~~A cross-repo or URL-form closing reference cannot be resolved by a repo-scoped lookup. It gets a",
+    "is indistinguishable from one that cannot. The bounds that remain prose here are DECISIONAL (a rule",
   ],
   "docs/design/atc-engagement-2026-07-18.md": [
     "> — the opposite of the null-branch shape, so the generic heuristic can't satisfy it. This is a **bespoke",

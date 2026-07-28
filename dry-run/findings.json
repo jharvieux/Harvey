@@ -12998,7 +12998,7 @@
     "id": "SUP-SCOPE-00",
     "title": "Supply-chain checks: 3 read the whole resolved dependency tree, 4 are limited to declared manifests",
     "taxonomy": "Coverage — supply-chain check scope",
-    "evidence": "Declared set: 11 package names from 1 manifest (no workspace globs declared). Resolved tree: 365 package names from package-lock.json. Read the whole resolved tree: SUP-TYPO-* (typosquat); SUP-IOC-* (known-malicious names); SUP-LICENSE-* (license compliance). Limited to the declared manifests: SUP-UNPINNED and SUP-NON-REGISTRY, which read the declared version RANGE — a lockfile records the version that resolved, never the range that was declared, so the resolved tree cannot answer the question they ask; SUP-SLOPSQUAT-* over 11 declared names, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves; SUP-INSTALL-SCRIPT, since a lifecycle script only ever exists in a manifest; DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows.",
+    "evidence": "Declared set: 11 package names from 1 manifest (no workspace globs declared). Resolved tree: 365 package names from package-lock.json. Read the whole resolved tree: SUP-TYPO-* (typosquat); SUP-IOC-* (known-malicious names); SUP-LICENSE-* (license compliance). Limited to the declared manifests: SUP-UNPINNED and SUP-NON-REGISTRY, which read the declared version RANGE — a lockfile records the version that resolved, never the range that was declared, so the resolved tree cannot answer the question they ask; SUP-SLOPSQUAT-* over 11 declared names, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves; SUP-INSTALL-SCRIPT, which reads the `scripts` block of the manifests above and so sees only lifecycle scripts THIS project declares. A transitive dependency's own install script is not covered, and that is a gap rather than a boundary: npm's lockfile records `hasInstallScript` for every resolved package, so the data is present and unread (#1351); DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows.",
     "impact": "A manifest-scoped check cannot see a package reached only through the resolved dependency tree. The absence of its findings across that tree is a disclosed scope boundary, NOT a verdict that the tree is clean.",
     "fix": "Nothing to fix for the range-based checks — SUP-UNPINNED and SUP-NON-REGISTRY ask about a declared range, which only a manifest carries. For the rest, commit a lockfile Harvey can parse (package-lock.json, pnpm-lock.yaml or yarn.lock) and declare every workspace member in pnpm-workspace.yaml / package.json#workspaces, so no member's manifest is missed.",
     "severity": "Info",
@@ -14757,6 +14757,237 @@
     ],
     "owasp": [
       "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
+    "id": "SEC-EXPRESS-HEADERS-lib-express-cors-nocreds-js-358",
+    "title": "Express app sets no security response headers",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Configuration",
+    "taxonomy": "Express app sets no security response headers",
+    "location": "lib/express-cors-nocreds.js:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options or Content-Security-Policy is set anywhere in lib/express-cors-nocreds.js — by any means, including a header middleware. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. Headers applied by a middleware module this pass did not read, or added at a reverse proxy, CDN or ingress in front of the app, are OUTSIDE what it can see — so a live response may well carry them. Confirm against the deployed response before treating these as absent. Note this is a check on the RESPONSE HEADERS, not on which package sets them: an app that sets them by hand clears it exactly as one mounting a header middleware does.",
+    "impact": "Without HSTS a downgraded request can be intercepted over plain HTTP; without X-Frame-Options or a frame-ancestors directive the pages can be framed for clickjacking; without nosniff a browser may MIME-sniff a response into an executable content type. These are the browser-side defences that cost nothing to set and are absent by default in Express, which sets no security headers of its own.",
+    "fix": "Set the headers once, at the top of the app — either by hand in a small middleware (`res.setHeader(\"Strict-Transport-Security\", …)`, `X-Content-Type-Options`, `X-Frame-Options`, and a Content-Security-Policy) or with a header middleware, whichever fits the codebase. If they are already added at a proxy or CDN, setting them in the app too keeps it from depending on the edge staying configured.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
+  },
+  {
+    "id": "SEC-EXPRESS-HEADERS-lib-express-cors-origintrue-nocreds-js-355",
+    "title": "Express app sets no security response headers",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Configuration",
+    "taxonomy": "Express app sets no security response headers",
+    "location": "lib/express-cors-origintrue-nocreds.js:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options or Content-Security-Policy is set anywhere in lib/express-cors-origintrue-nocreds.js — by any means, including a header middleware. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. Headers applied by a middleware module this pass did not read, or added at a reverse proxy, CDN or ingress in front of the app, are OUTSIDE what it can see — so a live response may well carry them. Confirm against the deployed response before treating these as absent. Note this is a check on the RESPONSE HEADERS, not on which package sets them: an app that sets them by hand clears it exactly as one mounting a header middleware does.",
+    "impact": "Without HSTS a downgraded request can be intercepted over plain HTTP; without X-Frame-Options or a frame-ancestors directive the pages can be framed for clickjacking; without nosniff a browser may MIME-sniff a response into an executable content type. These are the browser-side defences that cost nothing to set and are absent by default in Express, which sets no security headers of its own.",
+    "fix": "Set the headers once, at the top of the app — either by hand in a small middleware (`res.setHeader(\"Strict-Transport-Security\", …)`, `X-Content-Type-Options`, `X-Frame-Options`, and a Content-Security-Policy) or with a header middleware, whichever fits the codebase. If they are already added at a proxy or CDN, setting them in the app too keeps it from depending on the edge staying configured.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
+  },
+  {
+    "id": "SEC-EXPRESS-HEADERS-lib-express-cors-origintrue-js-524",
+    "title": "Express app sets no security response headers",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Configuration",
+    "taxonomy": "Express app sets no security response headers",
+    "location": "lib/express-cors-origintrue.js:9",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options or Content-Security-Policy is set anywhere in lib/express-cors-origintrue.js — by any means, including a header middleware. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. Headers applied by a middleware module this pass did not read, or added at a reverse proxy, CDN or ingress in front of the app, are OUTSIDE what it can see — so a live response may well carry them. Confirm against the deployed response before treating these as absent. Note this is a check on the RESPONSE HEADERS, not on which package sets them: an app that sets them by hand clears it exactly as one mounting a header middleware does.",
+    "impact": "Without HSTS a downgraded request can be intercepted over plain HTTP; without X-Frame-Options or a frame-ancestors directive the pages can be framed for clickjacking; without nosniff a browser may MIME-sniff a response into an executable content type. These are the browser-side defences that cost nothing to set and are absent by default in Express, which sets no security headers of its own.",
+    "fix": "Set the headers once, at the top of the app — either by hand in a small middleware (`res.setHeader(\"Strict-Transport-Security\", …)`, `X-Content-Type-Options`, `X-Frame-Options`, and a Content-Security-Policy) or with a header middleware, whichever fits the codebase. If they are already added at a proxy or CDN, setting them in the app too keeps it from depending on the edge staying configured.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
+  },
+  {
+    "id": "SEC-EXPRESS-HEADERS-lib-express-cors-safe-js-366",
+    "title": "Express app sets no security response headers",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Configuration",
+    "taxonomy": "Express app sets no security response headers",
+    "location": "lib/express-cors-safe.js:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options or Content-Security-Policy is set anywhere in lib/express-cors-safe.js — by any means, including a header middleware. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. Headers applied by a middleware module this pass did not read, or added at a reverse proxy, CDN or ingress in front of the app, are OUTSIDE what it can see — so a live response may well carry them. Confirm against the deployed response before treating these as absent. Note this is a check on the RESPONSE HEADERS, not on which package sets them: an app that sets them by hand clears it exactly as one mounting a header middleware does.",
+    "impact": "Without HSTS a downgraded request can be intercepted over plain HTTP; without X-Frame-Options or a frame-ancestors directive the pages can be framed for clickjacking; without nosniff a browser may MIME-sniff a response into an executable content type. These are the browser-side defences that cost nothing to set and are absent by default in Express, which sets no security headers of its own.",
+    "fix": "Set the headers once, at the top of the app — either by hand in a small middleware (`res.setHeader(\"Strict-Transport-Security\", …)`, `X-Content-Type-Options`, `X-Frame-Options`, and a Content-Security-Policy) or with a header middleware, whichever fits the codebase. If they are already added at a proxy or CDN, setting them in the app too keeps it from depending on the edge staying configured.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
+  },
+  {
+    "id": "SEC-EXPRESS-HEADERS-lib-express-cors-js-343",
+    "title": "Express app sets no security response headers",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Configuration",
+    "taxonomy": "Express app sets no security response headers",
+    "location": "lib/express-cors.js:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options or Content-Security-Policy is set anywhere in lib/express-cors.js — by any means, including a header middleware. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. Headers applied by a middleware module this pass did not read, or added at a reverse proxy, CDN or ingress in front of the app, are OUTSIDE what it can see — so a live response may well carry them. Confirm against the deployed response before treating these as absent. Note this is a check on the RESPONSE HEADERS, not on which package sets them: an app that sets them by hand clears it exactly as one mounting a header middleware does.",
+    "impact": "Without HSTS a downgraded request can be intercepted over plain HTTP; without X-Frame-Options or a frame-ancestors directive the pages can be framed for clickjacking; without nosniff a browser may MIME-sniff a response into an executable content type. These are the browser-side defences that cost nothing to set and are absent by default in Express, which sets no security headers of its own.",
+    "fix": "Set the headers once, at the top of the app — either by hand in a small middleware (`res.setHeader(\"Strict-Transport-Security\", …)`, `X-Content-Type-Options`, `X-Frame-Options`, and a Content-Security-Policy) or with a header middleware, whichever fits the codebase. If they are already added at a proxy or CDN, setting them in the app too keeps it from depending on the edge staying configured.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
+  },
+  {
+    "id": "SEC-EXPRESS-HEADERS-src-owasp-node-hpp-param-normalized-ts-258",
+    "title": "Express app sets no security response headers",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Configuration",
+    "taxonomy": "Express app sets no security response headers",
+    "location": "src/owasp-node/hpp-param-normalized.ts:6",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options or Content-Security-Policy is set anywhere in src/owasp-node/hpp-param-normalized.ts — by any means, including a header middleware. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. Headers applied by a middleware module this pass did not read, or added at a reverse proxy, CDN or ingress in front of the app, are OUTSIDE what it can see — so a live response may well carry them. Confirm against the deployed response before treating these as absent. Note this is a check on the RESPONSE HEADERS, not on which package sets them: an app that sets them by hand clears it exactly as one mounting a header middleware does.",
+    "impact": "Without HSTS a downgraded request can be intercepted over plain HTTP; without X-Frame-Options or a frame-ancestors directive the pages can be framed for clickjacking; without nosniff a browser may MIME-sniff a response into an executable content type. These are the browser-side defences that cost nothing to set and are absent by default in Express, which sets no security headers of its own.",
+    "fix": "Set the headers once, at the top of the app — either by hand in a small middleware (`res.setHeader(\"Strict-Transport-Security\", …)`, `X-Content-Type-Options`, `X-Frame-Options`, and a Content-Security-Policy) or with a header middleware, whichever fits the codebase. If they are already added at a proxy or CDN, setting them in the app too keeps it from depending on the edge staying configured.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
+  },
+  {
+    "id": "SEC-EXPRESS-HEADERS-src-owasp-node-hpp-param-pollution-ts-447",
+    "title": "Express app sets no security response headers",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Configuration",
+    "taxonomy": "Express app sets no security response headers",
+    "location": "src/owasp-node/hpp-param-pollution.ts:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options or Content-Security-Policy is set anywhere in src/owasp-node/hpp-param-pollution.ts — by any means, including a header middleware. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. Headers applied by a middleware module this pass did not read, or added at a reverse proxy, CDN or ingress in front of the app, are OUTSIDE what it can see — so a live response may well carry them. Confirm against the deployed response before treating these as absent. Note this is a check on the RESPONSE HEADERS, not on which package sets them: an app that sets them by hand clears it exactly as one mounting a header middleware does.",
+    "impact": "Without HSTS a downgraded request can be intercepted over plain HTTP; without X-Frame-Options or a frame-ancestors directive the pages can be framed for clickjacking; without nosniff a browser may MIME-sniff a response into an executable content type. These are the browser-side defences that cost nothing to set and are absent by default in Express, which sets no security headers of its own.",
+    "fix": "Set the headers once, at the top of the app — either by hand in a small middleware (`res.setHeader(\"Strict-Transport-Security\", …)`, `X-Content-Type-Options`, `X-Frame-Options`, and a Content-Security-Policy) or with a header middleware, whichever fits the codebase. If they are already added at a proxy or CDN, setting them in the app too keeps it from depending on the edge staying configured.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
+  },
+  {
+    "id": "SEC-EXPRESS-HEADERS-src-owasp-node-no-request-size-limit-ts-323",
+    "title": "Express app sets no security response headers",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Configuration",
+    "taxonomy": "Express app sets no security response headers",
+    "location": "src/owasp-node/no-request-size-limit.ts:6",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options or Content-Security-Policy is set anywhere in src/owasp-node/no-request-size-limit.ts — by any means, including a header middleware. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. Headers applied by a middleware module this pass did not read, or added at a reverse proxy, CDN or ingress in front of the app, are OUTSIDE what it can see — so a live response may well carry them. Confirm against the deployed response before treating these as absent. Note this is a check on the RESPONSE HEADERS, not on which package sets them: an app that sets them by hand clears it exactly as one mounting a header middleware does.",
+    "impact": "Without HSTS a downgraded request can be intercepted over plain HTTP; without X-Frame-Options or a frame-ancestors directive the pages can be framed for clickjacking; without nosniff a browser may MIME-sniff a response into an executable content type. These are the browser-side defences that cost nothing to set and are absent by default in Express, which sets no security headers of its own.",
+    "fix": "Set the headers once, at the top of the app — either by hand in a small middleware (`res.setHeader(\"Strict-Transport-Security\", …)`, `X-Content-Type-Options`, `X-Frame-Options`, and a Content-Security-Policy) or with a header middleware, whichever fits the codebase. If they are already added at a proxy or CDN, setting them in the app too keeps it from depending on the edge staying configured.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
+  },
+  {
+    "id": "SEC-EXPRESS-HEADERS-src-owasp-node-request-size-limit-set-ts-229",
+    "title": "Express app sets no security response headers",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Configuration",
+    "taxonomy": "Express app sets no security response headers",
+    "location": "src/owasp-node/request-size-limit-set.ts:6",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options or Content-Security-Policy is set anywhere in src/owasp-node/request-size-limit-set.ts — by any means, including a header middleware. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. Headers applied by a middleware module this pass did not read, or added at a reverse proxy, CDN or ingress in front of the app, are OUTSIDE what it can see — so a live response may well carry them. Confirm against the deployed response before treating these as absent. Note this is a check on the RESPONSE HEADERS, not on which package sets them: an app that sets them by hand clears it exactly as one mounting a header middleware does.",
+    "impact": "Without HSTS a downgraded request can be intercepted over plain HTTP; without X-Frame-Options or a frame-ancestors directive the pages can be framed for clickjacking; without nosniff a browser may MIME-sniff a response into an executable content type. These are the browser-side defences that cost nothing to set and are absent by default in Express, which sets no security headers of its own.",
+    "fix": "Set the headers once, at the top of the app — either by hand in a small middleware (`res.setHeader(\"Strict-Transport-Security\", …)`, `X-Content-Type-Options`, `X-Frame-Options`, and a Content-Security-Policy) or with a header middleware, whichever fits the codebase. If they are already added at a proxy or CDN, setting them in the app too keeps it from depending on the edge staying configured.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
+  },
+  {
+    "id": "SEC-EXPRESS-HEADERS-src-owasp-node-x-powered-by-disabled-ts-207",
+    "title": "Express app sets no security response headers",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Configuration",
+    "taxonomy": "Express app sets no security response headers",
+    "location": "src/owasp-node/x-powered-by-disabled.ts:5",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options or Content-Security-Policy is set anywhere in src/owasp-node/x-powered-by-disabled.ts — by any means, including a header middleware. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. Headers applied by a middleware module this pass did not read, or added at a reverse proxy, CDN or ingress in front of the app, are OUTSIDE what it can see — so a live response may well carry them. Confirm against the deployed response before treating these as absent. Note this is a check on the RESPONSE HEADERS, not on which package sets them: an app that sets them by hand clears it exactly as one mounting a header middleware does.",
+    "impact": "Without HSTS a downgraded request can be intercepted over plain HTTP; without X-Frame-Options or a frame-ancestors directive the pages can be framed for clickjacking; without nosniff a browser may MIME-sniff a response into an executable content type. These are the browser-side defences that cost nothing to set and are absent by default in Express, which sets no security headers of its own.",
+    "fix": "Set the headers once, at the top of the app — either by hand in a small middleware (`res.setHeader(\"Strict-Transport-Security\", …)`, `X-Content-Type-Options`, `X-Frame-Options`, and a Content-Security-Policy) or with a header middleware, whichever fits the codebase. If they are already added at a proxy or CDN, setting them in the app too keeps it from depending on the edge staying configured.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
+    ]
+  },
+  {
+    "id": "SEC-EXPRESS-HEADERS-src-owasp-node-x-powered-by-exposed-ts-401",
+    "title": "Express app sets no security response headers",
+    "severity": "Medium",
+    "confidence": "Review",
+    "category": "Configuration",
+    "taxonomy": "Express app sets no security response headers",
+    "location": "src/owasp-node/x-powered-by-exposed.ts:7",
+    "status": "Open",
+    "evidence": "`express()` builds an Express app, and no Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options or Content-Security-Policy is set anywhere in src/owasp-node/x-powered-by-exposed.ts — by any means, including a header middleware. SCOPE OF THIS CHECK: it reads the module that CONSTRUCTS the app and nothing else. Headers applied by a middleware module this pass did not read, or added at a reverse proxy, CDN or ingress in front of the app, are OUTSIDE what it can see — so a live response may well carry them. Confirm against the deployed response before treating these as absent. Note this is a check on the RESPONSE HEADERS, not on which package sets them: an app that sets them by hand clears it exactly as one mounting a header middleware does.",
+    "impact": "Without HSTS a downgraded request can be intercepted over plain HTTP; without X-Frame-Options or a frame-ancestors directive the pages can be framed for clickjacking; without nosniff a browser may MIME-sniff a response into an executable content type. These are the browser-side defences that cost nothing to set and are absent by default in Express, which sets no security headers of its own.",
+    "fix": "Set the headers once, at the top of the app — either by hand in a small middleware (`res.setHeader(\"Strict-Transport-Security\", …)`, `X-Content-Type-Options`, `X-Frame-Options`, and a Content-Security-Policy) or with a header middleware, whichever fits the codebase. If they are already added at a proxy or CDN, setting them in the app too keeps it from depending on the edge staying configured.",
+    "value": 3,
+    "ease": 4,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "review",
+    "cwe": [
+      "CWE-693: Protection Mechanism Failure"
     ]
   },
   {

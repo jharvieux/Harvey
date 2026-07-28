@@ -190,6 +190,12 @@ function describeManifestSources(from: LicenseScope["declaredFrom"]): string {
 // each check lives — but a decision that only exists in a comment is, from the deliverable's side,
 // indistinguishable from an oversight. #1213's lesson exactly: a manifest-scoped check whose
 // disclosure row does not admit the limit reads as a clean bill of health.
+//
+// #1350: of those declines, three survived re-testing and one did not. SUP-INSTALL-SCRIPT was
+// disclosed as manifest-only "since a lifecycle script only ever exists in a manifest" — false, and
+// it is now stated as the outstanding gap it is (#1351). The lesson repeats one this repo already
+// names: the decline was written in the same confident register as the three true ones, so nothing
+// in the row's own shape distinguished the claim that held from the claim that did not.
 export function supplyChainScopeFinding(s: {
   license: LicenseScope;
   treeNames: number;
@@ -202,7 +208,15 @@ export function supplyChainScopeFinding(s: {
   const manifestOnly = [
     "SUP-UNPINNED and SUP-NON-REGISTRY, which read the declared version RANGE — a lockfile records the version that resolved, never the range that was declared, so the resolved tree cannot answer the question they ask",
     `SUP-SLOPSQUAT-* over ${s.declaredNames} declared name${s.declaredNames === 1 ? "" : "s"}, because a package the lockfile resolved carries an integrity hash against a published tarball and has by construction been published — a registry HEAD over the transitive tree would spend thousands of live requests confirming what the lockfile already proves`,
-    "SUP-INSTALL-SCRIPT, since a lifecycle script only ever exists in a manifest",
+    // #1350 CORRECTION. This used to read "since a lifecycle script only ever exists in a manifest",
+    // which is false and, worse, unfalsifiable-sounding: npm lockfile v2/v3 records
+    // `hasInstallScript: true` per RESOLVED package, transitive ones included (MEASURED 2026-07-27,
+    // `grep -c hasInstallScript targets/calibration/package-lock.json` -> 3, two of them the
+    // transitive fsevents no manifest declares). The tree can answer this; Harvey has not yet asked
+    // it. Stated as outstanding work with the issue that owns it, because the old wording forecloses
+    // the very check whose own impact text names Shai-Hulud — a worm that travels by transitive
+    // postinstall, i.e. entirely within the half this row currently excludes.
+    "SUP-INSTALL-SCRIPT, which reads the `scripts` block of the manifests above and so sees only lifecycle scripts THIS project declares. A transitive dependency's own install script is not covered, and that is a gap rather than a boundary: npm's lockfile records `hasInstallScript` for every resolved package, so the data is present and unread (#1351)",
   ];
   if (s.osvRan) {
     manifestOnly.push("DEP-CVE-* (the curated offline CVE table), because osv-scanner walked the whole lockfile this pass and widening the curated table would double-report its rows");

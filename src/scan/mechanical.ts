@@ -33,6 +33,7 @@ import { scanServiceRoleLiteral } from "./service-role-literal.js";
 import { scanEnvSchema } from "./env-schema.js";
 import { scanEmitterUnhandledError } from "./emitter-error.js";
 import { scanExpressPoweredBy } from "./express-powered-by.js";
+import { scanExpressSecurityHeaders } from "./express-security-headers.js";
 import { scanRawBodyNoLimit } from "./raw-body-limit.js";
 import { annotateCveReachability, unrankedCveDisclosure } from "./dep-reachability.js";
 import { checkKnownDependencyCVEs, checkNextVersionCVEs, osvUnavailableFinding, parseOsvFindings, type OsvScanResult } from "./dependencies.js";
@@ -495,6 +496,12 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
     // module, a strip at the proxy/CDN). The "use helmet" half of the same OWASP line is declined
     // by ruling — see the recorded reason in express-powered-by.ts.
     findings.push(...scanExpressPoweredBy(scanDir));
+
+    // #1350 — the effect check that decline assumed already existed. b5-headers only reads a
+    // next.config.js headers() route (MEASURED: bare Express app 0 findings, same omission in a
+    // next.config.js 3), so on Express nothing checked the headers and nothing said so. Adoption is
+    // still not a defect: hand-set headers clear this exactly as a header middleware does.
+    findings.push(...scanExpressSecurityHeaders(scanDir));
 
     // #1200 — a raw `req.on("data", …)` accumulator with no byte ceiling; disclosed
     // single-handler limitation (a ceiling imposed by middleware elsewhere is invisible).
