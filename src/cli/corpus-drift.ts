@@ -5,8 +5,9 @@
 //
 //   pnpm corpus-drift [--target <slug>] [--keep] [--json <path>] [--install] [--m8]
 //
-// --install (#251) runs `npm install` in each clone before the scanners, which is what lets knip
-// resolve the target's config (CLAUDE.md's M5 prereq). --m8 (#300) additionally installs Stryker +
+// --install (#251) installs each clone's own dependency tree before the scanners — with the package
+// manager that clone's lockfile implies, since #1268 — which is what lets knip resolve the target's
+// config (CLAUDE.md's M5 prereq). --m8 (#300) additionally installs Stryker +
 // the target's runner plugin and scores the mutation baseline of every target carrying an `m8`
 // config. Both are opt-in and both are minutes per target — the scheduled jobs pass them
 // (corpus-drift.yml --install; corpus-m8.yml --install --m8), a local run stays fast by default.
