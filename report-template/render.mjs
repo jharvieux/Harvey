@@ -275,7 +275,16 @@ const MODULE_LIMITATIONS = {
   M4: { name: "Duplication", note: "Mechanical clone detection; some duplication may be intentional (generated code, fixtures) — reviewed, not auto-excluded." },
   M5: { name: "Slop / dead code", note: "Flags candidate unused exports/code mechanically; some may be public API or dynamically referenced — review before pruning." },
   M6: { name: "Simplification / maintainability", note: "The free tier is non-grading indicators only. The paid verdict is a reviewed judgment over a packet — an unreviewed packet is not a verdict." },
-  M7: { name: "Performance", note: "DB advisor findings reflect the platform's own heuristics, not independently re-verified. Core Web Vitals/Lighthouse figures are a single LAB run, not field/real-user data." },
+  // #1279's code-tier precision hedge. The number is a FIELD number and must stay one: it comes
+  // from #1261's row-by-row triage of the pinned external corpus against source, NOT from
+  // `validate-precision.ts`, whose 100.0% is scored over fixtures this repo authored (one planted
+  // instance per class, one lookalike per catalogued FP shape) and is therefore a statement about
+  // the corpus, not about the scanner. Do not "update" this to the labeled-corpus figure.
+  // MEASURED 2026-07-28 — `pnpm exec tsx src/cli/static-detect.ts <clone>` at each pinned commit,
+  // every graded row then read against its own source; method and per-class splits are recorded
+  // in src/scan/external-corpus.ts's M7 notes. Re-measure and re-date this sentence whenever an
+  // M7 code-tier detector or guard changes.
+  M7: { name: "Performance", note: "Code-tier findings are AST pattern matches and a measured share do not survive review: read against source on six pinned open-source codebases (2026-07-28), 47 of 65 graded findings held — 72%; a 40-row random sample drawn from 858 graded findings on four larger codebases held 78%. Treat the code-tier list as roughly three-in-four, not as a verified defect list. The misses concentrate in the low-severity classes, and per-class precision is NOT stated for classes with too few field instances to measure — an unquoted class is unmeasured, not clean. Info-severity hook-dependency notes are excluded from that count and are not graded. DB advisor findings reflect the platform's own heuristics, not independently re-verified. Core Web Vitals/Lighthouse figures are a single LAB run, not field/real-user data." },
   M8: { name: "Test quality", note: "A mutation score is only as good as its stated scope — a scoped run is not a whole-repo coverage claim (see Test quality below when present)." },
   M9: { name: "App Router boundary/rendering", note: "AST pattern coverage of App Router conventions, not full framework-semantics execution." },
   M10: { name: "Data classification (PII/PHI/PCI)", note: "Classification is derived from column/schema naming and structure. A JSON/JSONB container is flagged for review, not asserted, and its actual contents are not read." },
