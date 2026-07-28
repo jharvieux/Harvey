@@ -5,7 +5,12 @@
 // were used only as a reference for real advisor/extension response shapes while building
 // src/scan/supabase-advisors.ts and src/scan/supabase-config.ts).
 //
-// CLI: `pnpm exec tsx src/cli/scan.ts --supabase <project-ref|local>`
+// CLI: `pnpm exec tsx src/cli/scan.ts --supabase <project-ref|local> [--migrations <dir>]`
+//
+// #1280 — with --migrations, the pass also diffs the deployed public schema against the end state of
+// the committed migration history (src/scan/supabase-drift.ts): tables on each side, RLS enablement,
+// and policy identities. Read-only on both halves, and against the SAME connected project the rest
+// of this pass already reads — it is not the production-probe tier declined on #904.
 //
 // Hosted mode uses the Supabase Management API with a personal access token
 // (env SUPABASE_ACCESS_TOKEN, or the managementApiToken option). Two endpoints are confirmed
@@ -45,6 +50,13 @@ import { join } from "node:path";
 import type { Finding } from "../findings.js";
 import { parseAdvisorFindings, type AdvisorsResponse } from "./supabase-advisors.js";
 import { runSplinter } from "./supabase-splinter.js";
+import {
+  checkMigrationDrift,
+  loadMigrations,
+  type DriftLivePolicy,
+  type DriftLiveTable,
+  type MigrationFile,
+} from "./supabase-drift.js";
 import {
   checkAuthConfig,
   deriveAuthMethods,
@@ -89,6 +101,14 @@ const CRON_SCHEMA_EXISTS_SQL = `select exists (select 1 from pg_namespace where 
 const CRON_JOBS_SQL = `select j.jobid, j.schedule, j.command, j.nodename, j.database, j.username, j.active, coalesce(r.rolsuper, false) as "isSuperuser" from cron.job j left join pg_roles r on r.rolname = j.username;`;
 const DEFINER_FUNCTION_NAMES_SQL = `select p.proname as name from pg_proc p where p.prosecdef = true;`;
 
+// #1280 — the live half of the prod-vs-migration drift comparison (src/scan/supabase-drift.ts).
+// Read from pg_class rather than reusing TABLES_SQL because the drift pass needs one extra fact:
+// whether an installed extension owns the table (pg_depend deptype 'e'). An extension's own tables
+// are legitimately absent from the client's migrations, and without this they read as "someone
+// created a table by hand".
+const DRIFT_TABLES_SQL = `select n.nspname as schema, c.relname as name, c.relrowsecurity as "rlsEnabled", exists (select 1 from pg_depend d where d.objid = c.oid and d.deptype = 'e') as "extensionOwned" from pg_class c join pg_namespace n on n.oid = c.relnamespace where c.relkind = 'r' and n.nspname = 'public';`;
+const DRIFT_POLICIES_SQL = `select schemaname as schema, tablename as "table", policyname as name from pg_policies where schemaname = 'public';`;
+
 // PostgREST config exposes the schema allow-list as `db_schema` (comma-separated).
 // MEASURED 2026-07-28 against a live hosted project (operator-authorized read-only Management API
 // call, GET /v1/projects/<ref>/postgrest → HTTP 200): the key IS `db_schema` and its value is a
@@ -112,6 +132,10 @@ interface SupabaseScanOptions {
   functionsDir?: string; // path to the client repo's supabase/functions directory, if scanning it
   splinterImpl?: (connectionString: string) => AdvisorsResponse; // injection point for tests, defaults to runSplinter
   gotrueProbe?: { authUrl: string; anonKey: string }; // self-hosted GoTrue version/provider probe
+  // #1280 — the client repo's supabase/migrations (or the repo root containing it). Supplying it
+  // turns on the prod-vs-migration drift comparison; omitting it emits SB-DRIFT-00 as not-assessed
+  // rather than leaving the topic out of the report.
+  migrationsDir?: string;
 }
 
 export function parseExposedSchemas(config: PostgrestConfig): string[] {
@@ -170,7 +194,7 @@ function bucketPolicyCounts(rows: { bucket_id: string; count: number }[]): Recor
   return Object.fromEntries(rows.map((r) => [r.bucket_id, Number(r.count)]));
 }
 
-async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch): Promise<Finding[]> {
+async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch, migrations: MigrationFile[], driftReason?: string): Promise<Finding[]> {
   const findings: Finding[] = [];
 
   // #671 — read the auth config first so its enabled-methods signal (external_email_enabled /
@@ -217,6 +241,13 @@ async function scanHosted(ref: string, token: string, fetchImpl: typeof fetch): 
   const exposedSchemas = parseExposedSchemas(postgrest);
   const pgGraphqlInstalled = hasPgGraphql(extensions);
   findings.push(...checkExposedSchemas(exposedSchemas), ...checkGraphqlIntrospection(pgGraphqlInstalled, exposedSchemas));
+
+  // The two drift reads are skipped entirely when there is no migration history to compare against —
+  // no point spending two round trips on a client's project to feed a comparison with no expectation.
+  // checkMigrationDrift is still called either way: it owns the SB-DRIFT-00 row in both cases.
+  const driftTables = migrations.length > 0 ? await managementApiQuery<DriftLiveTable[]>(ref, DRIFT_TABLES_SQL, token, fetchImpl) : [];
+  const driftPolicies = migrations.length > 0 ? await managementApiQuery<DriftLivePolicy[]>(ref, DRIFT_POLICIES_SQL, token, fetchImpl) : [];
+  findings.push(...checkMigrationDrift(driftTables, driftPolicies, migrations, driftReason));
 
   return findings;
 }
@@ -271,7 +302,7 @@ function localScopeFinding(): Finding[] {
   ];
 }
 
-async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterImpl: (connectionString: string) => AdvisorsResponse = runSplinter): Promise<Finding[]> {
+async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterImpl: (connectionString: string) => AdvisorsResponse = runSplinter, migrations: MigrationFile[] = [], driftReason?: string): Promise<Finding[]> {
   const { default: postgres } = await import("postgres");
   const sql = postgres(connectionString, { max: 1, idle_timeout: 5 });
   try {
@@ -292,9 +323,13 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
         )
       : [];
 
+    const driftTables = migrations.length > 0 ? ((await sql.unsafe(DRIFT_TABLES_SQL)) as unknown as DriftLiveTable[]) : [];
+    const driftPolicies = migrations.length > 0 ? ((await sql.unsafe(DRIFT_POLICIES_SQL)) as unknown as DriftLivePolicy[]) : [];
+
     const splinterFindings = parseAdvisorFindings(splinterImpl(connectionString));
 
     return [
+      ...checkMigrationDrift(driftTables, driftPolicies, migrations, driftReason),
       ...localScopeFinding(),
       ...splinterFindings,
       ...dedupeAutoExposed(splinterFindings, checkAutoExposedTables(tables)),
@@ -312,14 +347,24 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
 }
 
 export async function runSupabaseScan(opts: SupabaseScanOptions): Promise<Finding[]> {
+  // #1280 — loaded once, before either path, so the two modes compare against the same expectation.
+  // With no --migrations there is no expectation to compare against, and the scan says so on its way past
+  // rather than returning a finding list in which the topic simply does not appear.
+  const migrations = opts.migrationsDir ? loadMigrations(opts.migrationsDir) : [];
+  const driftReason = !opts.migrationsDir
+    ? "No migrations directory was supplied to this scan (`--migrations <dir>`), so the deployed schema was never compared against the committed migration history."
+    : migrations.length === 0
+      ? `The migrations path supplied (${opts.migrationsDir}) contains no .sql files, either at it or at its supabase/migrations subdirectory, so there is no expectation to compare the deployed schema against.`
+      : undefined;
+
   let findings: Finding[];
   if (opts.local) {
-    findings = await scanLocal(LOCAL_CONNECTION, opts.splinterImpl);
+    findings = await scanLocal(LOCAL_CONNECTION, opts.splinterImpl, migrations, driftReason);
   } else {
     if (!opts.projectRef) throw new Error("runSupabaseScan requires projectRef unless local is set");
     const token = opts.managementApiToken ?? process.env.SUPABASE_ACCESS_TOKEN;
     if (!token) throw new Error("Supabase Management API token required (SUPABASE_ACCESS_TOKEN env var or managementApiToken option)");
-    findings = await scanHosted(opts.projectRef, token, opts.fetchImpl ?? fetch);
+    findings = await scanHosted(opts.projectRef, token, opts.fetchImpl ?? fetch, migrations, driftReason);
   }
 
   if (opts.functionsDir) {
