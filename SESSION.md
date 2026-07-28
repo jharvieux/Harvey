@@ -2,7 +2,7 @@
 
 Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite stale items.
 
-_Last updated: 2026-07-28 — **27-batch sweep PAUSED after wave 2 + 3 partial batches. 8 PRs merged, 13 issues closed, 11 filed, 18 batches queued.** Ledger `.git/issue-sweep-ledger.json` is DELIBERATELY NOT DELETED — the sweep is paused, not finished. Newest block first._
+_Last updated: 2026-07-28 — **27-batch sweep PAUSED after wave 2 + 4 partial batches.** MEASURED at pause, not recalled: **8 PRs merged** (#1381 #1382 #1383 #1387 #1397 #1398 #1405 #1417), **14 issues closed** (5 on fully-met criteria + 9 with a live remainder), **18 issues filed** (9 remainders #1407–#1415, 9 new defects), **1 still `Failed`+open**, **18 batches queued**. Same-day totals from `gh` are LARGER and do not all belong to this sweep — 6 more PRs and 4 more closes landed earlier in the day, and 9 closed issues (#1384, #1389–#1396) are the sweep's own alert-drill artifacts, created and closed as test fixtures. Ledger `.git/issue-sweep-ledger.json` is DELIBERATELY NOT DELETED — paused, not finished. Newest block first._
 
 ## 2026-07-28 — SWEEP PAUSED. Resume from `.git/issue-sweep-ledger.json` + this block.
 
