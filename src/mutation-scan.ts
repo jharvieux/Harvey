@@ -725,7 +725,12 @@ export function detectTestEnv(files: readonly { path: string; text: string }[]):
 // and the probe recorded a generic requires-live-run. The failure is distinct and actionable:
 // the SUITE does not pass under the invoked env, which is the target's defect (or an env we
 // failed to replicate), not an environment gap.
-const DRY_RUN_FAILURE = /failed tests in the initial test run|initial test run (?:failed|timed out)/i;
+// #1284: MEASURED against the installed Stryker 9.6.1 source (process/3-dry-run-executor.js) —
+// a dry run that errors or times out (as opposed to running tests that then fail) throws the plain
+// "Something went wrong in the initial test run", which this regex did not match. Unmatched, the
+// CLI fell through to "mutation report not found" and (before this fix) exited 1 with NO artifact
+// at all — the exact "absent status, not a wrong one" hazard this file's doctrine forbids.
+const DRY_RUN_FAILURE = /failed tests in the initial test run|initial test run (?:failed|timed out)|something went wrong in the initial test run/i;
 // Best-effort first failing test out of the runner output Stryker echoes (vitest ×/✗, jest ●/FAIL).
 const FAILING_TEST_LINE = /^.*(?:✗|✖|×|✘|●|\bFAIL\b).*$/m;
 
@@ -883,6 +888,19 @@ export function scopedRunModuleRecord(scope: MutationScope): { status: "partial"
   };
 }
 
+// #1309: the branch #504's own tests skipped — verifyMutationScope returning `verified: false` (a
+// non-JSON Stryker config, or an unsupported glob) is neither a proven full run NOR a proven subset,
+// so scopedRunModuleRecord above (gated on `scope.scoped`) never fired for it and the caller emitted
+// no moduleRecord at all. With no moduleRecord, src/audit-runners.ts's mutationVerdict fell through
+// to `if (parsed.summary) return { kind: "ran" }` — a full `ran` over a scope nobody verified. This
+// is the same failure shape as an unscoped subset, reached through the OTHER branch of `verified`.
+export function unverifiableScopeModuleRecord(scope: MutationScope): { status: "partial"; note: string } {
+  return {
+    status: "partial",
+    note: `Mutate scope could not be verified — ${scope.note}. The run is recorded partial rather than a full measurement (#1309): the ledger must not read a full 'ran' over a scope nobody confirmed covers the target's configured mutate set.`,
+  };
+}
+
 // #513: most third-party clients have a test suite but no Stryker setup — before this, M8's
 // headline metric (mutation score) was simply unavailable to them ("this wrapper does not
 // generate a config" was the old stance; ATC masked it by shipping its own config). Now the CLI
@@ -918,6 +936,14 @@ export function scaffoldStrykerConfig(runner: ScaffoldRunner, presentDirs: reado
     : undefined;
   return {
     testRunner: runner,
+    // #1284: Stryker's own default plugin discovery (`plugins: ["@stryker-mutator/*"]`) resolves
+    // the glob relative to wherever @stryker-mutator/core's OWN module lives (MEASURED against the
+    // installed 9.6.1 source, di/plugin-loader.js's globPluginModules) — under pnpm, core resolves
+    // through its content-addressable store slot, which does not contain a sibling runner package
+    // installed as a separate top-level dependency, so the glob finds nothing even though
+    // node_modules/@stryker-mutator/<runner>-runner exists and resolves fine as a bare import.
+    // Naming the plugin explicitly skips the glob (and the symlink layout it depends on) entirely.
+    plugins: [`@stryker-mutator/${runner}-runner`],
     coverageAnalysis: "perTest",
     reporters: ["json", "progress"],
     jsonReporter: { fileName: "reports/mutation/mutation.json" },
