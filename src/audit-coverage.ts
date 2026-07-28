@@ -48,12 +48,31 @@ export const MODULES: Record<AuditModule, { name: string; needs: ModuleNeed; fre
   M3: { name: "Hotspot analysis", needs: "source", freeTier: true },
   M4: { name: "Duplication", needs: "source", freeTier: true },
   M5: { name: "Slop / dead code", needs: "source", freeTier: true },
-  M6: { name: "Simplification / maintainability", needs: "llm", freeTier: true },
+  // #1296: was needs:"llm" — wrong. audit-runners.ts's M6 runner (m6, ~line 626) runs the free
+  // indicator layer (handrolled.ts) on source alone and reports `examined`/partial with real
+  // findings when the LLM tier is out of scope; it only needs "llm" for the triage VERDICT layer,
+  // same shape as M7's code tier vs. its DB advisors. "source" is the correct minimum.
+  M6: { name: "Simplification / maintainability", needs: "source", freeTier: true },
   M7: { name: "Performance", needs: "source", freeTier: true },
   M8: { name: "Test quality", needs: "source", freeTier: true },
   M9: { name: "App Router boundary/rendering", needs: "source", freeTier: true },
   M10: { name: "Data classification (PII/PHI/PCI)", needs: "source", freeTier: true },
 };
+
+// #1296: `needs` is what actually gates behaviour (envGated, below) — `freeTier` had no production
+// reader and had drifted from it (M6 disagreed: needs:"llm", freeTier:true). Under the free tier's
+// own definition (docs/free-tier-scope.md: "no database, no credentials, no contact with
+// production"), a module whose MINIMUM environment is anything but "source" cannot be free — so
+// freeTier is fully determined by needs, and the two encoding the same fact by hand is exactly the
+// two-list drift this file's own history (#288) warns about. `needs` is the decided source of
+// truth; this throws at load if `freeTier` is ever hand-edited out of sync with it again, rather
+// than waiting for a test run to notice.
+for (const [id, m] of Object.entries(MODULES)) {
+  const derived = m.needs === "source";
+  if (m.freeTier !== derived) {
+    throw new Error(`MODULES.${id}: freeTier (${m.freeTier}) disagrees with needs (${m.needs}) — freeTier must equal (needs === "source")`);
+  }
+}
 
 // Modules with no execution record in ANY engagement, ever. This is a repo-level ledger, not a
 // per-engagement one: a reason answers "why not THIS time," and for a module whose environment is

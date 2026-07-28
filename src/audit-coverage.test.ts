@@ -59,6 +59,12 @@ describe("the module enumeration itself (#275)", () => {
   // three as free. Nothing read the field, so nothing could disagree with it. Same fix as #275
   // one field over: derive the split from the document instead of restating it, so the constant
   // cannot be wrong in silence while it waits for its first consumer.
+  //
+  // #1296: freeTier alone didn't catch a real drift, because nothing gates behaviour on freeTier —
+  // `needs` does (envGated in audit-coverage.ts), and M6 had needs:"llm" while freeTier:true and
+  // the doc both said M6 is free. One field wider: a free-tier module's minimum can never be "llm"
+  // (or "connected"/"dynamic" — the free tier is source-only by definition, docs/free-tier-scope.md's
+  // "no database, no credentials, no contact with production"), so assert that too.
   it("splits free from paid exactly as docs/free-tier-scope.md does — read, not restated", () => {
     const doc = readFileSync(fileURLToPath(new URL("../docs/free-tier-scope.md", import.meta.url)), "utf8");
     const table = doc.split("## What the free scan delivers")[1]?.split("\n## ")[0] ?? "";
@@ -66,6 +72,9 @@ describe("the module enumeration itself (#275)", () => {
     if (free.size === 0) throw new Error("parsed no modules from the free-tier table in docs/free-tier-scope.md — its shape changed");
     for (const id of AUDIT_MODULES) {
       expect(MODULES[id].freeTier, `${id} (${MODULES[id].name})`).toBe(free.has(id));
+      if (free.has(id)) {
+        expect(MODULES[id].needs, `${id} (${MODULES[id].name}) is documented free but needs its paid-only tier to run at all`).toBe("source");
+      }
     }
     // The one module the doc deliberately withholds from the free tier — pinned so a table that
     // stopped parsing (every module "paid") cannot pass this test by accident.
