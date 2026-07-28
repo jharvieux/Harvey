@@ -13,6 +13,7 @@
 
 import { detectionMetrics, type DetectionMetrics } from "./detection-metrics.js";
 import { validateRecordedReason, type ParsedReason } from "../recorded-reasons.js";
+import type { Cadence } from "../scored-gates.js";
 import type { Finding, PrecisionTier, Severity } from "../findings.js";
 import { baseEntries } from "./calibration/base.entries.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
@@ -395,10 +396,29 @@ export const MIN_NEGATIVES_PER_MODULE = 1;
 //
 // An exemption for a module that is NOT thin is itself a failure (the `stale` list) — a substitute gate
 // that has been overtaken by real fixtures must not keep standing in for them.
+/**
+ * #1483 — one gate standing in for a module's missing fixtures. Naming it is not enough: a path that
+ * EXISTS and a gate that RUNS are different claims, and re-validating M2 for #1454 found the two
+ * apart. `pnpm exec tsx src/cli/pentest.ts --mode=coverage` works — it exits 1 naming a real
+ * untested target and 0 when that target is listed — and appears in no workflow and no
+ * package.json script, so nothing runs it unless a human remembers. That is the exact state #1288
+ * found for the scored gates, one level over, and an exemption was free to cite it.
+ *
+ * So a substitute gate declares its `cadence` in the same checkable vocabulary #1288 built, and
+ * `none` is a legitimate answer that must carry the issue tracking it — disclosed, never silent.
+ */
+export interface SubstituteGate {
+  /** What it covers, in a reader's words. Every path token must exist in the checkout. */
+  what: string;
+  /** The token a venue has to invoke for this gate to have run — normally the CLI's own path. */
+  invokes: string;
+  cadence: Cadence;
+}
+
 export interface ParityExemption {
   module: string;
-  /** The gate that covers this module instead of corpus fixtures. Must name a path that exists. */
-  substituteGate: string;
+  /** The gate(s) covering this module instead of corpus fixtures. */
+  substituteGates: readonly SubstituteGate[];
   /**
    * The registry's fields (#1033/#1072/#1319), validated by validateRecordedReason. Lowercase keys
    * deliberately: recorded-reasons.ts's own file walk reads `REASON:` at the start of any line as a
@@ -418,8 +438,22 @@ export interface ParityExemption {
 const PARITY_EXEMPTIONS: readonly ParityExemption[] = [
   {
     module: "M2",
-    substituteGate:
-      "`src/cli/pentest.ts --mode=coverage` → assertComplete (src/pentest/targets.ts), which fails loud on any enumerated target `--tested` did not list, plus the M2 conservation plant in src/audit-conservation.ts asserted by src/cli/validate-conservation.ts (#352/#1155).",
+    substituteGates: [
+      {
+        what: "`src/cli/pentest.ts --mode=coverage` reaches assertComplete (src/pentest/targets.ts) and fails loud on any enumerated target `--tested` did not list (#352)",
+        invokes: "src/cli/pentest.ts",
+        // MEASURED 2026-07-28: `grep -rn "mode=coverage" .github/workflows/ package.json` returns
+        // nothing, and no workflow names pentest at all. The check works in both directions; it just
+        // runs only when a human remembers. Wiring it into a venue is a supervised
+        // .github/workflows/ edit, so it is DISCLOSED here and relayed on #1483 rather than done.
+        cadence: { kind: "none", issue: 1483 },
+      },
+      {
+        what: "the M2 conservation plant in src/audit-conservation.ts, asserted by src/cli/validate-conservation.ts (#1155)",
+        invokes: "src/cli/validate-conservation.ts",
+        cadence: { kind: "workflow", file: ".github/workflows/conservation.yml", job: "conservation", when: "every PR + daily schedule (a required status check since #1205)" },
+      },
+    ],
     reason: {
       claim:
         "M2's findings are produced only by HTTP probes against a running two-tenant stack, so the offline scan of a planted source tree emits no M2 finding for a CorpusEntry to score — the corpus scores findings against planted file locations, and M2 never produces one",
@@ -435,8 +469,18 @@ const PARITY_EXEMPTIONS: readonly ParityExemption[] = [
   },
   {
     module: "M6",
-    substituteGate:
-      "the #483 `M6-indicator` baselines over six external targets in src/scan/external-corpus.ts, re-run by `pnpm corpus-drift`, plus the per-indicator fixtures under src/detectors/__fixtures__/handrolled gated by src/detectors/handrolled.test.ts.",
+    substituteGates: [
+      {
+        what: "the #483 `M6-indicator` baselines over six external targets in src/scan/external-corpus.ts",
+        invokes: "src/cli/corpus-drift.ts",
+        cadence: { kind: "workflow", file: ".github/workflows/corpus-drift.yml", job: "corpus-drift", when: "daily schedule + on changes to the corpus CLI" },
+      },
+      {
+        what: "the per-indicator fixtures under src/detectors/__fixtures__/handrolled, gated by src/detectors/handrolled.test.ts",
+        invokes: "test",
+        cadence: { kind: "verify" },
+      },
+    ],
     reason: {
       claim:
         "M6's mechanical indicators are not mirrored into CorpusEntry rows, so M6 sits below the parity minimum — a product question about whether a deterministic AST pass belongs in the shared precision matrix, NOT a limit on what a planted fixture can express",
@@ -488,13 +532,48 @@ interface ExemptionErrors {
 }
 
 /**
- * Every committed exemption, held to the recorded-reasons registry plus the substitute-gate rule.
+ * The venues a substitute gate's cadence can be checked against: `package.json` scripts and the
+ * workflow texts. Same inputs #1288's gate takes, because it is the same question one level over.
+ */
+export interface CadenceVenues {
+  readonly scripts: Readonly<Record<string, string>>;
+  readonly workflows: Readonly<Record<string, string>>;
+}
+
+// #1483 — "the gate exists" and "the gate runs" are different claims. This checks the second, and
+// only ever against a venue the caller actually supplied: an absent `venues` is stated in the
+// output by the caller (validate-calibration), never silently treated as a pass.
+function cadenceErrors(gate: SubstituteGate, venues: CadenceVenues): string[] {
+  const { cadence } = gate;
+  if (cadence.kind === "verify") {
+    const chain = venues.scripts["verify"] ?? "";
+    const runs = venues.scripts["test"] ?? "";
+    return chain.includes(gate.invokes) || runs.includes(gate.invokes) || chain.split("&&").some((p) => p.trim().endsWith(gate.invokes))
+      ? []
+      : [`substituteGates: "${gate.what.slice(0, 60)}…" declares the \`verify\` cadence, but the verify chain (\`${chain}\`) never reaches \`${gate.invokes}\``];
+  }
+  if (cadence.kind === "workflow") {
+    const text = venues.workflows[cadence.file];
+    if (text === undefined) return [`substituteGates: declares a cadence in ${cadence.file}, which does not exist — the venue was renamed or deleted and this module now stands on nothing`];
+    return text.includes(gate.invokes)
+      ? []
+      : [`substituteGates: declares a cadence in ${cadence.file} (${cadence.job}) but that workflow never invokes \`${gate.invokes}\` — the cadence was removed, or never landed`];
+  }
+  return cadence.issue > 0
+    ? []
+    : ["substituteGates: has no cadence and names no tracking issue. A substitute gate that runs only when someone remembers is a legitimate state; an undisclosed one never appears in a tally"];
+}
+
+/**
+ * Every committed exemption, held to the recorded-reasons registry plus the substitute-gate rules.
  * `exists` answers "is this a path in the checkout"; it defaults to accepting everything so a caller
  * with no filesystem still gets the structural half (same contract as validateRecordedReason).
+ * `venues` adds the #1483 cadence check; omitted, the cadence half is not scored.
  */
 export function validateParityExemptions(
   exemptions: readonly ParityExemption[] = PARITY_EXEMPTIONS,
   exists: (path: string) => boolean = () => true,
+  venues?: CadenceVenues,
 ): ExemptionErrors[] {
   const reasons = parityExemptionReasons(exemptions);
   return exemptions
@@ -503,13 +582,19 @@ export function validateParityExemptions(
       if (!AUDIT_MODULES.includes(e.module as (typeof AUDIT_MODULES)[number])) {
         errors.push(`module: "${e.module}" is not one of the ten audited modules (${AUDIT_MODULES.join(", ")}) — an exemption for a module the census never renders exempts nothing and is invisible`);
       }
-      const paths = [...new Set([...e.substituteGate.matchAll(GATE_PATH_TOKEN)].map((m) => m[0] as string))];
-      const missing = paths.filter((p) => !exists(p));
-      if (paths.length === 0) {
-        errors.push("substituteGate: names no path in this checkout — an exemption's whole content is the gate standing in for the missing fixtures, and a gate nobody can open is a sentence, not a substitute");
+      if (e.substituteGates.length === 0) {
+        errors.push("substituteGates: empty — an exemption's whole content is the gate standing in for the missing fixtures");
       }
-      if (missing.length > 0) {
-        errors.push(`substituteGate: names path(s) that do not exist here — ${missing.join(", ")}. A renamed or deleted substitute gate reads exactly like a live one, so this module would stand on nothing while the census printed EXEMPT`);
+      for (const gate of e.substituteGates) {
+        const paths = [...new Set([...gate.what.matchAll(GATE_PATH_TOKEN)].map((m) => m[0] as string))];
+        const missing = [...paths, gate.invokes].filter((p) => p.includes("/") && !exists(p));
+        if (paths.length === 0) {
+          errors.push(`substituteGates: "${gate.what.slice(0, 60)}…" names no path in this checkout — a gate nobody can open is a sentence, not a substitute`);
+        }
+        if (missing.length > 0) {
+          errors.push(`substituteGates: names path(s) that do not exist here — ${[...new Set(missing)].join(", ")}. A renamed or deleted substitute gate reads exactly like a live one, so this module would stand on nothing while the census printed EXEMPT`);
+        }
+        if (venues) errors.push(...cadenceErrors(gate, venues));
       }
       return { module: e.module, errors };
     })

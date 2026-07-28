@@ -34,7 +34,9 @@
 // FALSIFIER: test -d .github/workflows || exit 127; grep -rq 'validate-semantic' .github/workflows/ && exit 0 || exit 1
 // TOUCHES: src/cli/validate-semantic.ts .github/workflows
 
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** Where a gate runs, and the evidence that proves it still does. */
 export type Cadence =
@@ -184,6 +186,25 @@ export function checkScoredGates(
   }
 
   return violations;
+}
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// #1483 — lives here rather than in validate-scored-gates.ts, where it used to. That CLI runs its
+// gate and can `process.exit(1)` at module load, so importing it to reach this loader made one
+// gate able to abort another; src/scan/calibration.ts now needs the same venues.
+export function loadGateInputs(root = REPO_ROOT): GateInputs {
+  const workflowDir = join(root, ".github", "workflows");
+  const workflows: Record<string, string> = {};
+  for (const f of readdirSync(workflowDir).filter((f) => f.endsWith(".yml"))) {
+    workflows[`.github/workflows/${f}`] = readFileSync(join(workflowDir, f), "utf8");
+  }
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
+  return {
+    discovered: discoverValidateClis(join(root, "src", "cli")),
+    scripts: pkg.scripts ?? {},
+    workflows,
+  };
 }
 
 export function describeCadence(cadence: Cadence): string {

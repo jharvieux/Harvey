@@ -15,6 +15,7 @@ import { arg, assertKnownFlags } from "./args.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, validateParityExemptions, type MatrixRow } from "../scan/calibration.js";
+import { describeCadence, loadGateInputs } from "../scored-gates.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision } from "../scan/heuristic-precision.js";
 import { SEVERITIES, type Finding, type Severity } from "../findings.js";
@@ -159,9 +160,12 @@ for (const e of parity.exempt) {
   console.log(`  EXEMPT ${e.module} [${r.kind.toUpperCase()}] — ${r.claim}`);
   console.log(`    PROVENANCE: ${r.provenance}`);
   console.log(`    ${r.kind === "empirical" ? `FALSIFIER (exits 0 when this is no longer true): ${r.falsifier}` : `RULED BY: ${r.owner} — ${r.decision}`}`);
-  console.log(`    SUBSTITUTE GATE: ${e.exemption.substituteGate}`);
+  // #1483: the cadence prints beside the gate. "It exists" and "it runs" are different claims, and
+  // re-validating M2 for #1454 found them apart — `pentest.ts --mode=coverage` works and is invoked
+  // by nothing, so a reader must be able to see that without going to look.
+  for (const g of e.exemption.substituteGates) console.log(`    SUBSTITUTE GATE: ${g.what}\n      RUNS: ${describeCadence(g.cadence)}`);
 }
-const exemptionErrors = validateParityExemptions(undefined, (p) => existsSync(join(repoRoot, p)));
+const exemptionErrors = validateParityExemptions(undefined, (p) => existsSync(join(repoRoot, p)), loadGateInputs());
 if (parity.stale.length) console.log(`  STALE EXEMPTION: ${parity.stale.join(", ")} now meet(s) the minimum on real fixtures — delete the PARITY_EXEMPTIONS row so the corpus, not the substitute gate, is what the module stands on.`);
 // #881: fixture counts are not performance. Name the modules that actually have a scored
 // precision/recall metric, so the M1 metric block below cannot be read as a suite-wide figure.

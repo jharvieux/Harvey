@@ -7,8 +7,7 @@
 // The controls below matter more than the pass. Each one plants a defective exemption and asserts
 // the specific error — because a gate nobody has watched fail is indistinguishable from a gate that
 // is incapable of failing, and the M6 row this issue came from would have passed a shape-only
-// check: it was a
-// well-formed English sentence and it was false the day it was written.
+// check: it was a well-formed English sentence and it was false the day it was written.
 //
 // This rides inside `pnpm verify`. The same function runs at the live gate
 // (src/cli/validate-calibration.ts) with a real `existsSync`, which is what makes the
@@ -18,14 +17,15 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parityExemptionReasons, validateParityExemptions, type ParityExemption } from "./calibration.js";
+import { describeCadence, loadGateInputs } from "../scored-gates.js";
+import { CORPUS, parityExemptionReasons, parityVerdict, validateParityExemptions, type CadenceVenues, type ParityExemption, type SubstituteGate } from "./calibration.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const inRepo = (path: string): boolean => existsSync(resolve(REPO_ROOT, path));
 
 const WELL_FORMED: ParityExemption = {
   module: "M2",
-  substituteGate: "src/cli/pentest.ts --mode=coverage → assertComplete (src/pentest/targets.ts)",
+  substituteGates: [{ what: "src/cli/pentest.ts --mode=coverage → assertComplete (src/pentest/targets.ts)", invokes: "src/cli/pentest.ts", cadence: { kind: "none", issue: 1483 } }],
   reason: {
     claim: "a probe-only module produces no offline finding a planted fixture could be scored against",
     kind: "empirical",
@@ -96,15 +96,77 @@ describe("#1454 a parity exemption is held to the recorded-reasons registry", ()
   });
 
   it("CONTROL — a substitute gate naming a path that is not in the checkout is refused", () => {
-    const errors = errorsFor(modify({ substituteGate: "src/cli/pentest-coverage-runner.ts --mode=coverage" }));
-    expect(errors.join(" ")).toMatch(/substituteGate: names path\(s\) that do not exist here/);
+    const errors = errorsFor(modify({ substituteGates: [{ what: "src/cli/pentest-coverage-runner.ts --mode=coverage", invokes: "src/cli/pentest-coverage-runner.ts", cadence: { kind: "none", issue: 1483 } }] }));
+    expect(errors.join(" ")).toMatch(/substituteGates: names path\(s\) that do not exist here/);
   });
 
   it("CONTROL — a substitute gate naming no path at all is refused (a sentence is not a gate)", () => {
-    expect(errorsFor(modify({ substituteGate: "covered by the pentest suite" })).join(" ")).toMatch(/names no path in this checkout/);
+    expect(errorsFor(modify({ substituteGates: [{ what: "covered by the pentest suite", invokes: "pentest", cadence: { kind: "none", issue: 1483 } }] })).join(" ")).toMatch(/names no path in this checkout/);
   });
 
   it("CONTROL — an exemption for a module outside M1–M10 exempts nothing and is refused", () => {
     expect(errorsFor(modify({ module: "M11" })).join(" ")).toMatch(/is not one of the ten audited modules/);
+  });
+});
+
+// #1483 — the half the check above does NOT reach: a path that EXISTS and a gate that RUNS are
+// different claims, and re-validating M2 for #1454 found them apart. `pentest.ts --mode=coverage`
+// works in both directions and is invoked by no workflow and no script, so an exemption could cite
+// a gate nothing ever runs while the census printed EXEMPT.
+describe("#1483 a substitute gate declares a cadence, and the cadence is checked", () => {
+  const VENUES: CadenceVenues = {
+    scripts: { verify: "pnpm typecheck && pnpm test", test: "vitest run" },
+    workflows: { ".github/workflows/ci.yml": "run: pnpm exec tsx src/cli/corpus-drift.ts" },
+  };
+  const withGate = (gate: SubstituteGate): ParityExemption => modify({ substituteGates: [gate] });
+  const cadenceErrorsFor = (gate: SubstituteGate): string =>
+    (validateParityExemptions([withGate(gate)], inRepo, VENUES)[0]?.errors ?? []).join(" ");
+
+  it("every COMMITTED exemption's cadence holds against the real package.json and workflows", () => {
+    expect(validateParityExemptions(undefined, inRepo, loadGateInputs())).toEqual([]);
+  });
+
+  it("MEASURED — M2's pentest --mode=coverage gate runs on NO cadence, and says so rather than pretending", () => {
+    // The finding this issue is filed on, asserted in BOTH directions: if the gate gets wired into
+    // a venue, this test goes red and the row has to be re-declared with its new cadence.
+    const real = loadGateInputs();
+    expect(Object.values(real.workflows).some((w) => w.includes("mode=coverage"))).toBe(false);
+    const m2 = parityVerdict(CORPUS).exempt.find((e) => e.module === "M2")?.exemption as ParityExemption;
+    const pentest = m2.substituteGates.find((g) => g.invokes === "src/cli/pentest.ts") as SubstituteGate;
+    expect(pentest.cadence).toEqual({ kind: "none", issue: 1483 });
+    expect(describeCadence(pentest.cadence)).toContain("NO CADENCE");
+  });
+
+  it("CONTROL — a gate declaring a workflow cadence that workflow no longer invokes is refused", () => {
+    const errors = cadenceErrorsFor({
+      what: "the #483 baselines in src/scan/external-corpus.ts",
+      invokes: "src/cli/dry-run.ts",
+      cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "ci", when: "every PR" },
+    });
+    expect(errors).toMatch(/never invokes `src\/cli\/dry-run\.ts` — the cadence was removed, or never landed/);
+  });
+
+  it("CONTROL — a gate declaring a workflow that does not exist is refused", () => {
+    const errors = cadenceErrorsFor({
+      what: "the #483 baselines in src/scan/external-corpus.ts",
+      invokes: "src/cli/corpus-drift.ts",
+      cadence: { kind: "workflow", file: ".github/workflows/gone.yml", job: "gone", when: "never" },
+    });
+    expect(errors).toMatch(/which does not exist — the venue was renamed or deleted/);
+  });
+
+  it("CONTROL — a gate claiming the `verify` cadence the verify chain never reaches is refused", () => {
+    const errors = cadenceErrorsFor({
+      what: "the fixtures under src/detectors/__fixtures__/handrolled",
+      invokes: "src/cli/corpus-drift.ts",
+      cadence: { kind: "verify" },
+    });
+    expect(errors).toMatch(/declares the `verify` cadence, but the verify chain/);
+  });
+
+  it("CONTROL — 'no cadence' is allowed, but only with the issue tracking it", () => {
+    const gate = { what: "src/cli/pentest.ts --mode=coverage", invokes: "src/cli/pentest.ts" };
+    expect(cadenceErrorsFor({ ...gate, cadence: { kind: "none", issue: 1483 } })).toBe("");
+    expect(cadenceErrorsFor({ ...gate, cadence: { kind: "none", issue: 0 } })).toMatch(/names no tracking issue/);
   });
 });
