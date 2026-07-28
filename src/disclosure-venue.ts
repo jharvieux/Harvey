@@ -21,22 +21,64 @@
 //    lines belong to no rule at all — file headers and the shared `req_source` YAML anchor above
 //    the first `- id:`, 10 of them already carrying a bound marker. A bound on a shared anchor
 //    applies to every rule using it and is outside what a per-rule gate can see.
+//    Re-measured 2026-07-27 (#1320 bounds audit): 20 negated-"match" comment lines, 110/110 rules
+//    with a `message: >` block, 1597 comment lines in the rule files — all three unchanged.
+//
+//    REASON: rules stating a real unassessed class in the two phrasings #1342 names ("can't/cannot see", "is a heuristic") are invisible to this gate, so its `bound comment-only: 0` is a statement about BOUND_MARKERS rather than about the rule set
+//    KIND: empirical
+//    PROVENANCE: MEASURED 2026-07-27 — grep for those phrasings reports hits in 7 of the rule files while `pnpm exec tsx src/cli/validate-disclosure-venue.ts --list` reports 13 bounded rules and 0 comment-only.
+//    FALSIFIER: grep -q "can't see\|cannot see\|is a heuristic" src/scan/rules/semgrep/*.yml && exit 1 || exit 0
+//    TOUCHES: src/scan/rules/semgrep
 //
 // 2. CORRESPONDENCE IS APPROXIMATED, NOT JUDGED — a marker in the message PLUS at least one
 //    distinctive term shared with the comment that declared the bound, tested against the SCOPE
 //    SENTENCE only (see scopeSentence). It is a keyword overlap, so it OVER-REFUSES in one
 //    direction: a complete, correct, client-legible paraphrase that happens to share no 5-letter
-//    term with the comment is rejected as `unrelated-scope-sentence`. Measured example — comment
+//    term with the comment is rejected as `unrelated-scope-sentence`. Recorded example — comment
 //    "LIMITATION: dynamically-interpolated selectors are unhandled by the shape below", message
 //    "...SCOPE OF THIS CHECK: only a string literal written inline is examined; a value built at
 //    runtime from concatenation or a template is outside what this rule can see" — a faultless
-//    disclosure, refused. No mechanical overlap rule can pass it, so the gate does not pretend to.
+//    disclosure, refused. The two texts share NO content word, which is why the whole overlap
+//    family refuses it: measured 2026-07-27 (#1320 bounds audit) over five variants — exact terms,
+//    prefix-5 stemming, a suffix-stripping stemmer, character 4-gram Jaccard, TF-IDF cosine — all
+//    five refuse this pair, and the 4-gram variant additionally breaks 4 of the 13 committed
+//    bounded rules. So the over-refusal is a property of OVERLAP, re-measurable rather than
+//    assumed. It is NOT a property of every mechanical rule: a substance floor (the scope sentence
+//    must carry >= 4 distinctive terms of its own) accepts the paraphrase and still refuses the
+//    contentless sticker on all 13 — but it accepts 156/156 MISMATCHED comment/scope pairs, where
+//    exact overlap refuses 123 of them, so it is not a correspondence check at all and was not
+//    adopted. The open question, untested here because no offline model is available: does an
+//    embedding or LLM adjudicator accept this pair while still refusing the 156? That is what
+//    would replace the overlap; a cheaper lexical rule is measured not to.
 //    An author hitting this should NOT parrot a word to appease the gate: reword the COMMENT to
 //    the plain terms the message uses (the comment is the internal note; the message is the
-//    deliverable, and the message should win). Judging same-bound-ness needs an adjudicator.
+//    deliverable, and the message should win).
+//
+//    REASON: every lexical-overlap variant tried refuses a correct paraphrase that shares no content word with the comment it discloses, and the one non-overlap alternative measured (a >= 4-distinctive-term substance floor) removes the over-refusal only by accepting every mismatched pair
+//    KIND: empirical
+//    PROVENANCE: MEASURED 2026-07-27 — five overlap variants (exact / prefix-5 / suffix-stripping stemmer / char 4-gram Jaccard / TF-IDF cosine) scored against the recorded paraphrase, the contentless-sticker control and all 13 committed bounded rules, plus a 13x12 mismatched-pair cross-run; exact overlap refuses 123/156 mismatched pairs, the substance floor 0/156.
+//    FALSIFIER: pnpm exec vitest run src/disclosure-venue.test.ts -t "over-refuses a correct paraphrase" > /tmp/harvey-dv.log 2>&1; grep -q "1 passed" /tmp/harvey-dv.log && exit 1 || { grep -q "1 failed" /tmp/harvey-dv.log && exit 0 || exit 127; }
+//    TOUCHES: src/disclosure-venue.ts
 //
 // 3. SEMGREP ONLY. The TS/AST detectors and the conditional-scan (`scanLocal`) shape are #1317's
-//    4b, tracked separately as #1330.
+//    4b, tracked separately as #1330. Re-tested 2026-07-27 (#1345) rather than inherited from the
+//    issue text: the candidate population is 37 comment lines across 27 files (the #1330 grep,
+//    re-run, unchanged), and the named live instance is still live — `src/scan/supabase.ts`'s
+//    `scanLocal` returns its finding list with no not-assessed row for the exposed-schema /
+//    pg_graphql class its own comment says local mode cannot read, so a locally-scanned client sees
+//    the same silence as one whose schema exposure was checked and found clean.
+//
+//    REASON: bounds written in TS/AST detector comments, and conditional scan paths that omit a check another path runs, are outside what this gate reads — it parses `src/scan/rules/semgrep/*.yml` only, so its green verdict is a statement about the semgrep rule set and not about the detector set
+//    KIND: empirical
+//    PROVENANCE: MEASURED 2026-07-27 — #1330's population grep re-run over src/scan + src/detectors reports 37 comment lines across 27 files that this gate never reads, and src/scan/supabase.ts:252-253's local-mode omission still emits no disclosure row.
+//    FALSIFIER: grep -rlE '^ *//.*(LIMITATION:|does not cover|not assessed|blind to|only covers)' --include='*.ts' src/scan src/detectors | grep -qv '\.test\.ts$' && exit 1 || exit 0
+//    TOUCHES: src/scan src/detectors
+//
+//    What that command settles and what it does not: it fires when no bound is DECLARED in a
+//    comment this gate cannot read, which is the half #1330 can measure. A conditional omission
+//    carrying no comment at all — the `scanLocal` shape with the note deleted — is invisible to it
+//    too, and is why #1330's first acceptance bullet asks for a check over the SHAPE rather than
+//    over the vocabulary.
 //
 // A lower bound on the defect, not a census of it.
 
