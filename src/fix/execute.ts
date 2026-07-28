@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, join } from "node:path";
 import { verifySuggestedFix } from "../trackers/fix-diff.js";
 import { blastRadiusOf, checkBlastRadius, parseDiffFacts, type DiffCap } from "./rails.js";
-import type { DetectorRun } from "./verify.js";
+import type { DetectorRun, VerificationEvidence } from "./verify.js";
 
 // "diff-verified" is the only success, and it still means an INERT diff on disk — never an applied
 // fix. Everything else names why not, so a caller cannot mistake silence for success.
@@ -38,6 +38,10 @@ export interface FixExecution {
   // re-run against the applied worktree (§2.3). Absent ⇒ the detector was never re-run here (no hook,
   // or the diff didn't clear the apply gate) — a caller must treat that as not-clean, never as green.
   detectorAfter?: DetectorRun;
+  // Present only when the `evidence` hook was supplied and the detector re-ran: the full §2 evidence,
+  // client checks included, assembled INSIDE the applied worktree (#1272). Absent ⇒ the client half
+  // was never gathered here, which computeGreen refuses to score as green.
+  evidence?: VerificationEvidence;
 }
 
 interface ExecuteOptions {
@@ -53,6 +57,12 @@ interface ExecuteOptions {
   // uses this to score green from the same disposable worktree — the untrusted operator diff has to
   // make the detector stop firing, not just apply. Absent ⇒ apply-clean is the whole gate.
   detectorAfter?: (worktreeDir: string) => DetectorRun;
+  // Optional §2.1/§2.2 client-verification pass (#1272): once the diff is applied into the worktree
+  // and the detector has re-run, assemble the FULL verification evidence there — discovered client
+  // commands actually executed against the fixed source, scored against a baseline. Runs only when
+  // `detectorAfter` also ran, because green needs both halves and the assembler takes the detector
+  // result as an input. Absent ⇒ the client half was not gathered and `evidence` is absent with it.
+  evidence?: (worktreeDir: string, detectorAfter: DetectorRun) => VerificationEvidence;
 }
 
 // stderr is piped, not inherited: the client repo's git chatter ("Preparing worktree…", a failed
@@ -117,7 +127,14 @@ export function executeFixDiff(findingId: string, diff: string, opts: ExecuteOpt
       execFileSync("git", ["-C", worktree, "apply", "-"], { input: diff, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
       detectorAfter = opts.detectorAfter(worktree);
     }
-    return { ...base, outcome: "diff-verified", verification: result.detail, ...(detectorAfter ? { detectorAfter } : {}) };
+    const evidence = detectorAfter && opts.evidence ? opts.evidence(worktree, detectorAfter) : undefined;
+    return {
+      ...base,
+      outcome: "diff-verified",
+      verification: result.detail,
+      ...(detectorAfter ? { detectorAfter } : {}),
+      ...(evidence ? { evidence } : {}),
+    };
   } finally {
     disposeWorktree(opts.targetDir, worktree);
   }

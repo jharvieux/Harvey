@@ -13,7 +13,7 @@ import { detectorBefore, rerunDetector } from "./detector-rerun.js";
 import { executeFixDiff, type FixExecution } from "./execute.js";
 import { capturePatch, disposeCorpus, materialize } from "./materialize-calibration.js";
 import type { DiffCap } from "./rails.js";
-import { computeGreen, type DetectorRun } from "./verify.js";
+import { detectorHalfClean, type DetectorRun } from "./verify.js";
 
 interface PlantedClass {
   file: string; // repo-relative path within targets/calibration
@@ -27,7 +27,15 @@ interface AcceptanceResult {
   detectorBefore: DetectorRun; // verbatim from the scan (§2.4)
   detectorAfter: DetectorRun; // re-run against the fixed source (§2.3)
   green: boolean; // diff-verified AND detector-after clean — the §8 clause-1 gate
+  // #1272: what this gate did NOT score, stated on every result rather than left to be inferred.
+  // A materialized corpus is the planted file and nothing else — no package.json, no workflows — so
+  // the §2.1 client half has nothing to discover and is out of scope here BY CONSTRUCTION, not
+  // skipped. The path that does score it is ingestFixDiff, against a real client checkout.
+  clientChecksScope: string;
 }
+
+const CLIENT_CHECKS_OUT_OF_SCOPE =
+  "not assessed: a materialized single-file corpus carries no package.json and no workflows, so there are no client verify commands to discover; the §8 gate scores the apply/rails + detector-after halves only";
 
 export function runFixAcceptance(finding: Finding, planted: PlantedClass, opts: { allowlist: string[]; diffCap?: DiffCap }): AcceptanceResult {
   const baseline = materialize({ [planted.file]: planted.original });
@@ -41,8 +49,8 @@ export function runFixAcceptance(finding: Finding, planted: PlantedClass, opts: 
       diffCap: opts.diffCap,
     });
     const after = rerunDetector(finding, fixedRepo.dir);
-    const green = execution.outcome === "diff-verified" && computeGreen({ detectorAfter: after, clientChecks: [] });
-    return { findingId: finding.id, execution, detectorBefore: detectorBefore(finding), detectorAfter: after, green };
+    const green = execution.outcome === "diff-verified" && detectorHalfClean(after);
+    return { findingId: finding.id, execution, detectorBefore: detectorBefore(finding), detectorAfter: after, green, clientChecksScope: CLIENT_CHECKS_OUT_OF_SCOPE };
   } finally {
     disposeCorpus(baseline);
     disposeCorpus(fixedRepo);
