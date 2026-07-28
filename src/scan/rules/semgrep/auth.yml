@@ -78,7 +78,9 @@ rules:
       This 'use server' Server Action mutates data with no authority/permission check
       (assertPermission/requirePermission/requireRole) anywhere in the function. An Origin check
       alone (see harvey-csrf-missing) proves the request is same-site, not that the caller is
-      authorized to perform this specific mutation.
+      authorized to perform this specific mutation. SCOPE OF THIS CHECK: the guard is recognised by
+      NAME, from a fixed list. A real authority check under a different name is not recognised, so
+      this is a prompt to confirm the action is guarded, not proof that it is not.
     patterns:
       - pattern-inside: |
           "use server";
@@ -283,7 +285,11 @@ rules:
       A request-controlled id (req.query/req.params or the App Router { params } arg) is the only
       predicate on this query — no owner/tenant scoping (e.g. .eq('user_id', session.user.id)) in
       the same chain. Any caller who can guess/enumerate another record's id can read or write it
-      (IDOR/BOLA, OWASP API1).
+      (IDOR/BOLA, OWASP API1). SCOPE OF THIS CHECK: the id must arrive by one of the request shapes
+      treated as a source here — req.query / req.params, an App Router params value (awaited or
+      not), a URL searchParams read, or an awaited JSON body. An identifier carried in a cookie or
+      a header is deliberately not a source (an IDOR source is an identifier), and owner scoping
+      applied in a different statement or file is not assessed.
     # #1221 measured this rule blind to BOTH `searchParams.get()` and `await req.json()`, then put
     # it outside its own scope list and outside #1224's split — so it would have fallen through.
     # It does NOT adopt base.yml's canonical block: an IDOR source is an IDENTIFIER, and widening
@@ -625,7 +631,10 @@ rules:
       jwt.verify/verifyToken/requireAuth) but performs no role/permission check before returning
       privileged data — broken function-level authorization (OWASP API5). It correctly rejects
       anonymous callers, but any authenticated lower-privilege user (e.g. a member) reaches it. Add
-      a server-side role/permission gate after authenticating.
+      a server-side role/permission gate after authenticating. SCOPE OF THIS CHECK: it reads only
+      files whose path contains admin/internal/privileged — a privileged handler on any other path
+      is not assessed — and it is a review-tier signal, so a role gate expressed in a form this rule
+      does not recognise reads here as missing.
     patterns:
       - pattern: |
           export async function $M($REQ) {

@@ -508,7 +508,10 @@ rules:
       Access-Control-Allow-Origin is wildcarded with no credentials signal on this response.
       Any site may read it, which is the correct configuration for a deliberately-public
       endpoint — confirm this endpoint is meant to be public. Not counted in the grade: without
-      credentials the response cannot be read as a logged-in user cross-origin.
+      credentials the response cannot be read as a logged-in user cross-origin. SCOPE OF THIS
+      CHECK: it covers the response-header and Next.js config forms. The same bare wildcard
+      configured through the cors() MIDDLEWARE (origin "*" or origin true, no credentials) is
+      deliberately not reported at all, so silence there is a decision and not a clean result.
     patterns:
       - pattern-either:
           - patterns:
@@ -579,7 +582,9 @@ rules:
       A Supabase service-role key is read from import.meta.env.VITE_* — Vite inlines every
       VITE_-prefixed variable into the browser bundle, so this ships full RLS-bypass credentials to
       every visitor. Never expose a service-role key with the VITE_ prefix; move service-role work to
-      a server-side function and keep only the anon/publishable key in the client.
+      a server-side function and keep only the anon/publishable key in the client. SCOPE OF THIS
+      CHECK: it fires on a VITE_-prefixed variable whose NAME reads as a service-role key. A
+      privileged key inlined under a name this rule does not recognise is not assessed.
     patterns:
       - pattern: import.meta.env.$K
       - metavariable-regex:

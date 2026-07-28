@@ -1157,6 +1157,9 @@ rules:
       supabase.auth.admin.* (the service-role-only GoTrue admin API) is called inside a Client
       Component ("use client") on what looks like the service-role client. The privileged admin
       client ships to the browser. Move all auth.admin usage into a server-only route/action.
+      SCOPE OF THIS CHECK: it keys off the client's BINDING NAME (one reading as admin/service),
+      because there is no cross-file taint here — an admin client bound to a name that does not
+      read that way is not assessed.
     patterns:
       - pattern: $C.auth.admin.$M(...)
       - pattern-inside: |
