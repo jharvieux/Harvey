@@ -4,7 +4,7 @@
 // Supabase project. The classification logic itself is pure and unit-tested
 // without a DB connection; this file only gathers the structured input.
 //
-//   SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json] [--tenant-key <column>] [--tenant-mode per-tenant|per-user]
+//   SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json] [--tenant-key <column>] [--tenant-mode per-tenant|per-user] [--findings-out <file>]
 //
 // --tenant-key names the column that scopes a row to its tenant (the declared tenancy model);
 // with it, the live pg_policies bodies are semantically reviewed against that key (#199).
@@ -16,8 +16,16 @@
 // service-role). Without it, every no-policy table is treated as "not queried by
 // client code" (conservative: real client reads would show up as a vestigial-
 // grant flag instead of a broken-read flag — still a flag, just the wrong reason).
+//
+// --findings-out (#1364): writes the bare Finding[] to a file, the same shape `pnpm record-pass
+// --findings <file>` reads. Before this flag the only output was the combined
+// `{ definer, grants, findings }` blob on stdout, so recording the M1 live pass meant capturing
+// stdout and hand-extracting `.findings` before calling record-pass — the "no hand-editing" #448
+// asked for did not hold for this pass. `record-pass --module M1 --pass live --findings <file>
+// --out <artifacts-dir>` is still the write step that produces M1.pass.json; this flag just removes
+// the manual extraction in front of it.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import postgres from "postgres";
 import type { Finding } from "../findings.js";
 import {
@@ -150,7 +158,7 @@ async function main() {
   const dbUrl = process.env.SUPABASE_DB_URL;
   if (!dbUrl) {
     console.error(
-      "usage: SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json] [--tenant-key <column>] [--tenant-mode per-tenant|per-user]",
+      "usage: SUPABASE_DB_URL=postgres://... pnpm detect-deeper [--queried-tables tables.json] [--tenant-key <column>] [--tenant-mode per-tenant|per-user] [--findings-out <file>]",
     );
     process.exit(2);
   }
@@ -167,6 +175,8 @@ async function main() {
     tenantKeyIdx >= 0 || tenantMode === "per-user"
       ? { tenantKey: tenantKeyIdx >= 0 ? args[tenantKeyIdx + 1]! : "", mode: tenantMode }
       : undefined;
+  const findingsOutIdx = args.indexOf("--findings-out");
+  const findingsOutPath = findingsOutIdx >= 0 ? args[findingsOutIdx + 1] : undefined;
 
   const sql = postgres(dbUrl, { max: 1, idle_timeout: 5 }) as unknown as Sql;
   try {
@@ -179,6 +189,10 @@ async function main() {
       `M1 detect-deeper: ${findings.length} flagged, ${okCount} checked & ruled out, ${ambiguousCount} ambiguous (needs manual review)`,
     );
     console.log(JSON.stringify({ definer, grants, findings }, null, 2));
+    if (findingsOutPath) {
+      writeFileSync(findingsOutPath, `${JSON.stringify(findings, null, 2)}\n`);
+      console.error(`${findings.length} finding(s) → ${findingsOutPath} (feed to \`pnpm record-pass --module M1 --pass live --findings ${findingsOutPath}\`)`);
+    }
   } finally {
     await (sql as unknown as { end: () => Promise<void> }).end();
   }

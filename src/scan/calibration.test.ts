@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildCoverageMatrix, CORPUS, mechanicalCorpus, moduleCensus, scoreEntry, type CorpusEntry } from "./calibration.js";
+import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, type CorpusEntry } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
 import { b10DepsEntries } from "./calibration/b10-deps.entries.js";
@@ -814,9 +814,11 @@ describe("moduleCensus (#341 — per-module legibility so a blended count can't 
     const census = moduleCensus(CORPUS);
     const byModule = new Map(census.map((c) => [c.module, c]));
 
-    // Every module the corpus tags must appear as its own row.
+    // #1314: the census is exhaustive over the ten modules, not over what the corpus happens to
+    // tag. A module with zero entries must still emit a row — an absent row cannot be flagged.
+    expect(census.map((c) => c.module)).toEqual([...AUDIT_MODULES]);
     const modulesInCorpus = new Set(CORPUS.map((e) => e.module ?? "M1"));
-    expect(new Set(census.map((c) => c.module))).toEqual(modulesInCorpus);
+    for (const m of modulesInCorpus) expect(AUDIT_MODULES).toContain(m);
 
     // The census must equal a direct recount — a thin module reads as thin, not blended into M1.
     for (const m of modulesInCorpus) {
@@ -831,6 +833,97 @@ describe("moduleCensus (#341 — per-module legibility so a blended count can't 
     expect(census[0]?.module).toBe("M1");
     const nums = census.map((c) => Number(c.module.replace(/^M/, "")));
     expect(nums).toEqual([...nums].sort((a, b) => a - b));
+  });
+});
+
+describe("#1314 parity minimum over ALL ten modules (the two with zero fixtures were the two it could not flag)", () => {
+  it("a module with zero entries renders as a row reading 0 and trips the minimum", () => {
+    const census = moduleCensus([]);
+    expect(census.map((c) => c.module)).toEqual([...AUDIT_MODULES]);
+    expect(census.every((c) => c.positivesStatic === 0 && c.positivesConnected === 0 && c.negatives === 0)).toBe(true);
+    const { thin, exempt } = parityVerdict([]);
+    expect([...thin.map((t) => t.module), ...exempt.map((e) => e.module)].sort()).toEqual([...AUDIT_MODULES].sort());
+  });
+
+  it("NEGATIVE CONTROL — deleting a module's entries makes the gate fail on that module", () => {
+    const victim = "M9";
+    expect(parityVerdict(CORPUS).thin.map((t) => t.module)).not.toContain(victim);
+    const without = CORPUS.filter((e) => (e.module ?? "M1") !== victim);
+    const thin = parityVerdict(without).thin;
+    expect(thin.map((t) => t.module)).toContain(victim);
+    expect(thin.find((t) => t.module === victim)?.missing).toBe(`0/${MIN_POSITIVES_PER_MODULE} positives and 0/${MIN_NEGATIVES_PER_MODULE} negatives`);
+  });
+
+  it("enforces the boundary-negative half, not only positives (#427's comment claimed it; nothing checked it)", () => {
+    const positivesOnly = CORPUS.filter((e) => (e.module ?? "M1") !== "M8" || e.kind === "positive");
+    const row = parityVerdict(positivesOnly).thin.find((t) => t.module === "M8");
+    expect(row?.missing).toBe(`0/${MIN_NEGATIVES_PER_MODULE} negatives`);
+  });
+
+  it("M2 and M6 stand on a NAMED substitute gate, and an exemption a module no longer needs fails loud", () => {
+    const { thin, exempt, stale } = parityVerdict(CORPUS);
+    expect(thin).toEqual([]);
+    expect(stale).toEqual([]);
+    expect(exempt.map((e) => e.module)).toEqual(["M2", "M6"]);
+    for (const e of exempt) expect(e.reason).toMatch(/pnpm |#\d+/);
+    // A module that grows real fixtures must lose its exemption rather than keep hiding behind it.
+    const withM2Fixtures: CorpusEntry[] = [
+      ...CORPUS,
+      entry({ id: "P-M2-A", kind: "positive", cls: "c", module: "M2", location: "a", note: "" }),
+      entry({ id: "P-M2-B", kind: "positive", cls: "c", module: "M2", location: "b", note: "" }),
+      entry({ id: "N-M2-A", kind: "negative", cls: "c", module: "M2", location: "c", note: "" }),
+    ];
+    expect(parityVerdict(withM2Fixtures).stale).toEqual(["M2"]);
+  });
+});
+
+describe("#1355 self-matching `match` keys (a keyword that is a substring of its own fixture path)", () => {
+  it("no corpus entry carries a key that is a substring of its own location", () => {
+    const rows = selfMatchingMatchKeys(CORPUS);
+    expect(formatSelfMatchingKeys(rows)).toBe("");
+    expect(rows).toEqual([]);
+    // Canary: an empty corpus, or one that stopped using `match` at all, would pass vacuously.
+    expect(CORPUS.filter((e) => e.match?.length).length).toBeGreaterThan(400);
+  });
+
+  it("NEGATIVE CONTROL — the check reports a planted self-matching key, in both the raw and the id-hyphenated shape", () => {
+    const planted: CorpusEntry[] = [
+      entry({ id: "P-CONTROL-RAW", kind: "positive", cls: "c", location: "src/owasp-mt/client-supplied-tenant.ts", match: ["tenant"], note: "" }),
+      entry({ id: "P-CONTROL-HYPHEN", kind: "positive", cls: "c", location: "20260727000002_using_true_pii.sql", match: ["using-true-pii"], note: "" }),
+      entry({ id: "N-CONTROL", kind: "negative", cls: "c", location: "sqli-parseint-safe.js", match: ["sql"], note: "" }),
+      entry({ id: "P-CONTROL-CLEAN", kind: "positive", cls: "c", location: "sqli-denylist-guard.js", match: ["sql-injection"], note: "" }),
+    ];
+    const rows = selfMatchingMatchKeys(planted);
+    expect(rows.map((r) => r.id)).toEqual(["P-CONTROL-RAW", "P-CONTROL-HYPHEN", "N-CONTROL"]);
+    expect(formatSelfMatchingKeys(rows)).toContain("Re-scope the key");
+    expect(formatSelfMatchingKeys(rows)).toContain("Delete the `match` list");
+  });
+
+  // The behavioural half, and the reason the string check matters: #1355's stated proof that a
+  // positive's key really discriminates is that the row still FAILS when the finding it exists to
+  // score is withheld. Planting a finding that carries NO corpus vocabulary at the entry's own
+  // location is that test for every positive at once — only a key drawn from the location itself
+  // can accept it.
+  const unrelated = (location: string): Finding =>
+    finding({
+      location: `${location}:1`,
+      id: "CONTROL-1355",
+      title: "Unrelated control finding",
+      taxonomy: "harvey-control-1355",
+      evidence: "synthetic — #1355 masking control, never a real finding",
+      precisionTier: "high",
+    });
+
+  it("every positive with a `match` list rejects an unrelated finding planted at its own location", () => {
+    const masked = CORPUS.filter((e) => e.kind === "positive" && e.match?.length && scoreEntry(e, [unrelated(e.location)]).caughtTier !== undefined);
+    expect(masked.map((e) => e.id)).toEqual([]);
+  });
+
+  it("NEGATIVE CONTROL — a self-matching positive DOES accept that unrelated finding, which is the masking this check exists to stop", () => {
+    const vacuous = entry({ id: "P-CONTROL", kind: "positive", cls: "c", location: "src/owasp-mt/client-supplied-tenant.ts", match: ["tenant"], expectedTier: "high", note: "" });
+    expect(scoreEntry(vacuous, [unrelated(vacuous.location)]).pass).toBe(true);
+    const scoped = { ...vacuous, match: ["scopes on `tenantId`"] };
+    expect(scoreEntry(scoped, [unrelated(scoped.location)]).pass).toBe(false);
   });
 });
 

@@ -1,3 +1,6 @@
+import { buildPassArtifact, type PassArtifact } from "./audit-pass-artifact.js";
+import type { Finding } from "./findings.js";
+
 // M6 two-reviewer agreement (#813) — the mechanical half of the M6 verdict protocol.
 //
 // M6's paid verdict is a judgment with no detector and, until #813, no defense against
@@ -134,4 +137,54 @@ export function renderAgreementReport(report: AgreementReport): string {
   }
   lines.push("", "This is a rubric-agreement figure for this pair of passes — never quote it as M6 precision (docs/design/m6-simplification-eval.md §3).");
   return lines.join("\n");
+}
+
+// #1364: turns the UNANIMOUS-flag rows into report-schema findings for the M6 pass artifact
+// (src/cli/m6-agreement.ts --artifacts-dir). Only `bothFlag` qualifies: a split has NOT been
+// through the human adjudicator this protocol requires (renderAgreementReport's own "a split never
+// goes straight into a report"), and a spare is not a finding — so neither is ever promoted here.
+// Confidence is deliberately the WEAKER of the two reviewers' stated confidence (both "high" ⇒
+// Confirmed; anything else, including a reviewer who left it unstated, ⇒ Review) — one confident
+// reviewer cannot make a finding Confirmed on the other's behalf.
+export function toM6Findings(a: ReviewerPass, b: ReviewerPass, report: AgreementReport): Finding[] {
+  const byFileA = new Map(a.verdicts.map((v) => [v.file, v]));
+  const byFileB = new Map(b.verdicts.map((v) => [v.file, v]));
+  return report.bothFlag.map((file, i): Finding => {
+    const va = byFileA.get(file)!;
+    const vb = byFileB.get(file)!;
+    const bothHighConfidence = va.confidence === "high" && vb.confidence === "high";
+    const replacement = va.replacement ?? vb.replacement;
+    const reasons = [va.reason, vb.reason].filter((r): r is string => !!r);
+    return {
+      id: `M6VER-${String(i + 1).padStart(2, "0")}`,
+      title: `Hand-rolled reinvention: ${file}`,
+      severity: "Info", // M6 findings are maintainability, not security — never graded (#267)
+      confidence: bothHighConfidence ? "Confirmed" : "Review",
+      category: "Maintainability",
+      taxonomy: "M6 — Verdict: hand-rolled reinvention",
+      location: file,
+      status: "Open",
+      evidence: reasons.length ? reasons.join(" / ") : `both reviewers (${a.reviewer}, ${b.reviewer}) independently flagged this file as a reinvention`,
+      impact: "Maintenance and correctness risk from a hand-rolled reimplementation of behavior a maintained library already covers.",
+      fix: replacement ? `Replace with ${replacement}.` : "Name a replacement — neither reviewer's verdict block recorded one.",
+      value: 2,
+      ease: 3,
+      safety: 4,
+    };
+  });
+}
+
+// The M6 pass artifact src/cli/m6-agreement.ts writes with --artifacts-dir — the write side of the
+// #416 read (findFreshPass reads M6.pass.json, mirroring the manual `record-pass --pass verdict`
+// path #283's first real-target verdict used, docs/design/m6-first-real-target-verdict.md).
+export function buildM6PassArtifact(a: ReviewerPass, b: ReviewerPass, report: AgreementReport, target: string, generatedAt: string): PassArtifact {
+  const findings = toM6Findings(a, b, report);
+  return buildPassArtifact({
+    module: "M6",
+    target,
+    pass: "verdict",
+    generatedAt,
+    summary: `${a.reviewer} vs ${b.reviewer}: ${report.agreed}/${report.compared} agreed, ${findings.length} unanimous flag(s), ${report.splits.length} split(s) pending adjudication`,
+    findings,
+  });
 }
