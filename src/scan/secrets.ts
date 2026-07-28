@@ -24,9 +24,10 @@
 // the sweep's actual scope (verified-only, working-tree pattern pass) on every run.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { statSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 import { relativizeScanScope } from "./scan-scope.js";
@@ -380,9 +381,9 @@ export function isGitRepoRoot(dir: string): boolean {
     // realpath strings differing only in case then compare unequal and false-negative a valid repo
     // root — silently skipping the git-history secret scan on a full checkout. dev+ino identity is
     // case-insensitive and symlink-safe: the same file has one (dev, ino) regardless of path case.
-    const a = statSync(top);
-    const b = statSync(dir);
-    return a.dev === b.dev && a.ino === b.ino;
+    const a = statSafe(top);
+    const b = statSafe(dir);
+    return a !== undefined && b !== undefined && a.dev === b.dev && a.ino === b.ino;
   } catch {
     return false;
   }

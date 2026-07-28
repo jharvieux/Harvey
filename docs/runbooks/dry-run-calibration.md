@@ -590,18 +590,30 @@ new migration and `src/cli/dry-run.ts` re-run. It emitted
 `supabase/migrations/20260728000001_connected_postgrest_realtime.sql:65`. The file is read. The
 probe was then removed.
 
-### 11.5 Two blockers this pass found and did not fix
+### 11.5 Two blockers this pass found — both FIXED 2026-07-28
 
-- **`supabase start` on `targets/calibration` does not complete.** It aborts applying
-  `20260719000002_plpgsql_injection_definer.sql` with `ERROR: type "public.nocode_tickets" does not
-  exist (SQLSTATE 42704)` — that table is referenced by four functions in that migration and is
-  created by no migration in the target. Every migration from that point on, including the #1182
-  storage-bucket fixtures and the new one above, has therefore **never been applied to a live
-  stack**. This is why §11.3 was measured on a bare stack rather than on the calibration target, and
-  it is what currently blocks a scored live run of the whole connected/M7 advisor corpus (§9's
-  successor). Pre-existing, unrelated to #1299, filed as **#1424**.
-- **A migration that DISABLES row-level security is invisible to the static tier.** The same probe
-  run in §11.4 also appended `alter table public.notes disable row level security;` and it produced
-  **nothing**: `src/scan/supabase-static.ts` carries no `disable row level security` pattern at all,
-  and `checkMigrationRlsStatic` aggregates `enable row level security` across every migration — so a
-  table that one migration protects and a later one un-protects still scores clean. Filed as **#1425**.
+- **`supabase start` on `targets/calibration` completes — fixed 2026-07-28 (#1424).** It used to
+  abort applying `20260719000002_plpgsql_injection_definer.sql` with `ERROR: type
+  "public.nocode_tickets" does not exist (SQLSTATE 42704)`: that table is created only by the
+  target's root `schema.sql` (the #565 no-code-export fixture) and by no migration, so every
+  migration from that point on — including the #1182 storage-bucket fixtures and the one added in
+  §11.4 — had never been applied to a live stack. That migration's four functions now read
+  `public.support_tickets`, a table the target really creates in
+  `20260709000004_b8_connected_advisors.sql`. MEASURED 2026-07-28: `supabase start -x
+  vector,logflare` exits 0 and `supabase_migrations.schema_migrations` lists all 24 migrations. The
+  connected/M7 advisor corpus (§9's successor) is no longer blocked, and §11.3's measurements can be
+  retaken on the calibration target instead of a bare stack. Note the fix was NOT a copy of the
+  `schema.sql` DDL into a migration: `checkMigrationRlsStatic` attributes a table to the FIRST
+  source that creates it and reads migrations before the root `schema.sql`, so that copy was
+  measured to move `SB-RLS-STATIC-nocode_tickets` off `schema.sql:9` and fail
+  `P-RLS-MISSING-ROOT-SCHEMA`.
+- **A migration that DISABLES row-level security is now visible to the static tier — fixed
+  2026-07-28 (#1425).** The probe run in §11.4 also appended `alter table public.notes disable row
+  level security;` and it produced **nothing**: `src/scan/supabase-static.ts` carried no `disable
+  row level security` pattern at all, and `checkMigrationRlsStatic` aggregated `enable row level
+  security` across every migration, so a table that one migration protects and a later one
+  un-protects scored clean. `checkMigrationRlsStatic` now resolves row-security state in apply order
+  across the whole file set and emits `SB-RLS-DISABLED-STATIC-<table>` at high tier (Critical) for
+  the table whose LAST statement is a disable. Plants are B25 in
+  `targets/calibration/GROUND-TRUTH.md`; the gate is proven to fail in both directions (gutting the
+  tracking fails the positive, flagging every disable fails the benign twin).

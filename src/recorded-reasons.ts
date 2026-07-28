@@ -21,8 +21,9 @@
 // this for one narrow slice — external-corpus not-run baselines, re-tested by the drift run's own
 // re-attempt rather than by a stored command. Same doctrine, repo-wide, with the command written down.
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { readEntriesSafe, statSafe } from "./fs-walk.js";
 
 type ReasonKind = "empirical" | "decisional";
 
@@ -136,14 +137,14 @@ const SCANNED = /\.(ts|md|txt|yml|sql)$/;
 const SKIP_DIR = new Set(["node_modules", ".git", "dist", "coverage", "targets"]);
 
 function walk(abs: string, out: string[]): void {
-  const stat = statSync(abs, { throwIfNoEntry: false });
+  const stat = statSafe(abs);
   if (!stat) return;
   if (stat.isFile()) {
     if (SCANNED.test(abs)) out.push(abs);
     return;
   }
-  for (const entry of readdirSync(abs, { withFileTypes: true })) {
-    if (entry.isDirectory() && SKIP_DIR.has(entry.name)) continue;
+  for (const entry of readEntriesSafe(abs).entries) {
+    if (entry.isDirectory && SKIP_DIR.has(entry.name)) continue;
     walk(join(abs, entry.name), out);
   }
 }

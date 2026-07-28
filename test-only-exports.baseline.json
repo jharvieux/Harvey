@@ -1,9 +1,6 @@
 {
   "files": [
     "src/fix/acceptance.ts",
-    "src/fix/escalation.ts",
-    "src/fix/materialize-calibration.ts",
-    "src/fix/verify-harness.ts",
     "src/pentest/calibration-fixture.ts"
   ],
   "exports": [
@@ -12,10 +9,7 @@
     "src/dynamic-validate.ts:runDynamicValidation",
     "src/epic-builder/state-machine.ts:canTransition",
     "src/fix/detector-rerun.ts:resolvesToDetector",
-    "src/fix/schedule.ts:detectLateConflict",
-    "src/fix/schedule.ts:runScheduled",
-    "src/fix/verify.ts:discoverVerifyCommands",
-    "src/fix/verify.ts:runCommand",
+    "src/fix/escalation.ts:plansDisagree",
     "src/migration-sql-parse.ts:parseCheckInConstraints",
     "src/migration-sql-parse.ts:parseColumns",
     "src/pentest/active-exploit.ts:ACTIVE_EXPLOIT_PROBE_IDS",

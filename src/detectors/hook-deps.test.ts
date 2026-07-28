@@ -2,8 +2,9 @@
 // planted missing-dep and stay silent on the corrected version — same fixture discipline as
 // the other M7C classes.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { Linter } from "eslint";
 import { describe, expect, it, vi } from "vitest";
@@ -16,9 +17,8 @@ function loadFixtureDir(relDir: string): SourceInput[] {
   const root = join(FIXTURES_ROOT, relDir);
   const files: SourceInput[] = [];
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) walk(full);
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      if (isDirectory) walk(full);
       else if (entry.endsWith(".txt")) {
         files.push({ path: relative(root, full).replace(/\.txt$/, "").split(sep).join("/"), text: readFileSync(full, "utf8") });
       }

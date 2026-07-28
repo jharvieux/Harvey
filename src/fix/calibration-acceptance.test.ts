@@ -15,9 +15,16 @@
 //     async), which had no detector at all until #1021 added src/scan/rules/semgrep/silent-failure.yml
 //     and the §B21 corpus fixtures they score against.
 //   • What is STILL disclosed rather than scored: a semgrep REGISTRY-pack rule (needs a network
-//     fetch to replay). The diff-GENERATING implementer is still absent — every fixed source below
-//     is a hand-authored mechanical edit, not one the pipeline produced (tracked separately).
+//     fetch to replay).
 //   • Clause 2: an out-of-scope planted bug downgraded to recommend-only through intake/screening.
+//
+// #1277 corrects what this header used to say. It read "the diff-GENERATING implementer is still
+// absent … (tracked separately)", naming no issue, against a closed parent. That has not been true
+// since #1056: the 2026-07-26 operator ruling replaced an SDK-driven implementer with the INTERACTIVE
+// one (emitFixPrompt → the operator's own session → ingestFixDiff), and the loop below drives a
+// planted calibration class through it end to end. The fixed sources in the runFixAcceptance tests
+// are still hand-authored mechanical edits — that part was accurate and is unchanged — but they are
+// no longer the only path, and "the implementer is absent" is not a description of this repo.
 //
 // Companion record: docs/design/fix-calibration-acceptance.md.
 
@@ -28,8 +35,10 @@ import type { Finding, FindingsDocument, ReportMeta } from "../findings.js";
 import { runFixAcceptance } from "./acceptance.js";
 import { rerunDetector, resolvesToDetector } from "./detector-rerun.js";
 import { executeFixDiff } from "./execute.js";
-import { CALIBRATION_ROOT, disposeCorpus, materialize, readCalibration, type MaterializedCorpus } from "./materialize-calibration.js";
+import { CALIBRATION_ROOT, capturePatch, disposeCorpus, materialize, readCalibration, type MaterializedCorpus } from "./materialize-calibration.js";
+import { emitFixPrompt, ingestFixDiff } from "./interactive.js";
 import { intake, type EngagementManifest } from "./pipeline.js";
+import type { FixPlan } from "./plan.js";
 
 const created: MaterializedCorpus[] = [];
 afterEach(() => {
@@ -366,5 +375,73 @@ describe("fix §8 acceptance — rails + in-place refusal (unchanged from #885/#
     });
     expect(result.outcome).toBe("rails-blocked");
     expect(result.railViolations.join(" ")).toContain("cap is 2");
+  });
+});
+
+// #1277: the §8 clause the pipeline had never actually been driven through. runFixAcceptance scores a
+// planted class from a fixed source the TEST supplies; that proves the gate, not the loop. This drives
+// the same planted class through the real operator loop instead — emitFixPrompt produces the spec, a
+// diff is authored against that spec's own acceptance criterion, and ingestFixDiff scores it — and
+// pins BOTH directions, because a gate nobody has watched refuse reads exactly like a gate with no
+// refusal path at all. The corpus carries a real package.json so the §2.1 client half runs too (#1272);
+// npm rather than pnpm because a materialized corpus has no lockfile.
+describe("fix §8 acceptance — a planted class through the full emit → diff → ingest loop (#1277)", () => {
+  const clientRepo = (src: string) => ({
+    [M5_FILE]: src,
+    "package.json": `${JSON.stringify({ name: "cal-client", private: true, scripts: { test: "node client-test.js" } }, null, 2)}\n`,
+    "client-test.js": "console.log('client suite ok');\n",
+  });
+  const plan: FixPlan = {
+    findingId: "CAL-UNUSED-PARAM", severity: "Low", category: "Maintainability", mode: "auto",
+    detectorId: "M5 — Unused parameter", approach: "Drop the unread `request` parameter from GET.",
+    blastRadius: { files: [M5_FILE], createdFiles: [], symbols: [], callers: [], behaviorPreserving: true, estimatedChangedLines: 1 },
+    verifyCommands: [], testPlan: "", tier: "cheap", risks: [],
+  };
+
+  it("reaches GREEN: the emitted spec names the detector to silence, and the diff written to it clears both halves", () => {
+    const src = readCalibration(M5_FILE);
+    const c = track(materialize(clientRepo(src)));
+
+    // 1. EMIT — the spec the operator pastes into their own session.
+    const prompt = emitFixPrompt({ finding: m5Finding(), plan, baselineCommit: c.commit, allowlist: ["app/**"], sources: [{ path: M5_FILE, text: src }] });
+    expect(prompt).toContain("M5 — Unused parameter"); // the acceptance criterion the ingest re-checks
+    expect(prompt).toContain(c.commit); // pinned to the same baseline the ingest executes against
+
+    // 2. DIFF — authored against that criterion (here, mechanically: drop the unread parameter).
+    const diff = capturePatch(c, M5_FILE, m5Fixed(src));
+
+    // 3. INGEST — the pipeline's own gate, nothing hand-scored.
+    const ingest = ingestFixDiff({
+      finding: m5Finding(), diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: "npm",
+    });
+    expect(ingest.execution.outcome).toBe("diff-verified");
+    expect(ingest.execution.railViolations).toEqual([]); // §8 clause 3
+    expect(ingest.evidence.detectorAfter.notRun).toBeUndefined();
+    expect(ingest.evidence.detectorAfter.fired).toBe(false);
+    expect(ingest.evidence.clientChecks.map((x) => x.exitCode)).toEqual([0]); // the client half really ran
+    expect(ingest.green).toBe(true);
+    expect(ingest.rejected).toBe(false);
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("and REFUSES the same class on a cosmetic diff — the loop's green is earned, not structural", () => {
+    const src = readCalibration(M5_FILE);
+    const c = track(materialize(clientRepo(src)));
+    const noop = src.replace("export async function GET(request: Request) {", "export async function GET(request: Request) { // touched");
+    const ingest = ingestFixDiff({
+      finding: m5Finding(), diff: capturePatch(c, M5_FILE, noop), targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: "npm",
+    });
+    expect(ingest.execution.outcome).toBe("diff-verified"); // it applied
+    expect(ingest.evidence.detectorAfter.fired).toBe(true);
+    expect(ingest.green).toBe(false);
+    expect(ingest.rejectReason).toContain("still fires");
+  }, SEMGREP_TIMEOUT_MS);
+
+  it("runFixAcceptance reaches GREEN on the same planted class, and says what it did NOT score", () => {
+    const src = readCalibration(M5_FILE);
+    const r = runFixAcceptance(m5Finding(), { file: M5_FILE, original: src, fixed: m5Fixed(src) }, { allowlist: ["app/**"] });
+    expect(r.green).toBe(true);
+    // #1272: this gate scores the detector half only, and now SAYS so instead of passing an empty
+    // clientChecks array into computeGreen and collecting a vacuous pass for the client half.
+    expect(r.clientChecksScope).toContain("not assessed");
   });
 });

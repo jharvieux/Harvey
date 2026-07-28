@@ -21,8 +21,9 @@
 // is invisible here — this is a backstop for the contract-before-switchover ordering mistake, not a
 // substitute for grepping every reader before shipping the drop.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { isDirectorySafe, readEntriesSafe } from "../fs-walk.js";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { loc, parse, type SourceInput } from "../detectors/common.js";
@@ -56,10 +57,9 @@ function readMigrations(dir: string): { file: string; sql: string }[] {
   const out: { file: string; sql: string }[] = [];
   for (const rel of [join("supabase", "migrations"), join("prisma", "migrations"), "migrations"]) {
     const base = join(dir, rel);
-    if (!existsSync(base) || !statSync(base).isDirectory()) continue;
-    for (const entry of readdirSync(base).sort()) {
-      const full = join(base, entry);
-      if (statSync(full).isDirectory()) {
+    if (!isDirectorySafe(base)) continue;
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(base).entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (isDirectory) {
         // prisma/migrations/<name>/migration.sql
         const nested = join(full, "migration.sql");
         if (existsSync(nested)) out.push({ file: relative(dir, nested), sql: readFileSync(nested, "utf8") });
