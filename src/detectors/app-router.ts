@@ -1973,7 +1973,7 @@ function detectUncappedRetryFanOut(sources: Map<string, ts.SourceFile>, nextId: 
               category: "Performance",
               taxonomy: "M9 — Uncapped retry/fan-out",
               location: loc(path, sf, node),
-              evidence: `\`${node.getText(sf).slice(0, 80).replace(/\s+/g, " ")}\` issues one outbound call per element of \`${fanOut.collection}\`, which comes from the incoming request, with no \`.slice(…)\` bound and no length check before the map.`,
+              evidence: `\`${node.getText(sf).slice(0, 80).replace(/\s+/g, " ")}\` issues one outbound call per element of \`${fanOut.collection}\`, which comes from the incoming request, with no \`.slice(…)\`/\`.splice(…)\` bound on the mapped expression. Scope of this check: it reads the mapped expression only, so a length check or early return elsewhere in the handler would also bound the fan-out and this rule cannot see one.`,
               impact: "The caller chooses how many outbound calls one request makes: a large array multiplies compute, connections and third-party spend per request, and is a ready-made amplification vector against both this service and whatever it calls.",
               fix: "Validate the collection's length against a maximum before the map (rejecting oversized input), and/or bound concurrency with a limiter and chunk the work.",
               value: 4,
