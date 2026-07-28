@@ -110,6 +110,72 @@ describe("checkMigrationRlsStatic", () => {
     writeFileSync(join(dir, "schema.sql"), "create table public.nocode_tickets (id uuid primary key);");
     expect(checkMigrationRlsStatic(dir)).toEqual([]);
   });
+
+  // #1425 — protect, then UN-protect. Aggregating only `enable` cleared the table permanently.
+  describe("disable row level security (#1425)", () => {
+    it("flags a table whose RLS is turned off by a LATER migration", () => {
+      const dir = writeMigrations({
+        "0001_schema.sql": "create table public.invoices (id uuid primary key);",
+        "0002_rls.sql": "alter table public.invoices enable row level security;",
+        "0047_hotfix.sql": "alter table public.invoices disable row level security;",
+      });
+      const findings = checkMigrationRlsStatic(dir);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.id).toBe("SB-RLS-DISABLED-STATIC-invoices");
+      expect(findings[0]!.precisionTier).toBe("high");
+      expect(findings[0]!.severity).toBe("Critical");
+      // The disable is the defect, so that is what the report points at — not the create site.
+      expect(findings[0]!.location).toContain("0047_hotfix.sql");
+    });
+
+    it("clears a table disabled and then re-enabled by a later migration", () => {
+      const dir = writeMigrations({
+        "0001_schema.sql": "create table public.invoices (id uuid primary key);",
+        "0002_rls.sql": "alter table public.invoices enable row level security;",
+        "0047_backfill.sql": "alter table public.invoices disable row level security;",
+        "0048_revert.sql": "alter table public.invoices enable row level security;",
+      });
+      expect(checkMigrationRlsStatic(dir)).toEqual([]);
+    });
+
+    it("resolves order WITHIN one file, not just across files", () => {
+      const dir = writeMigrations({
+        "0001_schema.sql": [
+          "create table public.invoices (id uuid primary key);",
+          "alter table public.invoices enable row level security;",
+          "alter table public.invoices disable row level security;",
+          "alter table public.invoices enable row level security;",
+        ].join("\n"),
+      });
+      expect(checkMigrationRlsStatic(dir)).toEqual([]);
+    });
+
+    it("reports a disabled table ONCE — not also as never-enabled", () => {
+      const dir = writeMigrations({
+        "0001_schema.sql": "create table public.invoices (id uuid primary key);",
+        "0047_hotfix.sql": "alter table public.invoices disable row level security;",
+      });
+      const findings = checkMigrationRlsStatic(dir);
+      expect(findings.map((f) => f.id)).toEqual(["SB-RLS-DISABLED-STATIC-invoices"]);
+    });
+
+    it("ignores a disable on a non-public schema (not PostgREST-exposed)", () => {
+      const dir = writeMigrations({
+        "0001_schema.sql": "create table private.internal_audit (id uuid primary key);",
+        "0047_hotfix.sql": "alter table private.internal_audit disable row level security;",
+      });
+      expect(checkMigrationRlsStatic(dir)).toEqual([]);
+    });
+
+    it("does not treat a commented-out disable as a real one", () => {
+      const dir = writeMigrations({
+        "0001_schema.sql": "create table public.invoices (id uuid primary key);",
+        "0002_rls.sql": "alter table public.invoices enable row level security;",
+        "0047_hotfix.sql": "-- alter table public.invoices disable row level security;",
+      });
+      expect(checkMigrationRlsStatic(dir)).toEqual([]);
+    });
+  });
 });
 
 describe("checkEdgeFunctionVerifyJwt", () => {
@@ -844,6 +910,20 @@ describe("checkMigrationRlsBypass (#1190 — from the OWASP Multi-Tenant cheat s
     expect(f).toHaveLength(1);
     expect(f[0]!.precisionTier).toBe("review");
     expect(f[0]!.evidence).toContain("a, b, c");
+  });
+
+  // #1425 — "enabled but never FORCEd" is the wrong thing to say about a table whose row security
+  // is off; checkMigrationRlsStatic already reports it as exposed outright.
+  it("drops a table whose RLS is finally DISABLED from the missing-FORCE rollup", () => {
+    const dir = writeMigrations({
+      "0001.sql": enabledWithPolicy("a") + enabledWithPolicy("b"),
+      "0047_hotfix.sql": "alter table public.b disable row level security;",
+    });
+    const f = checkMigrationRlsBypass(dir).filter((x) => x.id === "SB-RLS-NOFORCE-ROLLUP");
+    expect(f).toHaveLength(1);
+    expect(f[0]!.evidence).toContain("1 table(s)");
+    // The trailing name list, anchored — a bare `not.toContain("b")` would match "but"/"table".
+    expect(f[0]!.evidence).toContain("in any migration: a.");
   });
 
   it("clears a table that enables, polices AND forces row level security", () => {

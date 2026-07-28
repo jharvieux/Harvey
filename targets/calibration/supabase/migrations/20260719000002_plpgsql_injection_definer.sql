@@ -2,6 +2,21 @@
 -- semantic tier had to catch: plpgsql dynamic-SQL injection (EXECUTE with `||` concat of a parameter)
 -- and SECURITY DEFINER data-dumping functions explicitly granted to the anon (unauthenticated) role.
 
+-- #1424 — every function below used to read `public.nocode_tickets`, which is created ONLY in the
+-- root schema.sql (the #565 no-code-export fixture) and by NO migration. `supabase start` therefore
+-- aborted here with `type "public.nocode_tickets" does not exist`, and the eight migrations after
+-- this one had never reached a live stack. They now read public.support_tickets, a real table this
+-- target already creates in 20260709000004_b8_connected_advisors.sql (RLS on, tenant-scoped) —
+-- which also sharpens the P-DEFINER-ANON-DUMP plant below, since `setof public.support_tickets`
+-- now returns customer_ssn and tenant_id to an anonymous caller.
+--
+-- NOT fixed by copying the schema.sql DDL into a migration, which is the obvious move:
+-- checkMigrationRlsStatic attributes a table to the FIRST source that creates it and reads
+-- migrations before the root schema.sql, so MEASURED 2026-07-28 that copy moved
+-- SB-RLS-STATIC-nocode_tickets from schema.sql:9 onto this file and failed the corpus row that
+-- exists to prove the root-schema pass runs at all (P-RLS-MISSING-ROOT-SCHEMA, "NOT caught by any
+-- rule"). nocode_tickets stays exclusive to schema.sql.
+
 -- PLANTED BUG (P-PLPGSQL-SQLI-CONCAT, #602 CX-12): search_tickets_unsafe builds its dynamic query by
 -- CONCATENATING the p_query parameter into the EXECUTE string — classic CWE-89. It is SECURITY DEFINER,
 -- so the injected query runs as the owner, bypassing RLS. checkMigrationDynamicSqlInjection → review.
@@ -12,7 +27,7 @@ security definer
 as $$
 begin
   return query execute
-    'select id, subject from public.nocode_tickets where subject ilike ' || p_query;
+    'select id, subject from public.support_tickets where subject ilike ' || p_query;
 end;
 $$;
 
@@ -26,7 +41,7 @@ security definer
 as $$
 begin
   return query execute
-    'select id, subject from public.nocode_tickets where subject ilike $1'
+    'select id, subject from public.support_tickets where subject ilike $1'
     using '%' || p_query || '%';
 end;
 $$;
@@ -40,7 +55,7 @@ security definer
 as $$
 begin
   return query execute
-    'select id, subject from public.nocode_tickets where subject = ' || quote_literal(p_query);
+    'select id, subject from public.support_tickets where subject = ' || quote_literal(p_query);
 end;
 $$;
 
@@ -49,12 +64,12 @@ $$;
 -- dump any user row. checkMigrationDefinerAuthz only flags privileged WRITES, so this data-dumping
 -- reader fell through; checkMigrationDefinerAnonGrant surfaces the explicit-anon-grant signal → review.
 create or replace function public.get_user_by_email(p_email text)
-returns setof public.nocode_tickets
+returns setof public.support_tickets
 language plpgsql
 security definer
 as $$
 begin
-  return query select * from public.nocode_tickets where requester_email = p_email;
+  return query select * from public.support_tickets where requester_email = p_email;
 end;
 $$;
 grant execute on function public.get_user_by_email(text) to anon;
@@ -63,12 +78,12 @@ grant execute on function public.get_user_by_email(text) to anon;
 -- its caller (auth.uid()) before returning rows — legitimately anon-callable and self-scoping, so it
 -- is cleared. Proves the anon-grant rule keys on the MISSING caller check, not on the anon grant alone.
 create or replace function public.get_my_tickets()
-returns setof public.nocode_tickets
+returns setof public.support_tickets
 language plpgsql
 security definer
 as $$
 begin
-  return query select * from public.nocode_tickets where requester_email = auth.jwt() ->> 'email' and auth.uid() is not null;
+  return query select * from public.support_tickets where requester_email = auth.jwt() ->> 'email' and auth.uid() is not null;
 end;
 $$;
 grant execute on function public.get_my_tickets() to anon;
@@ -77,12 +92,12 @@ grant execute on function public.get_my_tickets() to anon;
 -- (not anon/public). A user-facing RPC granted to signed-in users is normal, so the anon-grant rule
 -- must stay silent — it is scoped to anon/public.
 create or replace function public.list_my_org_tickets()
-returns setof public.nocode_tickets
+returns setof public.support_tickets
 language plpgsql
 security definer
 as $$
 begin
-  return query select * from public.nocode_tickets;
+  return query select * from public.support_tickets;
 end;
 $$;
 grant execute on function public.list_my_org_tickets() to authenticated;

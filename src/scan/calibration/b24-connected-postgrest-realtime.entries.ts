@@ -34,12 +34,12 @@
 // supabase/migrations/20260728000001_connected_postgrest_realtime.sql:65 — the file is read. The
 // probe was then removed. MEASURED 2026-07-28.
 //
-// A GAP THE SAME PROBE FOUND, tracked separately: the second probe line,
-// `alter table public.notes disable row level security`, produced NOTHING. `src/scan/
-// supabase-static.ts` has no `disable row level security` pattern at all, and
-// checkMigrationRlsStatic aggregates ENABLE across every migration — so a migration that revokes
-// RLS from a table an earlier migration protected is invisible statically AND still scores that
-// table clean. Not this batch's class; filed as #1425.
+// A GAP THE SAME PROBE FOUND, filed as #1425 and CLOSED 2026-07-28: the second probe line,
+// `alter table public.notes disable row level security`, produced NOTHING, because
+// src/scan/supabase-static.ts had no `disable row level security` pattern at all and
+// checkMigrationRlsStatic aggregated ENABLE across every migration. checkMigrationRlsStatic now
+// resolves row-security state in apply order and emits SB-RLS-DISABLED-STATIC; the plants are
+// B25 in GROUND-TRUTH.md (P-RLS-DISABLE-NOT-REVERTED / N-RLS-DISABLE-REVERTED, b13-supa.entries.ts).
 
 import type { CorpusEntry } from "./types.js";
 
@@ -73,7 +73,7 @@ export const b24ConnectedPostgrestRealtimeEntries: CorpusEntry[] = [
     match: ["channel lacks authorization"],
     expectedTier: "connected",
     expectedSeverity: "High",
-    note: "#140, the id the issue itself named. Unlike the other two this check runs in BOTH hosted and local mode (supabase.ts:198/:303), so it is the one of the three a local stack can actually score. Plantable, which was not obvious: realtime.messages ships with RLS ENABLED and is owned by supabase_realtime_admin, but `postgres` is a member of that role, so migration 20260728000001's `alter table realtime.messages disable row level security` succeeds (MEASURED 2026-07-28 — ALTER TABLE, relrowsecurity flips to false). Expect SB-REALTIME-NO-AUTHZ, review tier, High. NOT YET SCORED LIVE against this target: `supabase start` on targets/calibration currently aborts at migration 20260719000002_plpgsql_injection_definer.sql (`type \"public.nocode_tickets\" does not exist`), so no migration from that point on — including this one — has ever been applied to a stack. Pre-existing, unrelated to this batch, filed as #1424; the psql work above was done on a bare stack for exactly that reason.",
+    note: "#140, the id the issue itself named. Unlike the other two this check runs in BOTH hosted and local mode (supabase.ts:198/:303), so it is the one of the three a local stack can actually score. Plantable, which was not obvious: realtime.messages ships with RLS ENABLED and is owned by supabase_realtime_admin, but `postgres` is a member of that role, so migration 20260728000001's `alter table realtime.messages disable row level security` succeeds (MEASURED 2026-07-28 — ALTER TABLE, relrowsecurity flips to false). Expect SB-REALTIME-NO-AUTHZ, review tier, High. The stack blocker that kept this from being applied to targets/calibration (#1424 — `supabase start` aborted at 20260719000002_plpgsql_injection_definer.sql with `type \"public.nocode_tickets\" does not exist`) was fixed 2026-07-28, and the plant is now confirmed against THIS target rather than a bare stack: `supabase start -x vector,logflare` exits 0 through all 24 migrations and realtime.messages reports relrowsecurity=false. Scoring it still needs a connected-tier run, which is why the entry stays expectedTier connected.",
   },
 
   // --- NEGATIVE (boundary — scored statically, deliberately NOT tiered "connected") ---

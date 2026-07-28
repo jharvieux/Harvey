@@ -12059,6 +12059,30 @@
     ]
   },
   {
+    "id": "SB-RLS-STATIC-export_audit",
+    "title": "public.export_audit is created but never gets RLS enabled in any migration",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "category": "Supabase config",
+    "taxonomy": "Migration table without RLS (static)",
+    "location": "supabase/migrations/20260728000002_rls_disable_tables.sql:42",
+    "status": "Open",
+    "evidence": "create table public.export_audit has no matching \"alter table public.export_audit enable row level security\" anywhere in supabase/migrations/.",
+    "impact": "A public-schema table with RLS off is auto-exposed via PostgREST — every row is readable/writable by anyone holding the anon key, with no per-row restriction.",
+    "fix": "Add `alter table public.export_audit enable row level security;` plus policies, or move the table out of the exposed public schema.",
+    "value": 5,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
     "id": "SB-RLS-STATIC-nocode_tickets",
     "title": "public.nocode_tickets is created but never gets RLS enabled in any migration",
     "severity": "Critical",
@@ -12107,6 +12131,30 @@
     ]
   },
   {
+    "id": "SB-RLS-DISABLED-STATIC-billing_exports",
+    "title": "public.billing_exports has row level security turned back OFF by a later migration",
+    "severity": "Critical",
+    "confidence": "Confirmed",
+    "category": "Supabase config",
+    "taxonomy": "Migration disables RLS on a public table (static)",
+    "location": "supabase/migrations/20260728000003_rls_disable_hotfix.sql:17",
+    "status": "Open",
+    "evidence": "\"alter table public.billing_exports disable row level security\" in supabase/migrations/20260728000003_rls_disable_hotfix.sql is the LAST row-security statement for this table across the migration set, so the table ships with RLS off no matter how many earlier migrations enabled it.",
+    "impact": "A public-schema table with RLS off is auto-exposed via PostgREST — every row is readable/writable by anyone holding the anon key. Any policies still defined on the table are inert: Postgres does not consult them while row security is disabled, so the schema reads as protected and behaves as public.",
+    "fix": "Remove the disable statement, or follow it with \"alter table public.billing_exports enable row level security;\" in the same migration if it was only needed for a backfill.",
+    "value": 5,
+    "ease": 3,
+    "safety": 4,
+    "mechanical": true,
+    "precisionTier": "high",
+    "cwe": [
+      "CWE-862: Missing Authorization"
+    ],
+    "owasp": [
+      "A01:2021 - Broken Access Control"
+    ]
+  },
+  {
     "id": "SB-RLS-BYPASSRLS-mt_app_worker",
     "title": "Role mt_app_worker is granted BYPASSRLS, which voids every row-level policy for that role",
     "severity": "Critical",
@@ -12132,14 +12180,14 @@
   },
   {
     "id": "SB-RLS-NOFORCE-ROLLUP",
-    "title": "23 RLS-enabled table(s) never force row level security, so the owning role bypasses their policies",
+    "title": "24 RLS-enabled table(s) never force row level security, so the owning role bypasses their policies",
     "severity": "Low",
     "confidence": "Review",
     "category": "Supabase config",
     "taxonomy": "RLS enabled without FORCE — owner bypasses policies (static)",
     "location": "supabase/migrations/20260724000001_rls_drop_policy_broken.sql:19",
     "status": "Open",
-    "evidence": "23 table(s) have \"enable row level security\" and at least one policy but no matching \"force row level security\" in any migration: audit_events, counters, documents, gadgets, internal_notes, invoices, mt_ledger, newsletter_subscribers, notes, patient_billing, perf_events, perf_line_items, perf_orders, perf_shipments, pii_calibration_fixture, plans, profiles, support_categories, support_tickets, tautology_articles, tenant_reports, tenants, widgets. Review question: Does any runtime code path connect as the role that OWNS these tables? On a stock Supabase project PostgREST connects as anon/authenticated, which are not the owner, and this is defence-in-depth only. A self-hosted or custom-pooled deployment that connects as the owning role has no row-level isolation on these tables at all.",
+    "evidence": "24 table(s) have \"enable row level security\" and at least one policy but no matching \"force row level security\" in any migration: audit_events, counters, documents, gadgets, import_staging, internal_notes, invoices, mt_ledger, newsletter_subscribers, notes, patient_billing, perf_events, perf_line_items, perf_orders, perf_shipments, pii_calibration_fixture, plans, profiles, support_categories, support_tickets, tautology_articles, tenant_reports, tenants, widgets. Review question: Does any runtime code path connect as the role that OWNS these tables? On a stock Supabase project PostgREST connects as anon/authenticated, which are not the owner, and this is defence-in-depth only. A self-hosted or custom-pooled deployment that connects as the owning role has no row-level isolation on these tables at all.",
     "impact": "PostgreSQL exempts a table's owner from row security unless FORCE ROW LEVEL SECURITY is set. Where the owning role is used at runtime, every policy listed here holds for non-owner roles only.",
     "fix": "Add `alter table public.<table> force row level security;` alongside each enable statement — inert when the owner never serves requests, and closes the gap when it does.",
     "value": 2,
@@ -12349,7 +12397,7 @@
     "taxonomy": "M1 — Multi-tenant security",
     "location": "supabase/migrations/",
     "status": "Open",
-    "evidence": "The static policy review inferred tenancy PER TABLE by looking for one of the known tenant-key columns (tenant_id, org_id, organization_id, workspace_id, account_id, company_id). Reviewed as per-tenant: profiles → per-tenant on \"tenant_id\"; notes → per-tenant on \"tenant_id\"; counters → per-tenant on \"tenant_id\"; documents → per-tenant on \"tenant_id\"; invoices → per-tenant on \"tenant_id\"; pii_calibration_fixture → per-tenant on \"tenant_id\"; perf_orders → per-tenant on \"tenant_id\"; perf_events → per-tenant on \"tenant_id\"; internal_notes → per-tenant on \"tenant_id\"; support_tickets → per-tenant on \"tenant_id\"; tenant_reports → per-tenant on \"tenant_id\"; tautology_articles → per-tenant on \"tenant_id\"; audit_events → per-tenant on \"tenant_id\"; patient_billing → per-tenant on \"tenant_id\"; mt_ledger → per-tenant on \"tenant_id\"; mt_contracts → per-tenant on \"tenant_id\"; d091_quotes → per-tenant on \"tenant_id\"; d091_bookings → per-tenant on \"tenant_id\"; d091_contacts → per-tenant on \"tenant_id\"; job_queue → per-tenant on \"tenant_id\"; rollup_daily → per-tenant on \"tenant_id\". Reviewed as per-user (no recognised tenant column — a row bound to auth.uid() is treated as the isolation boundary): tenants, perf_line_items, perf_shipments, objects, plans, widgets, gadgets, newsletter_subscribers, support_categories. NOT RECOGNISED — these tables declare a scoping column that is not on the known list, so they were reviewed as per-user and any cross-tenant policy bug in them WAS NOT LOOKED FOR: perf_line_items (declares order_id); perf_shipments (declares order_id); widgets (declares site). Coverage note: the scoping-column scan above names a column when it ends in \"_id\" OR is a foreign key to a tenant-shaped table (tenants/orgs/accounts/workspaces/companies). A bare tenant column with NEITHER signal — an off-list name (e.g. \"tenant\", \"site\", \"region_slug\") and no FK to a tenant table — is still reviewed as per-user and will not be named. An empty list above is not proof that no such column exists.",
+    "evidence": "The static policy review inferred tenancy PER TABLE by looking for one of the known tenant-key columns (tenant_id, org_id, organization_id, workspace_id, account_id, company_id). Reviewed as per-tenant: profiles → per-tenant on \"tenant_id\"; notes → per-tenant on \"tenant_id\"; counters → per-tenant on \"tenant_id\"; documents → per-tenant on \"tenant_id\"; invoices → per-tenant on \"tenant_id\"; pii_calibration_fixture → per-tenant on \"tenant_id\"; perf_orders → per-tenant on \"tenant_id\"; perf_events → per-tenant on \"tenant_id\"; internal_notes → per-tenant on \"tenant_id\"; support_tickets → per-tenant on \"tenant_id\"; tenant_reports → per-tenant on \"tenant_id\"; tautology_articles → per-tenant on \"tenant_id\"; audit_events → per-tenant on \"tenant_id\"; patient_billing → per-tenant on \"tenant_id\"; mt_ledger → per-tenant on \"tenant_id\"; mt_contracts → per-tenant on \"tenant_id\"; d091_quotes → per-tenant on \"tenant_id\"; d091_bookings → per-tenant on \"tenant_id\"; d091_contacts → per-tenant on \"tenant_id\"; job_queue → per-tenant on \"tenant_id\"; rollup_daily → per-tenant on \"tenant_id\"; billing_exports → per-tenant on \"tenant_id\"; import_staging → per-tenant on \"tenant_id\". Reviewed as per-user (no recognised tenant column — a row bound to auth.uid() is treated as the isolation boundary): tenants, perf_line_items, perf_shipments, objects, plans, widgets, gadgets, newsletter_subscribers, support_categories. NOT RECOGNISED — these tables declare a scoping column that is not on the known list, so they were reviewed as per-user and any cross-tenant policy bug in them WAS NOT LOOKED FOR: perf_line_items (declares order_id); perf_shipments (declares order_id); widgets (declares site). Coverage note: the scoping-column scan above names a column when it ends in \"_id\" OR is a foreign key to a tenant-shaped table (tenants/orgs/accounts/workspaces/companies). A bare tenant column with NEITHER signal — an off-list name (e.g. \"tenant\", \"site\", \"region_slug\") and no FK to a tenant table — is still reviewed as per-user and will not be named. An empty list above is not proof that no such column exists.",
     "impact": "This is the review's central assumption, not a defect. If a table listed as per-user is really tenant-scoped under a name the list does not know (e.g. site_id), its policies were judged against the wrong model and cross-tenant findings were silently missed — a failed inference is indistinguishable from a clean result unless it is stated.",
     "fix": "Confirm the assumed model above. If a table is tenant-scoped under a column not listed, re-run this scan with `--tenant-key <column>` (quick-scan / mechanical scan, or detect-deeper at the connected tier) — the reviewer uses the declared column for any table that has it instead of guessing from the built-in list. Use `--tenant-mode per-user` instead if the app is genuinely single-tenant end to end. Until re-run, treat the per-user verdict for any unlisted table as not assessed.",
     "value": 1,
@@ -12423,7 +12471,7 @@
     "confidence": "Review",
     "category": "Multi-tenant security",
     "taxonomy": "SECURITY DEFINER granted to anon (static)",
-    "location": "supabase/migrations/20260719000002_plpgsql_injection_definer.sql:51 (public.get_user_by_email(p_email))",
+    "location": "supabase/migrations/20260719000002_plpgsql_injection_definer.sql:66 (public.get_user_by_email(p_email))",
     "status": "Open",
     "evidence": "public.get_user_by_email is SECURITY DEFINER (runs as owner, bypasses RLS), returns/reads data, has no auth.uid()/auth.jwt() caller check, and is EXPLICITLY granted execute to the anon/public role. An unauthenticated caller can invoke it to enumerate or dump data across every tenant.",
     "impact": "A SECURITY DEFINER reader reachable by anon runs with the owner's privileges and no RLS — anyone holding the anon key can dump or enumerate the data it returns for any tenant.",
@@ -12444,7 +12492,7 @@
     "confidence": "Review",
     "category": "Injection",
     "taxonomy": "plpgsql dynamic SQL injection (static)",
-    "location": "supabase/migrations/20260719000002_plpgsql_injection_definer.sql:8 (public.search_tickets_unsafe)",
+    "location": "supabase/migrations/20260719000002_plpgsql_injection_definer.sql:23 (public.search_tickets_unsafe)",
     "status": "Open",
     "evidence": "EXECUTE in public.search_tickets_unsafe splices the parameter(s) p_query into the dynamic query by string concatenation (|| / format %s) with no quote_literal/quote_ident/%L/%I escaping — and the function is SECURITY DEFINER, so the injected query runs as the owner, bypassing RLS. CWE-89.",
     "impact": "A caller controls the SQL text: they can read, modify, or drop any data the function's role can reach (for a SECURITY DEFINER function, that is the table owner's full access, bypassing RLS).",
