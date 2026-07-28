@@ -88,20 +88,39 @@ export function discoverVerifyCommands(
   return commands;
 }
 
-export function runCommand(command: string, cwd: string): CommandRun {
+// A client suite that never terminates would hang the whole ingest, so every run is bounded. A
+// killed command reports a non-zero exit and says WHY in its own output tail — never a silent 0.
+const DEFAULT_COMMAND_TIMEOUT_MS = 15 * 60 * 1000;
+
+export function runCommand(command: string, cwd: string, timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS): CommandRun {
   const start = Date.now();
-  const res = spawnSync(command, { cwd, shell: true, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+  const res = spawnSync(command, { cwd, shell: true, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, timeout: timeoutMs });
   const durationMs = Date.now() - start;
-  const combined = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+  const timedOut = res.error !== undefined && (res.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+  const combined = `${res.stdout ?? ""}${res.stderr ?? ""}${timedOut ? `\n[harvey] killed after ${timeoutMs}ms — command exceeded the client-check timeout` : ""}`;
   const exitCode = res.status ?? (res.error ? 1 : 0);
   return { command, cwd, exitCode, durationMs, outputTail: scrubSecrets(tail(combined, 50)) };
+}
+
+// The DETECTOR half of the §2 contract on its own: the finding's detector re-ran, and it is clean.
+// Split out of computeGreen because a caller that scores only this half must SAY so rather than
+// passing an empty clientChecks array and collecting a green it did not earn (see computeGreen).
+export function detectorHalfClean(detectorAfter: DetectorRun): boolean {
+  if (detectorAfter.notRun !== undefined) return false; // fail loud: an unrun detector is not clean
+  return !detectorAfter.fired;
 }
 
 // A fix is green iff the detector no longer fires AND no client check newly
 // fails. Skipped checks (needs-ci, pre-existing baseline failures) don't count
 // against green — but they're always visible in the evidence (§2.2).
+//
+// #1272: an EMPTY clientChecks is not green. `[].every(...)` is vacuously true, so for as long as
+// the only production assembler hardcoded `clientChecks: []` the client half of this decision did
+// not merely go unrun — it silently PASSED, and a fix that broke the client's own suite could be
+// reported verified. The contract says both halves must have actually executed; nothing discovered
+// and nothing run is a reason to withhold green, not to grant it.
 export function computeGreen(ev: Pick<VerificationEvidence, "detectorAfter" | "clientChecks">): boolean {
-  if (ev.detectorAfter.notRun !== undefined) return false; // fail loud: an unrun detector is not clean
-  if (ev.detectorAfter.fired) return false;
+  if (!detectorHalfClean(ev.detectorAfter)) return false;
+  if (ev.clientChecks.length === 0) return false;
   return ev.clientChecks.every((c) => c.skipped !== undefined || c.exitCode === 0);
 }
