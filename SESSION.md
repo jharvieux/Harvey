@@ -34,7 +34,15 @@ Review trail: `gh issue list --label Failed --state all` (10 issues; 9 closed wi
 
 ### ⛔ TWO PRs OPEN — neither merged, both need a decision
 
-- **PR #1403** (M8, `#1284`/`#1309` closing, `#1268`→remainder pending). **Held deliberately.** The `install target deps + score M8 mutation baselines` CI job — which this PR modifies — **FAILS in CI** at its own new `withRestoredManifest` code, while every local run succeeded. `stdout: null, stderr: null`, so the real error is discarded. A diagnosis agent was dispatched and **had not reported when the session ended**; its worktree is `agent-af268efad81c64a88`. **If the mechanism cannot work in CI, `#1284`'s first criterion is falsified and it must be dropped from the close-set and labelled `Failed`.** Do not merge until that is settled.
+- **PR #1403** (M8, closes `#1284`/`#1309`). **DIAGNOSED AND FIXED — but held, and it needs YOUR decision, not a verifier's.**
+
+  *The CI failure:* `--legacy-peer-deps` is an **npm-only** flag that leaked into pnpm invocations. `detectPackageManager` correctly resolved proposit to pnpm and then handed it npm's flags; pnpm exits 1 on an unknown option. **Logical, not environmental.** `m8-corpus.ts`'s own comment already claimed npm flags only apply to npm targets — the code never implemented it, so it was a recorded claim false at the moment it was written. Invisible locally because the executor exercised only the two NEW targets, whose `installFlags` are empty.
+
+  *Fixed*, plus a second defect it exposed (Stryker's flat-`node_modules` plugin glob finds nothing under pnpm). **Post-fix run 30363638458 PASSES in 12m47s**, all four targets reproducing baselines: proposit 100% (21/21), boxyhq 20% (7/35), inbox-zero 76% (80/125), rallly 53.33% (16/30).
+
+  *`#1284.1`:* falsified **at the failing run** (for proposit, `--install` provisioned nothing) and should not have been marked MET on local evidence. **Met now on measured CI evidence** — its acceptance should cite run 30363638458, not the executor's local runs.
+
+  *⛔ THE ACTUAL BLOCKER:* **this PR turns `corpus-drift` RED on `main`.** It is not a required check, so it merges over the failure and the daily scheduled job goes red. Measured deltas (run 30363642610): carbon **−2307**, inbox-zero −13, saas-lite −6, rallly −6. These are **real precision gains** — knip on a fully-resolved workspace stops manufacturing thousands of phantom rows (control: proposit `−1` pre-fix, exact match post-fix) — **but the baselines were never re-measured.** #1404 is now widened to all four targets and is the blocker. **Choose:** (a) re-measure and land baselines inside #1403 so the job never goes red, or (b) merge and accept a knowingly-red daily check. I did not choose this at session end.
 - **PR #1406** (reason registry, `#1311`/`#1349`/`#1253`). **Never verified** — the operator halted new agents before its acceptance verifier was dispatched. **Do not merge on the executor's own claim**; every other PR this sweep had a verifier and 12 of 19 issue-verdicts moved as a result.
 
 ### The gate fired on its own supervisor — the best result of the sweep
