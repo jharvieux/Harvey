@@ -4,7 +4,7 @@
 // commercial claim being backed is "generated and vendored code doesn't count" — a claim that fails
 // silently (an inflated invoice) rather than loudly if the exclusions stop matching M4's list.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -78,5 +78,22 @@ describe("measureCodebaseSize (#1044)", () => {
     // The site routes monorepo/regulated apps to Enterprise regardless of size; that is an operator
     // judgement, and saying so is what stops a small-LOC regulated app reading as a settled quote.
     expect(definition).toMatch(/operator judgement/);
+  });
+
+  // Found by the 2026-07-28 #899 breadth sweep, on 3 of 15 wild repos (liam, dub, cal-diy). This
+  // walker runs at the END of quick-scan, so a throw here discarded a COMPLETED M1 pass — 118–235 s
+  // of semgrep/secret/dependency work and every finding it produced. It is the same bug #944 fixed
+  // in mutation-scan on 2026-07-24, reintroduced here on 2026-07-25 at a fresh call site.
+  it("walks past a committed dangling symlink instead of throwing ENOENT", () => {
+    const root = fixture({ "src/app.ts": body(10) });
+    symlinkSync("../../nowhere/.env", join(root, "src/.env")); // dangling, as liam and cal-diy commit
+    expect(() => measureCodebaseSize(root)).not.toThrow();
+    expect(measureCodebaseSize(root).loc).toBe(10);
+  });
+
+  it("still follows a symlink that resolves to a real source tree", () => {
+    const root = fixture({ "real/lib.ts": body(4), "src/app.ts": body(10) });
+    symlinkSync(join(root, "real"), join(root, "src/linked"));
+    expect(measureCodebaseSize(root).loc).toBe(18); // 10 + 4 + the 4 again through the link
   });
 });
