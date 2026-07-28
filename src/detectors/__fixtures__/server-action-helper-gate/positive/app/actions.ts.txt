@@ -1,0 +1,17 @@
+// The true-positive control for #1263: the action calls a house-style helper too, but that helper
+// only reshapes a string — it performs no check. Resolving callees must not turn "calls SOMETHING"
+// into "is gated", so this must still be flagged as missing authorization.
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+import { normaliseOrgId } from "../lib/format";
+
+const RenameSchema = z.object({ orgId: z.string().uuid(), name: z.string().min(1) });
+
+export async function renameOrganisation(input: unknown) {
+  const { orgId, name } = RenameSchema.parse(input);
+  const id = normaliseOrgId(orgId);
+
+  await supabase.from("organisations").update({ name }).eq("id", id);
+}

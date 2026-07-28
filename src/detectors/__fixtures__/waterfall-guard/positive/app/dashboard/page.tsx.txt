@@ -1,0 +1,18 @@
+// The true-positive control for #1292: an intervening statement DOES read the first result, but it
+// only logs it — control flow reaches the second query either way, so the pair is still a real
+// waterfall. Suppressing on "an intervening statement mentions the first binding" would lose this.
+import { supabase } from "../../lib/db";
+
+export default async function DashboardPage() {
+  const { data: teams } = await supabase.from("teams").select("id, name");
+  console.log("teams loaded", teams?.length);
+
+  const { data: projects } = await supabase.from("projects").select("id, name");
+
+  return (
+    <div>
+      <p>{teams?.length} teams</p>
+      <p>{projects?.length} projects</p>
+    </div>
+  );
+}

@@ -1,0 +1,14 @@
+// #1263 — the validator is real, its NAME is not on any list. `sanitize` parses the input through
+// a schema before returning it, so this action IS validated and must not be flagged.
+"use server";
+
+import { supabase } from "../lib/db";
+import { requireUser } from "../lib/auth";
+import { sanitize } from "../lib/sanitize";
+
+export async function updateBio(raw: unknown) {
+  const user = await requireUser();
+  const bio = sanitize(raw);
+
+  await supabase.from("profiles").update({ bio }).eq("user_id", user.id);
+}

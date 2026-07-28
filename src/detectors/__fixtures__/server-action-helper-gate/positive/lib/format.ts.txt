@@ -1,0 +1,3 @@
+export function normaliseOrgId(orgId: string) {
+  return orgId.trim().toLowerCase();
+}
