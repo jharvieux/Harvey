@@ -17,11 +17,21 @@
 //
 // The companion half of that OWASP line — "use helmet middleware" — is DECLINED, not missing:
 //
-// REASON: Harvey does not flag an Express app for failing to adopt helmet; the response headers helmet sets are checked by their effect instead (b5-headers: HSTS, X-Frame-Options, X-Content-Type-Options, CSP, cookie flags), so an app that sets them by hand is correct and is not flagged
+// REASON: Harvey does not flag an Express app for failing to ADOPT helmet, because an app that sets the same headers by hand is correct and flagging the absent import would be a false positive on working code; the headers are checked by their effect instead, on Express by express-security-headers.ts and on a Next.js config by b5-headers
 // KIND: decisional
 // PROVENANCE: MEASURED 2026-07-27 (the #1204 operator ruling; the by-design boundary is scored by P-OWASP-NODE-HELMET in src/scan/calibration/owasp-nodejs.entries.ts)
 // OWNER: operator
 // DECISION: #1204 — library adoption is not a defect; only the X-Powered-By half of the OWASP line is detected
+//
+// #1350 CORRECTION. Until express-security-headers.ts landed, this reason read "the response headers
+// helmet sets are checked by their effect instead (b5-headers …), which is agnostic to how the app
+// got there". That was false, and it was copied into three other files. MEASURED 2026-07-27 over
+// Harvey's own rule directory: a bare Express app with neither helmet nor hand-set headers produced
+// ZERO findings, while a next.config.js headers() route missing the same headers produced THREE
+// (harvey-missing-hsts / -frame-options / -nosniff). Those rules match `{ source: $S, headers: $ARR }`
+// and their own messages say they read next.config.js only — so the effect check was Next-gated, and
+// on Express, the app class the helmet question is ABOUT, nothing fired and nothing disclosed it.
+// The decline survives; the coverage it claimed had to be built for the claim to be true.
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
@@ -32,7 +42,7 @@ const POWERED_BY_HEADER = /^x-powered-by$/i;
 
 // Local bindings for the express factory: `import express from "express"`, `import * as express`,
 // `const express = require("express")`. A named import (`import { Router }`) is not the factory.
-function expressBindings(sf: ts.SourceFile): Set<string> {
+export function expressBindings(sf: ts.SourceFile): Set<string> {
   const names = new Set<string>();
   const visit = (n: ts.Node) => {
     if (ts.isImportDeclaration(n) && ts.isStringLiteralLike(n.moduleSpecifier) && n.moduleSpecifier.text === "express") {
@@ -74,7 +84,7 @@ function alreadyHandled(sf: ts.SourceFile): boolean {
   return found;
 }
 
-function appCreations(sf: ts.SourceFile, bindings: Set<string>): ts.CallExpression[] {
+export function appCreations(sf: ts.SourceFile, bindings: Set<string>): ts.CallExpression[] {
   const calls: ts.CallExpression[] = [];
   const visit = (n: ts.Node) => {
     if (ts.isCallExpression(n) && n.arguments.length === 0 && ts.isIdentifier(n.expression) && bindings.has(n.expression.text)) calls.push(n);
