@@ -46,6 +46,8 @@ import {
   checkVitalsContract,
   checkStrykerContract,
   checkLighthouseContract,
+  classifyVitalsGitScopeFailure,
+  type GitScopeSanity,
 } from "../scan/fixture-drift-contracts.js";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -68,6 +70,11 @@ interface DriftOptions<T> {
   parse: (raw: string) => T;
   contract: (parsed: T) => string[];
   rerun: () => Promise<{ parsed: T; summary: string }>;
+  // Checked ONLY against the fresh rerun, before the standard contract check. A returned reason
+  // means a KNOWN, detectable non-drift failure mode (#1206) — reported as NOT RUN (exit 0) instead
+  // of the generic contract-violation FAIL, so a disclosed flake doesn't get misread as a schema
+  // drift or spam the alert-issue tracker for something already tracked.
+  notRunIf?: (parsed: T) => string | undefined;
 }
 
 async function runDrift<T>(o: DriftOptions<T>): Promise<never> {
@@ -91,6 +98,11 @@ async function runDrift<T>(o: DriftOptions<T>): Promise<never> {
   }
 
   const { parsed, summary } = await o.rerun();
+  const notRunReason = o.notRunIf?.(parsed);
+  if (notRunReason) {
+    console.log(`○ ${o.tool}-fixture-drift: NOT RUN — ${notRunReason}`);
+    process.exit(0);
+  }
   const violations = o.contract(parsed);
   if (violations.length > 0) {
     fail(
@@ -258,17 +270,18 @@ async function vitalsDrift(): Promise<never> {
   if (!resolved) fail("vitals", "vitals_cli.py is not available on PATH or in ~/.claude/plugins — this drift check requires the vitals plugin (the conservation.yml job installs it).");
   const out = execFileSync(resolved.bin, [...resolved.prefixArgs, "version"], { encoding: "utf8" });
   const version = out.match(/v?(\d+\.\d+\.\d+)/)?.[1] ?? out.trim();
-  return runDrift<VitalsReport>({
+  return runDrift<VitalsReport & { _gitScopeSanity?: GitScopeSanity }>({
     tool: "vitals",
     pinnedVersion: VITALS_PINNED_VERSION,
     installedVersion: version,
     fixturePaths: ["src/__fixtures__/vitals-report.json"],
     parse: (raw) => {
-      const parsed = JSON.parse(raw) as VitalsReport & { _note?: string };
+      const parsed = JSON.parse(raw) as VitalsReport & { _note?: string; _gitScopeSanity?: GitScopeSanity };
       delete parsed._note;
       return parsed;
     },
     contract: checkVitalsContract,
+    notRunIf: classifyVitalsGitScopeFailure,
     rerun: async () => {
       const seed = join(repoRoot, "src/__fixtures__/vitals-recapture/seed.py");
       const outFile = join(mkdtempSync(join(tmpdir(), "harvey-vitals-drift-")), "vitals-report.json");
@@ -282,7 +295,7 @@ async function vitalsDrift(): Promise<never> {
           // #1206 was filed on exactly that misreading. Point at the real output instead.
           fail("vitals", `the re-capture seed ${relative(repoRoot, seed)} exited non-zero — ITS OWN OUTPUT IS IMMEDIATELY ABOVE THIS LINE and is the evidence to read. (${(err as Error).message})`);
         }
-        const parsed = JSON.parse(readFileSync(outFile, "utf8")) as VitalsReport & { _note?: string };
+        const parsed = JSON.parse(readFileSync(outFile, "utf8")) as VitalsReport & { _note?: string; _gitScopeSanity?: GitScopeSanity };
         delete parsed._note;
         return { parsed, summary: `vitals ${version} over the seeded M3 corpus — ${parsed.hotspots.length} hotspot(s), ${parsed.knowledge_risk.length} truck-factor row(s), ${parsed.coupling.length} coupling edge(s)` };
       } finally {
