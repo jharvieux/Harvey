@@ -19,6 +19,8 @@ import { join, relative } from "node:path";
 interface WorkspaceManifest {
   /** Path relative to the target root — "package.json" for the root manifest. */
   label: string;
+  /** The package's own name — how sibling members depend on it (#1344). */
+  name?: string;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;

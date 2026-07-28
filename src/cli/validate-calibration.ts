@@ -101,6 +101,10 @@ for (const r of matrix.rows.filter((r) => r.kind === "negative")) console.log(li
 // The credibility-critical gate: zero free-count FPs on negatives, and every high-expected
 // positive caught at high. Review-tier recall gaps are surfaced but non-fatal.
 const negFps = matrix.rows.filter((r) => r.kind === "negative" && r.highFlagged);
+// #1344: a negative that draws an UNRECORDED review-tier hit. Distinct from a free-count FP — it
+// costs no precision today, but it is a rule that moved onto benign code, and until now no gate
+// could fail on it (#1251).
+const negReviewDrift = matrix.rows.filter((r) => r.kind === "negative" && !r.highFlagged && !r.pass);
 const highMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "high" && !r.highFlagged);
 const reviewMisses = matrix.rows.filter((r) => r.kind === "positive" && r.expectedTier === "review" && !r.pass);
 // A "none"-tier positive is an accepted no-mechanical-rule gap (e.g. WEBHOOK-REPLAY, #425). It
@@ -214,15 +218,48 @@ const severityControl = (() => {
 })();
 console.log(`  negative control: ${severityControl.detail}`);
 
-const gatePass = negFps.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && severityMismatches.length === 0 && severityControl.ok;
+// #1344: the review-tier ratchet's own negative control. Until this gate change a planted negative
+// passed on `!highFlagged`, so a widened rule that lit one up at REVIEW tier scored "cleared
+// (review-tier hit only)" and every check stayed green — #1251 hit exactly that shape, and it
+// surfaced only because someone hand-diffed dry-run/findings.json. The control replays it: take
+// N-STORAGE-DB-PATH (measured silent today) and hand scoreEntry the harvey-path-traversal finding
+// #1251 saw, at review tier. A working ratchet must FAIL that row.
+const reviewRatchetControl = (() => {
+  const entry = mechanicalCorpus(CORPUS).find((e) => e.id === "N-STORAGE-DB-PATH");
+  if (!entry) return { ok: false, detail: "N-STORAGE-DB-PATH is gone from the corpus — the #1251 review-tier ratchet is unproven" };
+  const planted: Finding = {
+    id: "CONTROL-1251",
+    status: "Open",
+    category: "Security",
+    title: "Path traversal (negative control)",
+    severity: "High",
+    confidence: "Review",
+    precisionTier: "review",
+    taxonomy: "src.scan.rules.semgrep.harvey-path-traversal",
+    location: `app/api/${entry.location}.ts:1`,
+    evidence: "synthetic — #1344 negative control, never a real finding",
+    impact: "n/a",
+    fix: "n/a",
+    value: 1,
+    ease: 1,
+    safety: 1,
+  };
+  const row = scoreEntry(entry, [...findings, planted]);
+  return { ok: !row.pass, detail: `entry ${entry.id}: planted a review-tier harvey-path-traversal hit -> ratchet ${row.pass ? "DID NOT FIRE" : "FIRED"}` };
+})();
+console.log(`\nREVIEW-TIER RATCHET (#1344, replaying #1251): ${reviewRatchetControl.detail}`);
+
+const gatePass = negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok;
 if (!gatePass) {
   if (negFps.length) console.log(`\nGATE FAIL — free-count false positives: ${negFps.map((r) => r.id).join(", ")}`);
+  if (negReviewDrift.length) console.log(`GATE FAIL — review-tier regression on planted negatives (#1344): ${negReviewDrift.map((r) => `${r.id} — ${r.detail}`).join(" | ")}`);
   if (!heuristic.ok) console.log(`GATE FAIL — M7/M8 heuristic precision corpus (#823): ${heuristic.rows.filter((r) => !r.pass).map((r) => r.id).join(", ")} — run pnpm exec tsx src/cli/validate-precision.ts`);
   if (highMisses.length) console.log(`GATE FAIL — high-tier positives not caught: ${highMisses.map((r) => r.id).join(", ")}`);
   if (noRuleBroken.length) console.log(`GATE FAIL — a mechanical rule now fires on a by-design no-rule gap (re-tier it): ${noRuleBroken.map((r) => r.id).join(", ")}`);
   if (!gitHistoryGate.pass) console.log("GATE FAIL — git-history secret gate (#129) did not pass, see detail above");
   if (parityThin.length) console.log(`GATE FAIL — parity minimum (#427): ${parityThin.map((c) => c.module).join(", ")} below ${MIN_POSITIVES_PER_MODULE} positives`);
   if (severityMismatches.length) console.log(`GATE FAIL — delivered severity != answer key (#1157): ${severityMismatches.map((r) => `${r.id} (expected ${r.expectedSeverity}, got ${r.deliveredSeverities?.join("/") || "none"})`).join(", ")}`);
+  if (!reviewRatchetControl.ok) console.log(`GATE FAIL — the #1344 review-tier ratchet did not fire on its negative control: ${reviewRatchetControl.detail} — a widened rule could light up a planted negative unseen again`);
   if (!severityControl.ok) console.log(`GATE FAIL — severity-correctness negative control did not fire (#1157): ${severityControl.detail} — the check is not proven able to fail`);
   process.exit(1);
 }

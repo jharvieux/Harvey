@@ -71,11 +71,34 @@ describe("scoreEntry", () => {
     expect(row.detail).toContain("FALSE POSITIVE");
   });
 
-  it("clears a negative that only draws a review-tier finding (triaged out of the count)", () => {
-    const e = entry({ id: "N-DSIH", kind: "negative", cls: "dsih", location: "about.js", note: "" });
+  // #1344: the blind spot that let a precision regression reach main with every gate green. A
+  // negative used to pass on "no high-tier hit" alone, so a widened rule that lit one up at REVIEW
+  // tier scored "cleared (review-tier hit only)" — #1251's harvey-path-traversal on N-STORAGE-DB-PATH
+  // surfaced only by hand-diffing dry-run/findings.json. A review-tier hit now has to be RECORDED.
+  it("clears a negative whose review-tier hit is recorded in reviewTierHits (triaged out of the count)", () => {
+    const e = entry({ id: "N-DSIH", kind: "negative", cls: "dsih", location: "about.js", reviewTierHits: ["audit dsih"], note: "" });
     const row = scoreEntry(e, [finding({ location: "pages/about.js:11", taxonomy: "audit dsih", precisionTier: "review" })]);
     expect(row.pass).toBe(true);
     expect(row.reviewFlagged).toBe(true);
+  });
+
+  it("#1344: FAILS a negative that draws an UNRECORDED review-tier finding, naming the taxonomy", () => {
+    const e = entry({ id: "N-DSIH", kind: "negative", cls: "dsih", location: "about.js", note: "" });
+    const row = scoreEntry(e, [finding({ location: "pages/about.js:11", taxonomy: "audit dsih", precisionTier: "review" })]);
+    expect(row.pass).toBe(false);
+    expect(row.detail).toContain("REVIEW-TIER REGRESSION");
+    expect(row.detail).toContain("audit dsih");
+  });
+
+  it("#1344: a recorded taxonomy does not excuse a DIFFERENT review-tier rule arriving later", () => {
+    const e = entry({ id: "N-DSIH", kind: "negative", cls: "dsih", location: "about.js", reviewTierHits: ["audit dsih"], note: "" });
+    const row = scoreEntry(e, [
+      finding({ location: "pages/about.js:11", taxonomy: "audit dsih", precisionTier: "review" }),
+      finding({ location: "pages/about.js:12", taxonomy: "harvey-path-traversal", precisionTier: "review" }),
+    ]);
+    expect(row.pass).toBe(false);
+    expect(row.detail).toContain("harvey-path-traversal");
+    expect(row.detail).not.toContain("audit dsih");
   });
 
   it("keeps fixtures that share a file apart via match keywords (anon key vs. mis-prefixed secret)", () => {

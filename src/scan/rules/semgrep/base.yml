@@ -90,6 +90,23 @@ x-request-source: &request_source
         - pattern-not-inside: |
             $RSCPROP = ...
             ...
+        # #1344: the assignment guard above was the ONLY exclusion, and a name arriving as an
+        # ordinary FUNCTION PARAMETER is never assigned — so `function runJob(params: JobSpec)`,
+        # a scheduler argument bag with no request anywhere near it, was read as request input.
+        # MEASURED 2026-07-27 on two byte-identical files differing only in the parameter name:
+        # `params`/`searchParams` produced 6 findings including harvey-command-injection at
+        # Critical/precisionTier=high (GRADED), `opts`/`spec` produced 3. That falsified this
+        # block's own recorded measurement, which claimed an "RPC argument bag" probe fired on
+        # none — all five probes must have bound the name by local assignment.
+        #
+        # The discriminator is the BINDING FORM, which is also what makes the name safe at all: an
+        # RSC page receives `{ params }` DESTRUCTURED, and semgrep OSS cannot match a destructured
+        # object parameter (the reason this source is name-based in the first place). So a plain
+        # identifier parameter is excludable precisely because the real shape is not.
+        - pattern-not-inside: |
+            function $F(..., $RSCPROP, ...) { ... }
+        - pattern-not-inside: |
+            (..., $RSCPROP, ...) => ...
 # ---------------------------------------------------------------------------------------------
 
 rules:

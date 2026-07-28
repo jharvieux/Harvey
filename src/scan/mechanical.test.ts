@@ -77,6 +77,25 @@ describe("runMechanicalScan skipNetworkChecks", () => {
     );
   });
 
+  // #1344: a workspace member is resolved from inside the repo, so the registry 404s on its name
+  // and SUP-SLOPSQUAT calls it hallucinated — 10 such High rows graded saas-lite F on the free
+  // tier. Both declaration styles are covered: the `workspace:` protocol (pnpm/yarn-berry) and a
+  // plain range on a name that is itself a workspace member (npm/yarn-classic).
+  it("#1344: never asks the registry about a workspace-internal package", async () => {
+    const ws = mkdtempSync(join(tmpdir(), "harvey-mechanical-ws-"));
+    try {
+      writeFileSync(join(ws, "package.json"), JSON.stringify({ name: "root", workspaces: ["packages/*"], dependencies: { react: "18.2.0", "@kit/ui": "workspace:*", "@kit/auth": "1.0.0" } }));
+      mkdirSync(join(ws, "packages", "auth"), { recursive: true });
+      writeFileSync(join(ws, "packages", "auth", "package.json"), JSON.stringify({ name: "@kit/auth", dependencies: { zod: "3.0.0" } }));
+      await runMechanicalScan({ dir: ws });
+      expect(checkSlopsquat).toHaveBeenCalledWith(["react", "zod"]);
+      const scope = (await runMechanicalScan({ dir: ws })).find((f) => f.id === "SUP-SCOPE-00");
+      expect(scope?.evidence).toContain("@kit/ui, @kit/auth");
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
   // #1213: `@img/sharp-*` are optionalDependencies of `sharp`, so even a DIRECT `sharp` would not
   // have surfaced its platform binaries — the manifest's optional/peer sections were never merged.
   it("submits optional and peer dependencies to the license check", async () => {
