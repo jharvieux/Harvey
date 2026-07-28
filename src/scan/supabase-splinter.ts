@@ -18,6 +18,8 @@
 
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+import { assertNoSecretInArgv, splitPgPassword } from "../secret-argv.js";
 import type { AdvisorLint, AdvisorsResponse } from "./supabase-advisors.js";
 
 const SPLINTER_SQL_PATH = fileURLToPath(new URL("./rules/splinter.sql", import.meta.url));
@@ -96,9 +98,15 @@ export function parseSplinterOutput(raw: string): AdvisorsResponse {
 // (docs/runbooks/dry-run-calibration.md §9). parseSplinterOutput above is the tested layer.
 export function runSplinter(connectionString: string): AdvisorsResponse {
   let out: string;
+  // #1297 — the connection string is the CLIENT's, so its password is a real credential of the
+  // database being audited. libpq reads it from PGPASSWORD, keeping it out of the world-readable argv.
+  const { conninfo, password } = splitPgPassword(connectionString);
+  const argv = [conninfo, "-t", "-A", "-F", "|", "-f", SPLINTER_SQL_PATH];
+  assertNoSecretInArgv("runSplinter", argv, [password]);
   try {
-    out = execFileSync("psql", [connectionString, "-t", "-A", "-F", "|", "-f", SPLINTER_SQL_PATH], {
+    out = execFileSync("psql", argv, {
       encoding: "utf8",
+      env: password ? { ...process.env, PGPASSWORD: password } : process.env,
       maxBuffer: 1024 * 1024 * 64,
     });
   } catch (err) {

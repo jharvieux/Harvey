@@ -166,21 +166,25 @@ export function collectReasons(roots: string[], base: string): ParsedReason[] {
 // untriaged population is COUNTED on every run rather than quoted from a doc — an unstated
 // limitation reads as a clean bill of health, and a stored number stops being true.
 //
-// Deliberately a LOWER BOUND over a fixed vocabulary of standing-impossibility phrasings, and
-// PROSE-ONLY (`.md`): the same inventory measured docs/design carrying 2 provenance tags against
-// src/'s 119, so prose is the weak surface. The census is still advisory — it reports a number and
+// Deliberately a LOWER BOUND over a fixed vocabulary. It is still advisory — it reports a number and
 // nothing has to act on it — but since #1318 it also feeds the RATCHET below, which IS a gate
 // failure. Do not read the "advisory" framing as covering the ratchet.
 //
-// The `.md`-only boundary is a live gap, not a design boundary: #1318's three motivating examples
-// (#1311's `untestable in CI` comments, #1304, #1265) are all SOURCE COMMENTS, so the ratchet does
-// not yet cover the population that motivated it. Tracked by #1347, disclosed on every run by
-// src/cli/validate-reasons.ts rather than left to be discovered.
-//
 // #1319 added "out of reach"/"infeasible": #957 recorded a piece as "genuinely out of reach for a
-// mechanical assembly" and it landed 3h25m later in 98 lines. The same vocabulary drives the
-// impossibility-register check below, so the two cannot drift apart.
-const CLAIM_VOCABULARY = /\b(cannot|can't|can not|impossible|no way to|not possible|unable to|out of reach|infeasible)\b/i;
+// mechanical assembly" and it landed 3h25m later in 98 lines.
+//
+// #1347 added "untestable" and the unverified register. Until then the census was PROSE-ONLY and the
+// vocabulary was impossibility-only, so #1318's own three motivating examples all fell outside it —
+// all three are source comments, and none of the three phrasings was in the vocabulary. Measured
+// 2026-07-28 over DEFAULT_ROOTS: "untestable" costs 5 lines and reaches all three #1311 sites
+// (src/audit-runners.ts:722/972, src/pentest/targets.ts:157); the unverified register costs 81 and
+// reaches #1265's (src/scan/supabase.ts:18).
+const IMPOSSIBILITY_VOCABULARY = /\b(cannot|can't|can not|impossible|no way to|not possible|unable to|out of reach|infeasible|untestable)\b/i;
+// "the shape was never verified" forecloses nothing — it is the honest register, and refusing it on
+// an ASSUMED provenance would punish exactly the phrasing the doctrine asks for. So it is censused
+// (a standing claim nothing re-tests) but kept OUT of the impossibility-register check below.
+const UNVERIFIED_VOCABULARY = /\b(unverified|not (?:independently )?(?:re-)?verified|never (?:been )?verified)\b/i;
+const CLAIM_VOCABULARY = new RegExp(`${IMPOSSIBILITY_VOCABULARY.source}|${UNVERIFIED_VOCABULARY.source}`, "i");
 
 interface UntriagedClaim {
   file: string;
@@ -208,21 +212,51 @@ export function issueSources(issues: FetchedIssue[]): SourceText[] {
 }
 
 /**
- * The surfaces the census actually reads, out of everything `collectSources` walks. One home for the
- * boundary so the CLI and the test cannot drift apart while #1347 is open — and so widening it is a
- * one-line change with one place to update the disclosure.
+ * How much of a surface the census reads. One home for the boundary, so the CLI, the tests and the
+ * disclosure line cannot drift apart.
+ *
+ * `comments` rather than whole-file for code, because #1347's scale trap is real and was measured
+ * before the shape was chosen (2026-07-28, DEFAULT_ROOTS): `.ts` carries 767 claim-shaped lines
+ * against `.md`'s 274, but 270 of the 767 are CODE — error-message strings ("cannot seed: this body
+ * carries no…"), `not-assessed` detail strings and test titles. Those are the vocabulary firing on
+ * ordinary code prose, and ratcheting them would make the gate all backlog and no signal. The 497
+ * that remain are comments, which is where a standing claim actually gets recorded.
+ *
+ * `none` for the generated baseline itself (#1347's fifth criterion): since #1318 it records every
+ * claim VERBATIM, so censusing it would match every claim in the repo against itself — 275 lines
+ * measured, growing by one for every claim anyone writes anywhere.
  */
-export const isCensusedSurface = (file: string): boolean => file.endsWith(".md");
+type CensusScope = "prose" | "comments" | "none";
 
-/** Callers pass the prose surfaces they want censused; the vocabulary is not tuned for code. */
+const CENSUS_EXCLUDED = new Set(["src/unstructured-claims-baseline.ts"]);
+const COMMENT_LINE: Record<string, RegExp> = {
+  ts: /^\s*(?:\/\/|\/\*|\*)/,
+  yml: /^\s*#/,
+  sql: /^\s*--/,
+};
+
+export function censusScope(file: string): CensusScope {
+  if (CENSUS_EXCLUDED.has(file)) return "none";
+  return COMMENT_LINE[file.split(".").pop() ?? ""] ? "comments" : "prose";
+}
+
+/**
+ * Claim-shaped lines outside any reason block. Prose surfaces (`.md`, `.txt`, issue bodies) are read
+ * whole; code surfaces are read comment-lines-only — see `censusScope`. A trailing comment on a line
+ * of code (`foo(); // cannot X`) is not read, which keeps this the lower bound it has always been.
+ */
 export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]): UntriagedClaim[] {
   return sources.flatMap(({ file, text }) => {
+    const scope = censusScope(file);
+    if (scope === "none") return [];
+    const comment = scope === "comments" ? COMMENT_LINE[file.split(".").pop() ?? ""] : undefined;
     const triaged = reasons.filter((r) => r.file === file);
     const out: UntriagedClaim[] = [];
     let inFence = false;
     text.split("\n").forEach((raw, i) => {
       if (/^\s*(```|~~~)/.test(raw)) inFence = !inFence;
       if (inFence || !CLAIM_VOCABULARY.test(raw)) return;
+      if (comment && !comment.test(raw)) return;
       const line = i + 1;
       if (triaged.some((r) => line >= r.line && line <= r.endLine)) return;
       out.push({ file, line, text: raw.trim() });
@@ -375,7 +409,7 @@ export function validateRecordedReason(r: ParsedReason, exists: (path: string) =
   // one line: measure it and say MEASURED, name the real constraint (time), or ask the question.
   // Matched literally, including inside a denial ("not technically impossible") — the check reads
   // words, not sentences, and re-tagging a denial as MEASURED is the cheaper correction.
-  const impossibility = CLAIM_VOCABULARY.exec(claim)?.[0];
+  const impossibility = IMPOSSIBILITY_VOCABULARY.exec(claim)?.[0];
   if (impossibility && PROVENANCE_FORM.exec(f.PROVENANCE ?? "")?.[1] === "ASSUMED") {
     errors.push(`REASON: says "${impossibility}" on an ASSUMED provenance — that is impossibility's vocabulary spent on a claim nobody tested (#1319). Four such claims were falsified in 2026-07, one of them 26 minutes later. Go look and re-tag it MEASURED/TRIED, or name the real constraint ("not attempted this round; the pull is ~20s"), or ask it as a question ("does the token store expose non-owner reads?") — a question invites the next person to test it, an assertion closes the file.`);
   }

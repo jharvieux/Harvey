@@ -1,8 +1,11 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseAdvisorFindings } from "./supabase-advisors.js";
-import { parseSplinterOutput, parseSplinterPipeText, splinterRowsToAdvisorLints } from "./supabase-splinter.js";
+import { parseSplinterOutput, parseSplinterPipeText, runSplinter, splinterRowsToAdvisorLints } from "./supabase-splinter.js";
+
+vi.mock("node:child_process", () => ({ execFileSync: vi.fn(() => "") }));
 
 // #54 — recorded `psql <local-db> -t -A -F'|' -f splinter.sql` output from a real connected-tier
 // confirmation run (docs/runbooks/dry-run-calibration.md §9, 2026-07-09), against the B8/M7
@@ -81,5 +84,20 @@ describe("parseSplinterOutput -> parseAdvisorFindings — recorded connected-tie
   it("emits the 14 unindexed_foreign_keys rows the live confirmation caught", () => {
     const findings = parseAdvisorFindings(parseSplinterOutput(FIXTURE_RAW));
     expect(findings.filter((f) => f.taxonomy === "unindexed_foreign_keys")).toHaveLength(14);
+  });
+});
+
+describe("runSplinter argv (#1297)", () => {
+  it("keeps the client's database password out of argv and hands it to libpq via PGPASSWORD", () => {
+    vi.mocked(execFileSync).mockReturnValue("");
+    runSplinter("postgresql://postgres:not-a-real-db-password@db.abcxyz.supabase.co:5432/postgres");
+
+    const [file, argv, opts] = vi.mocked(execFileSync).mock.calls.at(-1) as [string, string[], { env: NodeJS.ProcessEnv }];
+    expect(file).toBe("psql");
+    for (const arg of argv) expect(arg).not.toContain("not-a-real-db-password");
+    expect(opts.env["PGPASSWORD"]).toBe("not-a-real-db-password");
+    // The rest of the connection still has to reach psql, or the fix silently breaks the scan.
+    expect(argv[0]).toContain("db.abcxyz.supabase.co:5432/postgres");
+    expect(argv).toContain("-f");
   });
 });
