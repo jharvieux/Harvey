@@ -16,6 +16,8 @@ import { validateFindings, type Finding, type FindingsDocument } from "../findin
 import { executeFixDiff, type FixExecution } from "../fix/execute.js";
 import { assembleHandoff, type FixOutcomeSummary, type HandoffStatus } from "../fix/handoff.js";
 import { intake, type EngagementManifest } from "../fix/pipeline.js";
+import { fileOfLocation } from "../fix/produce-plan.js";
+import { DEFAULT_CAPS, detectLateConflict, runScheduled, scheduleFixes, type ScheduleNode } from "../fix/schedule.js";
 
 const args = process.argv.slice(2);
 const VALUE_FLAGS = new Set(["--target", "--out"]);
@@ -70,6 +72,7 @@ const EXECUTION_STATUS: Record<FixExecution["outcome"], HandoffStatus> = {
 };
 const outcomes: FixOutcomeSummary[] = [];
 
+const withDiff = new Map<string, string>();
 for (const { finding } of result.auto) {
   const diff = finding.suggestedFix?.diff;
   if (!diff || diff.trim() === "") {
@@ -79,28 +82,78 @@ for (const { finding } of result.auto) {
     outcomes.push({ findingId: finding.id, severity: finding.severity, bftb: bftb(finding), files: [finding.location.split(":")[0] as string], status: "awaiting-implementer" });
     continue;
   }
-  const execution = executeFixDiff(finding.id, diff, {
-    targetDir,
-    baselineCommit: manifest.baselineCommit,
-    allowlist: manifest.allowlist,
-    diffCap: manifest.diffCap,
-  });
-  executions.push(execution);
-  outcomes.push({
-    findingId: finding.id,
-    severity: finding.severity,
-    bftb: bftb(finding),
-    files: [...execution.files, ...execution.createdFiles],
-    status: EXECUTION_STATUS[execution.outcome],
-    verification: execution.verification,
-    reason: execution.abortReason ?? (execution.railViolations.length ? execution.railViolations.join("; ") : undefined),
-  });
-  // A rail-blocked diff is never written out: the rails say it may not touch those paths, and a
-  // .diff sitting in the artifacts dir is one `git apply` away from doing exactly that. Its file
-  // list and violations are in fix-execution.json, which is what the operator needs to see.
-  if (execution.outcome !== "rails-blocked") {
-    writeFileSync(join(outDir, `${finding.id}.diff`), diff.endsWith("\n") ? diff : `${diff}\n`);
-  }
+  withDiff.set(finding.id, diff);
+}
+
+// §1.3/§4 scheduling (#926/#1272). The nodes carry the BATCH-TIME view of what each fix touches — the
+// finding's own file, which is all the plan knows before a diff exists. That is deliberate: the
+// late-conflict check below compares it against what the diff ACTUALLY changed, and a fix that grew a
+// file mid-implementation is an overlap that does not exist until the diff is written.
+const findingById = new Map(result.auto.map((e) => [e.finding.id, e.finding]));
+const nodes: ScheduleNode[] = [...withDiff.keys()].map((id) => {
+  const f = findingById.get(id) as Finding;
+  return { findingId: id, severity: f.severity, bftb: bftb(f), files: [fileOfLocation(f.location)] };
+});
+const components = scheduleFixes(nodes);
+
+// Concurrency is MEASURED here, not asserted: the worker records how many slots were ever live at
+// once and that number is written into fix-execution.json. See CONCURRENCY_NOTE below for what the
+// number means today.
+let liveSlots = 0;
+let peakSlots = 0;
+await runScheduled(
+  components,
+  async (component) => {
+    liveSlots++;
+    peakSlots = Math.max(peakSlots, liveSlots);
+    try {
+      // Serialized WITHIN the component: these fixes touch the same files, so their execution order
+      // is the merge order the client is advised to follow.
+      for (const findingId of component.findingIds) {
+        const finding = findingById.get(findingId) as Finding;
+        const diff = withDiff.get(findingId) as string;
+        const execution = executeFixDiff(findingId, diff, {
+          targetDir,
+          baselineCommit: manifest.baselineCommit,
+          allowlist: manifest.allowlist,
+          diffCap: manifest.diffCap,
+        });
+        executions.push(execution);
+        outcomes.push({
+          findingId,
+          severity: finding.severity,
+          bftb: bftb(finding),
+          files: [...execution.files, ...execution.createdFiles],
+          status: EXECUTION_STATUS[execution.outcome],
+          verification: execution.verification,
+          reason: execution.abortReason ?? (execution.railViolations.length ? execution.railViolations.join("; ") : undefined),
+        });
+        // A rail-blocked diff is never written out: the rails say it may not touch those paths, and a
+        // .diff sitting in the artifacts dir is one `git apply` away from doing exactly that. Its file
+        // list and violations are in fix-execution.json, which is what the operator needs to see.
+        if (execution.outcome !== "rails-blocked") {
+          writeFileSync(join(outDir, `${findingId}.diff`), diff.endsWith("\n") ? diff : `${diff}\n`);
+        }
+      }
+    } finally {
+      liveSlots--;
+    }
+    return null;
+  },
+  DEFAULT_CAPS,
+);
+
+// §4 pre-push late-conflict check: each verified fix's ACTUAL changed-file set against every fix
+// already cleared in this run. Batch time saw only the finding's own file, so this is where an
+// overlap introduced by the diff itself surfaces — before anything is pushed.
+const lateConflicts: { findingId: string; conflictsWith: { findingId: string; files: string[] }[] }[] = [];
+const cleared: { findingId: string; changedFiles: string[] }[] = [];
+for (const e of executions) {
+  if (e.outcome !== "diff-verified") continue;
+  const changedFiles = [...e.files, ...e.createdFiles];
+  const conflictsWith = detectLateConflict(changedFiles, cleared);
+  if (conflictsWith.length) lateConflicts.push({ findingId: e.findingId, conflictsWith });
+  cleared.push({ findingId: e.findingId, changedFiles });
 }
 
 for (const { finding, screen } of result.manual) {
@@ -112,9 +165,34 @@ for (const { finding, screen } of result.recommendOnly) {
 
 const handoff = assembleHandoff({ client: manifest.client, baselineCommit: manifest.baselineCommit, outcomes, notApproved: result.notApproved });
 
+// MEASURED 2026-07-28: peakSlots is 1 on every run, because executeFixDiff is synchronous end to end
+// (execFileSync git + verifySuggestedFix, and — where a caller supplies them — the sync detector
+// re-run and client checks). The semaphore is in the path and enforces the cap; it simply has nothing
+// to hold back yet. The number is REPORTED rather than assumed so that stays visible.
+//
+// REASON: the 4-slot cap is enforced but not yet binding — no two components overlap in wall-clock.
+// KIND: empirical
+// PROVENANCE: MEASURED 2026-07-28 — the peakSlots field this file writes, plus reading executeFixDiff, which is execFileSync/spawnSync throughout.
+// FALSIFIER: test -f src/fix/execute.ts || exit 127; grep -q 'export async function executeFixDiff' src/fix/execute.ts
+// TOUCHES: src/fix/schedule.ts, src/fix/execute.ts, src/cli/fix-execute.ts
+const CONCURRENCY_NOTE =
+  "caps enforced by the runScheduled semaphore; peakSlots is 1 while executeFixDiff is synchronous end to end (an async executor is the falsifier)";
+
 writeFileSync(
   join(outDir, "fix-execution.json"),
-  `${JSON.stringify({ client: manifest.client, baselineCommit: manifest.baselineCommit, targetDir, executions, awaitingImplementer }, null, 2)}\n`,
+  `${JSON.stringify(
+    {
+      client: manifest.client,
+      baselineCommit: manifest.baselineCommit,
+      targetDir,
+      concurrency: { ...DEFAULT_CAPS, componentsScheduled: components.length, peakSlots, note: CONCURRENCY_NOTE },
+      lateConflicts,
+      executions,
+      awaitingImplementer,
+    },
+    null,
+    2,
+  )}\n`,
 );
 // The client-handoff artifact (§1.5): every approved finding with its status + the merge-order advisory.
 // An operator folds fixHandoff into findings.<client>.json; report-template renders it (render.mjs).
@@ -130,6 +208,14 @@ for (const e of executions) {
 
 if (awaitingImplementer.length) {
   console.log(`\nAWAITING IMPLEMENTER (${awaitingImplementer.length}) — screened auto but no suggestedFix.diff supplied: ${awaitingImplementer.join(", ")}`);
+}
+console.log(
+  `\nScheduling: ${components.length} independent component(s), caps ${DEFAULT_CAPS.maxSlots} slot(s)/${DEFAULT_CAPS.maxClientChecks} client-check(s), peak slots observed ${peakSlots} — ${CONCURRENCY_NOTE}.`,
+);
+for (const lc of lateConflicts) {
+  console.log(
+    `  ⚠ late conflict: ${lc.findingId}'s diff also touches ${lc.conflictsWith.map((c) => `${c.files.join(", ")} (with ${c.findingId})`).join("; ")} — batch time did not see this; merge the earlier fix first.`,
+  );
 }
 console.log(`\nMANUAL: ${result.manual.length} · RECOMMEND-ONLY: ${result.recommendOnly.length} · not client-approved: ${result.notApproved.length}`);
 
