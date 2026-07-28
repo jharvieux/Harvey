@@ -227,3 +227,23 @@ export function legalTermsSection(data) {
 export function draftTermsBadge(data) {
   return data.legalTerms?.text ? "" : `<div class="conf" style="margin-left:8px">${DRAFT_NOTICE}</div>`;
 }
+
+// ---------------------------------------------------------------------------
+// §"Checked & ruled out (not applicable)" — the N/A rows — #1262
+// ---------------------------------------------------------------------------
+//
+// This section renders every `confidence: "N/A"` finding: the whole disclosure-row family
+// (M1-EXT-00, SUP-SCOPE-00, the M9 not-assessed rows, INFRA-SCOPE-00 …) lands here, and those rows
+// exist to say WHAT could not be assessed and WHY. It used to print `note ?? "Not applicable in
+// context."`, and none of those rows sets `note` — so on a rendered report the reason was replaced,
+// verbatim, by the one sentence the coverage guard exists to prevent: an unqualified "not
+// applicable". The row survived to the deliverable and its content did not. `evidence` is where a
+// not-assessed row states its scope, so it is the fallback; `note` still wins where a hand-authored
+// applicability finding sets one.
+export function notApplicableSection(na) {
+  if (!na.length) return "";
+  const rows = na.map((x) => `<div class="na"><span class="fid">${esc(x.id)}</span> <b>${esc(x.title)}</b> — ${esc(x.note ?? x.evidence ?? "Not applicable in context.")}</div>`).join("");
+  return `<h2>Checked &amp; ruled out (not applicable)</h2>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Items a checklist would flag, suppressed by the applicability gate (relevant to this app's auth model / architecture), plus every row a module recorded as NOT assessed. Shown for transparency — an item here was not cleared, it was not reached.</div>
+    ${rows}`;
+}

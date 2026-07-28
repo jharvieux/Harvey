@@ -1118,6 +1118,13 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     { check: "suspense", dir: "missing-suspense", neg: "negative" },
     { check: "unbounded", dir: "unbounded-route", neg: "negative" },
     { check: "cache-bleed", dir: "cache-bleed", neg: "negative" },
+    // #1263/#1292/#1262. The first three pairs are scored the opposite way round from their #848
+    // siblings: the NEGATIVE carries the shape that used to false-fire, the POSITIVE the
+    // near-identical shape that must still fire, so a fix that over-suppresses fails here.
+    { check: "action-auth-helper", dir: "server-action-helper-gate", neg: "negative" },
+    { check: "action-validation-helper", dir: "server-action-helper-validator", neg: "negative" },
+    { check: "waterfall-guard", dir: "waterfall-guard", neg: "negative" },
+    { check: "uncapped-retry", dir: "uncapped-retry", neg: "negative" },
   ];
 
   it("catches each check's planted positive at review tier and clears its boundary negative", () => {

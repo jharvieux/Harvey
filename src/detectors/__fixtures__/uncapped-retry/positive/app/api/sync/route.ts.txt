@@ -1,0 +1,17 @@
+// #1262 — two uncapped shapes in one handler: a retry loop whose attempt count comes from the
+// request body, and a fan-out issuing one outbound call per element of a request-supplied array.
+export async function POST(request: Request) {
+  const { url, attempts, ids } = await request.json();
+
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url);
+      return Response.json(await res.json());
+    } catch {
+      // swallow and retry
+    }
+  }
+
+  const results = await Promise.all(ids.map((id: string) => fetch(`${url}/${id}`)));
+  return Response.json(results.length);
+}

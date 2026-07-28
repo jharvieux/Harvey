@@ -1,0 +1,12 @@
+import { supabase } from "./db";
+
+export async function ensureMember(orgId: string) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("unauthenticated");
+
+  const { data: membership } = await supabase.from("memberships").select("id").eq("org_id", orgId).eq("user_id", user.id).single();
+  if (!membership) throw new Error("forbidden");
+  return membership;
+}
