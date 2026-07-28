@@ -1,0 +1,7 @@
+// The SAME read as the negative, in the route module's DEFAULT-EXPORT component instead of its
+// client-only `clientAction`. This one really does run during SSR — it must still fire, so a fix
+// that suppresses the negative by suppressing the whole file fails here.
+export default function ItemsRoute() {
+  window.clientCache.setQueryData("items", null);
+  return <div>items</div>;
+}

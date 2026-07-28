@@ -1,0 +1,10 @@
+import { UserCard } from "./UserCard";
+import { supabase } from "../../lib/db";
+
+// `select("*")` — the row really does carry every column to the client. Must still fire, so a fix
+// that suppresses the narrowed negative by dropping the check entirely fails here.
+export default async function DashboardPage() {
+  const { data: user } = await supabase.from("users").select("*").single();
+
+  return <UserCard user={user} />;
+}

@@ -1,0 +1,12 @@
+import { UserCard } from "./UserCard";
+import { supabase } from "../../lib/db";
+
+// The query ALREADY projected: `select("id, name")` names its columns, so "every field on the row
+// ships to the browser" — the finding's own evidence — is false here. Same rule the detector
+// already applied to `const { name } = row`, one step earlier in the chain (#1293: all THREE of
+// carbon's server→client-leak Highs were this shape).
+export default async function DashboardPage() {
+  const { data: user } = await supabase.from("users").select("id, name").single();
+
+  return <UserCard user={user} />;
+}
