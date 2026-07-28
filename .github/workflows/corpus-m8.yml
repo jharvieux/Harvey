@@ -18,11 +18,14 @@
 # with the measured note) OR our wrapper mis-reading the report (a scanner bug). Never something to
 # silence.
 #
-# SCOPE — only 2 of the corpus's 4 suite-carrying targets are scored here, and that is deliberate,
-# recorded, and NOT a silent skip (CLAUDE.md's coverage guard). multi-tenant-starter's suite starts
-# a Docker Postgres container per run, which mutation testing would pay per mutant; saas-lite's
-# suite is Playwright E2E only, so there is nothing to mutate. Both carry their measured reason in
-# external-corpus.ts's M8_DOCKER_PER_MUTANT / M8_E2E_ONLY_SUITE.
+# SCOPE — 3 of the corpus's 5 suite-carrying targets are scored here (inbox-zero joined proposit and
+# boxyhq, #1268), and the remaining gap is deliberate, recorded, and NOT a silent skip (CLAUDE.md's
+# coverage guard). multi-tenant-starter's suite starts a Docker Postgres container per run, which
+# mutation testing would pay per mutant; saas-lite's suite is Playwright E2E only, so there is
+# nothing to mutate. Both carry their measured reason in external-corpus.ts's
+# M8_DOCKER_PER_MUTANT / M8_E2E_ONLY_SUITE. rallly and carbon carry their own recorded not-run
+# reasons too (pnpm-workspace peculiarities #1268 did not resolve for them — see
+# external-corpus.ts's M8 entries for each).
 
 name: corpus-m8
 
@@ -49,10 +52,12 @@ jobs:
   mutation:
     name: install target deps + score M8 mutation baselines
     runs-on: ubuntu-latest
-    # The measured cost is ~1s of Stryker per target (proposit 21 mutants, boxyhq 35) on top of two
-    # `npm install`s of ~1000-1700 packages. The headroom is for the installs and for a suite that
-    # grows, not for the current mutant count — a Stryker run that somehow hangs should die here
-    # rather than burn an hour.
+    # proposit/boxyhq: ~1s of Stryker each (21/35 mutants) on top of two npm installs of
+    # ~1000-1700 packages. inbox-zero/rallly (#1268): pnpm workspace installs (~35-70s each,
+    # MEASURED) plus a real Stryker run each (~100s for inbox-zero's 125 mutants, ~10s for rallly's
+    # 30) — still low single-digit minutes total. The headroom is for the installs and for suites
+    # that grow, not for the current mutant counts — a Stryker run that somehow hangs should die
+    # here rather than burn an hour.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -63,15 +68,16 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      # Only the two targets with a scoreable suite. --install is redundant with --m8's own install
-      # for these two (both are also the ones needing --legacy-peer-deps), but passing it keeps this
-      # job's M5-knip reading consistent with corpus-drift.yml's rather than silently scoring knip
-      # against an uninstalled tree.
+      # Only the targets with a scoreable suite. --install is redundant with --m8's own install for
+      # these, but passing it keeps this job's M5-knip reading consistent with corpus-drift.yml's
+      # rather than silently scoring knip against an uninstalled tree.
       - name: Score M8 mutation baselines
         run: |
           set -euo pipefail
           pnpm corpus-drift --target proposit --install --m8 --json corpus-m8-proposit.json
           pnpm corpus-drift --target boxyhq --install --m8 --json corpus-m8-boxyhq.json
+          pnpm corpus-drift --target inbox-zero --install --m8 --json corpus-m8-inbox-zero.json
+          pnpm corpus-drift --target rallly --install --m8 --json corpus-m8-rallly.json
 
       - name: Upload M8 scorecards
         if: always()

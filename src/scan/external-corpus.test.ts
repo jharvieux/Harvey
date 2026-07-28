@@ -307,7 +307,10 @@ describe("M8 manifest shape (#300)", () => {
     for (const t of EXTERNAL_CORPUS) {
       expect(t.m8 !== undefined, `${t.slug}: m8 config vs baseline`).toBe(isMutationBaseline(t.modules.M8));
     }
-    expect(EXTERNAL_CORPUS.filter((t) => t.m8).map((t) => t.slug).sort()).toEqual(["boxyhq", "proposit"]);
+    // #1268: inbox-zero and rallly joined — a pnpm-aware install (and, for inbox-zero, disabling
+    // the target's own enableGlobalVirtualStore) resolved the pnpm-workspace blocker that used to
+    // leave both not-run.
+    expect(EXTERNAL_CORPUS.filter((t) => t.m8).map((t) => t.slug).sort()).toEqual(["boxyhq", "inbox-zero", "proposit", "rallly"]);
   });
 
   it("carries a covered scope matching the Stryker mutate config on every mutation baseline (#319)", () => {
