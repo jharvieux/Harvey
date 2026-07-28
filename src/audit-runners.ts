@@ -719,11 +719,23 @@ const M7_LIGHTHOUSE_NOT_RUN =
 // loses a layer — partial, not a skip. #350: detect-static exits 0 over an empty dir, so the probe
 // checks the file count it printed before claiming the code tier ran.
 //
-// #357 (untestable in CI): with no live DB, the `perf-scan` advisor call has only ever been
-// exercised in its FAILURE path (advisors failed → partial). Whether a successful advisor run that
-// linted nothing would read as `ran` rather than an honest partial is unverified — same open
-// question as M3/M5/M8/M9's exit-code-as-evidence pattern (#350). It fails honestly today; that a
-// success stays honest is not yet measured.
+// Re-tested 2026-07-28 (#1311, superseding #357's in-probe note — do not reopen #357, its scope is
+// superseded): the SUCCESS branch below (advisors succeeded → `ran`) is proven correct by unit
+// tests with a mocked ctx.exec, but the real `pnpm perf-scan <ref>` this probe shells out to has
+// never itself completed a token-authenticated fetch against a hosted project. #815 verified the
+// endpoint PATH (against the published OpenAPI spec) and that `parseAdvisorFindings()` parses a real
+// captured payload — but its own header says the raw `fetch()` in `fetchPerformanceAdvisors` "is
+// unexercised end-to-end" (`src/cli/perf-scan.ts`), and the one real connected engagement since
+// (`docs/design/aop-audit-2026-07-18.md`) got its advisor data through the `get_advisors` MCP tool,
+// not through this CLI/probe path. It fails honestly today; that a success stays honest is still not
+// measured.
+//
+// REASON: the orchestrator's own `pnpm perf-scan <ref>` invocation has never completed a real token-authenticated fetch against a hosted Supabase project — only the URL path and the payload parser have been verified live (#815), and the one real connected engagement used the get_advisors MCP tool instead of this CLI path
+// KIND: empirical
+// PROVENANCE: TRIED 2026-07-28 — attempted a live connected run this session (`supabase projects list`) and got "Access token not provided" (no SUPABASE_ACCESS_TOKEN available here); read src/cli/perf-scan.ts's header and docs/m7-performance.md:57 (#815 verified only the URL path and parseAdvisorFindings(), explicitly noting the fetch() itself is unexercised end-to-end) and docs/design/aop-audit-2026-07-18.md (the one real connected engagement's advisor data came from the MCP get_advisors tool, not this CLI)
+// FALSIFIER: SUPABASE_ACCESS_TOKEN=<supabase-pat> pnpm perf-scan <supabase-project-ref> --out /tmp/harvey-m7-live-falsifier.json
+// FALSIFIER-TIER: supabase-connected
+// TOUCHES: src/audit-runners.ts, src/cli/perf-scan.ts
 // #1042: M7 reads its own pass artifact rather than going through foldRecordedPass, because for M7
 // the recorded pass IS the named missing tier — with a fresh Lighthouse pass M7_LIGHTHOUSE_NOT_RUN
 // becomes a false claim and has to be REPLACED, not appended to.
@@ -969,8 +981,19 @@ const m9: ModuleRunner = { module: "M9", typed: true, run: perApp(m9Run) };
 // A coverage-only run (no capture) keeps the explicit not-collected disclosure — findings exist
 // only when a capture path was given, and absence must never read as clean.
 //
-// #357 (untestable in CI): the `connected` branch needs real DB creds and has only ever been
-// exercised in its failure path here.
+// Re-tested 2026-07-28 (#1311, superseding #357's in-probe note — do not reopen #357, its scope is
+// superseded): the `connected` branch below (`SUPABASE_DB_URL=<url> pnpm pii-classify`) still needs
+// real DB creds this environment does not have, and the one real connected engagement
+// (`docs/design/aop-audit-2026-07-18.md`) got its M10-live data through the `list_tables`/MCP tools
+// directly rather than through this CLI/probe path — so THIS probe's connected branch remains
+// exercised only in its failure path.
+//
+// REASON: the orchestrator's own `SUPABASE_DB_URL=<url> pnpm pii-classify` invocation (the m10Live connected branch) has never completed a real live-DB classification against a hosted project — the one real connected engagement used the list_tables/get_advisors MCP tools directly instead of this CLI path
+// KIND: empirical
+// PROVENANCE: TRIED 2026-07-28 — attempted a live connected run this session and had no SUPABASE_DB_URL for a hosted project available (no SUPABASE_ACCESS_TOKEN either, so no way to mint one via the Management API); read docs/design/aop-audit-2026-07-18.md's connected-tier section, which names get_advisors/list_tables (MCP), not pii-classify, as the source of that engagement's M10-live data
+// FALSIFIER: SUPABASE_DB_URL=<supabase-db-url> pnpm pii-classify --out /tmp/harvey-m10-live-falsifier.json
+// FALSIFIER-TIER: supabase-connected
+// TOUCHES: src/audit-runners.ts, tools/pii-classify.mjs
 // #1049: the data map itself — the table→PII/PHI/PCI classification every other module's severity is
 // weighted by. pii-classify writes it to --data-map-out; a run that captured no map leaves the
 // assembler to record M10-ESCALATION-00 rather than escalate nothing silently.

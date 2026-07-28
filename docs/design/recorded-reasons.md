@@ -156,17 +156,20 @@ reason registry.
 
 **FALSIFIER-TIER — for a falsifier that can only run against a live environment (#1072).** Some
 empirical blockers are only re-testable on a tier that is not present on a normal offline run: a
-two-tenant M2 stack, a Lighthouse/CWV pass, a SecBench run, the paired Supabase security labs.
-Recording those with a plain `FALSIFIER:` forces one of two dishonesties — a fake offline proxy
-command that re-tests nothing, or an `UNVERIFIABLE` failure on every offline run. `FALSIFIER-TIER:`
-names the environment the command needs. On an offline run the falsifier is **SKIPPED-LIVE** —
-disclosed and counted, never dropped and never a failure — and on a run that declares that tier
-available it runs exactly like any other falsifier. It is optional, empirical-only (refused on a
-decisional reason, which must carry no falsifier at all), and its value must be one of the registered
-tiers — `m2-stack`, `lighthouse`, `secbench`, `supabase-labs`. A value outside that set is
-**malformed**, not silently always-skipped, because a typo would make the falsifier permanently
-skip. The registry is the `KNOWN_FALSIFIER_TIERS` set in `src/recorded-reasons.ts` — the single
-place a new live tier is added (like #341's `OWNERS` map).
+two-tenant M2 stack, a Lighthouse/CWV pass, a SecBench run, the paired Supabase security labs, a
+hosted Supabase project reachable with a client-supplied credential. Recording those with a plain
+`FALSIFIER:` forces one of two dishonesties — a fake offline proxy command that re-tests nothing, or
+an `UNVERIFIABLE` failure on every offline run. `FALSIFIER-TIER:` names the environment the command
+needs. On an offline run the falsifier is **SKIPPED-LIVE** — disclosed and counted, never dropped and
+never a failure — and on a run that declares that tier available it runs exactly like any other
+falsifier. It is optional, empirical-only (refused on a decisional reason, which must carry no
+falsifier at all), and its value must be one of the registered tiers — `m2-stack`, `lighthouse`,
+`secbench`, `supabase-labs`, `supabase-connected` (#1311 — a HOSTED Supabase project plus a
+client-supplied credential such as a Management API PAT or a `SUPABASE_DB_URL`, distinct from
+`m2-stack`'s own locally-provisioned stack and `supabase-labs`' fixed local corpus pair). A value
+outside that set is **malformed**, not silently always-skipped, because a typo would make the
+falsifier permanently skip. The registry is the `KNOWN_FALSIFIER_TIERS` set in
+`src/recorded-reasons.ts` — the single place a new live tier is added (like #341's `OWNERS` map).
 
 ### `<placeholder>` bindings — how a live-tier falsifier names a target that is not in the repo
 
@@ -212,13 +215,16 @@ green job whose own controls no longer prove anything is precisely the false gre
 exists to kill. The rule generalises past `TOUCHES:`: **no new mandatory field may be added to a
 reason block without first adding it to those three planted heredocs.**
 
-**Open weakening, recorded rather than left silent (#1319).** The second planted heredoc reads
-`REASON: planted claim with no way to re-test it` / `PROVENANCE: ASSUMED 2026-07-27`, which now trips
-the impossibility-register rule as well as the missing-`FALSIFIER:` rule it was planted for. That
-control asserts only a non-zero exit, so it still fails — but it no longer *isolates* the rule it
-names. `.github/workflows/` is supervised, so the one-word fix (`no way to re-test it` → `nothing
-here re-tests it`) needs an operator pass; until then the isolation is asserted by
-`src/cli/validate-reasons.test.ts`'s own planted corpus instead.
+**Weakening found, then fixed (#1319/#1326).** The second planted heredoc used to read
+`REASON: planted claim with no way to re-test it` / `PROVENANCE: ASSUMED 2026-07-27`, which tripped
+the impossibility-register rule as well as the missing-`FALSIFIER:` rule it was planted for — the
+control still failed (it asserted only a non-zero exit), but it no longer *isolated* the rule it
+named. Fixed 2026-07-28 (#1326): the wording is now `REASON: planted claim, nothing here re-tests it
+(#1326)`, which trips ONLY the missing-`FALSIFIER:` rule (verified both before and after the edit),
+and the control itself was separately hardened (#1253 item 2) to assert its output names
+`FALSIFIER: missing` rather than accepting any non-zero exit — so it now both isolates the rule it
+names AND fails for that rule specifically, not incidentally. The isolation claim is additionally
+asserted by `src/cli/validate-reasons.test.ts`'s own planted corpus.
 
 Instead the paths are **derived from the falsifier the author already wrote** (#1246): a token in the
 `FALSIFIER:` naming a path that exists in this checkout is a subsystem the claim depends on.
