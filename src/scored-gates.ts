@@ -34,6 +34,9 @@
 // FALSIFIER: test -d .github/workflows || exit 127; grep -rq 'validate-semantic' .github/workflows/ && exit 0 || exit 1
 // TOUCHES: src/cli/validate-semantic.ts .github/workflows
 
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readNamesSafe } from "./fs-walk.js";
 
 /** Where a gate runs, and the evidence that proves it still does. */
@@ -115,6 +118,7 @@ export const NOT_SCORED: readonly { readonly id: string; readonly why: string }[
   { id: "validate-findings", why: "schema validation of a findings file" },
   { id: "validate-fs-walk", why: "structural — bans raw statSync/readdirSync outside src/fs-walk.ts; a violation count, not a recall number" },
   { id: "validate-reasons", why: "structural — checks recorded reasons are well-formed and re-tests their falsifiers" },
+  { id: "validate-render-fidelity", why: "structural — checks a finding's own words survive the render seam into report.html (#1435); the standing gate is src/render-fidelity.test.ts inside `pnpm verify`, this CLI points the same check at a real engagement deliverable" },
   { id: "validate-scored-gates", why: "this gate — checks the scored gates above still have a cadence" },
   { id: "validate-test-only-exports", why: "ratchet over exports whose only consumer is their own test" },
 ];
@@ -184,6 +188,25 @@ export function checkScoredGates(
   }
 
   return violations;
+}
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// #1483 — lives here rather than in validate-scored-gates.ts, where it used to. That CLI runs its
+// gate and can `process.exit(1)` at module load, so importing it to reach this loader made one
+// gate able to abort another; src/scan/calibration.ts now needs the same venues.
+export function loadGateInputs(root = REPO_ROOT): GateInputs {
+  const workflowDir = join(root, ".github", "workflows");
+  const workflows: Record<string, string> = {};
+  for (const f of readNamesSafe(workflowDir).filter((f) => f.endsWith(".yml"))) {
+    workflows[`.github/workflows/${f}`] = readFileSync(join(workflowDir, f), "utf8");
+  }
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
+  return {
+    discovered: discoverValidateClis(join(root, "src", "cli")),
+    scripts: pkg.scripts ?? {},
+    workflows,
+  };
 }
 
 export function describeCadence(cadence: Cadence): string {

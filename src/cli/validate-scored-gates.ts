@@ -6,35 +6,14 @@
 // this CLI is the human-readable view plus the negative controls. Each --seed flag corrupts one
 // input and the run MUST go red, so the failing direction is exercised rather than assumed.
 
-import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { readNamesSafe } from "../fs-walk.js";
-import { fileURLToPath } from "node:url";
 import { assertKnownFlags } from "./args.js";
 import {
   NOT_SCORED,
   SCORED_GATES,
   checkScoredGates,
   describeCadence,
-  discoverValidateClis,
-  type GateInputs,
+  loadGateInputs,
 } from "../scored-gates.js";
-
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-
-export function loadGateInputs(root = REPO_ROOT): GateInputs {
-  const workflowDir = join(root, ".github", "workflows");
-  const workflows: Record<string, string> = {};
-  for (const f of readNamesSafe(workflowDir).filter((f) => f.endsWith(".yml"))) {
-    workflows[`.github/workflows/${f}`] = readFileSync(join(workflowDir, f), "utf8");
-  }
-  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
-  return {
-    discovered: discoverValidateClis(join(root, "src", "cli")),
-    scripts: pkg.scripts ?? {},
-    workflows,
-  };
-}
 
 const SEEDS = ["--seed-missing-script", "--seed-broken-cadence", "--seed-unclassified"] as const;
 assertKnownFlags(SEEDS);
