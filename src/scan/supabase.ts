@@ -226,6 +226,47 @@ export function dedupeAutoExposed(splinterFindings: Finding[], autoExposedFindin
   return autoExposedFindings.filter((f) => !covered.has(f.location));
 }
 
+// Gate 4b (#1330). Local mode runs a strict subset of hosted mode's checks: three of them read the
+// hosted platform's own configuration (PostgREST's `db-schema` setting and the Management API's
+// auth config), which is not held in Postgres, so a local connection cannot answer their question.
+// Returning the shorter list in silence made a locally-scanned project indistinguishable from one
+// whose schema exposure and auth config were checked and found clean. The omissions are enumerated
+// in CONDITIONAL_SCANS (src/conditional-scan.ts), which fails loud if a fourth one appears or if
+// this row stops naming one of them.
+function localScopeFinding(): Finding[] {
+  return [
+    {
+      id: "SB-SCOPE-00",
+      title: "3 Supabase project-config checks a local-mode scan could not run",
+      severity: "Info",
+      confidence: "N/A",
+      category: "Coverage",
+      taxonomy: "Coverage — Supabase checks local mode could not run",
+      location: "(supabase project config)",
+      status: "Open",
+      evidence:
+        "This scan ran against a local `supabase start` stack over Postgres. Three checks the hosted-mode scan " +
+        "runs did not run here: PostgREST-exposed schemas (which non-public schemas the REST API serves to " +
+        "clients), GraphQL introspection (whether pg_graphql exposes a queryable schema over that same REST " +
+        "surface), and GoTrue auth configuration (auto-confirm, leaked-password protection, OTP expiry, redirect " +
+        "allow-list). The first two read PostgREST's `db-schema` setting and the third reads the Management API's " +
+        "auth config — both are held by the hosted platform, not in the database, so a local Postgres connection " +
+        "cannot read either.",
+      impact:
+        "The absence of a schema-exposure, GraphQL-introspection or auth-configuration finding in this report " +
+        "means those questions were never asked — not that the answers are safe. Counted and named here so the " +
+        "gap cannot be read as a clean result.",
+      fix:
+        "Re-run the Supabase pass in hosted mode against the deployed project (`pnpm exec tsx src/cli/scan.ts " +
+        "--supabase <project-ref>`, with a read-only Management API token) to cover these three classes.",
+      value: 1,
+      ease: 4,
+      safety: 5,
+      mechanical: true,
+    },
+  ];
+}
+
 async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterImpl: (connectionString: string) => AdvisorsResponse = runSplinter): Promise<Finding[]> {
   const { default: postgres } = await import("postgres");
   const sql = postgres(connectionString, { max: 1, idle_timeout: 5 });
@@ -249,9 +290,8 @@ async function scanLocal(connectionString: string = LOCAL_CONNECTION, splinterIm
 
     const splinterFindings = parseAdvisorFindings(splinterImpl(connectionString));
 
-    // Exposed-schema / pg_graphql breadth reads PostgREST's db-schema config, which isn't in
-    // Postgres — hosted-only. Local mode covers the realtime-authorization class (SQL-readable).
     return [
+      ...localScopeFinding(),
       ...splinterFindings,
       ...dedupeAutoExposed(splinterFindings, checkAutoExposedTables(tables)),
       ...checkDangerousExtensions(extensions),

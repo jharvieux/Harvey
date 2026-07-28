@@ -247,6 +247,10 @@ rules:
     message: >
       Redirect target derives from a request-controlled value with no host allowlist — a
       classic open-redirect primitive for phishing (and SSRF-shaped if fetched server-side).
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it follows the value within this file only. A host allowlist enforced elsewhere — in shared
+      middleware, a route wrapper, or a helper the value passes through — is not something this
+      rule reads, so confirm no such guard runs before treating this as unmitigated.
     pattern-sources:
       - *request_source
     pattern-sanitizers:
@@ -648,6 +652,9 @@ rules:
   # so keying the sink on the wrapper name recovers the flow (same curated-callee-name approach as
   # harvey-sql-injection-rpc's exec_sql/run_sql list). A wrapper called with a request-tainted URL
   # is exactly the SSRF entry point.
+  # #1342: the rule cannot see a host allowlist applied in another module, and the wrapper-name list
+  # is curated — a differently-named helper carrying the URL to the network is not assessed. Stated
+  # in the message, not only here.
   - id: harvey-ssrf-fetch
     languages: [javascript, typescript]
     mode: taint
@@ -663,6 +670,13 @@ rules:
     message: >
       A request-controlled URL is fetched server-side with no host allowlist — SSRF. Validate
       the host against an allowlist and block internal/link-local ranges before fetching.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it follows the value within this file only, and the fetch itself is recognised either as a
+      direct `fetch()` or through a short curated list of wrapper names — a request-tainted URL
+      reaching the network through a differently-named helper, or through a host allowlist applied
+      in another module, is not assessed here. Whether a confirmed SSRF is exploitable also depends
+      on the deploy network (which internal ranges and metadata endpoints are reachable), which no
+      source scan can determine.
     pattern-sources:
       - *request_source
     pattern-sanitizers:
@@ -694,7 +708,7 @@ rules:
                   ...
           - focus-metavariable: $X
       # #1240: (a2) validator-guard on the value the fetch RECEIVES, which the projection guard
-      # above structurally cannot see. Needed once the RSC `{ params }` source landed: the sheet's
+      # above structurally does not reach. Needed once the RSC `{ params }` source landed: the sheet's
       # own correct form validates the route segment itself, so without this the rule would fire on
       # the remedy it recommends. Same soundness constraints as the #989 block — an ANCHORED,
       # POSITIVE-class regex (an unanchored allowlist matches a prefix), or exact membership — plus a

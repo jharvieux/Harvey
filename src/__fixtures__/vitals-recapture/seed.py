@@ -228,6 +228,26 @@ def seed_provenance(repo):
     conn.close()
 
 
+def git_scope_sanity(repo):
+    """Independent, error-visible check that the seeded repo's 90-day churn window has commits --
+    the precondition vitals' OWN `git log --since=90.days.ago` queries need to produce non-empty
+    hotspots/coupling/knowledge_risk. vitals 0.2.0's git_analysis._run_git discards stderr AND
+    collapses ANY non-zero exit or timeout to an empty result, indistinguishable in its JSON output
+    from "no history in window" (read from the plugin source at
+    ~/.claude/plugins/cache/vitals/vitals/0.2.0/scripts/git_analysis.py, not assumed). This capture
+    answers, from OUTSIDE that swallow point, whether the window genuinely had no commits (a real
+    seed bug) or git itself failed (the #1206 flake class) -- something vitals' own output cannot
+    say. Recorded in the fixture as `_gitScopeSanity`, read by
+    src/scan/fixture-drift-contracts.ts's classifyVitalsGitScopeFailure.
+    """
+    r = subprocess.run(
+        ["git", "-C", repo, "log", "--since=90.days.ago", "--oneline"],
+        capture_output=True, text=True,
+    )
+    commits = len(r.stdout.strip().splitlines()) if r.returncode == 0 and r.stdout.strip() else 0
+    return {"commits": commits, "returncode": r.returncode, "stderr": (r.stderr.strip() or None)}
+
+
 def run_vitals(repo):
     ver = subprocess.run([sys.executable, VITALS_CLI, "version"], capture_output=True, text=True)
     if ver.stdout.strip() != EXPECTED_VERSION:
@@ -267,11 +287,13 @@ def main():
     try:
         build_repo(repo)
         seed_provenance(repo)
+        sanity = git_scope_sanity(repo)
         report = run_vitals(repo)
 
         # Prepend a provenance _note (metadata, not a tool field) — mirrors the lighthouse fixtures.
         # Absolute capture-machine path leaks nothing useful; normalize `scope`/path-ish fields.
-        out = {"_note": NOTE}
+        # _gitScopeSanity is likewise metadata (#1206), not a vitals field.
+        out = {"_note": NOTE, "_gitScopeSanity": sanity}
         out.update(report)
         with open(args.out, "w") as f:
             json.dump(out, f, indent=2)
@@ -292,6 +314,9 @@ def main():
         print("=== provenance.ai_files ===", file=sys.stderr)
         for a in (report.get("provenance", {}) or {}).get("ai_files", []):
             print(f"  {a['file_path']}  total_events={a['total_events']} edit={a['edit_count']} write={a['write_count']}", file=sys.stderr)
+        print("=== git scope sanity (independent of vitals, #1206) ===", file=sys.stderr)
+        print(f"  commits(90d window)={sanity['commits']} returncode={sanity['returncode']}"
+              + (f" stderr={sanity['stderr']!r}" if sanity["stderr"] else ""), file=sys.stderr)
         print(f"\nwrote {args.out}", file=sys.stderr)
     finally:
         if args.keep_repo:

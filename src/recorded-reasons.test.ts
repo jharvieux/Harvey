@@ -10,8 +10,8 @@ import {
   claimRatchetBreaches,
   claimTotal,
   collectReasons,
+  censusScope,
   collectSources,
-  isCensusedSurface,
   issueSources,
   markNewClaims,
   parseRecordedReasons,
@@ -393,15 +393,36 @@ describe("the claim ratchet (#1318) — the census may fall, never rise", () => 
   // breach elsewhere in the repo, which is how it and the row below failed together in run
   // 30313783920 and named neither cause. A control has to isolate the rule it names.
   it("fires when a claim-shaped comment is planted in a real repo file", () => {
-    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT).filter((s) => isCensusedSurface(s.file));
+    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
     const planted = sources.map((s) => (s.file === "CLAUDE.md" ? { ...s, text: `${s.text}\nThis cannot be measured by any existing tier.\n` } : s));
     const census = claimCensusByFile(untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #")));
     const budget = CLAIM_BASELINE["CLAUDE.md"]?.length ?? 0;
     expect(claimRatchetBreaches(claimCounts(CLAIM_BASELINE), census)).toContainEqual({ file: "CLAUDE.md", baseline: budget, now: budget + 1 });
   });
 
+  // #1347's fourth criterion, and the half the .md control above cannot speak to: the ratchet gated
+  // prose only, so a claim planted in a source COMMENT moved nothing. Planted in a real `.ts` file
+  // under the real vocabulary, and scored against the whole breach list so only this file goes red.
+  it("fires when a claim-shaped comment is planted in a real .ts file", () => {
+    const target = "src/alert-paths.ts";
+    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
+    const planted = sources.map((s) => (s.file === target ? { ...s, text: `${s.text}\n// A planted claim: this cannot be measured by any existing tier.\n` } : s));
+    const census = claimCensusByFile(untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #")));
+    const budget = CLAIM_BASELINE[target]?.length ?? 0;
+    expect(claimRatchetBreaches(claimCounts(CLAIM_BASELINE), census)).toContainEqual({ file: target, baseline: budget, now: budget + 1 });
+  });
+
+  // The scale trap #1347 asks to decide first: `.ts` carries 767 claim-shaped lines to `.md`'s 274,
+  // but 270 of them are error-message strings and test titles. Pinned by an example of each so a
+  // widening to whole-file `.ts` cannot happen quietly.
+  it("reads a .ts comment but not a .ts code line, so ordinary code prose is not ratcheted", () => {
+    const text = ['// this cannot be measured today', 'throw new Error("cannot seed: nothing to drop");'].join("\n");
+    expect(untriagedClaims([{ file: "src/x.ts", text }], []).map((c) => c.line)).toEqual([1]);
+    expect(untriagedClaims([{ file: "docs/x.md", text }], []).map((c) => c.line)).toEqual([1, 2]);
+  });
+
   it("holds the committed baseline over this repo right now", () => {
-    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT).filter((s) => isCensusedSurface(s.file));
+    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
     const census = claimCensusByFile(untriagedClaims(sources, reasonsForCensus).filter((c) => !c.file.startsWith("issue #")));
     expect(claimRatchetBreaches(claimCounts(CLAIM_BASELINE), census)).toEqual([]);
     // A baseline that drifted to zero would pass the line above forever while measuring nothing.
@@ -438,11 +459,23 @@ describe("the claim ratchet (#1318) — the census may fall, never rise", () => 
     });
   });
 
-  // The boundary itself, asserted rather than left implicit — #1347 is open precisely because it was
-  // implicit, and a widening that forgets the disclosure would otherwise pass silently.
-  it("censuses prose only: a source file is not read, and #1347 says so", () => {
-    expect(isCensusedSurface("docs/design/x.md")).toBe(true);
-    expect(isCensusedSurface("src/alert-paths.ts")).toBe(false);
-    expect(isCensusedSurface(".github/workflows/ci.yml")).toBe(false);
+  // The boundary itself, asserted rather than left implicit — #1347 existed precisely because it was
+  // implicit, and a narrowing that forgets the disclosure would otherwise pass silently.
+  it("reads prose whole, code as comments, and refuses to census the generated baseline (#1347)", () => {
+    expect(censusScope("docs/design/x.md")).toBe("prose");
+    expect(censusScope("briefs/fp-rules.txt")).toBe("prose");
+    expect(censusScope("issue #1347")).toBe("prose");
+    expect(censusScope("src/alert-paths.ts")).toBe("comments");
+    expect(censusScope("src/scan/rules/semgrep/auth.yml")).toBe("comments");
+    // Its rows quote every claim in the repo verbatim, so censusing it counts each claim twice.
+    expect(censusScope("src/unstructured-claims-baseline.ts")).toBe("none");
+  });
+
+  // The three sites #1311 records. They are the population #1318 was built for and none of them was
+  // reachable: "untestable" was not in the vocabulary and `.ts` was not censused.
+  it("reaches #1311's three `untestable in CI` comments (#1347)", () => {
+    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
+    const found = untriagedClaims(sources, reasonsForCensus).filter((c) => /untestable in CI/.test(c.text));
+    expect(found.map((c) => c.file).sort()).toEqual(["src/audit-runners.ts", "src/audit-runners.ts", "src/pentest/targets.ts"]);
   });
 });

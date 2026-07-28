@@ -269,6 +269,10 @@ rules:
       This 'use server' Server Action mutates data with no Origin/CSRF check. Cookie-based auth
       is submitted automatically by the browser on cross-site requests too — without an Origin
       allowlist or CSRF token, a malicious page can trigger this mutation as the logged-in user.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it looks for an Origin or CSRF comparison inside this function. A global CSRF guard — proxy
+      middleware, a framework default, or a shared action wrapper applied everywhere — is not
+      something this rule reads, so confirm none applies before treating this as unprotected.
     patterns:
       - pattern-inside: |
           "use server";
@@ -572,6 +576,10 @@ rules:
       A request-controlled value is written into a response header (res.setHeader) with no CR/LF
       stripping — an attacker can inject additional headers or split the response (CRLF injection).
       Strip CR/LF (or reject the value) before setting the header.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the unstripped write. Some frameworks already reject CR/LF in header values at the
+      runtime layer, which a source scan cannot confirm — verify your framework's behaviour before
+      treating this as exploitable.
     # #1224 judgment: adopt the canonical block WHOLESALE. The weakness is CR/LF reaching a
     # response-header value, so every attacker-controlled STRING is in class and no source in the
     # block is out of it — there is nothing to weigh. The eight patterns this replaces are all
@@ -689,6 +697,10 @@ rules:
       An on-demand ISR revalidation endpoint calls res.revalidate() on a request-controlled path
       with no shared-secret check — anyone can force cache purges/rebuilds (DoS). Require a secret
       token (compared against a server-side value) before revalidating.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it looks for the secret comparison inside this handler. A check that lives in shared
+      middleware or a route wrapper is outside what this rule reads, so confirm none applies before
+      treating the endpoint as unprotected.
     patterns:
       - pattern: $RES.revalidate($REQ.query.$P)
       - pattern-not-inside: |

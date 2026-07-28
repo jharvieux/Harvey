@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  BOUNDED_RULES,
+  BOUND_TRIAGE,
   auditDisclosureVenue,
+  boundedRatchet,
   commentBounds,
+  loadSemgrepRuleFiles,
   loadSemgrepRules,
   parseSemgrepRules,
+  residualBoundish,
   scopeSentence,
+  unattributedBounds,
   verdict,
   type SemgrepRule,
 } from "./disclosure-venue.js";
@@ -143,6 +149,12 @@ describe("the committed semgrep rules", () => {
   // The population-level negative control, and the one that measured the defect. A fixture proves
   // the gate CAN reject a contentless sticker; only this proves it rejects one on the rules it
   // actually guards. Measured 2026-07-27 against the whole message: 9 of 13 still passed.
+  //
+  // The sticker's own wording matters, which #1342 found the hard way: the previous text ("nothing
+  // worth naming") shared the word "naming" with harvey-secret-in-url-param's bound ("this is a
+  // naming heuristic"), which the widened vocabulary brought into the population — so the control
+  // passed that one rule for a reason that had nothing to do with disclosure. A control must carry
+  // no content word any real bound might use.
   it("rejects a contentless sticker substituted for the real disclosure on EVERY bounded rule", () => {
     const bounded = rules.filter((r) => commentBounds(r).length > 0);
     const stillPassing = bounded
@@ -150,10 +162,73 @@ describe("the committed semgrep rules", () => {
         const scope = scopeSentence(r.message);
         if (scope === null) throw new Error(`${r.id} passes the gate with no scope sentence`);
         const prefix = r.message.slice(0, r.message.length - scope.length);
-        return { ...r, message: `${prefix}SCOPE OF THIS CHECK: nothing worth naming.` };
+        return { ...r, message: `${prefix}SCOPE OF THIS CHECK: n/a.` };
       })
       .filter((r) => verdict(r, commentBounds(r)) === "stated")
       .map((r) => r.id);
     expect(stillPassing).toEqual([]);
+  });
+});
+
+// #1342: a bound the ORIGINAL vocabulary already covered was invisible purely because the author
+// pressed return in the middle of the phrase. harvey-jwt-sign-noexpiry and
+// harvey-edgefn-secret-fallback were both found this way, not by widening the words.
+describe("a bound that wraps across comment lines", () => {
+  it("is seen, and the hit carries only the lines the phrase spans", () => {
+    const text = [
+      "rules:",
+      "  # A variable options argument is NOT flagged — this rule can't",
+      "  # see whether expiresIn lives inside it, so it stays out.",
+      "  # An unrelated note about pattern mechanics.",
+      "  - id: harvey-fixture",
+      "    message: >",
+      "      A finding. SCOPE OF THIS CHECK: an options object held in a variable is not assessed.",
+      "    pattern: foo()",
+    ].join("\n");
+    const [parsed] = parseSemgrepRules(text, "fixture.yml");
+    const hits = commentBounds(parsed as SemgrepRule);
+
+    expect(hits.map((h) => h.marker)).toContain("cannot see");
+    expect(hits[0]?.text).toContain("expiresIn");
+    expect(hits[0]?.text).not.toContain("unrelated note"); // the bound's vocabulary, not the preamble's
+    expect(verdict(parsed as SemgrepRule, hits)).toBe("stated");
+  });
+});
+
+describe("boundedRatchet (#1330's deletion vector)", () => {
+  it("reports a rule that still exists and has lost its recorded bound", () => {
+    const kept = loadSemgrepRules();
+    const stripped = kept.map((r) => (r.id === BOUNDED_RULES[0] ? { ...r, comments: [] } : r));
+
+    expect(boundedRatchet(stripped)).toEqual([BOUNDED_RULES[0]]);
+  });
+
+  it("is silent about a baseline rule that no longer exists — renaming and deleting are legitimate", () => {
+    expect(boundedRatchet([])).toEqual([]);
+  });
+
+  it("passes on the committed rule set", () => {
+    expect(boundedRatchet(loadSemgrepRules())).toEqual([]);
+  });
+});
+
+// #1342 criteria 3 and 4: what the gate cannot judge is counted, never absent.
+describe("the gate's own residual", () => {
+  it("triages every rule carrying bound-ish prose outside the marker vocabulary", () => {
+    const residual = residualBoundish(loadSemgrepRules()).map((r) => r.id).sort();
+
+    expect(residual).toEqual([...BOUND_TRIAGE.map((t) => t.id)].sort());
+    expect(BOUND_TRIAGE.every((t) => t.disposition.length > 40)).toBe(true);
+  });
+
+  it("counts and names the marker-bearing comment lines that belong to no rule", () => {
+    const rules = loadSemgrepRules();
+    const { commentLines, unattributed, bearing } = unattributedBounds(rules, loadSemgrepRuleFiles());
+
+    expect(unattributed).toBeGreaterThan(0);
+    expect(unattributed).toBeLessThan(commentLines);
+    // Zero here would mean the shared-anchor gap reads as closed when it is only unmeasured.
+    expect(bearing.length).toBeGreaterThan(0);
+    expect(bearing.every((b) => b.file.endsWith(".yml") && b.line > 0 && b.text.length > 0)).toBe(true);
   });
 });

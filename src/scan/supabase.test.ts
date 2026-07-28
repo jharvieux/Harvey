@@ -234,6 +234,45 @@ describe("runSupabaseScan", () => {
       expect(rlsFindings[0]?.taxonomy).toBe("rls_disabled_in_public");
     });
   });
+
+  // #1330 (gate 4b). Local mode runs a strict subset of hosted mode's checks. The subset itself is
+  // fine; returning it in silence is not — a locally-scanned project would read exactly like one
+  // whose schema exposure and auth config were checked and found clean.
+  describe("local mode — the omitted checks are disclosed, not silent (#1330)", () => {
+    const splinterImpl = () => ({ lints: [] });
+
+    it("emits SB-SCOPE-00 naming all three classes local mode could not read", async () => {
+      const findings = await runSupabaseScan({ local: true, splinterImpl });
+      const row = findings.find((f) => f.id === "SB-SCOPE-00");
+
+      expect(row).toBeDefined();
+      expect(row?.category).toBe("Coverage");
+      // The three checks scanHosted runs and scanLocal does not, in the words the client reads.
+      expect(row?.evidence).toContain("PostgREST-exposed schemas");
+      expect(row?.evidence).toContain("GraphQL introspection");
+      expect(row?.evidence).toContain("GoTrue auth configuration");
+    });
+
+    it("does not emit SB-SCOPE-00 in hosted mode, where those three checks actually run", async () => {
+      const fetchImpl = mockFetch({
+        advisors: { lints: [] },
+        authConfig: { mailer_autoconfirm: true },
+        tables: [],
+        extensions: [],
+        buckets: [],
+        policies: [],
+        postgrest: { db_schema: "public,internal" },
+      });
+
+      const findings = await runSupabaseScan({ projectRef: "abc123", managementApiToken: "t", fetchImpl });
+
+      expect(findings.some((f) => f.id === "SB-SCOPE-00")).toBe(false);
+      // The two classes the row stands in for locally are real findings here, which is why the row
+      // must NOT be present: hosted mode asked the questions.
+      expect(findings.some((f) => f.taxonomy === "PostgREST schema exposure wider than intended")).toBe(true);
+      expect(findings.some((f) => f.taxonomy === "Auth config: email confirmation disabled")).toBe(true);
+    });
+  });
 });
 
 describe("dedupeAutoExposed", () => {
