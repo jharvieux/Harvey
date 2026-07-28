@@ -68,8 +68,14 @@ export interface CorpusEntry {
   // green — #1251 hit exactly that (a taint-source widening made harvey-path-traversal fire on
   // N-STORAGE-DB-PATH; it surfaced only by hand-diffing dry-run/findings.json). The free count is
   // still what makes a negative FAIL LOUD as a false positive; this makes any MOVEMENT fail as a
-  // regression, which is the thing no gate could previously see. Recording a taxonomy here is a
-  // deliberate act with a reason in `note`, not a way to quiet a row.
+  // regression, which is the thing no gate could previously see.
+  //
+  // The 28 rows carrying this field today were populated from a MEASURED `validate-calibration` run
+  // on 2026-07-27, as the starting baseline — they are pre-existing noise, not per-row judgements,
+  // and the rationale for the recurring shapes (third-party detect-child-process on guarded exec
+  // fixtures, cross-class keyword matches on the storage/RLS fixtures) is already argued in
+  // src/scan/calibration.test.ts. ADDING a taxonomy from here on is a deliberate act and belongs in
+  // the entry's `note` with the reason it is acceptable noise rather than a rule to narrow.
   reviewTierHits?: readonly string[];
   note: string;
 }
