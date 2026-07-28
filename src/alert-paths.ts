@@ -153,3 +153,40 @@ export function checkAlertPaths(facts: WorkflowFacts[], registry: AlertPathRegis
 export function expectedLabels(registry: AlertPathRegistry): string[] {
   return [...registry.paths.map((p) => p.marker), ...registry.unconverted.map((u) => u.marker)].sort();
 }
+
+/**
+ * `scheduledWithoutAlertPath` is the hatch that lets a scheduled workflow ship with no alarm, on the
+ * promise that a tracking issue carries it. Nothing validated that promise: the moment #1333 closes,
+ * four undisclosed-alarm workflows go back to passing silently — a disclosure that fails OPEN, which
+ * is the shape this whole gate exists against. So the tracking issue must exist AND be open.
+ *
+ * `state` returns undefined when the issue could not be read at all; that is UNVERIFIABLE and the
+ * caller must not fold it in with "the issue is closed" (#1246).
+ */
+export function checkDisclosureTracking(registry: AlertPathRegistry, state: (issue: number) => string | undefined): Violation[] {
+  return registry.scheduledWithoutAlertPath.flatMap((w) => {
+    const s = state(w.tracking);
+    if (s === "OPEN") return [];
+    return [{
+      workflow: w.workflow,
+      detail: s === undefined
+        ? `is disclosed as having no alert path, tracked by #${w.tracking} — which could not be read. An unreadable tracker is no measurement, not a clean one.`
+        : `is disclosed as having no alert path, tracked by #${w.tracking} — which is ${s}. The disclosure now points at nothing, so a scheduled failure here raises no alarm and appears in no tally. Give it an alert path or re-point the disclosure.`,
+    }];
+  });
+}
+
+/**
+ * A REQUIRED status check that shells out to `gh` couples every merge in the repo to GitHub API
+ * availability — no other required context here does that. Retry the transient case before a blip
+ * becomes merge-blocking. Exit 127 on the last failure is still the rule (#1246): "I could not
+ * check" must not share a channel with "I checked and it is gone".
+ */
+export function retrying<T extends { status: number | null }>(run: () => T, attempts: number, pause: (ms: number) => void): T {
+  let last = run();
+  for (let attempt = 1; attempt < attempts && last.status !== 0; attempt++) {
+    pause(1000 * 2 ** (attempt - 1));
+    last = run();
+  }
+  return last;
+}

@@ -167,9 +167,15 @@ export function collectReasons(roots: string[], base: string): ParsedReason[] {
 // limitation reads as a clean bill of health, and a stored number stops being true.
 //
 // Deliberately a LOWER BOUND over a fixed vocabulary of standing-impossibility phrasings, and
-// prose-only: the same inventory measured docs/design carrying 2 provenance tags against src/'s 119,
-// so prose is the weak surface. Advisory, never a gate failure — a hard gate over a heuristic gets
-// argued down or suppressed, and what this needs to do is stay visible while the number shrinks.
+// PROSE-ONLY (`.md`): the same inventory measured docs/design carrying 2 provenance tags against
+// src/'s 119, so prose is the weak surface. The census is still advisory — it reports a number and
+// nothing has to act on it — but since #1318 it also feeds the RATCHET below, which IS a gate
+// failure. Do not read the "advisory" framing as covering the ratchet.
+//
+// The `.md`-only boundary is a live gap, not a design boundary: #1318's three motivating examples
+// (#1311's `untestable in CI` comments, #1304, #1265) are all SOURCE COMMENTS, so the ratchet does
+// not yet cover the population that motivated it. Tracked by #1347, disclosed on every run by
+// src/cli/validate-reasons.ts rather than left to be discovered.
 //
 // #1319 added "out of reach"/"infeasible": #957 recorded a piece as "genuinely out of reach for a
 // mechanical assembly" and it landed 3h25m later in 98 lines. The same vocabulary drives the
@@ -201,6 +207,13 @@ export function issueSources(issues: FetchedIssue[]): SourceText[] {
   ]);
 }
 
+/**
+ * The surfaces the census actually reads, out of everything `collectSources` walks. One home for the
+ * boundary so the CLI and the test cannot drift apart while #1347 is open — and so widening it is a
+ * one-line change with one place to update the disclosure.
+ */
+export const isCensusedSurface = (file: string): boolean => file.endsWith(".md");
+
 /** Callers pass the prose surfaces they want censused; the vocabulary is not tuned for code. */
 export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]): UntriagedClaim[] {
   return sources.flatMap(({ file, text }) => {
@@ -228,10 +241,39 @@ export function untriagedClaims(sources: SourceText[], reasons: ParsedReason[]):
 // a per-file breach can NAME the lines to look at, which a global delta cannot: #1318's acceptance
 // asks for the new lines, because otherwise the fix is a guessing game.
 //
+// A COUNT alone does not get there, which is why the baseline records each claim VERBATIM. Printing
+// every claim line in the breaching file is the guessing game with extra steps: the first cut of
+// this gate did exactly that and a real breach printed four lines with nothing marking which one was
+// new — on docs/design/recorded-reasons.md (baseline 18) it would have printed nineteen. Matching
+// the current lines against the recorded ones as a MULTISET reduces that to the actual delta, and it
+// makes a baseline bump reviewable: the diff shows the new claims, not a number going up.
+//
 // Deliberately no exemption list. Suppressing a file recreates exactly the invisibility this exists
 // to remove; the way past a breach is to write the claim as a falsifiable block, or to bump that
 // file's baseline in a diff a human reads.
 type ClaimBaseline = Record<string, number>;
+
+/** The committed baseline records each claim verbatim (see above); the ratchet still scores counts. */
+export function claimCounts(baseline: Record<string, string[]>): ClaimBaseline {
+  return Object.fromEntries(Object.entries(baseline).map(([file, texts]) => [file, texts.length]));
+}
+
+/**
+ * Which of a file's current claim lines are NOT accounted for by its baseline. A multiset, so a
+ * claim written twice needs two baseline entries. Whenever the count breaches, at least
+ * (now - baseline) lines come back `isNew` — the marking cannot silently produce an empty set and
+ * leave the author with nothing to act on.
+ */
+export function markNewClaims(baselineLines: string[], current: UntriagedClaim[]): { claim: UntriagedClaim; isNew: boolean }[] {
+  const unclaimed = new Map<string, number>();
+  for (const text of baselineLines) unclaimed.set(text, (unclaimed.get(text) ?? 0) + 1);
+  return current.map((claim) => {
+    const left = unclaimed.get(claim.text) ?? 0;
+    if (left === 0) return { claim, isNew: true };
+    unclaimed.set(claim.text, left - 1);
+    return { claim, isNew: false };
+  });
+}
 
 export function claimCensusByFile(claims: { file: string }[]): ClaimBaseline {
   const out: ClaimBaseline = {};

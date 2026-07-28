@@ -1,4 +1,5 @@
-// pnpm exec tsx src/cli/validate-alert-paths.ts [--labels] [--seed-unprovable | --seed-missing-label]
+// pnpm exec tsx src/cli/validate-alert-paths.ts [--labels]
+//     [--seed-unprovable | --seed-missing-label | --seed-closed-tracking]
 //
 // Gate 5 of epic #1320 (#1287). Two passes:
 //
@@ -10,7 +11,8 @@
 //     step self-heals its marker label with `gh label create`, so a marker label that does not exist
 //     is machine-checkable proof that the path has never executed. This is the half no diff can
 //     speak to — a label deleted by hand in the GitHub UI leaves every file in this repo unchanged —
-//     so it runs on a schedule as well as on PRs.
+//     so it runs on a schedule as well as on PRs. It also re-reads the tracking issue behind every
+//     `scheduledWithoutAlertPath` disclosure: that hatch fails OPEN the day the tracker closes.
 //
 // A `gh` that cannot run exits 127 = UNVERIFIABLE, never 1: "I could not check" must not be
 // reported in the same channel as "I checked and the label is gone" (#1246's rule for falsifiers).
@@ -22,7 +24,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkAlertPaths, expectedLabels, workflowFacts, type AlertPathRegistry } from "../alert-paths.js";
+import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, workflowFacts, type AlertPathRegistry } from "../alert-paths.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const WORKFLOWS = join(REPO_ROOT, ".github", "workflows");
@@ -68,11 +70,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
 
   if (process.argv.includes("--labels")) {
-    const gh = spawnSync("gh", ["label", "list", "--limit", "200", "--json", "name", "--jq", ".[].name"], { encoding: "utf8", cwd: REPO_ROOT });
-    if (gh.status !== 0) {
-      console.error(`✗ UNVERIFIABLE — \`gh label list\` could not run (${(gh.stderr || gh.error?.message || "").trim().slice(0, 200)}). This is not "the labels are fine" and not "the labels are gone"; it is no measurement at all.`);
+    const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    const runGh = (args: string[]) => retrying(() => spawnSync("gh", args, { encoding: "utf8", cwd: REPO_ROOT }), 3, sleep);
+    const unverifiable = (what: string, detail: string): never => {
+      console.error(`✗ UNVERIFIABLE — ${what} could not run after 3 attempts (${detail.trim().slice(0, 200)}). This is not "the labels are fine" and not "the labels are gone"; it is no measurement at all.`);
       process.exit(127);
-    }
+    };
+
+    const gh = runGh(["label", "list", "--limit", "200", "--json", "name", "--jq", ".[].name"]);
+    if (gh.status !== 0) unverifiable("`gh label list`", gh.stderr || gh.error?.message || "");
     const present = new Set(gh.stdout.split("\n").map((l) => l.trim()).filter(Boolean));
     // Negative control 2: pretend a marker label vanished. #1287's whole finding rests on a missing
     // label being detectable, so this must fail.
@@ -83,6 +89,21 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       violations.push({ workflow: "(labels)", detail: `marker label '${l}' does not exist. Every alert step creates its own label, so this is proof the path has not run — or that someone deleted the label, which breaks find-or-update and turns every future alarm into a duplicate issue.` });
     }
     if (missing.length === 0) console.log(`\n✓ all ${expectedLabels(registry).length} marker label(s) exist`);
+
+    // The disclosure hatch, checked rather than trusted. --seed-closed-tracking is its negative
+    // control: a hatch nobody has watched fail is one nobody knows can fail.
+    const seedClosed = process.argv.includes("--seed-closed-tracking");
+    const trackingState = (issue: number): string | undefined => {
+      if (seedClosed) return "CLOSED";
+      const r = runGh(["issue", "view", String(issue), "--json", "state", "--jq", ".state"]);
+      if (r.status !== 0) unverifiable(`\`gh issue view ${issue}\``, r.stderr || r.error?.message || "");
+      return r.stdout.trim();
+    };
+    const stale = checkDisclosureTracking(registry, trackingState);
+    violations.push(...stale);
+    if (stale.length === 0 && registry.scheduledWithoutAlertPath.length > 0) {
+      console.log(`✓ all ${registry.scheduledWithoutAlertPath.length} no-alert-path disclosure(s) still point at an OPEN tracking issue`);
+    }
   } else {
     console.log("\nℹ marker-label existence NOT checked (pass --labels with an authenticated gh). Structure alone cannot tell a path that has run from one that never has.");
   }

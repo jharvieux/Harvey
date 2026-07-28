@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkAlertPaths, expectedLabels, workflowFacts, type AlertPathRegistry, type WorkflowFacts } from "./alert-paths.js";
+import { checkAlertPaths, checkDisclosureTracking, expectedLabels, retrying, workflowFacts, type AlertPathRegistry, type WorkflowFacts } from "./alert-paths.js";
 import { loadFacts, loadRegistry } from "./cli/validate-alert-paths.js";
 
 const PROVEN = { run: "https://github.com/o/r/actions/runs/1", issue: 7, at: "2026-07-27" };
@@ -92,6 +92,46 @@ describe("checkAlertPaths — the seeded states main was actually in before #128
 
   it("does not demand an alert path from a workflow that never runs on a schedule", () => {
     expect(checkAlertPaths([facts({ workflow: "pr-only.yml", scheduled: false, alertSteps: [] })], registry({ paths: [] }))).toEqual([]);
+  });
+});
+
+describe("checkDisclosureTracking — the no-alarm hatch must not fail open", () => {
+  const disclosed = registry({ paths: [], scheduledWithoutAlertPath: [{ workflow: "quiet.yml", tracking: 1333 }] });
+
+  it("accepts a disclosure whose tracking issue is open", () => {
+    expect(checkDisclosureTracking(disclosed, () => "OPEN")).toEqual([]);
+  });
+
+  // The negative control, and the only way this hatch fails: #1333 closes, and four workflows with
+  // no alarm at all go back to passing silently on a disclosure that now points at nothing.
+  it("fails when the tracking issue has been closed", () => {
+    expect(checkDisclosureTracking(disclosed, () => "CLOSED").map((v) => v.workflow)).toEqual(["quiet.yml"]);
+  });
+
+  // Unreadable is not clean. Reported separately so the caller can exit 127 rather than 1 (#1246).
+  it("fails distinctly when the tracking issue could not be read at all", () => {
+    expect(checkDisclosureTracking(disclosed, () => undefined)[0]?.detail).toContain("could not be read");
+  });
+});
+
+describe("retrying — a required check must not fail on one API blip", () => {
+  const attempt = (statuses: (number | null)[]) => {
+    let i = 0;
+    return () => ({ status: statuses[i++] ?? null });
+  };
+
+  it("returns the first success and stops calling", () => {
+    const paused: number[] = [];
+    expect(retrying(attempt([1, 0, 0]), 3, (ms) => paused.push(ms)).status).toBe(0);
+    expect(paused).toEqual([1000]);
+  });
+
+  // The control: retrying must not turn a real "the label is gone" into a pass. It hands back the
+  // last failure and the caller still exits 127.
+  it("gives up and returns the failure when every attempt fails", () => {
+    const paused: number[] = [];
+    expect(retrying(attempt([1, 1, 1]), 3, (ms) => paused.push(ms)).status).toBe(1);
+    expect(paused).toEqual([1000, 2000]);
   });
 });
 

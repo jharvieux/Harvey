@@ -6,11 +6,14 @@ import { CLAIM_BASELINE } from "./unstructured-claims-baseline.js";
 import {
   DEFAULT_ROOTS,
   claimCensusByFile,
+  claimCounts,
   claimRatchetBreaches,
   claimTotal,
   collectReasons,
   collectSources,
+  isCensusedSurface,
   issueSources,
+  markNewClaims,
   parseRecordedReasons,
   reasonKind,
   revalidateReasons,
@@ -386,18 +389,60 @@ describe("the claim ratchet (#1318) — the census may fall, never rise", () => 
 
   // End-to-end over the real repo with a real claim-shaped line planted, rather than over a hand-
   // built census: proves the vocabulary, the census and the ratchet are actually wired to each other.
+  // toContainEqual, not toEqual: scored against the WHOLE breach list this reddens for any unrelated
+  // breach elsewhere in the repo, which is how it and the row below failed together in run
+  // 30313783920 and named neither cause. A control has to isolate the rule it names.
   it("fires when a claim-shaped comment is planted in a real repo file", () => {
-    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT).filter((s) => s.file.endsWith(".md"));
+    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT).filter((s) => isCensusedSurface(s.file));
     const planted = sources.map((s) => (s.file === "CLAUDE.md" ? { ...s, text: `${s.text}\nThis cannot be measured by any existing tier.\n` } : s));
     const census = claimCensusByFile(untriagedClaims(planted, reasonsForCensus).filter((c) => !c.file.startsWith("issue #")));
-    expect(claimRatchetBreaches(CLAIM_BASELINE, census)).toEqual([{ file: "CLAUDE.md", baseline: CLAIM_BASELINE["CLAUDE.md"], now: (CLAIM_BASELINE["CLAUDE.md"] ?? 0) + 1 }]);
+    const budget = CLAIM_BASELINE["CLAUDE.md"]?.length ?? 0;
+    expect(claimRatchetBreaches(claimCounts(CLAIM_BASELINE), census)).toContainEqual({ file: "CLAUDE.md", baseline: budget, now: budget + 1 });
   });
 
   it("holds the committed baseline over this repo right now", () => {
-    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT).filter((s) => s.file.endsWith(".md"));
+    const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT).filter((s) => isCensusedSurface(s.file));
     const census = claimCensusByFile(untriagedClaims(sources, reasonsForCensus).filter((c) => !c.file.startsWith("issue #")));
-    expect(claimRatchetBreaches(CLAIM_BASELINE, census)).toEqual([]);
+    expect(claimRatchetBreaches(claimCounts(CLAIM_BASELINE), census)).toEqual([]);
     // A baseline that drifted to zero would pass the line above forever while measuring nothing.
-    expect(claimTotal(CLAIM_BASELINE)).toBeGreaterThan(100);
+    expect(claimTotal(claimCounts(CLAIM_BASELINE))).toBeGreaterThan(100);
+  });
+
+  // #1318's third criterion. A breach that reprints every claim in the file is the guessing game it
+  // names: on docs/design/recorded-reasons.md (baseline 18) that is nineteen lines, one of them new.
+  describe("markNewClaims — the breach names the NEW lines, not every line in the file", () => {
+    const at = (line: number, text: string) => ({ file: "d.md", line, text });
+
+    it("marks only the line the baseline does not account for", () => {
+      const marked = markNewClaims(["old one", "old two"], [at(1, "old one"), at(2, "old two"), at(3, "brand new")]);
+      expect(marked.filter((m) => m.isNew).map((m) => m.claim.line)).toEqual([3]);
+    });
+
+    // A count baseline cannot do this: two identical claims and one recorded entry is still a breach,
+    // and the second occurrence is the new one.
+    it("matches as a multiset, so a claim written twice needs two baseline entries", () => {
+      const marked = markNewClaims(["same claim"], [at(1, "same claim"), at(9, "same claim")]);
+      expect(marked.map((m) => m.isNew)).toEqual([false, true]);
+    });
+
+    it("marks everything new for a file absent from the baseline — a new doc has a budget of zero", () => {
+      expect(markNewClaims([], [at(1, "a"), at(2, "b")]).every((m) => m.isNew)).toBe(true);
+    });
+
+    // The guarantee the CLI leans on: whenever the count breaches, at least (now - baseline) lines
+    // come back new, so a breach can never print an empty list and leave nothing to act on.
+    it("never returns an empty set while the count is over budget", () => {
+      const baseline = ["a", "b", "c"];
+      const current = [at(1, "a"), at(2, "b"), at(3, "c"), at(4, "d")];
+      expect(markNewClaims(baseline, current).filter((m) => m.isNew).length).toBeGreaterThanOrEqual(current.length - baseline.length);
+    });
+  });
+
+  // The boundary itself, asserted rather than left implicit — #1347 is open precisely because it was
+  // implicit, and a widening that forgets the disclosure would otherwise pass silently.
+  it("censuses prose only: a source file is not read, and #1347 says so", () => {
+    expect(isCensusedSurface("docs/design/x.md")).toBe(true);
+    expect(isCensusedSurface("src/alert-paths.ts")).toBe(false);
+    expect(isCensusedSurface(".github/workflows/ci.yml")).toBe(false);
   });
 });

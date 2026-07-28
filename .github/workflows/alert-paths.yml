@@ -36,15 +36,20 @@ concurrency:
 
 permissions:
   contents: read
+  issues: read # `--labels` re-reads the tracking issue behind every no-alert-path disclosure.
 
 jobs:
   alert-paths:
     name: every alert path is dispatch-provable and its marker label exists
     runs-on: ubuntu-latest
     # This gate holds every other scheduled workflow to "alert on failure, and prove it once", and
-    # it does NOT yet meet its own rule: an alert path's proof requires `gh workflow run`, which
-    # 404s until the workflow file is on the default branch, so a brand-new workflow cannot be
-    # drilled in the PR that introduces it. Rather than register an unprovable path — the exact
+    # it does NOT yet meet its own rule: an alert path's proof requires `gh workflow run`, whose
+    # inputs are read from the DEFAULT BRANCH's copy of the file. Measured on this branch:
+    #   $ gh workflow run alert-paths.yml --ref feature/sweep-alerts-1287 -f alert_drill=true
+    #   could not create workflow dispatch event: HTTP 422: Unexpected inputs provided:
+    #   ["alert_drill"] (https://api.github.com/repos/jharvieux/Harvey/actions/workflows/321758855/dispatches)
+    # So a brand-new workflow cannot be drilled in the PR that introduces it. Rather than register an
+    # unprovable path — the exact
     # "recorded as working, never fired" shape #1287 exists to kill — it is DISCLOSED in
     # .github/alert-paths.json's scheduledWithoutAlertPath, printed on every gate run, and tracked
     # by #1333, which adds and drills it once this file is on main.
@@ -107,5 +112,15 @@ jobs:
         run: |
           if pnpm exec tsx src/cli/validate-alert-paths.ts --labels --seed-missing-label; then
             echo "::error::--seed-missing-label removed a marker label from the observed set and the gate still exited 0. A missing label is the one machine-checkable proof that an alert path never ran, so this control failing to fail voids the whole gate (#1287)."
+            exit 1
+          fi
+
+      - name: Negative control — a CLOSED tracking issue must FAIL the no-alarm disclosure
+        if: steps.filter.outputs.relevant == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if pnpm exec tsx src/cli/validate-alert-paths.ts --labels --seed-closed-tracking; then
+            echo "::error::--seed-closed-tracking closed every no-alert-path disclosure's tracking issue and the gate still exited 0. That hatch is the one place this gate fails OPEN: the day #1333 closes, four workflows with no alarm at all go back to passing silently (#1287)."
             exit 1
           fi

@@ -18,6 +18,15 @@
 # It refuses to run while a REAL alert on the same marker is open, so a drill can never be mistaken
 # for — or silently overwrite — a live alarm.
 #
+# WHAT THE DRILL DOES NOT PROVE, said here rather than left to be discovered. The drill is a PARALLEL
+# branch: the `DRILL != true` path below (find_open real → `gh issue comment "$existing"` → else
+# create) is executed by no drill. What the two share is the `gh label create` + assert above, and
+# the same `gh issue create/comment/close` primitives against the same token and repo. So `PROVED`
+# means "these primitives work under the real job token, with the drill's own payload" — one step
+# short of "the production branch executed". Making the drill run the real branch would mean opening
+# an issue indistinguishable from a live alarm, which is the confusion the SUFFIX partition exists to
+# prevent, so it needs a design call rather than a patch — tracked by #1348, not silently omitted.
+#
 # Registry of markers and their proof runs: .github/alert-paths.json.
 
 name: Alert issue (find-or-update)
@@ -156,6 +165,12 @@ runs:
           echo "- find-or-update: located #$num and commented ($before → $after comments)"
           echo "- closed again — tracker left clean"
           echo ""
+          echo "**Scope of this proof.** The drill is a PARALLEL branch of this action. It proves the"
+          echo "label create+assert (shared code with the real path) and that \`gh issue"
+          echo "create/comment/close\` work under this job's token — with the drill's own payload."
+          echo "The production branch (\`gh issue comment \"\$existing\"\` on a live alarm) is executed"
+          echo "by no drill. Read PROVED as 'the primitives work here', not 'the real branch ran'."
+          echo ""
           echo "Re-run: \`gh workflow run \"$WORKFLOW\" -f alert_drill=true\`"
         } >> "$GITHUB_STEP_SUMMARY"
-        echo "PROVED $MARKER — $url"
+        echo "PROVED $MARKER — $url (drill branch; the real find-or-update branch is not exercised by a drill)"
