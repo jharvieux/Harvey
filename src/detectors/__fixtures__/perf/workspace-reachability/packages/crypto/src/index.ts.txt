@@ -1,0 +1,6 @@
+import { pbkdf2Sync } from "node:crypto";
+
+// The #1353 shape: a KDF in a shared package, reached from a route through a workspace specifier.
+export function hashPassword(password: string, salt: string): string {
+  return pbkdf2Sync(password, salt, 600000, 32, "sha256").toString("hex");
+}

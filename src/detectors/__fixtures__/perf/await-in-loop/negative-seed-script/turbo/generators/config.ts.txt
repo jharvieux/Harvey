@@ -1,0 +1,9 @@
+import { readFile, writeFile } from "node:fs/promises";
+
+// Turborepo codegen — runs on a developer's machine at scaffold time.
+export async function renderTemplates(templates: string[], vars: Record<string, string>) {
+  for (const template of templates) {
+    const body = await readFile(template, "utf8");
+    await writeFile(template.replace(".hbs", ""), body.replace("{{name}}", vars.name ?? ""));
+  }
+}

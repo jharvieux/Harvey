@@ -2,7 +2,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { detectAppRouterFindings, type SourceInput } from "./app-router.js";
+import { buildImportGraph, collectPathAliases, detectAppRouterFindings, resolveImport, type SourceInput } from "./app-router.js";
+import { parse } from "./common.js";
 
 const FIXTURES_ROOT = fileURLToPath(new URL("./__fixtures__/", import.meta.url));
 
@@ -1199,5 +1200,45 @@ describe("TanStack Start boundary adapter (#918)", () => {
   it("clears the validator-guarded negative", () => {
     const findings = detectAppRouterFindings(loadFixtureDir("tanstack/action-validation/negative"), "tanstack-start");
     expect(taxonomies(findings)).not.toContain("M9 — server function missing input validation");
+  });
+});
+
+// #1353 — the import graph used to stop at the package boundary. #1344 gated M7's generic
+// sync-I/O tier on import-reachability from a request entry point, which silenced three MEASURED
+// true positives in shared monorepo packages (rallly packages/utils pbkdf2Sync, two documenso rows)
+// purely because `@rallly/utils` resolved to nothing. Every consumer of resolveImport had the same
+// blind spot in the MISSING-findings direction: detectMissingServerOnly's client-reachability
+// check, service-role-literal.ts, and M9's whole graph.
+describe("import resolution across a workspace (#1353)", () => {
+  const files = loadFixtureDir("perf/workspace-reachability");
+  const allPaths = new Set(files.map((f) => f.path));
+  const aliases = collectPathAliases(files);
+  const from = "apps/web/app/api/reset/route.ts";
+
+  it("resolves a workspace package specifier to the member's entry module", () => {
+    // `main: "./src/index.ts"` and `exports: { ".": … }` are both in the fixture — neither is a
+    // path the resolver could have guessed from the specifier alone.
+    expect(resolveImport(from, "@acme/crypto", allPaths, aliases)).toBe("packages/crypto/src/index.ts");
+    expect(resolveImport(from, "@acme/utils", allPaths, aliases)).toBe("packages/utils/src/index.ts");
+  });
+
+  it("resolves a subpath under a workspace package specifier", () => {
+    expect(resolveImport(from, "@acme/utils/src/slugify", allPaths, aliases)).toBe("packages/utils/src/slugify.ts");
+  });
+
+  it("does not resolve a third-party package that merely shares a member's prefix", () => {
+    expect(resolveImport(from, "@acme/utils-external", allPaths, aliases)).toBeUndefined();
+    expect(resolveImport(from, "react", allPaths, aliases)).toBeUndefined();
+  });
+
+  it("reads the tsconfig nearest the importing file, not the shallowest one with paths", () => {
+    // Root tsconfig maps @/* -> shared/*; apps/web's own maps @/* -> apps/web/*. The root's is
+    // shallower, so before #1353 it won and every `@/…` inside apps/web resolved to nothing.
+    expect(resolveImport(from, "@/lib/session", allPaths, aliases)).toBe("apps/web/lib/session.ts");
+  });
+
+  it("puts the shared package in the route's import closure", () => {
+    const graph = buildImportGraph(new Map(files.filter((f) => /\.tsx?$/.test(f.path)).map((f) => [f.path, parse(f.path, f.text)])), allPaths, aliases);
+    expect(graph.get(from)).toContain("packages/crypto/src/index.ts");
   });
 });

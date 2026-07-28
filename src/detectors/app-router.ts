@@ -5,13 +5,15 @@
 //
 // Method: TypeScript compiler API (already a devDependency; no ts-morph in
 // this repo). Cross-file resolution (server→client leak, server-only graph)
-// follows both relative imports and tsconfig/jsconfig `paths` aliases
-// (`@/components/...`), falling back to the create-next-app `@/*`→root default
-// when no config is present (#380). See docs/m9-app-router.md for full
-// per-check limitations.
+// follows relative imports, tsconfig/jsconfig `paths` aliases
+// (`@/components/...`, per-config-scoped since #1353), and workspace package
+// specifiers (`@acme/utils` → `packages/utils/src/index.ts`, #1353), falling
+// back to the create-next-app `@/*`→root default when no config is present
+// (#380). See docs/m9-app-router.md for full per-check limitations.
 
 import ts from "typescript";
 import type { Finding } from "../findings.js";
+import { workspacePackages } from "../workspaces.js";
 import {
   FRAMEWORK_LABELS,
   isViteTooling,
@@ -157,17 +159,33 @@ function candidatePaths(base: string): string[] {
 export interface PathAlias {
   prefix: string;
   baseDir: string;
+  /**
+   * #1353: the directory whose tsconfig declared this alias ("" = repo root). An alias only applies
+   * to importers underneath it, so a member's own `@/*`→`apps/web/*` beats the root's `@/*`→`src/*`
+   * for files in that member — which is the whole point of reading more than one config.
+   */
+  scopeDir?: string;
+  /**
+   * #1353: a workspace member's entry-module bases, tried when the specifier IS the package name
+   * with no subpath. Present only on workspace-package aliases, which match EXACTLY (a tsconfig
+   * alias like `@/` is a prefix and is never itself a whole specifier).
+   */
+  entryBases?: string[];
 }
 
-// Parse the source set's tsconfig/jsconfig for `paths` aliases (#380). The shallowest config in
-// the set wins (the repo-root tsconfig defines the app-wide alias); ts.parseConfigFileTextToJson
-// tolerates the comments/trailing commas tsconfig commonly carries. With no config paths in the
-// set, fall back to Next.js's own `@/*`→root default rather than giving up — the vast majority of
-// otherwise-unresolved specifiers are exactly that scaffolding default.
+// Parse the source set's tsconfig/jsconfig for `paths` aliases (#380), plus one alias pair per
+// workspace member package (#1353). ts.parseConfigFileTextToJson tolerates the comments/trailing
+// commas tsconfig commonly carries. With no config paths in the set, fall back to Next.js's own
+// `@/*`→root default rather than giving up — the vast majority of otherwise-unresolved specifiers
+// are exactly that scaffolding default.
+//
+// #1353 replaced "the shallowest config with `paths` wins, then stop reading" with per-config
+// scoping. In a monorepo the shallowest config is the ROOT's, so a member's own `@/*` mapping was
+// never read at all and every `@/…` import inside apps/web resolved against the root's baseDir or
+// not at all — the import graph then stops, and M7's reachability gate reads "unreachable" for code
+// a route imports every request.
 export function collectPathAliases(files: SourceInput[]): PathAlias[] {
-  const configs = files
-    .filter((f) => /(^|\/)(tsconfig|jsconfig)\.json$/.test(f.path))
-    .sort((a, b) => a.path.split("/").length - b.path.split("/").length);
+  const configs = files.filter((f) => /(^|\/)(tsconfig|jsconfig)\.json$/.test(f.path));
   const aliases: PathAlias[] = [];
   for (const cfg of configs) {
     const { config } = ts.parseConfigFileTextToJson(cfg.path, cfg.text);
@@ -178,11 +196,16 @@ export function collectPathAliases(files: SourceInput[]): PathAlias[] {
     for (const [key, targets] of Object.entries(opts.paths)) {
       const target = Array.isArray(targets) ? targets[0] : undefined;
       if (!key.endsWith("/*") || typeof target !== "string" || !target.endsWith("/*")) continue;
-      aliases.push({ prefix: key.slice(0, -1), baseDir: normalizeRepoPath(`${cfgDir}/${baseUrl}/${target.slice(0, -1)}`) });
+      aliases.push({ prefix: key.slice(0, -1), baseDir: normalizeRepoPath(`${cfgDir}/${baseUrl}/${target.slice(0, -1)}`), scopeDir: cfgDir });
     }
-    if (aliases.length > 0) break;
   }
+  // Deepest scope first, so the config nearest the importing file is consulted before the root's.
+  aliases.sort((a, b) => (b.scopeDir ?? "").split("/").length - (a.scopeDir ?? "").split("/").length);
   if (aliases.length === 0) aliases.push({ prefix: "@/", baseDir: "" });
+  for (const pkg of workspacePackages(files)) {
+    aliases.push(...pkg.subpaths);
+    aliases.push({ prefix: pkg.name, baseDir: pkg.dir, entryBases: pkg.entryBases });
+  }
   return aliases;
 }
 
@@ -197,8 +220,16 @@ function resolveRelativeImport(fromPath: string, specifier: string, allPaths: Se
   return candidatePaths(stack.join("/")).find((c) => allPaths.has(c));
 }
 
-function resolveAliasedImport(specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
-  for (const { prefix, baseDir } of aliases) {
+function resolveAliasedImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
+  for (const { prefix, baseDir, scopeDir, entryBases } of aliases) {
+    if (scopeDir && !fromPath.startsWith(`${scopeDir}/`)) continue;
+    if (entryBases) {
+      // A workspace package named exactly, with no subpath: resolve to its own entry module.
+      if (specifier !== prefix) continue;
+      const hit = entryBases.flatMap(candidatePaths).find((c) => allPaths.has(c));
+      if (hit) return hit;
+      continue;
+    }
     if (!specifier.startsWith(prefix)) continue;
     const rest = specifier.slice(prefix.length);
     const base = normalizeRepoPath(baseDir ? `${baseDir}/${rest}` : rest);
@@ -209,7 +240,7 @@ function resolveAliasedImport(specifier: string, allPaths: Set<string>, aliases:
 }
 
 export function resolveImport(fromPath: string, specifier: string, allPaths: Set<string>, aliases: PathAlias[]): string | undefined {
-  return resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(specifier, allPaths, aliases);
+  return resolveRelativeImport(fromPath, specifier, allPaths) ?? resolveAliasedImport(fromPath, specifier, allPaths, aliases);
 }
 
 // An object literal whose ONLY informative content is a spread of a raw-row name — `{...row}`,

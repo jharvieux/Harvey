@@ -617,6 +617,15 @@ const REQUEST_PATH = /(^|\/)(app|pages)\//;
 function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
   for (const [path, sf] of sources) {
+    const onRequestPath = REQUEST_PATH.test(path);
+    // #1306: #230's SIXTH precision suppression — "N+1 in seed/build scripts (prisma/seed.ts, turbo
+    // codegen). Exclude." — was the one of six PR #236 never implemented, and was still firing when
+    // re-measured 2026-07-27. A sequential await in a seed or codegen script is CORRECT code: it
+    // runs once, off any request, often deliberately serial so rows land in FK order. Dropping it to
+    // `Review` was not enough — `Perf` severity is a COUNTED finding, so the client still gets told
+    // their seed script has a performance defect. briefs/fp-rules.txt already scopes seed/dev-script
+    // code out of the audit entirely; this is the N+1 detector obeying it.
+    if (!onRequestPath && NON_REQUEST_PATH.test(path)) continue;
     const hits: ts.AwaitExpression[] = [];
     const visit = (node: ts.Node) => {
       if (ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isForStatement(node)) {
@@ -640,7 +649,6 @@ function detectAwaitInLoop(sources: Map<string, ts.SourceFile>, nextId: NextId):
     visit(sf);
     const first = hits[0];
     if (!first) continue;
-    const onRequestPath = REQUEST_PATH.test(path);
     findings.push(
       makeFinding(nextId, {
         title: `Per-item await inside a loop — serial N+1 round-trips (${hits.length} loop${hits.length === 1 ? "" : "s"} in ${path})`,
@@ -1170,7 +1178,13 @@ const HANDLER_PATH = /(\/route\.[cm]?[jt]sx?$)|((^|\/)pages\/api\/)/;
 // #1203: files that are never on a request path regardless of what they export — build/tooling
 // scripts, config files, migrations/seeds, tests. Excluded from the broader (non-route-file)
 // tier below so cold-start/dev-time code doesn't get flagged as a request-path blocker.
-const NON_REQUEST_PATH = /(^|\/)(scripts|bin|migrations?|seeds?|__tests__|__mocks__)\/|\.(test|spec)\.[cm]?[jt]sx?$|\.config\.[cm]?[jt]sx?$/;
+// #1306 widened it, and gave it a SECOND consumer (detectAwaitInLoop). Two gaps, both measured on
+// 2026-07-27 against real conventions: it only matched a DIRECTORY named `seeds/`, so the single
+// commonest seed file in the ecosystem — `prisma/seed.ts` — did not match, and turbo's codegen
+// lives under `turbo/generators/`. `prisma/` and `turbo/` hold no request-path code by convention,
+// and a `seed*.ts` / `*.seed.ts` filename is a seed script wherever it sits.
+const NON_REQUEST_PATH =
+  /(^|\/)(scripts|bin|migrations?|seeds?|prisma|turbo|__tests__|__mocks__)\/|(^|\/)seed[^/]*\.[cm]?[jt]sx?$|\.seed\.[cm]?[jt]sx?$|\.(test|spec)\.[cm]?[jt]sx?$|\.config\.[cm]?[jt]sx?$/;
 // #1344: the entry points a request actually enters through. HANDLER_PATH is the Next.js subset the
 // "Likely" tier keys on; a Remix/RR7/Nest/Express app has none of those files, so the reachability
 // roots below are deliberately wider — otherwise the whole generic tier goes silent on every

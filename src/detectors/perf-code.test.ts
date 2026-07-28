@@ -177,6 +177,12 @@ describe("await in loop (N+1)", () => {
   it("does not flag a loop over a hardcoded/inline-literal list — bounded by source code, not data (#816)", () => {
     expect(byTaxonomy("await-in-loop/negative-static-list", TAX)).toHaveLength(0);
   });
+  it("does not flag seed/codegen scripts, but still flags the route in the same tree (#1306)", () => {
+    const hits = byTaxonomy("await-in-loop/negative-seed-script", TAX);
+    // Not "no findings" — the suppression must not have taken the request path with it, which is
+    // how an FP fix turns into a silent FN nothing measures.
+    expect(hits.map((h) => h.location.split(":")[0])).toEqual(["app/api/orders/route.ts"]);
+  });
 });
 
 describe("unbounded select", () => {

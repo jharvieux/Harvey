@@ -53,6 +53,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { Browser, detectBrowserPlatform, install as installBrowser, resolveBuildId } from "@puppeteer/browsers";
 import { launch, type LaunchedChrome, type Options as LaunchOptions } from "chrome-launcher";
 import runLighthouse from "lighthouse";
 import type { Finding } from "../findings.js";
@@ -125,46 +126,38 @@ function chromeCacheDir(): string {
   return process.env.HARVEY_CHROME_CACHE_DIR || join(homedir(), ".cache", "harvey", "chrome-for-testing");
 }
 
-// Provisions a Lighthouse-compatible Chrome (#556) via the `@puppeteer/browsers` CLI, installed at
-// RUNTIME (npm install --prefix <cache> --no-save) rather than as a package.json dependency of this
-// repo — see docs/design/m7-chrome-provisioning.md for why. Cached under chromeCacheDir() so only
-// the first run on a machine pays the download; `browsers install` itself is idempotent (it skips
-// re-downloading a revision already present at --path), so this is cheap to call every run.
+// Provisions a Lighthouse-compatible Chrome (#556) through `@puppeteer/browsers`, a LOCKFILE-PINNED
+// devDependency of this repo (#1324). Until 2026-07-28 it shelled out to `npm install --prefix
+// <cache> --no-save @puppeteer/browsers` at RUN TIME, and the recorded reason was that
+// `package.json` is a supervised path for this repo. It never was — the operator ruled on
+// 2026-07-27 and the file itself, checked as it stood the day #556 was worked, never listed it. The
+// cost that false constraint bought was concrete and this step is where it lands hardest: an
+// unpinned `latest` resolve, with no lockfile and no recorded integrity hash, fetched and EXECUTED
+// during a scan, on a client's machine. A pinned devDependency is pnpm-integrity-checked at our
+// install time instead. It also retires the parsing of the CLI's stdout for an executable path.
+//
+// What this does NOT remove is the network: `install()` still downloads ~150 MB of Chrome-for-
+// Testing from Google's CDN the first time. That is the step's whole purpose, and it stays the LAST
+// resort in the resolution order for exactly that reason. Cached under chromeCacheDir()/browsers —
+// the same directory the CLI wrote to, so a machine that already provisioned keeps its cache — and
+// `install()` is idempotent, so this is cheap to call on every run.
+//
 // Returns undefined (never throws) on any failure — the caller falls back to the next resolution
 // step rather than treating a failed provision as fatal.
 async function provisionChrome(): Promise<string | undefined> {
-  const cacheDir = chromeCacheDir();
-  const cliBin = join(cacheDir, "node_modules", ".bin", "browsers");
+  const cacheDir = join(chromeCacheDir(), "browsers");
   try {
-    if (!existsSync(cliBin)) {
-      console.error(`no system Chrome found; provisioning the @puppeteer/browsers CLI into ${cacheDir} (one-time) …`);
-      const install = spawnSync("npm", ["install", "--prefix", cacheDir, "--no-save", "--no-audit", "--no-fund", "@puppeteer/browsers"], {
-        stdio: ["ignore", "pipe", "pipe"],
-        encoding: "utf8",
-        timeout: 180_000,
-      });
-      if (install.status !== 0) {
-        console.error(`provisioning @puppeteer/browsers failed: ${install.stderr || install.error?.message || `exit ${install.status}`}`);
-        return undefined;
-      }
-    }
-    const browsersDir = join(cacheDir, "browsers");
-    console.error(`provisioning a Lighthouse-compatible Chrome (chrome-for-testing) into ${browsersDir} …`);
-    const result = spawnSync(cliBin, ["install", "chrome@stable", "--path", browsersDir], { encoding: "utf8", timeout: 180_000 });
-    if (result.status !== 0) {
-      console.error(`chrome-for-testing provisioning failed: ${result.stderr || result.error?.message || `exit ${result.status}`}`);
+    const platform = detectBrowserPlatform();
+    if (!platform) {
+      console.error(`chrome-for-testing provisioning: @puppeteer/browsers does not recognise this platform`);
       return undefined;
     }
-    // `browsers install` prints one line per install: "<id>@<version> <path-to-executable>".
-    const lastLine = result.stdout.trim().split("\n").pop() ?? "";
-    const chromePath = lastLine.split(/\s+/).slice(1).join(" ").trim();
-    if (!chromePath || !existsSync(chromePath)) {
-      console.error(`could not parse a Chrome executable path from \`browsers install\` output: ${JSON.stringify(lastLine)}`);
-      return undefined;
-    }
-    return chromePath;
+    const buildId = await resolveBuildId(Browser.CHROME, platform, "stable");
+    console.error(`provisioning a Lighthouse-compatible Chrome (chrome-for-testing ${buildId}) into ${cacheDir} …`);
+    const installed = await installBrowser({ browser: Browser.CHROME, buildId, cacheDir, platform });
+    return existsSync(installed.executablePath) ? installed.executablePath : undefined;
   } catch (err) {
-    console.error(`chrome-for-testing provisioning threw: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`chrome-for-testing provisioning failed: ${err instanceof Error ? err.message : String(err)}`);
     return undefined;
   }
 }
