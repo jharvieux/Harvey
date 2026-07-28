@@ -67,6 +67,11 @@ on:
   schedule:
     - cron: "0 8 * * *" # Daily 08:00 UTC — after dry-run-drift (Mon 07:00) and conservation (07:30)
   workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-reasons-alert path fires end-to-end (#1287). Fails this job on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
 
 concurrency:
   group: reasons-drift-${{ github.ref }}
@@ -87,6 +92,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill
+        run: |
+          echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a reasons-drift failure."
+          exit 1
+
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -174,22 +186,21 @@ jobs:
 
       # Scheduled runs go red on a branch nobody watches (#1128/#1138's precedent, applied here as
       # in corpus-drift.yml/conservation.yml). On a scheduled failure, find-or-update ONE tracking
-      # issue by the marker label: comment on the open one if it exists, otherwise create it. Never
-      # fires on workflow_dispatch — a manual run's failure is already visible to whoever ran it.
+      # issue by the marker label.
+      #
+      # This step USED to read `github.event_name == 'schedule'` alone, with the rationale "a manual
+      # run's failure is already visible to whoever ran it". #1287 falsified that: the exclusion also
+      # made the path unprovable, and it had consequently never executed — `ci-reasons-alert` did not
+      # exist as a label, which is machine-checkable proof of exactly that. `workflow_dispatch` is
+      # now permanently in the condition.
       - name: Open or update the reasons-drift tracking issue
-        if: failure() && github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          MARKER: ci-reasons-alert
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          gh label create "$MARKER" --color B60205 \
-            --description "Auto-opened when the scheduled reasons-drift CI run fails" 2>/dev/null || true
-          body="The scheduled \`reasons-drift\` run failed (run: $RUN_URL). Either a reason block is malformed — **in the repo OR in an open issue's body/comment, which \`--issues\` now folds in (#1246); the log names the row as \`issue #N\`** — or an empirical falsifier now exits 0 (STALE — the blocker it describes is gone, but the recorded reason still asserts it, per CLAUDE.md's recorded-reasons-decay doctrine), or \`gh issue list\` could not read the tracker (the issue surface went ungated; fix the credential, do not drop the flag), or a negative control stopped failing (the gate itself broke — fix that before trusting the pass). See the job log for which step and which row. Re-read the claim, correct or retire it, and close this issue once green."
-          existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            gh issue create --title "reasons-drift scheduled run failing" --label "$MARKER" --body "$body"
-          fi
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-reasons-alert
+          label-description: Auto-opened when the scheduled reasons-drift CI run fails
+          title: reasons-drift scheduled run failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The scheduled `reasons-drift` run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Either a reason block is malformed — **in the repo OR in an open issue's body/comment, which `--issues` now folds in (#1246); the log names the row as `issue #N`** — or an empirical falsifier now exits 0 (STALE — the blocker it describes is gone, but the recorded reason still asserts it, per CLAUDE.md's recorded-reasons-decay doctrine), or `gh issue list` could not read the tracker (the issue surface went ungated; fix the credential, do not drop the flag), or a negative control stopped failing (the gate itself broke — fix that before trusting the pass). See the job log for which step and which row. Re-read the claim, correct or retire it, and close this issue once green."

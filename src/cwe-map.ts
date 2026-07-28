@@ -139,6 +139,9 @@ const SECURITY: Record<string, [string, string | null]> = {
   // Generic missing-header protection (semgrep.ts synthetic rows) and CSP/sniff footguns.
   "Missing security headers": ["693", null],
   "missing security headers": ["693", null],
+  // #1350 — the Express half of the same class. b5-headers only reads a next.config.js headers()
+  // route, so this carries the identical weakness for an app class those rules cannot match.
+  "Express app sets no security response headers": ["693", null],
   // Over-privileged database roles / grants — CWE is clean, OWASP does not categorize these.
   "Column-level grant to client role outside RLS model": ["732", null],
   "Default privileges grant future objects to client role": ["732", null],

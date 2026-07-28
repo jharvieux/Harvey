@@ -36,6 +36,7 @@ const OWNERS: Record<string, string> = {
   "src/scan/service-role-literal.ts": "M1",
   "src/scan/emitter-error.ts": "M1", // #1202 — EventEmitter 'error' emit with no same-file listener
   "src/scan/express-powered-by.ts": "M1", // #1204 — Express app whose module never disables X-Powered-By
+  "src/scan/express-security-headers.ts": "M1", // #1350 — Express app that sets no security response headers (b5-headers is next.config.js-only)
   "src/scan/raw-body-limit.ts": "M1", // #1200 — raw req.on("data") accumulator with no byte ceiling
   "src/scan/job-tenant-scope.ts": "M1",
   "src/scan/prisma-tenant-scope.ts": "M1",
