@@ -38,9 +38,16 @@
 //     rather than in a comment nobody downstream reads. "Use helmet middleware" is DECLINED
 //     (P-OWASP-NODE-HELMET, gapKind "by-design") — an app that sets the same headers by hand is
 //     correct, so flagging the missing import would be a false positive on working code, and the
-//     headers themselves are already checked by effect in b5-headers. The decline is a recorded
-//     decisional reason in src/scan/express-powered-by.ts; the detected half carries no gapKind at
-//     all, because it is no longer a gap of any kind.
+//     headers themselves are checked by EFFECT: on Express by src/scan/express-security-headers.ts,
+//     on a next.config.js headers() route by b5-headers. The decline is a recorded decisional
+//     reason in src/scan/express-powered-by.ts; the detected half carries no gapKind at all,
+//     because it is no longer a gap of any kind.
+//     #1350 CORRECTION: this paragraph asserted the effect coverage came from b5-headers alone,
+//     and that was false on Express — the app class the sheet line is about. MEASURED 2026-07-27,
+//     a bare Express app produced ZERO findings from Harvey's own rules; the same omission in a
+//     next.config.js produced three, because those rules match `{ source: $S, headers: $ARR }`.
+//     The decline was sound and the sentence defending it was not; express-security-headers.ts is
+//     the coverage that makes it true.
 //
 // MEASURED 2026-07-26 (`quick-scan --dir targets/calibration`, 472 findings): of the eight
 // recommendations planted here, ZERO were detected as the recommendation under test.
@@ -222,7 +229,30 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     match: ["helmet"],
     expectedTier: "none",
     gapKind: "by-design",
-    note: "Sheet, Server Security: 'Use helmet middleware to set appropriate security headers.' DECLINED by the #1204 operator ruling, and by-design rather than a measured gap: 'helmet is not imported' is a library-adoption check, not a defect. This fixture is the case that proves it — it sets HSTS, nosniff and X-Frame-Options by hand and is CORRECT, so a helmet-adoption rule would be a false positive on working code. The headers helmet would have set are checked by their effect instead (b5-headers), which is agnostic to which package set them. The reason block is recorded in src/scan/express-powered-by.ts (KIND: decisional, OWNER: operator, DECISION: #1204). Any rule that ever fires on this fixture fails the gate loud — that is the point of scoring a declined boundary rather than deleting the row.",
+    note: "Sheet, Server Security: 'Use helmet middleware to set appropriate security headers.' DECLINED by the #1204 operator ruling, and by-design rather than a measured gap: 'helmet is not imported' is a library-adoption check, not a defect. This fixture is the case that proves it — it sets HSTS, nosniff and X-Frame-Options by hand and is CORRECT, so a helmet-adoption rule would be a false positive on working code. The headers helmet would have set are checked by their EFFECT instead, which is agnostic to which package set them: on Express by src/scan/express-security-headers.ts (#1350) and on a next.config.js headers() route by b5-headers. #1350 CORRECTION — this note used to cite b5-headers alone, which was false for exactly the app class this sheet line is about: MEASURED 2026-07-27, a bare Express app produced ZERO findings from Harvey's rules while the same omission in a next.config.js produced three, because harvey-missing-hsts/-frame-options/-nosniff match `{ source: $S, headers: $ARR }` and read next.config.js only. The decline stands; the coverage it claimed had to be built. The reason block is recorded in src/scan/express-powered-by.ts (KIND: decisional, OWNER: operator, DECISION: #1204). Any rule that ever fires on this fixture fails the gate loud — that is the point of scoring a declined boundary rather than deleting the row.",
+  },
+  {
+    id: "N-OWASP-NODE-EXPRESS-HEADERS-BY-HAND",
+    kind: "negative",
+    cls: "Express app that sets the security headers by hand and adopts no middleware",
+    location: "src/owasp-node/security-headers-by-hand.ts",
+    // Scoped to the effect check's own taxonomy. P-OWASP-NODE-HELMET already scores this fixture,
+    // but on `match: ["helmet"]` — which would NOT catch express-security-headers.ts firing here,
+    // because that rule deliberately never names the package. Without this row the by-design
+    // boundary would be guarded against one rule and open to the one most likely to break it.
+    match: ["sets no security response headers"],
+    note: "#1350: the load-bearing control on #1204's ruling. This app is CORRECT — HSTS, nosniff and X-Frame-Options set by hand, no header middleware anywhere — so the effect check must clear it. A firing here means the effect check has degenerated into the adoption check the operator declined, i.e. a false positive on working code.",
+  },
+  {
+    id: "P-OWASP-NODE-EXPRESS-HEADERS",
+    kind: "positive",
+    cls: "Express app that sets none of the four security response headers by any means",
+    location: "src/owasp-node/x-powered-by-exposed.ts",
+    // NOT "security headers" — the sibling powered-by finding on this same file discusses headers
+    // too. This phrase is the effect check's taxonomy verbatim and appears in no other finding here.
+    match: ["sets no security response headers"],
+    expectedTier: "review",
+    note: "#1350, from the audit of #1204's decline. Same fixture as P-OWASP-NODE-POWERED-BY and a DIFFERENT defect on it: that entry scores the framework-disclosure header, this one scores the absence of HSTS / X-Frame-Options / X-Content-Type-Options / CSP. Two entries on one file rather than one, because an unscoped match would let either finding record the other's class as covered — the #1062 masking shape. Review tier for the same disclosed reason as its sibling: headers set in a middleware module this pass did not read, or at a proxy/CDN, are outside what it can see, and the emitted evidence says so.",
   },
   {
     id: "P-OWASP-NODE-SENSITIVE-CACHE",
