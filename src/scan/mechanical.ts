@@ -353,7 +353,19 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
         Object.entries({ ...m.dependencies, ...m.devDependencies }).map(([name, range]) => ({ manifest: m.label, name, range })),
       );
       const license = licenseScope(scanDir);
-      const declaredNames = [...new Set(declared.map((d) => d.name))];
+      // #1344: a workspace member is resolved from inside the repo, never from the registry, so a
+      // registry HEAD for it returns 404 and SUP-SLOPSQUAT reads that as "hallucinated". #1231's
+      // widening from the root manifest to every member is what first fed these names in, and the
+      // result was 10 High "hallucinated dependency" rows on saas-lite (@kit/*) and 21 on carbon
+      // (@carbon/*) — both graded F on the free tier (MEASURED 2026-07-27, #1344). Excluded on the
+      // premise, not the symptom: these names are not registry packages, so the registry cannot
+      // answer anything about them. Both signals are used because either alone misses cases — npm
+      // and yarn-classic workspaces declare a member with a plain semver range, not `workspace:`.
+      const workspaceOwnNames = new Set(workspace.manifests.map((m) => m.name).filter((n): n is string => typeof n === "string"));
+      const isWorkspaceInternal = (d: { name: string; range: string }): boolean =>
+        workspaceOwnNames.has(d.name) || /^(workspace|link|portal):/.test(d.range.trim());
+      const workspaceInternalNames = [...new Set(declared.filter(isWorkspaceInternal).map((d) => d.name))];
+      const declaredNames = [...new Set(declared.filter((d) => !isWorkspaceInternal(d)).map((d) => d.name))];
       // Root manifest first (workspace.manifests is root-first), then members, then the tree — so
       // any capped registry budget is spent on the packages the client actually chose.
       const allNames = [...new Set([...declaredNames, ...license.candidates.map((c) => c.name)])];
@@ -393,6 +405,7 @@ export async function runMechanicalScan(opts: MechanicalScanOptions): Promise<Fi
           license,
           treeNames: new Set(license.candidates.map((c) => c.name)).size,
           declaredNames: declaredNames.length,
+          workspaceInternalNames,
           osvRan: osv.failure === undefined,
         }),
       );

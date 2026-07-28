@@ -230,13 +230,19 @@ export function scoreEntry(entry: CorpusEntry, findings: Finding[]): MatrixRow {
     return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail, expectedSeverity: entry.expectedSeverity, deliveredSeverities, severityMismatch };
   }
 
-  // negative
-  const pass = !highFlagged;
+  // negative. #1344: `!highFlagged` alone let a widened rule light up a planted negative at review
+  // tier while every gate stayed green (#1251). The free count still decides FALSE POSITIVE; a
+  // review-tier taxonomy the entry has not recorded now decides REGRESSION.
+  const accepted = new Set(entry.reviewTierHits ?? []);
+  const unexpectedReview = [...new Set(relevant.filter((f) => f.precisionTier === "review" && !accepted.has(f.taxonomy)).map((f) => f.taxonomy))];
+  const pass = !highFlagged && unexpectedReview.length === 0;
   const detail = highFlagged
     ? "FALSE POSITIVE in the free count"
-    : reviewFlagged
-      ? "cleared from the count (review-tier hit only, triaged out)"
-      : "cleared — not flagged";
+    : unexpectedReview.length > 0
+      ? `REVIEW-TIER REGRESSION: a rule newly fires on this benign fixture — ${unexpectedReview.join(", ")}. Narrow the rule, or record the taxonomy in this entry's reviewTierHits with the reason it is acceptable noise.`
+      : reviewFlagged
+        ? `cleared from the count (recorded review-tier hit only, triaged out: ${[...new Set(relevant.filter((f) => f.precisionTier === "review").map((f) => f.taxonomy))].join(", ")})`
+        : "cleared — not flagged";
   return { id: entry.id, kind: entry.kind, cls: entry.cls, expectedTier: entry.expectedTier, caughtTier, highFlagged, reviewFlagged, pass, detail, ...noSev };
 }
 

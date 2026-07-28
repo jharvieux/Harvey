@@ -471,7 +471,7 @@ describe("supplyChainScopeFinding (SUP-SCOPE-00)", () => {
     declaredFrom: { manifests: 3, source: "pnpm-workspace.yaml", unresolvedGlobs: [], unreadable: [] },
     ...over,
   });
-  const args = { license: scope(), treeNames: 395, declaredNames: 40, osvRan: true };
+  const args = { license: scope(), treeNames: 395, declaredNames: 40, workspaceInternalNames: [], osvRan: true };
 
   it("names every manifest-scoped check and why the tree cannot answer it", () => {
     const finding = supplyChainScopeFinding(args);
@@ -487,6 +487,13 @@ describe("supplyChainScopeFinding (SUP-SCOPE-00)", () => {
   it("moves the curated CVE table into the tree-wide set exactly when osv-scanner did not run", () => {
     expect(supplyChainScopeFinding(args).evidence).toContain("double-report");
     expect(supplyChainScopeFinding({ ...args, osvRan: false }).evidence).toContain("widened for this pass because osv-scanner did not run");
+  });
+
+  it("#1344: names the workspace-internal packages excluded from the registry-backed checks, and says nothing when there are none", () => {
+    expect(supplyChainScopeFinding(args).evidence).not.toContain("workspace-internal");
+    const finding = supplyChainScopeFinding({ ...args, workspaceInternalNames: ["@kit/ui", "@kit/supabase"] });
+    expect(finding.evidence).toContain("2 workspace-internal package name(s) — @kit/ui, @kit/supabase");
+    expect(finding.evidence).toContain("SUP-SLOPSQUAT-*");
   });
 
   it("discloses a workspace glob that resolved to nothing instead of a plausible-looking count", () => {

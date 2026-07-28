@@ -16,6 +16,7 @@
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { isViteTooling, type TargetFramework } from "../scan/framework-detect.js";
+import { buildImportGraph, collectPathAliases, importClosure } from "./app-router.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 import { SOURCE_FILE } from "./load-sources.js";
 
@@ -1170,6 +1171,11 @@ const HANDLER_PATH = /(\/route\.[cm]?[jt]sx?$)|((^|\/)pages\/api\/)/;
 // scripts, config files, migrations/seeds, tests. Excluded from the broader (non-route-file)
 // tier below so cold-start/dev-time code doesn't get flagged as a request-path blocker.
 const NON_REQUEST_PATH = /(^|\/)(scripts|bin|migrations?|seeds?|__tests__|__mocks__)\/|\.(test|spec)\.[cm]?[jt]sx?$|\.config\.[cm]?[jt]sx?$/;
+// #1344: the entry points a request actually enters through. HANDLER_PATH is the Next.js subset the
+// "Likely" tier keys on; a Remix/RR7/Nest/Express app has none of those files, so the reachability
+// roots below are deliberately wider — otherwise the whole generic tier goes silent on every
+// non-Next target, which is a fail-quiet, not a precision fix.
+const REQUEST_ENTRY_PATH = /(\/route\.[cm]?[jt]sx?$)|((^|\/)(pages\/api|app\/api|routes?|controllers?|handlers?)\/)|(\.(server|route|controller|resolver|handler)\.[cm]?[jt]sx?$)|((^|\/)middleware\.[cm]?[jt]sx?$)/;
 
 function isExportedFunctionLike(n: ts.Node): boolean {
   if (ts.isFunctionDeclaration(n)) return !!n.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
@@ -1181,11 +1187,41 @@ function isExportedFunctionLike(n: ts.Node): boolean {
   return false;
 }
 
-function detectSyncIoInHandler(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+// #1344: #1203's generic tier flagged "an exported function anywhere that is not a tooling path",
+// which on the pinned external corpus was 86% wrong — MEASURED 2026-07-27 across six repos, 51 of
+// 59 new hits were in CLI packages, code generators, dev harnesses and test utilities that no
+// server process ever loads (inbox-zero packages/cli ×15, carbon packages/{dev,checks,harness} ×31,
+// saas-lite turbo/generators ×2, ghostfolio *-test-utils ×1, rallly apps/landing blog loader ×2).
+// A path blocklist can never enumerate that; the question it was standing in for is reachability,
+// which the import graph can answer. So the generic tier now requires the module to be transitively
+// imported by a request entry point, and the finding NAMES that entry point instead of disclaiming
+// that it proved nothing. The cost is recorded, not hidden: resolveImport cannot follow a WORKSPACE
+// PACKAGE specifier, so a shared monorepo package is unreachable from the app's routes as far as
+// this gate can tell — rallly packages/utils pbkdf2Sync and two documenso rows go silent. #1353.
+// A tree with no request entry point at all cannot answer the reachability question either way, and
+// an UNAVAILABLE signal must not read as a negative one — that is the fail-quiet this module's own
+// coverage rows exist to prevent. So the filter applies only when there is something to be reachable
+// FROM; otherwise the tier keeps #1203's behaviour and says in the evidence that it could not check.
+function requestReachableModules(files: SourceInput[], sources: Map<string, ts.SourceFile>): Map<string, string> | undefined {
+  const allPaths = new Set(sources.keys());
+  const entries = [...allPaths].filter((p) => REQUEST_ENTRY_PATH.test(p));
+  if (entries.length === 0) return undefined;
+  const graph = buildImportGraph(sources, allPaths, collectPathAliases(files));
+  const reached = new Map<string, string>();
+  for (const entry of entries) {
+    for (const p of importClosure([entry], graph)) if (!reached.has(p)) reached.set(p, entry);
+  }
+  return reached;
+}
+
+function detectSyncIoInHandler(files: SourceInput[], sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   const findings: Finding[] = [];
+  const reachedFrom = requestReachableModules(files, sources);
   for (const [path, sf] of sources) {
     const onHandlerPath = HANDLER_PATH.test(path);
     if (!onHandlerPath && NON_REQUEST_PATH.test(path)) continue;
+    const entry = reachedFrom?.get(path);
+    if (!onHandlerPath && reachedFrom !== undefined && entry === undefined) continue;
     // Only flag calls inside a function body — module-scope sync reads run once at cold
     // start (an accepted pattern), not per request.
     const visit = (n: ts.Node, inFunction: boolean, inExportedFn: boolean) => {
@@ -1207,7 +1243,11 @@ function detectSyncIoInHandler(sources: Map<string, ts.SourceFile>, nextId: Next
               location: loc(path, sf, n),
               evidence: onHandlerPath
                 ? `\`${n.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` runs inside a request handler in ${path} — it blocks the event loop for its full duration.`
-                : `\`${n.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` blocks the event loop for its full duration and runs inside an exported function in ${path} — not itself a route/handler file, so this flags on the call shape alone; reachability from an actual request was not proven statically (no cross-file call-graph analysis).`,
+                : `\`${n.getText(sf).replace(/\s+/g, " ").slice(0, 100)}\` blocks the event loop for its full duration and runs inside an exported function in ${path}. ${
+                    entry === undefined
+                      ? "The scanned tree contains no request entry point (no route/handler/controller file), so reachability could not be evaluated at all and this flags on the call shape alone"
+                      : `The request entry point ${entry} imports it (transitively), so the MODULE is reachable from a request, but this exported function's own invocation from the handler was not traced (no call-graph analysis)`
+                  } — confirm reachability before treating it as a live request-path stall.`,
               impact: "While it runs, the process serves nothing else — one slow call stalls every concurrent request on that instance; CPU-bound sync crypto is the classic tail-latency source.",
               fix: `Use the async form (\`${name.replace(/Sync$/, "")}\`) or hoist a run-once read to module scope.`,
               value: 4,
@@ -1623,7 +1663,7 @@ export function detectPerfCodeFindings(files: SourceInput[], framework?: TargetF
     ...detectImportMetaGlobEager(sources, nextId, isVite),
     ...detectUnsplitRouteComponents(sources, nextId, isVite),
     ...detectMiddlewareFetch(sources, nextId),
-    ...detectSyncIoInHandler(sources, nextId),
+    ...detectSyncIoInHandler(files, sources, nextId),
     ...detectJsonDeepClone(sources, nextId),
     ...detectNestedLoopJoin(sources, nextId),
   ];

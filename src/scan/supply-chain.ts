@@ -200,6 +200,8 @@ export function supplyChainScopeFinding(s: {
   license: LicenseScope;
   treeNames: number;
   declaredNames: number;
+  /** #1344 — workspace members depended on by their siblings. Never registry packages. */
+  workspaceInternalNames: readonly string[];
   osvRan: boolean;
 }): Finding {
   const treeWide = ["SUP-TYPO-* (typosquat)", "SUP-IOC-* (known-malicious names)", "SUP-LICENSE-* (license compliance)"];
@@ -233,7 +235,10 @@ export function supplyChainScopeFinding(s: {
       `Declared set: ${s.declaredNames} package name${s.declaredNames === 1 ? "" : "s"} from ${describeManifestSources(s.license.declaredFrom)}. ` +
       `Resolved tree: ${s.treeNames} package name${s.treeNames === 1 ? "" : "s"} from ${s.license.source}. ` +
       `Read the whole resolved tree: ${treeWide.join("; ")}. ` +
-      `Limited to the declared manifests: ${manifestOnly.join("; ")}.`,
+      `Limited to the declared manifests: ${manifestOnly.join("; ")}.` +
+      (s.workspaceInternalNames.length > 0
+        ? ` Excluded from the registry-backed name checks (SUP-SLOPSQUAT-*, SUP-TYPO-*, SUP-IOC-*): ${s.workspaceInternalNames.length} workspace-internal package name(s) — ${s.workspaceInternalNames.join(", ")} — which resolve from inside this repo and are not published, so a registry lookup cannot say anything about them. Their CONTENTS are still scanned as first-party source; only the registry existence/name questions are skipped.`
+        : ""),
     impact:
       "A manifest-scoped check cannot see a package reached only through the resolved dependency tree. The absence of its findings across that tree is a disclosed scope boundary, NOT a verdict that the tree is clean.",
     fix:

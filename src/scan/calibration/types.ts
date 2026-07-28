@@ -60,6 +60,23 @@ export interface CorpusEntry {
   // several severities (e.g. a two-CVE cluster) — a silent omission there is fine, a wrong
   // assertion is not.
   expectedSeverity?: Severity;
+  // #1344 — NEGATIVES ONLY. The review-tier taxonomies this benign fixture is MEASURED to draw and
+  // that are accepted as triaged-out noise. A review-tier hit not on this list fails the gate.
+  //
+  // Why this exists: a negative used to pass on `!highFlagged` alone, so a widened rule that lit up
+  // a planted negative at review tier scored "cleared (review-tier hit only)" and every gate stayed
+  // green — #1251 hit exactly that (a taint-source widening made harvey-path-traversal fire on
+  // N-STORAGE-DB-PATH; it surfaced only by hand-diffing dry-run/findings.json). The free count is
+  // still what makes a negative FAIL LOUD as a false positive; this makes any MOVEMENT fail as a
+  // regression, which is the thing no gate could previously see.
+  //
+  // The 28 rows carrying this field today were populated from a MEASURED `validate-calibration` run
+  // on 2026-07-27, as the starting baseline — they are pre-existing noise, not per-row judgements,
+  // and the rationale for the recurring shapes (third-party detect-child-process on guarded exec
+  // fixtures, cross-class keyword matches on the storage/RLS fixtures) is already argued in
+  // src/scan/calibration.test.ts. ADDING a taxonomy from here on is a deliberate act and belongs in
+  // the entry's `note` with the reason it is acceptable noise rather than a rule to narrow.
+  reviewTierHits?: readonly string[];
   note: string;
 }
 
@@ -84,5 +101,11 @@ export interface HeuristicEntry {
   // M7 axes: run with the Vite framework flag / with a React-Compiler-on next.config appended.
   framework?: "vite";
   compilerOn?: boolean;
+  // #1344: a location substring naming a KNOWN-CAUGHT hit planted in the same negative fixture
+  // directory. Its findings are excluded from the false-positive count, and the row FAILS if it
+  // does not fire. Without it a negative dir the scanner never read scores identically to one it
+  // scanned and correctly cleared — CLAUDE.md's rule (3), which until now had no way to be
+  // enforced here, only followed by hand.
+  scopeControl?: string;
   note: string;
 }

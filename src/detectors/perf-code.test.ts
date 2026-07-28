@@ -336,14 +336,22 @@ describe("blocking sync I/O in request handler", () => {
     expect(byTaxonomy("sync-io/negative", TAX)).toHaveLength(0);
   });
   it("#1203: flags pbkdf2Sync/readFileSync inside exported functions outside a recognised handler path, at Review confidence", () => {
-    const hits = byTaxonomy("sync-io/positive-generic", TAX);
+    const hits = byTaxonomy("sync-io/positive-generic", TAX).filter((h) => h.confidence === "Review");
     expect(hits).toHaveLength(2);
-    expect(hits.every((h) => h.confidence === "Review")).toBe(true);
     expect(hits.map((h) => h.title).join(" | ")).toContain("pbkdf2Sync");
     expect(hits.map((h) => h.title).join(" | ")).toContain("readFileSync");
+    // #1344: the evidence must NAME the entry point that reaches it — the old wording disclaimed
+    // that reachability was never established, which was true and was the precision bug.
+    expect(hits[0]?.evidence).toContain("app/api/login/route.ts");
   });
   it("#1203: does not flag a sync read in a build/tooling script (scripts/ dir)", () => {
     expect(byTaxonomy("sync-io/negative-build-script", TAX)).toHaveLength(0);
+  });
+  it("#1344: stays silent on an exported-function sync call no request entry point imports, while the same-directory route control still fires", () => {
+    const hits = byTaxonomy("sync-io/negative-unreachable", TAX);
+    // Exactly the scope control — the CLI package's three exported sync calls contribute nothing.
+    expect(hits.map((h) => h.location)).toEqual(["app/api/health/route.ts:8"]);
+    expect(hits[0]?.confidence).toBe("Likely");
   });
 });
 

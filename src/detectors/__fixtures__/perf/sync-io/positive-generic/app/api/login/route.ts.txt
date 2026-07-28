@@ -1,0 +1,10 @@
+import { NextResponse } from "next/server";
+import { verifyPassword } from "../../../lib/crypto-helpers";
+
+// #1344: the entry point that makes lib/crypto-helpers request-reachable. Without an importer on a
+// request path the generic tier must stay silent (negative-unreachable) — this file is what turns
+// "an exported function somewhere" into "a module a request actually loads".
+export async function POST(req: Request) {
+  const { password, salt } = (await req.json()) as { password: string; salt: string };
+  return NextResponse.json({ hash: verifyPassword(password, salt) });
+}

@@ -228,6 +228,13 @@ export const owaspMultiTenantEntries: CorpusEntry[] = [
     note: "uploadAttachmentScoped's `${session.user.tenantId}/${filename}` path, the negative #1198's storage-tenant-scope.ts had to clear to ship. Confirmed silent: the path resolves (through the local `path` binding) to text mentioning `session`/`tenantId`, which clears the finding.",
   },
   {
+    id: "N-OWASP-MT-STORAGE-PATH-DB-DERIVED",
+    kind: "negative",
+    cls: "Storage object key read from a DB row the caller had to be entitled to fetch",
+    location: "src/owasp-mt/storage-path-db-derived.ts",
+    note: "#1198/#1344: `storage.from(\"exports\").download(job.storage_path)` where `job` came from `supabase.from(\"export_jobs\").select(...).eq(\"id\", jobId).single()` — the request supplies only a row id and never names a path. MEASURED 2026-07-27: fired High before #1344, because storage-tenant-scope judged the path by NAME and a DB-derived path never contains \"tenant\"/\"session\"/\"org\". Two detectors disagreed about one route: harvey-path-traversal was deliberately taught to stay silent on exactly this shape (#1220, N-STORAGE-DB-PATH) while this one reported it. Cleared by tracing the path expression's ROOT BINDING to a `.from(...).select(...)`/`.single()` chain in the same function — the same reasoning #1220 encoded as its `$Q.eq(...)` sanitizer, expressed for an AST detector: the entitlement lives in the query that produced the row, not in the path string. The scope control is P-OWASP-MT-STORAGE-PATH on storage-path-no-tenant.ts, whose key IS the caller-supplied filename and must keep firing.",
+  },
+  {
     id: "N-OWASP-MT-LOG-TENANT-PRESENT",
     kind: "negative",
     cls: "Audit entries carrying tenant context, plus the two lookalikes an audit-log rule must not fire on",
