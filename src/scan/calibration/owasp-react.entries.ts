@@ -226,7 +226,7 @@ export const owaspReactEntries: CorpusEntry[] = [
     kind: "positive",
     cls: "Untrusted object spread back into an object literal before the JSX spread",
     location: "src/owasp-react/prop-spread-literal-respread.tsx",
-    match: ["prop"],
+    match: ["prop-spread-injection"],
     expectedTier: "review",
     expectedSeverity: "High",
     note: "#1237/#1344: the ADVERSARIAL half of the literal-pick exclusion. `{...{ placeholder: \"Name\", ...raw }}` is an object literal, so the structural exclusion added for prop-spread-literal-pick.tsx would clear it — except the literal spreads the untrusted object straight back in, so every name in `raw`, dangerouslySetInnerHTML included, still reaches the component. Planted so the exclusion is falsifiable in the one way it is spoofable, rather than trusted because it sounds structural (#989/#1066). MEASURED 2026-07-27: fires with the exclusion in place.",

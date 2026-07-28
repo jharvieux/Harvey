@@ -10,7 +10,8 @@
 // something to review: the diff shows the new standing claims, not a total going up. Prefer writing
 // the block over bumping the file.
 //
-// PROSE ONLY (`.md`) — source comments are not censused; see #1347.
+// Since #1347 this covers prose (`.md`/`.txt`) whole and COMMENT LINES of `.ts`/`.yml`/`.sql`.
+// This file is excluded from its own census — it quotes every claim in the repo verbatim.
 
 export const CLAIM_BASELINE: Record<string, string[]> = {
   "briefs/anti-patterns.md": [
@@ -31,19 +32,30 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "- **Report:** mutation score overall + per module (whole repo); a \"tests covering X can't actually fail\" list (the",
     "cannot see (application-layer encryption, RLS *policy* quality, non-`public` schemas, review-flagged columns);",
   ],
+  "briefs/quality-extras.txt": [
+    "- DEFENSIVE VALIDATION for inputs that can't be invalid (validating internal, already-typed callers).",
+    "- MISSING SEAMS — business logic entangled with I/O so it can't be tested without the DB/network.",
+    "## TEST QUALITY / INTENT (M8) — flag tests that can't fail",
+    "- TAUTOLOGICAL — it asserts a value it just set, or mocks the very thing under test so the assertion can't fail.",
+    "- MOCKS THE DATABASE/RLS — a \"tenant isolation\" test that mocks the DB layer can't observe an RLS regression;",
+  ],
+  "briefs/scan-extras.txt": [
+    "`_CURRENT`/`_PREVIOUS` acceptance cannot be rotated without an outage. Flag both:",
+  ],
   "CLAUDE.md": [
     "Completeness is a core product principle: **a module that cannot run is recorded as `partial` / `requires-live-run` WITH THE REASON — never silently omitted. Fail loud.**",
     "**Silent omission is worse than a wrong status.** A `missed` shows up in the tally; an absent row does not. If a thing cannot be assessed, say so IN THE OUTPUT — an unstated limitation reads as a clean bill of health. (`requires-live-run: 0` once asserted nothing awaited a live run while four planted bugs were simply not listed — #345.)",
-    "**Scope decisions that are DISCLOSED, not silent (#903):** infrastructure code (Dockerfiles, Compose, Terraform, K8s/Helm) is out of scope BY DECISION — rationale in `docs/design/infrastructure-out-of-scope.md` — and a target containing it gets an `INFRA-SCOPE-00` not-assessed row naming what was found and its file counts, never silence. The same posture covers non-JS/TS source (M1's rules are JS/TS-only): `M1-LANG-00` names each language M1 cannot analyse (#871). SFC files (`.svelte`/`.vue`/`.astro`) the source loader can't read get a counted not-assessed row too (#919), pending the parse layer (#920). `M1-EXT-00` extends the family (#1065): it reports source files LOADED vs. source-like files PRESENT — measured against a yardstick deliberately independent of the loader's own extension filter — so a narrowing of what gets read fires a row instead of silently shrinking the scan. **The family keeps growing and no row is the last one** — `M1-WRAPPER-00`, `SUP-SLOPSQUAT-00`, `SUP-LICENSE-00`, `SEM-SUPPRESS-00`/`SEM-SCOPE-00` (#1066, a target's own `nosemgrep`/`.semgrepignore` overridden, then counted and disclosed), `M3-KNOWLEDGE-00` (#1112, whether an empty truck-factor list was measured clean or never had authorship history to read) and `SUP-SCOPE-00` (#1231, which supply-chain checks read the whole resolved dependency tree and which are limited to the declared manifests, with the reason each limited one cannot use the tree) have all joined it since. Adding one is the normal response to finding something Harvey cannot assess; the defect is a silent gap, never a missing row id.",
-    "- **Accounted-for is not delivered — the conservation gate (#1064).** The rest of this section proves a module was ACCOUNTED FOR. It does not prove that module's findings REACHED THE DELIVERABLE, and a whole recurring defect class (#1040/#1045/#1050/#1043/#1061/#1062) lives in that gap: the detector works, the finding is dropped at a producer→consumer seam, the ledger reads clean and the run exits 0. `pnpm exec tsx src/cli/validate-conservation.ts` closes it — it runs the real ten-module orchestrator against `targets/calibration`, assembles the real deliverable, and asserts per module that its PLANTED finding was both produced by that module's own probe and present in the assembled document. **Zero findings for a planted defect is a FAIL** (zero is legitimate in the field, never on the fixture). The produced/delivered split is load-bearing: a deliverable-only check can't tell a finding a module's OWN probe produced from one another probe contributed under the same taxonomy — that is how #1062 hid (M9 then captured `detect-static` unfiltered and re-collected M7's rows; since #1084 M9 collects only the complement of M6/M7/M8, closing that masking — which #1084 exposed as a FALSE M7-plant pass and then fixed). Every module M1–M10 now has an offline conservation plant (#1155 added M2's — a recorded dynamic-pass artifact through the #416/#1042 seam); `UNEXERCISED` is empty, kept as the landing slot for a future genuinely-live-only module; the live pentest→artifact M2 seam stays live-only. A module in neither list throws at load. The CLI needs the mechanical binaries, so — like `dry-run-drift`/`corpus-drift` — it is NOT part of `pnpm verify`; its logic is, via `src/audit-conservation.test.ts`. Its wiring test (`src/cli/validate-conservation.test.ts`) is ALSO no longer part of `pnpm verify` (#1105) — gated behind `HARVEY_CONSERVATION_E2E`, it runs isolated in `.github/workflows/conservation.yml`. Since #1096 it runs on a schedule of its own (`.github/workflows/conservation.yml`, daily, #1142) and since #1205 it is a **required status check** on `main` (context `plant → deliverable, and the produced/delivered arithmetic`), so a red gate now blocks the merge instead of being advisory — PR #1199 squash-merged over a red one, which is the silent-omission shape the gate exists to prevent. Being required is why its `paths:` filter had to move INSIDE the job first: a path-filtered required check deadlocks every PR outside its filter (#1107's rule), so the job now runs on EVERY PR and short-circuits to a green no-op when nothing relevant changed. That in-job filter has **two tiers**, because the job does two unrelated things: the GATE is change-based (does this diff touch the conservation pipeline or `targets/calibration/**`?), while the seven **captured-fixture drift checks are TIME-based** — each re-runs a pinned external tool and asserts the fresh output still satisfies the committed contract, so what they detect is an upstream release moving a tool's output schema, which no diff can speak to. They therefore run on the daily schedule and on PRs only when the fixtures, their contracts or the drift CLIs move (#1226). That job's negative-control steps assert the gate can still FAIL — a green run means \"passed AND can fail\"; a scheduled failure find-or-updates a tracking issue (label `ci-conservation-alert`), mirroring corpus-drift/heavy-cli (#1138). Record: `docs/design/conservation-of-findings.md`.",
+    "**Scope decisions that are DISCLOSED, not silent (#903):** infrastructure code (Dockerfiles, Compose, Terraform, K8s/Helm) is out of scope BY DECISION — rationale in `docs/design/infrastructure-out-of-scope.md` — and a target containing it gets an `INFRA-SCOPE-00` not-assessed row naming what was found and its file counts, never silence. The same posture covers non-JS/TS source (M1's rules are JS/TS-only): `M1-LANG-00` names each language M1 cannot analyse (#871). SFC files (`.svelte`/`.vue`/`.astro`) the source loader can't read get a counted not-assessed row too (#919), pending the parse layer (#920). `M1-EXT-00` extends the family (#1065): it reports source files LOADED vs. source-like files PRESENT — measured against a yardstick deliberately independent of the loader's own extension filter — so a narrowing of what gets read fires a row instead of silently shrinking the scan. **The family keeps growing and no row is the last one** — `M1-WRAPPER-00`, `SUP-SLOPSQUAT-00`, `SUP-LICENSE-00`, `SEM-SUPPRESS-00`/`SEM-SCOPE-00` (#1066, a target's own `nosemgrep`/`.semgrepignore` overridden, then counted and disclosed), `M3-KNOWLEDGE-00` (#1112, whether an empty truck-factor list was measured clean or never had authorship history to read) and `SUP-SCOPE-00` (#1231/#1344, which supply-chain checks read the whole resolved dependency tree and which are limited to the declared manifests — carrying, for each limited one, either the reason the tree cannot answer its question or a statement that the data is present and unread; plus the workspace-internal package names excluded from the registry-backed checks, because a member resolves from inside the repo and the registry cannot answer anything about it) have all joined it since. Adding one is the normal response to finding something Harvey cannot assess; the defect is a silent gap, never a missing row id. The family discloses what a MODULE could not assess; since #1317 the same principle is enforced one level down, at the individual rule — a semgrep rule whose comments declare a bound must state that bound in its own `message`, gated by `pnpm validate-disclosure-venue` and by `a recorded bound reaches the finding it bounds` in CI. Its own bound: the check recognises a 12-phrase marker vocabulary, so ~9 rules stating a real unassessed class in other words stay invisible (#1342).",
+    "- **Accounted-for is not delivered — the conservation gate (#1064).** The rest of this section proves a module was ACCOUNTED FOR. It does not prove that module's findings REACHED THE DELIVERABLE, and a whole recurring defect class (#1040/#1045/#1050/#1043/#1061/#1062) lives in that gap: the detector works, the finding is dropped at a producer→consumer seam, the ledger reads clean and the run exits 0. `pnpm exec tsx src/cli/validate-conservation.ts` closes it — it runs the real ten-module orchestrator against `targets/calibration`, assembles the real deliverable, and asserts per module that its PLANTED finding was both produced by that module's own probe and present in the assembled document. **Zero findings for a planted defect is a FAIL** (zero is legitimate in the field, never on the fixture). The produced/delivered split is load-bearing: a deliverable-only check can't tell a finding a module's OWN probe produced from one another probe contributed under the same taxonomy — that is how #1062 hid (M9 then captured `detect-static` unfiltered and re-collected M7's rows; since #1084 M9 collects only the complement of M6/M7/M8, closing that masking — which #1084 exposed as a FALSE M7-plant pass and then fixed). Every module M1–M10 now has an offline conservation plant (#1155 added M2's — a recorded dynamic-pass artifact through the #416/#1042 seam); `UNEXERCISED` is empty, kept as the landing slot for a future genuinely-live-only module; the live pentest→artifact M2 seam stays live-only. A module in neither list throws at load. The CLI needs the mechanical binaries, so — like `dry-run-drift`/`corpus-drift` — it is NOT part of `pnpm verify`; its logic is, via `src/audit-conservation.test.ts`. Its wiring test (`src/cli/validate-conservation.test.ts`) is ALSO no longer part of `pnpm verify` (#1105) — gated behind `HARVEY_CONSERVATION_E2E`, it runs isolated in `.github/workflows/conservation.yml`. Since #1096 it runs on a schedule of its own (`.github/workflows/conservation.yml`, daily, #1142) and since #1205 it is a **required status check** on `main` (context `plant → deliverable, and the produced/delivered arithmetic`), so a red gate now blocks the merge instead of being advisory — PR #1199 squash-merged over a red one, which is the silent-omission shape the gate exists to prevent. Being required is why its `paths:` filter had to move INSIDE the job first: a path-filtered required check deadlocks every PR outside its filter (#1107's rule), so the job now runs on EVERY PR and short-circuits to a green no-op when nothing relevant changed. That in-job filter has **two tiers**, because the job does two unrelated things: the GATE is change-based (does this diff touch the conservation pipeline or `targets/calibration/**`?), while the seven **captured-fixture drift checks are TIME-based** — each re-runs a pinned external tool and asserts the fresh output still satisfies the committed contract, so what they detect is an upstream release moving a tool's output schema, which no diff can speak to. They therefore run on the daily schedule and on PRs only when the fixtures, their contracts or the drift CLIs move (#1226). That job's negative-control steps assert the gate can still FAIL — a green run means \"passed AND can fail\"; a failure on schedule OR `workflow_dispatch` find-or-updates a tracking issue (label `ci-conservation-alert`), mirroring corpus-drift/heavy-cli (#1138). Since #1287 that path is PROVEN, not merely written: it fired under the real job token (run 30313133260), all five alert paths share one composite action `.github/actions/alert-issue`, and each has a re-runnable drill (`gh workflow run \"<name>\" -f alert_drill=true`). Before #1287, three of six marker labels did not exist — machine-checkable proof those paths had never run. The drill exercises a parallel branch, not the production find-or-update branch (#1348). Record: `docs/design/conservation-of-findings.md`.",
     "**Regenerate the committed dry-run artifacts after any change to a detector, semgrep rule, finding schema, or calibration fixture.** Run `pnpm exec tsx src/cli/dry-run.ts --target targets/calibration --out dry-run` and commit BOTH `dry-run/findings.json` AND `dry-run/pii-data-map.json`. The `dry-run-drift` CI gate diffs both, and since #1107 (operator ruling 2026-07-26) it is a **required** status check on `main` — context `regenerate dry-run findings + diff committed artifact` — so a missing regeneration now blocks the merge instead of nagging. It reports on EVERY PR (no `paths:` filter, because a path-filtered required check deadlocks every PR outside its filter) and short-circuits to a green no-op when the change set touches neither the harness, `src/scan/**`, `targets/calibration/**`, nor the committed artifacts. Still regenerate proactively: the gate tells you the artifact drifted, it does not produce the corrected one. Regenerate on a machine with the mechanical-tier binaries installed (semgrep/trufflehog/osv-scanner/gitleaks) — a run missing semgrep/trufflehog/gitleaks fails, and a run missing osv-scanner produces a DEP-OSV-00 disclosure finding that does not belong in the committed artifact. The dry-run harness deliberately pins off the inputs it cannot control, so `findings.json` stays deterministic: `checkSlopsquat` entirely and `checkLicenseCompliance`'s live-registry FALLBACK (both via `skipNetworkChecks` — since #1213 that check classifies from the committed lockfile, which is deterministic, so its copyleft detection stays exercised by the gate rather than going silent; since #1231 both registry-backed checks are additionally bounded by a 300-lookup cap named in their disclosure rows) and — since 2026-07-26 — the built-bundle secret pass (via `skipBundleScan`, so `SEC-BUNDLE-00` always emits). The bundle one was found by `dry-run-drift` failing on a correctly-regenerated artifact: `resolveBundleScan` probes the ORIGINAL target dir rather than the git-tracked scratch copy, so it auto-detected a gitignored `targets/calibration/.next/static` on a machine that had run a build and omitted the disclosure row CI emitted. **If you add a scan input that reads outside the scratch copy or off the network, pin it on this path too** — real engagement scans still run all of them.",
     "- **Slop sweep before commit.** Re-read your own diff and delete: comments that say WHAT instead of WHY, single-call helper functions, try/catch that re-throws or swallows, JSDoc paragraphs on simple functions, TODOs without an owner or issue ref, defensive validation of inputs that can't be invalid.",
     "- **Tests verify intent, not just behavior.** A test that can't fail when business logic changes is wrong.",
     "- **Fail loud.** \"Done\" is wrong if anything was skipped silently. Silent omission is worse than a wrong status — an absent row never appears in a tally, so it cannot be argued with. If something could not be assessed, say so in the output.",
+    "- **Verify the defect before you fix it — this is a step with an output, not a posture.** Before writing code against an issue, a recorded blocker, or a `not-run` reason: read the current code, run the failing case or reproduce the symptom, and check `git log` on the touched paths for work that landed after the claim was written. State in the PR body what you verified and how. Already fixed → do NOT re-implement: close it with a comment naming the fixing commit/PR. Misdiagnosed but a real adjacent defect exists → fix that and correct the record. Trackers go stale: a single 2026-07-24 sweep found **four** recorded blockers false (#977's \"needs `semgrep --pro`\", #997's \"token identity unreachable\", #1009's \"unplanted fixtures\", #1011's \"both detectors outside the gate\" — the last one written in the issue *and* its design doc), and #1230 then found a **blanket** one covering nine items at once — \"every one of these is a cross-statement or cross-time dataflow question a mechanical pass is a poor fit for\" — false for six of the nine, including two whose stated blocker (\"needs a per-provider encoding table\", \"needs migration history over time\") dissolved on first contact. **A single reason covering N items is N unverified claims wearing one coat.** The general gate for this landed in #1033: `pnpm exec tsx src/cli/validate-reasons.ts --revalidate`.",
     "- **Measure, don't recall.** Never state a capability number — recall, coverage, precision, \"we catch X\", \"module Y is unrunnable\" — from memory, a doc, a comment, or a prior session. **Run the thing that measures it**: `pnpm exec tsx src/cli/validate-calibration.ts` for corpus recall; the dry-run scorecard only after regenerating it via the tool; `ls src/scan/calibration/*.entries.ts` for what the gate actually covers. A recorded number is a claim about the past, not the present. If you cannot verify it, write \"recorded as N, unverified\" — never let a stored number become an argument's premise. Beware blended numbers: they hide skew — the gate's headline positive count is nearly all M1 by design (it scores only the M1 mechanical corpus; the per-module census #341 and the parity minimum #427 make the split legible). **No recall figure is recorded in this file on purpose**: it moves every time a detector or fixture lands, and a number written here becomes an argument's premise months after it stopped being true. `pnpm exec tsx src/cli/validate-calibration.ts` prints the current TP/FN/FP/TN, the per-module census and the verdict in one run — quote that run, dated, or write \"unverified\".",
     "- **An answer key we wrote cannot measure our coverage — the OWASP corpora exist for that (#1190/#1191, 2026-07-26).** Every other corpus in `src/scan/calibration/` traces to `briefs/anti-patterns.md`, a catalog we wrote and *then* wrote detectors for: it measures internal consistency, and we cannot fail a check authored to match what we already catch. `owasp-multitenant.entries.ts`, `owasp-nodejs.entries.ts` and `owasp-react.entries.ts` are scored against third-party OWASP cheat sheets, pinned by commit, that we did not write and cannot quietly edit — so a miss there is evidence. The React one pins the head of an OPEN upstream PR (#2196), reproducible because GitHub keeps a PR head reachable from the base repo; reconciling it after merge is #1241, which carries an empirical falsifier that fires when it lands. Add a third rule: (3) **a fixture the scanner never read reports zero findings, exactly like one it scanned and missed** — the scan walks a git-tracked scratch copy, so `git add` fixtures before believing a zero, and keep a known-caught scope control in any new fixture directory. Two rules for extending them. (1) **Bucket by RUNNING the scanner over a planted fixture, never by inspection** — three of eight Node.js fixtures produced findings for *entirely different* defects (path traversal, XSS, excessive data exposure), every one correct, and an unscoped `match` would have recorded all three gaps as COVERED. That is the #1062 masking shape reached through a corpus instead of a producer seam. (2) `match` is tested against a finding's **evidence, which quotes the source line**, and its **id, which derives from the file path** — so a keyword resembling either self-matches (`\"Sync(\"` matched `readFileSync(`). Take match phrases from taxonomy vocabulary. `CorpusEntry.gapKind` separates a `by-design` boundary from a `measured-gap` that is outstanding work; calling the second \"by design\" misreports it.",
-    "- **A recorded reason is a claim about the world, and claims decay.** When you read a comment, note, `not-run` reason, or status explaining why something cannot run or is not caught — treat it as **unverified until you re-test it**, however confidently it is written. This is the repo's signature defect: ~10 instances found on 2026-07-15 alone, every one failing silently toward a confident-looking number (#321, closed 2026-07-16, added a re-validation pass that re-tests the external-corpus not-run reasons on every drift run; #1033 generalized it repo-wide — see the next bullet). Rules that \"never existed\" existed; targets that \"can't be scored\" scored; gates described as active were unwired. **Check before you repeat it, and especially before you build an argument on it.**",
-    "- **When you RECORD a reason, tag its provenance and write the falsifier — and since #1033 there is a machine-readable form and a gate.** These claims are born at the moment work stops — a blocker is a justification for deferring, so nobody stress-tests it and, by construction, nobody exercises the path it describes. Negative claims are self-sealing: \"X works\" fails loudly when wrong, \"X can't be done\" fails silently forever. So mark every reason you write as **MEASURED** (name the command and date), **TRIED** (what you actually attempted, and what it did), or **ASSUMED** (inferred, never tested) — the four blockers falsified on 2026-07-24 were all ASSUMED written in MEASURED's confident register. **Split the reason by kind and record it as a block** (`REASON:` / `KIND:` / `PROVENANCE:` / `FALSIFIER:` or `OWNER:`+`DECISION:` / optional `TOUCHES:` / optional `FALSIFIER-TIER:` — #1072, naming the live tier a falsifier needs so an offline `--revalidate` marks it SKIPPED-LIVE rather than STALE, one of `m2-stack`/`lighthouse`/`secbench`/`supabase-labs`; convention and rationale in `docs/design/recorded-reasons.md`. A live-tier falsifier names any out-of-repo target as a placeholder bound from `HARVEY_FALSIFIER_<NAME>`, never bare `<angle-brackets>` — those reach the shell as an input redirect, exit non-zero, and read as \"the blocker still holds\", which is how all five live falsifiers sat green while re-testing nothing (#1246). For the same reason a lookup that CANNOT run (no credential, no network) must exit 127 = UNVERIFIABLE and fail the gate, never non-zero = still-blocked): an **empirical** reason is re-testable against the world and MUST carry the command that would falsify it — **written so the command EXITS 0 WHEN THE BLOCKER IS GONE** — while a **decisional** reason awaits a human ruling and must NOT carry one (re-testing a product ruling is a category error; the gate refuses it). A reason with no falsifier is unfalsifiable and therefore permanent. `pnpm exec tsx src/cli/validate-reasons.ts` checks the structure (also enforced under `pnpm verify` by `src/recorded-reasons.test.ts`); `--revalidate` re-runs every empirical falsifier and fails loud on any that now succeeds. Prefer phrasing an untested blocker as a question (\"does the token store expose non-owner reads?\") over an assertion (\"token identity is unreachable\") — a question invites the next person to test it, an assertion closes the file. And never let a claim launder itself by being copied: two documents citing one guess is not corroboration — the #1033 sweep found that exact shape twice more (§8 classes 1/2/5 \"no detector\" in `fix-implementation.md` + `fix-calibration-acceptance.md`, and F-11 \"no static detector at all\" in `superredhat-recall-measurement.md` + `src/scan/semantic-corpus.ts`), both false, both corrected.",
+    "- **A recorded reason is a claim about the world, and claims decay.** When you read a comment, note, `not-run` reason, or status explaining why something cannot run or is not caught — treat it as **unverified until you re-test it**, however confidently it is written. This is the repo's signature defect: ~10 instances found on 2026-07-15 alone, every one failing silently toward a confident-looking number (#321, closed 2026-07-16, added a re-validation pass that re-tests the external-corpus not-run reasons on every drift run; #1033 generalized it repo-wide — see the next bullet). Rules that \"never existed\" existed; targets that \"can't be scored\" scored; gates described as active were unwired. **Check before you repeat it, and especially before you build an argument on it.** And it happens INSIDE DETECTORS, not only in trackers: #1240's shared taint-source block recorded *\"MEASURED against five benign probes … including an RPC argument bag … fires on none\"*. An independently-written RPC argument bag fired at Critical, GRADED (#1344) — all five probes must have bound the name by local assignment, the one case the guard covered. **A measurement whose probes are drawn from the same intuition as the guard proves only that the intuition is self-consistent.**",
+    "- **When you RECORD a reason, tag its provenance and write the falsifier — and since #1033 there is a machine-readable form and a gate.** These claims are born at the moment work stops — a blocker is a justification for deferring, so nobody stress-tests it and, by construction, nobody exercises the path it describes. Negative claims are self-sealing: \"X works\" fails loudly when wrong, \"X can't be done\" fails silently forever. So mark every reason you write as **MEASURED** (name the command and date), **TRIED** (what you actually attempted, and what it did), or **ASSUMED** (inferred, never tested) — the four blockers falsified on 2026-07-24 were all ASSUMED written in MEASURED's confident register. **Split the reason by kind and record it as a block** (`REASON:` / `KIND:` / `PROVENANCE:` / `FALSIFIER:` or `OWNER:`+`DECISION:` / optional `TOUCHES:` / optional `FALSIFIER-TIER:` — #1072, naming the live tier a falsifier needs so an offline `--revalidate` marks it SKIPPED-LIVE rather than STALE, one of `m2-stack`/`lighthouse`/`secbench`/`supabase-labs`; convention and rationale in `docs/design/recorded-reasons.md`. A live-tier falsifier names any out-of-repo target as a placeholder bound from `HARVEY_FALSIFIER_<NAME>`, never bare `<angle-brackets>` — those reach the shell as an input redirect, exit non-zero, and read as \"the blocker still holds\", which is how all five live falsifiers sat green while re-testing nothing (#1246). For the same reason a lookup that CANNOT run (no credential, no network) must exit 127 = UNVERIFIABLE and fail the gate, never non-zero = still-blocked. And a falsifier that RUNS cleanly can still be incapable of firing — a case-sensitive `grep -q CLOSED` over an API answering lowercase `closed` exits 1 in BOTH directions, and sat inside a green `--revalidate` run re-testing nothing (found 2026-07-27, #1345). **So EXERCISE every falsifier in both directions before recording it**: run it as committed, then against a state where the blocker is gone, and show both exit codes. A falsifier nobody has watched exit 0 is indistinguishable from one that cannot): an **empirical** reason is re-testable against the world and MUST carry the command that would falsify it — **written so the command EXITS 0 WHEN THE BLOCKER IS GONE** — while a **decisional** reason awaits a human ruling and must NOT carry one (re-testing a product ruling is a category error; the gate refuses it). A reason with no falsifier is unfalsifiable and therefore permanent. `pnpm exec tsx src/cli/validate-reasons.ts` checks the structure (also enforced under `pnpm verify` by `src/recorded-reasons.test.ts`); `--revalidate` re-runs every empirical falsifier and fails loud on any that now succeeds. Prefer phrasing an untested blocker as a question (\"does the token store expose non-owner reads?\") over an assertion (\"token identity is unreachable\") — a question invites the next person to test it, an assertion closes the file. And never let a claim launder itself by being copied: two documents citing one guess is not corroboration — the #1033 sweep found that exact shape twice more (§8 classes 1/2/5 \"no detector\" in `fix-implementation.md` + `fix-calibration-acceptance.md`, and F-11 \"no static detector at all\" in `superredhat-recall-measurement.md` + `src/scan/semantic-corpus.ts`), both false, both corrected.",
     "- **Disclosure is the second-best outcome, and it is EARNED BY AN ATTEMPT (#1345, operator ruling 2026-07-27).** A not-assessed row is the right answer when something genuinely cannot be assessed — silence is always worse, and the disclosure-row family exists for exactly that. But it is a **fallback, never a first move: you may not disclose what you have not tried.** Before writing that something cannot be done, spend the attempt and record what you actually ran. Three tests every disclosure must pass. (1) **Provenance** — MEASURED or TRIED, never ASSUMED wearing MEASURED's register. (2) **Population** — how many real cases hit this limit? A bound audited on 2026-07-27 had never occurred in 60 PRs; **a limit with a population of zero is not a limit, it is a guess.** (3) **Scope** — one failed attempt does not license a universal claim (\"no keyword-overlap rule can accept a paraphrase\" — one variant tried, five more existed). If you cannot pass all three you have not found a limitation, you have run out of afternoon: say *that* instead. The 2026-07-27 audit of 677 closed issues found the dominant failure was never \"documented instead of built\" — the code usually shipped — it was **a false reason attached to the undone half**, which is worse, because the shipped half makes the closure look legitimate and nobody re-tests the decline. Instances: #1204 (\"the headers are checked by their effect\" — a bare Express app produced ZERO findings), #1231 (\"a lifecycle script only ever exists in a manifest\" — npm lockfiles record `hasInstallScript` per resolved package), #370 (declined cross-file counting for want of a module graph; `buildImportGraph` had shipped four days earlier in the same directory), #266 (\"M6 is not mechanically detectable\" — `pnpm detector-census` measures 33 M6 detectors, first five landing 24h later), #556 (\"`package.json` is supervised\" — verified against `CLAUDE.md` as it stood that day: **the constraint never existed**), #1012 (\"registry packs need a network fetch, so deliberately not resolvable\" — online it resolves in 2.2s, and the unmeasured cost was that 12% of a real deliverable's rule findings can never be marked resolved).",
     "- **If your change falsifies a claim in this file, say so — you cannot fix it yourself. THE ORCHESTRATOR APPLIES IT, NOT YOU, AND NOT MID-SWEEP (operator ruling 2026-07-26).** This file is supervised: a dispatched agent must never edit it, **even when the operator has granted CLAUDE.md changes for the session** — a grant authorises the ORCHESTRATOR to make them, it does not delegate down. The flow is: **agent reports the falsified sentence → orchestrator records it in the sweep ledger → orchestrator applies every recorded change in ONE pass, just before the final summary.** Two reasons it works this way. (1) Concurrent executors editing one file collide: on 2026-07-26 six of them edited this file and PRs #1108/#1110 had to be hand-sequenced around the conflict. (2) A sentence \"falsified\" at 10:00 is often re-falsified by a later batch the same day; batching to the end means the file is corrected once, against the final state, instead of thrashing. So the moment your work makes a sentence here untrue — a \"known gap\" you closed, a prereq you removed, a command you renamed, a guard you wired or unwired — **name the exact sentence and recommend the replacement wording**, in your PR body AND your report to the supervisor. **The supervisor must relay it to the operator with that recommendation before the session ends — it may not be silently absorbed.** Every dispatched agent reads this file: a false sentence here misinforms every future session, and in sweep #3 an uncommitted-vs-committed drift in this one file caused a class of phantom bugs. #310 falsified its own known-gap paragraph the moment it merged; its executor reported it and it still took an operator question hours later to surface. **A stale CLAUDE.md is not a documentation chore — it is a defect with a blast radius.**",
   ],
@@ -66,10 +78,13 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "original and a human following the issue would see it; they **cannot** conclude the sentence around",
     "- ~~A cross-repo or URL-form closing reference cannot be resolved by a repo-scoped lookup. It gets a",
     "is indistinguishable from one that cannot. The bounds that remain prose here are DECISIONAL (a rule",
+    "**default branch only**, so this trigger cannot fire until it is merged and has therefore **never",
+    "workflow\" is, until the first firing, an unverified claim about GitHub. Prove it with the dispatch",
   ],
   "docs/design/atc-engagement-2026-07-18.md": [
     "> — the opposite of the null-branch shape, so the generic heuristic can't satisfy it. This is a **bespoke",
     "> table whose bespoke cross-column CHECK/constraint a generic seed can't satisfy is **rolled back, recorded",
+    "| M1 | git-history secrets (TruffleHog) | mechanical | ran (clean) | **orchestrator falsely skipped it (Harvey #619)**; run manually: 26,311 chunks / 49MB, **0 verified, 0 unverified secrets** |",
     "| M5 | packages/shared-types | knip | requires-live-run | that package has no local `node_modules` — knip can't resolve config imports |",
   ],
   "docs/design/benchproctor-evaluation.md": [
@@ -77,18 +92,23 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "docs/design/breadth-sweep-899.md": [
     "curated corpus targets cannot: *what does real code in the wild look like at volume, and where does",
+    "Every count in this document and in `breadth-sweep/ungraded/*.json` is an **unverified finding from",
   ],
   "docs/design/calibration-corpus-spec.md": [
     "- **`detect-object-injection`** — flags *any* `obj[expr]` bracket access regardless of context. Benign whenever the key is a hardcoded/enum-constrained/validated value (a lookup table, a switch over known keys, indexing a typed array). The rule \"detects a very serious vulnerability but flags safe code that merely looks similar\" and cannot know whether the key is attacker-controlled; it is the canonical noise generator and is usually set to warn, not error. *Harvey:* exclude from the free count entirely (Semgrep covers real prototype-pollution/injection with taint context). If ever run, suppress via applicability gate: only a finding when the key is taint-reachable from request input. [ [docs](https://github.com/eslint-community/eslint-plugin-security/blob/main/docs/rules/detect-object-injection.md), [issue #136](https://github.com/eslint-community/eslint-plugin-security/issues/136) ]",
     "- **`typescript.react.security.audit.react-dangerouslySetInnerHTML`** — an `.audit.` rule (for human auditors, inherently noisy — `mechanical-toolchain.md` §2 says exclude `.audit.*` from the count). It flags `dangerouslySetInnerHTML` even when fed a **constant** or an already-`DOMPurify.sanitize()`-ed value, because single-file analysis can't see the sanitizer. *Harvey:* use the custom `harvey-dangerously-set-inner-html` rule instead, and gate it — a constant literal `__html` or a value returning from a known sanitizer (`DOMPurify.sanitize`, `sanitizeHtml`) is benign; only a taint-reachable non-constant is a finding. [ [semgrep-rules #2168](https://github.com/semgrep/semgrep-rules/issues/2168), [rule](https://semgrep.dev/r?q=typescript.react.security.audit.react-dangerouslysetinnerhtml) ]",
+    "| POSITIVE | P-HARDCODED-KEY | Hardcoded provider secret in source | new `lib/ai.js` — `const key = \"sk-ant-api03-…\"` (fake but valid-shape) | TruffleHog (verify), gitleaks provider patterns | high (verified) / review (unverified) | [scan-gaps §1.3](https://github.com/gitleaks/gitleaks) |",
   ],
   "docs/design/conservation-of-findings.md": [
     "(4) and (5) watch **ten rows**: the one finding planted per module. They cannot see the other 595.",
     "3. **The #1033 reason contract is structural.** A `NotAssessed` cannot be written without a",
   ],
+  "docs/design/corpus-roadmap-to-100.md": [
+    "| P-JWT-DECODE-RENDER | Unverified `jwtDecode` claim used in UI/authz (client-render sink) | review | `const{role}=jwtDecode(t)` / role from server session (adjacent `P-JWT-DECODE-NOVERIFY`) | semgrep |",
+  ],
   "docs/design/coverage-guard-status.md": [
     "asks whether the finding planted for module Mn arrived; it cannot see the other 595. The",
-    "**Updated 2026-07-16** (the 2026-07-15 gaps below all CLOSED that sweep): the exit-0-as-evidence blindness is closed (#350) — M4/M5/M8/M9 now derive status from the tool's machine-readable output, and a scan of zero files (or an incomplete per-workspace scan, #505) records `partial`/`requires-live-run`, never `ran`. M6's never-run alarm can no longer be cleared by an unread review packet (#351) — it reports `partial` until a reviewed verdict is recorded. The coverage ledger now HAS a path into the client report (#349): `run-audit --findings-out` assembles the derived ledger into the engagement findings.json and `report-template` renders per-module coverage, so a module that never ran shows as a \"Not run\" row with its reason rather than silence. The orchestrator's **derive-`ran`-from-artifact path LANDED** (#416 read side + #448 emit side): `run-audit --artifacts-dir <dir>` derives `ran` for the out-of-orchestrator passes (M1 semantic/live, M2 dynamic, M3 vitals, M6 verdict) from a fresh, target-matching `<module>.pass.json` and folds its findings into the deliverable — a stale/wrong-target artifact is rejected, never a silent `ran`. **Since #1042 all TEN modules consume a recorded pass**, not just those four: M7 replaces its `M7_LIGHTHOUSE_NOT_RUN` claim with the recorded Lighthouse pass, and M4/M5/M8/M9/M10 merge the pass's findings and NAME it on the row (upgrading `requires-live-run` → `partial`) without claiming `ran`, because a pass covers one tier and the orchestrator has no evidence about the others. Before #1042 `record-pass` accepted all ten while only four were read, so a recorded M7 pass was written and then silently dropped. `pnpm record-pass` emits one from any operator/LLM pass; `pnpm dynamic-validate` is the M2 producer. Schema/flow: `docs/design/audit-pass-artifacts.md`. M7 advisors (#434), M8 surviving-mutants (#435), and M10's data-map → `Finding[]` (#436) landed 2026-07-17; M3/M8 capture + explicit non-collection landed in #420. The **M2 live stand-up is now AUTONOMOUS** (#545): `pnpm dynamic-validate <t> --execute` provisions its own local Supabase, applies every Supabase project's migrations (per-DB across a monorepo's projects, #610), seeds two tenants + two auth users (per-user owner columns inferred from FK-to-auth graph, e.g. `author_id`, #617), and runs the live PostgREST cross-tenant matrix, the pg_graphql cross-tenant matrix (#877), and the wired-in auth-attack probe (#658) — which also ages a session across logout / refresh reuse / privilege revocation / password change (#878) — plus invitation-state revoked-BOLA (#905), soft-delete/restore/tenant-teardown data-residue (#907/#954), share-link identity-class (#952), Supabase Storage object-authorization (#956), API-token credential-store (#997), and **guest / cross-org-collaborator identity-class** (#1023 — a THIRD guest-role principal is really seeded and signed in, `M2-GUEST-SCOPE`; where the applied schema cannot express a guest the class is still a named not-assessed row, never a silent two-persona run) probes and a control-gated Realtime subscribe-and-assert runtime probe opt-in behind `HARVEY_PROBE_REALTIME` (#951, superseding the #906 NOT-ASSESSED disclosure; Phoenix wire shape proven live against realtime v2.100.0 — both the leak and the tenant-scoped verdict — #1003, `docs/design/realtime-wire-shape-live-proof.md`; **now all three channel classes and every published table**: `postgres_changes` runs one `M2-REALTIME-SCOPE-<table>` verdict per seeded scoped table rather than `cfg.tables[0]` alone (#1030), and Broadcast + Presence are probed cross-identity alongside the private-channel/Realtime-Authorization posture as `M2-REALTIME-CHANNEL-SCOPE` (#1029)), with no operator step (`src/pentest/live-standup.ts`); the app-route probe tier is built and proven live (#552 — a real Critical on a booted target). Every probed run also emits an `M2-SCOPE-RECONSTRUCTION` disclosure + per-surface/per-identity ledger (#875). The M2 methodology's portability to NON-Supabase apps was measured against VAmPI and crAPI (#880/#941) and the measured gaps are CLOSED (#965): an OpenAPI→route adapter, a response-shape-aware and target-supplied leak-confirmation predicate, an externalized victim-id source (operator seed / victim self-read, no PostgREST oracle required), and a per-route multi-origin external-target runner (`pentest.ts --mode=external`) — proven live against a real VAmPI container, where IDOR-OBJECT reached proven on the headline cross-user BOLA that the prior measurement recorded as MISSED (offline controls: `src/pentest/{external-target,object-leak,openapi-routes}.test.ts`). An external run probes the route-adaptive tier only; the DB oracle, the Supabase platform surfaces, and every schema-derived probe are disclosed as not-probed rows, never as coverage. MASS-ASSIGNMENT off-Supabase still reports not-applicable rather than a false clean (it needs a read-back oracle an external target does not expose, #995). The inter-service seam probes are WIRED and reachability-proven live (#161 CLOSED — route-based seam-discovery populates `profile.seams` #714, precision-hardened #716, monorepo behind-the-gateway service detection #719, and ran live against a real Stripe webhook receiver reaching a correct verdict). The seam probes' and the NO-RATE-LIMIT loop's *proven* (finding-producing) branches have now ALSO been exercised live (#717/#159 CLOSED; the #718 fixture is built at `targets/vuln-seam-app/`): a `pnpm dynamic-validate targets/vuln-seam-app --execute` run reached 4/4 seams proven with zero controls flagged, guarded against regression by the offline `src/pentest/vuln-seam-app.test.ts` and recorded in `docs/design/vuln-seam-app-live-validation.md`. **Still open:** each out-of-orchestrator pass emitting its artifact routinely end-to-end.",
+    "**Updated 2026-07-16** (the 2026-07-15 gaps below all CLOSED that sweep): the exit-0-as-evidence blindness is closed (#350) — M4/M5/M8/M9 now derive status from the tool's machine-readable output, and a scan of zero files (or an incomplete per-workspace scan, #505) records `partial`/`requires-live-run`, never `ran`. M6's never-run alarm can no longer be cleared by an unread review packet (#351) — it reports `partial` until a reviewed verdict is recorded. The coverage ledger now HAS a path into the client report (#349): `run-audit --findings-out` assembles the derived ledger into the engagement findings.json and `report-template` renders per-module coverage, so a module that never ran shows as a \"Not run\" row with its reason rather than silence. The orchestrator's **derive-`ran`-from-artifact path LANDED** (#416 read side + #448 emit side): `run-audit --artifacts-dir <dir>` derives `ran` for the out-of-orchestrator passes (M1 semantic/live, M2 dynamic, M3 vitals, M6 verdict) from a fresh, target-matching `<module>.pass.json` and folds its findings into the deliverable — a stale/wrong-target artifact is rejected, never a silent `ran`. **Since #1042 all TEN modules consume a recorded pass**, not just those four: M7 replaces its `M7_LIGHTHOUSE_NOT_RUN` claim with the recorded Lighthouse pass, and M4/M5/M8/M9/M10 merge the pass's findings and NAME it on the row (upgrading `requires-live-run` → `partial`) without claiming `ran`, because a pass covers one tier and the orchestrator has no evidence about the others. Before #1042 `record-pass` accepted all ten while only four were read, so a recorded M7 pass was written and then silently dropped. `pnpm record-pass` emits one from any operator/LLM pass; `pnpm dynamic-validate` is the M2 producer. Schema/flow: `docs/design/audit-pass-artifacts.md`. M7 advisors (#434), M8 surviving-mutants (#435), and M10's data-map → `Finding[]` (#436) landed 2026-07-17; M3/M8 capture + explicit non-collection landed in #420. The **M2 live stand-up is now AUTONOMOUS** (#545): `pnpm dynamic-validate <t> --execute` provisions its own local Supabase, applies every Supabase project's migrations (per-DB across a monorepo's projects, #610), seeds two tenants + two auth users (per-user owner columns inferred from FK-to-auth graph, e.g. `author_id`, #617), and runs the live PostgREST cross-tenant matrix, the pg_graphql cross-tenant matrix (#877), and the wired-in auth-attack probe (#658) — which also ages a session across logout / refresh reuse / privilege revocation / password change (#878) — plus invitation-state revoked-BOLA (#905), soft-delete/restore/tenant-teardown data-residue (#907/#954), share-link identity-class (#952), Supabase Storage object-authorization (#956), API-token credential-store (#997), and **guest / cross-org-collaborator identity-class** (#1023 — a THIRD guest-role principal is really seeded and signed in, `M2-GUEST-SCOPE`; where the applied schema cannot express a guest the class is still a named not-assessed row, never a silent two-persona run) probes and a control-gated Realtime subscribe-and-assert runtime probe opt-in behind `HARVEY_PROBE_REALTIME` (#951, superseding the #906 NOT-ASSESSED disclosure; Phoenix wire shape proven live against realtime v2.100.0 — both the leak and the tenant-scoped verdict — #1003, `docs/design/realtime-wire-shape-live-proof.md`; **now all three channel classes and every published table**: `postgres_changes` runs one `M2-REALTIME-SCOPE-<table>` verdict per seeded scoped table rather than `cfg.tables[0]` alone (#1030), and Broadcast + Presence are probed cross-identity alongside the private-channel/Realtime-Authorization posture as `M2-REALTIME-CHANNEL-SCOPE` (#1029)), with no operator step (`src/pentest/live-standup.ts`); the app-route probe tier is built and proven live (#552 — a real Critical on a booted target). Every probed run also emits an `M2-SCOPE-RECONSTRUCTION` disclosure + per-surface/per-identity ledger (#875). The M2 methodology's portability to NON-Supabase apps was measured against VAmPI and crAPI (#880/#941) and the measured gaps are CLOSED (#965): an OpenAPI→route adapter, a response-shape-aware and target-supplied leak-confirmation predicate, an externalized victim-id source (operator seed / victim self-read, no PostgREST oracle required), and a per-route multi-origin external-target runner (`pentest.ts --mode=external`) — proven live against a real VAmPI container, where IDOR-OBJECT reached proven on the headline cross-user BOLA that the prior measurement recorded as MISSED (offline controls: `src/pentest/{external-target,object-leak,openapi-routes}.test.ts`). An external run probes the route-adaptive tier only; the DB oracle, the Supabase platform surfaces, and every schema-derived probe are disclosed as not-probed rows, never as coverage. MASS-ASSIGNMENT off-Supabase still reports not-applicable rather than a false clean (it needs a read-back oracle an external target does not expose, #995). The inter-service seam probes are WIRED and reachability-proven live (#161 CLOSED — route-based seam-discovery populates `profile.seams` #714, precision-hardened #716, monorepo behind-the-gateway service detection #719, and ran live against a real Stripe webhook receiver reaching a correct verdict). The seam probes' and the NO-RATE-LIMIT loop's *proven* (finding-producing) branches have now ALSO been exercised live (#717/#159 CLOSED; the #718 fixture is built at `targets/vuln-seam-app/`): a `pnpm dynamic-validate targets/vuln-seam-app --execute` run reached 4/4 seams proven with zero controls flagged, guarded against regression by the offline `src/pentest/vuln-seam-app.test.ts` and recorded in `docs/design/vuln-seam-app-live-validation.md`. **2026-07-28 (#1364) — of #448's five named out-of-orchestrator passes, only M2 dynamic self-emitted",
   ],
   "docs/design/crapi-m2-portability-measurement.md": [
     "| **IDOR-OBJECT** (#366) | **BLOCKED / not-applicable (fail-loud).** Pass A: \"the oracle exposed no Tenant A object id to substitute.\" Pass B (foreign id injected): the real cross-user BOLA 200 is classified \"no such object\". | The real BOLA exists and was proven out-of-band; the probe **structurally cannot reach it** for two code-grounded reasons, both re-measured on crAPI (below). |",
@@ -127,6 +147,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "| Verification unrunnable locally and no CI available to the operator | **Downgrade** (a fix we can't verify is a liability, not a deliverable). |",
     "- Branch rails move from wrapper-enforced to structurally enforced where possible: the client keeps branch protection on their default branch, so even a buggy Harvey cannot push it; Harvey additionally keeps the `harvey/fix/*`-only wrapper as belt-and-braces.",
     "The rollback section is mandatory and must be *true* — it's the enforcement mirror of rail 3.1(6). If a fix can't honestly write that paragraph, it shouldn't be a PR.",
+    "- **A rail-blocked or unverified fix is never presented as applied.** The CLI exits non-zero and labels each row with its outcome.",
     "Sequencing: #922 → #924 → #923 → #927 → #925 → #926. **#925 is not first** — it is the repo's first privileged, network-writing path, and a PR opened on a fix whose verification cannot yet compute green is the exact failure #885 was filed about.",
     "**#957 is a verified-PARTIAL, split → #1009.** Blockers 2 (detector-after re-run) and 3 (corpus materialization) are CLOSED. Still not fully autonomous, and genuinely out of reach for a mechanical assembly: (a) the fix diffs are still hand-authored — the diff-**generating** LLM implementer is #922's other half, not deterministic code; (b) `rerunDetector` has no semgrep/M1 resolver, so the §8 in-scope classes 1–4 report `notRun` (correct fail-loud) rather than green; (c) classes 1/2/5 aren't planted as before/after fix fixtures. All three are #1009, cross-linked from `docs/design/fix-calibration-acceptance.md`.",
   ],
@@ -153,6 +174,8 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "docs/design/m6-handrolled-catalogue.md": [
     "| 18 | HTML-entity escaping via replace chain (`&amp;`, `&lt;`…) | framework escaping (React JSX auto-escapes) | **MAYBE** | Boundary settled (#406): M1's taint rules own the sink-feeding case — `harvey-dangerously-set-inner-html` (base.yml) plus `harvey-dom-innerhtml`/`-stored` (xss.yml) — and their sanitizer lists (`DOMPurify.sanitize`/`sanitizeHtml`/`sanitize`) don't include a hand-rolled helper, so M1 still fires *through* one; an M6 indicator on the helper *definition* can't double-count. No M1 rule or b4 entry covers the replace chain itself (verified by grep 2026-07-16). Remaining blocker: non-DOM outputs (email/XML assembly) hand-escape legitimately — FP/tone surface. |",
     "| 33 | Timezone-offset arithmetic (`getTimezoneOffset() * 60000` …) | `date-fns-tz` etc. | **NO** | Sometimes genuinely required (UTC normalization); shape alone can't tell. |",
+    "| 53 | JWT payload decode by hand (`token.split(\".\")[1]` + atob/Buffer + `JSON.parse`) | `jose` / `supabase.auth.getUser()` | **SHIPPED (batch 3, #542)** | `M6 — Indicator: JWT decode by hand` — `JSON.parse` over an atob/`Buffer.from` decode of a `token.split(\".\")[n]` segment; any single step alone (a file-extension split, a plain JSON.parse, a bare atob) stays silent. The \"+ M1 check\" (authz on unverified claims, #221/b11) is a paid/semantic-tier yield, NOT a mechanical double-count — verified 2026-07-18 that no M1 rule fires on the hand-rolled decode. Graduated on organic-AI evidence (#413/#543: flori-web=1). |",
+    "yield condition* on the detector's inputs (password/secret hash input; authz on unverified claims;",
     "measure-before-graduate rule was circular (a shape's frequency can't be measured without a",
   ],
   "docs/design/m6-simplification-eval.md": [
@@ -177,11 +200,17 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "docs/design/mechanical-toolchain.md": [
     "- **Rule remediation metadata reaches the report, and a per-file parse error is disclosed, not read as clean (#1077).** MEASURED 2026-07-25 (semgrep 1.164.0): all 915 rules across the six registry packs Harvey loads carry `metadata.references`; Harvey previously dropped it one line before writing a placeholder fix pointing at \"the rule's remediation guidance\" — 224/386 (58%) of a real deliverable's findings carried that identical placeholder string. `Finding.references` and the composed fix (the rule's own reference links + its `source` page, falling back to the placeholder only for a rule that truly declares none — every `harvey-*` custom rule today) close that. Separately: a client file semgrep could not parse (`errors[]`) still appears in `paths.scanned` — MEASURED, so `SEM-SCOPE-00` above cannot catch it — and semgrep exits 0, so it read as scanned-and-clean. `SEM-ERR-00` now names every such file, plus anything in `paths.skipped` (only populated once the wrapper runs `--verbose` instead of `--quiet` — the two are mutually exclusive).",
+    "**NOT trustworthy for the raw free count (needs LLM triage):** all `eslint-plugin-security` heuristics; Semgrep `.audit.*` and MEDIUM/LOW-confidence + heuristic taxonomy rules; gitleaks unverified regex/entropy; generic transitive-dep CVEs and any \"vulnerable version\" whose exploitability depends on deployment context; SonarQube code smells and React-FP rules (S3776/S6479/S6853/S1481).",
+  ],
+  "docs/design/model-routing.md": [
+    "- **Coding reputation:** GLM-5.2 scores **SWE-bench Pro 62.1** and Terminal-Bench 2.1 **81.0** — widely reported as the top open-weight coding model ([Tom's Hardware, June 2026](https://www.tomshardware.com/tech-industry/artificial-intelligence/z-ai-free-glm-5-2-tops-the-open-weight-ai-rankings-on-all-huawei-silicon)). Vendor tool-call-reliability claims are not independently verified.",
   ],
   "docs/design/nocode-rescue-recall-measurement.md": [
     "## SCOPE — STATIC ONLY (this target cannot exercise the dynamic tier)",
   ],
   "docs/design/portability-cold-target.md": [
+    "so — per the repo doctrine, an unverified recorded reason must be re-tested before you build on",
+    "| **M3 hotspots** (`hotspot-scan.ts`) | vitals plugin on PATH (operator, #507 — discovery is PATH-only today); the target's **git history** for churn/co-change (target — so the engagement must receive a full clone, not a zip/shallow clone; recorded in #512, **not re-verified here**: vitals is not on PATH in this environment, #357); optional `.vitals` provenance DB (target — absent is normal for a cold target) | Install vitals where the scan runs, or run vitals elsewhere and replay via `--report <capture>` (#314) or an M3 pass artifact | vitals missing/failed → exit 1, probe records `requires-live-run` with the reason (`src/audit-runners.ts` m3). Absent provenance DB → \"AI-provenance: no data\" stated in output, never silent (`src/cli/hotspot-scan.ts`) | `ran` only with a real table or fresh pass artifact |",
     "| **M7 advisors** (`perf-scan`) | `SUPABASE_ACCESS_TOKEN` + project ref (client) | Client mints scoped token; pass `run-audit --supabase <ref>` | No `--connected` → `partial` \"code tier only\"; `--connected` without ref → `partial` (#434); advisor call fails → `partial` with reason. The advisors endpoint is **no longer unverified** (#815, CLOSED): `/advisors/performance` was confirmed live against a real Supabase project — `parseAdvisorFindings()` parsed a 220-lint payload and the path was confirmed against the published OpenAPI spec (`src/cli/perf-scan.ts` header). What #357 still covers is the orchestrator probe's advisors-SUCCESS branch, which CI cannot exercise without a live DB | `partial` until connected + ref |",
     "| **M8 stub-check** (`mutation-scan --stub-check`) | Runnable test suite: installed deps + a working `npm test` (target; `--test-cmd` overridable) | Harvey installs deps and verifies the suite runs green first (an env-dependent suite voids the run — detect/replicate the target's test env, #503). **Measured 2026-07-18 (#531)** against `boxyhq/saas-starter-kit`: `npx jest` and `mutation-scan --stub-check` produced identical results (same tests passed, same stub-check findings) under `npm install --ignore-scripts` vs. a normal install — the target's one jest unit spec (`__tests__/lib/server-common.spec.ts`) never touches the Prisma client, so the skipped `prisma generate` postinstall had no effect here. **Re-confirmed 2026-07-18 (#540):** boxyhq still has no covered test that imports generated codegen, so this case remains unmeasured *on a real covered suite* — reported honestly rather than papered over. To characterize the failure mode directly, a throwaway probe spec (`import { prisma } from '../../lib/prisma'`, run once and deleted, never part of the target's covered suite) was added to the same clone: under `--ignore-scripts` (no `.prisma/client`) the suite doesn't fail a test, it fails to load at all — `Cannot find module '.prisma/client/default'` — a load-time crash for every spec file that transitively imports the generated client; running `npx prisma generate` first (no live DB needed) fixes it and the suite passes. Practical conclusion: a target whose *actual* covered tests import a generated client will void under `--ignore-scripts` alone; the fix is the same targeted codegen step as the M7 build case below, run once before `npm test`/`mutation-scan` | No covered source files → \"nothing was checked; this is NOT a clean result\" on stderr | operator-run today (not probed by orchestrator) |",
   ],
@@ -197,6 +226,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "**Strategic bet:** win trust with a genuinely useful, honest, low-FP, *local* free scan that gives away the full **diagnosis** (what's wrong and where) — and monetize the **remediation** plus the deep dynamic/semantic scan a solo dev can't self-serve. The failure class this targets (missing RLS, leaked `service_role` keys) is documented in 170+ real Lovable/Supabase breaches and ~380k exposed apps.",
   ],
   "docs/design/realtime-wire-shape-live-proof.md": [
+    "ASSESSED (treat as UNVERIFIED)\"*, with the \"treat as UNVERIFIED, not as clean\" tail appended — a proven",
     "simply do not cover Harvey's probe topic — Harvey cannot separate those two without the app's real",
   ],
   "docs/design/recorded-reasons.md": [
@@ -218,6 +248,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "| `docs/design/vandyand-recall-measurement.md` — M2 cannot reach orgs/line_items | `m2-stack` |",
     "| `docs/design/supabase-security-labs-paired-validation.md` — static tier cannot distinguish the pair (cause 1) | `supabase-labs` |",
     "`m7-lighthouse-validation.md`'s \"Playwright-only machines still can't measure CWV\" (resolved by",
+    "block as-is. Wrapping an unverified claim in a `PROVENANCE:` tag launders it, which is the failure",
   ],
   "docs/design/semantic-recall-gate.md": [
     "mechanical binaries), it needs an input `pnpm verify` cannot manufacture. The scoring logic is unit",
@@ -228,6 +259,8 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "docs/design/spec-71-security-corpus.md": [
     ">    version). Principle: factual/descriptive & FP-safe can be free; asserted judgments cannot.",
     "So the deliverable is honest about padding: ~34 of the ~100 are credible free-count rules; the rest are real, valuable, mechanically-*runnable* checks that are correctly quarantined to `review`/`connected`. Padding the free count past ~34 would break the \"a wrong Critical is credibility-fatal\" rule. Sources are cited per row; **every Semgrep registry rule id below is marked `‡` and MUST be confirmed with `semgrep --validate` / `semgrep --config <pack> --dump-ast` before it is wired into the gate** — registry ids drift and I cannot verify them from here.",
+    "| P-HARDCODED-KEY `[exists]` | Hardcoded Anthropic key in source | CWE-798 | `lib/ai.js` — `const key = \"sk-ant-api03-…\"` | gitleaks `anthropic-api-key` (dead → not verified) | review | [gitleaks](https://github.com/gitleaks/gitleaks) |",
+    "1. **Semgrep rule ids are unverified.** Every `‡`-marked id is a plausible registry id from the pack's known scope but MUST pass `semgrep --validate` before wiring into the gate; substitute a custom rule if the registry id doesn't exist or is `.audit.`/MEDIUM (→ `review`).",
   ],
   "docs/design/spec-72-crossmodule-corpus.md": [
     ">    & FP-safe can be free; asserted judgments cannot.",
@@ -236,11 +269,14 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "(d) **Precision tier:** `high`. knip is deterministic; the FP class is entirely \"things referenced in ways static analysis can't see,\" which the three negatives cover. Real precision measure.",
     "**What \"precision/recall\" even means here (read first):** M6's **verdict** has no mechanical detector — it is the `/simplify` LLM review against `briefs/quality-extras.txt` (`docs/m4-m6-quality.md` §0: \"Not mechanically detectable\"). You cannot gate an LLM suggestion with a precision number the way you gate jscpd. #72 must **not** manufacture one. What #72 *can* build is a **labeled rubric-eval set**: known hand-rolled-vs-stdlib patterns the reviewer *should* flag + benign lookalikes it *should* spare, run through `/simplify`, reported as an **agreement rate against the rubric**, explicitly not a \"precision\" claim.",
     "| M8-P-DBMOCKED | `test-quality/tenant.ts` + `tenant.mocked.test.ts` that mocks the DB/RLS layer | Mocks the database/RLS | the tenant-scope mutant **survives** (mock can't observe it) |",
+    "- vitals plugin (churn×complexity ROI ranking, truck-factor, co-change coupling, AI-provenance): `briefs/audit-modules.md` M3 (external `vitals_cli.py`; no public doc captured — schema unverified).",
   ],
   "docs/design/story-standards.md": [
     "If an epic can't articulate a success metric, it's a theme, not an epic.",
+    "- **Vague/untestable** — \"should be intuitive\", \"should be fast\" without thresholds.",
   ],
   "docs/design/supabase-security-labs-paired-validation.md": [
+    "therefore *labelled-and-unverified*, recorded here rather than counted as caught.",
     "**The static mechanical tier cannot tell the broken lab from its fix. The output is byte-identical.**",
     "(`posts_select_leaky`, `family_members_select_all` — the generic seeder cannot satisfy",
   ],
@@ -256,7 +292,11 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "can't block stand-up) but therefore never creates buckets the seed would — so the live",
     "outside the probe surface — so M2 structurally cannot reach #1 or #2 (both caught by M1 static",
   ],
+  "docs/design/vibe-dummy-precision-measurement.md": [
+    "| 03 auth | 5 | 5 | semantic | client-trusted `isAdmin`, unverified JWT decode, no login rate limit, non-expiring reset token, middleware skips `/api`. |",
+  ],
   "docs/design/vuln-seam-app-live-validation.md": [
+    "| `SERVICE-JWT-UNVERIFIED` (#717) | `M2-APP-SERVICE-JWT-UNVERIFIED` | Critical | `GET /api/ingest/events` |",
     "4. the answer key still names all eight route paths (so a rename can't leave a stale denominator).",
   ],
   "docs/example-report-atc.md": [
@@ -297,6 +337,14 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "docs/gtm/04-marketing-engine.md": [
     "builders on Supabase who *know* they can't self-assess.",
+    "pages. Unverified (search-only, treat sizes as approximate): Supabase/Next.js/Lovable/",
+    "Theo/Fireship subscriber counts, X #buildinpublic community size. None of the unverified",
+  ],
+  "docs/gtm/10-old-docs-crosscheck.md": [
+    "their numbers as unverified-until-retested (repo doctrine). Where they conflict with the",
+    "the organic-first strategy; the specific 0.3% number is unverified — treat as",
+    "require it\" — unverified number). The *angle* is already independently validated by",
+    "The old doc's specific 70% stat is unverified — do not cite it; the angle stands on",
   ],
   "docs/gtm/11-acquisition-hooks.md": [
     "single-issue competitor structurally cannot do this, and it hedges against any one",
@@ -347,6 +395,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "denominator and reported in a caveat. This is the audit's coverage-guard doctrine (\"a module that cannot",
   ],
   "docs/runbooks/dry-run-calibration.md": [
+    "pass was unverified end-to-end. **Resolved 2026-07-09** — see §10.",
     "| 1 | RLS-USING-TRUE | Crit | yes | ❌ (RLS on + policy present — advisor lints can't judge policy quality) | ✅ explore | **caught** |",
     "into a raw SQL string / template literal. It cannot catch the most classic web vuln present.",
     "cross-tenant/logic-bug classes the mechanical layer structurally cannot (§3's 5 \"missed\" + 3",
@@ -366,9 +415,11 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "docs/runbooks/m2-pentest-ops.md": [
     "cannot reproduce (dashboard-edited policies, platform env vars, uncommitted edge functions, WAF",
     "rather than decided. Where the schema cannot express a guest, or seeding one failed, the class is",
+    "into the stand-up and run it. Left un-opted, treat Realtime authorization as UNVERIFIED, not clean.",
     "rather than a per-target misconfiguration; and a refused private-channel join cannot distinguish",
   ],
   "docs/templates/auth-questionnaire.md": [
+    "know\" is not a non-answer — it's itself a finding (unverified security posture), and gets tagged",
     "Three things here can't be read from code and must come from you; the first is a confirmation so",
     "in the database, so a SQL connection alone can't see them; without the token those checks are",
     "the code deviates from it. This can't be inferred reliably from schema alone — a table without an",
@@ -376,16 +427,22 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "auth/platform-config items that can't be derived from SQL alone (splinter reads the database, not",
   ],
   "docs/test-targets.md": [
+    "built-in FP traps**. Unstarred, so the labelling is unverified until diffed — and unlicensed, so it must be",
     "> `public.profiles` to `anon`, an unlabelled bug in the target's ground truth. The fixed variant cannot",
   ],
   "docs/tier1-runbook.md": [
+    "into `~/.claude/skills/` or a project's `.claude/skills/`) is unverified from this operator's",
+    "scan-vs-triage model choice (this env var's effect was not independently verified either — see",
     "| 3 | Read-only Supabase Management API token + project ref | Highest ask | Broadest — DB *and* config advisors via `get_advisors` | Use when the client is comfortable with platform-level access; covers the auth/platform-config items §3 can't detect from SQL. |",
+    "\"Don't know\" is itself a finding: unverified security posture. Tag it taxonomy `Config`, severity",
   ],
   "SESSION.md": [
+    "- **jharvieux/ATC#2050** `imports/source-file/route.ts`: request-controlled `?path=` → **service-role** client (RLS bypassed) → `createSignedUrl`, guarded only by ``path.startsWith(`${ctx.tenant_id}/`)``. A prefix check is not containment: `<tenant>/../<other>/doc.pdf` passes. **NOT verified: whether Supabase Storage normalizes `../` in an object key** — needs a local-stack test, deliberately not asserted either way. The guard is wrong on its own terms regardless.",
     "exit 0 when its git scope resolves empty?** If so, `run_vitals` cannot detect it and a hand",
     "runner cannot beat a floor that moves 58→87s on its own.",
     "**The conservation gate is NOT a required check.** PR #1199 squash-merged while \"plant → deliverable\" was RED; only `verify` and `dry-run-drift` are required. A gate built to stop silent drops is itself advisory on the merge path. It cannot just be made required yet: its vitals `fixture-drift` step is **flaky in CI** (4 of last 8 runs, unrelated branches; passes locally — **#1206**, which also discards python3's stderr so the cause is invisible). Sequence: fix #1206 → operator adds the required check → confirm negative controls still fire.",
     "Two edits: the dry-run determinism sentence now names `skipBundleScan` alongside `skipNetworkChecks` with the \"pin any new uncontrolled input\" rule; and a new \"an answer key we wrote cannot measure our coverage\" bullet recording the OWASP corpora, the bucket-by-running rule, the `match`-against-evidence footgun, and `gapKind`. Nothing in the file was falsified — both are additions/completions.",
+    "- ⚠ **Unverified:** the routine's first test run (`cse_01UvN9UK9uSNJh6sQP3zvVoq`) was triggered but its output was NOT observed. Confirm it printed the no-change line.",
     "**Why:** our calibration corpus is scored against `briefs/anti-patterns.md` — a catalog we wrote, then wrote detectors for. That measures internal consistency, not coverage; we cannot fail a check we authored to match what we already catch. The OWASP sheets are an **independent answer key we did not author and cannot quietly edit.** Operator ruling: **this is for finding real product gaps, NOT for marketing** — the deliverable is a gap list, never a percentage.",
     "- **#1190** (opus) Multi-Tenant — **do this first.** Closest to what Harvey sells, and it carries the forcing function: we just publicly told OWASP that three things matter, so if Harvey can't detect them we should find out before a maintainer does.",
     "- **#888 GO** → non-destructive RLS write-probe: measured PostgREST eval-order (RLS before not-null), empty-body INSERT can't persist; `Prefer: tx=rollback` is NOT a safety net.",
@@ -395,11 +452,14 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "- **Two corrections I made to my own analysis** (operator pushes were right both times): (1) \"map to child CWEs = gaming\" — nuanced: it's gaming only where the detector can't distinguish the sub-class (measured: Harvey's command-injection detector fires *identically* on BenchProctor's cmdi/genericcmdi/argument_injection — same `execSync(shell-string)` code, 3 labels; their argument_injection is mislabeled 78-code). (2) \"generic authz = out-of-scope, would dilute the differentiator\" — **WRONG**; ~200 idor/authzfailure/authzincorrect/privescalation cases are the same untrusted-input→authz-grant taint we already partially detect (`leftover-auth.ts` B14, too narrow — matches `req.body.x==='admin'`, misses `allowlist.includes(input)` + multi-hop). Reclassified as improvable → **#991**.",
     "- **#884 (#862)** — refreshed the two stale M7 \"unverified\" in-code comments (`perf-scan.ts` #815, `bundle-stats.ts` #840). The third item — the **supervised** `docs/m7-performance.md` line-57 caveat — was carved out to remainder **#890** (`deferred`; agents can't edit `docs/*.md`).",
     "- **#891 (#830)** — M6 twelve-file two-reviewer eval. Executors can't nest-spawn subagents, so the **supervisor** orchestrated it: regenerated the packet, dispatched TWO genuinely-independent fresh fable reviewers (run5/run6), then a finalizer committed. **12/12 agreement, no splits; both passes 7/7 positives + 5/5 negatives vs the §4 key** — this pair replaces the seven-file transcription as the baseline.",
+    "- **Filed (2):** **#861** (M9 raw-SQL/`pg` data layer still silently unassessed — #844 remainder; real blocker: needs a `detectOrm` raw-SQL signal), **#862** (refresh stale M7 \"unverified\" comments in `perf-scan.ts` + `bundle-stats.ts` + `docs/m7-performance.md`).",
     "- **Remainder #830** (OPEN): the M6 paired two-reviewer eval over the expanded 12-file corpus — needs two genuinely independent contexts a single agent can't honestly produce.",
     "**The adversarial read (what's thin):** M3 wraps the external `vitals` plugin and can't run cold (needs a pre-run `.vitals` store + git history); M4 is 90% jscpd, 10% the original `diverged-clones.ts`; M5's dead-code half is knip and breaks the \"source-only\" promise (needs target `npm install`); **M6 is weakest** — the paid verdict has no detector and never will, its only eval is n=6 with measured reviewer disagreement, and `simplify-scan` literally prints source without judging; M7's DB advisor rests on an endpoint path **never verified live** and its code tier measured **~10% raw precision**; M8's source tiers (test-intent + stub-check) are the strongest original work but the mutation tier is a fragile Stryker wrapper and the headline coverage-vs-mutation gap is **hand-filled**. CodeScene is the most dangerous single competitor (it IS M3+M6, productized, with ACE auto-refactor).",
+    "**Sequencing to honor:** #823 (build the M7/M8 precision instrument) BEFORE #816 (improve against a recorded baseline) — \"measure, don't recall.\" The two credibility-critical ones for paid delivery: **#815** (unverified endpoint) + **#816** (10% precision). Cheapest competitive wins: **#819** + **#821** + **#825**.",
     "**Disclosures filed (operator action — I can't send outreach):** #774 launch-mvp (2 Crit/4 High), #775 proposit (5 High/1 Med), #776 devtodollars (1 Med), #777 boxyhq (1 High/2 Med), #778 wallens11 (1 Med; prior Crit REMEDIATED), #779 cipherx (**live service_role key committed in .env → rotate**). subpay (archived) + makerkit (hardened) → no disclosure. 4 samples only-known → no disclosure. Old stale disclosure issues (#168/#214–#219) closed.",
     "### ⚠️ CLAUDE.md RELAY (operator edit — agents can't touch CLAUDE.md)",
     "the Next.js app. Do NOT rely on claude.ai Artifact preview links — the operator can't",
+    "- **Corpus seam-target investigation (per operator ask):** no corpus repo ships an *unverified* seam (every receiver verifies). Best public self-provisioning exerciser = `nextjs-subscription-payments` (webhook, not-vulnerable). ATC = only full-3-probe surface (all hardened). boxyhq richest but not Supabase-standable. Others: no seam.",
     "### ⚠️ CLAUDE.md RELAY (operator edit — agents can't touch CLAUDE.md)",
     "**Real findings the run DID surface (worth keeping as leads for the real retry):** M1 core-isolation is strong (416 RLS policies all gate on `auth_user_in_tenant`, JWT fail-closed, webhook replay guard correct); the one notable security item = `tenantClient` UPDATE path doesn't sanitize `tenant_id` in the SET payload (latent cross-tenant write, no confirmed call site); M10 data-classification is the real high-severity signal (gmail_oauth_tokens, contacts, booking_passengers passport/DOB); M8 tenant-isolation tests mock the DB client (53 sites) so they can't catch RLS regressions; live SECURITY DEFINER `tenant_is_active` is an existence oracle. ATC#1999 (TZ-brittle test) also found.",
     "- **#487 (#387) — M7 Core Web Vitals / Lighthouse.** Was 0% implemented (doc paragraph only). New `pnpm lighthouse-scan` (`src/lighthouse.ts` pure parse + `src/cli/lighthouse-scan.ts`): **runs locally** — builds+serves the target (`next build && next start`) and drives Chrome via **`chrome-launcher` + `lighthouse`** (both deps added, operator-approved; can reuse the Playwright chromium). Emits M7L-* findings for LCP/TBT(as INP lab proxy)/CLS/perf-score vs Google \"Good\" thresholds; degrades to an M7L-00 disclosure finding (exit 0, never silent) when the target can't build/serve. Opt-in CLI (heavy live pass, not folded into run-audit's M7 probe). `docs/m7-performance.md` §3 updated (approved). Live end-to-end validation split to **#488**.",
@@ -410,25 +470,1180 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "**The orchestrator's architecture HELD under attack** (8 attempts failed: no forgeable ledger, missing runner throws pre-run, crashed probe can't launder into `requires-live-run`). #229 was built right. **The disease is in the probes' definition of evidence, and at the last mile.**",
     "- **THREE measurement surfaces, not one** (#339): the gated 153-corpus (rule fires on shape) · the dry-run (pipeline catches bug, with exploitability) · the external corpus of 6 real repos (holds on code we didn't write). They cannot collapse — self-authored fixtures **structurally cannot** measure real-world precision (#326's lesson).",
     "`src/cli/run-audit.ts` + `src/audit-runner.ts` run all ten modules and **derive** the ledger from execution. Three properties, verified by reading the code, not the executor's summary: no parameter accepts a caller-supplied `ModuleCoverage[]`; a module with no registered runner **throws before anything runs** (`assertRegistryComplete`), so a short registry can't emit a partial ledger that reads as whole; a **crashed probe goes to `failures`, never laundered into `requires-live-run`** (that would be the silent pass the gate exists to prevent). #284 came with it — `MODULES_NEVER_EXECUTED` is now the complement of `audit-execution-log.json`, defaulting unknown → never-run.",
+    "34 issues filed (#307–#357). Reconciling against every executor's `follow_ups` + the audit's findings **and** its `unverified` list found **three unfiled**: #355 (`dry-run.ts`'s non-recursive `readMigrations` — reported by the scan-299 executor and **missed at that sweep's wrap-up**), #356 (M2's half of the flags-as-facts defect; #311 only covered M1), #357 (the audit's unverified list). **This was a reconciliation, not a proof** — anything an executor noticed but didn't report was never visible. #355 existing shows the wrap-up check misses things; it surfaced only because the operator asked.",
     "- **#263/#261 → #276** — **Layer-2 corpus CI ships and runs** (clones 6 pinned commits, scores baselines, 2m10s, 28/28). **The baselines were themselves wrong and had never been through the scorer**: M4 recorded jscpd *cluster* counts vs the scorer's *findings* (203 vs 68); M8 recorded test-*file* counts; two M5 modules marked \"can't run\" ran fine. Every M4/M8 baseline would have failed day one. One real drift caught + rebaselined (saas-lite M7 22→23, from #269's new class).",
     "- **#222/#228 → PR #241** external-repo regression corpus + quality-module precision validation. Corpus built as pinned-commit clones, **not** vendored extracts: `Wallens11/supabase-multi-tenant-starter` ships **no LICENSE** (all-rights-reserved), so its migration cannot lawfully be copied in; the #230/#232 FP shapes are whole-repo properties an extract can't reproduce anyway. Confirmed #230–#233 hold on real code (mvp-boilerplate dup 13.3%→1.35%; boxyhq Pages Router → clean 0).",
     "- **#229 → PR #243, PARTIAL, still open.** Coverage *gate* landed (`src/audit-coverage.ts`: every M1–M10 accounted for, `assertAuditComplete` throws naming gaps). The `run-audit` **orchestrator did not** — needs prereq detection (target `npm install`, `supabase start`, vitals, DB creds) across 10 heterogeneous CLIs / 3 tiers. **The seam:** the gate takes the ledger *from its caller*, so it cannot detect that you skipped M5. Bookkeeping discipline, not ground truth — CLAUDE.md's \"known gap\" wording still holds.",
     "7. **#339 / #321** — the structural fixes. One gated key per question; make stale reasons impossible rather than guarded after the fact.",
+    "- **Triage collapsed the raw \"Criticals\":** raw mechanical flagged ~12 Criticals across the 6 repos; the secret-exposure ones are all **false positives** — the local Supabase demo key (`iss:\"supabase-demo\"`, ships with every `supabase start`) in seed/.env files, and a SAML **test** private key in boxyhq CI. The Next.js CVE Criticals are version-matches (not exploitability-confirmed; some CVE IDs unverified). proposit's 9 Server-Action Highs are review-tier heuristics (no-visible-auth / no-input-validation) needing the triage pass, not free-tier verdicts.",
     "Ran `/threat-model → /vuln-scan → /triage` (one parallel review agent per target). Full per-target write-up in the session scratchpad `llm-suite-results.md`. **Result validates the thesis:** the deep pass caught the real bugs the free/mechanical tier can't see and cleared every false Critical the free tier raised.",
+    "- **Free-vs-deep gap (headline for GTM):** every graded free-tier \"Critical\" across all 6 was an unverified CVE version-match or a demo/test-key FP — none was real; the genuinely dangerous repos got the same \"F\" as the well-built ones. Reinforces #210/#212 and the open question below.",
     "- **Module runnability learned (source-only, no target deps):** **M4 duplication (jscpd)** runs clean on any source tree — results: mvp-boilerplate 13.3%, proposit 9.8%/199 clones, subscription-payments 6.1%, boxyhq 6.0%, saas-lite 3.7%, multi-tenant-starter 3.0%. **M5 dead-code (knip)** FAILS without the target's `node_modules` (can't resolve config imports like `vitest/config`) → needs `npm install` in the target first, a per-engagement step; it drags M4 down when co-run in `quality-scan`, so run jscpd standalone for a deps-free M4. **M8 mutation (Stryker)** is not source-only — needs the target's test suite + a `stryker.conf` per repo. **M6** = paid review dimension (slop detector already runs via `detect-static`). **M10 PII** needs a DB or schema; ran indicatively off migration SQL (payment/PCI columns in the Stripe repos; invite `token` in proposit/multi-tenant-starter). boxyhq uses Prisma (no SQL migrations) → M10 needs `prisma/schema.prisma` or a live DB.",
     "- **CLAUDE.md updated** (operator-named the file → authorized): new section \"The audit — full scope, how to run it, and the coverage guard\" — the M1–M10 module→command table with per-module prereqs, the free/connected/dynamic/paid tiering, and the **coverage guard** (never silently skip; `assertComplete` + `coverage-scorecard.moduleRan`; a module that can't run is `partial`/`requires-live-run` with a reason). Corrected stale \"9-module\" → \"ten-module (M1–M10)\".",
+    "**unverified against a live analyzer run** — confirm on first real use.",
+    "- **Seam probes** (`src/pentest/verify.ts`, PR #157): DIRECT-SERVICE-CALL, SERVICE-JWT-UNVERIFIED",
+  ],
+  "src/acceptance-conservation.test.ts": [
+    "// The gate shipped asserting it \"cannot tell a real command from an invented one\" — true only of",
+    "// `repository`, which reports a repo the token cannot READ as one that does not EXIST.",
+    "// \"the gate cannot fire\" and \"there was nothing to fire on\" indistinguishable.",
+  ],
+  "src/acceptance-conservation.ts": [
+    "* A REPOSITORY that fails to resolve is ambiguous: a private repo this token cannot read fails with",
+    "* something the lookup cannot know — the exact conflation the invariant above forbids — so it is",
+    "* quoted sentence are all mechanically separable from the real thing, and \"it cannot tell a real",
+    "// checkout's root `scripts` set cannot answer, so the reference is left unchecked rather than",
+    "// indistinguishable from one that cannot fail — this repo has shipped exactly that twice. Each",
+    "// seeder THROWS when it cannot plant its violation, because a seed that silently plants nothing",
+  ],
+  "src/alert-paths.ts": [
+    "// that cannot fire, and this repo shipped four of them: `ci-conservation-alert`, `ci-reasons-alert`",
+  ],
+  "src/audit-conservation.ts": [
+    "// The two are separate on purpose. Asking only about the deliverable is not enough: it cannot tell",
+    "// A module that genuinely cannot be exercised offline is recorded in UNEXERCISED with a tagged",
+    "// #1155 falsified M2's UNEXERCISED reason: the recorded blocker claimed M2 \"cannot be plant-and-",
+    "// exists to make impossible. Checked at module load so the failure arrives before any run does.",
+    "* recorded \"cannot run offline\" is a claim about the world, and `--require M2` is the command",
+  ],
+  "src/audit-coverage.test.ts": [
+    "// makes the enumeration true by construction: the one thing a guard cannot check about itself is",
+    "// just be the two-list drift of #288 again, one layer up: the doc and the code cannot disagree if",
+    "// cannot be wrong in silence while it waits for its first consumer.",
+    "// stopped parsing (every module \"paid\") cannot pass this test by accident.",
+    "// a reason. The gate can't verify a reason is TRUE, but it can reject the unfilled placeholder.",
+  ],
+  "src/audit-coverage.ts": [
+    "// The rule it enforces: a module that cannot run is recorded `partial`/`requires-live-run` WITH",
+    "// reads that file and asserts this list matches it, so the doc cannot drift from the code (#275).",
+    "// parity test is now that reader, so a wrong value cannot sit here waiting to be adopted as truth.",
+    "// production\"), a module whose MINIMUM environment is anything but \"source\" cannot be free — so",
+    "// cannot claim full module coverage on the strength of a module that has never produced output.",
+    "// recording a reason. This cannot be fixed by a reason; only by running the module.",
+    "// we can't know which is true, so refuse to pick rather than let a \"ran\" mask a gap.",
+    "// An unfilled --template row. The gate can't judge whether a reason is TRUE, but it can",
+  ],
+  "src/audit-execution-log.test.ts": [
+    "// false \"never run\" alarm. Derivation makes forgetting impossible — the record IS the removal.",
+  ],
+  "src/audit-execution-log.ts": [
+    "// A module is never-run iff no record claims it ran. Derived, so it cannot go stale in either",
+    "// direction: it can't hold a false alarm for a module that has run, and it can't miss a module",
+  ],
+  "src/audit-pass-artifact.ts": [
+    "// A pass older than this describes a prior state of the target, so it cannot prove the module ran",
+  ],
+  "src/audit-plan.ts": [
+    "// The ordered plan for the passes the orchestrator cannot run itself. Steps in scope are gated by",
+  ],
+  "src/audit-report.test.ts": [
+    "// come from a live/human pass this run cannot observe. M6's free indicator layer CAN collect",
+  ],
+  "src/audit-report.ts": [
+    "// is different from an empty map (M10 classified and found no regulated data): the first cannot run",
+  ],
+  "src/audit-runner.test.ts": [
+    "// column tally. A probe that cannot read them now says it examined nothing, so a double that",
+    "// cannot be recorded \"ran\" by anyone — there is no parameter through which to claim it.",
+  ],
+  "src/audit-runner.ts": [
+    "// the CALLER, so it cannot tell that you skipped M5: a caller that never mentions a module and a",
+    "//      skipped\" case of #229 becomes structurally impossible rather than merely discouraged.",
+    "// only describe what it did, and cannot claim a status for a module it isn't registered under.",
+    "// their honest partial/requires-live-run — no artifacts dir, no way to prove the pass ran.",
+    "// original fix only fired when ctx.captureDir was set). Absent ⇒ the probe cannot tell and stays",
+    "// runner that declares itself migrated is HELD to it at runtime, so a helper cannot quietly",
+    "// cannot discover that it skipped M5. Checked before anything runs, so the failure arrives before",
+    "// severity weight, and both entries classify the same name, so the merge cannot invent sensitivity.",
+  ],
+  "src/audit-runners.ts": [
+    "// orchestrator cannot stand up or reach the stack (the pen-test runs via `pentest.ts` with a full",
+    "// exit 0 cannot slip through.",
+    "// than readCaptured. The stdout table still gates the `ran` status, so a no-op vitals exit cannot",
+    "// source alone, while knip cannot resolve config imports without the target's installed deps. One",
+    "// node_modules, on the recorded reason that \"knip cannot resolve config imports without the",
+    "// target's installed deps\". #810 (2026-07-23) built the very fallback that reason calls impossible",
+    "// #357 (untestable in CI): with no live DB, the `perf-scan` advisor call has only ever been",
+    "// linted nothing would read as `ran` rather than an honest partial is unverified — same open",
+    "// whether or not the mutation tier below can proceed (and are kept, not dropped, if it can't).",
+    "// #357 (untestable in CI): the `connected` branch needs real DB creds and has only ever been",
+  ],
+  "src/cli/corpus-drift.ts": [
+    "// Anything a target can't run is recorded not-run WITH THE REASON in the manifest and skipped by",
+    "// Prisma migrations this parser can't read) is skipped here and stays not-run in the manifest,",
+  ],
+  "src/cli/dry-run-scorecard.test.ts": [
+    "// (replayId), and detection is derived from the gated corpus — which cannot drift, it fails",
+    "// `pnpm verify`. These tests prove the link is intact and can't rot silently:",
+    "// the drift the parallel matcher used to allow is now structurally impossible.",
+    "// every later corpus table is keyed by a string id, so this can't over-collect from them.",
+    "// findings the corpus is scored against, so the two keys cannot disagree.",
+  ],
+  "src/cli/dry-run-scorecard.ts": [
+    "// WITH its reason — an unlisted bug can't appear in a tally. replayId is the replay registered in",
+    "// (the FK-integrity guard that makes drift structurally impossible), and the \"none\" tier maps its",
+  ],
+  "src/cli/dry-run.ts": [
+    "// answer; a migration-SQL-only feed cannot distinguish \"default, never touched\" from \"explicitly",
+    "// git-tracked-only walk can't silently drop a planted .env fixture nobody force-added upstream.",
+  ],
+  "src/cli/fix-interactive.ts": [
+    "// Fail loud: say WHY this id can't take the automated interactive path, never a silent no-op.",
+  ],
+  "src/cli/fix-verify.ts": [
+    "// that provably cannot touch the network, and never needs a token).",
+  ],
+  "src/cli/fixture-drift.ts": [
+    "// #1130 remainder: lighthouse, vitals, trufflehog (unverified + git-history), jscpd, knip, Stryker.",
+  ],
+  "src/cli/heavy-shard.ts": [
+    "// the shard membership is derived from src/heavy-cli-tests.ts and an eighth heavy file cannot be",
+  ],
+  "src/cli/hotspot-scan.ts": [
+    "// If cache directory doesn't exist or can't be read, continue to PATH check",
+  ],
+  "src/cli/lighthouse-scan.test.ts": [
+    "// call's duration, and a blocked worker cannot service the birpc ack for a task update it already",
+  ],
+  "src/cli/lighthouse-scan.ts": [
+    "// Fail-loud (CLAUDE.md coverage doctrine): if the target can't be built, served, or driven, the",
+    "// #841: a candidate that launches but can't measure `probeRoute` (NO_FCP or any other Lighthouse",
+    "// human reason) when the target can't be built or served — the caller turns that into the",
+  ],
+  "src/cli/mutation-scan.test.ts": [
+    "// call's duration, and a blocked worker cannot service the birpc ack for a task update it already",
+    "// Two test files so #252's single-placeholder threshold can't trip — this fixture is about the",
+    "// try/finally on the same file — a finally that can't run once the process is killed. A real",
+    "// #1067: `false` always exits non-zero — a suite that cannot run at all. Every stubbed run then",
+  ],
+  "src/cli/mutation-scan.ts": [
+    "// SIGTERM/SIGKILL/timeout mid-run cannot leave it stubbed (a real engagement did: a killed run",
+    "// construction, not by a try/finally racing a signal — a signal handler can't run cleanup code",
+    "// non-JSON target config that can't be safely patched, or a crash the proactive check missed,",
+    "// ran (a non-JSON config can't be statically read here, same limitation as warnIfNotPerTest —",
+    "// can't run here — that's itself a High-severity M8 finding (zero automated coverage on a",
+    "// both (unusual, but not impossible) reports the ancestor-root gap first.",
+    "// Best-effort: a killed process can't run this either, but that only leaks a scratch temp",
+    "// config gets a patched COPY (never rewrites the target's own file); a non-JSON config can't be",
+  ],
+  "src/cli/pentest.test.ts": [
+    "// on the runner can't perturb the discovered manifest.",
+  ],
+  "src/cli/pentest.ts": [
+    "//     merges them with --seeds; a finding it can't map prints a warning to stderr, never a silent",
+    "//     route-adaptive probe tier only; every Supabase/schema surface it cannot reach ships as its own",
+    "// requires-live-run (honest partial), never a silent skip. A finding --findings can't map to a",
+    "// and every surface an external run cannot reach ships as its own \"not probed\" ledger row.",
+  ],
+  "src/cli/quality-scan.test.ts": [
+    "// per-workspace change, which on a monorepo structurally cannot see a block copy-pasted ACROSS",
+    "// workspace the shared discoverTargets glob can't expand (a `packages/**` double-star, #548). This",
+    "// call's duration, and a blocked worker cannot service the birpc ack for a task update it already",
+    "// no dependency at all (the issue's \"vite not in deps\" cause) leaves knip unable to activate its",
+    "// #696: a config-less scan target gives knip no way to infer non-app entry points (test files above",
+    "// Imports an uninstalled plugin → knip can't load this config without the target's node_modules.",
+  ],
+  "src/cli/quality-scan.ts": [
+    "// surface, and per-workspace scoping structurally cannot see it. Per-workspace jscpd also silently",
+    "// dropped every workspace the shared discoverTargets glob can't expand (saas-lite's `packages/**`",
+    "// strictly — an unknown key aborts the run. If the layout can't be read (a future knip repackaging),",
+    "// timeout, a non-zero exit (knip aborts with exit 2 when it can't LOAD a config it needs to resolve",
+    "// No config of its own: knip can't infer non-app entries (tests above all) and floods the",
+    "// second full timeout; and with no plugin list we can't build the retry config. Either way, let",
+    "// #360/#399: the Type-3 near-miss layer jscpd structurally cannot provide — diverged copies of",
+  ],
+  "src/cli/quick-scan.test.ts": [
+    "// call's duration, and a blocked worker cannot service the birpc ack for a task update it already",
+  ],
+  "src/cli/quick-scan.ts": [
+    "// cannot be resolved the document says so in its own compositions/properties AND the CLI prints",
+    "// no way to know nine of the ten modules were never attempted.",
+    "// not the app, and exploitability depends on repo/trigger settings the scan can't see, so they",
+  ],
+  "src/cli/run-audit.test.ts": [
+    "// loop, and a blocked worker cannot service the birpc ack for the task update it already sent; that",
+  ],
+  "src/cli/run-audit.ts": [
+    "// toolExecutionNotifications so a module that did not run cannot vanish into \"no results\" — see",
+    "// hand: it enforces bookkeeping discipline, but cannot detect that you skipped M5. This command",
+    "// \"no findings\". Meta is engagement metadata run-audit cannot derive: take it from --meta, else",
+    "// still gets a row), so the two exports of one run cannot disagree about what ran.",
+    "// Written with --record so a dry run can't quietly retire an alarm; the diff is reviewed like any",
+  ],
+  "src/cli/static-detect.ts": [
+    "// pattern and a `where` filter with no covering index — schema.prisma alone can't see either.",
+  ],
+  "src/cli/validate-acceptance.ts": [
+    "* describing a CLI branch that cannot be reached.",
+  ],
+  "src/cli/validate-alert-paths.ts": [
+    "// A `gh` that cannot run exits 127 = UNVERIFIABLE, never 1: \"I could not check\" must not be",
+    "// from one that cannot fail — which is the exact defect this gate exists to catch.",
+  ],
+  "src/cli/validate-calibration.ts": [
+    "// target with the offline manifest checks. This is how the corpus models scenarios that can't",
+    "// graduated — that is a GATE FAIL, forcing a re-tier so a by-design gap can't silently become a",
+    "// precision/recall metric, so the M1 metric block below cannot be read as a suite-wide figure.",
+    "// stronger reading — the artifact could be stale, a live scan cannot be.",
+  ],
+  "src/cli/validate-conditional-scan.ts": [
+    "//                  cannot fail (#350/#1065).",
+  ],
+  "src/cli/validate-conservation.test.ts": [
+    "// worker cannot service the birpc ack for the task update it already sent — that ack has the",
+    "// the producer path for suppressed/capped/not-applicable cannot close the arithmetic on a fiction.",
+  ],
+  "src/cli/validate-conservation.ts": [
+    "//                 conservation ledger's arithmetic cannot.",
+  ],
+  "src/cli/validate-disclosure-venue.ts": [
+    "//              indistinguishable from one that cannot fail (#350/#1065).",
+  ],
+  "src/cli/validate-reasons.ts": [
+    "// \"cannot\", \"impossible\", \"no way to\", \"unable to\" and friends, which nothing re-tests because",
+    "// cannot be confused (#1246).",
+    "// the number so it cannot be quietly ignored the way the advisory census was for months.",
+  ],
+  "src/cli/validate-test-only-exports.test.ts": [
+    "// is indistinguishable from a gate that cannot fail (#1320).",
+  ],
+  "src/conditional-scan.test.ts": [
+    "// The gate's own recorded bound, held as a test so it cannot rot into folklore: the omission signal",
+    "// scanLocal DOES run checkBeta, through betaViaHelper. The gate cannot tell.",
+  ],
+  "src/conditional-scan.ts": [
+    "// db-schema config, which is not in Postgres, so local mode cannot run them. It returned its",
+    "// fails on one CONDITIONAL_SCANS does not list. So a new conditional module cannot join the repo",
+  ],
+  "src/conservation-ledger.ts": [
+    "// not-applicable columns: without it the arithmetic has no way to tell a legitimate suppression from",
+  ],
+  "src/corpus-aggregate.ts": [
+    "// Coverage guard on the corpus: an app with no coverage ledger cannot be asserted to have run any",
+  ],
+  "src/coverage-scorecard.ts": [
+    "// \"does a rule catch this?\" is answered once, in the corpus, so it cannot drift into a second",
+    "// (review tier, or an untiered finding whose trust we can't vouch for) is surfaced-for-review — the",
+  ],
+  "src/cwe-map.ts": [
+    "// cannot quietly ship without a CWE decision.",
+    "// Unverified inbound data authenticity.",
+    "// route, so this carries the identical weakness for an app class those rules cannot match.",
+    "// #1242: an audit trail that cannot be scoped to a tenant is the A09 class — the detective",
+  ],
+  "src/data-class-escalation.ts": [
+    "// a silently higher number is an assertion the client cannot check.",
+  ],
+  "src/definer-review.ts": [
+    "// classifier can't adjudicate mechanically: a privileged write/grant with no check on WHO is",
+  ],
+  "src/detectors/__fixtures__/m1-tenant-scope/policy-filter-negative/src/policy/policy-handler.ts.txt": [
+    "// Mutation path: the row's identity AND the policy filter — the mutation cannot escape the",
+  ],
+  "src/detectors/__fixtures__/m1-tenant-scope/wrapper-extension-negative/src/app/api/posts/route.ts.txt": [
+    "// the $extends-wrapped client that injects `tenantId` centrally — the same shape the AST cannot",
+  ],
+  "src/detectors/__fixtures__/perf/nested-loop-join/negative/lib/static-and-per-item.ts.txt": [
+    "// An imported SCREAMING_SNAKE constant: isStaticListSource can't see across files, but the",
+  ],
+  "src/detectors/__fixtures__/perf/sync-io/negative-unreachable/packages/cli/src/setup.ts.txt": [
+    "// directory is `packages/cli/src`, which NON_REQUEST_PATH does NOT match — a path blocklist cannot",
+  ],
+  "src/detectors/__fixtures__/slop/unreachable-branch/positive/status.ts.txt": [
+    "return \"impossible\";",
+  ],
+  "src/detectors/app-router.ts": [
+    "// surfaces can't drift apart\", same rationale as src/detectors/owner-id.ts.",
+    "// a role-gate wrapper the AST can't see into may already authorize arbitrary-row writes.",
+    "// not that authorization is absent from code it can't see.",
+    "// on code this AST pass can't see — stay silent, for every shape.",
+    "// from a wrapper/middleware it can't see. That residual is what triage is for.",
+    "// itself; don't also flag the file for lacking a cache config it can't",
+    "// The one shape this check cannot adjudicate: `unstable_cache(importedFn, …)`, where the cached",
+    "// run in parallel two queries where the second cannot even be built without the first's result",
+    "// whole identifiers, so a short intermediate binding cannot swallow the class.",
+    "// that's dynamic by construction for lacking a cache config it can't have.",
+    "//     render body (a component needs JSX, so it can't live here) → off path. At carbon's scale the",
+    "// What M9 emits for a scope it cannot analyse: the Vite/SPA path keeps its own note plus the one",
+  ],
+  "src/detectors/bundle-stats.ts": [
+    "//   baseline every route pays, but per-route attribution is impossible from manifests",
+    "// depend on which bundler produced the chunks it lists. UNVERIFIED against a live Turbopack",
+    "// parsing can't: duplicate modules across chunks, per-package dependency attribution, and",
+    "// No index.html — can't separate first-load from lazy chunks. If JS assets exist, disclose the",
+  ],
+  "src/detectors/handrolled.ts": [
+    "// Fails CLOSED — no package.json in the set, or none that parses, means the gate cannot be",
+    "// a bare atob). The authz half (trusting unverified claims) is M1's; this notes only the decode.",
+    "// (a pattern's frequency can't be measured without a detector) and corpus-bounded. New rule:",
+  ],
+  "src/detectors/hook-deps.ts": [
+    "// skip it too\" — unverified, and contradicted by `grep 'limitations.push|notes.push' src` :",
+  ],
+  "src/detectors/owner-id.ts": [
+    "// One implementation so the two surfaces can't drift apart on what \"client-supplied\" means.",
+  ],
+  "src/detectors/perf-code.test.ts": [
+    "// ATC dogfood: email clients REQUIRE raw <img>, and index keys can't cause remounts in",
+  ],
+  "src/detectors/perf-code.ts": [
+    "// — we can't know at scan time what that evaluates to (#249).",
+    "// --- A0. React Compiler flag can't be statically resolved [WATCH] ------------",
+    "// memoization; flagging it is noise the app can't act on (#230 dogfood FP).",
+    "// `next/image` can't optimize anyway since there's no remote URL for it to fetch/resize",
+    "// inserts, or deletes at runtime — the whole failure mode index-as-key guards against can't",
+    "// --- C3. Heavy barrel imports on a Next version that can't optimize them [PERF] ---",
+    "// that it proved nothing. The cost is recorded, not hidden: resolveImport cannot follow a WORKSPACE",
+    "// A tree with no request entry point at all cannot answer the reachability question either way, and",
+    "//     receivers: isStaticListSource can't see across module boundaries, and an all-caps",
+  ],
+  "src/detectors/slop.ts": [
+    "// without a type checker we can't tell it apart from the redundant case (dogfood FP).",
+    "// single-call-wrapper detector: a mechanical count can't know it's a deliberate test/refactor",
+  ],
+  "src/detectors/test-intent.ts": [
+    "// unable to fail, the free/source-tier complement to the Stryker mutation scan",
+    "// vitest/jest expose. skip/todo registrations can't fail by design, so they are exempt.",
+    "// registrations can't fail by design, so their whole subtree is exempt.",
+    "// the mock makes structurally impossible, so a keyword miss is a silent skip, not an FP.",
+  ],
+  "src/detectors/vitest-intent.ts": [
+    "// whether the reference throws \"Cannot access X before initialization\" depends on runtime IMPORT",
+  ],
+  "src/disclosure-venue.test.ts": [
+    "// #1342 criteria 3 and 4: what the gate cannot judge is counted, never absent.",
+  ],
+  "src/disclosure-venue.ts": [
+    "// health\" (CLAUDE.md). The repo already has the disclosure-row family for scope a MODULE cannot",
+    "//    estimate: the issue named ~9 rules; the first widening (\"can't see\", \"heuristic\") plus matching",
+    "//    across a LINE WRAP found 17, and a further pass (\"can't prove/confirm/tell\", \"exploitability",
+    "//    three checks hosted mode runs and it cannot. (That count is three, not the two the issue",
+    "//    which is exactly the case a vocabulary check cannot reach.) What is STILL open is the other",
+    "//   grep -hiE \"^ *#.*(does not|doesn't|do not|don't|cannot|can't|will not|won't) match\\b\" \\",
+    "// stated limit on what the rule KNOWS, which is exactly what this gate is about: \"can't see\" names",
+    "// a fact the rule structurally cannot reach, and \"a heuristic\" says the match is evidence rather",
+    "// Third pass over the same census: \"a static rule can't PROVE no allowlist runs elsewhere\" and",
+    "// \"exploitability DEPENDS on the deploy network\" are the same declaration as \"can't see\" — a named",
+    "// bound-ish prose the markers still cannot see. It is not a gate on its own (it catches pattern",
+    "// bound-ish prose cannot join the set unread and a triaged rule cannot quietly stop being triaged.",
+    "// adds \"cannot\"/\"heuristic\" on the same footing when it adds those markers.",
+    "// `harvey-jwt-sign-noexpiry` writes \"…this rule can't\" and \"see whether expiresIn lives inside it\"",
+    "// on consecutive lines, and per-line matching cannot see the phrase at all — a bound made invisible",
+    "// to every rule that uses it, and a PER-RULE gate structurally cannot attribute it to anyone — so",
+  ],
+  "src/diverged-clones.ts": [
+    "// structurally cannot see. jscpd is a raw-token Rabin-Karp match: the moment a copy-pasted",
+    "// Cheap prefilter: a pair whose token counts differ by more than this ratio cannot reach",
+  ],
+  "src/dynamic-validate.ts": [
+    "// we can't stand it up from this repo. Not a hard blocker (core RLS still works); a disclosed limit.",
+    "// holding ≥1 .sql, skipping build/dep/VCS dirs so the scan is cheap and can't wander. Depth is",
+    "// seed can't satisfy). The rest seeded and were probed; these are disclosed (fail-loud) and were",
+    "// its cross-tenant isolation was NOT probed, so it can't read as a clean pass. The rest DID seed and",
+    "// (run app) → pen-test → (bonus: the client's own suite) → emit M2.pass.json. A step that can't",
+    "// ports); a project that can't stand up is recorded as an honest per-DB partial, never dropped, and",
+  ],
+  "src/epic-builder/model-scaffold.ts": [
+    "// The scaffold cannot semantically revise. Per the §4.3 contract it never silently drops a",
+  ],
+  "src/epic-builder/session.ts": [
+    "// story is ignored (it can't constrain ordering).",
+  ],
+  "src/findings.ts": [
+    "// Shown verbatim in the deliverable — a higher severity the client cannot trace back to a table",
+    "// ticket (src/trackers/fix-diff.ts verifySuggestedFix) — an unverified proposal is dropped, not",
+    "// A surviving mutant the suite never disproved — the \"tests that can't fail\" evidence.",
+  ],
+  "src/fix/execute.ts": [
+    "// fix. Everything else names why not, so a caller cannot mistake silence for success.",
+  ],
+  "src/fix/materialize-calibration.ts": [
+    "// cannot execute a fix against it in place. This copies the relevant planted files (verbatim, or a",
+  ],
+  "src/fix/transport.test.ts": [
+    "// merely unused. This guards the source itself so a future edit can't quietly add one.",
+  ],
+  "src/fix/transport.ts": [
+    "// HERE, before any git command runs — a caller cannot bypass it by forgetting to ask.",
+  ],
+  "src/fix/verify.ts": [
+    "// for something that never executed cannot manufacture a false green (the repo's signature defect).",
+  ],
+  "src/fp-rules.test.ts": [
+    "// did not survive a skill upgrade). So the carve-out gets a test: it may be reworded, but it cannot",
+    "// The section the triage verifier reads for this override, isolated so a match cannot be satisfied",
+  ],
+  "src/grant-classifier.ts": [
+    "*  from a static grep of the client repo — DB introspection alone can't tell. */",
+  ],
+  "src/hotspot-scan.test.ts": [
+    "// report, so the post-slice hotspots.length alone can't tell the CLI how many files actually",
+    "// #1112 — the issue asked for a plant that cannot decay; the measurement said the plant decays on a",
+  ],
+  "src/hotspot-scan.ts": [
+    "// it and a bare finding count can't distinguish \"0 hotspots, full vitals, clean repo\" from \"0",
+  ],
+  "src/lighthouse.ts": [
+    "// The fail-loud disclosure the coverage doctrine requires: when the target can't be built, served,",
+  ],
+  "src/m6-agreement.ts": [
+    "//   • a file reviewed by only one pass is listed, not dropped — an absent row can't be argued with;",
+    "// reviewer cannot make a finding Confirmed on the other's behalf.",
+  ],
+  "src/migration-sql-parse.ts": [
+    "// One real gap this file can't paper over: GRANT/REVOKE and role membership aren't always present",
+    "// and lets them contain characters a bare \\w+ can't. IDENT matches either shape: group 1 is a",
+    "// at apply time and leaves the resolver unable to map the seeded JWT to a tenant. `references",
+    "// it cannot resolve is handled correctly: a NULLABLE FK is simply OMITTED (left NULL), but a NOT NULL",
+    "// FK cannot be — it needs a real parent row (#630). A column absent from this set is nullable",
+    "// cannot be mistaken for the grantee list.",
+  ],
+  "src/mutation-scan.test.ts": [
+    "// covered scope must travel with it so \"100% over one file\" can't read as \"the repo is tested\".",
+    "// perTest coverage analysis cannot attribute a once-per-suite mutant to any one test. It is weaker",
+  ],
+  "src/mutation-scan.ts": [
+    "// coverage tracking cannot attribute it to any one test, so it is weaker evidence than an",
+    "// can't run Stryker at all — src/cli/mutation-scan.ts used to have nothing to do but error out.",
+    "// suite that covers the app is NOT suite-absence; it is a suite this per-app path cannot invoke.",
+    "// the deletion\" on ANY non-zero exit, so a suite that cannot run at all scored as a flawless one —",
+    "// and degrades loudly (mutationNotRunModuleRecord) when it cannot detect one.",
+    "// config Harvey can't safely rewrite) or missed the incompatibility (TypeScript resolved from",
+    "// The explicit degradation ladder (#513): when the full-mutation rung cannot run, the ledger says",
+    "// the Stryker side, for suites stub-check's transpile-and-run path can't reach. One finding per",
+  ],
+  "src/pentest/active-exploit.test.ts": [
+    "// Drop the canary → SSRF cannot confirm out-of-band and records requires-live-run.",
+  ],
+  "src/pentest/active-exploit.ts": [
+    "// Coverage-guard discipline (CLAUDE.md \"fail loud\"): a probe that cannot reach a definitive verdict —",
+    "// Absent ⇒ every SSRF sink records requires-live-run (out-of-band confirmation is impossible",
+  ],
+  "src/pentest/auth-attack.ts": [
+    "// Docker stack. Coverage-guard discipline (design §, CLAUDE.md \"fail loud\"): a probe that cannot",
+    "// channel we can read it, otherwise the poison lands in an email we can't inspect from HTTP alone.",
+  ],
+  "src/pentest/bizlogic-gen.test.ts": [
+    "// can't tell the difference is worse than the hand-authored file it replaces.",
+  ],
+  "src/pentest/business-logic.test.ts": [
+    "// Drop the authz cases → that class cannot be assessed and records requires-live-run.",
+  ],
+  "src/pentest/business-logic.ts": [
+    "// response is \"cannot observe\" ⇒ requires-live-run, never a guessed verdict.",
+    "// accepted request. Returns null when the path is absent — the caller treats \"cannot observe\" as",
+  ],
+  "src/pentest/calibration-fixture.ts": [
+    "// #seam SERVICE-JWT-UNVERIFIED: an internal admin endpoint accepts any Bearer token without",
+  ],
+  "src/pentest/data-residue.ts": [
+    "// #954 — RESTORE residue. Soft-delete a tenant-A row, confirm a NON-OWNER cannot see it while deleted,",
+    "// referencing A prevents the parent's removal, so the tenant cannot be fully torn down.",
+    "// The app-mediated restore variant this REST-only tier cannot construct, disclosed so it is a row, not",
+  ],
+  "src/pentest/discovery.ts": [
+    "// route can't have a shadow-API-version bug).",
+    "// keys its id under the domain name `carId`, which a fixed `id`/`tenant_id` list cannot see.",
+    "// multi-service target (crAPI: identity/workshop/community on three origins) cannot be expressed",
+  ],
+  "src/pentest/engine.test.ts": [
+    "// #877 — the GraphQL door is transported as a POST, so the read-only run cannot knock on it. It",
+  ],
+  "src/pentest/engine.ts": [
+    "// #1204 — X-Powered-By on the APP's own responses. The static check has to disclose that it cannot",
+  ],
+  "src/pentest/exploit-seed-derivation.test.ts": [
+    "// scratch prefix findRoute can't match even though the relative tail is identical.",
+  ],
+  "src/pentest/exploit-seed-derivation.ts": [
+    "// function's concern — it isn't a gap). A finding IN one of those families that can't be mapped to",
+  ],
+  "src/pentest/external-target.ts": [
+    "// The M2 surfaces an EXTERNAL run structurally cannot reach, each with its reason. Without these the",
+  ],
+  "src/pentest/graphql-probe.ts": [
+    "// nothing and report a clean pass. A table whose collection/tenant field cannot be resolved is named",
+  ],
+  "src/pentest/guest-probe.test.ts": [
+    "// every decision are scored: a schema that CAN express a guest and one that cannot; a policy that",
+    "// The distinguishing claim: the cross-tenant matrix cannot see this, because both of ITS",
+  ],
+  "src/pentest/guest-probe.ts": [
+    "// two values the seed already used, genuinely cannot express a guest, and that is a real",
+    "// The half this data-layer probe genuinely cannot decide — on every output, so a clean cross-tenant",
+  ],
+  "src/pentest/identity-classes.ts": [
+    "// this flip, so the row cannot claim \"probed\" for a surface the probe was not given.",
+    "// cannot express a guest at all, or when seeding one failed — never a silent two-persona run.",
+    "// received a resolvable credential store. The authentication half stays out of reach, so the row",
+  ],
+  "src/pentest/invitation-probe.test.ts": [
+    "// SELECT policy), and an app-mediated one (anon cannot resolve the invitation through REST at all),",
+  ],
+  "src/pentest/invitation-probe.ts": [
+    "// column, or no way to represent revocation, is returned as unresolved (named in the disclosure).",
+  ],
+  "src/pentest/live-standup.ts": [
+    "//      seed can't block the stand-up; we bring our own deterministic two-tenant seed).",
+    "//      can't boot, that is a recorded limitation (coverage degrades to postgrest-only) — Tier 1",
+    "// can't fail the whole stand-up. db + auth (GoTrue) + rest (PostgREST) + storage + the gateway are what",
+    "// but never completes a response can't stall the poll for minutes; the total budget is capped at",
+    "// #649 — the per-table SAVEPOINT seed: a table whose bespoke constraint a generic seed can't",
+  ],
+  "src/pentest/next-auth-session.ts": [
+    "// custom-auth HS256 minter (custom-auth.ts) can't forge one and detectCustomAuth reported \"no secret\".",
+  ],
+  "src/pentest/object-ids.ts": [
+    "// serves GET. A by-id route needs the id we are trying to find, so it cannot be the source.",
+  ],
+  "src/pentest/object-leak.ts": [
+    "// count so a large response cannot turn one probe into a walk of the whole graph.",
+  ],
+  "src/pentest/openapi-routes.ts": [
+    "// The classification a spec structurally cannot supply — recorded so a run over an OpenAPI-sourced",
+  ],
+  "src/pentest/powered-by-probe.ts": [
+    "// A dynamic segment cannot be requested without inventing an id, and Express stamps the header on a",
+  ],
+  "src/pentest/prisma-standup.ts": [
+    "// attempt so a server that accepts the connection but never responds can't stall the poll.",
+  ],
+  "src/pentest/prisma-xtenant.test.ts": [
+    "// email is unique — the two augment users carry distinct values that also can't collide with the",
+  ],
+  "src/pentest/prisma-xtenant.ts": [
+    "// the generic placeholder can't satisfy skips that row and discloses, never aborting the whole apply.",
+    "// route can't silently shrink the probed set while the summary still reads \"each denied … no leak\".",
+  ],
+  "src/pentest/race-toctou.test.ts": [
+    "// Always 200 but only an echo, never `\"redeemed\":true` → 0 accepted → cannot assess (partial).",
+  ],
+  "src/pentest/race-toctou.ts": [
+    "// Coverage-guard discipline (CLAUDE.md \"fail loud\"): a probe that cannot reach a definitive verdict —",
+  ],
+  "src/pentest/realtime-channel-probe.test.ts": [
+    "// with exactly this reason. The row must quote it AND admit what it cannot distinguish.",
+  ],
+  "src/pentest/realtime-channel-probe.ts": [
+    "//     tenant-scoped data over Broadcast/Presence — something the database cannot tell us.",
+    "//     cannot tell those two apart without the app's real topic names, so the disclosure says exactly",
+    "// name Harvey's probe topic. Harvey has no way to tell those apart without the app's real topic names,",
+  ],
+  "src/pentest/realtime-probe.test.ts": [
+    "//      assessed, is UNVERIFIED, and the reason it did not run is stated.",
+    "// title telling the reader to treat Realtime as unverified. A proven result must read as proven.",
+    "// #1003 — measured live: the service explains its own refusal (\"Unable to subscribe to changes …\"),",
+  ],
+  "src/pentest/realtime-probe.ts": [
+    "// Realtime's channel authorization ships in the M2 findings as an explicit UNVERIFIED row rather than",
+    "// must not ship under the NOT-ASSESSED title telling the reader to treat it as unverified. The live",
+  ],
+  "src/pentest/realtime-transport.ts": [
+    "// {\"event\":\"system\",\"payload\":{\"message\":\"Unable to subscribe to changes …\",\"status\":\"error\",",
+  ],
+  "src/pentest/route-probes.test.ts": [
+    "// target with no PostgREST-equivalent surface), persistence of the injected field can't be",
+  ],
+  "src/pentest/schema-introspect.ts": [
+    "// null for a comparison/regex/expression check the seed can't derive a legal literal from.",
+    "// #656 shape 3 — a single-column CHECK the allow-list path can't handle: a length constraint",
+  ],
+  "src/pentest/scope-ledger.test.ts": [
+    "// The specific drift classes a migration replay cannot reproduce — the reason the disclosure",
+    "// across the scoped surface. The app-mediated restore variant stays named as out of reach.",
+  ],
+  "src/pentest/scope-ledger.ts": [
+    "// The production-only state a migration replay cannot reproduce. Enumerated rather than summarised",
+    "// so on a default run its authorization is still UNVERIFIED — a distinction the report has to carry,",
+  ],
+  "src/pentest/scorecard.ts": [
+    "// A `proven`/`unproven` verdict alone cannot tell \"ran and cleared\" from \"never ran\" — both are",
+  ],
+  "src/pentest/share-probe.test.ts": [
+    "// (revocation enforced at the SELECT policy), and an app-mediated one (anon cannot resolve the share via",
+  ],
+  "src/pentest/share-probe.ts": [
+    "// link column, or no way to represent revocation, is returned as unresolved (named in the disclosure).",
+  ],
+  "src/pentest/storage-probe.ts": [
+    "// Ground truth: does the bucket actually hold objects? An empty bucket can't prove a leak.",
+  ],
+  "src/pentest/targets.ts": [
+    "// (untestable in CI): that firing is proven at the discovery+assert level (a real manifest, a real",
+  ],
+  "src/pentest/token-identity-probe.test.ts": [
+    "// Fail loud: a token table we cannot identify credential material in is NAMED, not silently dropped.",
+  ],
+  "src/pentest/token-identity-probe.ts": [
+    "//     app-mediated. Harvey cannot mint an app session from a seeded token row through PostgREST, so",
+    "// The app-mediated half this REST door genuinely cannot reach — stated on every output so a clean",
+  ],
+  "src/pentest/two-tenant-seed.test.ts": [
+    "// Distinct per tenant row so a UNIQUE text column (slug/name) can't collide across the two rows.",
+    "// the auth-link key column is the arbiter, never in the SET list (can't update the conflict key)",
+    "// BEGIN/EXCEPTION subtransaction) so a table whose bespoke constraint a generic seed can't satisfy is",
+  ],
+  "src/pentest/two-tenant-seed.ts": [
+    "// CHECK/constraint a generic seed can't satisfy is ROLLED BACK and recorded as SKIPPED (with the",
+    "// invariant like `imported_* NULL iff origin='platform'`). Independent per-column placeholders can't",
+    "// (a bespoke cross-column CHECK a generic seed can't satisfy — ATC's `tasks` exactly-one-of, #649),",
+    "// FK we cannot resolve (a non-uuid-keyed or cyclic parent) is DISCLOSED and left to fail loud, never",
+    "// table is added before we recurse into it. A referenced parent whose referenced column we cannot pin",
+    "// is disclosed and left to fail loud (its child's FK can't be resolved).",
+    "// Disclose the edge cases where the tenant/principal parent identity can't be pinned (scoped FKs to",
+    "// cannot prove satisfies it. Disclose it up front rather than let it surface only as an opaque",
+  ],
+  "src/pentest/types.ts": [
+    "// it the kit cannot express a credential change at all. The PostgREST matrix's verb list is separate",
+  ],
+  "src/pentest/upload-attack.test.ts": [
+    "// (honest partial) paths are asserted too, so a probe that cannot confirm is never silently dropped.",
+  ],
+  "src/pentest/upload-attack.ts": [
+    "// uploaded marker echoed back, never by mere acceptance of the upload. A probe that cannot reach a",
+    "// Absent ⇒ the stored-XSS probe records requires-live-run (serving cannot be inspected).",
+  ],
+  "src/pentest/verify.ts": [
+    "// service-role oracle cannot (operator seed). Both absent ⇒ the Supabase path, unchanged.",
+    "// A class whose target has no candidate route/RPC can't exhibit the bug — report it cleanly",
+    "// #seam SERVICE-JWT-UNVERIFIED: an endpoint meant to require a signed service JWT accepts a",
+    "// community on three origins) carries its origin PER ROUTE, because one `appUrl` cannot express it.",
+    "// every exclusion / deferred write is logged so an un-reviewed allowlist can't hide a real gap.",
+    "// also can't reach it, the route may just be down, so a member 2xx is only a finding when the admin",
+  ],
+  "src/pii-protection-review.ts": [
+    "// the same read-only connection. protectionScope() is the other half: on any tier that CANNOT",
+    "// gather them, the deliverable says protection was not verified rather than staying silent, because",
+  ],
+  "src/prisma-dynamic.ts": [
+    "// app-route probes → emit M2.pass.json. A step that can't complete returns a reasoned failure and",
+  ],
+  "src/prisma-schema-parse.ts": [
+    "// can't resolve a cached binary either — see tools/pii-classify.mjs's columnsFromPrismaSchema,",
+  ],
+  "src/probe-result.test.ts": [
+    "//      with a reason, so a half-migration cannot be mistaken for a finished one.",
+    "// sweep. It cannot be written here.",
+  ],
+  "src/quality-scan.test.ts": [
+    "// asserted here against the same live findings so the fixture can't silently degrade.",
+    "// only the pure transform, so it cannot depend on which deps happen to be installed.",
+  ],
+  "src/quality-scan.ts": [
+    "// #223/#505: knip throws (rather than reporting) when it can't resolve a target's config/plugin",
+  ],
+  "src/quick-scan.ts": [
+    "// ordering is worthless to a reader who cannot see what it is based on.",
+    "// grouped per file rather than listed one row per occurrence, so forty debounces can't bury",
+    "// scan\". Optional because the pure-transform entry point takes a Finding[] and cannot walk a",
+    "// Grading on it produced F's built entirely on unverified version matches while the real",
+    "// on repository/trigger settings the scan cannot see — and the headline grade presents itself as",
+    "// rule cannot reach a client's grade because it cannot reach `main`. The filter is deliberately NOT",
+    "// static tier can see a policy's shape but cannot prove how it behaves against a live database,",
+    "// is exactly the claim this tier cannot make.",
+  ],
+  "src/recorded-reasons.test.ts": [
+    "// named as the blocker. Co-occurrence cannot tell this from BLOCKED above.",
+    "// #1347's fourth criterion, and the half the .md control above cannot speak to: the ratchet gated",
+    "// widening to whole-file `.ts` cannot happen quietly.",
+    "// A count baseline cannot do this: two identical claims and one recorded entry is still a breach,",
+    "// reachable: \"untestable\" was not in the vocabulary and `.ts` was not censused.",
+  ],
+  "src/recorded-reasons.ts": [
+    "// #1033 — a recorded reason (a blocker, a not-run explanation, a \"we can't do X\") is a CLAIM ABOUT",
+    "// against UNDERclaiming: \"X works\" fails loudly when it stops being true, while \"X can't be done\"",
+    "// #1072 — a live-only falsifier cannot name its target in the repo: the crAPI gateway URL, the",
+    "// >=3 chars so a Markdown \"M1:\" or \"NB:\" outside the convention can't be mistaken for a typo'd field.",
+    "// #1319 added \"out of reach\"/\"infeasible\": #957 recorded a piece as \"genuinely out of reach for a",
+    "// #1347 added \"untestable\" and the unverified register. Until then the census was PROSE-ONLY and the",
+    "// 2026-07-28 over DEFAULT_ROOTS: \"untestable\" costs 5 lines and reaches all three #1311 sites",
+    "// (src/audit-runners.ts:722/972, src/pentest/targets.ts:157); the unverified register costs 81 and",
+    "// \"the shape was never verified\" forecloses nothing — it is the honest register, and refusing it on",
+    "// \"a migrationsDir-less Prisma-7 target cannot stand up\", retired by prismaV7ApplyArgs in",
+    "* disclosure line cannot drift apart.",
+    "* against `.md`'s 274, but 270 of the 767 are CODE — error-message strings (\"cannot seed: this body",
+    "* of code (`foo(); // cannot X`) is not read, which keeps this the lower bound it has always been.",
+    "// a per-file breach can NAME the lines to look at, which a global delta cannot: #1318's acceptance",
+    "* (now - baseline) lines come back `isNew` — the marking cannot silently produce an empty set and",
+    "// anywhere in the text cannot tell them apart — the citation above was refused by the first cut of",
+    "// protected\"), or the OBJECT of a prohibition (\"cannot edit <path>\", \"a supervised path like",
+    "// missed), #957's \"genuinely out of reach for a mechanical assembly\" (98 lines, 3h25m later, no",
+    "// three named classes) and #873's \"our mechanical tier structurally cannot see that shape\" (the",
+    "// Matched literally, including inside a denial (\"not technically impossible\") — the check reads",
+  ],
+  "src/review-tier.ts": [
+    "// mechanical lints can't: each deterministically CLEARS the provably-safe subjects and packages",
+  ],
+  "src/rls-policy-review.test.ts": [
+    "// The benign twin: same shape, same lack of USING (INSERT policies cannot have one — Postgres",
+  ],
+  "src/sarif.ts": [
+    "// A caller cannot omit the ledger by accident: `toSarif` takes a discriminated union, so the only",
+    "// The location string is repeated in the message so a finding whose location cannot be a",
+  ],
+  "src/sbom.ts": [
+    "// A lockfile Harvey cannot parse never yields a silently-thinner BOM: it degrades to the manifest's",
+    "// regex cannot resolve is a package this parser did not recover — counted, not ignored.",
+    "// next header arrives, so a truncated or unfamiliar entry cannot pass as a clean parse.",
+    "// hex digest. A hash Harvey cannot convert is omitted rather than emitted in the wrong encoding —",
   ],
   "src/scan/__fixtures__/FIXTURE-INVENTORY.md": [
     "Better than HAND-WRITTEN, still not invariant-3 compliant — you cannot mechanically re-capture and",
+    "| 8 | TruffleHog 3.96.0 | `src/scan/secrets.test.ts` — `TruffleHogResult[]` fed to `parseTruffleHogFindings` | **CAPTURED** (#1146, 2026-07-26) — the #1078 rotation/provenance test now loads `__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json` (real `trufflehog git --no-verification --results=unverified --json` output; sibling `PROVENANCE.md`). The **verified-secret** path is a recorded REASON (verification is live-only); the grading-path tests override the single `Verified` field, disclosed at the test site. Other `parseTruffleHogFindings` literals in this file (the drop-unverified and #1099 empty-Redacted cases) remain minimal hand-built inputs exercising specific parse branches. | PARTIAL — dry-run runs real `trufflehog`; the verified branch has no offline backstop (recorded REASON, falsifier fires when a live-verified capture is committed). |",
+    "| 10 | TruffleHog 3.96.0 (git-history) | `src/scan/git-history-secret-gate.test.ts` — `TruffleHogGitResult[]` fed to `scoreGitHistoryResults` | **CAPTURED** (#1150) | PARTIAL — as row 8. RE-CAPTURED: `src/scan/__fixtures__/trufflehog-git-history/trufflehog-3.96.0-git-history.json` + `PROVENANCE.md` — the real one-record output of `trufflehog git --no-verification --results=unverified --json` against a `buildGitHistoryFixture`-shaped repo. The benign file's negative control is by necessity synthetic (a real run emits nothing for it); the \"false positive\" branch's second record stays hand-built and is labelled so. |",
     "| 14 | PostgREST / GoTrue HTTP responses | ~20 `src/pentest/*.test.ts`, `src/dynamic-validate.test.ts`, `src/scan/supabase*.test.ts` — inline response-body/error literals | **REASON (live-only)** (#1146) — offline capture is impossible; the block is recorded below. | LIVE-STACK only — real responses come from the M2 two-tenant stack, which is not a CI gate. Large class; not individually enumerated here. |",
     "itself can still encode a field the tool never emits, it just can't leave the tool *entirely* dead.",
     "two-tenant stack, so those get a `REASON:` block where an offline capture is impossible.",
+    "- **Row 8 (TruffleHog, unverified path)** RE-CAPTURED — `__fixtures__/trufflehog/trufflehog-3.96.0-git-unverified.json`",
+    "from a real `trufflehog git --no-verification --results=unverified --json` run (trufflehog 3.96.0,",
     "below), because an offline capture is genuinely impossible — not a fabricated fixture.",
   ],
   "src/scan/__fixtures__/trufflehog-git-history/PROVENANCE.md": [
+    "come from walking history. `--no-verification`/`--results=unverified` are the gate's own flags",
     "control (a real trufflehog run cannot produce a benign-file hit — the \"false positive\" branch in",
   ],
   "src/scan/__fixtures__/trufflehog/PROVENANCE.md": [
+    "# `trufflehog-3.96.0-git-unverified.json` — provenance",
+    "`parseTruffleHogFindings` DROPS unverified hits — only a live-verified secret (`Verified: true`) reaches",
     "token; the field cannot be flipped in a committed fixture without EDITING captured output, which",
+  ],
+  "src/scan/audit-log-tenant.ts": [
+    "// cannot see whether the sink injects one (a pino/winston child logger bound with `tenant_id`",
+  ],
+  "src/scan/bola-owner.ts": [
+    "// authorization is absent from a wrapper it can't see.",
+  ],
+  "src/scan/breadth-sweep.test.ts": [
+    "// The crux of #899/#900: the ungraded breadth tier must be structurally impossible to confuse with",
+  ],
+  "src/scan/calibration.test.ts": [
+    "// key can't drift from what the scanner emits. Covers the two #353 graduations (unscoped-write",
+    "// tag. A module with zero entries must still emit a row — an absent row cannot be flagged.",
+    "// committed fixture — so the answer key can't drift away from what the scanner actually emits.",
+    "// rest of the corpus uses — so the answer key can't drift from what the scanner emits, and no",
+    "// answer key can't drift from what the scanner emits. The plants are the SAME migration the",
+    "// detector against the REAL committed fixture, so the answer key can't drift from what the",
+  ],
+  "src/scan/calibration.ts": [
+    "// enters the keyword-matching haystack, so a corpus `match` keyword can't spuriously match the",
+    "// package name can't cross-match another fixture's manifest (#253).",
+  ],
+  "src/scan/calibration/b10-deps.entries.ts": [
+    "// b10-nextauth-csrf isolates the OAuth-CSRF next-auth version (which can't share the vuln manifest's",
+  ],
+  "src/scan/calibration/b11-crypto.entries.ts": [
+    "// decipher returning update() with no final(), an unverified client-side jwtDecode() render sink, a",
+  ],
+  "src/scan/calibration/b12-nextconfig.entries.ts": [
+    "// src/scan/rules/semgrep/xss.yml; and the one class Semgrep can't express — a sensitive file",
+  ],
+  "src/scan/calibration/b13-supa.entries.ts": [
+    "// can't carry the opposite value for the same key that the positive already sets).",
+  ],
+  "src/scan/calibration/b14-applogic.entries.ts": [
+    "// is absent in THIS file, never that it isn't enforced in middleware/a wrapper it can't see), so",
+  ],
+  "src/scan/calibration/b15-nextjs-authz.entries.ts": [
+    "// judgment, cross-function taint, or a server→client boundary a grep/AST can't do FP-safely, so the",
+  ],
+  "src/scan/calibration/b16-storage-secdef.entries.ts": [
+    "// reasoning a structural grep can't do reliably, so — per #123 option (b) — detection was left to",
+  ],
+  "src/scan/calibration/b17-race-unscoped.entries.ts": [
+    "// scored by validate-calibration here; both stay review (a grep can't prove a whole-table write is",
+    "// unintended, and the AST can't see a DB-side lock/transaction), never free-count. The third bug",
+    "// callee reasoning a mechanical rule can't do FP-safely. As of #425 it is a corpus entry too, at",
+  ],
+  "src/scan/calibration/b19-prisma-tenant-scope.entries.ts": [
+    "// ownership check in a wrapper it can't see is absent. The negative scopes each query to",
+  ],
+  "src/scan/calibration/b2-deps.entries.ts": [
+    "// These five needed manifest scenarios that can't coexist in the single root package.json, so",
+  ],
+  "src/scan/calibration/b20-drizzle-tenant-scope.entries.ts": [
+    "// in a wrapper it can't see is absent. The negative scopes each query to organizationId and clears.",
+  ],
+  "src/scan/calibration/b21-silent-failure.entries.ts": [
+    "// at REVIEW — these are reliability heuristics whose shape (\"this chain is missing a call\") cannot",
+  ],
+  "src/scan/calibration/b22-gha-permissions.entries.ts": [
+    "// block is `review` (it depends on a repository setting the scan cannot read). Both route to",
+  ],
+  "src/scan/calibration/b5-headers.entries.ts": [
+    "// check is a GLOBAL presence check over one well-known file set, so a headers-present negative can't",
+  ],
+  "src/scan/calibration/b6-crypto.entries.ts": [
+    "// `NODE_TLS_REJECT_UNAUTHORIZED=0`. The rest (unverified jwt.decode(), a hardcoded/static IV,",
+  ],
+  "src/scan/calibration/b7-auth.entries.ts": [
+    "// (a static tool cannot confirm an ownership/permission/rate-limit check is correct, only that",
+  ],
+  "src/scan/calibration/b8-supa.entries.ts": [
+    "// confirm, so buildCoverageMatrix always scores it N/A, never a pass/fail — these can't regress",
+  ],
+  "src/scan/calibration/m4-m5.entries.ts": [
+    "// #360: the Type-3 shape jscpd structurally cannot see — a copy-pasted tenant guard whose",
+  ],
+  "src/scan/calibration/m7.entries.ts": [
+    "// filter regardless, so they can't spuriously break the M1 live gate. `match` keywords pin each",
+    "// fixtures) can't cross-attribute a finding between entries.",
+    "// (unused_index) — locationFor() groups by table, not by index, so a rule-name keyword can't",
+  ],
+  "src/scan/calibration/m8.entries.ts": [
+    "// filter regardless, so they can't spuriously break the M1 live gate.",
+  ],
+  "src/scan/calibration/m9-checks.entries.ts": [
+    "// answer key can't drift from what the scanner emits, and no new files land in the scanned",
+  ],
+  "src/scan/calibration/m9-ports.entries.ts": [
+    "// doctrine each must be GRADED, not merely shipped: an ungraded port cannot claim recall and would",
+    "// `m9-<fw>-corpus/<check>/<kind>` location so the answer key can't drift from what the scanner emits",
+  ],
+  "src/scan/calibration/owasp-multitenant.entries.ts": [
+    "// coverage: we cannot fail a check we authored to match what we already catch. This sheet is a",
+    "// third-party checklist we did not write and cannot quietly edit to match our detectors, which makes",
+    "// it. A recommendation that cannot be faithfully translated is recorded as out-of-universe in the",
+    "//                                  gap, recorded so it cannot silently become a claimed catch\",",
+  ],
+  "src/scan/calibration/owasp-nodejs.entries.ts": [
+    "//     small, version disclosure, and the two things a static pass cannot see (a disable applied in",
+    "// filename has hyphens (\"event loop\" cannot match \"blocking-event-loop\"), and never from the fixture",
+    "// cannot re-open the footgun by hand.",
+  ],
+  "src/scan/calibration/owasp-react.entries.ts": [
+    "// The falsifier is written so a BROKEN LOOKUP cannot masquerade as \"still blocked\". `gh api` exits",
+  ],
+  "src/scan/calibration/secrets.entries.ts": [
+    "// verification would confirm land at `review` because the planted keys are FAKE and can't verify",
+    "// than bare \".env\", so the substring match can't also credit findings from .env.local or",
+  ],
+  "src/scan/calibration/types.ts": [
+    "// and if ANY mechanical rule ever fires on its class the gate FAILS LOUD, so a by-design gap can't",
+    "// on/off, Next vs Vite) that a single shared scan cannot express.",
+    "// in idioms we did not anticipate, which is the case planted-clean fixtures cannot test.",
+    "// scanned and correctly cleared — CLAUDE.md's rule (3), which until now had no way to be",
+  ],
+  "src/scan/client-supplied-tenant.test.ts": [
+    "// The tests that matter here are the SILENCE ones: a rule for this class that cannot tell",
+  ],
+  "src/scan/client-supplied-tenant.ts": [
+    "// or middleware they cannot see may supply the scope. This proves a PRESENCE: the request value",
+  ],
+  "src/scan/common.ts": [
+    "// A mechanical pass has no human triage step, so BFTB inputs (value/ease/safety) can't be",
+  ],
+  "src/scan/counter-race.ts": [
+    "// shape this dataflow gate clears. It still can't see a DB-side lock/transaction wrapper, so it",
+  ],
+  "src/scan/dep-reachability.ts": [
+    "//     through another dependency, a build step, a config file, or dynamic loading this pass cannot",
+    "// A CVE finding that reached the reachability pass without naming its package cannot be ranked.",
+  ],
+  "src/scan/dependencies.test.ts": [
+    "// network, so it can't run in verify. These offline tests guard the list it reads: an advisory",
+  ],
+  "src/scan/dependencies.ts": [
+    "// #512: when osv-scanner cannot run at all (binary missing, crash with no report), the CVE pass",
+  ],
+  "src/scan/drizzle-tenant-scope.ts": [
+    "//     on the VALUE side of a comparison can't spuriously clear the finding;",
+    "// an ownership check in a wrapper/middleware it can't see is absent.",
+  ],
+  "src/scan/env-schema.test.ts": [
+    "// so it can't false-fire as an undeclared read.",
+  ],
+  "src/scan/env-schema.ts": [
+    "// #902: the framework-native env accesses the process.env/import.meta.env read-diff below cannot",
+    "// cannot see. Emitted only when the target actually uses that convention, so it fails loud on a real",
+    "// no-schema-module early return, since the schema itself may live in the shape we can't read.",
+    "// A schema module we can't extract any keys from can't ground a diff — stay silent rather than",
+  ],
+  "src/scan/express-powered-by.test.ts": [
+    "// disables clear it) and, just as much, that the bound it cannot see is stated in the finding: the",
+  ],
+  "src/scan/express-security-headers.test.ts": [
+    "// The bound this pass cannot see has to be in the finding a client reads, not only in the source",
+  ],
+  "src/scan/ext-coverage.ts": [
+    "// cannot read, M1-SFC-00 for single-file components, INFRA-SCOPE-00 for infrastructure). It exists",
+  ],
+  "src/scan/external-corpus.test.ts": [
+    "// The coverage guard (CLAUDE.md): a module that cannot run is `partial`/`requires-live-run`",
+    "// future non-indicator M6 class (the paid triage tier) can't silently fall into this module.",
+  ],
+  "src/scan/external-corpus.ts": [
+    "//     — all-rights-reserved by default, so its source cannot be copied into this repo at all.",
+    "// WHOLE — a minimal extract cannot reproduce a 5.27%-of-52,165-lines duplication figure. The",
+    "// routes every pass/fail line through this so \"20%\" can't appear without \"over lib/server-common.ts\".",
+    "// the real match rule that keeps them apart (a shared \"M5 \" prefix can't distinguish them).",
+    "// BY DESIGN (#267's non-grading ruling), so `counted` here can't mean \"non-Info count\" the way",
+    "// classifyMigrationSql cannot read one — it parses CREATE TABLE SQL. #758 shipped the Prisma",
+    "// as 0 on every target forever, making the drift check permanently unable to fail. Every match",
+  ],
+  "src/scan/fixture-drift-contracts.ts": [
+    "// field-reads were verified against. A drift check run against a different version cannot vouch for",
+    "// TruffleHog 3.96.0 `git --no-verification --results=unverified --json` → parseTruffleHogFindings",
+    "// FIXTURE-INVENTORY rows 8 (unverified) and 10 (git-history) — same tool, same command, same-shaped",
+  ],
+  "src/scan/framework-detect.ts": [
+    "/** A framework-native env access the process.env/import.meta.env diff cannot see — disclose it. */",
+    "// malformed package.json can't assert a dependency either way, so treat it as absent.",
+    "// #696: a third-party scan target usually ships NO knip config, so knip can't infer non-app entry",
+    "// Every non-root workspace under `root` whose framework M9 cannot analyse — Vite SPAs and (since",
+  ],
+  "src/scan/gha-permissions.ts": [
+    "// exact fact (`high`); shape 2 depends on a repository setting this scan cannot read, so it asks",
+  ],
+  "src/scan/git-history-secret-gate.test.ts": [
+    "// Real `trufflehog 3.96.0 git --no-verification --results=unverified --json` capture against a",
+  ],
+  "src/scan/git-history-secret-gate.ts": [
+    "// could never verify anyway). --results=unverified surfaces the pattern match itself, which is",
+  ],
+  "src/scan/handrolled-frequency.test.ts": [
+    "// canonical example. A signature that cannot match its own example would report an",
+  ],
+  "src/scan/handrolled-frequency.ts": [
+    "// A shape whose presence cannot be counted honestly by a statable signature lives in",
+    "// signature that cannot match its own example would report an honest-looking zero, which is",
+    "// Shapes that CANNOT be counted honestly by a statable regex/light-AST signature. Listed, never",
+  ],
+  "src/scan/heuristic-precision.ts": [
+    "// scoping — the case a fixture we wrote ourselves cannot test, because we would write it clean the",
+  ],
+  "src/scan/hosting-headers.ts": [
+    "// tier — the header can legitimately be set at a CDN/proxy layer this scan can't see, same caveat as",
+  ],
+  "src/scan/job-tenant-scope.ts": [
+    "// enclosing statement suppresses the finding (tenancy enforced by a wrapper/RPC the AST can't see).",
+  ],
+  "src/scan/language-coverage.ts": [
+    "// #871 — languages M1's own analysis cannot read. MEASURED 2026-07-23: all 92 `harvey-*` semgrep",
+  ],
+  "src/scan/leftover-auth.ts": [
+    "// a grep can't tell a genuinely bypassed guard from `// TODO: auth` in a comment explaining",
+    "// file can't see is a false negative, not a gate concern).",
+    "// can't prove the same decision isn't ALSO re-enforced server-side/RLS.",
+    "// B14 (#71): app-logic heuristics — all \"review\" tier (a grep can't prove the missing check",
+    "// legitimate, so a grep can't prove intent — discriminator is the missing WHERE, FP shape the admin",
+    "// nearby comment that says \"WHERE\" can't mask an actually-unscoped statement.",
+    "// the enable call and the absence of a secret gate in THIS file, not a gate in a wrapper it can't",
+  ],
+  "src/scan/mechanical.test.ts": [
+    "// purposes, so that disclosure alone can't catch it — this proves runMechanicalScan actually reads",
+  ],
+  "src/scan/mechanical.ts": [
+    "// diff above can't catch it — and paths.skipped is a distinct silence again. Named here so",
+    "// premise, not the symptom: these names are not registry packages, so the registry cannot",
+    "// #1194 — the OTHER half of tenant scoping, which #760/#901 structurally cannot see: the tenant",
+    "// access cannot be reconstructed afterwards, which undercuts the sheet's own detective control.",
+    "// Column names are strings inside the query chain, so tsc cannot see the break.",
+    "// and the finding itself states the two things a static pass cannot see (a disable in another",
+  ],
+  "src/scan/migration-column-drift.ts": [
+    "// root schema.sql is a snapshot, and a snapshot cannot state that anything was ever dropped.",
+    "// Blank comments rather than delete them, so a commented-out DROP can't register while line",
+  ],
+  "src/scan/osv-fixture-contract.ts": [
+    "// against a different version cannot vouch for the fixture — it must fail loud and prompt a",
+  ],
+  "src/scan/pg-idor.ts": [
+    "//     (a false negative, not a false positive) — a single-file AST pass can't tell \"the id was",
+    "// comparison, not that authorization is absent from a wrapper it can't see (same posture as",
+  ],
+  "src/scan/prisma-app-perf.ts": [
+    "// cross-referencing Prisma perf heuristics #761 deliberately deferred: schema.prisma alone can't",
+  ],
+  "src/scan/prisma-schema-perf.ts": [
+    "// migration files, so there's no \"a later file already fixed this\" caveat), but this still can't",
+  ],
+  "src/scan/prisma-tenant-scope.test.ts": [
+    "// wrapper injects the predicate at runtime and the AST at the call site can't see it.",
+  ],
+  "src/scan/prisma-tenant-scope.ts": [
+    "// an ownership check in a wrapper/middleware it can't see is absent.",
+    "// each call site — which the AST cannot do reliably — this gates the WHOLE detector off for a",
+  ],
+  "src/scan/rule-corpus-pairing.ts": [
+    "// impossible and its CI enforcement was never built. This is the enforcement: every `harvey-*` rule",
+  ],
+  "src/scan/rules/semgrep/auth.yml": [
+    "# risk in the whole corpus: a static tool cannot confirm an ownership check, a permission check, or",
+    "# exact-shape pattern can't match. #570: the trailing-.single() and update().select().single()",
+    "# (same as harvey-mass-assignment — a static rule can't prove no allowlist runs elsewhere).",
+    "# can't prove no allowlist runs inside the named function.",
+    "# that reads it only to reject it is a benign shape a single-file rule can't tell apart, so it is",
+  ],
+  "src/scan/rules/semgrep/base.yml": [
+    "# Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS",
+    "# RSC page receives `{ params }` DESTRUCTURED, and semgrep OSS cannot match a destructured",
+    "# a number cannot carry SQL metacharacters, so the interpolation is safe. Deterministically",
+    "# rule cannot see an allowlist check that may live elsewhere.",
+    "# single-file taint cannot span — but the wrapper CALL in the route is same-file with the source,",
+    "# #1342: the rule cannot see a host allowlist applied in another module, and the wrapper-name list",
+  ],
+  "src/scan/rules/semgrep/crypto.yml": [
+    "# `NODE_TLS_REJECT_UNAUTHORIZED=0`. The rest (unverified jwt.decode(), a hardcoded/static IV,",
+    "# wrapped in Buffer.from (not freshly random per call). Review — a static rule can't confirm the",
+    "# has no `expiresIn` key (pattern-not). A variable options argument is NOT flagged — this rule can't",
+    "# with no expiry is a real weakness (it can't be revoked by time), but a deliberately long-lived",
+    "# could live on another path a static rule can't see).",
+  ],
+  "src/scan/rules/semgrep/headers.yml": [
+    "# with `semgrep --config headers.yml` before being wired in (a Semgrep AST rule can't express",
+    "# Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS",
+    "# RSC page receives `{ params }` DESTRUCTURED, and semgrep OSS cannot match a destructured",
+    "# legitimately be set at the CDN/hosting layer this repo scan can't see (same caveat as CSP).",
+    "# Origin check anywhere in the function. Review — a heuristic (can't see a global CSRF",
+  ],
+  "src/scan/rules/semgrep/injection.yml": [
+    "# Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS",
+    "# RSC page receives `{ params }` DESTRUCTURED, and semgrep OSS cannot match a destructured",
+    "# cannot carry SQL metacharacters, so it is safe to interpolate into the raw-SQL string.",
+    "# rule can't prove the value wasn't cast/escaped, and blast radius is the queried collection.",
+    "# segment cannot pollute a prototype on its own. `$U.searchParams`, `cookies()` and `headers()`",
+    "# deep merge walks nothing. Each of these would be recall theatre: a source that cannot reach",
+    "# resolution may be enabled by config the static rule can't see. Review — exploitability depends",
+    "# service-role client shipping to the browser; the plain anon client (bound as `supabase`) can't",
+    "# sink is a res.send() of a template literal carrying a tainted value. Review — a static rule can't",
+  ],
+  "src/scan/rules/semgrep/secrets.yml": [
+    "# structural patterns gitleaks (a value/regex matcher) can't express. Tiering per the locked",
+  ],
+  "src/scan/rules/semgrep/shared-sources.test.ts": [
+    "// that hand-rolls its own source list is the defect, and it now cannot land silently.",
+  ],
+  "src/scan/rules/semgrep/silent-failure.yml": [
+    "# cannot distinguish an oversight from a deliberate choice without reading intent.",
+    "# successful write — `{ error: null }`, no affected-row count. The caller cannot tell \"I took the",
+  ],
+  "src/scan/rules/semgrep/xss.yml": [
+    "# Reached by NAME because semgrep OSS cannot match a destructured object parameter in JS/TS",
+    "# RSC page receives `{ params }` DESTRUCTURED, and semgrep OSS cannot match a destructured",
+    "# dangerouslySetInnerHTML unsanitized. Review — a static rule can't confirm whether the write",
+    "# metavariable-pattern). Review tier (MEDIUM): a static rule can't prove the value was sanitized",
+    "# javascript: URL XSS via a native <a href>. Review — a static rule can't see whether a scheme",
+    "# static rule can't see a host allowlist that may run first.",
+    "# mechanical tier cannot make (the common real-world shape — player/embed commands, resize",
+  ],
+  "src/scan/scan-scope.ts": [
+    "//     best-effort — without git history we can't tell a legitimately-committed `.env` from a",
+  ],
+  "src/scan/secbench.test.ts": [
+    "// A Snyk-only entry: no CVE id, no GHSA — models the class osv/GHSA cannot cover.",
+  ],
+  "src/scan/secbench.ts": [
+    "// above) cannot measure. SecBench's vulnerability lives inside the target package's own source (the",
+  ],
+  "src/scan/secret-rotation.ts": [
+    "// read, not that rotation is operationally impossible — the pair could live in a secret store the",
+  ],
+  "src/scan/secrets.test.ts": [
+    "// then removed is recovered by `--no-verification --results=unverified` (1 result) and by",
+    "// `--only-verified` (0 results) — production's flags cannot see it.",
+    "// --results=unverified --json` output on trufflehog 3.96.0 (see",
+    "// path (parseTruffleHogFindings drops unverified hits). An offline capture cannot produce",
+    "// and the bug cannot occur, so there is nothing to assert.",
+  ],
+  "src/scan/secrets.ts": [
+    "// gitleaks rule (default ruleset + our regex-only custom rules) is unverified pattern-match →",
+    "// --results=unverified` recovers it; `trufflehog git --only-verified` — Harvey's production flags —",
+  ],
+  "src/scan/semantic-corpus-passes.test.ts": [
+    "// pass artifact it cannot manufacture, so it is out of `pnpm verify`; this test carries the recorded",
+  ],
+  "src/scan/semgrep.test.ts": [
+    "// ships cwe, so a no-cwe match cannot be captured (PROVENANCE.md). The parser must still add",
+    "// paths.scanned (so semgrepScopeFinding's diff above can't catch it) while contributing zero",
+  ],
+  "src/scan/semgrep.ts": [
+    "// trigger settings the scan cannot see (who can open PRs, which events fire the workflow). They",
+    "// be set at the CDN/hosting layer this repo scan can't see.",
+    "// world-readable — a config/secret leak a Semgrep AST rule can't express (it's a filesystem-presence",
+    "// a fixed bug. `paths.scanned` is then checked so the narrowing itself can't reintroduce the same",
+  ],
+  "src/scan/source-recall.ts": [
+    "// whose location it carries, so combining the two sets can't cross-contaminate scoring.",
+  ],
+  "src/scan/ssr-sanitizer.ts": [
+    "// genuine, well-regarded library running where it cannot work. Unsanitized HTML injected during SSR",
+  ],
+  "src/scan/stale-quota-read.ts": [
+    "// `review`, not free-count: this pass cannot see a DB-side reserve row, an advisory lock, or a",
+  ],
+  "src/scan/storage-tenant-scope.ts": [
+    "// which is the one that actually appears and which localBinding above cannot see.",
+  ],
+  "src/scan/supabase-config.ts": [
+    "// reachable from a permissive/SECURITY DEFINER path needs source review this check can't do",
+    "// check can't see, so it only fires on the unambiguous RLS-off case and stays \"review\".",
+    "// tables checks above can't see. A deliberate public grant (e.g. a public read API) can be",
+  ],
+  "src/scan/supabase-static.test.ts": [
+    "// Never free-count: the body-read can't see a wrapper's own gate, so this is triage-tier.",
+  ],
+  "src/scan/supabase-static.ts": [
+    "// the statement it's warning about) can't register as a real create/enable. Keep line count",
+    "// deployment that migration SQL cannot answer, so this asks rather than asserts.",
+    "// cannot say which one this is.",
+    "// would manufacture findings against policies we cannot see the schema for.",
+    "// RECOGNISED\" so it can't be mistaken for another entry in that list by a reader (or a test)",
+    "// the reviewer cannot tell them apart. What it cannot see is that another module ALREADY decided —",
+  ],
+  "src/scan/supabase.ts": [
+    "// That endpoint's exact request/response envelope was NOT independently re-verified against",
+    "// endpoint is documented but its response shape was NOT independently re-verified against the",
+    "// auth config), which is not held in Postgres, so a local connection cannot answer their question.",
+  ],
+  "src/scan/supply-chain.ts": [
+    "// nondeterministic. So the classification runs and the packages the lockfile cannot answer are",
+    "// it's \"high\" precision, unlike the offline edit-distance check above. A network error can't",
+    "// A finding aggregated over several manifests cannot claim one file as its location, and it must",
+    "// the version that RESOLVED, never the range that was declared, so the tree cannot answer the",
+  ],
+  "src/scan/tenant-guc-scope.ts": [
+    "// A grep, not a dataflow proof: this cannot see whether the pool is in session mode (where SET is",
+  ],
+  "src/simplify-scan.ts": [
+    "// is the minimum honest replacement: it can't make the reviewer think, but it can stop M6's absence",
+  ],
+  "src/test-only-exports.test.ts": [
+    "// that only ever removes them cannot catch a regression; both directions have to fail.",
+  ],
+  "src/test-only-exports.ts": [
+    "// WHAT THE RATCHET CANNOT SEE, recorded here rather than in an issue body the reason registry",
+    "// cannot reach. `knip.production.json` sets `ignoreExportsUsedInFile: true`, deliberately: without",
+    "* wired-up capability cannot leave its row behind to absorb the next regression.",
+  ],
+  "src/trackers/findings-to-tickets.test.ts": [
+    "// The function takes no Tracker; a preview provably cannot write. This is the dry-run guarantee.",
+  ],
+  "src/trackers/findings-to-tickets.ts": [
+    "// preview provably cannot touch the network. fileFindings is the only path that writes.",
+    "// mechanically verified (applies cleanly + effect confirmed). An unverified proposal is never filed.",
+    "// Pure preview: the whole plan, computed without a Tracker — a dry-run cannot make an API call",
+  ],
+  "src/trackers/fix-diff.ts": [
+    "// is ever attached; an unverified proposal is dropped (fail loud — never file a patch we couldn't",
+  ],
+  "src/trackers/github.ts": [
+    "//   - Brief    -> issues can't take file uploads via the API, so the brief markdown is committed to",
+  ],
+  "src/trackers/jira.ts": [
+    "// that cannot be transitioned must surface as a write-back failure, never a silent skip).",
+  ],
+  "src/trackers/types.ts": [
+    "// when none is available — a ticket that cannot be transitioned is a loud failure, never a",
+  ],
+  "src/trackers/verify-writeback.ts": [
+    "// cannot touch the network; writeBackVerification is the only path that writes, goes through the",
+  ],
+  "src/workspaces.ts": [
+    "// Dirs a glob walk never descends into — build output, deps, VCS internals — so a `**` can't",
+  ],
+  "vitest.config.ts": [
+    "// code never belongs in this suite — but it deploys ALONE from site/ and therefore cannot import",
+    "// spawning its own multi-core child. A blocked worker cannot service the birpc ack for the",
+    "// absent row cannot be argued with (CLAUDE.md's coverage guard). #1105's opt-in block prints the",
   ],
 };

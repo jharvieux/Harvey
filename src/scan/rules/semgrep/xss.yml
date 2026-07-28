@@ -309,6 +309,10 @@ rules:
       A database-read value (Supabase select result) reaches dangerouslySetInnerHTML unsanitized
       — stored XSS (the payload was persisted by an earlier write, e.g. a comment body). Sanitize
       before rendering, or sanitize at write time.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the database-read value reaching the sink. Whether the WRITE that produced the
+      stored value sanitized it is not something this rule can confirm, so a value already
+      sanitized at write time will appear here too.
     pattern-sources:
       - pattern: $C.from($T).select(...)
     pattern-sanitizers:
@@ -434,6 +438,10 @@ rules:
       the data on this path is user-controlled (a bio, a comment, markdown, an AI-generated string),
       this is stored/reflected XSS. Sanitize with DOMPurify.sanitize before it reaches __html, or
       render the value as text.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the prop or identifier reaching __html. Whether the value was already sanitized
+      upstream — by the component's caller, a shared formatter, or at write time — is outside what
+      this rule reads, so a correctly sanitized value can still appear here.
     patterns:
       - pattern-either:
           - pattern: "<$EL dangerouslySetInnerHTML={{ __html: $VAL }} />"
@@ -504,6 +512,10 @@ rules:
       A request/URL-controlled value is assigned directly to window.location — an
       attacker-chosen javascript:/data: value can execute script, and any URL enables
       phishing/open-redirect. Validate against a host allowlist first.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the assignment at this call site. A host allowlist that runs first — earlier in
+      the function, in a wrapper, or in shared validation — is outside what a single-file static
+      rule reads, so confirm no such guard applies before treating this as unmitigated.
     pattern-sources:
       - *dom_source
     pattern-sanitizers:
@@ -592,6 +604,10 @@ rules:
       A window 'message' event listener uses event.data with no event.origin check — any page can
       post data into your app. Validate event.origin against an allowlist before trusting the
       message.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it looks for the origin comparison inside the listener it matched. An origin check that lives
+      in a callback the listener delegates to, or in a shared message router, is outside what this
+      rule reads.
     patterns:
       - pattern-either:
           - pattern: $W.addEventListener("message", $CB)
@@ -689,6 +705,12 @@ rules:
       props the component receives, including dangerouslySetInnerHTML, so this is an XSS sink that
       never names one. Filter the object against an explicit allowlist of prop names before
       spreading it, and never use a blocklist (new dangerous props keep being added).
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      a spread object is treated as safe only when it passes an explicit allowlist membership test
+      (Object.fromEntries over a .has/.includes filter, or pick()). Any other sanitizer — a custom
+      filter function, a validation library, a schema parse — is not recognised, so a correctly
+      filtered spread can still be reported here. The recognised test is a structural match on the
+      filtering code, not evidence that the allowlist it uses is itself complete.
     pattern-sources:
       - *dom_source
       - *request_source

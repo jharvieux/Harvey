@@ -1,7 +1,11 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import { findFreshPass, ranFromPass, writePassArtifact } from "./audit-pass-artifact.js";
+import type { RunContext } from "./audit-runner.js";
 import type { Finding } from "./findings.js";
-import { aiProvenanceFiles, buildFallbackReport, classifyChurn, complexityProxy, couplingEdges, crossReferenceHotspots, enrichFindingsWithHotspots, fallbackQualifyingCount, isUnranked, knowledgeRiskNotAssessed, rankHotspots, toFactFindings, topKFiles, trendFindings, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
+import { aiProvenanceFiles, buildFallbackReport, buildM3PassArtifact, classifyChurn, complexityProxy, couplingEdges, crossReferenceHotspots, enrichFindingsWithHotspots, fallbackQualifyingCount, isUnranked, knowledgeRiskNotAssessed, rankHotspots, toFactFindings, topKFiles, trendFindings, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
 import { summarizeMutationReport, type StrykerReport } from "./mutation-scan.js";
 import { buildCoverageMatrix } from "./scan/calibration.js";
 import { m3Entries } from "./scan/calibration/m3.entries.js";
@@ -384,5 +388,53 @@ describe("M3 knowledge-risk disclosure (#1112)", () => {
     const matrix = buildCoverageMatrix(toFactFindings(report), m3Entries);
     expect(matrix.ok).toBe(true);
     expect(matrix.negativesCleared).toBe(matrix.negativesTotal);
+  });
+});
+
+// #1364: the M3 pass artifact src/cli/hotspot-scan.ts writes with --artifacts-dir.
+describe("buildM3PassArtifact + write → derive round trip (#1364)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "harvey-m3-pass-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("names which tier produced the findings in its summary, since the artifact schema has no tier field", () => {
+    const findings = toFactFindings(report);
+    const full = buildM3PassArtifact({ targetDir: "/t", findings, hotspots: ["core/checkout.ts"], rankedCount: 3, tier: "full", generatedAt: "2026-07-27T00:00:00Z" });
+    expect(full.summary).toContain("full vitals");
+    const reduced = buildM3PassArtifact({ targetDir: "/t", findings: [], hotspots: [], rankedCount: 0, tier: "reduced", generatedAt: "2026-07-27T00:00:00Z" });
+    expect(reduced.summary).toContain("reduced tier");
+    const unranked = buildM3PassArtifact({ targetDir: "/t", findings: [], hotspots: [], rankedCount: 5, tier: "unranked", generatedAt: "2026-07-27T00:00:00Z" });
+    expect(unranked.summary).toContain("unranked");
+  });
+
+  it("a written M3 pass artifact is read back fresh and derives ran, findings and hotspots intact", () => {
+    const findings = toFactFindings(report);
+    const built = buildM3PassArtifact({
+      targetDir: "/engagement/target",
+      findings,
+      hotspots: ["core/checkout.ts"],
+      rankedCount: 3,
+      tier: "full",
+      generatedAt: "2026-07-27T00:00:00Z",
+    });
+    const path = writePassArtifact(dir, built);
+    expect(path).toBe(join(dir, "M3.pass.json"));
+
+    const ctx: RunContext = {
+      targetDir: "/engagement/target",
+      env: { connected: false, dynamic: false, llm: false },
+      exec: () => ({ ok: true, output: "" }),
+      exists: (p) => existsSync(p),
+      artifactsDir: dir,
+      readArtifact: (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : undefined),
+      now: Date.parse("2026-07-27T12:00:00Z"),
+    };
+    const fresh = findFreshPass(ctx, "M3");
+    expect(fresh.fresh).toBe(true);
+    if (fresh.fresh) {
+      expect(fresh.artifact.hotspots).toEqual(["core/checkout.ts"]);
+      const ran = ranFromPass(fresh.artifact, "mech");
+      expect(ran.status).toBe("ran");
+      expect(ran.findings).toEqual(findings);
+    }
   });
 });

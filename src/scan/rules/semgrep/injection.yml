@@ -340,6 +340,10 @@ rules:
       injection (CWE-88). Even without a shell, a leading -/--flag value is interpreted as an option
       by the invoked program. Validate the value against an allowlist and pass `--` before
       positional arguments.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the tainted argv element. Whether that is exploitable depends on how the invoked
+      program treats a leading dash — a binary with no option parsing, or one already given `--`,
+      is not at risk — and no source scan can determine that.
     pattern-sources:
       - *request_source
     pattern-sanitizers:
@@ -590,6 +594,10 @@ rules:
       Request input flows into a MongoDB query operator ($where/$regex/$ne/$gt) — NoSQL injection.
       An attacker can craft an operator object to bypass the filter or run a $where JS predicate.
       Cast/validate the value to its expected primitive type before building the query.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the request value reaching the query operator. It is not evidence the value was
+      never cast or escaped on the way — a validation step in a helper or middleware is outside
+      what this rule follows — and the blast radius, where real, is the queried collection.
     pattern-sources:
       - *request_source
     pattern-sinks:
@@ -678,6 +686,10 @@ rules:
     message: >
       Request input is deserialized with an unsafe unserialize() (node-serialize executes embedded
       function bodies) — remote code execution. Use JSON.parse and validate the shape.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the request value reaching an unserialize() call. Whether that is exploitable
+      depends on the deserialization library actually in use being one that executes embedded
+      function bodies, which this rule does not resolve.
     # #1224 judgment: adopt the canonical block WHOLESALE — the opposite call from its neighbour
     # harvey-prototype-pollution, and for the same reason read the other way. `unserialize()`
     # consumes a serialized STRING, so every attacker-controlled string is in class: a payload in a
@@ -733,6 +745,10 @@ rules:
       Request-controlled input is parsed as XML through an XXE-capable parser (libxmljs/DOMParser).
       If external-entity resolution is enabled, this is XXE (file read / SSRF via DOCTYPE entities).
       Disable entity resolution (e.g. libxmljs { noent: false }) and validate the input.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the parse of request-controlled XML, NOT proof that external-entity resolution is
+      enabled. Whether it is depends on parser options that may be set in config this rule does not
+      read, so exploitability has to be confirmed against the parser's actual settings.
     pattern-sources:
       - *request_source
     pattern-sinks:
@@ -1298,6 +1314,9 @@ rules:
       A template is compiled with HTML autoescaping disabled (noEscape / escape:false) — every
       interpolation renders raw, so any user data through it is an XSS sink. Leave autoescaping on
       and mark only known-safe values as raw.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the compile-time setting. Whether user data actually flows through this template is
+      not traced here, so a template that only ever renders trusted content will appear too.
     patterns:
       - pattern-either:
           - pattern: "Handlebars.compile($T, { ..., noEscape: true, ... })"
@@ -1320,6 +1339,10 @@ rules:
     message: >
       Request input is interpolated into an HTML template literal and sent with res.send —
       reflected XSS. Escape the value, or render through a template engine with autoescaping on.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it reports the interpolated value reaching res.send(). It is not evidence that no escaping or
+      sanitizer ran on that value earlier — in a helper, in middleware, or at write time — so
+      confirm none did before treating this as unmitigated.
     pattern-sources:
       - *request_source
     pattern-sanitizers:
@@ -1429,6 +1452,11 @@ rules:
     message: >
       A .replace() with a plain string needle replaces only the FIRST match, so this "sanitizer"
       leaves later dangerous characters intact. Use a global regex (/.../g) or a real sanitizer.
+      SCOPE OF THIS CHECK (#1342), so its silence elsewhere is not read as a clean bill of health:
+      it flags the single string-needle .replace() shape wherever it appears. Some single-replace
+      calls legitimately mean to change only the first occurrence, so this is a shape to review
+      rather than a proven defect, and a genuinely incomplete sanitizer written some other way is
+      not assessed by this rule.
     patterns:
       - pattern: $S.replace($NEEDLE, $R)
       - metavariable-regex:

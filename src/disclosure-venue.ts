@@ -12,23 +12,29 @@
 //
 // SCOPE OF THIS GATE, stated here so its own silence is not read as coverage. Three bounds:
 //
-// 1. VOCABULARY. It matches a fixed set of bound-declaring phrases (BOUND_MARKERS) over
-//    `src/scan/rules/semgrep/*.yml`, and a bound phrased outside that vocabulary is invisible to
-//    it. This is not hypothetical: an independent census on 2026-07-27 found ~9 rules stating a
-//    real unassessed class in prose the markers do not recognise (`harvey-open-url-sink` states
-//    the same bound as its file-neighbour `harvey-href-js-url`, which was caught only because its
-//    comment happened to contain "scoped to"). Tracked as #1342. Also structural: 382 comment
-//    lines belong to no rule at all — file headers and the shared `req_source` YAML anchor above
-//    the first `- id:`, 10 of them already carrying a bound marker. A bound on a shared anchor
-//    applies to every rule using it and is outside what a per-rule gate can see.
-//    Re-measured 2026-07-27 (#1320 bounds audit): 20 negated-"match" comment lines, 110/110 rules
-//    with a `message: >` block, 1597 comment lines in the rule files — all three unchanged.
+// 1. VOCABULARY, NARROWED BUT NOT REMOVED (#1342). It matches a fixed set of bound-declaring
+//    phrases (BOUND_MARKERS) over `src/scan/rules/semgrep/*.yml`, and a bound phrased outside that
+//    vocabulary is invisible to the PASS/FAIL. #1342 chose to WIDEN the vocabulary (its option (a))
+//    rather than invert the gate to "every rule is bound-bearing unless exempted" (its option (b)):
+//    (b) removes the vocabulary dependence permanently but needs a scope sentence or an exemption
+//    on all 110 rules, and an exemption list of ~90 entries IS the invisibility this gate exists to
+//    remove — the same objection the BOUND_MARKERS comment below records against a broad net.
+//    Widening was done three times against a re-measured population, not once against the issue's
+//    estimate: the issue named ~9 rules; the first widening ("can't see", "heuristic") plus matching
+//    across a LINE WRAP found 17, and a further pass ("can't prove/confirm/tell", "exploitability
+//    depends") found 10 more. 27 rules gained a client-legible scope sentence. Two of the 17 were
+//    invisible for a reason #1342 did not know about: their bound was already inside the ORIGINAL
+//    12-phrase vocabulary and split across two comment lines, so per-line matching never saw it.
+//    What remains is (i) prose outside even the widened net — counted by residualBoundish, every
+//    rule triaged in BOUND_TRIAGE, and the CLI fails on an untriaged one; and (ii) comment lines
+//    belonging to no rule (file headers and the shared YAML anchor blocks), counted and named by
+//    unattributedBounds on every run rather than left silent.
 //
-//    REASON: rules stating a real unassessed class in the two phrasings #1342 names ("can't/cannot see", "is a heuristic") are invisible to this gate, so its `bound comment-only: 0` is a statement about BOUND_MARKERS rather than about the rule set
+//    REASON: a bound phrased outside the 15 marker phrases is still invisible to this gate's PASS/FAIL, so a green run is a statement about that vocabulary and not about the rule set; what it is not is SILENT, because the residual is counted and each residual rule triaged
 //    KIND: empirical
-//    PROVENANCE: MEASURED 2026-07-27 — grep for those phrasings reports hits in 7 of the rule files while `pnpm exec tsx src/cli/validate-disclosure-venue.ts --list` reports 13 bounded rules and 0 comment-only.
-//    FALSIFIER: grep -q "can't see\|cannot see\|is a heuristic" src/scan/rules/semgrep/*.yml && exit 1 || exit 0
-//    TOUCHES: src/scan/rules/semgrep
+//    PROVENANCE: MEASURED 2026-07-28 — `pnpm exec tsx src/cli/validate-disclosure-venue.ts --residual-count` reports 6 rules carrying bound-ish prose the markers do not recognise, against 40 rules the markers do recognise (up from 13 before this widening).
+//    FALSIFIER: test "$(pnpm exec tsx src/cli/validate-disclosure-venue.ts --residual-count 2>/dev/null | tail -1)" = "0" && exit 0 || exit 1
+//    TOUCHES: src/scan/rules/semgrep src/disclosure-venue.ts
 //
 // 2. CORRESPONDENCE IS APPROXIMATED, NOT JUDGED — a marker in the message PLUS at least one
 //    distinctive term shared with the comment that declared the bound, tested against the SCOPE
@@ -60,25 +66,19 @@
 //    FALSIFIER: pnpm exec vitest run src/disclosure-venue.test.ts -t "over-refuses a correct paraphrase" > /tmp/harvey-dv.log 2>&1; grep -q "1 passed" /tmp/harvey-dv.log && exit 1 || { grep -q "1 failed" /tmp/harvey-dv.log && exit 0 || exit 127; }
 //    TOUCHES: src/disclosure-venue.ts
 //
-// 3. SEMGREP ONLY. The TS/AST detectors and the conditional-scan (`scanLocal`) shape are #1317's
-//    4b, tracked separately as #1330. Re-tested 2026-07-27 (#1345) rather than inherited from the
-//    issue text: the candidate population is 37 comment lines across 27 files (the #1330 grep,
-//    re-run, unchanged), and the named live instance is still live — `src/scan/supabase.ts`'s
-//    `scanLocal` returns its finding list with no not-assessed row for the exposed-schema /
-//    pg_graphql class its own comment says local mode cannot read, so a locally-scanned client sees
-//    the same silence as one whose schema exposure was checked and found clean.
+// 3. SEMGREP ONLY, and now only HALF of 4b is still open. The conditional-scan (`scanLocal`) shape
+//    #1330 named is CLOSED: src/conditional-scan.ts checks it over the SHAPE rather than over any
+//    comment vocabulary, and `src/scan/supabase.ts`'s local mode now emits SB-SCOPE-00 naming the
+//    three checks hosted mode runs and it cannot. (That count is three, not the two the issue
+//    named — the mechanical diff found `checkAuthConfig` omitted with no comment about it at all,
+//    which is exactly the case a vocabulary check cannot reach.) What is STILL open is the other
+//    half: a bound written in a TS/AST DETECTOR's own source comments, which no gate reads.
 //
-//    REASON: bounds written in TS/AST detector comments, and conditional scan paths that omit a check another path runs, are outside what this gate reads — it parses `src/scan/rules/semgrep/*.yml` only, so its green verdict is a statement about the semgrep rule set and not about the detector set
+//    REASON: a bound written in a TS/AST detector's source comments is outside what any gate reads — this one parses `src/scan/rules/semgrep/*.yml` and src/conditional-scan.ts checks call-shape, not prose — so neither says anything about whether a detector's recorded limit reaches the finding it bounds
 //    KIND: empirical
-//    PROVENANCE: MEASURED 2026-07-27 — #1330's population grep re-run over src/scan + src/detectors reports 37 comment lines across 27 files that this gate never reads, and src/scan/supabase.ts:252-253's local-mode omission still emits no disclosure row.
+//    PROVENANCE: MEASURED 2026-07-28 — #1330's population grep re-run over src/scan + src/detectors still reports comment lines declaring a bound in files no disclosure gate parses; the conditional-omission half it also covered is now gated (`pnpm exec tsx src/cli/validate-conditional-scan.ts`, negative control `--seed-omission`).
 //    FALSIFIER: grep -rlE '^ *//.*(LIMITATION:|does not cover|not assessed|blind to|only covers)' --include='*.ts' src/scan src/detectors | grep -qv '\.test\.ts$' && exit 1 || exit 0
 //    TOUCHES: src/scan src/detectors
-//
-//    What that command settles and what it does not: it fires when no bound is DECLARED in a
-//    comment this gate cannot read, which is the half #1330 can measure. A conditional omission
-//    carrying no comment at all — the `scanLocal` shape with the note deleted — is invisible to it
-//    too, and is why #1330's first acceptance bullet asks for a check over the SHAPE rather than
-//    over the vocabulary.
 //
 // A lower bound on the defect, not a census of it.
 
@@ -114,16 +114,94 @@ export const BOUND_MARKERS: readonly BoundMarker[] = [
   { name: "out of scope", re: /\bout of scope\b/i },
   { name: "false negative", re: /\bfalse[- ]negatives?\b/i },
   { name: "only covers", re: /\bonly (covers|detects|catches|matches|flags)\b/i },
+  // #1342. The two phrasings the 2026-07-27 census found doing the most invisible work. Both are a
+  // stated limit on what the rule KNOWS, which is exactly what this gate is about: "can't see" names
+  // a fact the rule structurally cannot reach, and "a heuristic" says the match is evidence rather
+  // than proof. `harvey-open-url-sink` and its file-neighbour `harvey-href-js-url` record the SAME
+  // bound 30 lines apart; only the neighbour was caught, because its comment happened to contain
+  // "scoped to". A gate whose coverage turns on which synonym an engineer reached for is measuring
+  // vocabulary, not disclosure.
+  { name: "cannot see", re: new RegExp(String.raw`\b(cannot|ca ?n[o']t) (see|prove|confirm|tell)\b`, "i") },
+  { name: "heuristic", re: /\bheuristics?\b/i },
+  // Third pass over the same census: "a static rule can't PROVE no allowlist runs elsewhere" and
+  // "exploitability DEPENDS on the deploy network" are the same declaration as "can't see" — a named
+  // class the finding does not settle — and were the two phrasings left standing after the first
+  // widening. Measured 2026-07-28 over the residual population, not guessed from the issue text.
+  { name: "exploitability depends", re: /\bexploitability depends\b/i },
+];
+
+// The gate's own gaming vector, named in #1330: the cheapest way to go green is to DELETE the bound
+// comment rather than state it, which moves the limitation from an unread venue to no venue at all.
+// Nothing detected that, because an un-bounded rule is indistinguishable from one that never had a
+// bound. This is the ratchet: a rule on this list that still EXISTS and no longer declares a bound
+// is a regression and fails. Rules leave the list only by being deleted or renamed, which is why
+// the check keys on the id still being present.
+export const BOUNDED_RULES: readonly string[] = [
+  "harvey-aead-decipher-no-final", "harvey-argument-injection", "harvey-auth-admin-in-client",
+  "harvey-authed-no-role-check", "harvey-body-parser-no-limit", "harvey-client-trusted-role",
+  "harvey-crlf-header-injection", "harvey-csrf-missing", "harvey-dangerously-set-inner-html-prop",
+  "harvey-dangerously-set-inner-html-stored", "harvey-edgefn-secret-fallback", "harvey-href-js-url",
+  "harvey-html-template-literal", "harvey-idor-param", "harvey-incomplete-sanitize",
+  "harvey-internal-state-response", "harvey-isr-revalidate-nosecret",
+  "harvey-jsx-prop-spread-injection", "harvey-jwt-decode-noverify", "harvey-jwt-sign-noexpiry",
+  "harvey-mass-assignment-bare", "harvey-missing-frame-options", "harvey-missing-hsts",
+  "harvey-missing-nosniff", "harvey-nosql-injection", "harvey-open-redirect", "harvey-open-url-sink",
+  "harvey-permissive-cors-bare", "harvey-pg-mass-assignment", "harvey-plaintext-password",
+  "harvey-postmessage-no-origin", "harvey-redos-literal", "harvey-secret-in-url-param",
+  "harvey-sensitive-response-cached", "harvey-server-action-noauth", "harvey-ssrf-fetch",
+  "harvey-static-iv", "harvey-vite-service-role-in-client", "harvey-xxe-parse",
+  "harvey-zero-row-update",
+];
+
+// A deliberately WIDER net than BOUND_MARKERS, used only to measure the vocabulary's residual — the
+// bound-ish prose the markers still cannot see. It is not a gate on its own (it catches pattern
+// mechanics by design, which is exactly why the markers stay narrow); it exists so "how much does
+// this gate still miss?" has a number that is re-derived on every run instead of recalled from a
+// census someone ran once.
+const RESIDUAL_MARKERS: readonly RegExp[] = [
+  /\bmay live elsewhere\b/i,
+  /\bno dataflow\b/i,
+  new RegExp(String.raw`\b(cannot|ca ?n[o']t) (prove|span|reach|follow|know|read|resolve)\b`, "i"),
+  /\bnot flagged\b/i,
+  /\bdeliberately (left out|excluded|omitted)\b/i,
+  /\bstays out\b/i,
+  /\boutside what\b/i,
+  /\bsingle-file\b/i,
+  /\bfalse positives?\b/i,
+  /\bnot a (proof|certainty|guarantee)\b/i,
+  /\bno (proof|guarantee)\b/i,
+  /\bnot exhaustive\b/i,
+  /\bdepends on\b/i,
+];
+
+export function residualBoundish(rules: readonly SemgrepRule[]): SemgrepRule[] {
+  return rules.filter((r) => commentBounds(r).length === 0 && r.comments.some((c) => RESIDUAL_MARKERS.some((re) => re.test(c.text))));
+}
+
+// #1342 criterion 3. Every rule residualBoundish reports must appear here with a disposition, and
+// every entry here must still be residual — the CLI fails on either mismatch, so a new rule with
+// bound-ish prose cannot join the set unread and a triaged rule cannot quietly stop being triaged.
+// "We looked and it was nothing" and "we never looked" are the same silence otherwise.
+export const BOUND_TRIAGE: readonly { readonly id: string; readonly disposition: string }[] = [
+  { id: "harvey-service-role-in-client", disposition: "pattern mechanics — 'correctly NOT flagged' describes an intended non-firing (a server-only file), which is the rule's edge, not a class it leaves unassessed" },
+  { id: "harvey-prototype-pollution", disposition: "pattern mechanics — 'a source that cannot reach' explains why three candidate source extensions were REJECTED as recall theatre; the rejected shapes are not reachable defects" },
+  { id: "harvey-path-traversal", disposition: "pattern mechanics — names a specific measured false positive the pattern-not exists to exclude, i.e. the rule's edge working as intended" },
+  { id: "harvey-spawn-shell-true", disposition: "pattern mechanics — 'deliberately excluded' describes the DIVISION OF LABOUR with the argv-array rules, which do cover the excluded family; nothing is unassessed" },
+  { id: "harvey-unsafe-deserialization", disposition: "genuine bound — scope sentence written into the message ('depends on the deserialization library actually in use'); its phrasing is outside the marker vocabulary, so the sentence is voluntary rather than gate-held" },
+  { id: "harvey-template-autoescape-off", disposition: "genuine bound — scope sentence written into the message ('whether user data actually flows through this template is not traced'); same voluntary status as above" },
 ];
 
 // Terms too generic to prove the message is talking about the same bound the comment declared —
 // they are the vocabulary OF a scope sentence, so matching on them would let any scope sentence
 // correspond to any bound.
+// A marker's OWN words belong here too, or the marker supplies the overlap it is supposed to be
+// evidence for: "caveat", "limitation" and "scoped" were already listed for that reason, and #1342
+// adds "cannot"/"heuristic" on the same footing when it adds those markers.
 const GENERIC = new Set([
-  "assess", "assessed", "assesses", "because", "caveat", "caveats", "check", "checks", "cover",
-  "covers", "detect", "detects", "harvey", "limitation", "match", "matches", "review", "rules",
-  "scope", "scoped", "semgrep", "shape", "shapes", "there", "these", "this", "those", "which",
-  "while", "would",
+  "assess", "assessed", "assesses", "because", "cannot", "caveat", "caveats", "check", "checks",
+  "cover", "covers", "detect", "detects", "harvey", "heuristic", "heuristics", "limitation",
+  "match", "matches", "review", "rules", "scope", "scoped", "semgrep", "shape", "shapes", "there",
+  "these", "this", "those", "which", "while", "would",
 ]);
 
 // Hyphens split rather than join, so a comment's "hosting-layer" still corresponds to a message's
@@ -201,10 +279,35 @@ export function parseSemgrepRules(text: string, file: string): SemgrepRule[] {
 
 type MarkerHit = { readonly marker: string; readonly line: number; readonly text: string };
 
+// #1342: markers run over the rule's comment block JOINED, not line by line, because a bound wraps.
+// `harvey-jwt-sign-noexpiry` writes "…this rule can't" and "see whether expiresIn lives inside it"
+// on consecutive lines, and per-line matching cannot see the phrase at all — a bound made invisible
+// by the column at which the author pressed return. Each hit is attributed back to the lines it
+// actually spans, so the correspondence check below still gets the bound's own vocabulary rather
+// than the whole preamble's (which would let any scope sentence correspond to any bound).
 export function commentBounds(rule: SemgrepRule): MarkerHit[] {
-  return rule.comments.flatMap((c) =>
-    BOUND_MARKERS.filter((m) => m.re.test(c.text)).map((m) => ({ marker: m.name, line: c.line, text: c.text })),
-  );
+  const spans: { start: number; end: number; comment: CommentLine }[] = [];
+  let joined = "";
+  for (const comment of rule.comments) {
+    if (joined) joined += " ";
+    const start = joined.length;
+    joined += comment.text;
+    spans.push({ start, end: joined.length, comment });
+  }
+
+  return BOUND_MARKERS.flatMap((m) => {
+    const global = new RegExp(m.re.source, m.re.flags.includes("g") ? m.re.flags : `${m.re.flags}g`);
+    return [...joined.matchAll(global)].map((hit) => {
+      const from = hit.index;
+      const to = from + hit[0].length;
+      const covered = spans.filter((s) => s.end > from && s.start < to);
+      return {
+        marker: m.name,
+        line: covered[0]?.comment.line ?? rule.line,
+        text: covered.map((s) => s.comment.text).join(" "),
+      };
+    });
+  });
 }
 
 type VenueVerdict = "no-bound-recorded" | "stated" | "no-scope-sentence" | "unrelated-scope-sentence";
@@ -242,11 +345,58 @@ type VenueViolation = {
 };
 
 export function loadSemgrepRules(): SemgrepRule[] {
+  return [...loadSemgrepRuleFiles()].flatMap(([file, text]) => parseSemgrepRules(text, file));
+}
+
+// #1342, criterion 4 — the structural half. A comment line that sits above the first `- id:`, or
+// between rules at a shallower indent, belongs to NO rule: file headers and the shared YAML anchor
+// blocks (`&request_source`, `&dom_source`) live there. A bound recorded on a shared anchor applies
+// to every rule that uses it, and a PER-RULE gate structurally cannot attribute it to anyone — so
+// it is never anyone's bound and disappears. Propagating anchor bounds to every consumer was the
+// alternative and was rejected: one line on `*request_source` would make ~20 rules bounded on the
+// anchor's wording rather than their own, which is a worse disclosure, not a better one. So the
+// gate COUNTS and NAMES them instead. Same contract as SEM-SCOPE-00: a counted, named row, never
+// an absence.
+type UnattributedBound = { readonly file: string; readonly line: number; readonly text: string };
+
+export function unattributedBounds(rules: readonly SemgrepRule[], files: ReadonlyMap<string, string>): {
+  readonly commentLines: number;
+  readonly unattributed: number;
+  readonly bearing: readonly UnattributedBound[];
+} {
+  let commentLines = 0;
+  let unattributed = 0;
+  const bearing: UnattributedBound[] = [];
+  for (const [file, text] of files) {
+    const owned = new Set(rules.filter((r) => r.file === file).flatMap((r) => r.comments.map((c) => c.line)));
+    text.split("\n").forEach((line, i) => {
+      if (!/^\s*#/.test(line)) return;
+      commentLines++;
+      if (owned.has(i + 1)) return;
+      unattributed++;
+      const body = COMMENT.exec(line)?.[1] ?? "";
+      if (BOUND_MARKERS.some((m) => m.re.test(body))) bearing.push({ file, line: i + 1, text: body });
+    });
+  }
+  return { commentLines, unattributed, bearing };
+}
+
+export function loadSemgrepRuleFiles(): Map<string, string> {
   const dir = resolve(dirname(fileURLToPath(import.meta.url)), "..", RULES_DIR);
-  return readdirSync(dir)
-    .filter((f) => f.endsWith(".yml"))
-    .sort()
-    .flatMap((f) => parseSemgrepRules(readFileSync(resolve(dir, f), "utf8"), `${RULES_DIR}/${f}`));
+  return new Map(
+    readdirSync(dir)
+      .filter((f) => f.endsWith(".yml"))
+      .sort()
+      .map((f) => [`${RULES_DIR}/${f}`, readFileSync(resolve(dir, f), "utf8")]),
+  );
+}
+
+export function boundedRatchet(rules: readonly SemgrepRule[]): string[] {
+  const present = new Map(rules.map((r) => [r.id, r]));
+  return BOUNDED_RULES.filter((id) => {
+    const rule = present.get(id);
+    return rule !== undefined && commentBounds(rule).length === 0;
+  });
 }
 
 export function auditDisclosureVenue(rules: readonly SemgrepRule[]): VenueViolation[] {

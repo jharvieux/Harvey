@@ -184,6 +184,37 @@ export function checkVitalsContract(report: VitalsReport): string[] {
   return v;
 }
 
+// #1206: read directly from the pinned plugin's own source
+// (~/.claude/plugins/cache/vitals/vitals/0.2.0/scripts/git_analysis.py, `_run_git`) — vitals 0.2.0
+// discards stderr and collapses ANY non-zero exit or timeout on its internal `git log --since=...ago`
+// calls to an empty result, indistinguishable in the JSON output from "genuinely no history in this
+// window." seed.py independently re-runs `git log --since=90.days.ago` (stderr NOT suppressed) right
+// after building the seeded repo and records the result as `_gitScopeSanity`. When vitals' three
+// git-derived sections come back simultaneously empty despite that independent check finding commits
+// with no git error, the failure matches that known swallow class rather than a schema/behavior drift
+// in vitals' output — so the drift CLI reports NOT RUN with this reason instead of a generic
+// contract-violation FAIL. This does NOT name why git itself failed in a given CI occurrence (no
+// stderr was preserved from the one observed case, 2026-07-27, run 30273745542) — only that vitals'
+// own error-swallowing is the confirmed mechanism by which such a failure would look exactly like this.
+export interface GitScopeSanity {
+  commits: number;
+  returncode: number;
+  stderr: string | null;
+}
+
+export function classifyVitalsGitScopeFailure(report: VitalsReport & { _gitScopeSanity?: GitScopeSanity }): string | undefined {
+  const allGitSectionsEmpty = report.hotspots.length === 0 && report.coupling.length === 0 && report.knowledge_risk.length === 0;
+  if (!allGitSectionsEmpty) return undefined;
+  const sanity = report._gitScopeSanity;
+  if (!sanity || sanity.returncode !== 0 || sanity.commits === 0) return undefined;
+  return (
+    `vitals returned empty hotspots/coupling/knowledge_risk while an independent ` +
+    `\`git log --since=90.days.ago\` in the same seeded repo found ${sanity.commits} commit(s) with no ` +
+    `git error (returncode 0) — the known git-scope silent-failure class in vitals 0.2.0's ` +
+    `git_analysis._run_git, which discards stderr and returns [] on any non-zero exit or timeout (#1206).`
+  );
+}
+
 // Stryker 9.6.1 `run` JSON report → summarizeMutationReport / vacuousTestFiles (src/mutation-scan.ts).
 // Reads: files{}.mutants[].{id,mutatorName,status,location,coveredBy,killedBy,static}, testFiles (the
 // #1100 join), thresholds, schemaVersion. The seed is targets/calibration/test-quality/.

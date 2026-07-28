@@ -146,6 +146,16 @@ const isNonGrading = (f: Finding): boolean =>
 
 // The free tier draws ONLY from the ~100%-precision tier (#25's precisionTier tag).
 // Everything else is heuristic and must not enter the free count/grade.
+//
+// #1301: `precisionTier` is a tag the DETECTOR sets, so this filter alone never asked whether the
+// rule behind a finding had ever been validated. What backs the tag now is a BUILD-TIME gate, not a
+// runtime one: src/scan/rule-corpus-pairing.test.ts fails `pnpm verify` if any `harvey-*` rule
+// lacks a positive corpus entry it caught and a benign twin it stayed silent on, so an unvalidated
+// rule cannot reach a client's grade because it cannot reach `main`. The filter is deliberately NOT
+// gated on validation status at runtime: a client repo can exercise a rule on shapes the corpus has
+// no fixture for, and dropping those findings would trade a precision risk for a silent omission —
+// the worse of the two. Whether the tag is the intended contract for the free count remains an open
+// product ruling (#1301), and this comment is not that ruling.
 export function selectFreeFindings(findings: Finding[]): Finding[] {
   return findings.filter((f) => f.precisionTier === "high");
 }
