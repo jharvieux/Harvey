@@ -12,6 +12,8 @@
 //     real targets/calibration with the installed binaries.
 
 import { detectionMetrics, type DetectionMetrics } from "./detection-metrics.js";
+import { validateRecordedReason, type ParsedReason } from "../recorded-reasons.js";
+import type { Cadence } from "../scored-gates.js";
 import type { Finding, PrecisionTier, Severity } from "../findings.js";
 import { baseEntries } from "./calibration/base.entries.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
@@ -368,33 +370,245 @@ export const MIN_POSITIVES_PER_MODULE = 2;
 export const MIN_NEGATIVES_PER_MODULE = 1;
 
 // A module may sit below the minimum only with a NAMED substitute gate — the "disclosed exemption"
-// half of #1314. Both entries below were verified 2026-07-28 before being written here, per the
-// rule that a disclosure is earned by an attempt:
-//   M2 — `pnpm exec tsx src/cli/pentest.ts --mode=coverage` reaches assertComplete
-//        (src/pentest/targets.ts:161), and CALIBRATION_PLANTS carries an M2 row
-//        (src/audit-conservation.ts:59) since #1155.
-//   M6 — src/scan/external-corpus.ts carries an "M6-indicator" baseline on six external targets
-//        (#483), re-run by `pnpm corpus-drift`.
+// half of #1314.
+//
+// #1454 — AN EXEMPTION IS A RECORDED REASON, AND UNTIL NOW IT WAS THE ONLY KIND NOTHING GATED. The
+// shape used to be `{ module, reason }`: a free-text sentence with no KIND, no PROVENANCE, no OWNER,
+// no FALSIFIER. Every `REASON:` block in this repo is held to exactly those fields by
+// `pnpm validate-reasons`; the one structure whose whole job is to CLOSE A COVERAGE QUESTION was
+// held to none of them, and `validate-calibration` printed all three possible provenances — a
+// measured fact, an operator ruling, and one executor's untested guess — as the same `EXEMPT M6:`
+// line. The operator read a product decision they had never made off that line.
+//
+// The M6 row is why. Its stated ground, written the same day by the executor of #1314, held that
+// M6's indicators are whole-repo shape counts a planted single-file fixture could not express
+// (quoted verbatim in that row's provenance below) — impossibility's vocabulary on an untested claim. MEASURED 2026-07-28 by running
+// detectHandrolledFindings over ONE planted file carrying three hand-rolled shapes: 3 of 3 fire, at
+// their own line numbers (#1371/#1453 measure the full 33 of 33). The claim was false when written.
+//
+// So an exemption now carries the registry's own fields and is validated by the registry's own
+// function (validateRecordedReason), which buys three things at once: an ASSUMED provenance can no
+// longer wear impossibility's vocabulary (#1319), an empirical exemption must carry the command that
+// would falsify it (#1033), and a decisional one must name the OWNER and the venue where the
+// operator was actually asked (#1319's relay rule). `substituteGate` is the exemption-specific
+// field: the gate standing in for the missing fixtures, whose path tokens must EXIST in the
+// checkout — a renamed or deleted gate is otherwise indistinguishable from a live one.
+//
 // An exemption for a module that is NOT thin is itself a failure (the `stale` list) — a substitute gate
 // that has been overtaken by real fixtures must not keep standing in for them.
-interface ParityExemption {
+/**
+ * #1483 — one gate standing in for a module's missing fixtures. Naming it is not enough: a path that
+ * EXISTS and a gate that RUNS are different claims, and re-validating M2 for #1454 found the two
+ * apart. `pnpm exec tsx src/cli/pentest.ts --mode=coverage` works — it exits 1 naming a real
+ * untested target and 0 when that target is listed — and appears in no workflow and no
+ * package.json script, so nothing runs it unless a human remembers. That is the exact state #1288
+ * found for the scored gates, one level over, and an exemption was free to cite it.
+ *
+ * So a substitute gate declares its `cadence` in the same checkable vocabulary #1288 built, and
+ * `none` is a legitimate answer that must carry the issue tracking it — disclosed, never silent.
+ */
+export interface SubstituteGate {
+  /** What it covers, in a reader's words. Every path token must exist in the checkout. */
+  what: string;
+  /** The token a venue has to invoke for this gate to have run — normally the CLI's own path. */
+  invokes: string;
+  cadence: Cadence;
+}
+
+export interface ParityExemption {
   module: string;
-  reason: string;
+  /** The gate(s) covering this module instead of corpus fixtures. */
+  substituteGates: readonly SubstituteGate[];
+  /**
+   * The registry's fields (#1033/#1072/#1319), validated by validateRecordedReason. Lowercase keys
+   * deliberately: recorded-reasons.ts's own file walk reads `REASON:` at the start of any line as a
+   * block opener, so uppercase keys here would make this interface and these literals parse as five
+   * malformed reason blocks. They are mapped to the registry's keys in parityExemptionReasons.
+   */
+  reason: {
+    claim: string;
+    kind: "empirical" | "decisional";
+    provenance: string;
+    falsifier?: string;
+    owner?: string;
+    decision?: string;
+  };
 }
 
 const PARITY_EXEMPTIONS: readonly ParityExemption[] = [
-  { module: "M2", reason: "no static corpus by construction — M2 is the dynamic tier, and its findings come from a live two-tenant stack, not a planted file. Covered instead by `pnpm exec tsx src/cli/pentest.ts --mode=coverage` (#352 assertComplete, which fails loud on any enumerated target `--tested` did not list) and by the M2 conservation plant (#1155)." },
-  { module: "M6", reason: "no static corpus — M6's indicators are whole-repo shape counts, which a planted single-file fixture cannot express. Covered instead by the #483 `M6-indicator` baselines over six external targets in src/scan/external-corpus.ts, re-run by `pnpm corpus-drift`." },
+  {
+    module: "M2",
+    substituteGates: [
+      {
+        what: "`src/cli/pentest.ts --mode=coverage` reaches assertComplete (src/pentest/targets.ts) and fails loud on any enumerated target `--tested` did not list (#352)",
+        invokes: "src/cli/pentest.ts",
+        // MEASURED 2026-07-28: `grep -rn "mode=coverage" .github/workflows/ package.json` returns
+        // nothing, and no workflow names pentest at all. The check works in both directions; it just
+        // runs only when a human remembers. Wiring it into a venue is a supervised
+        // .github/workflows/ edit, so it is DISCLOSED here and relayed on #1483 rather than done.
+        cadence: { kind: "none", issue: 1483 },
+      },
+      {
+        what: "the M2 conservation plant in src/audit-conservation.ts, asserted by src/cli/validate-conservation.ts (#1155)",
+        invokes: "src/cli/validate-conservation.ts",
+        cadence: { kind: "workflow", file: ".github/workflows/conservation.yml", job: "conservation", when: "every PR + daily schedule (a required status check since #1205)" },
+      },
+    ],
+    reason: {
+      claim:
+        "M2's findings are produced only by HTTP probes against a running two-tenant stack, so the offline scan of a planted source tree emits no M2 finding for a CorpusEntry to score — the corpus scores findings against planted file locations, and M2 never produces one",
+      kind: "empirical",
+      // Re-measured for #1454 rather than inherited from the row this replaces. The falsifier's
+      // bound is stated here because the registry has no field for it: it reads the COMMITTED
+      // offline-scan artifact, so an offline M2 detector that targets/calibration plants no defect
+      // for would not turn it green.
+      provenance:
+        "MEASURED 2026-07-28 — `grep -c '\"taxonomy\": \"M2' dry-run/findings.json` (the committed offline scan of targets/calibration) is 0; the substitute gate fires in BOTH directions: `tsx src/cli/pentest.ts --mode=coverage --repo targets/vuln-seam-app --tested bogus-id` exits 1 naming the real gap `app:root`, and `--tested app:root` exits 0; CALIBRATION_PLANTS carries the M2 row (src/audit-conservation.ts). The falsifier below was exercised in all three directions the same day: 1 as committed (blocker holds), 0 against a copy of the artifact carrying an M2 taxonomy (blocker gone), 127 when the artifact is absent — a bare `grep` exits 2 there, which would read as \"still blocked\"",
+      falsifier: `test -f dry-run/findings.json || exit 127; grep -q '"taxonomy": "M2' dry-run/findings.json`,
+    },
+  },
+  {
+    module: "M6",
+    substituteGates: [
+      {
+        what: "the #483 `M6-indicator` baselines over six external targets in src/scan/external-corpus.ts",
+        invokes: "src/cli/corpus-drift.ts",
+        cadence: { kind: "workflow", file: ".github/workflows/corpus-drift.yml", job: "corpus-drift", when: "daily schedule + on changes to the corpus CLI" },
+      },
+      {
+        what: "the per-indicator fixtures under src/detectors/__fixtures__/handrolled, gated by src/detectors/handrolled.test.ts",
+        invokes: "test",
+        cadence: { kind: "verify" },
+      },
+    ],
+    reason: {
+      claim:
+        "M6's mechanical indicators are not mirrored into CorpusEntry rows, so M6 sits below the parity minimum — a product question about whether a deterministic AST pass belongs in the shared precision matrix, NOT a limit on what a planted fixture can express",
+      kind: "decisional",
+      provenance:
+        "MEASURED 2026-07-28 — detectHandrolledFindings over ONE planted single file carrying three hand-rolled shapes returns 3 findings at their own line numbers (JSON deep-equal, random-string id, query-string parsing), so the previously recorded ground for this exemption (\"whole-repo shape counts, which a planted single-file fixture cannot express\") is FALSE. What is open is a ruling, not a capability",
+      owner: "operator",
+      decision:
+        "#1371 — the #265 ruling that kept M6 out of src/scan/calibration.ts was about not folding an LLM-judge AGREEMENT RATE into a precision claim; src/detectors/handrolled.ts is a deterministic AST pass with no model in it, so that rationale does not reach it. The operator's answer is being implemented in #1453; when its entries land, M6 stops being thin and this row must be deleted — the `stale` check below fails loud if it is not.",
+    },
+  },
 ];
+
+// Mapped rather than written inline, for the same reason the keys above are lowercase: a literal
+// `REASON:` at the start of a line in this file is read by recorded-reasons.ts's own walk as a
+// malformed reason block. Keeping the uppercase names on the RIGHT of a lowercase key keeps them out
+// of column zero. (`pnpm validate-reasons` catches a regression here loudly, which is how this was
+// found — twice.)
+const REGISTRY_KEY = { claim: "REASON", kind: "KIND", provenance: "PROVENANCE", falsifier: "FALSIFIER", owner: "OWNER", decision: "DECISION" } as const;
+
+/**
+ * An exemption rendered as the registry's own block shape, so it is held to `validateRecordedReason`
+ * and re-tested by `validate-reasons --revalidate` exactly like a `REASON:` block in a source
+ * comment. `line: 0` marks it as data rather than a text span — no comment line owns it.
+ */
+export function parityExemptionReasons(exemptions: readonly ParityExemption[] = PARITY_EXEMPTIONS): ParsedReason[] {
+  return exemptions.map((e) => ({
+    file: `src/scan/calibration.ts (PARITY_EXEMPTIONS ${e.module})`,
+    line: 0,
+    endLine: 0,
+    fields: Object.fromEntries(
+      Object.entries(e.reason)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]) => [REGISTRY_KEY[key as keyof ParityExemption["reason"]], value]),
+    ),
+    parseErrors: [],
+  }));
+}
+
+// A path-shaped token, matching recorded-reasons.ts's own derivation: a `/`-bearing token is a path
+// claim, and a claim that names a path which is not in the checkout is watching nothing.
+// A trailing `.` is sentence punctuation, not part of the path — `handrolled.test.ts.` would be
+// reported missing forever, which is the false-alarm half of the same disease.
+const GATE_PATH_TOKEN = /[\w.@-]+\/[\w.@/-]*[\w@/-]/g;
+
+interface ExemptionErrors {
+  module: string;
+  errors: string[];
+}
+
+/**
+ * The venues a substitute gate's cadence can be checked against: `package.json` scripts and the
+ * workflow texts. Same inputs #1288's gate takes, because it is the same question one level over.
+ */
+export interface CadenceVenues {
+  readonly scripts: Readonly<Record<string, string>>;
+  readonly workflows: Readonly<Record<string, string>>;
+}
+
+// #1483 — "the gate exists" and "the gate runs" are different claims. This checks the second, and
+// only ever against a venue the caller actually supplied: an absent `venues` is stated in the
+// output by the caller (validate-calibration), never silently treated as a pass.
+function cadenceErrors(gate: SubstituteGate, venues: CadenceVenues): string[] {
+  const { cadence } = gate;
+  if (cadence.kind === "verify") {
+    const chain = venues.scripts["verify"] ?? "";
+    const runs = venues.scripts["test"] ?? "";
+    return chain.includes(gate.invokes) || runs.includes(gate.invokes) || chain.split("&&").some((p) => p.trim().endsWith(gate.invokes))
+      ? []
+      : [`substituteGates: "${gate.what.slice(0, 60)}…" declares the \`verify\` cadence, but the verify chain (\`${chain}\`) never reaches \`${gate.invokes}\``];
+  }
+  if (cadence.kind === "workflow") {
+    const text = venues.workflows[cadence.file];
+    if (text === undefined) return [`substituteGates: declares a cadence in ${cadence.file}, which does not exist — the venue was renamed or deleted and this module now stands on nothing`];
+    return text.includes(gate.invokes)
+      ? []
+      : [`substituteGates: declares a cadence in ${cadence.file} (${cadence.job}) but that workflow never invokes \`${gate.invokes}\` — the cadence was removed, or never landed`];
+  }
+  return cadence.issue > 0
+    ? []
+    : ["substituteGates: has no cadence and names no tracking issue. A substitute gate that runs only when someone remembers is a legitimate state; an undisclosed one never appears in a tally"];
+}
+
+/**
+ * Every committed exemption, held to the recorded-reasons registry plus the substitute-gate rules.
+ * `exists` answers "is this a path in the checkout"; it defaults to accepting everything so a caller
+ * with no filesystem still gets the structural half (same contract as validateRecordedReason).
+ * `venues` adds the #1483 cadence check; omitted, the cadence half is not scored.
+ */
+export function validateParityExemptions(
+  exemptions: readonly ParityExemption[] = PARITY_EXEMPTIONS,
+  exists: (path: string) => boolean = () => true,
+  venues?: CadenceVenues,
+): ExemptionErrors[] {
+  const reasons = parityExemptionReasons(exemptions);
+  return exemptions
+    .map((e, i) => {
+      const errors = validateRecordedReason(reasons[i] as ParsedReason, exists);
+      if (!AUDIT_MODULES.includes(e.module as (typeof AUDIT_MODULES)[number])) {
+        errors.push(`module: "${e.module}" is not one of the ten audited modules (${AUDIT_MODULES.join(", ")}) — an exemption for a module the census never renders exempts nothing and is invisible`);
+      }
+      if (e.substituteGates.length === 0) {
+        errors.push("substituteGates: empty — an exemption's whole content is the gate standing in for the missing fixtures");
+      }
+      for (const gate of e.substituteGates) {
+        const paths = [...new Set([...gate.what.matchAll(GATE_PATH_TOKEN)].map((m) => m[0] as string))];
+        const missing = [...paths, gate.invokes].filter((p) => p.includes("/") && !exists(p));
+        if (paths.length === 0) {
+          errors.push(`substituteGates: "${gate.what.slice(0, 60)}…" names no path in this checkout — a gate nobody can open is a sentence, not a substitute`);
+        }
+        if (missing.length > 0) {
+          errors.push(`substituteGates: names path(s) that do not exist here — ${[...new Set(missing)].join(", ")}. A renamed or deleted substitute gate reads exactly like a live one, so this module would stand on nothing while the census printed EXEMPT`);
+        }
+        if (venues) errors.push(...cadenceErrors(gate, venues));
+      }
+      return { module: e.module, errors };
+    })
+    .filter((x) => x.errors.length > 0);
+}
 
 interface ParityVerdict {
   thin: { module: string; positives: number; negatives: number; missing: string }[];
-  exempt: { module: string; positives: number; negatives: number; reason: string }[];
+  exempt: { module: string; positives: number; negatives: number; exemption: ParityExemption }[];
   stale: string[]; // modules carrying an exemption they no longer need
 }
 
-export function parityVerdict(corpus: CorpusEntry[] = CORPUS): ParityVerdict {
-  const exemptions = new Map(PARITY_EXEMPTIONS.map((e) => [e.module, e.reason]));
+export function parityVerdict(corpus: CorpusEntry[] = CORPUS, exemptions: readonly ParityExemption[] = PARITY_EXEMPTIONS): ParityVerdict {
+  const byModule = new Map(exemptions.map((e) => [e.module, e]));
   const verdict: ParityVerdict = { thin: [], exempt: [], stale: [] };
   for (const c of moduleCensus(corpus)) {
     const positives = c.positivesStatic + c.positivesConnected;
@@ -402,11 +616,11 @@ export function parityVerdict(corpus: CorpusEntry[] = CORPUS): ParityVerdict {
       positives < MIN_POSITIVES_PER_MODULE ? `${positives}/${MIN_POSITIVES_PER_MODULE} positives` : undefined,
       c.negatives < MIN_NEGATIVES_PER_MODULE ? `${c.negatives}/${MIN_NEGATIVES_PER_MODULE} negatives` : undefined,
     ].filter((s) => s !== undefined).join(" and ");
-    const reason = exemptions.get(c.module);
-    if (reason === undefined) {
+    const exemption = byModule.get(c.module);
+    if (exemption === undefined) {
       if (missing) verdict.thin.push({ module: c.module, positives, negatives: c.negatives, missing });
     } else if (missing) {
-      verdict.exempt.push({ module: c.module, positives, negatives: c.negatives, reason });
+      verdict.exempt.push({ module: c.module, positives, negatives: c.negatives, exemption });
     } else {
       verdict.stale.push(c.module);
     }

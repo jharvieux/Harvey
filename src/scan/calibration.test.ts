@@ -866,7 +866,7 @@ describe("#1314 parity minimum over ALL ten modules (the two with zero fixtures 
     expect(thin).toEqual([]);
     expect(stale).toEqual([]);
     expect(exempt.map((e) => e.module)).toEqual(["M2", "M6"]);
-    for (const e of exempt) expect(e.reason).toMatch(/pnpm |#\d+/);
+    for (const e of exempt) expect(e.exemption.substituteGates.length).toBeGreaterThan(0);
     // A module that grows real fixtures must lose its exemption rather than keep hiding behind it.
     const withM2Fixtures: CorpusEntry[] = [
       ...CORPUS,

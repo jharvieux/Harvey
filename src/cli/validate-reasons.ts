@@ -36,6 +36,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLAIM_BASELINE } from "../unstructured-claims-baseline.js";
+import { parityExemptionReasons } from "../scan/calibration.js";
 import {
   DEFAULT_ROOTS,
   KNOWN_FALSIFIER_TIERS,
@@ -135,11 +136,26 @@ const fileReasons = sources.flatMap(({ file, text }) => parseRecordedReasons(tex
 const issues = process.argv.includes("--issues") ? fetchOpenIssues() : [];
 const issueReasons = issues.flatMap(({ file, text }) => parseRecordedReasons(text, file, true));
 
-const reasons: ParsedReason[] = [...fileReasons, ...issueReasons];
+// #1454 — a parity exemption is a recorded reason held as DATA, which the file walk above never
+// reads. Folding it in here is what puts its falsifier under --revalidate: the structural half is also
+// enforced at the calibration gate (validateParityExemptions), but a claim that is only ever checked
+// for SHAPE is the half-gate this issue is about.
+//
+// Skipped under --root, on the ratchet's precedent below: --root narrows the run to a caller-chosen
+// surface, and a reason that is not in that surface would otherwise ride along and change every
+// count the narrowed run reports.
+const exemptionReasons = roots.length > 0 ? [] : parityExemptionReasons();
+
+const reasons: ParsedReason[] = [...fileReasons, ...issueReasons, ...exemptionReasons];
 const empirical = reasons.filter((r) => reasonKind(r) === "empirical");
 const decisional = reasons.filter((r) => reasonKind(r) === "decisional");
 
 console.log(`Recorded reasons (#1033): ${reasons.length} — ${empirical.length} empirical, ${decisional.length} decisional`);
+console.log(
+  roots.length > 0
+    ? "  parity exemptions (#1454) not folded in — --root narrowed this run to a caller-chosen surface. Run without --root to hold them."
+    : `  including ${exemptionReasons.length} parity exemption(s) held as data in src/scan/calibration.ts, outside the file walk's reach (#1454)`,
+);
 if (process.argv.includes("--issues")) console.log(`  including ${issueReasons.length} recorded in ${issues.length} open-issue bodies/comments (closed issues out of scope by decision, #1246)`);
 
 if (process.argv.includes("--list")) {
