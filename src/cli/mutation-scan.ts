@@ -93,9 +93,10 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isDirectorySafe, readEntriesSafe, statSafe, type SafeDirEntry } from "../fs-walk.js";
 import type { SourceInput } from "../detectors/common.js";
 import { detectPackageManager, installExtraCommand, withRestoredManifest } from "../package-manager.js";
 import { discoverTargets } from "../pentest/targets.js";
@@ -216,19 +217,17 @@ const REPORT_SEARCH_EXCLUDED_DIR = /^(node_modules|\.git)$/;
 function findReportByGlob(cwd: string, wantedBasename: string): string | undefined {
   const matches: { path: string; mtimeMs: number }[] = [];
   const walk = (dir: string) => {
-    let entries: string[];
+    let entries: SafeDirEntry[];
     try {
-      entries = readdirSync(dir);
+      entries = readEntriesSafe(dir).entries;
     } catch {
       return;
     }
-    for (const entry of entries) {
-      const full = join(dir, entry);
-      const st = statSync(full);
-      if (st.isDirectory()) {
+    for (const { name: entry, path: full, isDirectory } of entries) {
+      if (isDirectory) {
         if (!REPORT_SEARCH_EXCLUDED_DIR.test(entry)) walk(full);
       } else if (entry === wantedBasename) {
-        matches.push({ path: full, mtimeMs: st.mtimeMs });
+        matches.push({ path: full, mtimeMs: statSafe(full)?.mtimeMs ?? 0 });
       }
     }
   };
@@ -297,7 +296,7 @@ const WALK_EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out|r
 //
 // #944: `statSync` FOLLOWS symlinks and throws ENOENT on a dangling one (committed routinely —
 // liam-hq/liam's gitignored .env symlink, dub's EE LICENSE.md symlink, both real repos the #899
-// breadth sweep crashed on). `readdirSync(..., { withFileTypes: true })`'s Dirent classifies the
+// breadth sweep crashed on). `readEntriesSafe(...).entries`'s Dirent classifies the
 // entry ITSELF, not its resolved target, so `isSymbolicLink()` is safe to call on a dangling link;
 // `existsSync` (which also follows the link but swallows ENOENT into `false`) is what actually
 // tells dangling from resolvable. A dangling link is skipped outright — there is nothing to read.
@@ -306,12 +305,9 @@ const WALK_EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out|r
 function walkRelPaths(root: string): string[] {
   const paths: string[] = [];
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isSymbolicLink() && !existsSync(full)) continue;
-      const isDir = entry.isDirectory() || (entry.isSymbolicLink() && statSync(full).isDirectory());
-      if (isDir) {
-        if (!WALK_EXCLUDED_DIR.test(entry.name)) walk(full);
+    for (const { name, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      if (isDirectory) {
+        if (!WALK_EXCLUDED_DIR.test(name)) walk(full);
       } else {
         paths.push(relative(root, full).split(sep).join("/"));
       }
@@ -326,7 +322,7 @@ const readRel = (root: string, rel: string): { path: string; text: string } => (
 // The cpSync filter shared by the two disposable-copy rungs (#600's stub-check, #1285's coverage
 // pass): skip the same heavy/irrelevant directories walkRelPaths already skips. `existsSync` first
 // because statSync throws on a dangling symlink, which real repos commit (#944).
-const excludeHeavyDirs = (src: string): boolean => !(WALK_EXCLUDED_DIR.test(basename(src)) && existsSync(src) && statSync(src).isDirectory());
+const excludeHeavyDirs = (src: string): boolean => !(WALK_EXCLUDED_DIR.test(basename(src)) && isDirectorySafe(src));
 
 // #1285: the tree census the pristine invariant compares. Deliberately NOT walkRelPaths: that walk
 // excludes `reports` and `stryker-tmp` by name, which are exactly the two directories a Stryker run
@@ -343,13 +339,12 @@ const PRISTINE_WALK_EXCLUDED_DIR = /^(node_modules|\.git)$/;
 function snapshotTreePaths(root: string): Map<string, string> {
   const paths = new Map<string, string>();
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isSymbolicLink() && !existsSync(full)) continue; // #944: dangling symlink
-      const st = statSync(full);
+    for (const { name, path: full } of readEntriesSafe(dir).entries) {
+      const st = statSafe(full);
+      if (!st) continue; // a link that resolved during readEntriesSafe but not now
       const rel = relative(root, full).split(sep).join("/");
       paths.set(rel, st.isDirectory() ? "dir" : `${st.size}:${st.mtimeMs}`);
-      if (st.isDirectory() && !PRISTINE_WALK_EXCLUDED_DIR.test(entry.name)) walk(full);
+      if (st.isDirectory() && !PRISTINE_WALK_EXCLUDED_DIR.test(name)) walk(full);
     }
   };
   walk(root);

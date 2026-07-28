@@ -1,0 +1,8 @@
+// `document` here is a DESTRUCTURED PROP holding an app record, not the DOM global. The detector
+// already intended to skip a shadowed browser-global name; it only read the identifier-shaped
+// binding, so the destructured form slipped through (#1293: 14 of carbon's 108 rows).
+type DocumentRecord = { type: string; path: string };
+
+export function DocPreview({ bucket, document }: { bucket: string; document: DocumentRecord }) {
+  return <div>{bucket}: {document.type} at {document.path}</div>;
+}

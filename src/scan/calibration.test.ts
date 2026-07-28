@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
+import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, type CorpusEntry } from "./calibration.js";
@@ -861,15 +862,18 @@ describe("#1314 parity minimum over ALL ten modules (the two with zero fixtures 
   });
 
   it("M2 stands on a NAMED substitute gate, and an exemption a module no longer needs fails loud", () => {
-    // M6 was the second exempt module until #1371. Its exemption's stated reason — that a planted
-    // single-file fixture could not express a whole-repo shape count — was measured false (all 33
-    // indicator classes fire on one), so it grew real fixtures and the row had to go: keeping it
-    // would have tripped the `stale` check this test's last block exercises.
+    // M6 was the second exempt module until #1371/#1453. Its exemption's original ground — that a
+    // planted single-file fixture could not express a whole-repo shape count — was measured false
+    // twice independently (#1454 over one planted file, 3 of 3; #1453 over the full set, 33 of 33).
+    // #1454 could not delete the row, only re-express it as decisional, because the fixtures did not
+    // exist yet; it wrote the hand-off into the row instead. #1453 landed them, so the row went. The
+    // `stale` check is what would have fired had it stayed — proven positively in the last block
+    // below, not merely by this list coming back short.
     const { thin, exempt, stale } = parityVerdict(CORPUS);
     expect(thin).toEqual([]);
     expect(stale).toEqual([]);
     expect(exempt.map((e) => e.module)).toEqual(["M2"]);
-    for (const e of exempt) expect(e.reason).toMatch(/pnpm |#\d+/);
+    for (const e of exempt) expect(e.exemption.substituteGates.length).toBeGreaterThan(0);
     // A module that grows real fixtures must lose its exemption rather than keep hiding behind it.
     const withM2Fixtures: CorpusEntry[] = [
       ...CORPUS,
@@ -1097,9 +1101,8 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     const root = join(FIXTURES_ROOT, dir);
     const files: SourceInput[] = [];
     const walk = (d: string) => {
-      for (const e of readdirSync(d)) {
-        const full = join(d, e);
-        if (statSync(full).isDirectory()) walk(full);
+      for (const { name: e, path: full, isDirectory } of readEntriesSafe(d).entries) {
+        if (isDirectory) walk(full);
         else if (e.endsWith(".txt")) files.push({ path: `${prefix}/${relative(root, full).replace(/\.txt$/, "").split(sep).join("/")}`, text: readFileSync(full, "utf8") });
       }
     };
@@ -1129,6 +1132,13 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     { check: "action-validation-helper", dir: "server-action-helper-validator", neg: "negative" },
     { check: "waterfall-guard", dir: "waterfall-guard", neg: "negative" },
     { check: "uncapped-retry", dir: "uncapped-retry", neg: "negative" },
+    // #1293, same inverted scoring: each negative is an FP shape MEASURED on carbon's pinned tree.
+    { check: "ssr-client-route", dir: "ssr-client-route", neg: "negative" },
+    { check: "ssr-shadowed-global", dir: "ssr-shadowed-global", neg: "negative" },
+    { check: "ssr-early-return", dir: "ssr-early-return", neg: "negative" },
+    { check: "leak-narrowed-select", dir: "leak-narrowed-select", neg: "negative" },
+    // #1276, the family a real TanStack Start target produced and no authored fixture contained.
+    { check: "tanstack-client-only", dir: "tanstack-client-only", neg: "negative", framework: "tanstack-start" },
   ];
 
   it("catches each check's planted positive at review tier and clears its boundary negative", () => {
@@ -1173,7 +1183,7 @@ describe("#1238 OWASP React RSC boundary (live detectAppRouterFindings over targ
   const CALIBRATION_REACT = fileURLToPath(new URL("../../targets/calibration/src/owasp-react/", import.meta.url));
 
   function loadReactFixtures(): SourceInput[] {
-    return readdirSync(CALIBRATION_REACT)
+    return readNamesSafe(CALIBRATION_REACT)
       .filter((e) => e.endsWith(".tsx"))
       .map((e) => ({ path: `src/owasp-react/${e}`, text: readFileSync(join(CALIBRATION_REACT, e), "utf8") }));
   }
@@ -1211,9 +1221,8 @@ describe("#917/#918 M9 port corpus (live detectAppRouterFindings over the Remix/
     const root = join(FIXTURES_ROOT, dir);
     const files: SourceInput[] = [];
     const walk = (d: string) => {
-      for (const e of readdirSync(d)) {
-        const full = join(d, e);
-        if (statSync(full).isDirectory()) walk(full);
+      for (const { name: e, path: full, isDirectory } of readEntriesSafe(d).entries) {
+        if (isDirectory) walk(full);
         else if (e.endsWith(".txt")) files.push({ path: `${prefix}/${relative(root, full).replace(/\.txt$/, "").split(sep).join("/")}`, text: readFileSync(full, "utf8") });
       }
     };

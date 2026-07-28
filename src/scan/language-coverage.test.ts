@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { checkUnanalysedLanguages } from "./language-coverage.js";
@@ -62,7 +63,7 @@ describe("checkUnanalysedLanguages (#871)", () => {
 describe("the premise the #871 disclosure rests on", () => {
   it("every harvey-* semgrep rule still declares javascript/typescript only", () => {
     const rulesDir = join(dirname(fileURLToPath(import.meta.url)), "rules", "semgrep");
-    const declared = readdirSync(rulesDir)
+    const declared = readNamesSafe(rulesDir)
       .filter((f) => f.endsWith(".yml"))
       .flatMap((f) => [...readFileSync(join(rulesDir, f), "utf8").matchAll(/^\s*languages:\s*\[([^\]]+)\]/gm)].map((m) => m[1]!));
     expect(declared.length).toBeGreaterThan(0);

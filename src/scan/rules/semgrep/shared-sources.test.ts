@@ -1,5 +1,6 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { readNamesSafe } from "../../../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -69,7 +70,7 @@ function parseRules(file: string): Rule[] {
 }
 
 function ruleFiles(): string[] {
-  return readdirSync(RULES_DIR).filter((f) => f.endsWith(".yml"));
+  return readNamesSafe(RULES_DIR).filter((f) => f.endsWith(".yml"));
 }
 
 // The anchor definition block, from its key to the first line at column 0 that follows it.

@@ -109,4 +109,24 @@ describe("limitationsSection (#822)", () => {
     const html = limitationsSection([row({ module: "M8" })]);
     expect(html).toContain("scoped run is not a whole-repo coverage claim");
   });
+
+  // #1279: of the four hedges #822 named, code-tier precision was the one that never landed — so a
+  // client was told CWV is lab-only and told nothing about the precision of the tier that produces
+  // the most rows. #1261 measured it in the field; this asserts the number reaches the client and
+  // that it is the FIELD number. The labeled-corpus 100.0% (validate-precision.ts) is scored over
+  // fixtures this repo authored and must never be what a client reads, so it is asserted absent.
+  it("hedges M7's code-tier precision with the measured FIELD number, not the labeled-corpus one", () => {
+    const html = limitationsSection([row({ module: "M7" })]);
+    expect(html).toContain("47 of 65 graded findings held");
+    expect(html).toContain("2026-07-28");
+    expect(html).not.toContain("100%");
+  });
+
+  // The disclosure half: classes with too few field instances have NO stated precision, and an
+  // unstated limitation reads as a clean bill of health. The note must say which way to read a
+  // class it does not quote.
+  it("says an unquoted M7 class is unmeasured rather than clean", () => {
+    const html = limitationsSection([row({ module: "M7" })]);
+    expect(html).toContain("unmeasured, not clean");
+  });
 });

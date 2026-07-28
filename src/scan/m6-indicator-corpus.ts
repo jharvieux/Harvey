@@ -17,9 +17,10 @@
 //      CLAUDE.md's rule (3): a fixture the scanner never read reports zero findings exactly like
 //      one it scanned and cleared, and for a NEGATIVE that reads as a pass.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readEntriesSafe } from "../fs-walk.js";
 import type { SourceInput } from "../detectors/common.js";
 import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { scoreEntry, type MatrixRow } from "./calibration.js";
@@ -38,10 +39,9 @@ function loadPrefixed(relDir: string, prefix: string): SourceInput[] {
   const root = join(FIXTURES_ROOT, relDir);
   const files: SourceInput[] = [];
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) walk(full);
-      else if (entry.endsWith(".txt")) files.push({ path: `${prefix}/${relative(root, full).replace(/\.txt$/, "").split(sep).join("/")}`, text: readFileSync(full, "utf8") });
+    for (const { name, path, isDirectory } of readEntriesSafe(dir).entries) {
+      if (isDirectory) walk(path);
+      else if (name.endsWith(".txt")) files.push({ path: `${prefix}/${relative(root, path).replace(/\.txt$/, "").split(sep).join("/")}`, text: readFileSync(path, "utf8") });
     }
   };
   walk(root);

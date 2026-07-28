@@ -21,9 +21,10 @@
 // real, clonable repo) must keep operating on the ORIGINAL directory — callers pass both.
 
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 
 const NON_GIT_EXCLUDE_DIRS = new Set([
   "node_modules", ".git", ".claude", ".next", "dist", "build", "coverage",
@@ -64,17 +65,20 @@ function copyFile(src: string, dest: string): void {
 function copyTracked(dir: string, dest: string): void {
   for (const rel of trackedFiles(dir)) {
     const src = join(dir, rel);
-    if (!existsSync(src)) continue; // staged deletion or submodule gitlink — nothing to copy
+    // Staged deletion, submodule gitlink — or, MEASURED 2026-07-28 (#1451), a committed symlink
+    // whose target does not resolve: `existsSync` follows the link, so a tracked dangling link is
+    // dropped here too. That is why the git path never reproduced the crash the non-git path below
+    // did, and it is worth naming rather than leaving as a happy accident — the shielding is one
+    // `existsSync` wide, and every detector downstream was relying on it without saying so.
+    if (!existsSync(src)) continue;
     copyFile(src, join(dest, rel));
   }
 }
 
 function copyExcluding(dir: string, dest: string): void {
-  for (const entry of readdirSync(dir)) {
+  for (const { name: entry, path: src, isDirectory } of readEntriesSafe(dir).entries) {
     if (NON_GIT_EXCLUDE_DIRS.has(entry) || WORKTREE_DIR.test(entry) || NON_GIT_EXCLUDE_FILE.test(entry)) continue;
-    const src = join(dir, entry);
-    const stat = statSync(src);
-    if (stat.isDirectory()) copyExcluding(src, join(dest, entry));
+    if (isDirectory) copyExcluding(src, join(dest, entry));
     else copyFile(src, join(dest, entry));
   }
 }

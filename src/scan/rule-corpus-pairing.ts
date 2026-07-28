@@ -18,8 +18,9 @@
 // (a) half is weakest exactly where the rule is broadest.
 
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { CORPUS, scoreEntry, type CorpusEntry } from "./calibration.js";
 import type { Finding } from "../findings.js";
@@ -38,7 +39,7 @@ export interface SemgrepRule {
 export function harveySemgrepRules(): SemgrepRule[] {
   const dir = join(repoRoot, "src", "scan", "rules", "semgrep");
   const rules: SemgrepRule[] = [];
-  for (const file of readdirSync(dir).filter((n) => n.endsWith(".yml"))) {
+  for (const file of readNamesSafe(dir).filter((n) => n.endsWith(".yml"))) {
     for (const block of readFileSync(join(dir, file), "utf8").split(/^\s*-\s+id:\s*/m).slice(1)) {
       const id = /^(harvey-[a-z0-9-]+)/.exec(block)?.[1];
       if (!id) continue;
