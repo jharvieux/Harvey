@@ -1,0 +1,5 @@
+// The SAME read with NO guard above it — genuinely reached during SSR, so it must still fire.
+export function QuoteLink({ externalLinkId }: { externalLinkId?: string }) {
+  const url = `${window.location.origin}/quote/${externalLinkId}`;
+  return <a href={url}>quote</a>;
+}

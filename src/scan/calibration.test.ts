@@ -1125,6 +1125,13 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     { check: "action-validation-helper", dir: "server-action-helper-validator", neg: "negative" },
     { check: "waterfall-guard", dir: "waterfall-guard", neg: "negative" },
     { check: "uncapped-retry", dir: "uncapped-retry", neg: "negative" },
+    // #1293, same inverted scoring: each negative is an FP shape MEASURED on carbon's pinned tree.
+    { check: "ssr-client-route", dir: "ssr-client-route", neg: "negative" },
+    { check: "ssr-shadowed-global", dir: "ssr-shadowed-global", neg: "negative" },
+    { check: "ssr-early-return", dir: "ssr-early-return", neg: "negative" },
+    { check: "leak-narrowed-select", dir: "leak-narrowed-select", neg: "negative" },
+    // #1276, the family a real TanStack Start target produced and no authored fixture contained.
+    { check: "tanstack-client-only", dir: "tanstack-client-only", neg: "negative", framework: "tanstack-start" },
   ];
 
   it("catches each check's planted positive at review tier and clears its boundary negative", () => {
