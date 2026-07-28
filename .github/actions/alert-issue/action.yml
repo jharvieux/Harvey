@@ -13,19 +13,15 @@
 #
 #     gh workflow run <workflow name> -f alert_drill=true
 #
-# `drill: true` runs create AND find-or-update-comment AND close against a self-cleaning issue
-# titled `… — alert-path drill`, under the real job token, asserting each half actually happened.
-# It refuses to run while a REAL alert on the same marker is open, so a drill can never be mistaken
-# for — or silently overwrite — a live alarm.
-#
-# WHAT THE DRILL DOES NOT PROVE, said here rather than left to be discovered. The drill is a PARALLEL
-# branch: the `DRILL != true` path below (find_open real → `gh issue comment "$existing"` → else
-# create) is executed by no drill. What the two share is the `gh label create` + assert above, and
-# the same `gh issue create/comment/close` primitives against the same token and repo. So `PROVED`
-# means "these primitives work under the real job token, with the drill's own payload" — one step
-# short of "the production branch executed". Making the drill run the real branch would mean opening
-# an issue indistinguishable from a live alarm, which is the confusion the SUFFIX partition exists to
-# prevent, so it needs a design call rather than a patch — tracked by #1348, not silently omitted.
+# #1287 shipped the drill as a PARALLEL branch: the production `DRILL != true` path
+# (find_open real → `gh issue comment "$existing"` → else create) was executed by no drill, only its
+# shared label-create step and the same `gh issue create/comment/close` primitives. #1348 closed that
+# gap: `find_or_update()` below is now the ONE function both branches call. The production branch
+# calls it once; the drill calls it twice — create-when-absent, then comment-on-existing — against
+# its own drill-suffixed namespace, so a drill run can never be mistaken for, or overwrite, a live
+# alarm. Breaking `find_or_update`'s `gh issue comment "$existing"` line now breaks the drill AND
+# production identically, because it is the same line — proven 2026-07-27 by a negative control run
+# (see .github/alert-paths.json).
 #
 # Registry of markers and their proof runs: .github/alert-paths.json.
 
@@ -92,13 +88,42 @@ runs:
                 '[.[] | select((.title | endswith($s)) == ($want == "drill"))] | .[0].number // empty'
         }
 
-        if [ "$DRILL" != "true" ]; then
-          existing=$(find_open real)
+        # THE find-or-update logic (#1348) — the ONE code path both the production branch and the
+        # drill run. $1 = namespace (drill|real), $2 = title, $3 = body. Prints
+        # "created\t<number>\t<url>" or "commented\t<number>\t" (tab-separated, one line) so a caller
+        # can tell which half ran without re-deriving it.
+        # `|| return $?` on every gh/find_open call below is load-bearing, not defensive filler: a
+        # bare `existing=$(find_open ...)` or `gh issue comment ...` followed unconditionally by more
+        # commands means the function's own exit status (its LAST command) is whatever THAT command
+        # returns, not the one that actually failed — and dry-running this against a `gh` shim rigged
+        # to fail (#1348) proved it two different ways: the caller reported "Commented on existing
+        # tracking issue" even though the comment call itself had failed, and separately a failing
+        # `find_open` was swallowed the same way. `set -e` does not save either case: a function
+        # invoked inside a command substitution (`result=$(find_or_update ...)`) does not abort on an
+        # interior failure the way a true-top-level command does — proven empirically, not assumed.
+        # Explicitly forwarding the failing command's exit code makes the function's return status
+        # meaningful again, which the call sites below rely on.
+        find_or_update() {
+          local namespace="$1" title="$2" body="$3" existing url
+          existing=$(find_open "$namespace") || return $?
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$BODY"
-            echo "Commented on existing tracking issue #${existing}."
+            gh issue comment "$existing" --body "$body" || return $?
+            printf 'commented\t%s\t\n' "$existing"
           else
-            echo "Opened tracking issue $(gh issue create --title "$TITLE" --label "$MARKER" --body "$BODY")."
+            url=$(gh issue create --title "$title" --label "$MARKER" --body "$body") || return $?
+            printf 'created\t%s\t%s\n' "${url##*/}" "$url"
+          fi
+        }
+
+        if [ "$DRILL" != "true" ]; then
+          # Captured as a plain top-level assignment (not nested inside another command's word) so
+          # `set -e` aborts here if find_or_update itself returned non-zero, per the note above.
+          result=$(find_or_update real "$TITLE" "$BODY")
+          IFS=$'\t' read -r status num url <<<"$result"
+          if [ "$status" = "created" ]; then
+            echo "Opened tracking issue $url."
+          else
+            echo "Commented on existing tracking issue #${num}."
           fi
           exit 0
         fi
@@ -114,9 +139,10 @@ runs:
           gh issue close "$stale" --comment "Superseded by a newer drill run: $RUN_URL"
         fi
 
+        drill_title="${TITLE}${SUFFIX}"
         drill_body="**Alert-path liveness drill (#1287) — this is not a real failure.**
 
-        Opened, commented on and closed by ${RUN_URL} to prove the \`${MARKER}\` alert path executes end-to-end under the real job token. An alert path that has never fired is indistinguishable from one that cannot fire.
+        Opened by ${RUN_URL} via \`find_or_update\` — the SAME function the production \`DRILL != true\` branch above calls — to prove the \`${MARKER}\` alert path executes end-to-end under the real job token (#1348). An alert path that has never fired is indistinguishable from one that cannot fire.
 
         Re-run this proof at any time:
 
@@ -124,8 +150,14 @@ runs:
         gh workflow run \"${WORKFLOW}\" -f alert_drill=true
         \`\`\`"
 
-        url=$(gh issue create --title "${TITLE}${SUFFIX}" --label "$MARKER" --body "$drill_body")
-        num="${url##*/}"
+        # Pass 1: create-when-absent, via find_or_update. The namespace was just cleared of any
+        # stale drill issue above, so this MUST create, never comment.
+        result=$(find_or_update drill "$drill_title" "$drill_body")
+        IFS=$'\t' read -r status num url <<<"$result"
+        if [ "$status" != "created" ]; then
+          echo "::error::pass 1 expected to CREATE (the drill namespace was just cleared) but find_or_update reported '$status' on #$num instead — the create half did not run."
+          exit 1
+        fi
 
         # The number comes from the create, never from the lookup, and the lookup then has to AGREE
         # with it. Deriving it from the lookup is how run 30313030133 reported PROVED while proving
@@ -144,14 +176,20 @@ runs:
           exit 1
         fi
 
-        # The update half is the branch a create-only proof never reaches, and the one that runs on
-        # every alert after the first. Assert the count GREW: an absolute threshold is satisfiable by
-        # a comment that was already there.
+        # Pass 2: comment-on-existing, via the SAME find_or_update — this is now the exact code the
+        # production branch runs on every alert after the first (`gh issue comment "$existing"`), not
+        # a drill-only rewrite of it. Assert the count GREW: an absolute threshold is satisfiable by a
+        # comment that was already there.
         before=$(gh issue view "$num" --json comments --jq '.comments | length')
-        gh issue comment "$num" --body "Drill pass 2: find-or-update located this issue and commented on it rather than opening a second one."
+        result=$(find_or_update drill "$drill_title" "Drill pass 2: find-or-update located this issue and commented on it rather than opening a second one.")
+        IFS=$'\t' read -r status2 num2 _ <<<"$result"
+        if [ "$status2" != "commented" ] || [ "$num2" != "$num" ]; then
+          echo "::error::pass 2 expected to COMMENT on #$num but find_or_update reported '$status2' on #${num2:-?} instead — the update half did not run (or ran against the wrong issue)."
+          exit 1
+        fi
         after=$(gh issue view "$num" --json comments --jq '.comments | length')
         if [ "$after" -le "$before" ]; then
-          echo "::error::drill pass 2 exited 0 but issue #$num still has $after comment(s) — the update half of find-or-update raised nothing."
+          echo "::error::pass 2 exited 0 but issue #$num still has $after comment(s) — the update half of find-or-update raised nothing."
           exit 1
         fi
 
@@ -161,16 +199,16 @@ runs:
           echo "### Alert path \`$MARKER\` — PROVED"
           echo ""
           echo "- marker label exists (this step creates it if absent)"
-          echo "- create: $url"
-          echo "- find-or-update: located #$num and commented ($before → $after comments)"
+          echo "- create: pass 1 opened $url via \`find_or_update\`"
+          echo "- find-or-update: pass 2 located #$num and commented ($before → $after comments) via the SAME \`find_or_update\`"
           echo "- closed again — tracker left clean"
           echo ""
-          echo "**Scope of this proof.** The drill is a PARALLEL branch of this action. It proves the"
-          echo "label create+assert (shared code with the real path) and that \`gh issue"
-          echo "create/comment/close\` work under this job's token — with the drill's own payload."
-          echo "The production branch (\`gh issue comment \"\$existing\"\` on a live alarm) is executed"
-          echo "by no drill. Read PROVED as 'the primitives work here', not 'the real branch ran'."
+          echo "**Scope of this proof (#1348).** \`find_or_update\` is the ONE function both branches"
+          echo "call — the production branch (\`DRILL != true\`) calls it once; the drill calls it twice,"
+          echo "against its own drill-suffixed namespace so it can never be mistaken for a live alarm."
+          echo "There is no drill-only rewrite of the find-or-update logic left to diverge from what"
+          echo "production runs."
           echo ""
           echo "Re-run: \`gh workflow run \"$WORKFLOW\" -f alert_drill=true\`"
         } >> "$GITHUB_STEP_SUMMARY"
-        echo "PROVED $MARKER — $url (drill branch; the real find-or-update branch is not exercised by a drill)"
+        echo "PROVED $MARKER — #$num (find_or_update exercised twice: create-when-absent, then comment-on-existing — the same function the production branch runs)"
