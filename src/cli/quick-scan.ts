@@ -32,11 +32,12 @@
 // accepts, so the static RLS-tenancy review (SB-RLS-TENANCY-MODEL) can be told the app's tenancy
 // convention instead of only inferring it from a fixed candidate-column list.
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { arg, assertKnownFlags, targetDir } from "./args.js";
 import { classifyMigrationSql, classifyPrismaSchema } from "../../tools/pii-classify.mjs";
 import { loadSources } from "../detectors/load-sources.js";
+import { readRecursiveSafe } from "../fs-walk.js";
 import { measureCodebaseSize } from "../scan/codebase-size.js";
 import { runJscpd } from "../scan/duplication.js";
 import { detectOrm, detectTargetFramework, nonNextWorkspaces } from "../scan/framework-detect.js";
@@ -108,10 +109,13 @@ const JSCPD_TIMEOUT_MS = 60_000;
 
 // A recursive read, matching src/cli/dry-run.ts's: a Prisma migration lives one directory deeper
 // than Supabase's flat layout, so a non-recursive readdir silently reads as "no schema".
+// Through readRecursiveSafe, not a raw readdirSync (#1451): a client repo with a committed dangling
+// symlink under supabase/migrations would otherwise throw HERE — at the very end of a free scan,
+// discarding a completed pass, which is the crash shape that guard exists to stop.
 function readSchemaSql(dir: string): string {
   const migrations = join(dir, "supabase", "migrations");
   if (!existsSync(migrations)) return "";
-  return readdirSync(migrations, { recursive: true, encoding: "utf8" })
+  return readRecursiveSafe(migrations)
     .filter((f) => f.endsWith(".sql"))
     .sort()
     .map((f) => readFileSync(join(migrations, f), "utf8"))

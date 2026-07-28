@@ -17,8 +17,9 @@
 // detectors (perf and boundary findings in test code aren't audit findings) but ARE loaded
 // for the M8 test-intent pass (#372) — its subject matter is the test files themselves.
 
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 import { detectAppRouterFindings } from "../detectors/app-router.js";
 import { scanAssetWeight } from "../detectors/asset-weight.js";
@@ -92,7 +93,7 @@ try {
     const candidates = [join(targetDir, isVite ? "dist" : ".next")];
     const appsDir = join(targetDir, "apps");
     if (existsSync(appsDir)) {
-      for (const app of readdirSync(appsDir)) candidates.push(join(appsDir, app, isVite ? "dist" : ".next"));
+      for (const app of readNamesSafe(appsDir)) candidates.push(join(appsDir, app, isVite ? "dist" : ".next"));
     }
     buildDirs.push(...candidates.filter((c) => existsSync(join(c, marker))));
   }

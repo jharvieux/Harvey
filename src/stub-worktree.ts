@@ -9,8 +9,9 @@
 // store, `.bin`) symlink straight back to the original install, but a workspace-package symlink is
 // re-pointed at the COPY of that source so stubs are honored across package boundaries.
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
+import { readNamesSafe } from "./fs-walk.js";
 
 // Callers receive this as the inferred return of mirrorNodeModules — no name needs exporting.
 interface NodeModulesMirror {
@@ -80,12 +81,12 @@ export function mirrorNodeModules(targetDir: string, copyDir: string): NodeModul
       // An @scope directory holds the actual packages one level down (some of which are workspace
       // symlinks) — recurse so those are classified individually rather than symlinked as a block.
       mkdirSync(dest, { recursive: true });
-      for (const child of readdirSync(src)) linkEntry(join(rel, child));
+      for (const child of readNamesSafe(src)) linkEntry(join(rel, child));
       return;
     }
     symlinkSync(src, dest, stat.isDirectory() ? "dir" : "file");
   };
 
-  for (const entry of readdirSync(targetNM)) linkEntry(entry);
+  for (const entry of readNamesSafe(targetNM)) linkEntry(entry);
   return mirror;
 }

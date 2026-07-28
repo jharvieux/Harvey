@@ -9,8 +9,9 @@
 // bill of health". So: detect what is there, count it, and state plainly that it was not assessed.
 // This module deliberately does NOT analyse the files' contents for misconfiguration.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative, sep } from "node:path";
+import { readEntriesSafe, statSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 
 const EXCLUDED_DIR = /^(node_modules|\.git|\.next|dist|build|coverage|out|vendor|venv|\.venv|__pycache__)$/;
@@ -41,9 +42,8 @@ function findInfrastructureFiles(dir: string): Map<string, InfraHits> {
     else byClass.set(kind, { files: 1, example: path });
   };
   const walk = (current: string): void => {
-    for (const entry of readdirSync(current)) {
-      const full = join(current, entry);
-      if (statSync(full).isDirectory()) {
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(current).entries) {
+      if (isDirectory) {
         if (!EXCLUDED_DIR.test(entry)) walk(full);
         continue;
       }
@@ -61,7 +61,8 @@ function findInfrastructureFiles(dir: string): Map<string, InfraHits> {
 // app repo (CI workflows, tool config) has that pair. Large files are skipped — a manifest is small,
 // and a multi-megabyte YAML is a data dump we shouldn't read into memory to classify.
 function isKubernetesManifest(path: string): boolean {
-  if (statSync(path).size > 512 * 1024) return false;
+  const size = statSafe(path)?.size;
+  if (size === undefined || size > 512 * 1024) return false;
   const text = readFileSync(path, "utf8");
   return K8S_MANIFEST.test(text) && K8S_KIND.test(text);
 }

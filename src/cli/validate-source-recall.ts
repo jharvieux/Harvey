@@ -30,10 +30,11 @@
 
 import { execFileSync } from "node:child_process";
 import { arg, assertKnownFlags } from "./args.js";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
 import { M9_SOURCE_TIER_IDS, scoreM9SourceRecall, scoreSourceRecall, sourceTierCorpus } from "../scan/source-recall.js";
@@ -98,9 +99,8 @@ function loadLeakFixtures(kind: "positive" | "negative"): SourceInput[] {
   const root = join(leakFixturesRoot, kind);
   const files: SourceInput[] = [];
   const walk = (d: string) => {
-    for (const e of readdirSync(d)) {
-      const full = join(d, e);
-      if (statSync(full).isDirectory()) walk(full);
+    for (const { name: e, path: full, isDirectory } of readEntriesSafe(d).entries) {
+      if (isDirectory) walk(full);
       else if (e.endsWith(".txt")) {
         const suffix = relative(root, full).replace(/\.txt$/, "").split(sep).join("/");
         files.push({ path: `m9-corpus/leak/${kind}/${suffix}`, text: readFileSync(full, "utf8") });

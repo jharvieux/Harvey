@@ -14,8 +14,9 @@
 // external vitals plugin. Both caveats are printed so the integer is never over-read as recall.
 //
 // Run: pnpm detector-census
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDirectorySafe, readEntriesSafe } from "../fs-walk.js";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
 
@@ -85,9 +86,8 @@ const OWNERS: Record<string, string> = {
 };
 
 function walk(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) walk(p, out);
+  for (const { path: p, isDirectory } of readEntriesSafe(dir).entries) {
+    if (isDirectory) walk(p, out);
     else out.push(p);
   }
   return out;
@@ -106,7 +106,7 @@ for (const f of walk(join(ROOT, "src/scan/rules/semgrep")).filter((p) => p.endsW
 // 2. TS/AST detectors — distinct taxonomy per owned file; "Mx —" prefix overrides the file-owner.
 for (const [rel, owner] of Object.entries(OWNERS)) {
   const abs = join(ROOT, rel);
-  const files = statSync(abs).isDirectory()
+  const files = isDirectorySafe(abs)
     ? walk(abs).filter((p) => p.endsWith(".ts") && !p.endsWith(".test.ts"))
     : [abs];
   for (const f of files) {

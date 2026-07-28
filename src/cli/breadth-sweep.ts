@@ -20,10 +20,11 @@
 // M8 mutation, M10 live. This is the source/mechanical tier ONLY, by design.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { readEntriesSafe, type SafeDirEntry } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { cloneAtPin } from "../scan/corpus-clone.js";
 import { BREADTH_SWEEP } from "../scan/breadth-sweep.js";
@@ -126,15 +127,15 @@ function runM10(dir: string): { findings: Finding[]; source: string; seconds: nu
 
 function collectSchemaFiles(dir: string, depth = 0, acc: { sql: string[]; prisma: string[] } = { sql: [], prisma: [] }): { sql: string[]; prisma: string[] } {
   if (depth > 6) return acc;
-  let entries: import("node:fs").Dirent[];
+  let entries: SafeDirEntry[];
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
+    entries = readEntriesSafe(dir).entries;
   } catch {
     return acc;
   }
   for (const e of entries) {
     const p = join(dir, e.name);
-    if (e.isDirectory()) {
+    if (e.isDirectory) {
       if (!SKIP_WALK.has(e.name)) collectSchemaFiles(p, depth + 1, acc);
     } else if (e.name.endsWith(".prisma")) {
       // Any .prisma file, not just schema.prisma — Prisma's multi-file schema feature puts the
@@ -154,14 +155,14 @@ function countFiles(dir: string): { files: number; tsFiles: number } {
   let files = 0;
   let tsFiles = 0;
   const walk = (d: string): void => {
-    let entries: import("node:fs").Dirent[];
+    let entries: SafeDirEntry[];
     try {
-      entries = readdirSync(d, { withFileTypes: true });
+      entries = readEntriesSafe(d).entries;
     } catch {
       return;
     }
     for (const e of entries) {
-      if (e.isDirectory()) {
+      if (e.isDirectory) {
         if (!SKIP_WALK.has(e.name)) walk(join(d, e.name));
       } else {
         files++;

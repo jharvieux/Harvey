@@ -17,8 +17,9 @@
 // (createLiveStandUp) really does `supabase start`, applies the client migrations, creates two auth
 // users, seeds two tenants, and runs the PostgREST matrix with no operator step (#159/#161).
 
-import { type Dirent, existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
+import { readEntriesSafe, readNamesSafe, type SafeDirEntry } from "./fs-walk.js";
 import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
 import type { Finding } from "./findings.js";
 import { mechanicalFinding } from "./scan/common.js";
@@ -57,19 +58,19 @@ interface StandUpVerdict {
 export function discoverMigrationDirs(targetDir: string, maxDepth = 5): string[] {
   const found: string[] = [];
   const walk = (dir: string, depth: number): void => {
-    let entries: Dirent[];
+    let entries: SafeDirEntry[];
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      entries = readEntriesSafe(dir).entries;
     } catch {
       return; // unreadable dir — nothing to discover here
     }
     if (basename(dir) === "migrations" && basename(join(dir, "..")) === "supabase") {
-      if (entries.some((e) => e.isFile() && e.name.endsWith(".sql"))) found.push(dir);
+      if (entries.some((e) => !e.isDirectory && e.name.endsWith(".sql"))) found.push(dir);
       return; // a migrations dir has no nested migrations dirs to find
     }
     if (depth >= maxDepth) return;
     for (const e of entries) {
-      if (e.isDirectory() && !SKIP_DIRS.has(e.name)) walk(join(dir, e.name), depth + 1);
+      if (e.isDirectory && !SKIP_DIRS.has(e.name)) walk(join(dir, e.name), depth + 1);
     }
   };
   walk(targetDir, 0);
@@ -107,15 +108,15 @@ export function discoverSchemaFiles(targetDir: string, maxDepth = 3): { files: s
   if (conventional.length) return { files: conventional.sort(), probed };
   const found: string[] = [];
   const walk = (dir: string, depth: number): void => {
-    let entries: Dirent[];
+    let entries: SafeDirEntry[];
     try {
-      entries = readdirSync(dir, { withFileTypes: true });
+      entries = readEntriesSafe(dir).entries;
     } catch {
       return;
     }
     for (const e of entries) {
       const p = join(dir, e.name);
-      if (e.isDirectory()) {
+      if (e.isDirectory) {
         if (!SKIP_DIRS.has(e.name) && e.name !== "migrations" && depth < maxDepth) walk(p, depth + 1);
       } else if (e.name.endsWith(".sql") && !/seed/i.test(e.name) && declaresTable(p)) {
         found.push(p);
@@ -181,7 +182,7 @@ export function readRepoLayout(targetDir: string): RepoLayout {
 function readMigrationSql(migrationDirs: string[]): string {
   const parts: string[] = [];
   for (const dir of migrationDirs) {
-    for (const f of readdirSync(dir).filter((n) => n.endsWith(".sql")).sort()) {
+    for (const f of readNamesSafe(dir).filter((n) => n.endsWith(".sql")).sort()) {
       parts.push(readFileSync(join(dir, f), "utf8"));
     }
   }
