@@ -686,6 +686,9 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "// precision/recall metric, so the M1 metric block below cannot be read as a suite-wide figure.",
     "// stronger reading — the artifact could be stale, a live scan cannot be.",
   ],
+  "src/cli/validate-conditional-scan.ts": [
+    "//                  cannot fail (#350/#1065).",
+  ],
   "src/cli/validate-conservation.test.ts": [
     "// worker cannot service the birpc ack for the task update it already sent — that ack has the",
     "// the producer path for suppressed/capped/not-applicable cannot close the arithmetic on a fiction.",
@@ -703,6 +706,14 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   ],
   "src/cli/validate-test-only-exports.test.ts": [
     "// is indistinguishable from a gate that cannot fail (#1320).",
+  ],
+  "src/conditional-scan.test.ts": [
+    "// The gate's own recorded bound, held as a test so it cannot rot into folklore: the omission signal",
+    "// scanLocal DOES run checkBeta, through betaViaHelper. The gate cannot tell.",
+  ],
+  "src/conditional-scan.ts": [
+    "// db-schema config, which is not in Postgres, so local mode cannot run them. It returned its",
+    "// fails on one CONDITIONAL_SCANS does not list. So a new conditional module cannot join the repo",
   ],
   "src/conservation-ledger.ts": [
     "// not-applicable columns: without it the arithmetic has no way to tell a legitimate suppression from",
@@ -799,11 +810,26 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "src/detectors/vitest-intent.ts": [
     "// whether the reference throws \"Cannot access X before initialization\" depends on runtime IMPORT",
   ],
+  "src/disclosure-venue.test.ts": [
+    "// #1342 criteria 3 and 4: what the gate cannot judge is counted, never absent.",
+  ],
   "src/disclosure-venue.ts": [
     "// health\" (CLAUDE.md). The repo already has the disclosure-row family for scope a MODULE cannot",
-    "//    pg_graphql class its own comment says local mode cannot read, so a locally-scanned client sees",
-    "//    comment this gate cannot read, which is the half #1330 can measure. A conditional omission",
+    "//    estimate: the issue named ~9 rules; the first widening (\"can't see\", \"heuristic\") plus matching",
+    "//    across a LINE WRAP found 17, and a further pass (\"can't prove/confirm/tell\", \"exploitability",
+    "//    three checks hosted mode runs and it cannot. (That count is three, not the two the issue",
+    "//    which is exactly the case a vocabulary check cannot reach.) What is STILL open is the other",
     "//   grep -hiE \"^ *#.*(does not|doesn't|do not|don't|cannot|can't|will not|won't) match\\b\" \\",
+    "// stated limit on what the rule KNOWS, which is exactly what this gate is about: \"can't see\" names",
+    "// a fact the rule structurally cannot reach, and \"a heuristic\" says the match is evidence rather",
+    "// Third pass over the same census: \"a static rule can't PROVE no allowlist runs elsewhere\" and",
+    "// \"exploitability DEPENDS on the deploy network\" are the same declaration as \"can't see\" — a named",
+    "// bound-ish prose the markers still cannot see. It is not a gate on its own (it catches pattern",
+    "// bound-ish prose cannot join the set unread and a triaged rule cannot quietly stop being triaged.",
+    "// adds \"cannot\"/\"heuristic\" on the same footing when it adds those markers.",
+    "// `harvey-jwt-sign-noexpiry` writes \"…this rule can't\" and \"see whether expiresIn lives inside it\"",
+    "// on consecutive lines, and per-line matching cannot see the phrase at all — a bound made invisible",
+    "// to every rule that uses it, and a PER-RULE gate structurally cannot attribute it to anyone — so",
   ],
   "src/diverged-clones.ts": [
     "// structurally cannot see. jscpd is a raw-token Rabin-Karp match: the moment a copy-pasted",
@@ -1454,7 +1480,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
     "# a number cannot carry SQL metacharacters, so the interpolation is safe. Deterministically",
     "# rule cannot see an allowlist check that may live elsewhere.",
     "# single-file taint cannot span — but the wrapper CALL in the route is same-file with the source,",
-    "# above structurally cannot see. Needed once the RSC `{ params }` source landed: the sheet's",
+    "# #1342: the rule cannot see a host allowlist applied in another module, and the wrapper-name list",
   ],
   "src/scan/rules/semgrep/crypto.yml": [
     "# `NODE_TLS_REJECT_UNAUTHORIZED=0`. The rest (unverified jwt.decode(), a hardcoded/static IV,",
@@ -1567,6 +1593,7 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "src/scan/supabase.ts": [
     "// That endpoint's exact request/response envelope was NOT independently re-verified against",
     "// endpoint is documented but its response shape was NOT independently re-verified against the",
+    "// auth config), which is not held in Postgres, so a local connection cannot answer their question.",
   ],
   "src/scan/supply-chain.ts": [
     "// nondeterministic. So the classification runs and the packages the lockfile cannot answer are",
