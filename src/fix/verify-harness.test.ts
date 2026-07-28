@@ -194,3 +194,24 @@ describe("withBaselineWorktree — the §2.1 step-3 baseline root (#1272)", () =
     }
   });
 });
+
+describe("linkNodeModules — the client's installed tree is linked, never consumed", () => {
+  it("survives the worktree's disposal: `git worktree remove --force` + rmSync take the LINK, not the target", () => {
+    // The destructive risk worth proving rather than assuming: the harness symlinks the client's own
+    // node_modules into a disposable worktree, and that worktree is then force-removed. If either
+    // removal followed the link, an engagement would end with the client's dependencies deleted.
+    const c = materialize({ "a.txt": "baseline\n" });
+    try {
+      mkdirSync(join(c.dir, "node_modules"), { recursive: true });
+      writeFileSync(join(c.dir, "node_modules", "keep.txt"), "installed\n");
+      let linked = false;
+      withBaselineWorktree(c.dir, c.commit, (root) => {
+        linked = readFileSync(join(root, "node_modules", "keep.txt"), "utf8") === "installed\n";
+      });
+      expect(linked).toBe(true); // the commands really could have run against it
+      expect(readFileSync(join(c.dir, "node_modules", "keep.txt"), "utf8")).toBe("installed\n");
+    } finally {
+      disposeCorpus(c);
+    }
+  });
+});
