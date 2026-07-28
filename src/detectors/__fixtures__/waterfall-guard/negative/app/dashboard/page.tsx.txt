@@ -1,0 +1,13 @@
+// #1292 — an early return on the first result between the two awaits. No value flows from `team`
+// into the settings query, but hoisting them into Promise.all would run the second query on a
+// request the sequential code never reaches. A dependency, so nothing must fire.
+import { supabase } from "../../lib/db";
+
+export default async function DashboardPage() {
+  const { data: team } = await supabase.from("teams").select("id, name").single();
+  if (!team) return <p>No team</p>;
+
+  const { data: settings } = await supabase.from("settings").select("theme").eq("scope", "global").single();
+
+  return <p>{team.name} — {settings?.theme}</p>;
+}

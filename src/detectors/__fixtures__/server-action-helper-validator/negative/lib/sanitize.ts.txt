@@ -1,0 +1,7 @@
+import { z } from "zod";
+
+const BioSchema = z.string().max(280);
+
+export function sanitize(raw: unknown) {
+  return BioSchema.parse(raw).replace(/[<>]/g, "");
+}

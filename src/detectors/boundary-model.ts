@@ -44,7 +44,8 @@ export type M9Check =
   | "cache-bleed"
   | "route-segment-config"
   | "missing-suspense"
-  | "unbounded-route";
+  | "unbounded-route"
+  | "uncapped-retry";
 
 // One server mutation entry point: the function node plus the name to show. Next's `"use server"`
 // function, Remix/RR7's exported `action`, and TanStack's `createServerFn(...).handler(fn)` all
@@ -88,6 +89,7 @@ const CHECK_LABELS: Record<M9Check, string> = {
   "route-segment-config": "route segment config (dynamic/revalidate)",
   "missing-suspense": "missing Suspense/streaming boundary",
   "unbounded-route": "unbounded/self-calling route or edge fn",
+  "uncapped-retry": "uncapped retry / fan-out in a route or edge handler",
 };
 
 // A row disclosing that `check` was NOT assessed for `adapter`'s framework — emitted for every

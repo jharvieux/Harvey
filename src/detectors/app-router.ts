@@ -652,14 +652,143 @@ function stripLiteralsAndComments(sf: ts.SourceFile, action: ts.Node): string {
     .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
 }
 
+// #1263: AUTH_PATTERN and VALIDATION_PATTERN are closed NAME lists tested against the action's own
+// text, so a real gate with a house-style name — `await ensureMember(orgId)`, `sanitize(input)` —
+// matched neither and the action was reported as missing auth/validation. A false positive on
+// competent code. The fix recognises a gate by WHAT IT DOES: resolve each function the action calls
+// to its declaration (same file, or an imported module already in the loaded source set) and re-test
+// the pattern against THAT function's body, up to GATE_DEPTH hops of helper-calls-helper.
+//
+// It can only ever SUPPRESS. A callee that resolves to nothing — a node_modules import, a dynamic
+// call, a method on an object this pass doesn't model — leaves the finding exactly as it was, so
+// #857's false-negative half (literal/comment blanking) is untouched and no true positive is lost
+// by narrowing. The helper's body is blanked the same way before matching, so a `// TODO: add auth`
+// inside the HELPER does not vouch for it either.
+const GATE_DEPTH = 2;
+
+// Every function declared in a module, by the name a caller would use: `function f(){}`,
+// `const f = () => {}`, `const f = function(){}`, and the `export default` form.
+function collectDeclaredFunctions(sf: ts.SourceFile): Map<string, ts.Node> {
+  const out = new Map<string, ts.Node>();
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name && !out.has(node.name.text)) {
+      out.set(node.name.text, node);
+    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer)) && !out.has(node.name.text)) {
+      out.set(node.name.text, node.initializer);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+interface ImportedBinding {
+  path: string;
+  name: string;
+}
+
+// Local name → (module path, exported name) for every VALUE import whose module the scan loaded.
+// A specifier that resolves outside the source set (a package) is absent, which is what keeps an
+// unresolvable gate a finding rather than a silent pass.
+function collectValueImports(sf: ts.SourceFile, path: string, allPaths: Set<string>, aliases: PathAlias[]): Map<string, ImportedBinding> {
+  const out = new Map<string, ImportedBinding>();
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier) || !stmt.importClause || stmt.importClause.isTypeOnly) continue;
+    const resolved = resolveImport(path, stmt.moduleSpecifier.text, allPaths, aliases);
+    if (!resolved) continue;
+    const clause = stmt.importClause;
+    if (clause.name) out.set(clause.name.text, { path: resolved, name: "default" });
+    if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+      for (const el of clause.namedBindings.elements) {
+        if (!el.isTypeOnly) out.set(el.name.text, { path: resolved, name: (el.propertyName ?? el.name).text });
+      }
+    }
+  }
+  return out;
+}
+
+// The names a function body calls directly, as a caller would write them: `ensureMember(x)` and
+// `guards.ensureMember(x)` both yield "ensureMember".
+function calledNames(fn: ts.Node): string[] {
+  const names: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      if (ts.isIdentifier(callee)) names.push(callee.text);
+      else if (ts.isPropertyAccessExpression(callee)) names.push(callee.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(fn);
+  return names;
+}
+
+// Resolves the action's callees and returns the name of the first one whose own body satisfies
+// `pattern` — the gate, recognised without knowing what it is called.
+class GateResolver {
+  private readonly declared = new Map<string, Map<string, ts.Node>>();
+  private readonly imports = new Map<string, Map<string, ImportedBinding>>();
+
+  constructor(
+    private readonly sources: Map<string, ts.SourceFile>,
+    private readonly aliases: PathAlias[],
+  ) {}
+
+  private declaredIn(path: string): Map<string, ts.Node> {
+    let hit = this.declared.get(path);
+    if (!hit) {
+      const sf = this.sources.get(path);
+      hit = sf ? collectDeclaredFunctions(sf) : new Map();
+      this.declared.set(path, hit);
+    }
+    return hit;
+  }
+
+  private importsIn(path: string): Map<string, ImportedBinding> {
+    let hit = this.imports.get(path);
+    if (!hit) {
+      const sf = this.sources.get(path);
+      hit = sf ? collectValueImports(sf, path, new Set(this.sources.keys()), this.aliases) : new Map();
+      this.imports.set(path, hit);
+    }
+    return hit;
+  }
+
+  private resolve(path: string, name: string): { path: string; node: ts.Node } | undefined {
+    const local = this.declaredIn(path).get(name);
+    if (local) return { path, node: local };
+    const imported = this.importsIn(path).get(name);
+    if (!imported) return undefined;
+    const target = this.declaredIn(imported.path).get(imported.name);
+    return target ? { path: imported.path, node: target } : undefined;
+  }
+
+  gateIn(pattern: RegExp, path: string, fn: ts.Node, depth = GATE_DEPTH, seen = new Set<string>()): string | undefined {
+    if (depth <= 0) return undefined;
+    for (const name of calledNames(fn)) {
+      const key = `${path}#${name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const hit = this.resolve(path, name);
+      if (!hit) continue;
+      const sf = this.sources.get(hit.path);
+      if (sf && pattern.test(stripLiteralsAndComments(sf, hit.node))) return name;
+      if (this.gateIn(pattern, hit.path, hit.node, depth - 1, seen)) return name;
+    }
+    return undefined;
+  }
+}
+
 function detectServerActionAuthAndValidation(
   sources: Map<string, ts.SourceFile>,
   nextId: NextId,
   subsumedNoAuthActions: ReadonlySet<ts.Node>,
   mutationsFor: (path: string, sf: ts.SourceFile) => ServerMutation[],
   noun: string,
+  aliases: PathAlias[],
 ): Finding[] {
   const findings: Finding[] = [];
+  const gates = new GateResolver(sources, aliases);
   for (const [path, sf] of sources) {
     for (const action of mutationsFor(path, sf)) {
       const text = stripLiteralsAndComments(sf, action.node);
@@ -668,7 +797,7 @@ function detectServerActionAuthAndValidation(
       // The client-supplied-owner-id detector already fired on this no-auth action with a
       // strictly more specific finding (its evidence carries the no-auth fact) — one code
       // defect, one finding (#465).
-      if (!AUTH_PATTERN.test(text) && !subsumedNoAuthActions.has(action.node)) {
+      if (!AUTH_PATTERN.test(text) && !gates.gateIn(AUTH_PATTERN, path, action.node) && !subsumedNoAuthActions.has(action.node)) {
         findings.push(
           makeFinding(nextId, {
             title: `${noun} \`${action.name}\` mutates data with no visible auth check`,
@@ -680,7 +809,7 @@ function detectServerActionAuthAndValidation(
             // finding, the same class as the other three instances #221 catalogs.
             taxonomy: `M1 — ${noun} missing authorization check`,
             location: loc(path, sf, action.node),
-            evidence: `\`${action.name}\` is a ${noun} that calls insert/update/upsert/delete/rpc with no session/authority check found in its body.`,
+            evidence: `\`${action.name}\` is a ${noun} that calls insert/update/upsert/delete/rpc with no session/authority check found in its body, and none in any helper it calls that this pass could resolve to a declaration in the scanned tree (#1263 — a gate reached only through a package import stays invisible here).`,
             impact: `${noun}s are public POST endpoints — invocable directly with a crafted request regardless of which page normally calls them. Anyone can trigger this mutation.`,
             fix: "Verify the caller's session/tenant before the DB call (e.g. `auth.getUser()` + a tenant-scoped `.eq(...)`, or a shared `requireUser()`/`assertPermission()` gate).",
             value: 5,
@@ -690,7 +819,7 @@ function detectServerActionAuthAndValidation(
         );
       }
 
-      if (!VALIDATION_PATTERN.test(text)) {
+      if (!VALIDATION_PATTERN.test(text) && !gates.gateIn(VALIDATION_PATTERN, path, action.node)) {
         findings.push(
           makeFinding(nextId, {
             title: `${noun} \`${action.name}\` has no input schema validation`,
@@ -699,7 +828,7 @@ function detectServerActionAuthAndValidation(
             category: "Security",
             taxonomy: `M9 — ${noun} missing input validation`,
             location: loc(path, sf, action.node),
-            evidence: `\`${action.name}\` reads its arguments/formData straight into a DB mutation with no Zod/valibot (or similar) \`.parse\`/\`.safeParse\` call found in its body.`,
+            evidence: `\`${action.name}\` reads its arguments/formData straight into a DB mutation with no Zod/valibot (or similar) \`.parse\`/\`.safeParse\` call found in its body, and none in any helper it calls that this pass could resolve to a declaration in the scanned tree (#1263 — a validator reached only through a package import stays invisible here).`,
             impact: "Unvalidated input is type-unsafe and injectable, and any id/tenant field on it is trusted from the client.",
             fix: "Parse the action's input through a schema (Zod/valibot) before using any field in the DB call.",
             value: 4,
@@ -992,6 +1121,29 @@ function mentionsIdentifier(text: string, name: string): boolean {
   return new RegExp(`(?<![A-Za-z0-9_$])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_$])`).test(text);
 }
 
+// #1292: a guard on the FIRST result that can leave the function before the second query runs —
+// `if (!company) return null`, `if (error) throw new Error(…)`, `if (!row) notFound()` — is a
+// dependency even though no value flows. `Promise.all` hoists the second query above the guard, so
+// it executes on inputs the sequential code never reaches: on carbon one such pair issues a
+// compensating DELETE on the failure path. MEASURED on the pinned carbon clone 2026-07-28 (see the
+// PR): 40 waterfall rows before, and the guarded shape is the largest remaining sub-class.
+// `continue`/`break` count too — inside a loop they skip the rest of the iteration just the same.
+function escapesFunction(stmt: ts.Statement): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isReturnStatement(node) || ts.isThrowStatement(node) || ts.isContinueStatement(node) || ts.isBreakStatement(node)) {
+      found = true;
+      return;
+    }
+    // A nested function's own `return` returns from THAT function, not from this one.
+    if (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node)) return;
+    ts.forEachChild(node, visit);
+  };
+  visit(stmt);
+  return found;
+}
+
 function dependsOnPriorQuery(block: ts.Block, sf: ts.SourceFile, cur: AwaitedDbDeclaration, next: AwaitedDbDeclaration): boolean {
   // The direct test keeps its original substring form so this change can only ever SUPPRESS a pair,
   // never make a previously-suppressed one fire; the names reached by propagation are matched as
@@ -1002,6 +1154,7 @@ function dependsOnPriorQuery(block: ts.Block, sf: ts.SourceFile, cur: AwaitedDbD
   for (let i = cur.index + 1; i < next.index; i++) {
     const stmt = block.statements[i];
     if (stmt === undefined || !reads(stmt.getText(sf))) continue;
+    if (escapesFunction(stmt)) return true; // a guard on the first result — reordering changes behaviour
     if (ts.isVariableStatement(stmt)) {
       for (const d of stmt.declarationList.declarations) for (const n of boundNames(d.name)) tainted.add(n);
     }
@@ -1043,19 +1196,25 @@ function detectDataFetchingWaterfalls(
           const overflow = independentPairs.length > 1 + MAX_EXTRA_PAIRS_SHOWN ? `, +${independentPairs.length - 1 - MAX_EXTRA_PAIRS_SHOWN} more` : "";
           const countNote =
             independentPairs.length > 1
-              ? ` (first of ${independentPairs.length} independent sequential pairs in this function; the rest: ${extraPairs.join(", ")}${overflow})`
+              ? ` (first of ${independentPairs.length} such pairs in this function; the rest: ${extraPairs.join(", ")}${overflow})`
               : "";
           findings.push(
             makeFinding(nextId, {
-              title: `Independent sequential DB queries could run in parallel`,
+              title: `Sequential DB queries with no visible dependency could run in parallel`,
               severity: "Medium",
               confidence: "Review",
               category: "Performance",
               taxonomy: "M9 — Data-fetching waterfall",
               location: loc(path, sf, first.next.node),
-              evidence: `\`${first.cur.displayName}\` (${loc(path, sf, first.cur.node)}) and \`${first.next.displayName}\` (${loc(path, sf, first.next.node)}) are awaited sequentially and neither's query depends on the other's result.${countNote}`,
-              impact: "Each unrelated await serializes a network round-trip that could run concurrently, adding latency (and, compounded across requests, DB load) on every render.",
-              fix: `Combine into \`Promise.all([...])\` (or a single joined query/RPC) so the round-trips overlap.`,
+              // #1292: the old wording asserted "neither's query depends on the other's result" — a
+              // claim about the code this check never established. What it establishes is narrower:
+              // no name bound by the first (or derived from it through the intervening statements)
+              // is read by the second, and nothing between them guards on the first. Say that, plus
+              // the bound on what the check reads, rather than asserting independence and then
+              // recommending a reorder that would break the code if the assertion is wrong.
+              evidence: `\`${first.cur.displayName}\` (${loc(path, sf, first.cur.node)}) and \`${first.next.displayName}\` (${loc(path, sf, first.next.node)}) are awaited one after the other, and no dataflow from the first into the second was found — the second's query does not read the first's binding or anything derived from it in this block, and no guard between them exits on the first's result. A dependency carried outside this block (through shared mutable state, a side effect, or a helper call) would not be visible to this check.${countNote}`,
+              impact: "Each await that does not need the previous result serializes a network round-trip that could run concurrently, adding latency (and, compounded across requests, DB load) on every render.",
+              fix: `Confirm the two are order-independent, then combine into \`Promise.all([...])\` (or a single joined query/RPC) so the round-trips overlap.`,
               value: 3,
               ease: 4,
               safety: 4,
@@ -1521,9 +1680,10 @@ function detectSpaRootErrorBoundary(files: SourceInput[], nextId: NextId, scope:
 //      "bounded" only ever errs toward SILENCE (a false negative), never a false positive.
 //   2. SELF-REFERENTIAL FETCH: `fetch(…)` whose argument subtree reads the incoming request's own
 //      URL (`request.url` / `req.url` / `.nextUrl`) — the handler calling back into itself.
-// Uncapped retry/fan-out (the third brief item) needs loop-bound + call-count reasoning past a
-// precise mechanical rule and stays semantic/paid-tier — the two shapes above cover the
-// mechanically-decidable core so the surface is no longer a silent gap.
+// #1262 adds the brief's THIRD item, uncapped retry/fan-out, as two more AST shapes plus a
+// disclosure row for what neither reaches (detectUncappedRetryFanOut / uncappedRetryScopeNote
+// below). The comment this replaced called that item "past a precise mechanical rule" and left it
+// out of the report entirely — the technical claim was never tested and the report said nothing.
 const ROUTE_HANDLER_FILE = /(^|\/)(route\.[cm]?[jt]sx?|middleware\.[cm]?[jt]sx?)$|(^|\/)pages\/api\//;
 
 function declaresEdgeRuntime(sf: ts.SourceFile): boolean {
@@ -1634,6 +1794,246 @@ function detectUnboundedRouteOrEdge(sources: Map<string, ts.SourceFile>, nextId:
     visit(sf);
   }
   return findings;
+}
+
+// --- Uncapped retry / fan-out [MED] (#843 remainder, #1262) -----------------
+//
+// The M9 brief's third "unbounded route" item. #857 shipped the other two and recorded this one's
+// absence in a source comment only, so a client's report said nothing about it either way. Two AST
+// shapes, both scoped to the same route/edge handlers the sibling check uses:
+//
+//   1. UNCAPPED RETRY — a loop that re-issues a network/DB call on failure (an outbound call plus a
+//      `catch` in the same loop body) whose attempt count has no resolvable cap: `while (true)`, or
+//      a `for` whose bound is a value from the request rather than a literal/const. The bounded
+//      forms (`i < 3`, `i < MAX_RETRIES` where MAX_RETRIES is a numeric const, `i < rows.length`)
+//      resolve and stay silent.
+//   2. UNCAPPED FAN-OUT — `Promise.all(xs.map(…))` (or allSettled) whose callback issues an
+//      outbound call and whose `xs` roots in the REQUEST (a handler parameter, a parsed body, a
+//      query param), with no `.slice(…)` bound and no length guard. One request then buys the
+//      client N concurrent outbound calls.
+//
+// What these two do NOT reach is disclosed by uncappedRetryScopeNote below, with counts — see it
+// for the bound. Both shapes require an outbound call in the loop/callback, so an in-memory loop is
+// never a finding.
+
+const RETRY_LIBRARY = /^(p-retry|async-retry|retry|axios-retry|exponential-backoff|promise-retry|cockatiel|p-limit|bottleneck)$/;
+
+// An outbound call: `fetch(…)` or a DB query chain. The unit that makes a loop or a fan-out cost
+// something per iteration.
+function hasOutboundCall(node: ts.Node): boolean {
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isCallExpression(n) && ((ts.isIdentifier(n.expression) && n.expression.text === "fetch") || isDbQueryChain(n))) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function hasCatch(node: ts.Node): boolean {
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isCatchClause(n)) {
+      found = true;
+      return;
+    }
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === "catch") {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return found;
+}
+
+// Numeric constants declared anywhere in the file, so `for (let i = 0; i < MAX_RETRIES; i++)` with
+// `const MAX_RETRIES = 3` reads as capped.
+function numericConstNames(sf: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && ts.isNumericLiteral(node.initializer)) {
+      names.add(node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return names;
+}
+
+// Whether a loop's attempt count is bounded by something this pass can see. A `for` whose condition
+// compares against a numeric literal, a numeric const, or a `.length` is capped; `while (true)` and
+// a bound that is any other expression (a request value, a config lookup) are not. Anything that is
+// not a recognised loop header is treated as CAPPED — the shape must be proven unbounded to fire.
+function retryLoopIsUncapped(node: ts.Node, consts: ReadonlySet<string>): boolean {
+  if ((ts.isWhileStatement(node) || ts.isDoStatement(node)) && isTruthyLiteral(node.expression)) return true;
+  if (!ts.isForStatement(node)) return false;
+  const cond = node.condition;
+  if (cond === undefined) return true; // `for (;;)`
+  if (!ts.isBinaryExpression(cond)) return false;
+  const bound = cond.right;
+  if (ts.isNumericLiteral(bound)) return false;
+  if (ts.isIdentifier(bound) && consts.has(bound.text)) return false;
+  if (ts.isPropertyAccessExpression(bound) && bound.name.text === "length") return false;
+  return true;
+}
+
+// Names whose value comes from the incoming request: the handler's own parameters, and anything
+// bound from a request read (`await request.json()`, `req.body`, `searchParams.get(…)`, `params`).
+// Deliberately narrow — the fan-out shape fires only on a collection the CLIENT sizes.
+const REQUEST_READ = /\breq(uest)?\b|\bsearchParams\b|\bparams\b|\.body\b|\bformData\b/;
+
+function collectRequestDerivedNames(fn: ts.Node, sf: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  for (const p of (fn as ts.SignatureDeclarationBase).parameters ?? []) {
+    if (ts.isIdentifier(p.name)) names.add(p.name.text);
+    else if (ts.isObjectBindingPattern(p.name)) for (const el of p.name.elements) if (ts.isIdentifier(el.name)) names.add(el.name.text);
+  }
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      const text = node.initializer.getText(sf);
+      const root = ts.isExpression(node.initializer) ? rootIdentifier(node.initializer) : undefined;
+      if (REQUEST_READ.test(text) || (root !== undefined && names.has(root))) {
+        if (ts.isIdentifier(node.name)) names.add(node.name.text);
+        else if (ts.isObjectBindingPattern(node.name)) for (const el of node.name.elements) if (ts.isIdentifier(el.name)) names.add(el.name.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(fn);
+  return names;
+}
+
+interface FanOut {
+  node: ts.CallExpression;
+  collection: string;
+}
+
+// `Promise.all(xs.map(cb))` / `Promise.allSettled(...)` where cb makes an outbound call. Returns the
+// collection's root name so the caller can ask whether the CLIENT controls its length.
+function asFanOut(node: ts.Node): FanOut | undefined {
+  if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
+  if (!/^(all|allSettled)$/.test(node.expression.name.text)) return undefined;
+  if (!ts.isIdentifier(node.expression.expression) || node.expression.expression.text !== "Promise") return undefined;
+  const arg = node.arguments[0];
+  if (!arg || !ts.isCallExpression(arg) || !ts.isPropertyAccessExpression(arg.expression) || !/^(map|flatMap)$/.test(arg.expression.name.text)) return undefined;
+  const cb = arg.arguments[0];
+  if (!cb || !hasOutboundCall(cb)) return undefined;
+  const receiver = arg.expression.expression;
+  // A `.slice(…)`/`.splice(…)` anywhere in the receiver chain IS the cap — the shape is bounded.
+  if (/\.(slice|splice)\s*\(/.test(receiver.getText())) return undefined;
+  const collection = rootIdentifier(receiver);
+  return collection === undefined ? undefined : { node, collection };
+}
+
+function enclosingHandler(node: ts.Node): ts.Node | undefined {
+  return ts.findAncestor(node, (a) => ts.isFunctionDeclaration(a) || ts.isFunctionExpression(a) || ts.isArrowFunction(a) || ts.isMethodDeclaration(a)) ?? undefined;
+}
+
+function detectUncappedRetryFanOut(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  const findings: Finding[] = [];
+  for (const [path, sf] of sources) {
+    if (!isRouteOrEdgeHandler(path, sf)) continue;
+    const consts = numericConstNames(sf);
+
+    const visit = (node: ts.Node) => {
+      if ((ts.isForStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node)) && hasOutboundCall(node.statement) && hasCatch(node.statement) && retryLoopIsUncapped(node, consts)) {
+        findings.push(
+          makeFinding(nextId, {
+            title: `Retry loop with no attempt cap in a route/edge handler`,
+            severity: "Medium",
+            confidence: "Likely",
+            category: "Performance",
+            taxonomy: "M9 — Uncapped retry/fan-out",
+            location: loc(path, sf, node),
+            evidence: `\`${node.getText(sf).slice(0, 70).replace(/\s+/g, " ")}…\` re-issues an outbound call after catching a failure, and its attempt count resolves to no literal or constant bound in this file — the loop header is \`${(ts.isForStatement(node) ? node.condition?.getText(sf) : node.expression.getText(sf)) ?? "(none)"}\`.`,
+            impact: "A dependency that is down or rate-limiting turns every request into an unbounded retry storm: the handler holds its slot until the platform timeout, amplifies load onto the failing dependency, and multiplies the bill exactly when the system is least healthy.",
+            fix: "Cap the attempts with a literal/const maximum and back off between them (or delegate to a retry helper configured with a maxAttempts).",
+            value: 4,
+            ease: 4,
+            safety: 4,
+          }),
+        );
+      }
+      const fanOut = asFanOut(node);
+      if (fanOut) {
+        const handler = enclosingHandler(node);
+        const requestDerived = handler ? collectRequestDerivedNames(handler, sf) : new Set<string>();
+        if (requestDerived.has(fanOut.collection)) {
+          findings.push(
+            makeFinding(nextId, {
+              title: `Request-sized fan-out of outbound calls in a route/edge handler`,
+              severity: "Medium",
+              confidence: "Likely",
+              category: "Performance",
+              taxonomy: "M9 — Uncapped retry/fan-out",
+              location: loc(path, sf, node),
+              evidence: `\`${node.getText(sf).slice(0, 80).replace(/\s+/g, " ")}\` issues one outbound call per element of \`${fanOut.collection}\`, which comes from the incoming request, with no \`.slice(…)\` bound and no length check before the map.`,
+              impact: "The caller chooses how many outbound calls one request makes: a large array multiplies compute, connections and third-party spend per request, and is a ready-made amplification vector against both this service and whatever it calls.",
+              fix: "Validate the collection's length against a maximum before the map (rejecting oversized input), and/or bound concurrency with a limiter and chunk the work.",
+              value: 4,
+              ease: 4,
+              safety: 4,
+            }),
+          );
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return findings;
+}
+
+// The disclosure half of #1262. The two shapes above are what a precise AST rule reaches; three
+// sub-shapes it does not are named here WITH THEIR COUNT ON THIS TARGET, so the row carries a
+// measured population rather than a hypothetical bound, and its absence from the report can never
+// read as "assessed and clean". Emitted whenever the target has route/edge handlers at all.
+function uncappedRetryScopeNote(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
+  let handlers = 0;
+  let retryLibFiles = 0;
+  let unscopedFanOuts = 0;
+  for (const [path, sf] of sources) {
+    if (!isRouteOrEdgeHandler(path, sf)) continue;
+    handlers += 1;
+    const importsRetryLib = sf.statements.some((s) => ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier) && RETRY_LIBRARY.test(s.moduleSpecifier.text));
+    if (importsRetryLib) retryLibFiles += 1;
+    const visit = (node: ts.Node) => {
+      const fanOut = asFanOut(node);
+      if (fanOut) {
+        const handler = enclosingHandler(node);
+        const requestDerived = handler ? collectRequestDerivedNames(handler, sf) : new Set<string>();
+        if (!requestDerived.has(fanOut.collection)) unscopedFanOuts += 1;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  if (handlers === 0) return [];
+  return [
+    {
+      id: nextId(),
+      title: `M9 partially assessed — uncapped retry/fan-out (${handlers} route/edge handler${handlers === 1 ? "" : "s"})`,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Performance",
+      taxonomy: "M9 — Uncapped retry/fan-out — scope",
+      location: "(whole target)",
+      status: "Open",
+      evidence: `${handlers} route/edge handler${handlers === 1 ? " was" : "s were"} checked for two uncapped shapes: a retry loop whose attempt count resolves to no literal/const bound, and a \`Promise.all(xs.map(…))\` fan-out over a request-sized collection. THREE sub-shapes were NOT assessed, counted here on this target: (1) retries delegated to a retry/backoff/concurrency library, whose cap lives in a config object this pass does not read — ${retryLibFiles} handler file${retryLibFiles === 1 ? " imports" : "s import"} one; (2) fan-out over a collection this pass could not tie to the request (typically a DB read of unbounded size) — ${unscopedFanOuts} such site${unscopedFanOuts === 1 ? "" : "s"}, left unflagged to hold precision; (3) retry by RECURSION (a helper calling itself on failure) rather than by a loop — no loop node exists to bound, and no count is available for it.`,
+      impact: "These three sub-shapes are unassessed on this target. Recorded explicitly with their counts so the absence of a retry/fan-out finding reads as 'partially assessed', not 'assessed and clean' — the fail-loud coverage guard.",
+      fix: "None — informational. Review the counted sites by hand: confirm each library retry declares a maximum-attempts option, and each unscoped fan-out runs over a collection whose size the service controls.",
+      value: 1,
+      ease: 5,
+      safety: 5,
+      precisionTier: "high",
+    },
+  ];
 }
 
 // --- Route segment config & missing Suspense [MED] (#846) -------------------
@@ -1872,6 +2272,7 @@ const NEXT_CHECKS: readonly M9Check[] = [
   "route-segment-config",
   "missing-suspense",
   "unbounded-route",
+  "uncapped-retry",
 ];
 
 const nextAdapter: BoundaryAdapter = {
@@ -1914,7 +2315,7 @@ function runBoundaryPass(adapter: BoundaryAdapter, files: SourceInput[], nextId:
     ...dataLayer,
     ...(S.has("missing-server-only") ? detectMissingServerOnly(sources, nextId, pagesRouterOnly, collectPathAliases(files)) : []),
     ...(S.has("server-mutation-authz") || S.has("server-mutation-validation")
-      ? detectServerActionAuthAndValidation(sources, nextId, ownerId.subsumedNoAuthActions, mutations, adapter.mutationNoun)
+      ? detectServerActionAuthAndValidation(sources, nextId, ownerId.subsumedNoAuthActions, mutations, adapter.mutationNoun, collectPathAliases(files))
       : []),
     ...ownerId.findings,
     // Not ORM-gated with the three data-layer checks above: it keys on the auth + cache signals,
@@ -1923,6 +2324,7 @@ function runBoundaryPass(adapter: BoundaryAdapter, files: SourceInput[], nextId:
     ...(S.has("accidental-dynamic") ? detectAccidentalDynamicRendering(sources, nextId) : []),
     ...(S.has("ssr-browser-api") ? detectSsrBrowserApiMisuse(sources, nextId) : []),
     ...(S.has("unbounded-route") ? detectUnboundedRouteOrEdge(sources, nextId) : []),
+    ...(S.has("uncapped-retry") ? [...detectUncappedRetryFanOut(sources, nextId), ...uncappedRetryScopeNote(sources, nextId)] : []),
     ...(S.has("route-segment-config") ? detectRouteSegmentConfig(sources, nextId) : []),
     ...(S.has("missing-suspense") ? detectMissingSuspenseBoundary(sources, nextId) : []),
   ];
