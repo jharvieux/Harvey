@@ -6,20 +6,33 @@ instead of degrading through the M7L-00 disclosure. Both are closed here.
 
 ## Part 1 — provisioning a Lighthouse-compatible Chrome
 
-### The constraint
+### Why a pinned dependency, not a runtime install (#1324, 2026-07-28)
 
-`package.json`/`pnpm-lock.yaml` are **NOT supervised** (operator ruling 2026-07-27); the reason this is not a runtime dependency is a design choice, not a path restriction. `@puppeteer
-/browsers` (the standard tool for fetching a pinned Chrome-for-Testing build) can't be added there.
+`package.json`/`pnpm-lock.yaml` are **NOT supervised** — the operator ruled so on 2026-07-27, and the
+file never listed them, including on the day #556 was worked. The original runtime `npm install
+--prefix <cache> --no-save @puppeteer/browsers` was chosen for that non-existent constraint and has
+been replaced by a lockfile-pinned devDependency used through its programmatic API.
 
-### The approach: runtime install, not a repo dependency
+The re-evaluation was decided by one fact: `@puppeteer/browsers@3.0.6` was **already resolved in this
+repo's lockfile**, with an integrity hash, as a transitive dependency of `puppeteer-core` under
+`lighthouse`. The runtime path was therefore fetching a second, unpinned copy of a package we already
+had — executed during a client scan. Promoting it to a direct devDependency adds no packages at all.
 
-`src/cli/lighthouse-scan.ts`'s `provisionChrome()` shells out to `npm install --prefix <cache>
---no-save @puppeteer/browsers` **at run time**, only when reached (no system Chrome, or
-`LIGHTHOUSE_SKIP_SYSTEM_CHROME=1`) — it never touches this repo's own `node_modules` or lockfile.
-The installed CLI then runs `browsers install chrome@stable --path <cache>/browsers`, which
-downloads Google's official "Chrome-for-Testing" build (distinct from the Playwright chromium
-below) and prints `<id>@<version> <path-to-executable>`; `provisionChrome()` parses that path and
-hands it to `chrome-launcher` as `chromePath`.
+What the change does **not** remove is the network: `install()` still downloads ~150 MB of
+Chrome-for-Testing from Google's CDN on a cold cache. That is the step's purpose, and it is why
+provisioning remains the LAST of the four resolution candidates below.
+
+### The approach
+
+`src/cli/lighthouse-scan.ts`'s `provisionChrome()` calls `@puppeteer/browsers`' programmatic
+`install()` **at run time**, only when reached (no system Chrome, or
+`LIGHTHOUSE_SKIP_SYSTEM_CHROME=1`) — the download lands in the cache dir, never in this repo's own
+`node_modules` or lockfile.
+`install()` downloads Google's official "Chrome-for-Testing" build (distinct from the Playwright
+chromium below) into `<cache>/browsers` and RETURNS the installed executable path directly, which
+`provisionChrome()` hands to `chrome-launcher` as `chromePath`. The old shell-out parsed that path
+out of the CLI's `<id>@<version> <path>` stdout line; the programmatic API removes that parse, and
+with it a whole class of breakage from an upstream output-format change.
 
 Cache location: `~/.cache/harvey/chrome-for-testing` (override: `HARVEY_CHROME_CACHE_DIR`, used by
 the e2e proof below to avoid touching the real machine cache). Both the CLI install and the browser
