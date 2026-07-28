@@ -175,6 +175,10 @@ jobs:
         if: steps.filter.outputs.relevant == 'true'
         run: |
           set -euo pipefail
+          # pipx no longer guarantees ~/.local/bin exists on ubuntu-latest — MEASURED
+          # 2026-07-28, where the osv-scanner `curl -o` into it failed with `curl: (23)`
+          # (write error) on a fresh runner. Create it before anything writes there.
+          mkdir -p "$HOME/.local/bin"
           pipx install semgrep
           curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
             | sh -s -- -b "$HOME/.local/bin"
