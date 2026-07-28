@@ -10,8 +10,9 @@
 // match the real per-row shape exactly, but VitalsReport is NOT the real top-level shape — vitals_cli.py
 // serializes 11 top-level keys (mode, repo_info, file_health, hotspots, coupling, knowledge_risk,
 // provenance, trends, overall_health, files_analyzed, scope); VitalsReport is a DELIBERATE subset
-// modelling only mode/hotspots/coupling/knowledge_risk/provenance/trends/overall_health (7 of 11) —
-// repo_info/file_health/files_analyzed/scope are not read. `hotspots` is per-file rows sorted by
+// modelling 9 of 11 — mode/hotspots/coupling/knowledge_risk/provenance/trends/overall_health, plus
+// file_health/files_analyzed since #1290 (they are the DENOMINATORS of vitals' own caps; see
+// vitalsScope). repo_info/scope are not read. `hotspots` is per-file rows sorted by
 // `risk_score`; `coupling`/`knowledge_risk` are separate top-level arrays, not nested per hotspot row.
 // The `provenance` shape (#369) is verified against vitals 0.2.0's own source
 // (scripts/vitals_cli.py provenance_info + scripts/db.py get_ai_file_stats/get_provenance_summary):
@@ -130,6 +131,120 @@ export interface VitalsReport {
   // #1075: vitals' single-number codebase health (0–10, lower = worse), computed from the SAME
   // file_health scores hotspots are ranked by — but over every analysed file, not just the top-K.
   overall_health?: number;
+  // #1290: vitals' per-file health map (vitals_cli.py:180-188) — ONE ENTRY PER `code_files` ENTRY,
+  // never truncated. This is the population `hotspots` is the top-N slice of and the population the
+  // truck-factor cap slices, so its size is the denominator both caps need. Optional: absent from a
+  // pre-#1290 hand-built report, in which case the denominator is disclosed as underivable, never
+  // guessed.
+  file_health?: Record<string, number>;
+  // #1290: vitals' count of every TRACKED source file it considered (vitals_cli.py:310 —
+  // len(source_files)). A wider set than file_health: it includes files that never churned or carry
+  // no structural complexity. It is the truck-factor denominator ONLY in vitals' fallback branch
+  // (`code_files[:50] if code_files else source_files[:50]`, vitals_cli.py:132).
+  files_analyzed?: number;
+}
+
+// #1290 — vitals truncates THREE lists before Harvey ever sees them, and #1075 disclosed two of them
+// with no denominator ("capped at the first 50 source files") while both denominators were derivable.
+// The caps, from vitals 0.2.0's own emitter:
+//   hotspots  = hotspots[:top_n]                       (vitals_cli.py:233; top_n default 10, and
+//                                                       Harvey never passes --top, so always 10)
+//   coupling  = coupling_data[:5]                      (vitals_cli.py:305)
+//   knowledge = (code_files or source_files)[:50]      (vitals_cli.py:132)
+//
+// The population for the first and third is `code_files`, which the report DOES emit in full as the
+// `file_health` map — NOT `files_analyzed`, which is len(source_files), i.e. every tracked source
+// file. MEASURED 2026-07-28 with `python3 ~/.claude/plugins/cache/vitals/vitals/0.2.0/scripts/
+// vitals_cli.py report --json .` against this repo: file_health 314, files_analyzed 1792,
+// hotspots 10. So "the first 50 of 1792 source files" would have been wrong by 5.7× in the other
+// direction — the fixture masks this because it happens to have file_health 7 == files_analyzed 7.
+// Only the coupling total is genuinely absent from the payload; the CLI derives it by calling the
+// plugin's own function (see src/cli/hotspot-scan.ts::deriveCouplingTotal).
+const VITALS_HOTSPOT_CAP = 10;
+const VITALS_COUPLING_CAP = 5;
+const VITALS_KNOWLEDGE_CAP = 50;
+
+interface VitalsScope {
+  /** len(code_files) — files vitals actually scored. undefined when the report omits file_health. */
+  scored?: number;
+  /** len(source_files) — every tracked source file. undefined when the report omits files_analyzed. */
+  tracked?: number;
+  /** The population vitals' 50-file knowledge slice was taken from, mirroring its own branch. */
+  knowledgePopulation?: number;
+}
+
+export function vitalsScope(report: VitalsReport): VitalsScope {
+  const scored = report.file_health ? Object.keys(report.file_health).length : undefined;
+  const tracked = report.files_analyzed;
+  // Mirrors `code_files[:50] if code_files else source_files[:50]` exactly: an EMPTY code_files
+  // (nothing cleared the churn+complexity gate) falls back to the tracked set, which is the case
+  // #1112 measured on a fully backdated repo.
+  const knowledgePopulation = scored === undefined ? undefined : scored > 0 ? scored : tracked;
+  return { scored, tracked, knowledgePopulation };
+}
+
+// One "N of M" line per cap. A cap that did not BIND says so plainly rather than implying a cut —
+// "showing all 3 co-change pairs" is a different fact from "showing 5 of 10" and a client reads it
+// differently. A denominator left underivable is named as such WITH the reason; it is never
+// substituted with the nearest available number.
+function scopeLine(label: string, shown: number, cap: number, total: number | undefined, unit: [one: string, many: string], missing: string): string {
+  const n = (count: number) => `${count} ${count === 1 ? unit[0] : unit[1]}`;
+  if (total === undefined) {
+    return shown < cap
+      ? `${label}: ${n(shown)} — below vitals' cap of ${cap}, so this is the full set.`
+      : `${label}: ${n(shown)}, which is exactly vitals' cap of ${cap} — the true total is NOT derivable here (${missing}), so treat ${shown} as a floor, not a census.`;
+  }
+  return total > shown
+    ? `${label}: showing ${shown} of ${n(total)} — vitals caps this list at ${cap}.`
+    : `${label}: all ${n(total)} (vitals' cap of ${cap} did not bind).`;
+}
+
+// #1290: the client-facing scope row. Emitted as a Finding, not only a console NOTE, because
+// "accounted for is not delivered" — a stdout line reaches nobody who reads the report, and "50
+// source files analysed" vs "50 of 314" is the difference between a clean bill of health and a
+// disclosed 6× sampling. Info/no precisionTier, matching M3-KNOWLEDGE-00: a scope row is never a
+// free-count hit against a calibration negative.
+export function capScopeFinding(report: VitalsReport, couplingTotal: number | undefined, couplingUnavailable: string): Finding {
+  const { scored, tracked, knowledgePopulation } = vitalsScope(report);
+  const noFileHealth = "the report omits vitals' file_health map, so the scored-file population is unknown";
+  const lines = [
+    scopeLine("Hotspot table", report.hotspots.length, VITALS_HOTSPOT_CAP, scored, ["file vitals scored", "files vitals scored"], noFileHealth),
+    scopeLine("Co-change coupling", report.coupling.length, VITALS_COUPLING_CAP, couplingTotal, ["coupled file pair", "coupled file pairs"], couplingUnavailable),
+    scopeLine(
+      "Truck-factor / knowledge risk",
+      Math.min(VITALS_KNOWLEDGE_CAP, knowledgePopulation ?? VITALS_KNOWLEDGE_CAP),
+      VITALS_KNOWLEDGE_CAP,
+      knowledgePopulation,
+      scored !== undefined && scored > 0
+        ? ["churning source file with structural complexity", "churning source files with structural complexity"]
+        : ["tracked source file", "tracked source files"],
+      noFileHealth,
+    ),
+  ];
+  const undisclosed = [scored === undefined, couplingTotal === undefined, knowledgePopulation === undefined].filter(Boolean).length;
+  return {
+    id: "M3-SCOPE-00",
+    title: `M3 inputs are capped by vitals — ${undisclosed === 0 ? "all three caps stated with their true totals" : `${undisclosed} of 3 totals could not be derived`}`,
+    severity: "Info",
+    confidence: undisclosed === 0 ? "Confirmed" : "N/A",
+    category: "Maintainability",
+    taxonomy: "M3 — Input scope",
+    location: "(repository-wide)",
+    status: "Open",
+    evidence: `vitals truncates its three list outputs before Harvey ever sees them (vitals_cli.py:233 hotspots[:${VITALS_HOTSPOT_CAP}], :305 coupling[:${VITALS_COUPLING_CAP}], :132 knowledge[:${VITALS_KNOWLEDGE_CAP}]). Measured scope for this run:\n  - ${lines.join("\n  - ")}${tracked === undefined ? "" : `\n  - Tracked source files vitals considered overall: ${tracked}.`}`,
+    impact:
+      undisclosed === 0
+        ? "None to the findings themselves — recorded so a capped list is never read as a full census. Every M3 sub-signal above is drawn from the slices named here, not from the whole repository."
+        : "A cap whose denominator is unknown cannot be distinguished from no cap at all: the M3 sub-signals may be drawn from a small sample of this repository and this run cannot say how small.",
+    fix:
+      undisclosed === 0
+        ? "No action — this row is scope disclosure, not a defect."
+        : "Re-run M3 live against the target (drop --report) with the vitals plugin installed, so the denominators can be derived from the tool rather than estimated.",
+    value: 1,
+    ease: 5,
+    safety: 5,
+    mechanical: true,
+  };
 }
 
 // Worst-first by vitals' risk_score. Rank is an ordering, never scored as a percentage — callers

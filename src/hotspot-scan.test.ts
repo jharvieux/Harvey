@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { findFreshPass, ranFromPass, writePassArtifact } from "./audit-pass-artifact.js";
 import type { RunContext } from "./audit-runner.js";
 import type { Finding } from "./findings.js";
-import { aiProvenanceFiles, buildFallbackReport, buildM3PassArtifact, classifyChurn, complexityProxy, couplingEdges, crossReferenceHotspots, enrichFindingsWithHotspots, fallbackQualifyingCount, isUnranked, knowledgeRiskNotAssessed, rankHotspots, toFactFindings, topKFiles, trendFindings, truckFactorOneFiles, type VitalsReport } from "./hotspot-scan.js";
+import { aiProvenanceFiles, buildFallbackReport, buildM3PassArtifact, capScopeFinding, classifyChurn, complexityProxy, couplingEdges, crossReferenceHotspots, enrichFindingsWithHotspots, fallbackQualifyingCount, isUnranked, knowledgeRiskNotAssessed, rankHotspots, toFactFindings, topKFiles, trendFindings, truckFactorOneFiles, vitalsScope, type VitalsReport } from "./hotspot-scan.js";
 import { summarizeMutationReport, type StrykerReport } from "./mutation-scan.js";
 import { buildCoverageMatrix } from "./scan/calibration.js";
 import { m3Entries } from "./scan/calibration/m3.entries.js";
@@ -436,5 +436,82 @@ describe("buildM3PassArtifact + write → derive round trip (#1364)", () => {
       expect(ran.status).toBe("ran");
       expect(ran.findings).toEqual(findings);
     }
+  });
+});
+
+// #1290 — #1075 disclosed vitals' caps as "capped at the top 5 pairs / the first 50 source files"
+// with no denominator, so 50-of-52 and 50-of-1792 read identically. Both denominators were derivable;
+// one of them was already sitting unread in the payload Harvey parses.
+describe("M3 input-scope disclosure (#1290)", () => {
+  // The MEASURED shape from a live `vitals_cli.py report --json` run against this repo, 2026-07-28:
+  // file_health 314 scored files, files_analyzed 1792 tracked source files, coupling and hotspots
+  // both sliced (5 of 10, 10 of 314). The committed fixture misses a scored-vs-tracked mix-up
+  // because it happens to have 7 and 7, and its coupling list of 1 never reaches the cap at all.
+  const wideScope = (over: Partial<VitalsReport> = {}): VitalsReport => ({
+    ...report,
+    file_health: Object.fromEntries(Array.from({ length: 314 }, (_, i) => [`src/f${i}.ts`, 5])),
+    files_analyzed: 1792,
+    coupling: Array.from({ length: 5 }, (_, i) => ({ file_a: `src/a${i}.ts`, file_b: `src/b${i}.ts`, co_changes: 4, coupling_strength: 0.9, total_a: 5, total_b: 5 })),
+    ...over,
+  });
+
+  it("reads both denominators off the real committed capture — the payload already carried them", () => {
+    // Guards the #1290 root cause directly: #1075 widened VitalsReport for `mode`/`trends`/
+    // `overall_health` while `files_analyzed` sat in the very same JSON, undeclared and unread.
+    const raw = JSON.parse(readFileSync(new URL("./__fixtures__/vitals-report.json", import.meta.url), "utf8")) as Record<string, unknown>;
+    expect(raw["files_analyzed"]).toBe(7);
+    expect(Object.keys(raw["file_health"] as object)).toHaveLength(7);
+    expect(vitalsScope(report)).toEqual({ scored: 7, tracked: 7, knowledgePopulation: 7 });
+  });
+
+  it("the truck-factor denominator is the SCORED file count, not the tracked one", () => {
+    // vitals_cli.py:132 slices `code_files[:50]`, and code_files is what file_health is keyed by.
+    // files_analyzed is len(source_files) — 5.7x wider on this repo. Reporting "50 of 1792" would
+    // replace #1075's hedge with a second false claim, which is what this asserts against.
+    expect(vitalsScope(wideScope()).knowledgePopulation).toBe(314);
+    const evidence = capScopeFinding(wideScope(), 10, "").evidence;
+    expect(evidence).toContain("showing 50 of 314 churning source files with structural complexity");
+    expect(evidence).not.toContain("50 of 1792");
+  });
+
+  it("falls back to the tracked count only in vitals' own empty-code_files branch", () => {
+    // `code_files[:50] if code_files else source_files[:50]` — the #1112 case, where nothing cleared
+    // the churn+complexity gate and knowledge analysis runs over all tracked source files instead.
+    expect(vitalsScope(wideScope({ file_health: {} })).knowledgePopulation).toBe(1792);
+    expect(capScopeFinding(wideScope({ file_health: {} }), 10, "").evidence).toContain("showing 50 of 1792 tracked source files");
+  });
+
+  it("states the true pre-cap coupling total the plugin's own function returns", () => {
+    expect(capScopeFinding(wideScope(), 10, "").evidence).toContain("Co-change coupling: showing 5 of 10 coupled file pairs");
+  });
+
+  it("says a cap did NOT bind rather than implying a cut", () => {
+    const small = wideScope({ file_health: { "a.ts": 5, "b.ts": 6 }, hotspots: report.hotspots.slice(0, 2), coupling: report.coupling.slice(0, 1) });
+    const evidence = capScopeFinding(small, 1, "").evidence;
+    expect(evidence).toContain("all 2 files vitals scored (vitals' cap of 10 did not bind)");
+    expect(evidence).toContain("all 1 coupled file pair (vitals' cap of 5 did not bind)");
+    expect(capScopeFinding(small, 1, "").confidence).toBe("Confirmed");
+  });
+
+  it("an underivable denominator is named as underivable WITH its reason, never substituted", () => {
+    // The silent-omission shape this whole row exists to prevent: a 5-row coupling list with no
+    // total must not read as "5 coupled pairs exist".
+    const f = capScopeFinding(wideScope(), undefined, "the report was supplied pre-captured via --report");
+    expect(f.evidence).toContain("exactly vitals' cap of 5 — the true total is NOT derivable here (the report was supplied pre-captured via --report)");
+    expect(f.confidence).toBe("N/A");
+    expect(f.title).toContain("1 of 3 totals could not be derived");
+    expect(f.fix).toContain("Re-run M3 live");
+  });
+
+  it("is a disclosure row, never a free-count hit against a calibration negative", () => {
+    // Mirrors M3-KNOWLEDGE-00: no precisionTier, so a widened scope row can never light a benign
+    // fixture the way #1251/#1198 were found.
+    const f = capScopeFinding(wideScope(), 10, "");
+    expect(f.precisionTier).toBeUndefined();
+    expect(f.severity).toBe("Info");
+    // Every M3 negative still clears with the scope row in the finding set: it lights no fixture.
+    const matrix = buildCoverageMatrix([f], m3Entries);
+    expect(matrix.rows.filter((r) => r.kind === "negative" && (r.highFlagged || r.reviewFlagged))).toEqual([]);
+    expect(matrix.negativesCleared).toBe(matrix.negativesTotal);
   });
 });

@@ -23,3 +23,30 @@ export function normalizeA(value: number): number {
 export function normalizeB(value: number): number {
   return clamp(value, -1, 1);
 }
+
+// #370 / #325 — the third FALSE POSITIVE class briefs/quality-extras.txt names: "a 'single-use'
+// helper that exists for testability/seam reasons". NON-exported, real body, exactly one caller —
+// every trigger the rule looks for — but it is the pure money-math half of a function whose other
+// half is network I/O. Inlining it would entangle the calculation with the client, which is the
+// brief's own MISSING SEAMS failure. Mirrors M6's M6-N-SEAM fixture
+// (targets/calibration/simplify/reconcile.ts) so the two modules stay aligned on this class;
+// the contract is in the code (pure helper, awaiting caller), not asserted by this comment.
+interface PaymentRow {
+  amount_cents: number;
+  status: "succeeded" | "refunded" | "failed";
+}
+
+function reconcileTotals(rows: PaymentRow[]): { collectedCents: number; failedCount: number } {
+  let collectedCents = 0;
+  let failedCount = 0;
+  for (const row of rows) {
+    if (row.status === "succeeded") collectedCents += row.amount_cents;
+    else failedCount += 1;
+  }
+  return { collectedCents, failedCount };
+}
+
+export async function monthlyReconciliation(client: { fetchPayments: (m: string) => Promise<PaymentRow[]> }, billingMonth: string) {
+  const rows = await client.fetchPayments(billingMonth);
+  return reconcileTotals(rows);
+}

@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
+import { detectHandrolledFindings } from "../detectors/handrolled.js";
 import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, type CorpusEntry } from "./calibration.js";
 import { b2DepsEntries } from "./calibration/b2-deps.entries.js";
 import { b9SecretsEntries } from "./calibration/b9-secrets.entries.js";
@@ -874,6 +875,28 @@ describe("#1314 parity minimum over ALL ten modules (the two with zero fixtures 
       entry({ id: "N-M2-A", kind: "negative", cls: "c", module: "M2", location: "c", note: "" }),
     ];
     expect(parityVerdict(withM2Fixtures).stale).toEqual(["M2"]);
+  });
+
+  // #1371: M6's exemption reason USED to say "M6's indicators are whole-repo shape counts, which a
+  // planted single-file fixture could never express". MEASURED 2026-07-28 by running
+  // detectHandrolledFindings over src/detectors/__fixtures__/handrolled: 33 of 33 planted
+  // single-file positives fire. The claim was false the day it was written, and a substitute-gate
+  // reason nobody re-tests is exactly how #1371's doc sentence survived eleven days. This locks the
+  // measurement to the prose: the exemption may stand, but not on that argument.
+  it("M6's exemption does not rest on the falsified 'a single-file fixture cannot express it' claim", () => {
+    const m6 = parityVerdict(CORPUS).exempt.find((e) => e.module === "M6");
+    expect(m6).toBeDefined();
+    expect(m6!.reason).not.toMatch(/single-file fixture cannot|cannot express/i);
+    // It must instead name where the indicators ARE gated, so the claim is checkable.
+    expect(m6!.reason).toContain("handrolled");
+    const fixtureDirs = readdirSync("src/detectors/__fixtures__/handrolled");
+    const fired = fixtureDirs.filter((d) => {
+      const dir = join("src/detectors/__fixtures__/handrolled", d, "positive");
+      if (!existsSync(dir)) return false;
+      const inputs = readdirSync(dir).map((f) => ({ path: `src/${f.replace(/\.txt$/, "")}`, text: readFileSync(join(dir, f), "utf8") }));
+      return detectHandrolledFindings(inputs).some((x) => x.taxonomy.startsWith("M6"));
+    });
+    expect(fired.length).toBeGreaterThanOrEqual(33);
   });
 });
 

@@ -655,15 +655,58 @@ function detectUnusedImport(sf: ts.SourceFile, path: string, nextId: NextId): Fi
 // per the issue's own guidance. `confidence: "Review"` for the same reason as the existing
 // single-call-wrapper detector: a mechanical count can't know it's a deliberate test/refactor
 // seam.
-function countCalls(sf: ts.SourceFile, name: string, ownNode: ts.Node): number {
-  let count = 0;
+function callSites(sf: ts.SourceFile, name: string, ownNode: ts.Node): ts.CallExpression[] {
+  const sites: ts.CallExpression[] = [];
   const visit = (node: ts.Node) => {
     if (node === ownNode) return; // excludes the declaration itself and any self-recursive calls
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === name) count++;
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === name) sites.push(node);
     ts.forEachChild(node, visit);
   };
   ts.forEachChild(sf, visit);
-  return count;
+  return sites;
+}
+
+function containsAwait(node: ts.Node): boolean {
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    // Don't descend into a nested function — its awaits belong to it, not to `node`.
+    if (n !== node && ts.isFunctionLike(n)) return;
+    if (ts.isAwaitExpression(n)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return found;
+}
+
+function isAsync(node: ts.Node): boolean {
+  return ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) ?? false);
+}
+
+// #370 acceptance criterion 3 — the "kept as a test seam" FP class briefs/quality-extras.txt names,
+// shared with M6 via #325's M6-N-SEAM fixture (targets/calibration/simplify/reconcile.ts).
+//
+// The two detectors DID diverge, MEASURED 2026-07-28 by running detectSlopFindings over that fixture
+// and over a copy with one keyword removed: the exported original draws 0 M5 findings, but drop the
+// `export` and detectSingleUseHelper flags it — while M6's rubric spares it for a reason the `export`
+// keyword has nothing to do with. GROUND-TRUTH.md states that contract as "pure helper + I/O-entangled
+// sole caller", and it is AST-visible: the helper awaits nothing, its one caller does. A seam split
+// out to keep money-math testable without a Supabase client is the brief's own MISSING SEAMS remedy,
+// so inlining it is the wrong advice whether or not the module chose to export it.
+//
+// Deliberately conservative — a caller that awaits something unrelated also exempts. On the class the
+// repo calls "the likeliest real-world FP for the paid tier", a spared true positive costs less than
+// telling a team to entangle their tested logic with I/O. The bound is stated in the finding text so
+// a reader knows what the rule spares, not only what it flags.
+function isTestabilitySeam(helperBody: ts.Node, isAsyncHelper: boolean, callSite: ts.CallExpression): boolean {
+  if (isAsyncHelper || containsAwait(helperBody)) return false; // the helper does I/O itself — not a pure seam
+  let enclosing: ts.Node | undefined = callSite.parent;
+  while (enclosing && !ts.isFunctionLike(enclosing)) enclosing = enclosing.parent;
+  if (!enclosing) return false;
+  return isAsync(enclosing) || containsAwait(enclosing);
 }
 
 function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId): Finding[] {
@@ -672,13 +715,15 @@ function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId):
     name: string;
     node: ts.Node;
     declNode: ts.Node;
+    body: ts.Node;
+    async: boolean;
   }
   const candidates: Candidate[] = [];
   for (const stmt of sf.statements) {
     const exported = ts.canHaveModifiers(stmt) && ts.getModifiers(stmt)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
     if (exported) continue;
     if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body && ts.isBlock(stmt.body) && stmt.body.statements.length >= 1) {
-      candidates.push({ name: stmt.name.text, node: stmt, declNode: stmt });
+      candidates.push({ name: stmt.name.text, node: stmt, declNode: stmt, body: stmt.body, async: isAsync(stmt) });
     } else if (ts.isVariableStatement(stmt)) {
       for (const decl of stmt.declarationList.declarations) {
         if (
@@ -688,13 +733,15 @@ function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId):
           decl.initializer.body &&
           ts.isBlock(decl.initializer.body)
         ) {
-          candidates.push({ name: decl.name.text, node: stmt, declNode: decl });
+          candidates.push({ name: decl.name.text, node: stmt, declNode: decl, body: decl.initializer.body, async: isAsync(decl.initializer) });
         }
       }
     }
   }
   for (const c of candidates) {
-    if (countCalls(sf, c.name, c.declNode) !== 1) continue;
+    const sites = callSites(sf, c.name, c.declNode);
+    if (sites.length !== 1) continue;
+    if (isTestabilitySeam(c.body, c.async, sites[0]!)) continue;
     findings.push(
       makeFinding(nextId, {
         title: `Single-use helper \`${c.name}\` is only called from one site`,
@@ -702,7 +749,7 @@ function detectSingleUseHelper(sf: ts.SourceFile, path: string, nextId: NextId):
         confidence: "Review",
         taxonomy: "M5 — Single-use helper",
         location: `${path}:${lineOf(sf, c.node)}`,
-        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file.`,
+        evidence: `\`${c.name}\` is a non-exported helper with a real body, called from exactly one place in this file. Scope of this rule: it counts call sites WITHIN this file only, and it already exempts a pure helper whose one caller does I/O — the testability seam \`briefs/quality-extras.txt\` demands — so this one is not that shape.`,
         impact: "An extracted layer the reader must trace through for a single caller — unless it's a deliberate test/refactor seam.",
         fix: "Inline it at its one call site, unless it exists as an intentional seam (leave it if so).",
         value: 2,

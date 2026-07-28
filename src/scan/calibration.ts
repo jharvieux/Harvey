@@ -374,7 +374,22 @@ export const MIN_NEGATIVES_PER_MODULE = 1;
 //        (src/pentest/targets.ts:161), and CALIBRATION_PLANTS carries an M2 row
 //        (src/audit-conservation.ts:59) since #1155.
 //   M6 — src/scan/external-corpus.ts carries an "M6-indicator" baseline on six external targets
-//        (#483), re-run by `pnpm corpus-drift`.
+//        (#483), re-run by `pnpm corpus-drift`, PLUS a per-class single-file fixture pair for every
+//        indicator in src/detectors/__fixtures__/handrolled/, gated by handrolled.test.ts.
+//
+// #1371 CORRECTION 2026-07-28. M6's reason below used to read "M6's indicators are whole-repo shape
+// counts, which a planted single-file fixture could never express". That was written the same day and was
+// already false. MEASURED by running detectHandrolledFindings over each fixture directory: 33 of 33
+// planted single-file positives fire, and each negative clears its own taxonomy. A planted
+// single-file fixture expresses M6's indicators fine — 33 of them already do. The exemption survives
+// on a different and true footing (the indicators ARE gated, just not from the shared corpus), and
+// what is actually open is a product question, recorded below rather than dressed as impossibility.
+//
+// REASON: the mechanical M6 indicators are not mirrored into CorpusEntry, so M6 sits below the parity minimum with a named substitute gate instead of fixtures of its own
+// KIND: decisional
+// PROVENANCE: MEASURED 2026-07-28 (detectHandrolledFindings over src/detectors/__fixtures__/handrolled: 33/33 positives fire, negatives clear their own taxonomy — so the previously recorded "a single-file fixture cannot express them" is false; what remains is a ruling, not a capability limit)
+// OWNER: operator
+// DECISION: #1371 — the #265 ruling that kept M6 out of src/scan/calibration.ts was about not folding an LLM-judge AGREEMENT RATE into a precision claim; handrolled.ts is a deterministic AST pass with no model in it, so that rationale does not reach it. Asked on #1371: should the 33 mechanical indicators get CorpusEntry rows (gaining the shared scored matrix, at the cost of M6 rows sitting one line away from being read as a precision claim), or stay gated by handrolled.test.ts alone?
 // An exemption for a module that is NOT thin is itself a failure (the `stale` list) — a substitute gate
 // that has been overtaken by real fixtures must not keep standing in for them.
 interface ParityExemption {
@@ -384,7 +399,7 @@ interface ParityExemption {
 
 const PARITY_EXEMPTIONS: readonly ParityExemption[] = [
   { module: "M2", reason: "no static corpus by construction — M2 is the dynamic tier, and its findings come from a live two-tenant stack, not a planted file. Covered instead by `pnpm exec tsx src/cli/pentest.ts --mode=coverage` (#352 assertComplete, which fails loud on any enumerated target `--tested` did not list) and by the M2 conservation plant (#1155)." },
-  { module: "M6", reason: "no static corpus — M6's indicators are whole-repo shape counts, which a planted single-file fixture cannot express. Covered instead by the #483 `M6-indicator` baselines over six external targets in src/scan/external-corpus.ts, re-run by `pnpm corpus-drift`." },
+  { module: "M6", reason: "no rows in the SHARED corpus — a product decision (#265/#1371), not a capability limit: MEASURED 2026-07-28, all 33 mechanical indicators already have planted single-file fixture pairs and every positive fires. They are gated where they live — src/detectors/__fixtures__/handrolled/ via handrolled.test.ts — plus the #483 `M6-indicator` baselines over six external targets in src/scan/external-corpus.ts, re-run by `pnpm corpus-drift`. What is NOT gated here is M6's reviewer-judged verdict tier, which has no mechanical detector and is deliberately not scored as precision." },
 ];
 
 interface ParityVerdict {
