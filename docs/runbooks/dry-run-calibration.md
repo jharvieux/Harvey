@@ -477,3 +477,131 @@ fix (if any) belongs there, not in the pipeline's shipped defaults.
   against a real third-party Supabase/Next.js repo where the bugs are genuinely unknown, not a
   calibration fixture with an answer key — that's the test that would validate generalization rather
   than recall-on-a-known-set.
+
+## 11. Connected-tier live results for #140/#141/#142 (recorded 2026-07-28, issue #1299)
+
+All three of #140 (Realtime authorization), #141 (PostgREST schema exposure) and #142 (pg_graphql
+introspection) named **this file** as the venue for their validation result. The results were
+produced — and then written only into PR #150's body, which no future engagement reads. #1299
+found the gap; this section is the missing record, plus the two follow-up measurements that closed
+the open questions PR #150 left behind.
+
+Provenance is tagged on every claim below. Nothing here is recalled.
+
+### 11.1 The original ATC live run — MEASURED 2026-07-10 (read-only, hosted)
+
+Source: PR #150, run read-only against the ATC production project. Reproduced here verbatim in
+substance, because the PR body is not a durable venue.
+
+| Class | Issue | Live result on ATC | Verdict |
+|---|---|---|---|
+| Realtime authorization (`checkRealtimeAuthorization`) | #140 | `realtime.messages` had **RLS enabled** | clean **negative** |
+| pg_graphql introspection (`checkGraphqlIntrospection`) | #142 | `pg_graphql` **not installed** (so `graphql_public` being in the exposed list is harmless) | clean **negative** |
+| PostgREST schema exposure (`checkExposedSchemas`) | #141 | not decided — PR #150 flagged the `db_schema` response shape in a source comment as documented but never checked against a live response | **open until 2026-07-28**, see §11.2 |
+| GoTrue version (`checkGotrueVersion`) | #143/#144 | GoTrue **v2.192.0** with Azure enabled — patched; exercises #143's provider precondition and correctly produces no finding | clean **negative** |
+
+Response shapes confirmed live in that same run: `/auth/v1/health` → `{version}`, `/auth/v1/settings`
+→ `{external:{apple,azure,…}}`.
+
+**Read the two "clean negative" rows precisely.** They establish that the checks do not
+false-positive on a well-configured project. They do **not** establish that either detector can
+fire — ATC simply was not in the vulnerable state. The positive direction is what §11.3's seeded
+fixtures are for.
+
+### 11.2 The `db_schema` key, settled — MEASURED 2026-07-28
+
+PR #150 shipped `interface PostgrestConfig { db_schema?: string }` with an inline caveat that the
+key name had not been verified against a live response. Because the field is optional, a wrong key
+name would have yielded `[]` and made **both** #141 and #142 silently inert — a false negative with
+no disclosure.
+
+- **Command:** one operator-authorized, read-only Management API call,
+  `GET /v1/projects/<ref>/postgrest`.
+- **Result:** HTTP 200. The key **is** `db_schema`, and its value **is** a comma-separated schema
+  list (observed: the stock `public,graphql_public` default).
+- **Conclusion:** `parseExposedSchemas` reads the right key. The detectors are **not** inert; a `[]`
+  from them now means the allow-list is genuinely empty.
+
+**Handling note for anyone repeating this call:** the `/postgrest` response body also carries the
+project's `jwt_secret`. Extract only the field a check needs — never put the raw response object
+into a finding's evidence, a scan artifact, an issue, or a PR.
+
+One correction to the record while we are here: #1299 asserted that the inline caveat "no longer
+exists". It did exist, continuously, from `58abef7` (PR #150) until 2026-07-28 — `git log -L
+89,100:src/scan/supabase.ts` shows it added and never deleted. The provenance flag worked as
+designed; what was missing was the follow-up call, not the flag.
+
+### 11.3 Seeded-stack fixtures for the positive direction — MEASURED 2026-07-28
+
+Neither class had a calibration entry before #1299 (`grep -rl 'EXPOSED-SCHEMA\|REALTIME\|GRAPHQL'
+src/scan/calibration/` returned nothing). Adding one needs a stack state that actually triggers the
+check, and two of the three looked unreachable from a project migration. Both turned out to be
+reachable. Measured with `psql` against a stock `supabase start` stack, **Supabase CLI 2.102.0**:
+
+| Question | Command | Result |
+|---|---|---|
+| Does `realtime.messages` exist, and with RLS on? | `select relrowsecurity, pg_get_userbyid(relowner) …` | exists, `relrowsecurity = t`, owner `supabase_realtime_admin` |
+| Can a project migration turn it off? | `alter table realtime.messages disable row level security;` | **`ALTER TABLE`** — succeeds; `postgres` is a member of `supabase_realtime_admin` |
+| Is `pg_graphql` installed by default? | `select … from pg_extension where extname='pg_graphql'` | **0 rows — not installed** |
+| Is it available? | `select … from pg_available_extensions where name='pg_graphql'` | yes, `default_version 1.5.11`, `installed_version` null |
+| Can a migration install it? | `create extension if not exists pg_graphql;` | **`CREATE EXTENSION`** — version 1.5.11 in schema `graphql` |
+| Can a migration add a schema to expose? | `create schema if not exists internal_ops;` | **`CREATE SCHEMA`** |
+
+That last `pg_graphql` row also explains §11.1: ATC's clean negative was the **extension** missing,
+not the schema — exactly the discrimination `hasPgGraphql()` exists to make.
+
+The fixtures those measurements license now live in
+`targets/calibration/supabase/migrations/20260728000001_connected_postgrest_realtime.sql` and in
+`[api] schemas` in `targets/calibration/supabase/config.toml`; the answer key is
+`src/scan/calibration/b24-connected-postgrest-realtime.entries.ts` (`P-API-SCHEMA-WIDE`,
+`P-GRAPHQL-INTROSPECTION`, `P-REALTIME-NO-AUTHZ`, `N-API-SCHEMA-INTERNAL`).
+
+**What those rows lock, stated plainly.** All three positives are `expectedTier: "connected"`, which
+`scoreEntry()` scores **N/A and never fails**. They lock the answer key, the fixture, and the parity
+census — not a live assertion. The detector bodies are locked by `supabase-config.test.ts` and the
+wiring seam by `supabase.test.ts` ("runs the connected-tier checks (realtime, exposed schema,
+pg_graphql) on a hosted scan"). `N-API-SCHEMA-INTERNAL` is deliberately left untiered so that one
+row is genuinely scored by the static gate. A scored **live** run is still owed — and is blocked,
+see §11.5.
+
+`pnpm exec tsx src/cli/validate-calibration.ts`, run 2026-07-28 with the rows in place:
+
+```
+  N/A   P-API-SCHEMA-WIDE      -       N/A — connected tier (live DB), not evaluated statically
+  N/A   P-GRAPHQL-INTROSPECTION -       N/A — connected tier (live DB), not evaluated statically
+  N/A   P-REALTIME-NO-AUTHZ    -       N/A — connected tier (live DB), not evaluated statically
+  PASS  N-API-SCHEMA-INTERNAL  -       cleared — not flagged
+…
+  M1   positives=321 +16 connected negatives=274  SCORED BY THIS GATE
+M1 mechanical corpus — positives caught: 312/315 static (113 at high/free-count; 18 connected-tier N/A).
+M1 negatives cleared: 272/272 static
+CORPUS SELF-MATCH (#1355): 0 of 566 keyed entries carry a key that is a substring of their own location
+GATE PASS — no free-count false positives; every high-tier rule fired on its positive; every annotated severity delivered as rated.
+```
+
+### 11.4 The scope control, because a zero proves nothing on its own
+
+The new migration produces **zero** static findings, which is the correct result (all three checks
+read a live database or the hosted PostgREST config, never committed SQL) — and is also exactly
+what an unread file produces. So readership was proven, not assumed: a temporary
+`create policy tmp_probe_using_true on public.notes for select using (true);` was appended to the
+new migration and `src/cli/dry-run.ts` re-run. It emitted
+`SB-RLS-POLICY-public.notes.tmp_probe_using_true` at
+`supabase/migrations/20260728000001_connected_postgrest_realtime.sql:65`. The file is read. The
+probe was then removed.
+
+### 11.5 Two blockers this pass found and did not fix
+
+- **`supabase start` on `targets/calibration` does not complete.** It aborts applying
+  `20260719000002_plpgsql_injection_definer.sql` with `ERROR: type "public.nocode_tickets" does not
+  exist (SQLSTATE 42704)` — that table is referenced by four functions in that migration and is
+  created by no migration in the target. Every migration from that point on, including the #1182
+  storage-bucket fixtures and the new one above, has therefore **never been applied to a live
+  stack**. This is why §11.3 was measured on a bare stack rather than on the calibration target, and
+  it is what currently blocks a scored live run of the whole connected/M7 advisor corpus (§9's
+  successor). Pre-existing, unrelated to #1299, filed as **#1424**.
+- **A migration that DISABLES row-level security is invisible to the static tier.** The same probe
+  run in §11.4 also appended `alter table public.notes disable row level security;` and it produced
+  **nothing**: `src/scan/supabase-static.ts` carries no `disable row level security` pattern at all,
+  and `checkMigrationRlsStatic` aggregates `enable row level security` across every migration — so a
+  table that one migration protects and a later one un-protects still scores clean. Filed as **#1425**.
