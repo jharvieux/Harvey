@@ -11,6 +11,15 @@ on:
   # run as a post-merge-style safety net.
   schedule:
     - cron: "0 6 * * *" # daily 06:00 UTC
+  # #1287: this workflow had NO manual trigger, so heavy-cli's `ci-heavy-cli-alert` path could only
+  # ever run on cron — i.e. it could not be proven to work at all. The alert path had in fact never
+  # executed. `alert_drill` is the re-runnable proof; a bare dispatch with it off is an ordinary run.
+  workflow_dispatch:
+    inputs:
+      alert_drill:
+        description: "Prove the ci-heavy-cli-alert path fires end-to-end (#1287). Fails shard 1 on purpose; opens, comments on and then closes a self-cleaning drill issue."
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -126,6 +135,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Shard 1 only: the alert path is per-job, and three shards racing to open the same tracking
+      # issue would make pass 1 of the drill find an issue it was supposed to create. Shards 2 and 3
+      # run normally, which also keeps a drill from claiming the heavy suite passed.
+      - name: Alert-path liveness drill — fail deliberately (#1287)
+        if: inputs.alert_drill && matrix.shard == 1
+        run: |
+          echo "::error::Alert-path liveness drill (#1287): failing on purpose so the tracking-issue step runs under the real job token. This is NOT a heavy-cli failure."
+          exit 1
+
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -176,25 +195,20 @@ jobs:
 
       # A scheduled heavy-cli failure (#1138) means a regression from something no PR touched. It
       # goes red on main with no PR to surface it, so find-or-update ONE tracking issue by the marker
-      # label: comment on the open one if it exists, otherwise create it. Never fires on PR/push —
-      # those failures already gate the `verify` check on the PR. Distinct label from corpus-drift's.
+      # label. Still never fires on PR/push — those failures already gate the `verify` check on the
+      # PR — but `workflow_dispatch` is now permanently in the condition (#1287): this path had never
+      # executed once, and until this change the workflow had no manual trigger to prove it with.
       - name: Open or update the heavy-cli tracking issue
-        if: failure() && github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          MARKER: ci-heavy-cli-alert
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          gh label create "$MARKER" --color B60205 \
-            --description "Auto-opened when the scheduled heavy-cli CI run fails" 2>/dev/null || true
-          body="The scheduled heavy-cli run failed (run: $RUN_URL, shard ${{ matrix.shard }} of 3). This job runs the heavy child-process test files with the real mechanical binaries (semgrep/trufflehog/gitleaks/osv-scanner). A failure here with no code change points at an environment regression — a transitive dep bump, a runner-image change, or a scanner-binary drift. Investigate the run, then close this issue once green."
-          existing=$(gh issue list --state open --label "$MARKER" --json number --jq '.[0].number // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            gh issue create --title "heavy-cli scheduled run failing" --label "$MARKER" --body "$body"
-          fi
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        uses: ./.github/actions/alert-issue
+        with:
+          marker: ci-heavy-cli-alert
+          label-description: Auto-opened when the scheduled heavy-cli CI run fails
+          title: heavy-cli scheduled run failing
+          drill: ${{ inputs.alert_drill }}
+          token: ${{ github.token }}
+          repo: ${{ github.repository }}
+          body: "The scheduled heavy-cli run failed (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}, shard ${{ matrix.shard }} of 3). This job runs the heavy child-process test files with the real mechanical binaries (semgrep/trufflehog/gitleaks/osv-scanner). A failure here with no code change points at an environment regression — a transitive dep bump, a runner-image change, or a scanner-binary drift. Investigate the run, then close this issue once green."
 
   actionlint:
     name: actionlint
