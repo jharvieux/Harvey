@@ -89,9 +89,13 @@ const CRON_SCHEMA_EXISTS_SQL = `select exists (select 1 from pg_namespace where 
 const CRON_JOBS_SQL = `select j.jobid, j.schedule, j.command, j.nodename, j.database, j.username, j.active, coalesce(r.rolsuper, false) as "isSuperuser" from cron.job j left join pg_roles r on r.rolname = j.username;`;
 const DEFINER_FUNCTION_NAMES_SQL = `select p.proname as name from pg_proc p where p.prosecdef = true;`;
 
-// PostgREST config exposes the schema allow-list as `db_schema` (comma-separated). The GET
-// endpoint is documented but its response shape was NOT independently re-verified against the
-// live OpenAPI spec this session — confirm the `db_schema` key before the first real hosted run.
+// PostgREST config exposes the schema allow-list as `db_schema` (comma-separated).
+// MEASURED 2026-07-28 against a live hosted project (operator-authorized read-only Management API
+// call, GET /v1/projects/<ref>/postgrest → HTTP 200): the key IS `db_schema` and its value is a
+// comma-separated list, e.g. "public,graphql_public". The shape is confirmed, so a `[]` from
+// parseExposedSchemas now means the allow-list is genuinely empty, not that the key was misnamed.
+// The response ALSO carries the project's `jwt_secret` — extract only what a check needs and never
+// put the raw object into a finding's evidence or a scan artifact.
 interface PostgrestConfig {
   db_schema?: string;
 }
