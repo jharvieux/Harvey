@@ -92,6 +92,54 @@
   merely NAMED like one (`passwordLabel`, `awaiting_password_reset`, `secretQuestion`)
   holding a UI string is benign (vs name-only detectors like Sonar S2068).
 
+## Reachability is the WRONG test for presence-based classes (#53/#1302)
+
+- A COMMITTED CREDENTIAL IS A FINDING WHETHER OR NOT ANY CODE IMPORTS THE FILE.
+  The dead-code/unreachable-code exclusion — and the standing "TRUE_POSITIVE
+  requires the path be reachable from untrusted input" bar — are REACHABILITY
+  tests. The classes below are PRESENCE-based: the harm is that the value is in
+  the repository and in its history, readable by everyone with repo access, and
+  it stays compromised after the file is deleted. "Nothing imports it today" is
+  one refactor away from false, and is not what makes the credential exposed.
+  RECORDED 2026-07-09 (#53), on this repo's own calibration target: the triage
+  verifier dropped the genuine hardcoded `service_role` JWT in `lib/admin.js`
+  because nothing imports that file. RE-MEASURED 2026-07-28 (#1302) against a
+  clean fixture — an unimported `service_role` JWT in a file whose path carries
+  no test/fixture marker — with the real verifier prompt and NO org rules
+  loaded: 3 of 3 independent verifiers returned TRUE_POSITIVE, each reasoning
+  unprompted that presence is not reachability. So the drop does NOT reproduce
+  on demand, and this rule STATES A CONTRACT rather than repairing a live
+  regression. It is written anyway because 3 votes on one fixture on one day is
+  weak evidence of absence, and because #53's file sat in `targets/calibration/`
+  — where the example/fixture clause of the same exclusion applies for an
+  independent and legitimate reason, which is a confound #53 did not separate.
+
+  The presence-based classes, exhaustively — this list does NOT generalize to
+  other finding types:
+    1. a hardcoded credential, API key, token, private key, or a connection
+       string carrying a password, in any committed file;
+    2. a REAL credential committed to a sample/template file — the placeholder
+       rule above exempts PLACEHOLDERS (`your_key_here`, `changeme`), never a
+       live value;
+    3. a credential in committed build output, a bundle, or a lockfile;
+    4. a credential in git history that no longer exists in the working tree.
+
+  For these four, the verdict turns ONLY on whether the value is a live
+  credential (provider key pattern, decoded `role` claim, entropy+verification
+  per the rules above) — never on whether a call path reaches it. Specifically:
+    - do NOT cite the test/dead/example-code exclusion or the
+      missing-hardening-with-no-exploit-path exclusion against them;
+    - do NOT require a caller or a first call-site link; record it as not
+      applicable and say the class is presence-based;
+    - the out-of-scope rule for test/fixture/seed/dev-script code above governs
+      that code's OWN defects; it does not make a live credential committed
+      there unreported.
+
+  Everything else keeps the reachability exclusions exactly as they are — an
+  unexploitable crash in dead code, or an injection sink no input reaches, is
+  still a false positive. This rule narrows one exclusion for one class of harm;
+  it does not weaken triage generally.
+
 ## SQL / query construction
 
 - A PARAMETERIZED QUERY IS NOT SQL INJECTION. `pool.query("… where x = $1", [val])`
