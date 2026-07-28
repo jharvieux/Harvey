@@ -39,7 +39,8 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
 import type { Finding } from "../findings.js";
-import { buildFallbackReport, complexityProxy, crossReferenceHotspots, fallbackQualifyingCount, type FallbackFile, isUnranked, rankHotspots, toFactFindings, topKFiles, type VitalsReport } from "../hotspot-scan.js";
+import { writePassArtifact } from "../audit-pass-artifact.js";
+import { buildFallbackReport, buildM3PassArtifact, complexityProxy, crossReferenceHotspots, fallbackQualifyingCount, type FallbackFile, isUnranked, rankHotspots, toFactFindings, topKFiles, type VitalsReport } from "../hotspot-scan.js";
 
 // #808: the vitals version src/hotspot-scan.ts's VitalsReport shape is verified against (#94/#369).
 // A mismatch fails loud with expected/actual BEFORE the report schema-drift check, so version drift
@@ -96,7 +97,7 @@ function discoverVitalsCli(): string | undefined {
 const targetArg = args.find((a) => !a.startsWith("--"));
 
 if (!targetArg) {
-  console.error("usage: pnpm exec tsx src/cli/hotspot-scan.ts <target-dir> [--report <vitals.json>] [--out <m3.json>] [--hotspots-out <file>] [--findings <file>]... [--top <k>]");
+  console.error("usage: pnpm exec tsx src/cli/hotspot-scan.ts <target-dir> [--report <vitals.json>] [--out <m3.json>] [--hotspots-out <file>] [--findings <file>]... [--top <k>] [--artifacts-dir <dir>]");
   process.exit(2);
 }
 
@@ -104,6 +105,9 @@ const targetDir = resolve(targetArg);
 const reportPath = arg("--report");
 const outPath = arg("--out");
 const hotspotsOutPath = arg("--hotspots-out");
+// #1364: writes M3.pass.json directly (the #416 durable-artifact convention), so a captured/replayed
+// vitals pass records itself without a separate `record-pass` hand-off.
+const artifactsDirPath = arg("--artifacts-dir");
 const topK = Number(arg("--top") ?? 10);
 const findingsPaths = args.flatMap((a, i) => (a === "--findings" && args[i + 1] ? [args[i + 1]!] : []));
 
@@ -319,4 +323,11 @@ if (outPath) {
   };
   writeFileSync(outPath, `${JSON.stringify(artifact, null, 2)}\n`);
   console.log(`\nM3 artifact → ${outPath} — merge \`findings\` (and \`crossReferenced.findings\`) into the engagement findings.json for report-template/`);
+}
+
+if (artifactsDirPath) {
+  const tier = reduced ? "reduced" : unranked ? "unranked" : "full";
+  const passArtifact = buildM3PassArtifact({ targetDir, findings, hotspots: top, rankedCount: ranked.length, tier, generatedAt: new Date().toISOString() });
+  const path = writePassArtifact(artifactsDirPath, passArtifact);
+  console.log(`\nM3 pass artifact → ${path} (run-audit --artifacts-dir ${artifactsDirPath} derives M3 ran from it)`);
 }
