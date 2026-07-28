@@ -1,0 +1,20 @@
+// The precision boundary for #1262: the same two shapes, both bounded. The retry count is a numeric
+// constant this pass resolves, and the fan-out is sliced to a fixed window before the map.
+const MAX_ATTEMPTS = 3;
+const MAX_FANOUT = 20;
+
+export async function POST(request: Request) {
+  const { url, ids } = await request.json();
+
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    try {
+      const res = await fetch(url);
+      return Response.json(await res.json());
+    } catch {
+      // swallow and retry, capped
+    }
+  }
+
+  const results = await Promise.all(ids.slice(0, MAX_FANOUT).map((id: string) => fetch(`${url}/${id}`)));
+  return Response.json(results.length);
+}

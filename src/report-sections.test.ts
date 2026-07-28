@@ -18,6 +18,7 @@ import {
   derivedScopeLimits,
   draftTermsBadge,
   legalTermsSection,
+  notApplicableSection,
   tenantIsolationPill,
   testQualityAction,
   testQualityBlock,
@@ -27,7 +28,7 @@ import { assembleEngagementDocument } from "./audit-report.js";
 import { runAudit } from "./audit-runner.js";
 import type { RunContext } from "./audit-runner.js";
 import { AUDIT_RUNNERS } from "./audit-runners.js";
-import type { CoverageRow, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
+import type { CoverageRow, Finding, FindingsDocument, ReportMeta, TestQuality } from "./findings.js";
 import { validateFindings } from "./findings.js";
 
 const tq = (over: Partial<TestQuality> = {}): TestQuality => ({
@@ -257,5 +258,51 @@ describe("cover tenant-isolation pill (#1067)", () => {
       expect(pill).toContain("NOT verified this engagement");
       expect(pill).toContain("absent from the coverage ledger");
     }
+  });
+});
+
+// #1262. Every not-assessed row in the disclosure-row family carries its scope in `evidence` and
+// sets no `note`. The N/A section printed `note ?? "Not applicable in context."`, so each one
+// reached the deliverable and then had its reason replaced by the single sentence the coverage
+// guard exists to prevent. The row was accounted for; what it said was not delivered.
+describe('§"Checked & ruled out" — a not-assessed row keeps its reason (#1262)', () => {
+  const row = (over: Partial<Finding> = {}): Finding =>
+    ({
+      id: "M9-08",
+      title: "M9 partially assessed — uncapped retry/fan-out",
+      severity: "Info",
+      confidence: "N/A",
+      category: "Performance",
+      taxonomy: "M9 — Uncapped retry/fan-out — scope",
+      location: "(whole target)",
+      status: "Open",
+      evidence: "THREE sub-shapes were NOT assessed, counted here: 2 handler files import a retry library.",
+      impact: "unassessed",
+      fix: "None — informational.",
+      value: 1,
+      ease: 5,
+      safety: 5,
+      ...over,
+    }) as Finding;
+
+  it("renders the row's own evidence, not a generic applicability sentence", () => {
+    const html = notApplicableSection([row()]);
+    expect(html).toContain("THREE sub-shapes were NOT assessed");
+    expect(html).not.toContain("Not applicable in context.");
+  });
+
+  it("still prefers a hand-authored note where one is set", () => {
+    const html = notApplicableSection([row({ note: "Federated auth — password policy does not apply." })]);
+    expect(html).toContain("Federated auth");
+    expect(html).not.toContain("THREE sub-shapes");
+  });
+
+  it("renders nothing at all when there are no N/A rows", () => {
+    expect(notApplicableSection([])).toBe("");
+  });
+
+  it("says an item here was not reached, never that it was cleared", () => {
+    const html = notApplicableSection([row()]);
+    expect(html).toContain("it was not reached");
   });
 });

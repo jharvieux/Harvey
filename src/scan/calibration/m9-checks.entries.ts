@@ -296,4 +296,95 @@ export const m9CheckEntries: CorpusEntry[] = [
     match: ["Cross-user cache bleed"],
     note: "cache-bleed/negative: the identity in both the key parts and the tag, a `use cache` function taking the identity as an argument, a `private, no-store` authenticated response, and an anonymous public endpoint — the precision boundary for this check.",
   },
+
+  // #1263 — the auth/validation gates were matched by a closed NAME list, so a real gate called
+  // `ensureMember(...)`/`sanitize(...)` read as missing. The fix resolves callees and re-tests the
+  // pattern against the helper's own body, so each of these two pairs is scored the opposite way
+  // round from the #848 pair above it: the NEGATIVE is the house-style gate that must now clear,
+  // and the POSITIVE is a house-style helper that performs no check and must still fire — the
+  // control that stops "calls something" from becoming "is gated".
+  {
+    id: "M9C-AUTH-HELPER-POS",
+    kind: "positive",
+    cls: "Server Action whose only helper call performs no authorization check",
+    module: "M9",
+    location: "m9-corpus/action-auth-helper/positive",
+    match: ["Server Action missing authorization"],
+    expectedTier: "review",
+    note: "server-action-helper-gate/positive: the action calls `normaliseOrgId(...)`, a helper that only reshapes a string. Callee resolution must not treat any helper call as a gate — still flagged.",
+  },
+  {
+    id: "M9C-AUTH-HELPER-NEG",
+    kind: "negative",
+    cls: "Server Action gated by a house-style helper (`ensureMember`) whose body reads the session",
+    module: "M9",
+    location: "m9-corpus/action-auth-helper/negative",
+    match: ["Server Action missing authorization"],
+    note: "server-action-helper-gate/negative: `await ensureMember(orgId)` resolves to a helper that calls `supabase.auth.getUser()` and checks membership. The #1263 false positive — nothing must fire.",
+  },
+  {
+    id: "M9C-VAL-HELPER-POS",
+    kind: "positive",
+    cls: "Server Action whose only input helper performs no schema validation",
+    module: "M9",
+    location: "m9-corpus/action-validation-helper/positive",
+    match: ["Server Action missing input validation"],
+    expectedTier: "review",
+    note: "server-action-helper-validator/positive: the action routes its input through `squash(...)`, which only trims whitespace. Still unvalidated, still flagged.",
+  },
+  {
+    id: "M9C-VAL-HELPER-NEG",
+    kind: "negative",
+    cls: "Server Action validated by a house-style helper (`sanitize`) whose body parses a schema",
+    module: "M9",
+    location: "m9-corpus/action-validation-helper/negative",
+    match: ["Server Action missing input validation"],
+    note: "server-action-helper-validator/negative: `sanitize(raw)` resolves to a helper that runs `BioSchema.parse(raw)`. The #1263 false positive — nothing must fire.",
+  },
+
+  // #1292 — the waterfall check called two queries independent when no VALUE flowed between them,
+  // ignoring an intervening guard that exits on the first result. Promise.all hoists the second
+  // query above that guard, so the recommended fix changed behaviour. Same inversion as above: the
+  // negative is the guarded pair that must now clear, the positive the intervening-read-that-does-
+  // not-escape that must still fire.
+  {
+    id: "M9C-WATERFALL-GUARD-POS",
+    kind: "positive",
+    cls: "sequential queries with an intervening statement that reads the first result but cannot exit",
+    module: "M9",
+    location: "m9-corpus/waterfall-guard/positive",
+    match: ["Data-fetching waterfall"],
+    expectedTier: "review",
+    note: "waterfall-guard/positive: a `console.log(teams…)` sits between the two awaits. Control flow reaches the second query either way, so the pair is still a genuine waterfall — suppressing on any intervening mention would lose it.",
+  },
+  {
+    id: "M9C-WATERFALL-GUARD-NEG",
+    kind: "negative",
+    cls: "sequential queries with an early return on the first result between them",
+    module: "M9",
+    location: "m9-corpus/waterfall-guard/negative",
+    match: ["Data-fetching waterfall"],
+    note: "waterfall-guard/negative: `if (!team) return …` between the two awaits. No value flows, but parallelising runs the second query on a request the sequential code never reaches — the #1292 false positive.",
+  },
+
+  // #1262 — the brief's third unbounded-route shape, which #857 left undetected AND undisclosed.
+  {
+    id: "M9C-RETRY-POS",
+    kind: "positive",
+    cls: "route handler with a request-sized retry count and a request-sized outbound fan-out",
+    module: "M9",
+    location: "m9-corpus/uncapped-retry/positive",
+    match: ["Uncapped retry/fan-out"],
+    expectedTier: "review",
+    note: "uncapped-retry/positive: `for (let i = 0; i < attempts; i++)` around a caught `fetch`, plus `Promise.all(ids.map(… fetch …))` over an array from the request body. Detected by detectUncappedRetryFanOut.",
+  },
+  {
+    id: "M9C-RETRY-NEG",
+    kind: "negative",
+    cls: "the same two shapes with a constant attempt cap and a sliced fan-out",
+    module: "M9",
+    location: "m9-corpus/uncapped-retry/negative",
+    match: ["Uncapped retry/fan-out"],
+    note: "uncapped-retry/negative: `i < MAX_ATTEMPTS` (a numeric const this pass resolves) and `ids.slice(0, MAX_FANOUT).map(…)` — the precision boundary, nothing fires.",
+  },
 ];

@@ -493,7 +493,7 @@ describe("data-fetching waterfalls (MED, best-effort)", () => {
     const findings = detectAppRouterFindings([{ path: "app/dashboard/page.tsx", text }]);
     const hits = findings.filter((f) => f.taxonomy === "M9 — Data-fetching waterfall");
     expect(hits).toHaveLength(1);
-    expect(hits[0]?.evidence).toContain("first of 2 independent sequential pairs");
+    expect(hits[0]?.evidence).toContain("first of 2 such pairs");
     expect(hits[0]?.evidence).toContain("invoices");
   });
 });
@@ -733,6 +733,93 @@ describe("unbounded / self-calling route or edge fn (#843)", () => {
       { path: "lib/util.ts", text: `export function loop() {\n  while (true) {\n    tick();\n  }\n}\n` },
     ]);
     expect(taxonomies(findings)).not.toContain(UNBOUNDED);
+  });
+});
+
+const RETRY = "M9 — Uncapped retry/fan-out";
+const RETRY_SCOPE = "M9 — Uncapped retry/fan-out — scope";
+
+// #1262 (#843 remainder). The brief's third unbounded-route shape, which shipped neither as a
+// detector nor as a disclosure row. Two AST shapes plus a counted scope row.
+describe("uncapped retry / fan-out (#1262)", () => {
+  const ROUTE = "app/api/sync/route.ts";
+
+  it("flags a retry loop whose attempt count comes from the request", () => {
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `export async function POST(request: Request) {\n  const { url, attempts } = await request.json();\n  for (let i = 0; i < attempts; i++) {\n    try {\n      return await fetch(url);\n    } catch {}\n  }\n}\n` },
+    ]);
+    const hits = findings.filter((f) => f.taxonomy === RETRY);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ severity: "Medium", category: "Performance" });
+    expect(hits[0]?.evidence).toContain("i < attempts");
+  });
+
+  it("flags a `while (true)` retry whose only escape is the success path", () => {
+    // The sibling #843 check stays silent here — the `return` counts as an escape for it — so this
+    // shape had no detector at all before #1262.
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `export async function GET() {\n  while (true) {\n    try {\n      return await fetch("https://upstream.example.com/x");\n    } catch {}\n  }\n}\n` },
+    ]);
+    expect(taxonomies(findings)).toContain(RETRY);
+    expect(taxonomies(findings)).not.toContain(UNBOUNDED);
+  });
+
+  it("does not flag a retry capped by a numeric literal or a numeric const", () => {
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `const MAX = 3;\nexport async function GET() {\n  for (let i = 0; i < MAX; i++) {\n    try {\n      return await fetch("https://u.example.com/x");\n    } catch {}\n  }\n  for (let j = 0; j < 5; j++) {\n    try {\n      return await fetch("https://u.example.com/y");\n    } catch {}\n  }\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(RETRY);
+  });
+
+  it("does not flag an uncapped loop with no catch (not a retry) or with no outbound call", () => {
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `export async function GET(request: Request) {\n  const { n } = await request.json();\n  for (let i = 0; i < n; i++) {\n    await fetch("https://u.example.com/x");\n  }\n  for (let j = 0; j < n; j++) {\n    try {\n      compute(j);\n    } catch {}\n  }\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(RETRY);
+  });
+
+  it("flags a Promise.all fan-out over a request-supplied collection", () => {
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `export async function POST(request: Request) {\n  const { ids } = await request.json();\n  const out = await Promise.all(ids.map((id) => fetch("https://u.example.com/" + id)));\n  return Response.json(out.length);\n}\n` },
+    ]);
+    const hits = findings.filter((f) => f.taxonomy === RETRY);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.evidence).toContain("`ids`");
+  });
+
+  it("does not flag a sliced fan-out, nor one over a collection the server sized", () => {
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `export async function POST(request: Request) {\n  const { ids } = await request.json();\n  await Promise.all(ids.slice(0, 20).map((id) => fetch("https://u.example.com/" + id)));\n  const { data: rows } = await supabase.from("jobs").select("id");\n  await Promise.all(rows.map((r) => fetch("https://u.example.com/" + r.id)));\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(RETRY);
+  });
+
+  it("does not flag either shape outside a route/edge handler", () => {
+    const findings = detectAppRouterFindings([
+      { path: "lib/sync.ts", text: `export async function sync(request) {\n  const { attempts } = await request.json();\n  for (let i = 0; i < attempts; i++) {\n    try {\n      return await fetch("https://u.example.com/x");\n    } catch {}\n  }\n}\n` },
+    ]);
+    expect(taxonomies(findings)).not.toContain(RETRY);
+  });
+
+  // The disclosure half: what the two shapes do not reach must be stated, with counts, whenever the
+  // target has route/edge handlers at all — silence there reads as a clean bill of health.
+  it("emits a counted scope row naming the three unassessed sub-shapes", () => {
+    const findings = detectAppRouterFindings([
+      { path: ROUTE, text: `import pRetry from "p-retry";\nexport async function GET() {\n  const { data: rows } = await supabase.from("jobs").select("id");\n  await Promise.all(rows.map((r) => fetch("https://u.example.com/" + r.id)));\n  return pRetry(() => fetch("https://u.example.com/x"));\n}\n` },
+    ]);
+    const rows = findings.filter((f) => f.taxonomy === RETRY_SCOPE);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ severity: "Info", confidence: "N/A", precisionTier: "high", location: "(whole target)" });
+    // The counts are the population — a bound with a population of zero is a guess, not a limit.
+    expect(rows[0]?.evidence).toContain("1 route/edge handler was checked");
+    expect(rows[0]?.evidence).toContain("1 handler file imports one");
+    expect(rows[0]?.evidence).toContain("1 such site");
+    expect(rows[0]?.evidence).toContain("RECURSION");
+  });
+
+  it("emits no scope row on a target with no route/edge handlers", () => {
+    const findings = detectAppRouterFindings([{ path: "lib/util.ts", text: `export const x = 1;\n` }]);
+    expect(taxonomies(findings)).not.toContain(RETRY_SCOPE);
   });
 });
 

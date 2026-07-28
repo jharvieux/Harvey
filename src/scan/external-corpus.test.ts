@@ -118,12 +118,13 @@ describe("external corpus manifest", () => {
 
 describe("scoreExternalBaseline", () => {
   it("passes when a scan reproduces the recorded counted total", () => {
+    // The waterfall row this used to include was #1292's false positive (`if (existing) return`
+    // before an INSERT); the baseline is 2 since it was removed.
     const rows = scoreExternalBaseline(target("multi-tenant-starter"), [
       finding("M9 — Accidental dynamic rendering"),
       finding("M9 — Accidental dynamic rendering"),
-      finding("M9 — Data-fetching waterfall"),
     ]);
-    expect(rows.find((r) => r.module === "M9")).toMatchObject({ pass: true, actual: 3, drift: 0 });
+    expect(rows.find((r) => r.module === "M9")).toMatchObject({ pass: true, actual: 2, drift: 0 });
   });
 
   it("FAILS on a new over-match — the regression this corpus exists to catch", () => {
@@ -138,7 +139,7 @@ describe("scoreExternalBaseline", () => {
 
   it("FAILS when a real detection stops firing", () => {
     const rows = scoreExternalBaseline(target("multi-tenant-starter"), []);
-    expect(rows.find((r) => r.module === "M9")).toMatchObject({ pass: false, drift: -3 });
+    expect(rows.find((r) => r.module === "M9")).toMatchObject({ pass: false, drift: -2 });
   });
 
   it("ignores Info findings, so the demoted exhaustive-deps class can't re-enter the count", () => {
