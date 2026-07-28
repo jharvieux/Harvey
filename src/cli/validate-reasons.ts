@@ -43,8 +43,8 @@ import {
   claimCounts,
   claimRatchetBreaches,
   claimTotal,
+  censusScope,
   collectSources,
-  isCensusedSurface,
   issueSources,
   markNewClaims,
   parseRecordedReasons,
@@ -83,7 +83,8 @@ function renderBaseline(claims: { file: string; text: string }[]): string {
 // something to review: the diff shows the new standing claims, not a total going up. Prefer writing
 // the block over bumping the file.
 //
-// PROSE ONLY (\`.md\`) — source comments are not censused; see #1347.
+// Since #1347 this covers prose (\`.md\`/\`.txt\`) whole and COMMENT LINES of \`.ts\`/\`.yml\`/\`.sql\`.
+// This file is excluded from its own census — it quotes every claim in the repo verbatim.
 
 export const CLAIM_BASELINE: Record<string, string[]> = {
 ${rows}
@@ -170,24 +171,24 @@ const unwatched = empirical.filter((r) => watchedPaths(r, inRepo).length === 0);
 console.log(`\nSubsystem drift watches ${empirical.length - unwatched.length}/${empirical.length} empirical reason(s) — the rest name no path that exists here, so silence from them is absence of evidence:`);
 for (const r of unwatched) console.log(`  ${r.file}:${r.line} — add TOUCHES: <paths> to put this claim's subsystem under watch`);
 
-// Claim-shaped prose outside any block: untriaged, not malformed. Advisory and a lower bound.
-const censused = sources.filter((s) => isCensusedSurface(s.file));
-const notCensused = sources.filter((s) => !isCensusedSurface(s.file));
-const prose = untriagedClaims([...censused, ...issues], reasons);
+// Claim-shaped lines outside any block: untriaged, not malformed. Advisory and a lower bound.
+const prose = untriagedClaims([...sources, ...issues], reasons);
 const byRoot = new Map<string, number>();
 for (const c of prose) {
   const key = c.file.startsWith("issue #") ? "open issues" : (c.file.split("/")[0] as string);
   byRoot.set(key, (byRoot.get(key) ?? 0) + 1);
 }
 const breakdown = [...byRoot].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k} ${n}`).join(", ");
-console.log(`\nUntriaged claim-shaped prose lines (advisory, LOWER BOUND — a fixed vocabulary, prose only): ${prose.length}${prose.length > 0 ? ` — ${breakdown}` : ""}`);
+console.log(`\nUntriaged claim-shaped lines (advisory, LOWER BOUND — a fixed vocabulary): ${prose.length}${prose.length > 0 ? ` — ${breakdown}` : ""}`);
 console.log("  Each is a standing claim outside any REASON block, so nothing re-tests it. --census lists them.");
 
 // What this pass READ, not just what it found — a scope boundary nobody states reads as coverage.
-// The ratchet below inherits this boundary exactly, and #1318's own motivating examples fall outside
-// it, so it is printed on every run rather than left in a comment (#1347).
-console.log(`  CENSUSED: ${censused.length} .md file(s) under ${(roots.length > 0 ? roots : DEFAULT_ROOTS).join(", ")}${issues.length > 0 ? `, plus ${issues.length} open-issue surface(s)` : ""}.`);
-console.log(`  NOT CENSUSED: ${notCensused.length} .ts/.yml/.txt/.sql file(s) the same walk reads for REASON blocks. A claim written as a SOURCE COMMENT is invisible here and to the ratchet — including #1318's own motivating examples (#1311, #1304, #1265, all source comments). Tracked by #1347.`);
+// The ratchet below inherits this boundary exactly, so it is printed on every run (#1347).
+const scoped = (kind: string) => sources.filter((s) => censusScope(s.file) === kind).length;
+console.log(`  CENSUSED WHOLE: ${scoped("prose")} .md/.txt file(s) under ${(roots.length > 0 ? roots : DEFAULT_ROOTS).join(", ")}${issues.length > 0 ? `, plus ${issues.length} open-issue surface(s)` : ""}.`);
+console.log(`  CENSUSED COMMENTS ONLY: ${scoped("comments")} .ts/.yml/.sql file(s) — comment lines are read, code lines are NOT. Measured 2026-07-28: that drops 270 claim-shaped code lines, which are error-message strings, not-assessed details and test titles, i.e. the vocabulary firing on ordinary code prose.`);
+console.log(`  NOT CENSUSED: ${scoped("none")} file(s) — the generated baseline itself, which records every claim verbatim and would otherwise match the whole repo against itself.`);
+console.log("  The vocabulary is standing-IMPOSSIBILITY plus the unverified register. It does not reach a POSITIVE over-claim: #1304's `Verified live` (src/detectors/bundle-stats.ts:21) belongs to a different function and is invisible here. Measured 2026-07-28 — reaching it needs bare `verified`, which is 663 lines under DEFAULT_ROOTS, nearly all of them correct.");
 if (process.argv.includes("--census")) {
   for (const c of prose) console.log(`  ${c.file}:${c.line}  ${c.text.slice(0, 140)}`);
 }
