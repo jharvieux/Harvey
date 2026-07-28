@@ -723,6 +723,9 @@ export const EXTERNAL_CORPUS: ExternalTarget[] = [
 // "Loud" is deliberately `indicators at a real severity`, not `indicators.length > 0`: every target
 // with migrations draws the Info-severity "Tenancy model assumed" disclosure (#220), so counting it
 // would let the bad repos pass on a note that says nothing about them. Measured 2026-07-15.
+/** Which channel of the free tier has to carry the "we did not stay quiet" promise (#1473). */
+export type LoudChannel = "graded" | "indicator" | "either";
+
 export interface FreeTierExpectation {
   slug: string;
   mustNotScoreF: boolean;
@@ -733,6 +736,32 @@ export interface FreeTierExpectation {
   // posture still emits an explicit "not asserted" row rather than silently scoring one fewer
   // check — an absent row never shows up in a tally (the coverage-guard rule, applied here).
   mustRaiseLoudIndicator?: boolean;
+  // #1473 — the product promise, split off from the CHANNEL it used to be conflated with.
+  //
+  // `mustRaiseLoudIndicator` scores one presentation section: `report.indicators`, which by
+  // construction (selectIndicators, #220) holds only REVIEW-tier "Multi-tenant security" rows. That
+  // is a narrow claim, and it silently stood in for the wide one — "the free tier does not stay
+  // quiet on a known-vulnerable repo" — for as long as every corpus member happened to satisfy both.
+  //
+  // launch-mvp separates them, MEASURED 2026-07-28 against ShenSeanChen/launch-mvp-stripe-nextjs-
+  // supabase @ 513a8f0: `grade F 51`, `indicators: 0`, graded set 4 High + 1 Low, three of the Highs
+  // being the unauthenticated service-role account-deletion route of #774 — Confirmed, category
+  // "Broken access control", so they land in the GRADED set and never reach the indicator channel.
+  // All three available values of `mustRaiseLoudIndicator` therefore produce a FALSE statement about
+  // that repo: true fails with "STAYED QUIET" on a repo graded F; false asserts "must not accuse a
+  // sound repo" about two unauthenticated Criticals; undefined emits "tenancy posture is NOT
+  // ASSESSED" about a repo assessed twice (#168, #774). An invariant whose every value states
+  // something false is not an invariant, so the target sat outside the gate entirely (PR #1472).
+  //
+  // `mustBeLoud` asserts the promise itself and names the channel that has to carry it:
+  //   "graded"    — the free GRADE must be loud: a Critical or High in the graded set, or an F.
+  //   "indicator" — the review-tier tenancy indicator channel must fire (same signal as
+  //                 mustRaiseLoudIndicator: true, expressed as a channel).
+  //   "either"    — loud SOMEWHERE. The right value when the target is known-bad but which channel
+  //                 surfaces it is an implementation detail nobody should pin.
+  // Both fields may be set: they answer different questions, and a target whose Criticals are graded
+  // AND whose tenancy indicator fires can assert both.
+  mustBeLoud?: LoudChannel;
   // #934: the scale invariant carbon broke — placeholder/default credentials in docs/example
   // deployment paths must be REPORTED (in the non-grading informational section) and must NOT
   // appear in the graded set. Two-sided on purpose: "not graded" alone would also pass if the
@@ -758,13 +787,13 @@ export const FREE_TIER_EXPECTATIONS: FreeTierExpectation[] = [
     slug: "multi-tenant-starter",
     mustNotScoreF: false,
     mustRaiseLoudIndicator: true,
-    why: "The don't-stay-quiet case: any authed user self-joins any tenant as owner (#217 Critical, confirmed dynamically). If the free tier is silent here it has failed the promise. Measured: 4 High RLS indicators. Its grade is deliberately unconstrained — the Critical is an indicator, never a graded hygiene verdict (#213/#220).",
+    why: "The don't-stay-quiet case: any authed user self-joins any tenant as owner (#217 Critical, confirmed dynamically). If the free tier is silent here it has failed the promise. Measured 2026-07-15: 4 High RLS indicators. RE-MEASURED 2026-07-28 (#1473): grade B (89/100), 2 graded (0 Critical/High), 3 indicators of which 2 are loud — both public.tenants RLS semantic-review rows, i.e. the row still passes on the surface the #217 Critical is about, not on an unrelated signal. Its grade is deliberately unconstrained — the Critical is an indicator, never a graded hygiene verdict (#213/#220).",
   },
   {
     slug: "proposit",
     mustNotScoreF: false,
     mustRaiseLoudIndicator: true,
-    why: "The other don't-stay-quiet case: world-readable invitation tokens (#214 Critical). Measured: 1 High RLS indicator on organisation_invitations — the very table the Critical is about.",
+    why: "The other don't-stay-quiet case: world-readable invitation tokens (#214 Critical). Measured 2026-07-15: 1 High RLS indicator on organisation_invitations — the very table the Critical is about. RE-MEASURED 2026-07-28 (#1473): grade C (77/100), 2 graded (1 Critical/High), 8 indicators of which 7 are loud — the organisation_invitations policy row is still first, the other six are SECURITY DEFINER caller-authorization reviews added since. Still passing for the right reason.",
   },
   // #934: the first LARGE repo in this gate — the invariant had only ever been scored against
   // starter kits, and carbon is the target that broke it at scale (F (0/100), every Critical a
@@ -797,6 +826,29 @@ interface FreeTierRow {
   detail: string;
 }
 
+// #1473: the two channels a free scan can be loud on, measured separately so a row can say WHICH
+// one carried the promise instead of implying both.
+//
+// The graded channel is loud on a Critical/High in the GRADED set, or on an F. Both, not just the
+// grade: the grade is an arithmetic summary and a future re-weighting could move it off F while the
+// same Criticals are still printed — the finding is the substance, the letter is the presentation.
+//
+// Deliberately NOT part of loudness: `report.informational` (#213 — seen, reported, non-grading by
+// design) and the M6 handrolled rollup (#267). A target whose only signal is an informational note
+// HAS stayed quiet in the sense this invariant means.
+//
+// Open product question, recorded rather than decided here (#1473): should a CONFIRMED
+// object-level-authz finding ALSO appear in the indicator section? #220 frames indicators as
+// UNCONFIRMED signals pointing at the deep scan, which argues no — a Confirmed row belongs in the
+// graded set, which is where it is. Left as-is, and the invariant now measures the promise rather
+// than the section, so the answer no longer changes whether a known-bad repo can be gated.
+function measureLoudness(report: QuickScanReport): { graded: boolean; indicator: boolean; either: boolean; gradedHigh: number } {
+  const gradedHigh = report.findings.filter((f) => f.severity === "Critical" || f.severity === "High").length;
+  const graded = gradedHigh > 0 || report.grade === "F";
+  const indicator = report.indicators.some((i) => i.severity !== "Info");
+  return { graded, indicator, either: graded || indicator, gradedHigh };
+}
+
 // Scores a REAL free-tier quick-scan of `slug`'s pinned commit against #227's invariant.
 export function scoreFreeTierExpectation(expectation: FreeTierExpectation, report: QuickScanReport): FreeTierRow[] {
   const loud = report.indicators.filter((i) => i.severity !== "Info");
@@ -813,14 +865,34 @@ export function scoreFreeTierExpectation(expectation: FreeTierExpectation, repor
     });
   }
 
+  // #1473: the channel-agnostic promise. Scored FIRST because it is the one the product actually
+  // sells; the indicator row below is a claim about one section of the output.
+  if (expectation.mustBeLoud) {
+    const loudness = measureLoudness(report);
+    const fired = loudness[expectation.mustBeLoud === "either" ? "either" : expectation.mustBeLoud];
+    rows.push({
+      slug: expectation.slug,
+      check: `must be loud on a known-vulnerable repo (${expectation.mustBeLoud} channel)`,
+      pass: fired,
+      // Both channels are named either way — a pass that does not say which channel carried it is
+      // how a row starts passing for a reason nobody checked.
+      detail: `${fired ? "" : "STAYED QUIET: "}graded channel ${loudness.graded ? "LOUD" : "quiet"} (grade ${report.grade} ${report.score}/100, ${loudness.gradedHigh} Critical/High of ${report.total} graded), indicator channel ${loudness.indicator ? "LOUD" : "quiet"} (${loud.length} non-Info of ${report.indicators.length})${fired ? "" : ` — the "${expectation.mustBeLoud}" channel carried nothing on a repo the corpus records as known-vulnerable`}`,
+    });
+  }
+
   // #934: an unasserted indicator posture (tenancy NOT ASSESSED for this target) is an explicit
   // passing row, never a silently-absent check.
+  // #1473: the row now distinguishes the two reasons the indicator channel is unasserted. A target
+  // carrying `mustBeLoud` HAS an asserted posture — just on another channel — and saying "NOT
+  // ASSESSED" about it would be the false statement that kept launch-mvp out of this gate.
   if (expectation.mustRaiseLoudIndicator === undefined) {
     rows.push({
       slug: expectation.slug,
       check: "indicator posture",
       pass: true,
-      detail: `not asserted — this target's tenancy posture is NOT ASSESSED (no M1 semantic/dynamic pass), so neither "must raise" nor "must not accuse" can honestly be scored; ${loud.length} non-Info indicator(s) observed`,
+      detail: expectation.mustBeLoud
+        ? `indicator channel not asserted for this target — its loudness is asserted on the "${expectation.mustBeLoud}" channel above (#1473); ${loud.length} non-Info indicator(s) observed`
+        : `not asserted — this target's tenancy posture is NOT ASSESSED (no M1 semantic/dynamic pass), so neither "must raise" nor "must not accuse" can honestly be scored; ${loud.length} non-Info indicator(s) observed`,
     });
   } else {
     const raised = loud.length > 0;

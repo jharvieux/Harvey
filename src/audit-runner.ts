@@ -279,6 +279,106 @@ interface AuditRunResult {
   // #1045: M8's §3b test-quality measurement, when the mutation tier produced one. Absent ⇒ no
   // mutation measurement this engagement, and M8's ledger row states why.
   testQuality?: TestQuality;
+  // #1470: id families that collided this run and were disambiguated. Empty on a clean run; a
+  // non-empty list is printed loudly by the caller, because it names a detector minting an id that
+  // is not unique per finding — a real defect, just no longer one that costs the client the report.
+  idCollisions: IdCollision[];
+}
+
+/** One finding id that arrived on two or more DIFFERENT findings, and what they were renamed to. */
+interface IdCollision {
+  id: string;
+  /** How many distinct findings shared it (≥2). */
+  count: number;
+  /** The ids the 2nd..nth were given — the 1st keeps `id`. */
+  renamedTo: string[];
+  modules: AuditModule[];
+}
+
+// #1470 — the general guard behind the two id families proposit tripped over.
+//
+// MEASURED 2026-07-28 on JakeLeoDev/proposit @ 82838cef: ten modules ran, 589 findings were
+// produced, the conservation ledger printed LEDGER PASS, and `--findings-out`/`--sarif-out` wrote
+// NOTHING — the assembled document failed report-schema validation on two duplicate ids
+// (`SB-DEFINER-AUTHZ-public.handle_new_user()`, minted from a function name that two migrations
+// declare; `M4-97`, the 97th positional jscpd cluster colliding with the fixed diverged-clone scope
+// sentinel of the same id). #620 and #1175 are the same class on two earlier families.
+//
+// Both root causes are fixed at their detectors in this change. This is the guard for the NEXT one:
+// a duplicate id must never again be able to cost a client the whole deliverable. Of the three
+// available dispositions —
+//
+//   de-duplicate  — collapses two DIFFERENT findings into one. That is the #1040 loss class, and
+//                   the conservation ledger would (correctly) report it as UNACCOUNTED.
+//   block         — what happens today: every finding is assembled and none is delivered.
+//   disambiguate  — every finding ships, under an id that is unique.
+//
+// only the third keeps the two properties the audit sells: nothing is lost, and nothing is silent.
+// So the 2nd..nth finding sharing an id is renamed `<id>#2`, `<id>#3`, … in stable order, and the
+// collision is reported to the caller to print. Byte-identical repeats are NOT touched — those are
+// the shared-CLI double captures assembleEngagementDocument collapses and the ledger counts as
+// `deduped`.
+//
+// It runs at the PRODUCE boundary (here, beside #620's per-app namespacing, which does the same job
+// for a monorepo) rather than at assembly, so `findings` and `findingsByModule` carry the renamed
+// rows and the conservation ledger's produced/delivered arithmetic still matches finding-for-finding.
+function disambiguateFindingIds(
+  findings: Finding[],
+  byModule: Partial<Record<AuditModule, Finding[]>>,
+): { findings: Finding[]; byModule: Partial<Record<AuditModule, Finding[]>>; collisions: IdCollision[] } {
+  const distinctBodies = new Map<string, Set<string>>();
+  for (const f of findings) {
+    const bodies = distinctBodies.get(f.id) ?? new Set<string>();
+    bodies.add(JSON.stringify(f));
+    distinctBodies.set(f.id, bodies);
+  }
+  const collided = new Set([...distinctBodies].filter(([, bodies]) => bodies.size > 1).map(([id]) => id));
+  if (!collided.size) return { findings, byModule, collisions: [] };
+
+  // Keyed on the ORIGINAL object so both views get the same replacement — `findingsByModule` holds
+  // the very objects `findings` does, and a rename applied to only one of them would make the
+  // conservation gate's produced/delivered comparison disagree with itself.
+  const renamed = new Map<Finding, Finding>();
+  const seenBodies = new Map<string, Map<string, string>>();
+  const collisions = new Map<string, IdCollision>();
+  for (const f of findings) {
+    if (!collided.has(f.id)) continue;
+    const bodies = seenBodies.get(f.id) ?? new Map<string, string>();
+    seenBodies.set(f.id, bodies);
+    const body = JSON.stringify(f);
+    const already = bodies.get(body);
+    if (already !== undefined) {
+      // A byte-identical repeat of a finding whose id ALSO has a genuine collision: it keeps
+      // whatever id its first copy took, so dedupe still collapses the pair at assembly.
+      if (already !== f.id) renamed.set(f, { ...f, id: already });
+      continue;
+    }
+    const ordinal = bodies.size + 1;
+    const id = ordinal === 1 ? f.id : `${f.id}#${ordinal}`;
+    bodies.set(body, id);
+    if (ordinal > 1) renamed.set(f, { ...f, id });
+  }
+  for (const [id, bodies] of seenBodies) {
+    collisions.set(id, { id, count: bodies.size, renamedTo: [...bodies.values()].slice(1), modules: [] });
+  }
+
+  const remap = (list: Finding[]): Finding[] => list.map((f) => renamed.get(f) ?? f);
+  const nextByModule: Partial<Record<AuditModule, Finding[]>> = {};
+  for (const [module, list] of Object.entries(byModule) as [AuditModule, Finding[]][]) {
+    nextByModule[module] = remap(list);
+    for (const f of list) {
+      const c = collisions.get(f.id);
+      if (c && !c.modules.includes(module)) c.modules.push(module);
+    }
+  }
+  return { findings: remap(findings), byModule: nextByModule, collisions: [...collisions.values()] };
+}
+
+export function formatIdCollisions(collisions: IdCollision[]): string {
+  return [
+    `⚠ ${collisions.length} finding id(s) were minted more than once this run and were disambiguated so the deliverable could still ship (#1470). A detector is deriving an id from something that is not unique per finding — fix it at the detector; the rename below is a safety net, not the answer:`,
+    ...collisions.map((c) => `  ${c.id} — ${c.count} distinct findings${c.modules.length ? ` (produced by ${c.modules.join(", ")})` : ""}; renamed: ${c.renamedTo.join(", ")}`),
+  ].join("\n");
 }
 
 // A registry missing a module is the #229 defect at the source — an audit that never even tries M5
@@ -375,7 +475,8 @@ export function runAudit(runners: ModuleRunner[], ctx: RunContext): AuditRunResu
     }
   }
 
-  return { recorded, failures, findings, findingsByModule, ...(hotspots ? { hotspots } : {}), ...(dataMap ? { dataMap } : {}), ...(testQuality ? { testQuality } : {}) };
+  const unique = disambiguateFindingIds(findings, findingsByModule);
+  return { recorded, failures, findings: unique.findings, findingsByModule: unique.byModule, idCollisions: unique.collisions, ...(hotspots ? { hotspots } : {}), ...(dataMap ? { dataMap } : {}), ...(testQuality ? { testQuality } : {}) };
 }
 
 export function formatFailures(failures: ModuleFailure[]): string {
