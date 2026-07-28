@@ -1,0 +1,9 @@
+import { readFileSync } from "node:fs";
+import { NextResponse } from "next/server";
+
+// SCOPE CONTROL (#1190 rule 3): a known-caught hit in the same directory, so "0 findings for the
+// CLI package" is evidence the reachability gate cleared it — not evidence the scanner never read
+// this fixture at all. This one MUST fire, at Likely, because it is a route file.
+export async function GET() {
+  return new NextResponse(readFileSync("./version.txt", "utf8"));
+}

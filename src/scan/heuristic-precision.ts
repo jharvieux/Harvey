@@ -99,17 +99,24 @@ function scoreHeuristicEntry(entry: HeuristicEntry): HeuristicRow {
   // for refusing to stay silent. Same principle as validate-calibration, which only counts a
   // FREE-COUNT finding as an FP.
   const findings = runDetectors(entry).filter((f) => f.confidence !== "N/A");
-  const relevant = entry.taxonomy === undefined ? findings : findings.filter((f) => f.taxonomy === entry.taxonomy);
+  const matching = entry.taxonomy === undefined ? findings : findings.filter((f) => f.taxonomy === entry.taxonomy);
+  // #1344: the scope control's own hits are not the subject of a negative row — they are the proof
+  // that the fixture was read at all.
+  const control = entry.scopeControl === undefined ? [] : matching.filter((f) => f.location.includes(entry.scopeControl!));
+  const relevant = matching.filter((f) => !control.includes(f));
   const fired = relevant.length;
-  const pass = entry.kind === "positive" ? fired > 0 : fired === 0;
+  const controlSilent = entry.scopeControl !== undefined && control.length === 0;
+  const pass = entry.kind === "positive" ? fired > 0 : fired === 0 && !controlSilent;
   const detail =
     entry.kind === "positive"
       ? pass
         ? `caught (${fired} finding${fired === 1 ? "" : "s"})`
         : "NOT caught — the planted class did not fire"
-      : pass
-        ? "cleared — not flagged"
-        : `FALSE POSITIVE — fired ${fired}×: ${relevant.map((f) => f.taxonomy).join(", ")}`;
+      : controlSilent
+        ? `SCOPE UNPROVEN — the scope control "${entry.scopeControl}" did not fire, so 0 false positives is indistinguishable from the scanner never reading this fixture`
+        : pass
+          ? `cleared — not flagged (scope control ${entry.scopeControl === undefined ? "n/a" : `"${entry.scopeControl}" fired ${control.length}×`})`
+          : `FALSE POSITIVE — fired ${fired}×: ${relevant.map((f) => f.taxonomy).join(", ")}`;
   return { id: entry.id, module: entry.module, kind: entry.kind, cls: entry.cls, fired, pass, detail };
 }
 

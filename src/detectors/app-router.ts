@@ -352,25 +352,24 @@ function findSecretEnvAccess(sf: ts.SourceFile): ts.Node | undefined {
   return hit;
 }
 
-// Whether some 'use client' file, following relative imports transitively, actually reaches
-// `targetPath` — the real bundling risk the server-only guard defends against. #231: every
-// raw hit in the 6-repo triage was already shielded by the next/headers barrier or the 'use
-// server' boundary because nothing imported the module from client code at all; only a real
-// import path from a Client Component makes the missing guard an actual finding.
-function hasRealClientImportPath(targetPath: string, importGraph: ReadonlyMap<string, string[]>, clientPaths: ReadonlySet<string>): boolean {
-  const visited = new Set<string>();
-  const queue = [...clientPaths];
+// Every file the `roots` reach by following imports transitively, roots included. #231: a raw hit
+// is only real when something on the entry side actually imports the module — every raw hit in the
+// 6-repo triage was already shielded by the next/headers barrier or the 'use server' boundary
+// because nothing imported it from client code at all. #1344 reuses the same closure from the
+// server side, to answer "is this module reachable from a request handler at all".
+export function importClosure(roots: Iterable<string>, importGraph: ReadonlyMap<string, string[]>): Set<string> {
+  const reached = new Set<string>();
+  const queue = [...roots];
   while (queue.length > 0) {
     const cur = queue.shift();
-    if (cur === undefined || visited.has(cur)) continue;
-    if (cur === targetPath) return true;
-    visited.add(cur);
+    if (cur === undefined || reached.has(cur)) continue;
+    reached.add(cur);
     queue.push(...(importGraph.get(cur) ?? []));
   }
-  return false;
+  return reached;
 }
 
-function buildImportGraph(sources: Map<string, ts.SourceFile>, allPaths: Set<string>, aliases: PathAlias[]): Map<string, string[]> {
+export function buildImportGraph(sources: Map<string, ts.SourceFile>, allPaths: Set<string>, aliases: PathAlias[]): Map<string, string[]> {
   const graph = new Map<string, string[]>();
   for (const [path, sf] of sources) {
     const edges: string[] = [];
@@ -390,7 +389,7 @@ function detectMissingServerOnly(sources: Map<string, ts.SourceFile>, nextId: Ne
   const findings: Finding[] = [];
   const allPaths = new Set(sources.keys());
   const clientPaths = new Set([...sources].filter(([, sf]) => leadingDirective(sf) === "use client").map(([p]) => p));
-  const importGraph = buildImportGraph(sources, allPaths, aliases);
+  const reachedFromClient = importClosure(clientPaths, buildImportGraph(sources, allPaths, aliases));
 
   for (const [path, sf] of sources) {
     if (leadingDirective(sf) !== undefined) continue; // 'use client' can't hold secrets like this meaningfully; 'use server' modules are already server-exclusive by the Next compiler
@@ -398,7 +397,7 @@ function detectMissingServerOnly(sources: Map<string, ts.SourceFile>, nextId: Ne
     if (hasServerOnlyImport(sf)) continue;
     const secretNode = findSecretEnvAccess(sf);
     if (!secretNode) continue;
-    if (!hasRealClientImportPath(path, importGraph, clientPaths)) continue; // nothing on the client side imports this module — no bundling risk to guard against
+    if (!reachedFromClient.has(path)) continue; // nothing on the client side imports this module — no bundling risk to guard against
 
     findings.push(
       makeFinding(nextId, {
@@ -961,20 +960,53 @@ interface AwaitedDbDeclaration {
   boundNames: string[];
   node: ts.VariableStatement;
   text: string;
+  /** Index in the enclosing block — the statements between two queries carry the dependence. */
+  index: number;
 }
 
 function findAwaitedDbDeclarations(block: ts.Block, sf: ts.SourceFile): AwaitedDbDeclaration[] {
   const out: AwaitedDbDeclaration[] = [];
-  for (const stmt of block.statements) {
-    if (!ts.isVariableStatement(stmt) || stmt.declarationList.declarations.length !== 1) continue;
+  block.statements.forEach((stmt, index) => {
+    if (!ts.isVariableStatement(stmt) || stmt.declarationList.declarations.length !== 1) return;
     const decl = stmt.declarationList.declarations[0];
-    if (!decl?.initializer || !ts.isAwaitExpression(decl.initializer)) continue;
+    if (!decl?.initializer || !ts.isAwaitExpression(decl.initializer)) return;
     const call = decl.initializer.expression;
-    if (!ts.isCallExpression(call) || !isDbQueryChain(call)) continue;
+    if (!ts.isCallExpression(call) || !isDbQueryChain(call)) return;
     const names = boundNames(decl.name);
-    out.push({ displayName: names[0] ?? decl.name.getText(sf), boundNames: names, node: stmt, text: stmt.getText(sf) });
-  }
+    out.push({ displayName: names[0] ?? decl.name.getText(sf), boundNames: names, node: stmt, text: stmt.getText(sf), index });
+  });
   return out;
+}
+
+// #1344: the dependence between two queries is often laundered through an intermediate binding —
+// `const ids = [...new Set(memberships.map(m => m.organizationId))]` sits between the two, and the
+// second query filters on `ids`, never on `memberships`. Comparing only the FIRST query's bound
+// names against the second statement's text called that pair independent and told the client to
+// run in parallel two queries where the second cannot even be built without the first's result
+// (MEASURED on inbox-zero apps/web/utils/organizations/ownership.ts:43, 2026-07-27). So the taint
+// propagates forward through every intervening statement that reads it — the same one-hop-alias
+// reasoning collectRawRowNames already applies to row leaks, generalised to any number of hops.
+function mentionsIdentifier(text: string, name: string): boolean {
+  // Whole-identifier match: propagating taint on a bare substring lets a short binding like `t`
+  // mark every later statement as dependent and silence the whole class.
+  return new RegExp(`(?<![A-Za-z0-9_$])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9_$])`).test(text);
+}
+
+function dependsOnPriorQuery(block: ts.Block, sf: ts.SourceFile, cur: AwaitedDbDeclaration, next: AwaitedDbDeclaration): boolean {
+  // The direct test keeps its original substring form so this change can only ever SUPPRESS a pair,
+  // never make a previously-suppressed one fire; the names reached by propagation are matched as
+  // whole identifiers, so a short intermediate binding cannot swallow the class.
+  if (cur.boundNames.some((n) => next.text.includes(n))) return true;
+  const tainted = new Set(cur.boundNames);
+  const reads = (text: string): boolean => [...tainted].some((n) => mentionsIdentifier(text, n));
+  for (let i = cur.index + 1; i < next.index; i++) {
+    const stmt = block.statements[i];
+    if (stmt === undefined || !reads(stmt.getText(sf))) continue;
+    if (ts.isVariableStatement(stmt)) {
+      for (const d of stmt.declarationList.declarations) for (const n of boundNames(d.name)) tainted.add(n);
+    }
+  }
+  return reads(next.text);
 }
 
 // #1081: how many additional independent-pair locations a waterfall finding cites by name — the
@@ -1002,7 +1034,7 @@ function detectDataFetchingWaterfalls(
           const cur = decls[i];
           const next = decls[i + 1];
           if (!cur || !next) continue;
-          if (cur.boundNames.some((n) => next.text.includes(n))) continue; // depends on the prior result — legitimately sequential
+          if (dependsOnPriorQuery(node.body, sf, cur, next)) continue; // depends on the prior result, directly or through an intermediate — legitimately sequential
           independentPairs.push({ cur, next });
         }
         if (independentPairs.length > 0) {

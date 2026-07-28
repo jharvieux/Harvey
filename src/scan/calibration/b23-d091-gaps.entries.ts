@@ -30,7 +30,7 @@ export const b23D091GapEntries: CorpusEntry[] = [
     kind: "negative",
     cls: "Signatures decoded with each provider's documented encoding, plus an SDK-owned verification",
     location: "src/d091/webhook-sig-encoding-safe.ts",
-    note: "Four shapes, all silent: GitHub/hex, Shopify/base64, Svix/base64, and `stripe.webhooks.constructEvent`, which has no encoding literal at all because the SDK owns the decode. The last one is the reason the rule requires BOTH a known provider header and an encoding literal in the same function — without it, every SDK-delegating handler is a false positive.",
+    reviewTierHits: ["src.scan.rules.semgrep.harvey-missing-server-only"], note: "Four shapes, all silent: GitHub/hex, Shopify/base64, Svix/base64, and `stripe.webhooks.constructEvent`, which has no encoding literal at all because the SDK owns the decode. The last one is the reason the rule requires BOTH a known provider header and an encoding literal in the same function — without it, every SDK-delegating handler is a false positive.",
   },
   {
     id: "P-D091-DROPPED-COLUMN",
@@ -81,7 +81,7 @@ export const b23D091GapEntries: CorpusEntry[] = [
     kind: "negative",
     cls: "Idempotency row written after the handler returns, and a bare receipt record",
     location: "src/d091/webhook-dedup-order-safe.ts",
-    note: "Two shapes, both silent: the correct order (handler first, row after), and a dedup insert with nothing dispatched after it — recording receipt is not this bug. The second is why the rule is scoped to the enclosing FUNCTION body: file-wide, an insert in one function and an unrelated handler call further down would read as the defect.",
+    reviewTierHits: ["src.scan.rules.semgrep.harvey-unchecked-mutation"], note: "Two shapes, both silent: the correct order (handler first, row after), and a dedup insert with nothing dispatched after it — recording receipt is not this bug. The second is why the rule is scoped to the enclosing FUNCTION body: file-wide, an insert in one function and an unrelated handler call further down would read as the defect.",
   },
   {
     id: "P-D091-NO-IDEMPOTENCY-KEY",

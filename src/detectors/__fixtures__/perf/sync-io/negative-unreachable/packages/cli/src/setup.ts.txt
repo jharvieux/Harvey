@@ -1,0 +1,20 @@
+import { spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+
+// #1344: byte-for-byte the shape #1203's generic tier flagged 51 times across the pinned corpus —
+// exported functions doing sync I/O in a monorepo package no request entry point imports (a CLI:
+// inbox-zero packages/cli, carbon packages/{dev,checks,harness}, saas-lite turbo/generators).
+// Nothing here sits on any path a request takes, so the generic tier must stay silent. Note the
+// directory is `packages/cli/src`, which NON_REQUEST_PATH does NOT match — a path blocklist cannot
+// clear this fixture; only reachability can.
+export function readConfig(path: string): string {
+  return readFileSync(path, "utf8");
+}
+
+export function writeConfig(path: string, body: string): void {
+  writeFileSync(path, body);
+}
+
+export function provision(project: string): void {
+  spawnSync("gcloud", ["pubsub", "topics", "create", project], { stdio: "pipe" });
+}
