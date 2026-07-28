@@ -4,6 +4,55 @@ Running state log (see `CLAUDE.md` → Session log). Forward-looking; overwrite 
 
 _Last updated: 2026-07-28 — **27-batch sweep PAUSED after wave 2 + 4 partial batches.** MEASURED at pause, not recalled: **8 PRs merged** (#1381 #1382 #1383 #1387 #1397 #1398 #1405 #1417), **14 issues closed** (5 on fully-met criteria + 9 with a live remainder), **18 issues filed** (9 remainders #1407–#1415, 9 new defects), **1 still `Failed`+open**, **18 batches queued**. Same-day totals from `gh` are LARGER and do not all belong to this sweep — 6 more PRs and 4 more closes landed earlier in the day, and 9 closed issues (#1384, #1389–#1396) are the sweep's own alert-drill artifacts, created and closed as test fixtures. Ledger `.git/issue-sweep-ledger.json` is DELIBERATELY NOT DELETED — paused, not finished. Newest block first._
 
+## 2026-07-28 (resumed) — SWEEP RUNNING AGAIN, round 2. Four operator rulings taken.
+
+The pause block below is still the authoritative history; these rulings supersede its "Awaiting the
+operator" and "Open operator decisions" rows.
+
+### The four rulings
+
+| decision | ruling |
+|---|---|
+| **PR #1403** | **Re-measure baselines INSIDE the PR.** #1404 widened to all four targets and folded in, so the daily `corpus-drift` job never goes red. Not merge-and-accept-red. |
+| **PR #1406** | **Verify first.** Independent acceptance verifier dispatched; do not merge on the executor's claim. |
+| **#1299** | **Yes** — one read-only Management API call against the hosted `supabase-aop` project is authorized. |
+| **Executor cap** | **Workload-dependent: 4 concurrent for pure code work, 2 when the batch launches heavy external tooling** (Stryker, Docker, corpus installs). Supersedes the blanket "two is the practical cap" — that mis-attributed workload saturation to executor count. |
+
+### #1299 — measured, and it corrected the issue in two places
+
+`GET /v1/projects/<ref>/postgrest` → **HTTP 200**. The key **is** `db_schema`; its value is a
+comma-separated list. **So `parseExposedSchemas` is correct and neither detector is inert** — the
+stale *"NOT independently re-verified … confirm the `db_schema` key"* caveat is replaced with a
+MEASURED note citing endpoint, date and shape.
+
+Two of the issue's own claims were false, both verified before writing:
+
+1. ***"That inline flag no longer exists"* is FALSE.** The caveat sat at `src/scan/supabase.ts:92-94`
+   from commit 58abef7 (PR #150) and was never deleted — immediately above the lines the issue quoted
+   as carrying no caveat. The decay-of-recorded-claims defect, pointing back at the tracker.
+2. **Criterion 1 was already MET** under a different id: the row shipped as **`SB-SCOPE-00`**
+   (#1330 gate 4b), not the proposed `SUP-LOCAL-SCOPE-00`, and it names all three unreachable classes.
+
+**New hazard found while measuring:** the `/postgrest` response also carries the project's
+`jwt_secret`. Nothing embeds the raw object today (only `db_schema` is read at `supabase.ts:213`),
+but the hazard is now stated in the source comment so a future change cannot pipe a project secret
+into a finding or artifact.
+
+Criteria 2 (runbook record) and 3 (calibration entries — neither class is regression-locked) are
+genuinely unmet and in flight. **#1299 stays OPEN.**
+
+### In flight — OBSERVED, not intended (supervisor error #2 below)
+
+| batch | what | weight |
+|---|---|---|
+| PR #1403 | corpus baseline re-measure, all four targets | **HEAVY** |
+| PR #1406 | independent acceptance verifier | read-only |
+| #1299 | calibration entries + runbook record, `feature/1299-calibration-runbook` | code |
+| #1288 | recall/precision gate cadence (opus) | code |
+
+Live-run batches (`#1185`/`#1275`, `#1261`/`#1279`) are **deliberately held** until the corpus agent
+finishes — they touch the same external targets and would collide on installs.
+
 ## 2026-07-28 — SWEEP PAUSED. Resume from `.git/issue-sweep-ledger.json` + this block.
 
 ### The rule that governed this sweep, and its amendment
