@@ -17,8 +17,11 @@ const BASE_EXCLUDE = [
   // The marketing site is a separately-deployed Next.js app with its own toolchain, so its app
   // code never belongs in this suite — but it deploys ALONE from site/ and therefore cannot import
   // shared logic from src/. The free RLS checker's non-destructive write-probe (#888) lives in
-  // site/ for that reason, and its offline gate (write-probe.test.ts, the ONLY test under site/)
-  // has to ride this suite to run in `pnpm verify`. So exclude site's build/deps dirs, not the tree.
+  // site/ for that reason, and its offline gate (write-probe.test.ts) has to ride this suite to run
+  // in `pnpm verify`. So exclude site's build/deps dirs, not the tree. Since #1308 a second one
+  // rides it too — site-contract.test.ts, the offline half of the lead-capture guard. Both import
+  // nothing from `next`, deliberately: CI installs the repo root's deps but never site/node_modules,
+  // so a test needing the Next runtime would be skipped there.
   "site/node_modules/**",
   "site/.next/**",
   // ".claude/**": agent worktrees are full repo copies (see eslint.config.mjs).
