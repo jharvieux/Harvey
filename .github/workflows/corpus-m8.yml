@@ -18,14 +18,14 @@
 # with the measured note) OR our wrapper mis-reading the report (a scanner bug). Never something to
 # silence.
 #
-# SCOPE — 3 of the corpus's 5 suite-carrying targets are scored here (inbox-zero joined proposit and
-# boxyhq, #1268), and the remaining gap is deliberate, recorded, and NOT a silent skip (CLAUDE.md's
-# coverage guard). multi-tenant-starter's suite starts a Docker Postgres container per run, which
-# mutation testing would pay per mutant; saas-lite's suite is Playwright E2E only, so there is
-# nothing to mutate. Both carry their measured reason in external-corpus.ts's
-# M8_DOCKER_PER_MUTANT / M8_E2E_ONLY_SUITE. rallly and carbon carry their own recorded not-run
-# reasons too (pnpm-workspace peculiarities #1268 did not resolve for them — see
-# external-corpus.ts's M8 entries for each).
+# SCOPE — 4 of the corpus's 5 suite-carrying targets are scored here (inbox-zero and rallly joined
+# proposit and boxyhq, #1268), and the remaining gap is deliberate, recorded, and NOT a silent skip
+# (CLAUDE.md's coverage guard). multi-tenant-starter's suite starts a Docker Postgres container per
+# run, which mutation testing would pay per mutant; saas-lite's suite is Playwright E2E only, so
+# there is nothing to mutate. Both carry their measured reason in external-corpus.ts's
+# M8_DOCKER_PER_MUTANT / M8_E2E_ONLY_SUITE. carbon carries its own recorded not-run reason too — the
+# pnpm-aware install resolves its deps, but its own vitest configs need a monorepo build step
+# #1268 did not attempt (see external-corpus.ts's M8 entry for carbon).
 
 name: corpus-m8
 
