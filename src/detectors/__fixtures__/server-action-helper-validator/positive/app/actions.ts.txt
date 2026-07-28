@@ -1,0 +1,14 @@
+// The true-positive control: the action routes its input through a house-style helper that only
+// trims whitespace. A helper call is not a validator, and this must still be flagged.
+"use server";
+
+import { supabase } from "../lib/db";
+import { requireUser } from "../lib/auth";
+import { squash } from "../lib/text";
+
+export async function updateBio(raw: string) {
+  const user = await requireUser();
+  const bio = squash(raw);
+
+  await supabase.from("profiles").update({ bio }).eq("user_id", user.id);
+}

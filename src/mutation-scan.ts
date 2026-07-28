@@ -946,9 +946,42 @@ export function scaffoldStrykerConfig(runner: ScaffoldRunner, presentDirs: reado
     plugins: [`@stryker-mutator/${runner}-runner`],
     coverageAnalysis: "perTest",
     reporters: ["json", "progress"],
+    // Stryker's own defaults for these two are both cwd-relative, i.e. inside the target tree.
+    // withOffTreeScratch below overwrites BOTH before any real invocation (#1285) — a config that
+    // reached Stryker with the values written here would write into a client's checkout.
     jsonReporter: { fileName: "reports/mutation/mutation.json" },
     tempDirName: "stryker-tmp",
     ...(mutate ? { mutate } : {}),
+  };
+}
+
+// #1285: Stryker's two write locations into the project tree — the mutant sandbox parent
+// (`tempDirName`) and the json reporter's output (`jsonReporter.fileName`) — plus the incremental
+// file (`incrementalFile`, default `reports/stryker-incremental.json`, written only under
+// `--incremental`). All three are ordinary config values, and all three accept an ABSOLUTE path
+// pointing outside the project.
+//
+// MEASURED 2026-07-28 against @stryker-mutator/core 9.6.1, two runs of the same fixture differing
+// only in these values (`stryker run stryker.control.json` vs `stryker run stryker.abs.json`,
+// `cleanTempDir: false` on both so the scratch survives for inspection):
+//   - control (`tempDirName: "stryker-tmp"`, relative reporter path) → the target tree gained
+//     `stryker-tmp/sandbox-Ue5ABf` and `reports/mutation/mutation.json`;
+//   - absolute (both pointed at a temp dir) → the sandbox landed at `<tmp>/tmpdir-abs/sandbox-WuOIvZ`,
+//     the report at `<tmp>/reports/mutation-abs.json`, and `ls -a` on the target tree showed NO new
+//     entry at all. Both runs scored the same 7 mutants (4 killed / 2 survived / 1 no-coverage).
+// Stryker's own `utils/temporary-directory.js` does `path.resolve(options.tempDirName)`, which is
+// the identity on an already-absolute path — so this is a documented-by-construction property of
+// how the option is consumed, not a version accident.
+//
+// Never mutates `config`: callers write the result to a fresh path, the same contract
+// withTs7TsconfigBypass below states — a target's own committed Stryker config is never rewritten.
+export function withOffTreeScratch(config: Record<string, unknown>, paths: { tempDir: string; reportFile: string; incrementalFile: string }): Record<string, unknown> {
+  return {
+    ...config,
+    // Spread the target's own jsonReporter first so any other key it set survives the redirect.
+    jsonReporter: { ...((config.jsonReporter as Record<string, unknown> | undefined) ?? {}), fileName: paths.reportFile },
+    tempDirName: paths.tempDir,
+    incrementalFile: paths.incrementalFile,
   };
 }
 

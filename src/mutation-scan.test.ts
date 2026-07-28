@@ -37,6 +37,7 @@ import {
   vacuousTestFiles,
   vacuousTestFindings,
   verifyMutationScope,
+  withOffTreeScratch,
   withTs7TsconfigBypass,
   workspaceTestSuiteFinding,
   workspaceTestSuiteModuleRecord,
@@ -709,6 +710,29 @@ describe("TS7 tsconfig-preprocessor bypass (#773)", () => {
     expect(patched).toMatchObject({ testRunner: "vitest", coverageAnalysis: "perTest", mutate: ["src/**/*.ts"] });
     expect(patched.tsconfigFile).toBe(TS7_TSCONFIG_BYPASS_FILENAME);
     expect(original).not.toHaveProperty("tsconfigFile"); // never mutates the input
+  });
+
+  it("withOffTreeScratch redirects all three Stryker write locations without mutating or dropping the original", () => {
+    const original = { testRunner: "vitest", coverageAnalysis: "perTest", tempDirName: "stryker-tmp", jsonReporter: { fileName: "reports/mutation/mutation.json" } };
+    const paths = { tempDir: "/scratch/stryker-tmp", reportFile: "/scratch/reports/mutation/mutation.json", incrementalFile: "/scratch/incremental.json" };
+    const patched = withOffTreeScratch(original, paths);
+    expect(patched.tempDirName).toBe("/scratch/stryker-tmp");
+    expect(patched.jsonReporter).toEqual({ fileName: "/scratch/reports/mutation/mutation.json" });
+    expect(patched.incrementalFile).toBe("/scratch/incremental.json");
+    expect(patched.testRunner).toBe("vitest"); // everything else survives
+    expect(original.tempDirName).toBe("stryker-tmp"); // never mutates the input
+    expect(original.jsonReporter.fileName).toBe("reports/mutation/mutation.json");
+  });
+
+  it("withOffTreeScratch keeps the target's other jsonReporter keys while overriding fileName", () => {
+    const patched = withOffTreeScratch({ jsonReporter: { fileName: "reports/x.json", someFutureOption: true } }, { tempDir: "/s/t", reportFile: "/s/r.json", incrementalFile: "/s/i.json" });
+    expect(patched.jsonReporter).toEqual({ fileName: "/s/r.json", someFutureOption: true });
+  });
+
+  it("withOffTreeScratch redirects a config that declared none of the three (Stryker's cwd-relative defaults would apply)", () => {
+    const patched = withOffTreeScratch({ testRunner: "jest" }, { tempDir: "/s/t", reportFile: "/s/r.json", incrementalFile: "/s/i.json" });
+    expect(patched.tempDirName).toBe("/s/t");
+    expect(patched.jsonReporter).toEqual({ fileName: "/s/r.json" });
   });
 
   it("detectTs7TsconfigCrash recognizes the exact upstream crash signature, with or without the `ts.` receiver", () => {

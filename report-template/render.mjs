@@ -21,7 +21,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright";
 import { capActionPlan, rollupFindings } from "./rollup.mjs";
-import { draftTermsBadge, esc, legalTermsSection, tenantIsolationPill, testQualityBlock } from "./sections.mjs";
+import { draftTermsBadge, esc, legalTermsSection, notApplicableSection, tenantIsolationPill, testQualityBlock } from "./sections.mjs";
 
 const SEV = {
   Critical: { c: "#b3261e", o: 0 },
@@ -506,9 +506,7 @@ export function buildHtml(data) {
     ${data.fixHandoff ? fixSection(data.fixHandoff) : ""}
     ${data.baseline?.resolved?.length ? resolvedSection(data.baseline.resolved) : ""}
     ${reviewFlagged.length ? reviewFlagSection(reviewFlagged) : ""}
-    ${na.length ? `<h2>Checked &amp; ruled out (not applicable)</h2>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Items a checklist would flag, suppressed by the applicability gate (relevant to this app's auth model / architecture). Shown for transparency.</div>
-    ${na.map((x) => `<div class="na"><span class="fid">${esc(x.id)}</span> <b>${esc(x.title)}</b> — ${esc(x.note ?? "Not applicable in context.")}</div>`).join("")}` : ""}
+    ${notApplicableSection(na)}
     ${legalTermsSection(data)}
   </div>
   </body></html>`;

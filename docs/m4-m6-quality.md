@@ -12,7 +12,7 @@
 |---|---|---|---|
 | M4 Duplication | jscpd | `src/cli/quality-scan.ts` (`pnpm quality-scan`) | Pick consolidation approach per cluster |
 | M5 Slop / dead code | knip + `src/detectors/slop.ts` + `briefs/quality-extras.txt` checklist | `src/cli/quality-scan.ts` for dead exports/files; **`detectSlopFindings` (`src/detectors/slop.ts`, ids `SLOP-*`, run via `pnpm detect-static`)** now mechanizes 11 AI-slop classes — see §5; the residue (judgment-heavy simplification) stays a manual read against `briefs/quality-extras.txt` | Manual read for the classes neither knip nor the slop detector can see |
-| M6 Simplification / reuse | `pnpm simplify-scan` + `briefs/quality-extras.txt` | Not mechanically detectable — the runner assembles a brief+source review packet (`src/cli/simplify-scan.ts`); a reviewer judges it | Fully manual, brief-driven |
+| M6 Simplification / reuse | `pnpm simplify-scan` + `briefs/quality-extras.txt` | **Two tiers.** A mechanical **indicator** tier runs today — `src/detectors/handrolled.ts`, via `pnpm detect-static`, emitting Info-severity `M6 — Indicator: …` findings that name a hand-rolled shape and never grade it (for the count, run `pnpm detector-census` — never transcribe it). The **verdict** — is this genuinely a reinvention, and what replaces it — is a reviewer's judgment and is not mechanised: `src/cli/simplify-scan.ts` assembles a brief+source review packet a reviewer reads. | Indicators automatic; verdicts brief-driven and manual |
 
 ## 1. Running the scan (M4 + M5)
 
@@ -102,7 +102,7 @@ adjust confidence/severity after triage if the mechanical default doesn't match 
   than estimating. Auth/guard/security-path findings (elevated to Medium) belong alongside the M1
   authorization review, not just this list — cross-link them. If M5 didn't run this pass (`M5-00`),
   state that plainly as a disclosed coverage gap rather than implying zero dead code.
-- **§3b Simplification / reuse (M6):** this module has no mechanical detector — run
+- **§3b Simplification / reuse (M6):** this module has a mechanical **indicator** tier and a manual **verdict** tier. Run `pnpm detect-static <target>` for the `M6 — Indicator: …` rows (Info, non-grading — they say "this looks hand-rolled", never "replace it with X"), then run
   `pnpm simplify-scan <target>` to assemble the review packet, then review it against
   `briefs/quality-extras.txt`'s SIMPLIFICATION section
   (hand-rolled primitives, hand-rolled versions of an already-in-the-dependency-tree library,

@@ -136,7 +136,7 @@ Terminology carried from `src/scan/calibration.ts`: `expectedTier` ∈ {`high`, 
 
 ### M6 — Simplification / reuse / maintainability
 
-**What "precision/recall" even means here (read first):** M6's **verdict** has no mechanical detector — it is the `/simplify` LLM review against `briefs/quality-extras.txt` (`docs/m4-m6-quality.md` §0: "Not mechanically detectable"). You cannot gate an LLM suggestion with a precision number the way you gate jscpd. #72 must **not** manufacture one. What #72 *can* build is a **labeled rubric-eval set**: known hand-rolled-vs-stdlib patterns the reviewer *should* flag + benign lookalikes it *should* spare, run through `/simplify`, reported as an **agreement rate against the rubric**, explicitly not a "precision" claim.
+**What "precision/recall" even means here (read first):** M6's **verdict** has no mechanical detector — it is the `/simplify` LLM review against `briefs/quality-extras.txt` (`docs/m4-m6-quality.md` §0: the verdict tier, as distinct from the mechanical indicator tier). You cannot gate an LLM suggestion with a precision number the way you gate jscpd. #72 must **not** manufacture one. What #72 *can* build is a **labeled rubric-eval set**: known hand-rolled-vs-stdlib patterns the reviewer *should* flag + benign lookalikes it *should* spare, run through `/simplify`, reported as an **agreement rate against the rubric**, explicitly not a "precision" claim.
 
 > _Revision (2026-07-16, #267; count refreshed 2026-07-24):_ under the free-indicator ruling in the
 > preamble, a **mechanical subset** now exists — `src/detectors/handrolled.ts` (run via
@@ -333,7 +333,7 @@ Recorded-output fixtures for the Layer-1 unit gates (no binaries), colocated wit
 | 3 | **M8 mutation** | one PR | static-ish but needs a vitest suite + Stryker config in the target (net-new for the target); live command runs locally, no external service; closes the m8 "deferred live run" gap |
 | 4 | **M7 perf advisors** | one PR | connected tier — needs a live Supabase branch (MCP `create_branch`/`apply_migration`/`get_advisors` make it cheap); also verifies the inferred `/advisors/performance` path live |
 | 5 | **M3 hotspots** | one PR (heaviest fixture) | needs a scripted git-history fixture and a net-new vitals adapter; gate is regression/ordering, not precision — build last so the precision-modules land the headline claim first |
-| 6 | **M6 simplify** | separate track (eval, not a gate) | no mechanical detector; a rubric-agreement eval, not a blocking gate — decoupled from the CI gate work |
+| 6 | **M6 simplify** | separate track (eval, not a gate) | no mechanical detector **for the verdict**; a rubric-agreement eval, not a blocking gate — decoupled from the CI gate work |
 
 **Single self-contained PRs (fixtures + Layer-1 unit gate in `pnpm verify`, no external dep):** M10, M4+M5. Plus the Layer-1 *shaping* tests for M7 and M8 (recorded-output fixtures) land in their PRs even though Layer-2 needs live env.
 

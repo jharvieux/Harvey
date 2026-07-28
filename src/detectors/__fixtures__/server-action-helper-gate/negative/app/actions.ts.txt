@@ -1,0 +1,16 @@
+// #1263 — the gate is real, its NAME is not on any list. `ensureMember` performs the session read
+// and the membership check; the action is correctly authorized and must not be flagged.
+"use server";
+
+import { z } from "zod";
+import { supabase } from "../lib/db";
+import { ensureMember } from "../lib/gates";
+
+const RenameSchema = z.object({ orgId: z.string().uuid(), name: z.string().min(1) });
+
+export async function renameOrganisation(input: unknown) {
+  const { orgId, name } = RenameSchema.parse(input);
+  await ensureMember(orgId);
+
+  await supabase.from("organisations").update({ name }).eq("id", orgId);
+}
