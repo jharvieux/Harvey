@@ -18,6 +18,10 @@ import {
   seedDropDisposition,
   seedRemainder,
   selftestCases,
+  checkClosedIssue,
+  closeFailureComment,
+  closeSelftestCases,
+  formatClosedIssue,
   type IssueLookup,
   type IssueRecord,
 } from "./acceptance-conservation.js";
@@ -493,5 +497,81 @@ describe("the seeders fail loud rather than planting nothing", () => {
 
   it("throws when there is no `met` to hollow out", () => {
     expect(() => seedBareEvidence(SELFTEST_BODY.replace("met:", "split: #9002 —"))).toThrow(/no `met` disposition/);
+  });
+});
+
+// #1341 — the close path. Gate 1 reads PR bodies, and both of these close an issue with no PR body
+// to read: a bare click touches no PR at all, and a Development-sidebar link closes on merge with no
+// closing keyword in the body. Same rules, one more surface set.
+describe("an issue that closes with no PR body to read (#1341)", () => {
+  const CRITERIA = "## Acceptance\n- first\n- second\n";
+  const closeLookup: IssueLookup = (n) => (n === 700 ? issue({ number: 700, body: CRITERIA }) : undefined);
+  const bare = { issue: 700, linkedPrs: [], comments: [], authorIsBot: false };
+  const mapped = [
+    "ACCEPTANCE #700.1 met: src/acceptance-conservation.ts now checks it",
+    "ACCEPTANCE #700.2 met: src/acceptance-conservation.test.ts covers it",
+  ];
+
+  it("fails a BARE CLICK — no linked PR, no comment, and two criteria nobody accounted for", () => {
+    const r = checkClosedIssue(bare, closeLookup);
+    expect(r.ok).toBe(false);
+    expect(r.contributed).toEqual([]);
+    expect(formatClosedIssue(r)).toContain("a bare click");
+  });
+
+  it("passes a bare click whose dispositions are recorded as issue comments — the venue #1341 chose", () => {
+    const r = checkClosedIssue({ ...bare, comments: mapped }, closeLookup);
+    expect(r.ok).toBe(true);
+    expect(r.contributed).toEqual(["issue comment 1", "issue comment 2"]);
+  });
+
+  // The one that looks like a normal close and is not: GitHub acts on the sidebar link, so the issue
+  // closes on merge while a body-reading gate sees a PR that closes nothing.
+  it("fails a DEVELOPMENT-SIDEBAR close whose linked PR body carries no closing keyword and no dispositions", () => {
+    const r = checkClosedIssue({ ...bare, linkedPrs: [{ ref: "#800", body: "Refactors the seeder. refs #700" }] }, closeLookup);
+    expect(r.ok).toBe(false);
+    expect(r.surfacesRead).toEqual(["linked PR #800"]);
+  });
+
+  it("passes a sidebar close whose dispositions live in the linked PR's body, so nothing is written twice", () => {
+    const r = checkClosedIssue({ ...bare, linkedPrs: [{ ref: "#800", body: `refs #700\n\n${mapped.join("\n")}` }] }, closeLookup);
+    expect(r.ok).toBe(true);
+    expect(r.contributed).toEqual(["linked PR #800"]);
+  });
+
+  // Only disposition-bearing LINES cross over. A whole PR body would drag its other closing keywords
+  // in and put unrelated issues on trial in a check scoped to one issue.
+  it("ignores a closing keyword for another issue in the surfaces it reads", () => {
+    const r = checkClosedIssue({ ...bare, comments: [`Closes #999 as well.\n${mapped.join("\n")}`] }, closeLookup);
+    expect(r.ok).toBe(true);
+    expect(r.report!.closes.map((c) => c.number)).toEqual([700]);
+  });
+
+  it("exempts a bot-opened issue, and says so rather than passing silently", () => {
+    const r = checkClosedIssue({ ...bare, authorIsBot: true }, closeLookup);
+    expect(r.ok).toBe(true);
+    expect(formatClosedIssue(r)).toContain("NOT ASSESSED");
+  });
+
+  it("names both ways out in the comment it posts, so the failure is actionable where it lands", () => {
+    const comment = closeFailureComment(checkClosedIssue(bare, closeLookup));
+    expect(comment).toContain("ACCEPTANCE #700.<n>");
+    expect(comment).toContain("close it through a PR whose body carries those lines");
+  });
+
+  it("scores exactly as the CLI's --selftest-close asserts, so CI and `pnpm verify` share one fixture", () => {
+    for (const c of closeSelftestCases()) {
+      expect(checkClosedIssue(c.input, SELFTEST_LOOKUP, undefined, SELFTEST_WORLD).ok, c.name).toBe(c.expect === "pass");
+    }
+  });
+
+  // Both close paths, both directions. A control set that only ever proved one direction would leave
+  // "the gate cannot fire" and "there was nothing to fire on" indistinguishable.
+  it("covers each close path in both directions", () => {
+    const names = closeSelftestCases().map((c) => `${c.name} ${c.expect}`);
+    for (const path of ["BARE CLICK", "DEVELOPMENT SIDEBAR"]) {
+      expect(names.filter((n) => n.includes(path) && n.endsWith("pass"))).toHaveLength(1);
+      expect(names.filter((n) => n.includes(path) && n.endsWith("fail"))).toHaveLength(1);
+    }
   });
 });
