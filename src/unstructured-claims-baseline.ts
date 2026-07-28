@@ -843,6 +843,10 @@ export const CLAIM_BASELINE: Record<string, string[]> = {
   "src/fix/verify.ts": [
     "// for something that never executed cannot manufacture a false green (the repo's signature defect).",
   ],
+  "src/fp-rules.test.ts": [
+    "// did not survive a skill upgrade). So the carve-out gets a test: it may be reworded, but it cannot",
+    "// The section the triage verifier reads for this override, isolated so a match cannot be satisfied",
+  ],
   "src/grant-classifier.ts": [
     "*  from a static grep of the client repo — DB introspection alone can't tell. */",
   ],
