@@ -84,18 +84,18 @@ function extractAdvisoryIds(meta: RawMeta): string[] {
 // present (fail-loud is the CLI's job: it asserts all five classes loaded before scoring).
 export function loadSecbenchCorpus(
   root: string,
-  fs: { readdirSync: (p: string) => string[]; readFileSync: (p: string) => string; existsSync: (p: string) => boolean },
+  fs: { listDir: (p: string) => string[]; readText: (p: string) => string; exists: (p: string) => boolean },
 ): SecbenchEntry[] {
   const entries: SecbenchEntry[] = [];
   for (const cls of SECBENCH_CLASSES) {
     const clsDir = `${root}/${cls}`;
-    if (!fs.existsSync(clsDir)) continue;
-    for (const slug of fs.readdirSync(clsDir).sort()) {
+    if (!fs.exists(clsDir)) continue;
+    for (const slug of fs.listDir(clsDir).sort()) {
       const pjPath = `${clsDir}/${slug}/package.json`;
-      if (!fs.existsSync(pjPath)) continue;
+      if (!fs.exists(pjPath)) continue;
       let meta: RawMeta;
       try {
-        meta = JSON.parse(fs.readFileSync(pjPath)) as RawMeta;
+        meta = JSON.parse(fs.readText(pjPath)) as RawMeta;
       } catch {
         continue; // a malformed metadata file is not an entry; the CLI reports the count gap
       }

@@ -16,8 +16,9 @@
 // chances to miss. So a failure rate past --max-failure-pct aborts before anything is scored.
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import { promisify } from "node:util";
 import { arg, assertKnownFlags } from "./args.js";
 import { SECBENCH_PIN, SECBENCH_REPO, loadSecbenchCorpus } from "../scan/secbench.js";
@@ -48,7 +49,7 @@ const workRoot: string = out;
 const concurrency = Number(arg("--concurrency") ?? 8);
 const maxFailurePct = Number(arg("--max-failure-pct") ?? 5);
 
-const fs = { readdirSync: (p: string) => readdirSync(p), readFileSync: (p: string) => readFileSync(p, "utf8"), existsSync };
+const fs = { listDir: readNamesSafe, readText: (p: string) => readFileSync(p, "utf8"), exists: existsSync };
 const entries = loadSecbenchCorpus(dir, fs);
 if (entries.length === 0) {
   console.error(`No SecBench entries loaded from ${dir}. Is it a SecBench.js checkout?`);

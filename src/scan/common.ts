@@ -2,8 +2,9 @@
 // supply-chain, leftover-auth, supabase-*). Keeps Finding construction consistent so
 // every module fills the schema's required fields the same way.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import type { SourceInput } from "../detectors/common.js";
 import type { Finding, PrecisionTier, Severity } from "../findings.js";
 
@@ -20,12 +21,10 @@ const SOURCE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 // the 15 #899 breadth targets, each over a committed link into a gitignored file (`.env`, an EE
 // `LICENSE.md`). It runs inside runMechanicalScan, so the throw takes the whole M1 pass with it.
 export function walkSourceFiles(dir: string, root: string = dir, out: SourceInput[] = []): SourceInput[] {
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (SKIP_DIRS.has(e.name)) continue;
-    const full = join(dir, e.name);
-    if (e.isSymbolicLink() && !existsSync(full)) continue;
-    if (e.isDirectory() || (e.isSymbolicLink() && statSync(full).isDirectory())) walkSourceFiles(full, root, out);
-    else if (SOURCE_EXT.test(e.name)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
+  for (const { name, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+    if (SKIP_DIRS.has(name)) continue;
+    if (isDirectory) walkSourceFiles(full, root, out);
+    else if (SOURCE_EXT.test(name)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
   }
   return out;
 }

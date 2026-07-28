@@ -27,8 +27,33 @@ The free-scan form (`app/api/scan`) emails you each request via Resend. Copy
   sender only delivers to your Resend account email (the operator notification still
   works; requester confirmations don't until the domain is verified).
 
-Set the same three as environment variables in the Vercel project before go-live. Without
-them the form returns a clear "not set up yet" message rather than silently dropping leads.
+`.env.example` lists **every** variable the site reads; `app/site-contract.test.ts` fails if
+the code reads one that is missing from it.
+
+Set the same names on the Vercel project before go-live. Without them the form returns a
+clear "not set up yet" message rather than silently dropping leads — but it *is* rejecting
+every lead, which is what happened in production for five days (#721/#1308):
+
+```bash
+cd site
+printf '%s' "$RESEND_KEY" | vercel env add RESEND_API_KEY production
+printf '%s' "$NOTIFY_INBOX" | vercel env add SCAN_NOTIFY_TO production
+vercel env ls                      # confirm both are listed
+vercel --prod                      # env vars only reach the site on the NEXT deploy
+```
+
+## Verify a deployment
+
+```bash
+# from the repo root, against production (default) or any preview/local URL
+pnpm exec tsx src/cli/site-smoke.ts
+pnpm exec tsx src/cli/site-smoke.ts --base http://localhost:3000
+```
+
+It fails loudly if the deployment serves fewer routes than `app/sitemap.ts` declares (i.e.
+the deploy is behind `main`), or if `/api/scan` reports itself unconfigured. `GET /api/scan`
+is a readiness probe returning `{"service":"scan-intake","configured":<bool>}` — 200 when
+lead capture is live, 503 when its env vars are unset. It submits no lead and sends no mail.
 
 ## Build for production
 
@@ -56,8 +81,11 @@ app/
   page.tsx              The homepage (long-form landing; in-page anchors for its own sections)
   globals.css           All styles (hand-authored, theme-aware light/dark)
   opengraph-image.tsx   Dynamic 1200×630 OG image (next/og)
-  sitemap.ts            /sitemap.xml (all routes)
+  sitemap.ts            /sitemap.xml (all routes) — also the route CONTRACT the checks below use
   robots.ts             /robots.txt
+  site-contract.test.ts Offline guard (#1308): sitemap ↔ page files ↔ internal links ↔ .env.example.
+                        Runs in the main repo's `pnpm verify`; imports nothing from `next`,
+                        because CI installs the repo root's deps but never site/node_modules
   components/
     SiteHeader.tsx      Shared nav + theme toggle (used by every page)
     SiteFooter.tsx      Shared footer (links to all real pages)

@@ -2,8 +2,9 @@
 // state lives in session.json (rewritten atomically on every transition), draft content lives in
 // the .md files. A crash or Ctrl-C between calls loses nothing because every mutation lands on disk.
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import type { DraftSession, ReviewAction } from "./types.js";
 import { parseFrontmatter, serializeFrontmatter, type ParsedDoc } from "./frontmatter.js";
 
@@ -100,8 +101,8 @@ export function listWorkspaces(cwd: string): { slug: string; state: string }[] {
   const root = join(cwd, ROOT_DIR);
   if (!existsSync(root)) return [];
   const out: { slug: string; state: string }[] = [];
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+  for (const entry of readEntriesSafe(root).entries) {
+    if (!entry.isDirectory) continue;
     const dir = join(root, entry.name);
     if (!existsSync(join(dir, "session.json"))) continue;
     out.push({ slug: entry.name, state: loadSession(dir).state });

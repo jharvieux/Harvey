@@ -32,6 +32,18 @@ async function sendEmail(apiKey: string, body: Record<string, unknown>, idempote
   });
 }
 
+// Readiness probe. The intake sat unconfigured in production for five days (#1308) because the
+// only way to learn it was dead was to submit a lead and read the error — i.e. to be the prospect
+// who got dropped. This makes that state machine-readable from outside, so a monitor can see it
+// (src/cli/site-smoke.ts). Booleans only: never echo an env VALUE here.
+export async function GET() {
+  const ready = Boolean(process.env.RESEND_API_KEY && process.env.SCAN_NOTIFY_TO);
+  return NextResponse.json(
+    { service: "scan-intake", configured: ready },
+    { status: ready ? 200 : 503 },
+  );
+}
+
 export async function POST(req: Request) {
   const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
   if (rateLimited(ip)) {

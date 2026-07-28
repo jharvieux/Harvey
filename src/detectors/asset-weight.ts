@@ -7,8 +7,8 @@
 // public/ is fine; a 2 MB hero JPEG on the landing page is not. The instance list gives the
 // auditor the worst offenders to check.
 
-import { readdirSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { relative, sep } from "node:path";
+import { readEntriesSafe, statSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|tiff?|svg)$/i;
@@ -28,16 +28,15 @@ interface FatAsset {
 }
 
 function walk(root: string, dir: string, out: { images: FatAsset[]; media: FatAsset[] }, opts: Required<AssetWeightOptions>): void {
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    const stat = statSync(full);
-    if (stat.isDirectory()) {
+  for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+    if (isDirectory) {
       if (!EXCLUDED_DIR.test(entry)) walk(root, full, out, opts);
       continue;
     }
+    const size = statSafe(full)?.size ?? 0;
     const path = relative(root, full).split(sep).join("/");
-    if (IMAGE_EXT.test(entry) && stat.size > opts.imageThresholdBytes) out.images.push({ path, bytes: stat.size });
-    else if (MEDIA_EXT.test(entry) && stat.size > opts.mediaThresholdBytes) out.media.push({ path, bytes: stat.size });
+    if (IMAGE_EXT.test(entry) && size > opts.imageThresholdBytes) out.images.push({ path, bytes: size });
+    else if (MEDIA_EXT.test(entry) && size > opts.mediaThresholdBytes) out.media.push({ path, bytes: size });
   }
 }
 

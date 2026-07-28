@@ -17,8 +17,9 @@
 //     table, because that inference is a fixed name list and a failed inference is otherwise
 //     indistinguishable from a clean result.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import { classifyMigrationSql, type TableDataMapEntry } from "../../tools/pii-classify.mjs";
 import { definerReviewFindings } from "../definer-review.js";
 import type { Finding } from "../findings.js";
@@ -52,7 +53,7 @@ function readRlsSqlSources(dir: string): { file: string; raw: string }[] {
   const out: { file: string; raw: string }[] = [];
   const migrationsDir = join(dir, "supabase", "migrations");
   if (existsSync(migrationsDir)) {
-    for (const file of readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
+    for (const file of readNamesSafe(migrationsDir).filter((f) => f.endsWith(".sql")).sort()) {
       out.push({ file: relative(dir, join(migrationsDir, file)), raw: readFileSync(join(migrationsDir, file), "utf8") });
     }
   }
@@ -566,7 +567,7 @@ function tableBody(sql: string, table: string): string | null {
 function readMigrations(dir: string): { file: string; sql: string }[] {
   const migrationsDir = join(dir, "supabase", "migrations");
   if (!existsSync(migrationsDir)) return [];
-  return readdirSync(migrationsDir)
+  return readNamesSafe(migrationsDir)
     .filter((f) => f.endsWith(".sql"))
     .sort()
     .map((f) => ({ file: relative(dir, join(migrationsDir, f)), sql: readFileSync(join(migrationsDir, f), "utf8") }));
@@ -1041,10 +1042,10 @@ const OAUTH_CALL = /\bsignInWithOAuth\b|\bsignInWithIdToken\b|\bsignInWithSSO\b/
 function scanSourceAuthSignals(dir: string): { email: boolean; phone: boolean; oauth: boolean } {
   const signals = { email: false, phone: false, oauth: false };
   const walk = (d: string): void => {
-    for (const entry of readdirSync(d, { withFileTypes: true })) {
+    for (const entry of readEntriesSafe(d).entries) {
       if (AUTH_SKIP_DIRS.has(entry.name)) continue;
       const full = join(d, entry.name);
-      if (entry.isDirectory()) walk(full);
+      if (entry.isDirectory) walk(full);
       else if (AUTH_SOURCE_EXT.test(entry.name)) {
         const c = readFileSync(full, "utf8");
         if (!signals.email) signals.email = EMAIL_CALL.test(c);

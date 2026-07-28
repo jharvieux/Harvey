@@ -27,6 +27,7 @@ import { notAssessedCheckNote } from "./boundary-model.js";
 import { callChainNames, leadingDirective, loc, parse, type NextId, type SourceInput } from "./common.js";
 import {
   AUTH_PATTERN,
+  bindingNames,
   collectDbBoundNames,
   collectDerivedClientNames,
   collectParamRootNames,
@@ -233,12 +234,38 @@ export function rowNameOf(expr: ts.Expression, rawRowNames: ReadonlySet<string>)
 // intermediate before passing it must still flag. `const { name } = row` (a narrowing destructure)
 // is deliberately NOT propagated — it projects, which is the safe shape. The propagation pass runs
 // in source order, so a later alias of an earlier alias is also caught; direct bindings dominate.
+// #1293: a query whose own `.select()` names its columns has ALREADY projected — the same "it
+// projects, which is the safe shape" rule the comment above applies to `const { name } = row`, one
+// step earlier. The leak finding's evidence asserts "every field on the row ships to the browser";
+// against `.select("id, name, status")` that sentence is simply false, and all THREE of carbon's
+// server→client-leak Highs were this shape (MEASURED 2026-07-28 on the pin: 4, 5 and 7 named
+// columns). Only a literal column list counts — `*` anywhere (including an embed like
+// `"*, plan:planId(name)"`), a computed argument, or no argument at all leaves the row raw, so this
+// can only ever suppress on evidence that is present in the source.
+function selectIsColumnNarrowed(chain: ts.Expression): boolean {
+  for (let cur: ts.Expression = chain; ; ) {
+    if (ts.isCallExpression(cur)) {
+      if (ts.isPropertyAccessExpression(cur.expression) && cur.expression.name.text === "select") {
+        const arg = cur.arguments[0];
+        if (!arg) return false;
+        const cols = ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg) ? arg.text : undefined;
+        return cols !== undefined && cols.trim() !== "" && !cols.includes("*");
+      }
+      cur = cur.expression;
+    } else if (ts.isPropertyAccessExpression(cur)) {
+      cur = cur.expression;
+    } else {
+      return false;
+    }
+  }
+}
+
 export function collectRawRowNames(sf: ts.SourceFile): Set<string> {
   const rawRowNames = new Set<string>();
   const visit = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && node.initializer) {
       const init = ts.isAwaitExpression(node.initializer) ? node.initializer.expression : node.initializer;
-      if (ts.isCallExpression(init) && isDbQueryChain(init)) {
+      if (ts.isCallExpression(init) && isDbQueryChain(init) && !selectIsColumnNarrowed(init)) {
         if (ts.isIdentifier(node.name)) {
           rawRowNames.add(node.name.text);
         } else if (ts.isObjectBindingPattern(node.name)) {
@@ -1383,7 +1410,12 @@ const OPTIONAL_CHAIN_GUARD = /\b(window|document|localStorage|sessionStorage|nav
 function fileDeclaredNames(sf: ts.SourceFile): Set<string> {
   const names = new Set<string>();
   const visit = (node: ts.Node) => {
-    if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && ts.isIdentifier(node.name)) names.add(node.name.text);
+    // #1293: a DESTRUCTURED binding counts too. Reading only `isIdentifier(node.name)` missed
+    // `({ bucket, document }: Props)` and `const { data: document } = await …` — both bind
+    // `document` to something that is not the DOM, and carbon's pinned tree carries 14 such rows
+    // (a `DocumentType` prop and a loader's query result). The comment above already claimed this
+    // case was skipped; only the identifier-shaped half was implemented.
+    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) bindingNames(node.name, names);
     else if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name) names.add(node.name.text);
     else if (ts.isImportClause(node) && node.name) names.add(node.name.text);
     else if (ts.isImportSpecifier(node)) names.add(node.name.text);
@@ -1418,11 +1450,46 @@ function isFunctionScope(node: ts.Node): boolean {
 //   1, but it's a CLASS MEMBER (method/accessor/ctor) → not the App Router render path but an
 //     OO/framework lifecycle method (e.g. a Lexical node's client-only `createDOM`) → off path.
 //   ≥2 → nested in a deferred closure (effect callback, event handler) → off path.
+// #1293: route-module exports Remix / React Router 7 run ONLY in the browser. `clientLoader` and
+// `clientAction` are the framework's own name for "this never executes on the server", and an
+// `entry.client.*` module is the client entry by convention. Flagging a browser global there
+// inverts the framework contract: on carbon's pinned tree 59 of 108 rows in this class were
+// `window.clientCache` inside a `clientAction`, plus 3 in `entry.client.tsx` — 62 of 108, every one
+// correct code. MEASURED 2026-07-28 by `detect-static` over the pin (see external-corpus.ts).
+const CLIENT_ONLY_ROUTE_EXPORTS = new Set(["clientLoader", "clientAction"]);
+
+// #1276: TanStack Start marks client-only code by WRAPPER, not by export name —
+// `createClientOnlyFn(fn)` and `createIsomorphicFn().client(fn)` are the framework's own statement
+// that the body never runs on the server. FOUND BY RUNNING the adapter against a real target
+// (TanStack/tanstack.com, pinned below): 6 of its 18 residual rows in this class were inside one of
+// these two wrappers, a shape no fixture we authored contained.
+function isClientOnlyWrapperArg(fn: ts.Node): boolean {
+  const call = fn.parent;
+  if (!ts.isCallExpression(call) || !call.arguments.includes(fn as ts.Expression)) return false;
+  const callee = call.expression;
+  if (ts.isIdentifier(callee) && callee.text === "createClientOnlyFn") return true;
+  return ts.isPropertyAccessExpression(callee) && callee.name.text === "client" && /createIsomorphicFn/.test(callee.expression.getText());
+}
+
+function isClientOnlyRouteExport(fn: ts.Node): boolean {
+  if (isClientOnlyWrapperArg(fn)) return true;
+  if (ts.isFunctionDeclaration(fn)) return fn.name !== undefined && CLIENT_ONLY_ROUTE_EXPORTS.has(fn.name.text);
+  const decl = fn.parent;
+  return (
+    (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) &&
+    ts.isVariableDeclaration(decl) &&
+    ts.isIdentifier(decl.name) &&
+    CLIENT_ONLY_ROUTE_EXPORTS.has(decl.name.text)
+  );
+}
+
 function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile): boolean {
+  if (/(^|\/)entry\.client\.[jt]sx?$/.test(sf.fileName)) return false;
   const fns: ts.Node[] = [];
   for (let cur = node.parent; cur; cur = cur.parent) {
     if (isFunctionScope(cur)) fns.push(cur);
   }
+  if (fns.some(isClientOnlyRouteExport)) return false;
   if (fns.length >= 2) return false;
   const nearest = fns[0];
   if (nearest) {
@@ -1437,8 +1504,30 @@ function isOnSsrRenderPath(node: ts.Node, sf: ts.SourceFile): boolean {
 // True when a browser-global guard gates this node — an enclosing `if`, ternary, or `&&`/`||` whose
 // condition/left operand tests a browser global via `typeof` or optional chaining (`window?.x`).
 // The two standard SSR-safe guards.
+// #1293: an EARLY-RETURN guard is a preceding sibling, not an ancestor —
+// `if (typeof window === "undefined") return null;` followed by the read. Walking only ancestors
+// missed it, and the finding's own evidence asserts no such guard exists, so the row was not merely
+// noisy but wrong on its face. Only a guard that EXITS counts (return/throw); a guarded `if` with a
+// fall-through body says nothing about the code after it.
+function precedingGuardExits(node: ts.Node, sf: ts.SourceFile, guards: (text: string) => boolean): boolean {
+  for (let cur: ts.Node = node; cur.parent; cur = cur.parent) {
+    const parent = cur.parent;
+    if (!ts.isBlock(parent) && !ts.isSourceFile(parent)) continue;
+    for (const stmt of parent.statements) {
+      if (stmt.getStart(sf) >= cur.getStart(sf)) break;
+      if (!ts.isIfStatement(stmt) || !guards(stmt.expression.getText(sf))) continue;
+      const body = stmt.thenStatement;
+      const exits = (s: ts.Statement): boolean =>
+        ts.isReturnStatement(s) || ts.isThrowStatement(s) || (ts.isBlock(s) && s.statements.some(exits));
+      if (exits(body)) return true;
+    }
+  }
+  return false;
+}
+
 function isSsrGuarded(node: ts.Node, sf: ts.SourceFile): boolean {
   const guards = (text: string) => TYPEOF_GUARD.test(text) || OPTIONAL_CHAIN_GUARD.test(text);
+  if (precedingGuardExits(node, sf, guards)) return true;
   for (let cur = node.parent; cur; cur = cur.parent) {
     if (ts.isIfStatement(cur) && guards(cur.expression.getText(sf))) return true;
     if (ts.isConditionalExpression(cur) && guards(cur.condition.getText(sf))) return true;

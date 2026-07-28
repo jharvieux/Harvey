@@ -12,8 +12,8 @@
 // these languages for generic issues. What no rule covers is TENANT ISOLATION in them — that is
 // what this row says, rather than the broader (and false) "not scanned at all".
 
-import { readdirSync, statSync } from "node:fs";
-import { extname, join, relative, sep } from "node:path";
+import { extname, relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 
 // Server-side languages a second service in a multi-tenant repo is plausibly written in. Extension
@@ -42,9 +42,8 @@ interface LanguageHits {
 function countUnanalysedLanguages(dir: string): Map<string, LanguageHits> {
   const byLanguage = new Map<string, LanguageHits>();
   const walk = (current: string): void => {
-    for (const entry of readdirSync(current)) {
-      const full = join(current, entry);
-      if (statSync(full).isDirectory()) {
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(current).entries) {
+      if (isDirectory) {
         if (!EXCLUDED_DIR.test(entry)) walk(full);
         continue;
       }

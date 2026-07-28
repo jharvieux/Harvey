@@ -79,7 +79,7 @@ describe("external corpus manifest", () => {
     expect(scored.sort()).toEqual([
       "boxyhq", "carbon", "documenso", "ghostfolio", "inbox-zero", "launch-mvp",
       "multi-tenant-starter", "mvp-boilerplate", "proposit", "rallly", "saas-lite",
-      "subscription-payments", "supabase-security-labs",
+      "subscription-payments", "supabase-security-labs", "tanstack-com",
     ]);
   });
 
