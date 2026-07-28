@@ -716,7 +716,11 @@ interface ImportedBinding {
 
 // Local name → (module path, exported name) for every VALUE import whose module the scan loaded.
 // A specifier that resolves outside the source set (a package) is absent, which is what keeps an
-// unresolvable gate a finding rather than a silent pass.
+// unresolvable gate a finding rather than a silent pass. `import * as guards` records the local
+// name against NAMESPACE_IMPORT, so `guards.ensureMember(…)` resolves through the module (#1439 —
+// #1263's original false positive survived for that idiom).
+const NAMESPACE_IMPORT = "*";
+
 function collectValueImports(sf: ts.SourceFile, path: string, allPaths: Set<string>, aliases: PathAlias[]): Map<string, ImportedBinding> {
   const out = new Map<string, ImportedBinding>();
   for (const stmt of sf.statements) {
@@ -730,24 +734,78 @@ function collectValueImports(sf: ts.SourceFile, path: string, allPaths: Set<stri
         if (!el.isTypeOnly) out.set(el.name.text, { path: resolved, name: (el.propertyName ?? el.name).text });
       }
     }
+    if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+      out.set(clause.namedBindings.name.text, { path: resolved, name: NAMESPACE_IMPORT });
+    }
   }
   return out;
 }
 
-// The names a function body calls directly, as a caller would write them: `ensureMember(x)` and
-// `guards.ensureMember(x)` both yield "ensureMember".
-function calledNames(fn: ts.Node): string[] {
-  const names: string[] = [];
+interface CallSite {
+  /** the callee's own name: `ensureMember(x)` and `guards.ensureMember(x)` both yield "ensureMember" */
+  name: string;
+  /** the receiver of a property-access call — `guards` in `guards.ensureMember(x)` */
+  qualifier?: string;
+  node: ts.CallExpression;
+}
+
+function calledSites(fn: ts.Node): CallSite[] {
+  const sites: CallSite[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node)) {
       const callee = node.expression;
-      if (ts.isIdentifier(callee)) names.push(callee.text);
-      else if (ts.isPropertyAccessExpression(callee)) names.push(callee.name.text);
+      if (ts.isIdentifier(callee)) sites.push({ name: callee.text, node });
+      else if (ts.isPropertyAccessExpression(callee)) {
+        sites.push({ name: callee.name.text, qualifier: ts.isIdentifier(callee.expression) ? callee.expression.text : undefined, node });
+      }
     }
     ts.forEachChild(node, visit);
   };
   visit(fn);
-  return names;
+  return sites;
+}
+
+// #1439: matching the auth/validation pattern inside a helper's body says the helper LOOKS at the
+// session; it does not say the helper can stop the mutation. Two shapes proved that at review: a
+// logging helper whose body calls `getCurrentUser()` for the log line, and `const allowed = await
+// canAccess(id)` whose result is never read. Both vouched for an action that enforced nothing.
+//
+// A helper counts as a gate when it can DENY on its own — it throws, or it calls a framework
+// denial (`redirect`/`notFound`/`forbidden`) — or when the CALLER consumes what it returns. The
+// consumption test is deliberately generous: only the two shapes that provably discard the result
+// (a bare expression statement, and a binding never read again) fail it, so an unfamiliar idiom
+// still suppresses.
+const DENIAL_CALL = /^(redirect|permanentRedirect|notFound|forbidden|unauthorized)$/;
+
+function canDeny(fn: ts.Node): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isThrowStatement(node)) found = true;
+    else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && DENIAL_CALL.test(node.expression.text)) found = true;
+    else ts.forEachChild(node, visit);
+  };
+  visit(fn);
+  return found;
+}
+
+/** Whether the action does anything with the call's result. `await f(x);` alone does not. */
+function resultIsConsumed(call: ts.CallExpression, action: ts.Node): boolean {
+  const value = ts.isAwaitExpression(call.parent) ? call.parent : call;
+  const parent = value.parent;
+  if (parent === undefined || ts.isExpressionStatement(parent)) return false;
+  if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) {
+    // Read anywhere else in the action — a branch, an argument, the mutation itself.
+    const name = parent.name.text;
+    let reads = 0;
+    const visit = (node: ts.Node) => {
+      if (ts.isIdentifier(node) && node.text === name && node !== parent.name) reads += 1;
+      ts.forEachChild(node, visit);
+    };
+    visit(action);
+    return reads > 0;
+  }
+  return true;
 }
 
 // Resolves the action's callees and returns the name of the first one whose own body satisfies
@@ -781,26 +839,37 @@ class GateResolver {
     return hit;
   }
 
-  private resolve(path: string, name: string): { path: string; node: ts.Node } | undefined {
-    const local = this.declaredIn(path).get(name);
+  private resolve(path: string, site: CallSite): { path: string; node: ts.Node } | undefined {
+    if (site.qualifier !== undefined) {
+      // `guards.ensureMember(…)` — only a namespace import resolves; a method on a runtime object
+      // (`supabase.auth.getUser()`) has no declaration in this tree and stays unresolvable.
+      const ns = this.importsIn(path).get(site.qualifier);
+      if (ns?.name !== NAMESPACE_IMPORT) return undefined;
+      const target = this.declaredIn(ns.path).get(site.name);
+      return target ? { path: ns.path, node: target } : undefined;
+    }
+    const local = this.declaredIn(path).get(site.name);
     if (local) return { path, node: local };
-    const imported = this.importsIn(path).get(name);
-    if (!imported) return undefined;
+    const imported = this.importsIn(path).get(site.name);
+    if (!imported || imported.name === NAMESPACE_IMPORT) return undefined;
     const target = this.declaredIn(imported.path).get(imported.name);
     return target ? { path: imported.path, node: target } : undefined;
   }
 
   gateIn(pattern: RegExp, path: string, fn: ts.Node, depth = GATE_DEPTH, seen = new Set<string>()): string | undefined {
     if (depth <= 0) return undefined;
-    for (const name of calledNames(fn)) {
-      const key = `${path}#${name}`;
+    for (const site of calledSites(fn)) {
+      const key = `${path}#${site.qualifier ?? ""}#${site.name}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const hit = this.resolve(path, name);
+      const hit = this.resolve(path, site);
       if (!hit) continue;
       const sf = this.sources.get(hit.path);
-      if (sf && pattern.test(stripLiteralsAndComments(sf, hit.node))) return name;
-      if (this.gateIn(pattern, hit.path, hit.node, depth - 1, seen)) return name;
+      // #1439: matching the pattern is not enough — the helper must be able to deny, or the caller
+      // must consume what it returns. A logger that reads the session, and a boolean nobody looks
+      // at, are not gates.
+      if (sf && pattern.test(stripLiteralsAndComments(sf, hit.node)) && (canDeny(hit.node) || resultIsConsumed(site.node, fn))) return site.name;
+      if (this.gateIn(pattern, hit.path, hit.node, depth - 1, seen)) return site.name;
     }
     return undefined;
   }
@@ -1154,39 +1223,82 @@ function mentionsIdentifier(text: string, name: string): boolean {
 // it executes on inputs the sequential code never reaches: on carbon one such pair issues a
 // compensating DELETE on the failure path. MEASURED on the pinned carbon clone 2026-07-28 (see the
 // PR): 40 waterfall rows before, and the guarded shape is the largest remaining sub-class.
-// `continue`/`break` count too — inside a loop they skip the rest of the iteration just the same.
-function escapesFunction(stmt: ts.Statement): boolean {
-  let found = false;
-  const visit = (node: ts.Node) => {
-    if (found) return;
-    if (ts.isReturnStatement(node) || ts.isThrowStatement(node) || ts.isContinueStatement(node) || ts.isBreakStatement(node)) {
-      found = true;
-      return;
+//
+// What a guard DOES to control flow decides whether the pair is sequential, and there are two
+// answers, not one (#1438/#1441):
+//
+//   DIVERTS — a `return`, or a `break`/`continue` bound to a loop OUTSIDE this statement: the
+//     second query never runs on that path. A real dependency.
+//   ABORTS  — a `throw` only (including Remix's `throw redirect(…)`): the request ends. Nothing
+//     downstream observes the second query's result, so hoisting a READ above it costs one wasted
+//     round-trip on the failure path and changes no behaviour. Not a dependency, provided BOTH
+//     queries are reads — see mutatingChain.
+//
+// #1438: the old test counted ANY `Break`/`Continue` node. One belonging to a `switch` or an inner
+// loop INSIDE the intervening statement does not leave the function and does not skip the second
+// query, so it suppressed a genuinely parallelisable pair. A labelled `break outer` is only local
+// when `outer:` is itself declared inside this statement.
+type GuardEffect = "none" | "aborts" | "diverts";
+
+function guardEffect(stmt: ts.Statement): GuardEffect {
+  let diverts = false;
+  let aborts = false;
+  const visit = (node: ts.Node, loopDepth: number, labels: ReadonlySet<string>) => {
+    if (diverts) return;
+    if (ts.isReturnStatement(node)) diverts = true;
+    else if (ts.isThrowStatement(node)) aborts = true;
+    else if (ts.isBreakStatement(node) || ts.isContinueStatement(node)) {
+      const label = node.label?.text;
+      if (label === undefined ? loopDepth === 0 : !labels.has(label)) diverts = true;
     }
     // A nested function's own `return` returns from THAT function, not from this one.
     if (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node)) return;
-    ts.forEachChild(node, visit);
+    const opensLoop =
+      ts.isSwitchStatement(node) || ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node);
+    const nextLabels = ts.isLabeledStatement(node) ? new Set([...labels, node.label.text]) : labels;
+    ts.forEachChild(node, (c) => visit(c, loopDepth + (opensLoop ? 1 : 0), nextLabels));
   };
-  visit(stmt);
-  return found;
+  visit(stmt, 0, new Set());
+  return diverts ? "diverts" : aborts ? "aborts" : "none";
 }
 
-function dependsOnPriorQuery(block: ts.Block, sf: ts.SourceFile, cur: AwaitedDbDeclaration, next: AwaitedDbDeclaration): boolean {
+// #1441: `isDbQueryChain` accepts `.from("receipt").update({…}).select("id")` — a WRITE. Hoisting
+// one of those above an aborting guard is exactly the bug the #1292 suppression exists to prevent
+// (MEASURED on the pinned carbon clone 2026-07-28: apps/erp/app/routes/x+/receipt+/$receiptId.post
+// .tsx:172 flips a receipt to Pending under a `throw redirect` guard that rejects voided receipts).
+// So the abort relaxation applies only when NEITHER query mutates.
+function mutatingChain(decl: AwaitedDbDeclaration): boolean {
+  return MUTATION_PATTERN.test(decl.text);
+}
+
+/** Why a pair is not reported, or undefined when it is independent and fires. */
+type PairDependency = "dataflow" | "guard-diverts" | "guard-aborts-over-write";
+
+function dependsOnPriorQuery(block: ts.Block, sf: ts.SourceFile, cur: AwaitedDbDeclaration, next: AwaitedDbDeclaration): PairDependency | undefined {
   // The direct test keeps its original substring form so this change can only ever SUPPRESS a pair,
   // never make a previously-suppressed one fire; the names reached by propagation are matched as
   // whole identifiers, so a short intermediate binding cannot swallow the class.
-  if (cur.boundNames.some((n) => next.text.includes(n))) return true;
+  if (cur.boundNames.some((n) => next.text.includes(n))) return "dataflow";
+  const eitherWrites = mutatingChain(cur) || mutatingChain(next);
   const tainted = new Set(cur.boundNames);
   const reads = (text: string): boolean => [...tainted].some((n) => mentionsIdentifier(text, n));
+  let abortedOverWrite = false;
   for (let i = cur.index + 1; i < next.index; i++) {
     const stmt = block.statements[i];
     if (stmt === undefined || !reads(stmt.getText(sf))) continue;
-    if (escapesFunction(stmt)) return true; // a guard on the first result — reordering changes behaviour
+    const effect = guardEffect(stmt);
+    if (effect === "diverts") return "guard-diverts"; // a guard on the first result — reordering changes behaviour
+    // An aborting guard over a write stays a dependency, but the walk continues: a LATER statement
+    // may divert, or launder the first result into a binding the second query reads, and either of
+    // those is the stronger reason to suppress. Returning here would hide it (MEASURED 2026-07-28:
+    // 3 of the 13 abort-guarded pairs on the pinned corpus are caught by a later statement).
+    if (effect === "aborts" && eitherWrites) abortedOverWrite = true;
     if (ts.isVariableStatement(stmt)) {
       for (const d of stmt.declarationList.declarations) for (const n of boundNames(d.name)) tainted.add(n);
     }
   }
-  return reads(next.text);
+  if (reads(next.text)) return "dataflow";
+  return abortedOverWrite ? "guard-aborts-over-write" : undefined;
 }
 
 // #1081: how many additional independent-pair locations a waterfall finding cites by name — the
@@ -1199,6 +1311,9 @@ function detectDataFetchingWaterfalls(
   isClientContext: (sf: ts.SourceFile) => boolean = (sf) => leadingDirective(sf) === "use client",
 ): Finding[] {
   const findings: Finding[] = [];
+  let pairsExamined = 0;
+  let excludedByDivertingGuard = 0;
+  let excludedByAbortOverWrite = 0;
   for (const [path, sf] of sources) {
     if (isClientContext(sf)) continue;
 
@@ -1214,7 +1329,12 @@ function detectDataFetchingWaterfalls(
           const cur = decls[i];
           const next = decls[i + 1];
           if (!cur || !next) continue;
-          if (dependsOnPriorQuery(node.body, sf, cur, next)) continue; // depends on the prior result, directly or through an intermediate — legitimately sequential
+          pairsExamined += 1;
+          // depends on the prior result, directly or through an intermediate — legitimately sequential
+          const dependency = dependsOnPriorQuery(node.body, sf, cur, next);
+          if (dependency === "guard-diverts") excludedByDivertingGuard += 1;
+          if (dependency === "guard-aborts-over-write") excludedByAbortOverWrite += 1;
+          if (dependency !== undefined) continue;
           independentPairs.push({ cur, next });
         }
         if (independentPairs.length > 0) {
@@ -1253,7 +1373,39 @@ function detectDataFetchingWaterfalls(
     };
     visit(sf);
   }
-  return findings;
+  return [...findings, ...waterfallScopeNote(nextId, pairsExamined, excludedByDivertingGuard, excludedByAbortOverWrite)];
+}
+
+// The disclosure half of #1292 (#1441). The guard rule above is a deliberate precision trade: a
+// whole class of adjacent-query pair is set aside by policy, and until now nothing in the
+// deliverable said so. On the pinned mvp-boilerplate clone that took the target's only counted M9
+// finding away and left a report a client reads as a clean M9 result — the exact shape CLAUDE.md
+// names as worse than a wrong status. The class is now COUNTED on every target that has adjacent
+// query pairs at all, so a zero-finding M9 waterfall result carries its own population.
+function waterfallScopeNote(nextId: NextId, pairsExamined: number, diverted: number, abortedOverWrite: number): Finding[] {
+  const excluded = diverted + abortedOverWrite;
+  // Nothing was set aside — there is no limitation to disclose, and a "0 excluded" row on every
+  // target would dilute the family into a status line.
+  if (excluded === 0) return [];
+  return [
+    {
+      id: nextId(),
+      title: `M9 partially assessed — data-fetching waterfall (${excluded} of ${pairsExamined} adjacent query pair${pairsExamined === 1 ? "" : "s"} excluded by policy)`,
+      severity: "Info",
+      confidence: "N/A",
+      category: "Performance",
+      taxonomy: "M9 — Data-fetching waterfall — scope",
+      location: "(whole target)",
+      status: "Open",
+      evidence: `${pairsExamined} adjacent awaited-query pair${pairsExamined === 1 ? " was" : "s were"} examined for parallelisability. ${excluded} ${excluded === 1 ? "was EXCLUDED BY POLICY and is" : "were EXCLUDED BY POLICY and are"} therefore absent from the findings above, in two classes: (1) ${diverted} pair${diverted === 1 ? " is" : "s are"} separated by a guard on the first result that can leave the function — a \`return\`, or a \`break\`/\`continue\` bound to an enclosing loop. \`Promise.all\` hoists the second query above that guard, so it would execute on requests the sequential code never reaches; on this corpus such a pair has issued a duplicate invitation, a compensating DELETE and an update on an unverified row, so the class is suppressed rather than reported. (2) ${abortedOverWrite} pair${abortedOverWrite === 1 ? " is" : "s are"} separated by an error-only guard (a \`throw\`, including \`throw redirect(…)\`) where one of the two statements WRITES — the read-only case is reported normally, but hoisting a write above its guard is a behaviour change, not a latency win. Neither class was judged individually: each is set aside as a whole.`,
+      impact: "These pairs were NOT assessed for parallelisability — the trade buys precision on a Review-tier performance class at a known cost in recall. Recorded with its population so a zero-finding waterfall result reads as 'a class was set aside', never as 'nothing to find here' — the fail-loud coverage guard.",
+      fix: "None — informational. To recover the excluded pairs by hand, look for two adjacent awaited queries with a guard between them: where the guard only aborts the request and both statements are reads, `Promise.all` is usually safe.",
+      value: 1,
+      ease: 5,
+      safety: 5,
+      precisionTier: "high",
+    },
+  ];
 }
 
 // --- Accidental dynamic rendering [MED] — best-effort -----------------------
@@ -1955,21 +2107,35 @@ function numericConstNames(sf: ts.SourceFile): Set<string> {
   return names;
 }
 
-// Whether a loop's attempt count is bounded by something this pass can see. A `for` whose condition
-// compares against a numeric literal, a numeric const, or a `.length` is capped; `while (true)` and
-// a bound that is any other expression (a request value, a config lookup) are not. Anything that is
-// not a recognised loop header is treated as CAPPED — the shape must be proven unbounded to fire.
+// Whether a loop header carries a bound this pass can resolve: a comparison against a numeric
+// literal, a numeric const, or a `.length`. `&&` is capped if EITHER side caps (either one ends the
+// loop); `||` only if BOTH do (the loop runs while either holds).
+function conditionIsCapped(cond: ts.Expression, consts: ReadonlySet<string>): boolean {
+  if (!ts.isBinaryExpression(cond)) return false;
+  if (cond.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) return conditionIsCapped(cond.left, consts) || conditionIsCapped(cond.right, consts);
+  if (cond.operatorToken.kind === ts.SyntaxKind.BarBarToken) return conditionIsCapped(cond.left, consts) && conditionIsCapped(cond.right, consts);
+  const bound = cond.right;
+  if (ts.isNumericLiteral(bound)) return true;
+  if (ts.isIdentifier(bound) && consts.has(bound.text)) return true;
+  return ts.isPropertyAccessExpression(bound) && bound.name.text === "length";
+}
+
+// Whether a loop's attempt count is bounded by something this pass can see. Anything that is not a
+// recognised loop header is treated as CAPPED — the shape must be proven unbounded to fire.
+//
+// #1440: this used to accept only a LITERAL-true while-condition, so the canonical uncapped retry —
+// `while (!done) { try { await fetch(url) } catch {} }` — was never assessed at all, and was not
+// named in the scope row either. A while/do condition now resolves exactly as a `for` condition
+// does. The header is all this reads: a loop bounded by a counter the BODY updates reads as
+// uncapped, which is the fail-loud direction and is stated in the finding's own evidence.
 function retryLoopIsUncapped(node: ts.Node, consts: ReadonlySet<string>): boolean {
-  if ((ts.isWhileStatement(node) || ts.isDoStatement(node)) && isTruthyLiteral(node.expression)) return true;
+  if (ts.isWhileStatement(node) || ts.isDoStatement(node)) {
+    return isTruthyLiteral(node.expression) || !conditionIsCapped(node.expression, consts);
+  }
   if (!ts.isForStatement(node)) return false;
   const cond = node.condition;
   if (cond === undefined) return true; // `for (;;)`
-  if (!ts.isBinaryExpression(cond)) return false;
-  const bound = cond.right;
-  if (ts.isNumericLiteral(bound)) return false;
-  if (ts.isIdentifier(bound) && consts.has(bound.text)) return false;
-  if (ts.isPropertyAccessExpression(bound) && bound.name.text === "length") return false;
-  return true;
+  return !conditionIsCapped(cond, consts);
 }
 
 // Names whose value comes from the incoming request: the handler's own parameters, and anything
@@ -2040,7 +2206,7 @@ function detectUncappedRetryFanOut(sources: Map<string, ts.SourceFile>, nextId: 
             category: "Performance",
             taxonomy: "M9 — Uncapped retry/fan-out",
             location: loc(path, sf, node),
-            evidence: `\`${node.getText(sf).slice(0, 70).replace(/\s+/g, " ")}…\` re-issues an outbound call after catching a failure, and its attempt count resolves to no literal or constant bound in this file — the loop header is \`${(ts.isForStatement(node) ? node.condition?.getText(sf) : node.expression.getText(sf)) ?? "(none)"}\`.`,
+            evidence: `\`${node.getText(sf).slice(0, 70).replace(/\s+/g, " ")}…\` re-issues an outbound call after catching a failure, and its attempt count resolves to no literal or constant bound in this file — the loop header is \`${(ts.isForStatement(node) ? node.condition?.getText(sf) : node.expression.getText(sf)) ?? "(none)"}\`. Scope of this check: it reads the loop HEADER only, so a counter or flag the body updates on each attempt could still bound this loop and this rule would not see it (#1440).`,
             impact: "A dependency that is down or rate-limiting turns every request into an unbounded retry storm: the handler holds its slot until the platform timeout, amplifies load onto the failing dependency, and multiplies the bill exactly when the system is least healthy.",
             fix: "Cap the attempts with a literal/const maximum and back off between them (or delegate to a retry helper configured with a maxAttempts).",
             value: 4,
@@ -2079,17 +2245,26 @@ function detectUncappedRetryFanOut(sources: Map<string, ts.SourceFile>, nextId: 
   return findings;
 }
 
-// The disclosure half of #1262. The two shapes above are what a precise AST rule reaches; three
+// The disclosure half of #1262. The two shapes above are what a precise AST rule reaches; the
 // sub-shapes it does not are named here WITH THEIR COUNT ON THIS TARGET, so the row carries a
 // measured population rather than a hypothetical bound, and its absence from the report can never
 // read as "assessed and clean". Emitted whenever the target has route/edge handlers at all.
+//
+// #1440 audited this list for exhaustiveness and found it was not: the canonical
+// `while (!done) { try { await fetch(url) } catch {} }` was neither detected NOR named here, so the
+// row read as complete while omitting a class — the failure the disclosure family exists to
+// prevent, occurring inside a disclosure row. That class is now DETECTED (retryLoopIsUncapped), and
+// the bound it leaves behind — a loop bounded in the BODY rather than the header — is named as (4)
+// with its count, in the direction it errs.
 function uncappedRetryScopeNote(sources: Map<string, ts.SourceFile>, nextId: NextId): Finding[] {
   let handlers = 0;
   let retryLibFiles = 0;
   let unscopedFanOuts = 0;
+  let headerOnlyBounds = 0;
   for (const [path, sf] of sources) {
     if (!isRouteOrEdgeHandler(path, sf)) continue;
     handlers += 1;
+    const consts = numericConstNames(sf);
     const importsRetryLib = sf.statements.some((s) => ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier) && RETRY_LIBRARY.test(s.moduleSpecifier.text));
     if (importsRetryLib) retryLibFiles += 1;
     const visit = (node: ts.Node) => {
@@ -2098,6 +2273,17 @@ function uncappedRetryScopeNote(sources: Map<string, ts.SourceFile>, nextId: Nex
         const handler = enclosingHandler(node);
         const requestDerived = handler ? collectRequestDerivedNames(handler, sf) : new Set<string>();
         if (!requestDerived.has(fanOut.collection)) unscopedFanOuts += 1;
+      }
+      // The retry loops REPORTED above whose header is not a literal-true — the ones whose real cap,
+      // if any, would live in the body this pass does not read.
+      if (
+        (ts.isForStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node)) &&
+        hasOutboundCall(node.statement) &&
+        hasCatch(node.statement) &&
+        retryLoopIsUncapped(node, consts) &&
+        !isAlwaysTrueLoop(node)
+      ) {
+        headerOnlyBounds += 1;
       }
       ts.forEachChild(node, visit);
     };
@@ -2114,9 +2300,9 @@ function uncappedRetryScopeNote(sources: Map<string, ts.SourceFile>, nextId: Nex
       taxonomy: "M9 — Uncapped retry/fan-out — scope",
       location: "(whole target)",
       status: "Open",
-      evidence: `${handlers} route/edge handler${handlers === 1 ? " was" : "s were"} checked for two uncapped shapes: a retry loop whose attempt count resolves to no literal/const bound, and a \`Promise.all(xs.map(…))\` fan-out over a request-sized collection. THREE sub-shapes were NOT assessed, counted here on this target: (1) retries delegated to a retry/backoff/concurrency library, whose cap lives in a config object this pass does not read — ${retryLibFiles} handler file${retryLibFiles === 1 ? " imports" : "s import"} one; (2) fan-out over a collection this pass could not tie to the request (typically a DB read of unbounded size) — ${unscopedFanOuts} such site${unscopedFanOuts === 1 ? "" : "s"}, left unflagged to hold precision; (3) retry by RECURSION (a helper calling itself on failure) rather than by a loop — no loop node exists to bound, and no count is available for it.`,
-      impact: "These three sub-shapes are unassessed on this target. Recorded explicitly with their counts so the absence of a retry/fan-out finding reads as 'partially assessed', not 'assessed and clean' — the fail-loud coverage guard.",
-      fix: "None — informational. Review the counted sites by hand: confirm each library retry declares a maximum-attempts option, and each unscoped fan-out runs over a collection whose size the service controls.",
+      evidence: `${handlers} route/edge handler${handlers === 1 ? " was" : "s were"} checked for two uncapped shapes: a retry loop whose attempt count resolves to no literal/const bound in its header (\`while (true)\`, \`while (!done)\`, \`for (let i = 0; i < attempts; i++)\` alike), and a \`Promise.all(xs.map(…))\` fan-out over a request-sized collection. FOUR sub-shapes were NOT fully assessed, counted here on this target: (1) retries delegated to a retry/backoff/concurrency library, whose cap lives in a config object this pass does not read — ${retryLibFiles} handler file${retryLibFiles === 1 ? " imports" : "s import"} one; (2) fan-out over a collection this pass could not tie to the request (typically a DB read of unbounded size) — ${unscopedFanOuts} such site${unscopedFanOuts === 1 ? "" : "s"}, left unflagged to hold precision; (3) retry by RECURSION (a helper calling itself on failure) rather than by a loop — no loop node exists to bound, and no count is available for it; (4) a loop whose real cap lives in the BODY (a counter incremented then \`break\`-ed on, a flag the catch sets) rather than in the header — this pass reads the header only, so it errs LOUD and reports such a loop as uncapped: ${headerOnlyBounds} of the retry loops reported above ${headerOnlyBounds === 1 ? "has" : "have"} a non-literal header and may carry a body-side bound.`,
+      impact: "These four sub-shapes are not fully assessed on this target. Recorded explicitly with their counts so the absence of a retry/fan-out finding reads as 'partially assessed', not 'assessed and clean' — the fail-loud coverage guard.",
+      fix: "None — informational. Review the counted sites by hand: confirm each library retry declares a maximum-attempts option, each unscoped fan-out runs over a collection whose size the service controls, and each header-unbounded loop reported above really does terminate on the failure path.",
       value: 1,
       ease: 5,
       safety: 5,
