@@ -142,6 +142,54 @@ function relevantFindings(entry: CorpusEntry, findings: Finding[]): Finding[] {
   });
 }
 
+// #1355: a `match` keyword that is a substring of the entry's OWN location is vacuous. Every
+// finding that survives the location filter carries that location in the haystack (directly, and
+// again inside the path-derived ids the AST detectors mint), so such a key is satisfied by ANY
+// finding on the fixture — including one for an entirely different defect. On a POSITIVE that is
+// the #1062 masking shape: the detection the row exists to score can go silent while the row stays
+// green (MEASURED on P-OWASP-MT-CLIENT-TENANT, whose `["tenant"]` key on client-supplied-tenant.ts
+// scored an unrelated XSS finding as a full pass). MEASURED 2026-07-28 over the whole corpus: 59
+// such keys on 58 entries, 39 of them positives.
+//
+// Both shapes are reported: the raw location, and the location with every non-alphanumeric run
+// collapsed to "-", which is how a detector-minted id embeds the path (e.g.
+// AUTH-client-supplied-tenant-tenantId-src-owasp-mt-client-supplied-tenant-ts-2).
+//
+// On a NEGATIVE the vacuity runs the safe way — a wider relevant set can only make the row fail —
+// but the key is still a lie about what the entry discriminates, and the honest spelling is no
+// `match` at all. Both kinds are reported so the corpus stays free of the shape.
+interface SelfMatchingKeyRow {
+  id: string;
+  kind: CorpusEntry["kind"];
+  location: string;
+  keys: string[];
+}
+
+export function selfMatchingMatchKeys(corpus: CorpusEntry[] = CORPUS): SelfMatchingKeyRow[] {
+  const rows: SelfMatchingKeyRow[] = [];
+  for (const e of corpus) {
+    if (!e.match) continue;
+    const raw = e.location.toLowerCase();
+    const hyphenated = raw.replace(/[^a-z0-9]+/g, "-");
+    const keys = e.match.filter((k) => raw.includes(k.toLowerCase()) || hyphenated.includes(k.toLowerCase()));
+    if (keys.length) rows.push({ id: e.id, kind: e.kind, location: e.location, keys });
+  }
+  return rows;
+}
+
+export function formatSelfMatchingKeys(rows: SelfMatchingKeyRow[]): string {
+  return rows
+    .map(
+      (r) =>
+        `${r.id} (${r.kind}) — key(s) ${r.keys.map((k) => JSON.stringify(k)).join(", ")} are a substring of its own location "${r.location}", ` +
+        `so every finding on that fixture satisfies the entry. ` +
+        (r.kind === "positive"
+          ? "Re-scope the key to vocabulary from the taxonomy/message of the finding this row exists to score."
+          : "Delete the `match` list — for a negative the entry already means 'any finding here is a false positive'."),
+    )
+    .join("\n");
+}
+
 function topTier(findings: Finding[]): PrecisionTier | undefined {
   if (findings.some((f) => f.precisionTier === "high")) return "high";
   if (findings.some((f) => f.precisionTier === "review")) return "review";
@@ -277,11 +325,19 @@ interface ModuleCensusRow {
   negatives: number;
 }
 
+// The ten modules the deliverable is sold on. The census is seeded from this list, not from what
+// the corpus happens to contain (#1314): a module with zero entries used to emit no row at all, so
+// the parity minimum computed over the census could not see it — M2 and M6 had zero fixtures each
+// while the gate printed "all modules meet it". An absent row never appears in a tally.
+export const AUDIT_MODULES = ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10"] as const;
+
 // Per-module fixture census over the corpus, so a blended recall count can never imply uniform
 // coverage: a module standing on 1 positive is visibly thin here rather than averaged into the
 // M1-dominated total (#341). Purely counts the answer key — says nothing about what any gate runs.
 export function moduleCensus(corpus: CorpusEntry[] = CORPUS): ModuleCensusRow[] {
-  const rows = new Map<string, ModuleCensusRow>();
+  const rows = new Map<string, ModuleCensusRow>(
+    AUDIT_MODULES.map((m) => [m, { module: m, positivesStatic: 0, positivesConnected: 0, negatives: 0 }]),
+  );
   for (const e of corpus) {
     const m = moduleOf(e);
     const row = rows.get(m) ?? { module: m, positivesStatic: 0, positivesConnected: 0, negatives: 0 };
@@ -292,6 +348,68 @@ export function moduleCensus(corpus: CorpusEntry[] = CORPUS): ModuleCensusRow[] 
   }
   const numOf = (m: string) => Number(m.replace(/^M/, "")) || 0;
   return [...rows.values()].sort((a, b) => numOf(a.module) - numOf(b.module));
+}
+
+// PARITY MINIMUM (#427, made exhaustive by #1314). Every module carries >= MIN_POSITIVES_PER_MODULE
+// positive fixtures (static + connected) and >= MIN_NEGATIVES_PER_MODULE boundary negative.
+// Rationale: a single positive fails only on a TOTAL outage (its module's recall drops to 0); two
+// positives exercising DISTINCT rule surfaces let a PARTIAL regression — one shape breaks while
+// another still fires — show up as a drop. 2 is the floor at which partial and total become
+// distinguishable. This enforces the fixtures EXIST; the partial-regression detection itself lives
+// in each module's own suite.
+//
+// #1314 also enforces the negative half. #427's comment claimed every module's positives were "each
+// paired with >= 1 boundary negative" and only ever counted positives; the per-positive pairing it
+// describes is not representable in the answer key, so what is ENFORCED is the per-module floor
+// below — stated in the enforced form rather than the aspirational one.
+export const MIN_POSITIVES_PER_MODULE = 2;
+export const MIN_NEGATIVES_PER_MODULE = 1;
+
+// A module may sit below the minimum only with a NAMED substitute gate — the "disclosed exemption"
+// half of #1314. Both entries below were verified 2026-07-28 before being written here, per the
+// rule that a disclosure is earned by an attempt:
+//   M2 — `pnpm exec tsx src/cli/pentest.ts --mode=coverage` reaches assertComplete
+//        (src/pentest/targets.ts:161), and CALIBRATION_PLANTS carries an M2 row
+//        (src/audit-conservation.ts:59) since #1155.
+//   M6 — src/scan/external-corpus.ts carries an "M6-indicator" baseline on six external targets
+//        (#483), re-run by `pnpm corpus-drift`.
+// An exemption for a module that is NOT thin is itself a failure (parityStale) — a substitute gate
+// that has been overtaken by real fixtures must not keep standing in for them.
+interface ParityExemption {
+  module: string;
+  reason: string;
+}
+
+const PARITY_EXEMPTIONS: readonly ParityExemption[] = [
+  { module: "M2", reason: "no static corpus by construction — M2 is the dynamic tier, and its findings come from a live two-tenant stack, not a planted file. Covered instead by `pnpm exec tsx src/cli/pentest.ts --mode=coverage` (#352 assertComplete, which fails loud on any enumerated target `--tested` did not list) and by the M2 conservation plant (#1155)." },
+  { module: "M6", reason: "no static corpus — M6's indicators are whole-repo shape counts, which a planted single-file fixture cannot express. Covered instead by the #483 `M6-indicator` baselines over six external targets in src/scan/external-corpus.ts, re-run by `pnpm corpus-drift`." },
+];
+
+interface ParityVerdict {
+  thin: { module: string; positives: number; negatives: number; missing: string }[];
+  exempt: { module: string; positives: number; negatives: number; reason: string }[];
+  stale: string[]; // modules carrying an exemption they no longer need
+}
+
+export function parityVerdict(corpus: CorpusEntry[] = CORPUS): ParityVerdict {
+  const exemptions = new Map(PARITY_EXEMPTIONS.map((e) => [e.module, e.reason]));
+  const verdict: ParityVerdict = { thin: [], exempt: [], stale: [] };
+  for (const c of moduleCensus(corpus)) {
+    const positives = c.positivesStatic + c.positivesConnected;
+    const missing = [
+      positives < MIN_POSITIVES_PER_MODULE ? `${positives}/${MIN_POSITIVES_PER_MODULE} positives` : undefined,
+      c.negatives < MIN_NEGATIVES_PER_MODULE ? `${c.negatives}/${MIN_NEGATIVES_PER_MODULE} negatives` : undefined,
+    ].filter((s) => s !== undefined).join(" and ");
+    const reason = exemptions.get(c.module);
+    if (reason === undefined) {
+      if (missing) verdict.thin.push({ module: c.module, positives, negatives: c.negatives, missing });
+    } else if (missing) {
+      verdict.exempt.push({ module: c.module, positives, negatives: c.negatives, reason });
+    } else {
+      verdict.stale.push(c.module);
+    }
+  }
+  return verdict;
 }
 
 // The M1-only slice validate-calibration.ts scores against runMechanicalScan output (#341,

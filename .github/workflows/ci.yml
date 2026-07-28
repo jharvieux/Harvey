@@ -193,6 +193,15 @@ jobs:
           HARVEY_HEAVY_CLI_TESTS: "1"
         run: pnpm exec vitest run ${{ steps.shard.outputs.files }}
 
+      # #1301: `validate:calibration` scores the REAL mechanical scan against the corpus answer key
+      # and ran in no workflow at all — the gate that would catch "a rule stopped firing on its
+      # positive" was never run automatically. It belongs here because this is the only job that
+      # installs the mechanical binaries. Shard 1 only: it is one run of one scan, not a sharded
+      # test file, and three copies would just burn two runners.
+      - name: Calibration gate (real binaries, scored against the corpus answer key)
+        if: matrix.shard == 1
+        run: pnpm exec tsx src/cli/validate-calibration.ts
+
       # A scheduled heavy-cli failure (#1138) means a regression from something no PR touched. It
       # goes red on main with no PR to surface it, so find-or-update ONE tracking issue by the marker
       # label. Still never fires on PR/push — those failures already gate the `verify` check on the
