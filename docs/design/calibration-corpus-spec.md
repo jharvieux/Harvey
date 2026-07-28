@@ -8,7 +8,6 @@ Harvey's free "quick scan" surfaces a **count** of issues, so a single wrong "Cr
 
 The rule for promotion is unchanged from `mechanical-toolchain.md` §7: a rule enters the free count only at ~100% corpus precision. Every NEGATIVE row below is a benign lookalike the corpus must contain so we can *measure* that precision — a rule that fires on any NEGATIVE row is demoted to LLM-triage or suppressed.
 
-
 **Addendum, 2026-07-27 (#1344) — the code was looser than this rule for a long time, and it cost a
 release.** The sentence above says "a rule that fires on any NEGATIVE row is demoted or suppressed."
 `scoreEntry` did not enforce that: a negative passed on `!highFlagged` alone, so a rule firing on a
@@ -20,8 +19,8 @@ gates green.
 
 The gap is closed as a RATCHET rather than a ban, because the looseness was not arbitrary: 28
 negatives legitimately draw review-tier noise, which is precisely what the free-count exclusion
-exists to triage out, and failing on all of them would say nothing about movement. `CorpusEntry.
-reviewTierHits` now records the taxonomies each negative is MEASURED to draw, and any UNRECORDED
+exists to triage out, and failing on all of them would say nothing about movement. `CorpusEntry.reviewTierHits`
+now records the taxonomies each negative is MEASURED to draw, and any UNRECORDED
 review-tier taxonomy fails the gate naming it. `validate-calibration.ts` carries a negative control
 that replays #1251 against `N-STORAGE-DB-PATH` and must print `ratchet FIRED`, so a green run means
 "passed AND can still fail." The 28 were populated from a measured run, not asserted from memory.
