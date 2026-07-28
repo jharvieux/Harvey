@@ -41,9 +41,9 @@ const TREE: Record<string, string> = {
 };
 
 const fakeFs = {
-  existsSync: (p: string) => p in TREE || Object.keys(TREE).some((k) => k.startsWith(p + "/")),
-  readFileSync: (p: string) => TREE[p]!,
-  readdirSync: (p: string) => {
+  exists: (p: string) => p in TREE || Object.keys(TREE).some((k) => k.startsWith(p + "/")),
+  readText: (p: string) => TREE[p]!,
+  listDir: (p: string) => {
     const kids = new Set<string>();
     for (const k of Object.keys(TREE)) {
       if (!k.startsWith(p + "/")) continue;

@@ -19,8 +19,8 @@
 // FALSIFIER: grep -E "^export const SOURCE_FILE" src/detectors/load-sources.ts | grep -Eq "svelte|vue|astro"
 // TOUCHES: src/detectors/load-sources.ts
 
-import { readdirSync, statSync } from "node:fs";
-import { extname, join, relative, sep } from "node:path";
+import { extname, relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { SOURCE_FILE as ANALYSED_FILE } from "../detectors/load-sources.js";
 import type { Finding } from "../findings.js";
 
@@ -47,9 +47,8 @@ function scan(dir: string): { sfc: Map<string, SfcHits>; analysedCount: number }
   const sfc = new Map<string, SfcHits>();
   let analysedCount = 0;
   const walk = (current: string): void => {
-    for (const entry of readdirSync(current)) {
-      const full = join(current, entry);
-      if (statSync(full).isDirectory()) {
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(current).entries) {
+      if (isDirectory) {
         if (!EXCLUDED_DIR.test(entry)) walk(full);
         continue;
       }

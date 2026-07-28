@@ -40,8 +40,9 @@
 // both hosted and local targets, and fetching deployed function source wasn't a verified
 // Management API surface in this session.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 import { parseAdvisorFindings, type AdvisorsResponse } from "./supabase-advisors.js";
 import { runSplinter } from "./supabase-splinter.js";
@@ -142,8 +143,8 @@ async function managementFetchJson(url: string, headers: Record<string, string>,
 function readEdgeFunctionSources(functionsDir: string): EdgeFunctionSource[] {
   if (!existsSync(functionsDir)) return [];
   const sources: EdgeFunctionSource[] = [];
-  for (const entry of readdirSync(functionsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+  for (const entry of readEntriesSafe(functionsDir).entries) {
+    if (!entry.isDirectory) continue;
     const indexPath = ["index.ts", "index.js"].map((f) => join(functionsDir, entry.name, f)).find(existsSync);
     if (indexPath) sources.push({ name: entry.name, content: readFileSync(indexPath, "utf8") });
   }

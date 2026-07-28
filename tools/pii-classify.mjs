@@ -45,8 +45,9 @@
 // confidence rather than an assertion, so they're flagged for review, not treated as fact.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { readRecursiveSafe, statSafe } from "../src/fs-walk.js";
 import { parseClassifiableColumns } from "../src/migration-sql-parse.js";
 import { piiProtectionFindings, piiProtectionScope } from "../src/pii-protection-review.js";
 import { parsePrismaSchema } from "../src/prisma-schema-parse.js";
@@ -1216,9 +1217,10 @@ function columnsFromPrismaSchema(schemaPath) {
 // there and a Prisma target reads as "no schema input" instead of "found 0 columns", which is a
 // different, worse failure than the parser under-extracting.
 function readSchemaSql(target) {
-  const st = statSync(target);
+  const st = statSafe(target);
+  if (!st) throw new Error(`pii-classify: ${target} does not resolve — missing path or dangling symlink`);
   if (st.isFile()) return readFileSync(target, "utf8");
-  return readdirSync(target, { recursive: true })
+  return readRecursiveSafe(target)
     .filter((f) => f.endsWith(".sql"))
     .sort()
     .map((f) => readFileSync(join(target, f), "utf8"))

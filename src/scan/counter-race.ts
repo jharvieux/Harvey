@@ -10,8 +10,9 @@
 // shape this dataflow gate clears. It still can't see a DB-side lock/transaction wrapper, so it
 // stays review, never free-count.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import ts from "typescript";
 import type { Finding } from "../findings.js";
 import { callChainNames, loc, parse, type SourceInput } from "../detectors/common.js";
@@ -149,10 +150,9 @@ export function detectCounterRaceFindings(files: SourceInput[]): Finding[] {
 }
 
 function walk(dir: string, root: string, out: SourceInput[]): void {
-  for (const entry of readdirSync(dir)) {
+  for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
     if (SKIP_DIRS.has(entry)) continue;
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) walk(full, root, out);
+    if (isDirectory) walk(full, root, out);
     else if (SOURCE_EXT.test(entry)) out.push({ path: relative(root, full), text: readFileSync(full, "utf8") });
   }
 }
