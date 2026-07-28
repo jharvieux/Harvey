@@ -30,6 +30,7 @@
 // top-K *membership* check (rankHotspots / topKFiles) — see hotspot-scan.test.ts — never scored
 // as a percentage.
 
+import { buildPassArtifact, type PassArtifact } from "./audit-pass-artifact.js";
 import type { Finding } from "./findings.js";
 
 interface VitalsChurnData {
@@ -478,4 +479,31 @@ export function crossReferenceHotspots(findings: Finding[], report: VitalsReport
     findings: [...flagged, ...annotated.filter((a) => !a.hotspot)].map((a) => a.finding),
     hotspotFindingIds: flagged.map((a) => a.finding.id),
   };
+}
+
+// #1364: the M3 pass artifact src/cli/hotspot-scan.ts writes with --artifacts-dir — the write side
+// of the #416 read (findFreshPass reads M3.pass.json). A pure function so the round trip is tested
+// without spawning the CLI (hotspot-scan.test.ts): the CLI just calls this with what it already
+// computed, then writePassArtifact. `tier` records which of the three CLI tiers (full vitals,
+// reduced #807, unranked #1075) produced the findings, since the pass artifact carries no field for
+// it and a bare finding count can't distinguish "0 hotspots, full vitals, clean repo" from "0
+// hotspots, vitals unavailable".
+export function buildM3PassArtifact(params: {
+  targetDir: string;
+  findings: Finding[];
+  hotspots: string[];
+  rankedCount: number;
+  tier: "full" | "reduced" | "unranked";
+  generatedAt: string;
+}): PassArtifact {
+  const tierLabel = params.tier === "reduced" ? "reduced tier (vitals unavailable)" : params.tier === "unranked" ? "unranked (complexity-only)" : "full vitals";
+  return buildPassArtifact({
+    module: "M3",
+    target: params.targetDir,
+    pass: "vitals",
+    generatedAt: params.generatedAt,
+    summary: `${params.rankedCount} file(s) ranked, ${tierLabel}, ${params.findings.length} finding(s)`,
+    findings: params.findings,
+    hotspots: params.hotspots,
+  });
 }

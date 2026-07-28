@@ -81,6 +81,33 @@ dropped: MEASURED 2026-07-25 on `targets/calibration`, the recorded finding was 
 `--findings-out` and the M7 row still asserted Lighthouse "not run" — a confident negative claim
 contradicted by evidence sitting in the directory `run-audit` had just read.
 
+## The write side — which passes emit their own artifact (#448/#1364)
+
+#448 asked for passes to write their own artifact rather than depend on an operator remembering a
+second, separate `record-pass` invocation after hand-extracting findings from stdout. Before #1364
+only ONE pass did (`pnpm record-pass` itself is the generic manual path, not a self-emitter). As of
+#1364:
+
+| Pass | Self-emits its own `<module>.pass.json`? |
+|---|---|
+| M2 dynamic (`pentest.ts` → `dynamic-validate.ts` / `prisma-dynamic.ts`) | **yes** (pre-#1364) |
+| M3 vitals (`pnpm exec tsx src/cli/hotspot-scan.ts --artifacts-dir <dir>`) | **yes** — writes `M3.pass.json` directly, findings + top-K hotspots + which of the three CLI tiers (full/reduced/unranked) produced them |
+| M6 verdict (`pnpm exec tsx src/cli/m6-agreement.ts a.json b.json --target <dir> --artifacts-dir <dir>`) | **yes** — writes `M6.pass.json` from the UNANIMOUS-flag verdicts only (`toM6Findings`, `src/m6-agreement.ts`); a split is never auto-promoted, it still goes to the human adjudicator the agreement report already routes it to |
+| M1 live (`pnpm detect-deeper --findings-out <file>`) | no — but no longer needs hand-extraction either: `--findings-out` writes the bare `Finding[]` `record-pass --findings` reads, so recording it is `detect-deeper --findings-out f.json` then `record-pass --module M1 --pass live --findings f.json --out <dir>`, no manual JSON surgery |
+| M1 semantic (`/vuln-scan → /triage`) | no — see the recorded reason below |
+
+### Recorded reason: M1 semantic stays on the generic `record-pass` path
+
+> REASON: the M1 semantic pass (/vuln-scan → /triage) has no CLI Harvey's own code invokes — it is a Claude Code skill pair run interactively, not a subprocess any src/cli/*.ts can shell out to — so there is no producer file to add a self-emit branch to, and `pnpm record-pass --module M1 --pass semantic --findings triage.json --out <dir>` (the pre-existing generic path, #448) stays the only way to record it.
+> KIND: empirical
+> PROVENANCE: TRIED 2026-07-28 — surveyed every production caller of buildPassArtifact (src/prisma-dynamic.ts, src/dynamic-validate.ts, src/hotspot-scan.ts, src/m6-agreement.ts, src/cli/record-pass.ts); none is, or could mechanically become, a semantic-pass self-emitter, because the pass itself has no CLI entry point to attach one to.
+> FALSIFIER: grep -rl 'buildPassArtifact(' src --include='*.ts' | grep -vE 'record-pass\.ts|prisma-dynamic\.ts|dynamic-validate\.ts|hotspot-scan\.ts|m6-agreement\.ts|audit-pass-artifact\.ts|audit-conservation\.ts|\.test\.ts' | grep -q .
+> TOUCHES: src/cli, src/audit-pass-artifact.ts
+
+Exercised both directions 2026-07-28: exits 1 (non-zero) as committed; exits 0 against a planted
+dummy `src/cli/` file that calls `buildPassArtifact` outside the five known producers, proving the
+falsifier actually flips when the blocker is gone rather than being vacuously true or false.
+
 ## What this is not
 
 - It does **not** re-run the pass or verify the work is *correct* — it records that the pass *ran*
