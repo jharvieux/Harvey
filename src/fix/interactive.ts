@@ -36,7 +36,7 @@ import {
   withBaselineWorktree,
   type DiscoveredCommand,
 } from "./verify-harness.js";
-import { computeGreen, runCommand, type CommandRun, type DetectorRun, type VerificationEvidence } from "./verify.js";
+import { computeGreen, type CommandRun, type DetectorRun, type VerificationEvidence } from "./verify.js";
 
 interface FixPromptInput {
   finding: Finding;
@@ -101,14 +101,6 @@ Save the diff to a file and hand it back to the pipeline:
 `;
 }
 
-// #1272: the §2.1 client-verification half, which used to be hardcoded `clientChecks: []`. Every
-// field has a working default — the half runs unless a caller deliberately narrows it.
-interface ClientVerification {
-  runner?: string; // overrides the lockfile-derived runner (detectRunner)
-  run?: (command: string, cwd: string) => CommandRun; // injectable so a test never spawns a real suite
-  workflowsDir?: string; // defaults to <targetDir>/.github/workflows
-}
-
 interface IngestInput {
   finding: Finding;
   diff: string;
@@ -116,7 +108,9 @@ interface IngestInput {
   baselineCommit: string;
   allowlist: string[];
   diffCap?: DiffCap;
-  clientVerification?: ClientVerification;
+  // #1272: overrides the lockfile-derived runner for the §2.1 client checks, which used to be
+  // hardcoded `clientChecks: []`. Absent ⇒ detectRunner reads it off the target's own lockfile.
+  runner?: string;
   attempts?: number; // which escalation attempt produced this diff — recorded in the evidence
 }
 
@@ -155,14 +149,12 @@ interface IngestResult {
 // deliverFix (the caller's transport step). The detector re-run rides inside executeFixDiff's single
 // worktree, so the same applied source both clears the apply gate and answers "does it still fire".
 export function ingestFixDiff(input: IngestInput): IngestResult {
-  const cv = input.clientVerification ?? {};
-  const run = cv.run ?? runCommand;
   const facts = parseDiffFacts(input.diff);
   const commands = discoverClientCommands(
     input.targetDir,
     affectedWorkspaces(input.targetDir, [...facts.files, ...facts.createdFiles]),
-    cv.runner ?? detectRunner(input.targetDir),
-    extractCiRunSteps(cv.workflowsDir ?? join(input.targetDir, ".github/workflows")),
+    input.runner ?? detectRunner(input.targetDir),
+    extractCiRunSteps(join(input.targetDir, ".github/workflows")),
   );
 
   // §2.1 step 3, computed LAZILY: a baseline run of the client's own suite is the most expensive
@@ -170,7 +162,7 @@ export function ingestFixDiff(input: IngestInput): IngestResult {
   // is only reached once the diff has cleared the apply gate.
   let baselineRuns: Map<string, CommandRun> | undefined;
   const baseline = () =>
-    (baselineRuns ??= withBaselineWorktree(input.targetDir, input.baselineCommit, (root) => runBaseline(commands, root, run)));
+    (baselineRuns ??= withBaselineWorktree(input.targetDir, input.baselineCommit, (root) => runBaseline(commands, root)));
 
   const execution = executeFixDiff(input.finding.id, input.diff, {
     targetDir: input.targetDir,
@@ -193,7 +185,6 @@ export function ingestFixDiff(input: IngestInput): IngestResult {
           attempts: input.attempts ?? 1,
         },
         worktree,
-        run,
       );
     },
   });

@@ -51,7 +51,7 @@ const clientRepo = (src: string, suite: keyof typeof CLIENT_TESTS) => ({
 });
 // The client's own runner. npm is used rather than pnpm because a materialized corpus has no lockfile
 // and pnpm's deps-status check would fail the command for a reason unrelated to any fix.
-const NPM = { runner: "npm" };
+const NPM = "npm";
 
 const created: MaterializedCorpus[] = [];
 afterEach(() => {
@@ -98,7 +98,7 @@ describe("interactive fix — diff ingest through the existing rails", () => {
     const c = corpus(clientRepo(src, "ok"));
     const diff = capturePatch(c, M5_FILE, dropParam(src));
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], clientVerification: NPM });
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     expect(ingest.execution.outcome).toBe("diff-verified");
     expect(ingest.evidence.detectorAfter.notRun).toBeUndefined(); // the detector really re-ran
     expect(ingest.evidence.detectorAfter.fired).toBe(false); // and it stopped firing
@@ -130,7 +130,7 @@ describe("interactive fix — diff ingest through the existing rails", () => {
     expect(noop).not.toEqual(src);
     const diff = capturePatch(c, M5_FILE, noop);
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], clientVerification: NPM });
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     expect(ingest.execution.outcome).toBe("diff-verified"); // it DID apply
     expect(ingest.evidence.detectorAfter.fired).toBe(true); // but the bug is still there
     expect(ingest.green).toBe(false);
@@ -152,7 +152,7 @@ describe("interactive fix — diff ingest through the existing rails", () => {
     const c = corpus({ [M5_FILE]: src, ".env": "SECRET=1\n" });
     const diff = ["--- a/.env", "+++ b/.env", "@@ -1 +1 @@", "-SECRET=1", "+SECRET=2", ""].join("\n");
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["**"], clientVerification: NPM });
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["**"], runner: NPM });
     expect(ingest.execution.outcome).toBe("rails-blocked");
     expect(ingest.evidence.detectorAfter.notRun).toBeDefined(); // fail loud: unrun ≠ clean
     expect(ingest.green).toBe(false);
@@ -170,7 +170,7 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
     const c = corpus(clientRepo(src, "contract"));
     const diff = capturePatch(c, M5_FILE, dropParam(src));
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], clientVerification: NPM });
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     expect(ingest.execution.outcome).toBe("diff-verified"); // it applies
     expect(ingest.evidence.detectorAfter.fired).toBe(false); // and the detector IS clean
     const check = ingest.evidence.clientChecks[0]!;
@@ -187,7 +187,7 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
     const c = corpus({ [M5_FILE]: src });
     const diff = capturePatch(c, M5_FILE, dropParam(src));
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], clientVerification: NPM });
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     expect(ingest.evidence.detectorAfter.fired).toBe(false);
     expect(ingest.evidence.clientChecks).toEqual([]);
     expect(ingest.green).toBe(false);
@@ -200,7 +200,7 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
     const c = corpus(clientRepo(src, "red"));
     const diff = capturePatch(c, M5_FILE, dropParam(src));
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], clientVerification: NPM });
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     const check = ingest.evidence.clientChecks[0]!;
     expect(check.skipped).toBe("pre-existing-failure-on-baseline");
     expect(check.outputTail).toContain("client suite was already failing"); // visible, not swallowed
@@ -216,7 +216,7 @@ describe("interactive fix — the §2.1 client-check half (#1272)", () => {
     });
     const diff = capturePatch(c, M5_FILE, dropParam(src));
 
-    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], clientVerification: NPM });
+    const ingest = ingestFixDiff({ finding, diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: NPM });
     // The PR-triggered step is in; the push-only workflow's failing step is NOT (it would have made
     // this red for a reason no pull request would ever have surfaced).
     expect(ingest.evidence.clientChecks.map((x) => x.command)).toEqual(["npm run test", "node client-test.js"]);

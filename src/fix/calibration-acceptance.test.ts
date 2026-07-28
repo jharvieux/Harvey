@@ -412,7 +412,7 @@ describe("fix §8 acceptance — a planted class through the full emit → diff 
 
     // 3. INGEST — the pipeline's own gate, nothing hand-scored.
     const ingest = ingestFixDiff({
-      finding: m5Finding(), diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], clientVerification: { runner: "npm" },
+      finding: m5Finding(), diff, targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: "npm",
     });
     expect(ingest.execution.outcome).toBe("diff-verified");
     expect(ingest.execution.railViolations).toEqual([]); // §8 clause 3
@@ -428,7 +428,7 @@ describe("fix §8 acceptance — a planted class through the full emit → diff 
     const c = track(materialize(clientRepo(src)));
     const noop = src.replace("export async function GET(request: Request) {", "export async function GET(request: Request) { // touched");
     const ingest = ingestFixDiff({
-      finding: m5Finding(), diff: capturePatch(c, M5_FILE, noop), targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], clientVerification: { runner: "npm" },
+      finding: m5Finding(), diff: capturePatch(c, M5_FILE, noop), targetDir: c.dir, baselineCommit: c.commit, allowlist: ["app/**"], runner: "npm",
     });
     expect(ingest.execution.outcome).toBe("diff-verified"); // it applied
     expect(ingest.evidence.detectorAfter.fired).toBe(true);
