@@ -71,6 +71,22 @@ That is both directions, on the production path, unstaged — materially stronge
 - **`#1299`** — its last criterion needs one read-only Management API call against a **hosted** Supabase project. Notes record `supabase-aop` as operator-owned with a standing connected-tier read-only audit authorization (2026-07-18), but that is a recalled memory being used to justify a live call against a production project. **Needs an explicit yes.** The other blocked criterion (`docs/runbooks/dry-run-calibration.md`) was mine and is now unblocked.
 - **PR #1403 / #1406** merge decisions above.
 
+### Open operator decisions — MEASURED 2026-07-28, not inherited
+
+The prior log carried a list of ten "operator decisions still open". **Eight were already closed** when re-queried, so it was mostly stale — but this section was truncated wholesale in the wrap-up rather than triaged, and these are the ones that survive:
+
+| item | what is being asked |
+|---|---|
+| **#1069** (`awaiting-decision`) | Route the report's DRAFT limitations/liability wording to counsel and replace it. The product's own output currently ships DRAFT wording. |
+| **#899 / #900** | Ungraded breadth sweep — corpus approval, and the ruling on how ungraded results may be presented / disclosed. |
+| **PR #1403** | Merge and accept a knowingly-red daily `corpus-drift`, **or** widen #1404 to all four targets and land re-measured baselines inside the same PR. |
+| **PR #1406** | Merge on the executor's claim alone, **or** hold for the acceptance verifier it never received. |
+| **#1299** | May a read-only Management API call be made against a **hosted** Supabase project? Notes record `supabase-aop` as operator-owned with standing connected-tier read-only authorization (2026-07-18), but that is a recalled memory being used to justify a live call against production. |
+
+Closed since the old list was written, do not re-litigate: #946, #893, #888, #1084, #1072, #904, #1056, #861, #934.
+
+**Label discipline (operator ruling 2026-07-26, still current):** `deferred` is ONLY for intentional parks — it is dropped at fetch and never resurfaces. Anything awaiting an operator ruling gets **`awaiting-decision`**, which still reaches triage.
+
 ### Next sweep action
 
 Resume the ledger: 18 batches queued in plan order, starting **4b** (M8 environment), **4c** (M9 detection — never dispatched, reset to `queued`), **4d**, **4e**, **4f**. Wave 10 (`#1377`/`#1378`/`#1328`, discovery) runs **LAST** per operator ruling. Doc + workflow corrections are granted; `docs/runbooks/**` is included in that grant.
