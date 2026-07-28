@@ -12,6 +12,8 @@ import {
   checkVitalsContract,
   checkStrykerContract,
   checkLighthouseContract,
+  classifyVitalsGitScopeFailure,
+  type GitScopeSanity,
 } from "./fixture-drift-contracts.js";
 
 // These guard the SHAPE the drift check (src/cli/fixture-drift.ts, needs the binaries) enforces on a
@@ -84,6 +86,45 @@ describe("checkVitalsContract", () => {
   });
   it("fires when a top-level array is missing", () => {
     expect(checkVitalsContract({ ...fixture, hotspots: undefined as unknown as VitalsReport["hotspots"] }).join("\n")).toContain("hotspots is not an array");
+  });
+});
+
+describe("classifyVitalsGitScopeFailure", () => {
+  const fixture = load<VitalsReport>("../__fixtures__/vitals-report.json");
+  const emptied: VitalsReport = { ...fixture, hotspots: [], coupling: [], knowledge_risk: [] };
+
+  it("does not fire on the committed fixture (git-derived sections are populated)", () => {
+    expect(classifyVitalsGitScopeFailure(fixture)).toBeUndefined();
+  });
+
+  it("fires when all three git-derived sections are empty but an independent git log found commits with no error (#1206's observed shape)", () => {
+    const withSanity = { ...emptied, _gitScopeSanity: { commits: 72, returncode: 0, stderr: null } };
+    const reason = classifyVitalsGitScopeFailure(withSanity);
+    expect(reason).toContain("#1206");
+    expect(reason).toContain("72 commit(s)");
+  });
+
+  it("does NOT fire when the sections are empty and there is no independent sanity check to corroborate it", () => {
+    expect(classifyVitalsGitScopeFailure(emptied)).toBeUndefined();
+  });
+
+  it("does NOT fire when the independent sanity check itself errored (can't distinguish real-empty from swallowed-failure)", () => {
+    const withSanity = { ...emptied, _gitScopeSanity: { commits: 0, returncode: 128, stderr: "fatal: not a git repository" } };
+    expect(classifyVitalsGitScopeFailure(withSanity)).toBeUndefined();
+  });
+
+  it("does NOT fire when the sanity check found zero commits (a genuinely empty window is a real bug, not the #1206 flake)", () => {
+    const withSanity = { ...emptied, _gitScopeSanity: { commits: 0, returncode: 0, stderr: null } };
+    expect(classifyVitalsGitScopeFailure(withSanity)).toBeUndefined();
+  });
+
+  it("does NOT fire when only one of the three sections is empty (not the observed all-empty shape)", () => {
+    const partiallyEmptied: VitalsReport & { _gitScopeSanity: GitScopeSanity } = {
+      ...fixture,
+      coupling: [],
+      _gitScopeSanity: { commits: 72, returncode: 0, stderr: null },
+    };
+    expect(classifyVitalsGitScopeFailure(partiallyEmptied)).toBeUndefined();
   });
 });
 

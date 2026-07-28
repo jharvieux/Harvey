@@ -292,3 +292,80 @@ check that did nothing because it was broken**, so a no-op always names its reas
 They share one job and one context deliberately. Splitting them would add a second required context
 for a 16-second check, and would let a `split` disposition be accepted by a green Gate 1 while Gate 2
 — the only thing that makes `split` mean anything — sat red on the same PR. They are one assertion.
+
+## The close path — an issue that closes with no PR body to read (#1341)
+
+Everything above reads a **PR body**, which is #1315's stated scope and covers the audits' cases. It
+leaves a residual: an issue can close with no PR body to read, and then the gate never runs at all.
+
+Two paths, both measured live on 2026-07-28 rather than reasoned about:
+
+- **A bare click in the GitHub UI.** It touches no PR and no merge. Over the last 120 closed issues,
+  **11** closed this way. Seven were bot-opened alert-path drill issues (#1287); the other four were
+  opened by a human, and **#1130 and #1155 state acceptance criteria with no disposition anywhere**.
+- **The Development sidebar.** Linking a PR to an issue closes it on merge with **no closing keyword
+  in the body**, so a body-reading gate sees a PR that closes nothing. The worse of the two, because
+  it looks like a normal PR-driven close. Zero instances in that 120-issue window — so this is a
+  measured *mechanism*, not a measured *population*.
+
+### Where the disposition lives on a non-PR close
+
+**An issue comment, in the same `ACCEPTANCE #<issue>.<n> <met|split|relayed>: <detail>` format.** It
+is the only venue that exists on *every* close path — there is no PR at all on a bare click — it is
+where the operator already reads, and it survives the close, which a PR body archived at merge does
+not.
+
+So `checkClosedIssue` reads **one union**: every PR GitHub links to the issue, plus every comment on
+the issue, filtered to disposition-bearing lines and held to exactly the rules a PR body is held to.
+A PR that already carries its dispositions passes here unchanged; nothing is written twice. Only
+those lines cross over — a whole PR body would drag its *other* closing keywords into a check scoped
+to one issue.
+
+The sidebar path is covered by the same field as the keyword path: `closedByPullRequestsReferences`.
+That the sidebar link **alone** populates it — with no keyword in the body — is MEASURED, not
+assumed: issue #1384 and PR #1386, opened on 2026-07-28 as a throwaway probe with the keyword
+deliberately absent, and the field listed the PR.
+
+### What it does on failure
+
+Stated here and demonstrated end-to-end against issue #1384 on 2026-07-28 under an authenticated
+`gh` — all four branches, in order:
+
+| Situation | Action | Demonstrated |
+| --- | --- | --- |
+| Fails, first time | comment naming the unaccounted criteria, add `acceptance-unaccounted`, **re-open** | #1384 went `CLOSED` → commented, labelled, `OPEN` |
+| Fails, label already present | comment and re-label, **do not re-open** | second close of #1384 stayed `CLOSED` |
+| Passes, label present | **remove** the label | label removed, issue stayed `CLOSED`, exit 0 |
+| Bot-opened issue | `NOT ASSESSED`, with the reason | #1340 (a `ci-heavy-cli-alert` drill) |
+
+The label is the memory. Re-opening once makes this a gate rather than a note; re-opening *every*
+time would put a bot in a fight with a human who closed deliberately, and the label then stands as
+the permanent record that a criterion was never accounted for. A passing run removes it, because a
+label asserting an unaccounted criterion on an accounted-for issue is a false statement about the
+issue.
+
+Bot-opened issues are the one exemption and it is disclosed, not silent: the #1287 alert drills open,
+comment on and close a tracking issue under the job token, and seven of the eleven bare-click closes
+measured above were exactly that. They state no criteria and are not work items.
+
+### Wiring, and the bound
+
+`.github/workflows/acceptance-close.yml`, `on: issues: [closed]` plus `workflow_dispatch` with an
+`issue` input, so it is re-provable on demand:
+
+```
+gh workflow run "acceptance on close" -f issue=1155
+```
+
+Step 1 is the negative control (`--selftest-close`, seven hermetic cases — each close path in both
+directions, a partial record, a hollowed-out `met`, and the bot exemption), so a green run means the
+gate passed **and can still fail** even on a close it had nothing to object to. Step 2 runs the check
+with `--act`.
+
+**The bound, stated because it is the #1287 shape:** a workflow on the `issues` event runs from the
+**default branch only**, so this trigger cannot fire until it is merged and has therefore **never
+fired**. Everything downstream of the trigger is proven on live data — the check on real closes of
+both shapes (#1155 fires, #1384 fires through a real sidebar link, #1318 stays quiet, #1340 is not
+assessed) and all four failure-action branches — but "the `issues: closed` event reaches this
+workflow" is, until the first firing, an unverified claim about GitHub. Prove it with the dispatch
+above, or by closing any issue, and record the run.
