@@ -5,9 +5,10 @@
 // prove the re-pointed link resolves inside the copy (not the original), while ordinary
 // third-party entries still resolve to the original install.
 
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { isDirectorySafe } from "./fs-walk.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mirrorNodeModules } from "./stub-worktree.js";
 
@@ -44,7 +45,7 @@ function buildMonorepo(): { target: string; copy: string } {
   dirs.push(copy);
   cpSync(target, copy, {
     recursive: true,
-    filter: (src) => !(EXCLUDED.test(basename(src)) && statSync(src).isDirectory()),
+    filter: (src) => !(EXCLUDED.test(basename(src)) && isDirectorySafe(src)),
   });
   return { target, copy };
 }

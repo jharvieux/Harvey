@@ -10,10 +10,11 @@
 // positive expected at "high" isn't caught at high. Review-tier recall gaps (documented
 // follow-ups, e.g. OSV needing a lockfile) are reported but do not fail the gate.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { arg, assertKnownFlags } from "./args.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, validateParityExemptions, type MatrixRow } from "../scan/calibration.js";
 import { describeCadence, loadGateInputs } from "../scored-gates.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
@@ -47,8 +48,8 @@ function scanManifestFixtures(targetDir: string): Finding[] {
   const fixturesDir = join(targetDir, "fixtures");
   if (!existsSync(fixturesDir)) return [];
   const findings: Finding[] = [];
-  for (const entry of readdirSync(fixturesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+  for (const entry of readEntriesSafe(fixturesDir).entries) {
+    if (!entry.isDirectory) continue;
     const appDir = join(fixturesDir, entry.name);
     const manifestFile = join(appDir, "package.json");
     if (existsSync(manifestFile)) {

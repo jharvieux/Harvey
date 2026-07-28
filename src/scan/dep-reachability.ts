@@ -21,8 +21,9 @@
 //   • When no source files can be read at all, the status is `not-assessed` and it sorts near the
 //     TOP, not the bottom. An unmeasured row must never be presented as the least urgent one.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import type { DependencyReachability, Finding, ReachabilityStatus } from "../findings.js";
 
 const SOURCE_FILE = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
@@ -48,9 +49,8 @@ interface SourceFile {
 function loadScannableSources(root: string): SourceFile[] {
   const files: SourceFile[] = [];
   const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      if (isDirectory) {
         if (!EXCLUDED_DIR.test(entry)) walk(full);
       } else if (SOURCE_FILE.test(entry)) {
         files.push({ path: relative(root, full).split(sep).join("/"), text: readFileSync(full, "utf8") });

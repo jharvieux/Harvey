@@ -1,5 +1,6 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { readNamesSafe } from "../../../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -129,7 +130,7 @@ function parseRuleMetadata(fileName: string): RuleMeta[] {
 }
 
 describe("#493/#975: harvey-* rule metadata.owasp matches OWASP's official 2021 CWE-to-category mapping", () => {
-  const files = readdirSync(RULES_DIR).filter((f) => f.endsWith(".yml"));
+  const files = readNamesSafe(RULES_DIR).filter((f) => f.endsWith(".yml"));
   const allRules = files.flatMap(parseRuleMetadata);
   const rulesWithCwe = allRules.filter((r) => r.cwe && r.cwe.length > 0);
 
