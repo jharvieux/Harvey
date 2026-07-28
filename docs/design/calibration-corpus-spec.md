@@ -8,6 +8,29 @@ Harvey's free "quick scan" surfaces a **count** of issues, so a single wrong "Cr
 
 The rule for promotion is unchanged from `mechanical-toolchain.md` §7: a rule enters the free count only at ~100% corpus precision. Every NEGATIVE row below is a benign lookalike the corpus must contain so we can *measure* that precision — a rule that fires on any NEGATIVE row is demoted to LLM-triage or suppressed.
 
+
+**Addendum, 2026-07-27 (#1344) — the code was looser than this rule for a long time, and it cost a
+release.** The sentence above says "a rule that fires on any NEGATIVE row is demoted or suppressed."
+`scoreEntry` did not enforce that: a negative passed on `!highFlagged` alone, so a rule firing on a
+benign lookalike at REVIEW tier scored `cleared from the count (review-tier hit only, triaged out)`
+and no gate in the repo could fail on it. #1251 hit exactly that shape (a widened taint source made
+`harvey-path-traversal` fire on `N-STORAGE-DB-PATH`) and it surfaced only because someone hand-diffed
+`dry-run/findings.json`; on the same day three detector regressions reached `main` with both scored
+gates green.
+
+The gap is closed as a RATCHET rather than a ban, because the looseness was not arbitrary: 28
+negatives legitimately draw review-tier noise, which is precisely what the free-count exclusion
+exists to triage out, and failing on all of them would say nothing about movement. `CorpusEntry.
+reviewTierHits` now records the taxonomies each negative is MEASURED to draw, and any UNRECORDED
+review-tier taxonomy fails the gate naming it. `validate-calibration.ts` carries a negative control
+that replays #1251 against `N-STORAGE-DB-PATH` and must print `ratchet FIRED`, so a green run means
+"passed AND can still fail." The 28 were populated from a measured run, not asserted from memory.
+
+The heuristic (M7/M8) corpus has the sibling problem and the sibling fix: a negative fixture
+directory the scanner never read reports zero exactly like one it scanned and cleared.
+`HeuristicEntry.scopeControl` names a known-caught hit planted in that directory — excluded from the
+false-positive count, and the row FAILS if it does not fire.
+
 Two scoping notes carried from the source docs, so we do not over-claim:
 - **Structural / cross-tenant RLS logic is NOT mechanically detectable.** `USING (true)` and `USING (auth.role() = 'authenticated')` (calibration bugs #1, #2) are enabled policies that *look* correct — only reading the policy body catches them. The Supabase Advisor (`get_advisors`, Splinter lint `0013 rls_disabled_in_public`) catches RLS *disabled* (bug #3), but not a permissive-but-present policy. Replay (#5), counter race (#6), and unscoped cross-tenant `.update()` (#7) are likewise semantic/dynamic. These belong to the DEEP / connected-advisor / dynamic tiers, not the mechanical free count.
 - **Existing repo assets to reuse, not re-derive:** `briefs/fp-rules.txt` already suppresses several benign classes (service-role legitimate server use, RLS-enabled-no-policy on a service-only table, in-memory `Map`-as-cache, operator/env config URLs, test/fixture scope, documented exceptions). `src/scan/rules/semgrep-nextjs-supabase.yml` already ships rules for `dangerouslySetInnerHTML`, permissive CORS, service-role-in-client, and open-redirect. Rows below cross-reference these rather than duplicating them.
