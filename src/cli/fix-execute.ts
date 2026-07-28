@@ -175,6 +175,7 @@ const handoff = assembleHandoff({ client: manifest.client, baselineCommit: manif
 // PROVENANCE: MEASURED 2026-07-28 — the peakSlots field this file writes, plus reading executeFixDiff, which is execFileSync/spawnSync throughout.
 // FALSIFIER: test -f src/fix/execute.ts || exit 127; grep -q 'export async function executeFixDiff' src/fix/execute.ts
 // TOUCHES: src/fix/schedule.ts, src/fix/execute.ts, src/cli/fix-execute.ts
+// Tracked as #1464 — the async-executor conversion is a scanner-core change, not a fix-pipeline one.
 const CONCURRENCY_NOTE =
   "caps enforced by the runScheduled semaphore; peakSlots is 1 while executeFixDiff is synchronous end to end (an async executor is the falsifier)";
 
