@@ -18,6 +18,10 @@
     "check:duplication": "jscpd --config .jscpd.json src tools",
     "validate:findings": "tsx src/cli/validate-findings.ts",
     "validate:calibration": "tsx src/cli/validate-calibration.ts",
+    "validate:precision": "tsx src/cli/validate-precision.ts",
+    "validate:source-recall": "tsx src/cli/validate-source-recall.ts",
+    "validate:secbench": "tsx src/cli/validate-secbench.ts",
+    "validate:semantic": "tsx src/cli/validate-semantic.ts",
     "osv-fixture-drift": "tsx src/cli/osv-fixture-drift.ts",
     "jscpd-fixture-drift": "tsx src/cli/fixture-drift.ts --tool jscpd",
     "knip-fixture-drift": "tsx src/cli/fixture-drift.ts --tool knip",
@@ -53,7 +57,8 @@
     "validate-acceptance": "tsx src/cli/validate-acceptance.ts",
     "validate-disclosure-venue": "tsx src/cli/validate-disclosure-venue.ts",
     "validate-conditional-scan": "tsx src/cli/validate-conditional-scan.ts",
-    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip && pnpm test-only-exports"
+    "validate-scored-gates": "tsx src/cli/validate-scored-gates.ts",
+    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm knip && pnpm test-only-exports && pnpm validate:precision"
   },
   "devDependencies": {
     "@eslint/js": "^9.30.0",
