@@ -38,7 +38,11 @@ const KNOWN = new Set<string>(KEYS);
 // dropped), and on the run that declares that tier available (`--tier <name>` / `--live`) it runs
 // exactly like any other falsifier. A value outside this set is malformed rather than silently
 // always-skipped — this is the single place a new live tier is registered (like #341's OWNERS map).
-export const KNOWN_FALSIFIER_TIERS = new Set(["m2-stack", "lighthouse", "secbench", "supabase-labs"]);
+// #1311 — `supabase-connected` added: a HOSTED Supabase project plus a client-supplied credential
+// (a Management API PAT for `perf-scan`, a `SUPABASE_DB_URL` for `pii-classify`'s connected tier) —
+// distinct from `m2-stack` (Harvey's OWN locally-provisioned two-tenant stack, no client credential)
+// and from `supabase-labs` (the paired SSL corpus, a fixed pair of local variants).
+export const KNOWN_FALSIFIER_TIERS = new Set(["m2-stack", "lighthouse", "secbench", "supabase-labs", "supabase-connected"]);
 
 // #1072 — a live-only falsifier cannot name its target in the repo: the crAPI gateway URL, the
 // external clone path, the served origin are all supplied by whoever stands the tier up. All five
