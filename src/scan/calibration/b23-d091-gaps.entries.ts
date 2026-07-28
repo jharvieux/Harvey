@@ -140,7 +140,7 @@ export const b23D091GapEntries: CorpusEntry[] = [
     kind: "positive",
     cls: "SELECT-then-INSERT dedup with no UNIQUE constraint behind it",
     location: "src/d091/dedup-without-unique.ts",
-    match: ["unique constraint", "select-then-insert", "dedup"],
+    match: ["unique constraint", "select-then-insert"],
     expectedTier: "none",
     gapKind: "measured-gap",
     note: "D-091 item 25. MEASURED 2026-07-27: zero findings. OUTSTANDING WORK, not a boundary — re-checked against #1230's 'cross-time dataflow' framing and it is neither cross-time nor out of reach: the dedup predicate is in the app code and the constraint set is in the migrations, which is the same fold migration-column-drift.ts already ships. It is not here because it was judged unshippable, it is here because this pass ran out of scope; the remainder issue carries it. The fixture plants BOTH halves (app predicate on (tenant_id, external_ref) + `d091_contacts` with no unique index) so the answer key is complete for whoever ships the detector.",

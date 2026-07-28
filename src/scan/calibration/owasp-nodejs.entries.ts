@@ -88,6 +88,9 @@
 // Choose match phrases from the TAXONOMY vocabulary a future detector would use, with spaces where the
 // filename has hyphens ("event loop" cannot match "blocking-event-loop"), and never from the fixture
 // body. The gate failing loud here is the mechanism working — it refused to record a masked gap.
+// #1355 turned that instruction into a check: selfMatchingMatchKeys() (src/scan/calibration.ts) fails
+// under `pnpm verify` on any key that is a substring of its entry's own location, so the next batch
+// cannot re-open the footgun by hand.
 //
 // OUT-OF-UNIVERSE (recorded, not dropped — no static source signal, or not a security property):
 // "use flat promise chains instead of nested callbacks", "run SAST tools like ESLint", "enable strict
@@ -155,7 +158,7 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     kind: "positive",
     cls: "Catastrophic-backtracking regex in application source",
     location: "src/owasp-node/redos-regex.ts",
-    match: ["redos", "backtrack", "regular expression"],
+    match: ["backtrack", "regular expression"],
     expectedTier: "review",
     note: "Sheet, Platform Security: 'Test regular expressions for ReDoS vulnerabilities.' `/^([a-zA-Z0-9]+)+@example\\.com$/` is a nested quantifier over an overlapping class; a long non-matching input pins the event loop. Was MEASURED zero findings (2026-07-26); harvey-redos-literal (src/scan/rules/semgrep/owasp-node.yml, #1201) now catches a bare regex LITERAL with a nested quantifier (harvey-redos already caught the same shape inside `new RegExp(\"...\")` — a different AST node, hence the separate rule), re-measured caught at review tier on both regexes in this fixture. DISCLOSED limitation (Option 1 from the issue): this is a textual/structural nested-quantifier match, not a backtracking-complexity analyser — it will miss a dangerous regex assembled dynamically (e.g. built from a variable) or one whose catastrophic shape doesn't reduce to a literal `(...)...[+*]` motif. Note the distinction from the DEPENDENCY-CVE ReDoS check — Harvey ALSO catches ReDoS as a known-vulnerable package version (P-WS-REDOS-CVE in the deps batch); that is a different check from this source-level one, and a reader should not mistake one for coverage of the other. WHERE THE LIMITATION IS DISCLOSED (#1201's actual acceptance criterion, unmet when this first shipped): it is in the rule's `message`, so it travels into every emitted finding's text and reaches the client's report. A bound recorded only in a YAML comment and in this note is a bound the client never sees, and an unstated limitation reads as a clean bill of health.",
   },
@@ -164,7 +167,6 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     kind: "negative",
     cls: "Linear-time regexes: a single quantified group with no nested quantifier, and an ordinary anchored regex with no groups",
     location: "src/owasp-node/redos-regex-safe.ts",
-    match: ["redos", "backtrack", "regular expression"],
     note: "#1201 negative: `/^(ab)+$/` (one quantifier, no NESTED quantifier inside the group) and `/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$/` (quantifiers, no groups at all) both clear harvey-redos-literal.",
   },
   {
@@ -172,7 +174,7 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     kind: "positive",
     cls: "vm.runInNewContext used as a security boundary, with require/process handed in",
     location: "src/owasp-node/vm-no-sandbox.ts",
-    match: ["vm", "sandbox", "runInNewContext"],
+    match: ["runInNewContext"],
     expectedTier: "high",
     note: "Sheet, Platform Security: 'Use vm module only within secure sandboxes.' Node's own documentation is explicit that `vm` is not a security mechanism; this fixture also passes `require` and `process` into the context, so the guest reaches the host realm directly. Was MEASURED zero findings (2026-07-26); harvey-vm-unsafe-sandbox (src/scan/rules/semgrep/owasp-node.yml, #1200) now catches `vm.runInNewContext`/`runInThisContext` on a non-literal first argument, re-measured caught at high (free-count) tier — the cheap, high-precision rule the issue predicted.",
   },
@@ -181,7 +183,6 @@ export const owaspNodejsEntries: CorpusEntry[] = [
     kind: "negative",
     cls: "vm.runInNewContext called with a fixed literal script",
     location: "src/owasp-node/vm-literal-safe.ts",
-    match: ["vm", "sandbox", "runInNewContext"],
     note: "#1200 negative: the script text is a hardcoded literal, not a dynamic expression, so it clears the non-literal-argument rule.",
   },
   {
