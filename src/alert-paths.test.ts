@@ -95,6 +95,46 @@ describe("checkAlertPaths — the seeded states main was actually in before #128
   });
 });
 
+// #1288's hatch. A drill only dispatches against a workflow already on the default branch, so a new
+// alerting workflow is unprovable until it merges — the requirement above would otherwise forbid
+// adding one at all. The tests that matter here are the ones proving the hatch closes rather than
+// parking a path unproven forever.
+describe("pendingProof — the one disclosed way an alert path lands unproven (#1288)", () => {
+  const pending = { why: "cannot dispatch a drill until the workflow is on main", tracking: 1288, since: "2026-07-28" };
+  const withPending = (over: Record<string, unknown> = {}) =>
+    registry({ paths: [{ workflow: "wf.yml", marker: "m-alert", pendingProof: { ...pending, ...over } }] });
+
+  it("accepts a path with a complete pendingProof and no recorded run", () => {
+    expect(checkAlertPaths([facts()], withPending())).toEqual([]);
+  });
+
+  it("rejects a pendingProof missing its reason, its tracker or its date", () => {
+    expect(checkAlertPaths([facts()], withPending({ why: "  " }))[0]?.detail).toContain("not all of why/tracking/since");
+    expect(checkAlertPaths([facts()], withPending({ tracking: 0 }))[0]?.detail).toContain("not all of why/tracking/since");
+    expect(checkAlertPaths([facts()], withPending({ since: "" }))[0]?.detail).toContain("not all of why/tracking/since");
+  });
+
+  // The hatch is for a path that has not been drilled. Once it has, leaving the hatch open would
+  // re-authorise skipping the proof on any later change to the same path.
+  it("rejects a path carrying both a proof run and the hatch", () => {
+    const both = registry({ paths: [{ workflow: "wf.yml", marker: "m-alert", provenBy: PROVEN, pendingProof: pending }] });
+    expect(checkAlertPaths([facts()], both)[0]?.detail).toContain("BOTH a recorded proof run and a pendingProof");
+  });
+
+  // The load-bearing one. A pending marker's label does NOT exist — its step has never run — and
+  // the only way to satisfy a label check on it is to create the label by hand, which forges the
+  // exact evidence #1287 rests on.
+  it("does not demand a marker label for a path that has never fired", () => {
+    expect(expectedLabels(withPending())).not.toContain("m-alert");
+  });
+
+  // How the hatch closes rather than fails open: same treatment as scheduledWithoutAlertPath.
+  it("fails once the tracking issue closes with the proof still unrecorded", () => {
+    expect(checkDisclosureTracking(withPending(), () => "OPEN")).toEqual([]);
+    expect(checkDisclosureTracking(withPending(), () => "CLOSED")[0]?.detail).toContain("UNPROVEN alert path 'm-alert'");
+  });
+});
+
 describe("checkDisclosureTracking — the no-alarm hatch must not fail open", () => {
   const disclosed = registry({ paths: [], scheduledWithoutAlertPath: [{ workflow: "quiet.yml", tracking: 1333 }] });
 
@@ -139,14 +179,20 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
   const facts_ = loadFacts();
   const reg = loadRegistry();
 
-  it("has every alert path dispatch-provable, registered, and carrying a proof run", () => {
+  it("has every alert path dispatch-provable, registered, and carrying a proof run or a disclosed hatch", () => {
     expect(checkAlertPaths(facts_, reg)).toEqual([]);
   });
 
-  // The count is derived, never written down: a sixth alert path added without a registry entry
+  // The count is derived, never written down: a new alert path added without a registry entry
   // fails the assertion above rather than quietly joining an unchecked population.
-  it("still finds the five converted alert paths in the workflows themselves", () => {
+  it("finds exactly the registered alert paths in the workflows themselves", () => {
     expect(facts_.flatMap((f) => f.alertSteps.map((s) => s.marker)).sort()).toEqual(reg.paths.map((p) => p.marker).sort());
+  });
+
+  // Named, so the hatch is a list of one thing someone decided rather than a category that grows.
+  // A second unproven path has to edit this line, which is where it gets noticed.
+  it("has exactly one unproven alert path — secbench, landed under #1288's operator ruling", () => {
+    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker)).toEqual(["ci-secbench-alert"]);
   });
 
   it("expects a marker label for the inlined owasp-ack path too, not only the drilled ones", () => {

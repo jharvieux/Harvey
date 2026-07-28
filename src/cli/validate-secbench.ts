@@ -38,6 +38,7 @@ const FLAGS = [
   "--lockfile-tree",
   "--osv-report",
   "--semgrep-json",
+  "--min-sca-recall",
 ] as const;
 
 assertKnownFlags(FLAGS);
@@ -210,3 +211,38 @@ console.log(
     `detector recall is a MEASURED 0/${entries.length}; the LIBRARY-INTERNAL source recall (#946) is reported above when\n` +
     `--library-source-tree is provided. These are separate tiers and must not be blended.`,
 );
+
+// --- The floor (#1288) ------------------------------------------------------------------------
+// Without this the CLI reports and never refuses, and a monthly cadence over a gate with no failing
+// direction raises nothing — the same shape as an alert path that has never fired.
+//
+// WHAT THE FLOOR IS SCOPED TO CATCH, said plainly so its silence is not read as more than it is: a
+// BREAKAGE in the SCA pathway — the loader, matchEntryOsv's target-package scoping, or the osv
+// report going empty — which lands the number near zero, not a few points of drift. It is set well
+// under the measured score on purpose. OSV's advisory coverage moves under this corpus in both
+// directions (advisories are added, and occasionally withdrawn), and a floor tight enough to catch
+// three points of that would spend its life alarming on someone else's database.
+const minRecall = arg("--min-sca-recall");
+if (minRecall !== undefined) {
+  const floor = Number(minRecall);
+  if (!Number.isFinite(floor)) {
+    console.error(`--min-sca-recall ${minRecall} is not a number.`);
+    process.exit(2);
+  }
+  const scored = all.installable === 0 ? 0 : (all.scaFlagged / all.installable) * 100;
+  console.log(`\nFloor check: SCA recall (any advisory) ${scored.toFixed(1)}% vs --min-sca-recall ${floor}%.`);
+  if (all.installable === 0) {
+    console.error(`✗ zero installable entries — nothing was scored, which is not a passing score. Check the --lockfile-tree.`);
+    process.exit(1);
+  }
+  if (scored < floor) {
+    console.error(
+      `✗ SCA recall ${scored.toFixed(1)}% is under the ${floor}% floor.\n` +
+        `  Read this as the SCA pathway breaking, not as advisory-database drift: the floor sits well below\n` +
+        `  the measured score precisely so ordinary OSV churn does not reach it. Check matchEntryOsv's\n` +
+        `  target-package scoping and that the osv report is non-empty before rebaselining anything.`,
+    );
+    process.exit(1);
+  }
+  console.log(`✓ over the floor.`);
+}

@@ -22,11 +22,11 @@
 // never resolves, still satisfies it. What it removes is the state #1288 found — a gate wired to
 // nothing at all — not every way a wired gate can fail to run.
 //
-// REASON: validate-secbench scores ~600 real npm CVEs and runs in no workflow, because a scored run needs a SecBench.js checkout plus one generated package-lock per entry before osv-scanner can read the tree, and the per-entry install is network-bound work this repo has only ever done by hand
-// KIND: empirical
-// PROVENANCE: MEASURED 2026-07-28 — the pinned clone is 1s/28MB and `npm install --package-lock-only` averaged 0.60s over a 5-entry sample (~6min extrapolated across the 670 entries), so this is a COST, not an impossibility: a scheduled monthly job is affordable. What blocks it here is that a new scheduled workflow needs an alert path with a recorded proof run (#1287/.github/alert-paths.json), and a proof run cannot be taken until the workflow is on main. Proposed to the operator on #1288.
-// FALSIFIER: test -d .github/workflows || exit 127; grep -rq 'validate-secbench' .github/workflows/ && exit 0 || exit 1
-// TOUCHES: src/cli/validate-secbench.ts .github/workflows
+// validate-secbench's "no cadence" reason block used to live here. It was RETIRED on 2026-07-28,
+// not edited: the operator authorised the monthly workflow, secbench.yml landed, and the reason's
+// own falsifier (`grep -rq 'validate-secbench' .github/workflows/`) now exits 0 — which is the
+// registry's definition of STALE. A reason kept past the day its blocker dissolved is the decay this
+// repo names as its signature defect, so the row is gone rather than reworded.
 //
 // REASON: validate-semantic scores the paid LLM pass against recorded M1.pass.json artifacts, so no cadence can produce its input — the pass itself is an interactive skill run, and the gate exits 1 when nothing is scored
 // KIND: empirical
@@ -40,8 +40,13 @@ import { readdirSync } from "node:fs";
 export type Cadence =
   /** Rides inside the required `verify` context and every local `pnpm verify`. */
   | { readonly kind: "verify" }
-  /** A named workflow invokes the CLI. Checked against that file's text. */
-  | { readonly kind: "workflow"; readonly file: string; readonly job: string }
+  /**
+   * A named workflow invokes the CLI. Checked against that file's text. `when` is written out
+   * rather than assumed: the first three rows all ran on "every PR + daily schedule" and
+   * describeCadence hardcoded that phrase, so the monthly SecBench row would have been reported as
+   * running daily on every PR — a wrong cadence printed by the gate whose whole job is cadences.
+   */
+  | { readonly kind: "workflow"; readonly file: string; readonly job: string; readonly when: string }
   /** No cadence. Carries the issue tracking it; the reason lives in this file's header. */
   | { readonly kind: "none"; readonly issue: number };
 
@@ -60,7 +65,7 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     id: "validate-calibration",
     script: "validate:calibration",
     measures: "M1 mechanical recall/FP against the corpus answer key",
-    cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 1" },
+    cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 1", when: "every PR + daily schedule" },
   },
   {
     id: "validate-precision",
@@ -76,13 +81,18 @@ export const SCORED_GATES: readonly ScoredGate[] = [
     measures: "app-layer request→sink source-detector recall (free tier)",
     // Runs the real mechanical scan, so it needs the binaries only heavy-cli installs. Shard 2:
     // shard 1 already carries the calibration gate.
-    cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 2" },
+    cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 2", when: "every PR + daily schedule" },
   },
   {
     id: "validate-secbench",
     script: "validate:secbench",
     measures: "SecBench.js SCA + library-internal recall over ~600 real npm CVEs",
-    cadence: { kind: "none", issue: 1288 },
+    // Monthly, and in a workflow of its own, because a scored run has to BUILD its own input: a
+    // pinned clone, then one generated package-lock per entry before osv-scanner has anything to
+    // read (#879). Measured 2026-07-28 on this machine: clone 3s, 594/600 lockfiles in 39s at
+    // concurrency 12, osv 3.4s, score 5.5s. Cheap enough to run, too external to run per-PR — what
+    // moves it is OSV's advisory database, which no diff in this repo touches.
+    cadence: { kind: "workflow", file: ".github/workflows/secbench.yml", job: "secbench-recall", when: "monthly (1st, 05:00 UTC) + workflow_dispatch" },
   },
   {
     id: "validate-semantic",
@@ -180,7 +190,7 @@ export function describeCadence(cadence: Cadence): string {
     case "verify":
       return "pnpm verify (required context, every PR + every local push)";
     case "workflow":
-      return `${cadence.file} — ${cadence.job} (every PR + daily schedule)`;
+      return `${cadence.file} — ${cadence.job} (${cadence.when})`;
     case "none":
       return `NO CADENCE — runs only by hand, tracked by #${cadence.issue}`;
   }

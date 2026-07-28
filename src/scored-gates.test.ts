@@ -57,7 +57,7 @@ describe("#1288 — the scored gates still have the cadence they claim", () => {
   it("fails when the workflow that claims the cadence no longer invokes the CLI", () => {
     const v = checkScoredGates(
       inputs({ workflows: { ".github/workflows/ci.yml": "run: pnpm test" } }),
-      gate({ cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 1" } }),
+      gate({ cadence: { kind: "workflow", file: ".github/workflows/ci.yml", job: "heavy-cli shard 1", when: "every PR + daily schedule" } }),
     );
     expect(v.join("\n")).toContain("never invokes src/cli/validate-x.ts");
   });
