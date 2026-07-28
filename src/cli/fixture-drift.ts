@@ -21,10 +21,11 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, readFileSync, readdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 
 import { JSCPD_IGNORE_GLOBS, type JscpdReport, type KnipReport } from "../quality-scan.js";
@@ -255,7 +256,7 @@ function resolveVitals(): { bin: string; prefixArgs: string[] } | undefined {
   if (!onPath.error && /Vitals v/.test(onPath.stdout)) return { bin: "vitals_cli.py", prefixArgs: [] };
   const cacheDir = resolve(homedir(), ".claude/plugins/cache/vitals");
   if (existsSync(cacheDir)) {
-    for (const v of readdirSync(cacheDir)) {
+    for (const v of readNamesSafe(cacheDir)) {
       const script = resolve(cacheDir, v, "vitals/scripts/vitals_cli.py");
       if (existsSync(script)) return { bin: "python3", prefixArgs: [script] };
     }

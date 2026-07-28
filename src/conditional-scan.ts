@@ -41,8 +41,9 @@
 //
 // A lower bound on the defect, not a census of it.
 
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { readEntriesSafe } from "./fs-walk.js";
 import { fileURLToPath } from "node:url";
 
 // One omitted check, and the words the disclosure row must use for it. The class name is what the
@@ -188,9 +189,9 @@ export function discoverConditionalScans(read: (file: string) => string = (f) =>
   const out: string[] = [];
   for (const root of DISCOVERY_ROOTS) {
     const walk = (dir: string): void => {
-      for (const entry of readdirSync(repoPath(dir), { withFileTypes: true })) {
+      for (const entry of readEntriesSafe(repoPath(dir)).entries) {
         const rel = `${dir}/${entry.name}`;
-        if (entry.isDirectory()) walk(rel);
+        if (entry.isDirectory) walk(rel);
         else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts") && parseScanPaths(read(rel)).length >= 2) out.push(rel);
       }
     };

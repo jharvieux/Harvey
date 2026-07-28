@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import { readEntriesSafe } from "./fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { divergedCloneFindings, wholeRepoDivergedCloneFindings } from "./diverged-clones.js";
@@ -316,9 +317,9 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
   // touchesSecurityPath (path, #360) OR touchesTenantSupabasePath (content, #399).
   function widenedSecurityFiles(dir: string, rel = ""): { path: string; source: string }[] {
     const files: { path: string; source: string }[] = [];
-    for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+    for (const entry of readEntriesSafe(join(dir, rel)).entries) {
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
+      if (entry.isDirectory) {
         if (entry.name !== "generated") files.push(...widenedSecurityFiles(dir, relPath));
       } else if (entry.name.endsWith(".ts")) {
         const source = readFileSync(join(dir, relPath), "utf8");
@@ -334,9 +335,9 @@ describe("M4 calibration corpus — measured against a live jscpd + diverged-clo
   // whole-repo pass's wider admission).
   function wideRepoFiles(dir: string, rel = ""): { path: string; source: string }[] {
     const files: { path: string; source: string }[] = [];
-    for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+    for (const entry of readEntriesSafe(join(dir, rel)).entries) {
       const relPath = rel ? `${rel}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) files.push(...wideRepoFiles(dir, relPath));
+      if (entry.isDirectory) files.push(...wideRepoFiles(dir, relPath));
       else if (entry.name.endsWith(".ts")) files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
     }
     return files;

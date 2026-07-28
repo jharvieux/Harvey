@@ -82,8 +82,9 @@
 //
 // A lower bound on the defect, not a census of it.
 
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { readNamesSafe } from "./fs-walk.js";
 import { fileURLToPath } from "node:url";
 
 export const RULES_DIR = "src/scan/rules/semgrep";
@@ -384,7 +385,7 @@ export function unattributedBounds(rules: readonly SemgrepRule[], files: Readonl
 export function loadSemgrepRuleFiles(): Map<string, string> {
   const dir = resolve(dirname(fileURLToPath(import.meta.url)), "..", RULES_DIR);
   return new Map(
-    readdirSync(dir)
+    readNamesSafe(dir)
       .filter((f) => f.endsWith(".yml"))
       .sort()
       .map((f) => [`${RULES_DIR}/${f}`, readFileSync(resolve(dir, f), "utf8")]),

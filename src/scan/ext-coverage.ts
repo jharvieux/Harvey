@@ -15,8 +15,9 @@
 // Falsifier: `pnpm detect-static <target>` on a tree of .js files must print a product-source count
 // matching the .js file count, and must NOT emit M1-EXT-00.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { extname, join, relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { EXCLUDED_DIR, isGeneratedSource } from "../detectors/load-sources.js";
 import type { Finding } from "../findings.js";
 
@@ -31,16 +32,29 @@ const UNREAD_SHARE_THRESHOLD = 0.1;
 interface Unread {
   byExtension: Map<string, number>;
   generated: number;
+  danglingLinks: number;
   example: string | undefined;
 }
 
 function scan(dir: string, loaded: Set<string>): { loadedCount: number; unread: Unread } {
-  const unread: Unread = { byExtension: new Map(), generated: 0, example: undefined };
+  const unread: Unread = { byExtension: new Map(), generated: 0, danglingLinks: 0, example: undefined };
   let loadedCount = 0;
   const walk = (current: string): void => {
-    for (const entry of readdirSync(current)) {
-      const full = join(current, entry);
-      if (statSync(full).isDirectory()) {
+    const { entries, dangling } = readEntriesSafe(current);
+    // #1451's residual, counted rather than chosen silently. Every walk in Harvey now SKIPS a
+    // committed symlink whose target does not resolve — it has to, since following one throws and
+    // discards the whole pass. A skipped link named `foo.ts` is nonetheless a source file nobody
+    // read, and this row's whole job is loaded-vs-present. The population observed in the wild is
+    // `.env` and `LICENSE.md` (5 links across the 15 #899 targets, none source-like), so this
+    // ordinarily contributes 0 — which is the point: if it ever stops being 0, the row says so
+    // instead of the file vanishing between "present" and "loaded".
+    for (const name of dangling) {
+      if (!SOURCE_LIKE.test(name)) continue;
+      unread.danglingLinks += 1;
+      unread.example ??= relative(dir, join(current, name)).split(sep).join("/");
+    }
+    for (const { name: entry, path: full, isDirectory } of entries) {
+      if (isDirectory) {
         if (!EXCLUDED_DIR.test(entry)) walk(full);
         continue;
       }
@@ -63,7 +77,7 @@ function scan(dir: string, loaded: Set<string>): { loadedCount: number; unread: 
 
 export function checkUnreadSourceExtensions(dir: string, loadedPaths: string[]): Finding[] {
   const { loadedCount, unread } = scan(dir, new Set(loadedPaths));
-  const unreadCount = unread.generated + [...unread.byExtension.values()].reduce((a, b) => a + b, 0);
+  const unreadCount = unread.generated + unread.danglingLinks + [...unread.byExtension.values()].reduce((a, b) => a + b, 0);
   const total = loadedCount + unreadCount;
   if (total === 0 || unreadCount / total < UNREAD_SHARE_THRESHOLD) return [];
 
@@ -72,6 +86,7 @@ export function checkUnreadSourceExtensions(dir: string, loadedPaths: string[]):
   const parts = [
     ...(ranked.length ? [`extensions the source loader does not read: ${extSummary}`] : []),
     ...(unread.generated ? [`${unread.generated} minified/generated file(s) excluded by decision (machine-generated output is not fixable in place)`] : []),
+    ...(unread.danglingLinks ? [`${unread.danglingLinks} committed symlink(s) with a source extension whose target does not resolve in this checkout — skipped by every walk, because following one throws (#1451)`] : []),
   ];
 
   return [

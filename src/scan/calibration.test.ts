@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
+import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, type CorpusEntry } from "./calibration.js";
@@ -1093,9 +1094,8 @@ describe("#848 M9 per-check corpus (live detectAppRouterFindings over the commit
     const root = join(FIXTURES_ROOT, dir);
     const files: SourceInput[] = [];
     const walk = (d: string) => {
-      for (const e of readdirSync(d)) {
-        const full = join(d, e);
-        if (statSync(full).isDirectory()) walk(full);
+      for (const { name: e, path: full, isDirectory } of readEntriesSafe(d).entries) {
+        if (isDirectory) walk(full);
         else if (e.endsWith(".txt")) files.push({ path: `${prefix}/${relative(root, full).replace(/\.txt$/, "").split(sep).join("/")}`, text: readFileSync(full, "utf8") });
       }
     };
@@ -1176,7 +1176,7 @@ describe("#1238 OWASP React RSC boundary (live detectAppRouterFindings over targ
   const CALIBRATION_REACT = fileURLToPath(new URL("../../targets/calibration/src/owasp-react/", import.meta.url));
 
   function loadReactFixtures(): SourceInput[] {
-    return readdirSync(CALIBRATION_REACT)
+    return readNamesSafe(CALIBRATION_REACT)
       .filter((e) => e.endsWith(".tsx"))
       .map((e) => ({ path: `src/owasp-react/${e}`, text: readFileSync(join(CALIBRATION_REACT, e), "utf8") }));
   }
@@ -1214,9 +1214,8 @@ describe("#917/#918 M9 port corpus (live detectAppRouterFindings over the Remix/
     const root = join(FIXTURES_ROOT, dir);
     const files: SourceInput[] = [];
     const walk = (d: string) => {
-      for (const e of readdirSync(d)) {
-        const full = join(d, e);
-        if (statSync(full).isDirectory()) walk(full);
+      for (const { name: e, path: full, isDirectory } of readEntriesSafe(d).entries) {
+        if (isDirectory) walk(full);
         else if (e.endsWith(".txt")) files.push({ path: `${prefix}/${relative(root, full).replace(/\.txt$/, "").split(sep).join("/")}`, text: readFileSync(full, "utf8") });
       }
     };

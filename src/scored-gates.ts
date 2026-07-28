@@ -34,7 +34,7 @@
 // FALSIFIER: test -d .github/workflows || exit 127; grep -rq 'validate-semantic' .github/workflows/ && exit 0 || exit 1
 // TOUCHES: src/cli/validate-semantic.ts .github/workflows
 
-import { readdirSync } from "node:fs";
+import { readNamesSafe } from "./fs-walk.js";
 
 /** Where a gate runs, and the evidence that proves it still does. */
 export type Cadence =
@@ -113,6 +113,7 @@ export const NOT_SCORED: readonly { readonly id: string; readonly why: string }[
   { id: "validate-conservation", why: "plant-and-assert — a planted finding per module, pass/fail, not a score" },
   { id: "validate-disclosure-venue", why: "structural — checks a rule's recorded bound reaches its own message" },
   { id: "validate-findings", why: "schema validation of a findings file" },
+  { id: "validate-fs-walk", why: "structural — bans raw statSync/readdirSync outside src/fs-walk.ts; a violation count, not a recall number" },
   { id: "validate-reasons", why: "structural — checks recorded reasons are well-formed and re-tests their falsifiers" },
   { id: "validate-scored-gates", why: "this gate — checks the scored gates above still have a cadence" },
   { id: "validate-test-only-exports", why: "ratchet over exports whose only consumer is their own test" },
@@ -120,7 +121,7 @@ export const NOT_SCORED: readonly { readonly id: string; readonly why: string }[
 
 /** Discovered `validate-*` CLI ids, excluding test files. */
 export function discoverValidateClis(cliDir: string): string[] {
-  return readdirSync(cliDir)
+  return readNamesSafe(cliDir)
     .filter((f) => f.startsWith("validate-") && f.endsWith(".ts") && !f.endsWith(".test.ts"))
     .map((f) => f.slice(0, -".ts".length))
     .sort();

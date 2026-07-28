@@ -9,8 +9,9 @@
 // review tier — a broad-host + cookies extension is intent-dependent (a password manager legitimately
 // needs it), so the combo is surfaced with the specific host/permission evidence, never free-counted.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { relative } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import type { Finding } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 
@@ -37,10 +38,9 @@ interface WebExtManifest {
 }
 
 function findManifests(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
+  for (const { name, path: p, isDirectory } of readEntriesSafe(dir).entries) {
     if (name === "node_modules" || name === ".next" || name === ".git" || name === "dist") continue;
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) findManifests(p, out);
+    if (isDirectory) findManifests(p, out);
     else if (name === "manifest.json") out.push(p);
   }
   return out;

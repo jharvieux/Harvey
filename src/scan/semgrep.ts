@@ -19,8 +19,9 @@
 // across next.config/middleware/vercel.json, not something a Semgrep AST pattern expresses.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { readEntriesSafe, readNamesSafe } from "../fs-walk.js";
 import type { Finding, Severity } from "../findings.js";
 import { mechanicalFinding } from "./common.js";
 
@@ -231,9 +232,9 @@ const PUBLIC_SENSITIVE = [
 
 function walkFiles(dir: string): string[] {
   const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of readEntriesSafe(dir).entries) {
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walkFiles(full));
+    if (entry.isDirectory) out.push(...walkFiles(full));
     else out.push(full);
   }
   return out;
@@ -517,8 +518,8 @@ const SCOPE_SKIP_DIR = /^(node_modules|\.git)$/;
 
 function analysableFiles(dir: string): string[] {
   const out: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
+  for (const entry of readEntriesSafe(dir).entries) {
+    if (entry.isDirectory) {
       if (!SCOPE_SKIP_DIR.test(entry.name)) out.push(...analysableFiles(join(dir, entry.name)));
     } else if (SEMGREP_ANALYSABLE.test(entry.name)) {
       out.push(join(dir, entry.name));
@@ -611,7 +612,7 @@ export function semgrepErrorFinding(dir: string, output: SemgrepOutput): Finding
 // longer exists would otherwise "not fire" and read as a fixed bug).
 export function harveyRuleIds(): Set<string> {
   const ids = new Set<string>();
-  for (const file of readdirSync(CUSTOM_RULES)) {
+  for (const file of readNamesSafe(CUSTOM_RULES)) {
     if (!file.endsWith(".yml")) continue;
     for (const m of readFileSync(join(CUSTOM_RULES, file), "utf8").matchAll(/^\s*-\s*id:\s*(harvey-[\w-]+)\s*$/gm)) {
       ids.add(m[1] as string);
