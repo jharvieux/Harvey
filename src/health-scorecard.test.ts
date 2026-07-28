@@ -139,3 +139,51 @@ describe("the shared grade curve", () => {
     expect(densityScore(0, 0)).toBe(100);
   });
 });
+
+describe("M8 — 'no tests' is itself a gradable finding (the correction's third bullet)", () => {
+  const withTests = [...EMPTY_SOURCE, { path: "app/page.test.tsx", text: "it('works', () => {});\n" }];
+
+  it("grades a target with no test files at all as F, with no execution involved", () => {
+    const m8 = buildHealthScorecard(input()).dimensions.find((d) => d.module === "M8")!;
+    expect(m8.status).toBe("graded");
+    expect(m8.grade).toBe("F");
+    expect(m8.score).toBe(0);
+    expect(m8.measure).toContain("no test or spec files found");
+  });
+
+  it("calls out a declared test script with nothing behind it — the loudest form of it", () => {
+    const m8 = buildHealthScorecard(input({ testRunnerDeclared: true })).dimensions.find((d) => d.module === "M8")!;
+    expect(m8.measure).toContain("despite a test script being declared");
+    expect(m8.score).toBe(0);
+  });
+
+  it("reports PRESENT tests as an indicator, never a letter — existing is not passing", () => {
+    // The over-reach this tier exists to avoid: a letter here would read as a quality verdict on a
+    // suite nobody ran. Presence is a fact; quality is a connected-tier claim.
+    const m8 = buildHealthScorecard(input({ sources: withTests })).dimensions.find((d) => d.module === "M8")!;
+    expect(m8.status).toBe("indicator-only");
+    expect(m8.grade).toBeUndefined();
+    expect(m8.measure).toContain("1 test/spec file(s)");
+    expect(m8.scope).toContain("not a statement that they pass");
+  });
+
+  it("puts a no-tests F into the composition, and an indicator out of it", () => {
+    expect(buildHealthScorecard(input()).gradedModules).toContain("M8");
+    expect(buildHealthScorecard(input({ sources: withTests })).gradedModules).not.toContain("M8");
+  });
+});
+
+describe("the product/test split — the scorecard owns it so no caller can get it wrong", () => {
+  it("keeps test files out of the M5/M7/M9 densities while counting them for M8", () => {
+    // Every other consumer of these detectors filters NON_PRODUCT first (src/cli/static-detect.ts,
+    // detector-rerun.ts, handrolled-frequency.ts). A finding in a test file is not an audit finding,
+    // so grading a target on its own tests would both inflate the count and punish having tests.
+    const slopInTest = "export function f(a) { return 1; }\n".repeat(3);
+    const onlyTests = [{ path: "app/thing.test.ts", text: slopInTest }];
+    const s = buildHealthScorecard(input({ sources: onlyTests, kloc: 0.1 }));
+    for (const m of ["M5", "M7", "M9"]) {
+      expect(s.dimensions.find((d) => d.module === m)!.count, `${m} counted a test file`).toBe(0);
+    }
+    expect(s.dimensions.find((d) => d.module === "M8")!.status).toBe("indicator-only");
+  });
+});

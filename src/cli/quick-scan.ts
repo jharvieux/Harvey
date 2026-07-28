@@ -129,6 +129,18 @@ function classifySchema(dir: string): { tables: number; columns: number } | { ga
   return { gap: "No SQL migrations under supabase/migrations and no prisma/schema.prisma were found, so there was no schema to classify." };
 }
 
+// M8: does the target declare a way to run tests at all? A `test` script that runs nothing is a
+// louder finding than no script, so the scorecard is told which of the two it is. A malformed
+// package.json answers "no" rather than throwing — a free scan must not die on a client's bad JSON.
+function declaresTestScript(dir: string): boolean {
+  try {
+    const scripts = (JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { scripts?: Record<string, string> }).scripts ?? {};
+    return Object.keys(scripts).some((name) => /^(test|tests|vitest|jest|spec)(:|$)/.test(name));
+  } catch {
+    return false;
+  }
+}
+
 function measureDuplication(dir: string, sourceFileCount: number): Pick<ScorecardInput, "duplication" | "duplicationGap"> {
   try {
     const report = runJscpd(dir, { timeoutMs: JSCPD_TIMEOUT_MS, sourceFileCount: () => sourceFileCount });
@@ -371,6 +383,8 @@ async function main(): Promise<void> {
   // than from `rawFindings`: that array is the M1 mechanical feed the orchestrator's probe reads
   // (--findings-out), and widening it here would change what M1 reports it examined. The scorecard
   // reads the same tree, separately, and composes a health grade across all ten dimensions.
+  // The FULL set, tests included: buildHealthScorecard splits it (product code for M5/M7/M9, test
+  // files for M8's census), so the split lives in one place rather than at each call site.
   const sources = loadSources(absDir);
   const pii = classifySchema(absDir);
   const scorecard = buildHealthScorecard({
@@ -383,6 +397,7 @@ async function main(): Promise<void> {
     ...measureDuplication(absDir, size.files),
     handrolledClasses: report.handrolled.length,
     handrolledTotal: report.handrolled.reduce((sum, c) => sum + c.total, 0),
+    testRunnerDeclared: declaresTestScript(absDir),
     ...("gap" in pii ? { piiGap: pii.gap } : { pii }),
   });
 

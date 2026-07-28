@@ -39,6 +39,7 @@ import type { TargetOrm } from "./scan/framework-detect.js";
 import { detectAppRouterFindings } from "./detectors/app-router.js";
 import { detectPerfCodeFindings } from "./detectors/perf-code.js";
 import { detectSlopFindings } from "./detectors/slop.js";
+import { NON_PRODUCT } from "./detectors/load-sources.js";
 import { gradeOf, type Grade } from "./quick-scan.js";
 
 type DimensionStatus =
@@ -209,7 +210,12 @@ export interface ScorecardInput {
   // M1's hygiene grade, computed by src/quick-scan.ts on its own severity-weighted curve and passed
   // in verbatim — this module never re-grades M1, so the #244/#996 pinned promises stay pinned.
   m1: { grade: Grade; score: number; gradedCount: number; indicatorCount: number };
-  sources: SourceInput[]; // the target's application source, already loaded once by the caller
+  // The target's FULL source set, exactly as loadSources returns it — test files included. This
+  // module splits it itself rather than taking a pre-filtered list: M5/M7/M9 must see PRODUCT code
+  // only (a perf finding in a test file is not an audit finding — the rule every other consumer of
+  // these detectors applies), while M8's census is about the test files specifically. A caller that
+  // pre-filtered would silently zero M8; a caller that did not would grade the target on its tests.
+  sources: SourceInput[];
   kloc: number; // application lines of code / 1000, from measureCodebaseSize
   framework?: TargetFramework;
   nonNextWorkspaces?: WorkspaceFramework[];
@@ -222,6 +228,9 @@ export interface ScorecardInput {
   // M6: the hand-rolled indicator rollup the free report already carries (#267).
   handrolledClasses: number;
   handrolledTotal: number;
+  // M8: whether package.json declares a test script. A runner declared with no test files behind it
+  // is a louder finding than no runner at all, so the row distinguishes them.
+  testRunnerDeclared?: boolean;
   // M10: tables carrying at least one classified PII/PHI/PCI column, and whether any schema was
   // readable at all — the difference between "no sensitive data" and "no schema to read".
   pii?: { tables: number; columns: number };
@@ -230,7 +239,9 @@ export interface ScorecardInput {
 
 export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
   const spec = (m: string) => DIMENSIONS.find((d) => d.module === m)!;
-  const { kloc, sources } = input;
+  const { kloc } = input;
+  const sources = input.sources.filter((f) => !NON_PRODUCT.test(f.path));
+  const testFiles = input.sources.filter((f) => NON_PRODUCT.test(f.path));
   const dimensions: HealthDimension[] = [];
 
   // M1 — graded on the severity curve, not the density curve. Security is the one dimension where a
@@ -317,13 +328,39 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
     ),
   );
 
-  dimensions.push(
-    notAssessedRow(
-      spec("M8"),
-      "Test quality is measured by running the target's own suite and mutating it; the free scan executes none of the target's code.",
-      "connected tier (runs the target's tests + Stryker)",
-    ),
-  );
+  // M8 — the correction's own third bullet: "needs the target's tests to run — BUT 'NO TESTS' IS
+  // ITSELF A GRADABLE FINDING". So the absence of tests is graded (it is a fact about the source,
+  // decidable with no execution), while their PRESENCE is only an indicator: that files exist says
+  // nothing about whether they pass or assert anything, and claiming otherwise from source is the
+  // over-reach this tier exists to avoid. Mutation-scored quality stays a connected-tier claim.
+  if (testFiles.length === 0) {
+    dimensions.push({
+      ...spec("M8"),
+      status: "graded",
+      grade: gradeOf(0),
+      score: 0,
+      count: 0,
+      measure: `no test or spec files found across ${sources.length} source file(s)${input.testRunnerDeclared ? " — despite a test script being declared in package.json" : ""}`,
+      scope:
+        "Whether your codebase has automated tests at all. This is graded because it needs no " +
+        "execution to establish" +
+        (input.testRunnerDeclared
+          ? " — and a declared test script with no test files behind it is the loudest form of it. "
+          : ". ") +
+        "How GOOD the tests are (do they assert anything, do they kill mutants) is measured by the deep scan, which runs your suite.",
+    });
+  } else {
+    dimensions.push({
+      ...spec("M8"),
+      status: "indicator-only",
+      count: testFiles.length,
+      measure: `${testFiles.length} test/spec file(s) alongside ${sources.length} source file(s)`,
+      scope:
+        "Your codebase HAS automated tests — that is all this tier establishes, and it is why no " +
+        "letter is assigned. It is not a statement that they pass, that they cover anything, or " +
+        "that they assert anything: the deep scan runs your suite and mutation-scores it.",
+    });
+  }
 
   dimensions.push(
     gradedDensityRow(
