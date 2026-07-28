@@ -471,11 +471,17 @@ describe("the claim ratchet (#1318) — the census may fall, never rise", () => 
     expect(censusScope("src/unstructured-claims-baseline.ts")).toBe("none");
   });
 
-  // The three sites #1311 records. They are the population #1318 was built for and none of them was
-  // reachable: "untestable" was not in the vocabulary and `.ts` was not censused.
-  it("reaches #1311's three `untestable in CI` comments (#1347)", () => {
+  // The three sites #1311 recorded were the population #1347's `.ts`-comment widening was BUILT to
+  // reach: "untestable" was not in the vocabulary and `.ts` was not censused, so this test used to
+  // assert the census found all three as untriaged prose. #1311 (2026-07-28) re-tested each claim,
+  // found all three still true (not decayed, contrary to the issue's own premise — see the PR body),
+  // and migrated them into REASON:/KIND:/PROVENANCE:/FALSIFIER: blocks rather than deleting them. So
+  // the correct assertion flips: the widening still REACHES these files (proven generically by the
+  // sibling `censusScope` test above), but these three specific lines must no longer read as
+  // untriaged, because they now carry a falsifier `--revalidate` re-tests instead of nobody.
+  it("no longer flags #1311's three sites as untriaged — they are REASON blocks now, not bare prose (#1311)", () => {
     const sources = collectSources(DEFAULT_ROOTS, REPO_ROOT);
-    const found = untriagedClaims(sources, reasonsForCensus).filter((c) => /untestable in CI/.test(c.text));
-    expect(found.map((c) => c.file).sort()).toEqual(["src/audit-runners.ts", "src/audit-runners.ts", "src/pentest/targets.ts"]);
+    const found = untriagedClaims(sources, reasonsForCensus).filter((c) => c.file === "src/audit-runners.ts" || c.file === "src/pentest/targets.ts");
+    expect(found.filter((c) => /untestable in CI/.test(c.text))).toEqual([]);
   });
 });

@@ -125,7 +125,7 @@ jobs:
           // FALSIFIER: true
           EOF
           cat > "$FIXTURE/malformed.md" <<'EOF'
-          REASON: planted claim with no way to re-test it
+          REASON: planted claim, nothing here re-tests it (#1326)
           KIND: empirical
           PROVENANCE: ASSUMED 2026-07-27
           EOF
@@ -137,37 +137,65 @@ jobs:
           // FALSIFIER-TIER: lighthouse
           EOF
 
+      # #1253 item 2: this control used to accept ANY non-zero exit, which cannot tell "the gate
+      # fired for the planted reason" from "the gate fired for an unrelated one" — the same
+      # vacuous-pass shape the fourth control (below) was built to avoid. Retrofitted to also assert
+      # the output names STALE, matching the fourth control's grep-the-message shape. Verified
+      # 2026-07-28 that this fixture reports STALE today.
       - name: Negative control — a reason whose falsifier now exits 0 must FAIL the gate
         env:
           FIXTURE: ${{ runner.temp }}/reasons-control
         run: |
-          if pnpm validate-reasons --root "$FIXTURE/stale.ts" --revalidate; then
+          set -uo pipefail
+          if out=$(pnpm validate-reasons --root "$FIXTURE/stale.ts" --revalidate 2>&1); then
+            printf '%s\n' "$out"
             echo "::error::A planted reason whose falsifier exits 0 was not reported STALE. The re-validation pass cannot fail, so the PASS above means nothing (#1065)."
             exit 1
           fi
+          printf '%s\n' "$out"
+          if ! printf '%s\n' "$out" | grep -qF 'STALE'; then
+            echo "::error::validate-reasons exited non-zero for the planted stale.ts fixture, but not by reporting STALE. A control that passes on any failure is not a control (#1253 item 2)."
+            exit 1
+          fi
 
+      # #1253 item 2 (see above).
       - name: Negative control — an empirical reason with no falsifier must FAIL the structural pass
         env:
           FIXTURE: ${{ runner.temp }}/reasons-control
         run: |
-          if pnpm validate-reasons --root "$FIXTURE/malformed.md"; then
+          set -uo pipefail
+          if out=$(pnpm validate-reasons --root "$FIXTURE/malformed.md" 2>&1); then
+            printf '%s\n' "$out"
             echo "::error::A planted empirical reason carrying no FALSIFIER was accepted. The structural half of the gate is not asserting anything (#1033)."
             exit 1
           fi
+          printf '%s\n' "$out"
+          if ! printf '%s\n' "$out" | grep -qF 'FALSIFIER: missing'; then
+            echo "::error::validate-reasons exited non-zero for the planted malformed.md fixture, but not for a missing FALSIFIER. A control that passes on any failure is not a control (#1253 item 2)."
+            exit 1
+          fi
 
+      # #1253 item 2 (see above).
       - name: Negative control — an unbound live-tier placeholder must FAIL rather than read as 'holds'
         env:
           FIXTURE: ${{ runner.temp }}/reasons-control
         run: |
-          if pnpm validate-reasons --root "$FIXTURE/unbound.ts" --revalidate --tier lighthouse; then
+          set -uo pipefail
+          if out=$(pnpm validate-reasons --root "$FIXTURE/unbound.ts" --revalidate --tier lighthouse 2>&1); then
+            printf '%s\n' "$out"
             echo "::error::A live-tier falsifier with an unbound <placeholder> did not report UNVERIFIABLE. Run verbatim it dies on a shell redirect and exits non-zero, which the gate would read as 'the blocker still holds' (#1072)."
+            exit 1
+          fi
+          printf '%s\n' "$out"
+          if ! printf '%s\n' "$out" | grep -qF 'UNVERIFIABLE'; then
+            echo "::error::validate-reasons exited non-zero for the planted unbound.ts fixture, but not by reporting UNVERIFIABLE. A control that passes on any failure is not a control (#1253 item 2)."
             exit 1
           fi
 
       # The other three controls plant a bad reason; this one plants a broken SURFACE. A fetch that
       # returns nothing is indistinguishable in the output from a tracker with no recorded blockers,
-      # so the failure has to be asserted, not assumed. Checking the message too — the other three
-      # accept any non-zero exit, which is a weaker control (#1253 item 2).
+      # so the failure has to be asserted, not assumed. Checking the message too — matching the other
+      # three since #1253 item 2's retrofit.
       - name: Negative control — an --issues fetch with no usable credential must FAIL, not report zero
         env:
           GH_TOKEN: not-a-real-token
