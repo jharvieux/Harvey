@@ -189,10 +189,14 @@ describe("this repo's own alert paths (the gate `pnpm verify` enforces)", () => 
     expect(facts_.flatMap((f) => f.alertSteps.map((s) => s.marker)).sort()).toEqual(reg.paths.map((p) => p.marker).sort());
   });
 
-  // Named, so the hatch is a list of one thing someone decided rather than a category that grows.
-  // A second unproven path has to edit this line, which is where it gets noticed.
-  it("has exactly one unproven alert path — secbench, landed under #1288's operator ruling", () => {
-    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker)).toEqual(["ci-secbench-alert"]);
+  // The hatch is a named list, not a category that grows: any unproven path has to edit this line,
+  // which is where it gets noticed. secbench occupied it under #1288's operator ruling and was
+  // retired the same day once its drill ran (run 30376371298, issue #1430), so the list is empty
+  // again — which is the state it should normally be in. `pendingProof`'s own behaviour stays
+  // covered by the fixture tests above, so emptying this list does not un-test the mechanism.
+  it("has no unproven alert path — the hatch is empty and every path carries a proof run", () => {
+    expect(reg.paths.filter((p) => p.pendingProof).map((p) => p.marker)).toEqual([]);
+    expect(reg.paths.every((p) => p.provenBy?.run)).toBe(true);
   });
 
   it("expects a marker label for the inlined owasp-ack path too, not only the drilled ones", () => {
