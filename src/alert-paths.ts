@@ -49,7 +49,7 @@ export interface ProvenBy {
 
 // REASON: a brand-new alerting workflow's drill is not dispatchable until the workflow file is on the DEFAULT branch, so its alert path has no way to be proven before it merges — which is why `pendingProof` exists at all rather than every new path simply being drilled first
 // KIND: empirical
-// PROVENANCE: TRIED 2026-07-28 — `gh workflow run secbench.yml --ref feature/secbench-cadence -f alert_drill=true` against a pushed-but-unmerged branch, recorded in the PR for #1288. Operator ruling the same day: land the path unproven, drill immediately after merge, record the run id and delete the hatch.
+// PROVENANCE: TRIED 2026-07-28 — `gh workflow run secbench.yml --ref feature/secbench-cadence -f alert_drill=true` against the pushed-but-unmerged branch, three ways (by file, by name, and raw `POST .../workflows/secbench.yml/dispatches`). GitHub answers verbatim: `HTTP 404: workflow secbench.yml not found on the default branch`. Operator ruling the same day: land the path unproven, drill immediately after merge, record the run id and delete the hatch.
 // FALSIFIER: command -v gh >/dev/null 2>&1 || exit 127; gh api repos/jharvieux/Harvey >/dev/null 2>&1 || exit 127; gh api "repos/jharvieux/Harvey/contents/.github/workflows/secbench.yml?ref=main" >/dev/null 2>&1 && exit 0 || exit 1
 // TOUCHES: .github/alert-paths.json .github/workflows/secbench.yml
 //
