@@ -44,8 +44,15 @@ import { gradeOf, type Grade } from "./quick-scan.js";
 
 type DimensionStatus =
   | "graded" // a number this tier stands behind, composed into the health grade
+  | "risk-band" // an exposure-surface band (M10), deliberately NOT a letter and NOT composed
   | "indicator-only" // measured, surfaced, deliberately NOT composed (needs confirmation elsewhere)
   | "not-assessed"; // this tier did not run it — the row states why and what would
+
+// M10's band (operator ruling 2026-07-28 on #1305). Deliberately NOT the A–F letter scale: a letter
+// on M10 reads as a protection verdict ("your PII is safe"), which only the connected tier can
+// support. A band states how much sensitive data exists and how sensitive it is — exposure surface,
+// which source genuinely measures — and says in the output what it does not mean.
+export type RiskBand = "Low" | "Medium" | "High" | "Critical";
 
 export interface HealthDimension {
   module: string; // "M1".."M10"
@@ -59,6 +66,65 @@ export interface HealthDimension {
   reason?: string; // not-assessed rows only: why this tier could not answer it
   needs?: string; // not-assessed rows only: the tier that would
   notAssessedRows?: number; // in-dimension disclosure rows (confidence "N/A") the detector emitted
+  band?: RiskBand; // risk-band rows only
+  bandDerivation?: string; // risk-band rows only: the inputs and the rule that produced the band
+  bandCaveat?: string; // risk-band rows only: what the band does NOT mean, in the client's words
+  // The DISCLOSED ROLLUP of this dimension's evidence (operator ruling 2026-07-28 on #1305).
+  // Absent ⇒ this dimension surfaces no per-finding evidence, not "it had none".
+  evidence?: ExampleRollup;
+}
+
+// At most five examples per dimension, duplicates collapsed to one row plus a count — the operator's
+// ruling verbatim: "only show 5 examples of each and if there's dupes just give one example and
+// state how many times it appears".
+export const EXAMPLES_SHOWN = 5;
+
+interface DimensionExample {
+  shape: string; // the finding's taxonomy — the "shape" that repeats
+  title: string;
+  location: string; // ONE representative location; the rest are in the paid report
+  occurrences: number; // how many times this shape appears IN THE FULL SET
+}
+
+// The rollup carries the TRUE totals next to the shown rows, because a capped list that says
+// "5 findings" when 47 exist is a fabricated number, and a collapsed duplicate printed as one row
+// reads as singular. CLAUDE.md: when volume is the objection the answer is a threshold or a
+// DISCLOSED rollup (#935's shape) — never quietly showing fewer rows.
+export interface ExampleRollup {
+  examples: DimensionExample[];
+  totalFindings: number; // every finding in the dimension, not just the shown ones
+  totalShapes: number; // every distinct shape, not just the shown ones
+  hiddenShapes: number; // shapes not shown
+  hiddenFindings: number; // findings behind those shapes
+  capped: boolean; // true ⇒ the list was cut; false ⇒ every shape is shown
+}
+
+// Group by shape, most-frequent first (deterministic tiebreak), keep the first `limit`. The totals
+// are always computed over the WHOLE input, never over the kept slice — that arithmetic is the
+// difference between a disclosed rollup and a silent truncation, and it is what the tests pin.
+export function rollupExamples(findings: Finding[], limit = EXAMPLES_SHOWN): ExampleRollup {
+  const byShape = new Map<string, Finding[]>();
+  for (const f of findings) {
+    const list = byShape.get(f.taxonomy) ?? [];
+    list.push(f);
+    byShape.set(f.taxonomy, list);
+  }
+  const ordered = [...byShape.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  const shown = ordered.slice(0, limit);
+  const hidden = ordered.slice(limit);
+  return {
+    examples: shown.map(([shape, hits]) => ({
+      shape,
+      title: hits[0]!.title,
+      location: [...hits].sort((a, b) => a.location.localeCompare(b.location))[0]!.location,
+      occurrences: hits.length,
+    })),
+    totalFindings: findings.length,
+    totalShapes: ordered.length,
+    hiddenShapes: hidden.length,
+    hiddenFindings: hidden.reduce((sum, [, hits]) => sum + hits.length, 0),
+    capped: hidden.length > 0,
+  };
 }
 
 export interface HealthScorecard {
@@ -173,6 +239,10 @@ function gradedDensityRow(
 ): HealthDimension {
   const disclosures = findings.filter(isDisclosureRow);
   const defects = findings.filter((f) => !isDisclosureRow(f));
+  // The score is computed on `defects` — the FULL set — and the rollup is derived from the same
+  // array AFTERWARDS. A dimension graded on the five shown rows when forty-seven exist would be a
+  // fabricated number; keeping the score off the rollup's output is what prevents that, and
+  // `grades on the full set, not the shown examples` is the test that pins it.
   const score = densityScore(defects.length, kloc);
   return {
     module: spec.module,
@@ -183,7 +253,84 @@ function gradedDensityRow(
     count: defects.length,
     measure: kloc > 0 ? `${round1(defects.length / kloc)} per 1,000 lines (${defects.length} in ${round1(kloc)}k lines)` : `${defects.length} finding(s)`,
     scope: `${scopeTail} Banding: ${DENSITY_BAND_TEXT}.`,
+    evidence: rollupExamples(defects),
     ...(disclosures.length ? { notAssessedRows: disclosures.length } : {}),
+  };
+}
+
+
+// One table's classification, exactly as tools/pii-classify.mjs already derives it from source. The
+// per-table Low/Medium/High/Critical scale is that module's own shipped `scoreToSeverity` (category
+// points x confidence weight, stacked across infotypes) — this module reuses it rather than
+// inventing a parallel sensitivity scale that could disagree with the M10 findings themselves.
+export interface PiiTableBand {
+  table: string;
+  severity: string; // "Low" | "Medium" | "High" | "Critical" | "Info", from the classifier
+  categories: string[];
+  columns: number;
+}
+
+const BAND_ORDER: RiskBand[] = ["Low", "Medium", "High", "Critical"];
+
+// Volume is the operator's third named input ("volume of PII-bearing entities"). Forty tables of
+// personal data is a materially larger exposure surface than one, at the same sensitivity, so the
+// peak sensitivity is raised ONE step at this many PII-bearing tables. One step, capped at Critical:
+// volume widens a breach, it does not make ordinary contact data regulated.
+const VOLUME_ESCALATION_TABLES = 10;
+
+// Derived ONLY from what the source declares: which columns are classified, what sensitivity class
+// they fall in, and how many tables carry them. No protection signal (RLS, grants, policies) is an
+// input, by ruling — mixing one in is what would turn this back into a protection verdict.
+export function riskBandOf(pii: { tables: number; columns: number; tableBands?: PiiTableBand[] }): { band: RiskBand; derivation: string } {
+  const bands = pii.tableBands ?? [];
+  const rated = bands.filter((b) => BAND_ORDER.includes(b.severity as RiskBand));
+  if (pii.tables === 0 || rated.length === 0) {
+    return {
+      band: "Low",
+      derivation: `No table in your schema carries a column this tier classifies as personal, health, payment or secret data (${pii.columns} column(s) were read and classified).`,
+    };
+  }
+  const peakIndex = Math.max(...rated.map((b) => BAND_ORDER.indexOf(b.severity as RiskBand)));
+  const peak = BAND_ORDER[peakIndex]!;
+  const top = rated.find((b) => b.severity === peak)!;
+  const atPeak = rated.filter((b) => b.severity === peak).length;
+  const escalated = pii.tables >= VOLUME_ESCALATION_TABLES && peakIndex < BAND_ORDER.length - 1;
+  const band = escalated ? BAND_ORDER[peakIndex + 1]! : peak;
+
+  const sensitivity =
+    `Most sensitive table: \`${top.table}\` — ${peak} (${top.categories.join(", ")}, ${top.columns} classified column(s))` +
+    (atPeak > 1 ? `, one of ${atPeak} table(s) at that level.` : ".");
+  // Three distinct cases, and conflating the last two prints a falsehood: a schema at 18 tables is
+  // NOT "below the 10-table threshold" just because the band was already at the ceiling.
+  const atVolume = pii.tables >= VOLUME_ESCALATION_TABLES;
+  const volume = escalated
+    ? ` ${pii.tables} tables hold classified data, at or above the ${VOLUME_ESCALATION_TABLES}-table volume threshold, which raises the band one step to ${band}.`
+    : atVolume
+      ? ` ${pii.tables} tables hold classified data, at or above the ${VOLUME_ESCALATION_TABLES}-table volume threshold — the band is already at ${band}, the highest, so volume cannot raise it further.`
+      : ` ${pii.tables} table(s) hold classified data — below the ${VOLUME_ESCALATION_TABLES}-table volume threshold that would raise the band, so it stays at ${band}.`;
+  return { band, derivation: sensitivity + volume };
+}
+
+// M10's evidence rollup obeys the same cap as every other dimension: the most sensitive tables
+// first, the true total stated beside them.
+function piiEvidence(bands: PiiTableBand[]): ExampleRollup {
+  const ordered = [...bands].sort(
+    (a, b) => BAND_ORDER.indexOf(b.severity as RiskBand) - BAND_ORDER.indexOf(a.severity as RiskBand) || b.columns - a.columns || a.table.localeCompare(b.table),
+  );
+  const shown = ordered.slice(0, EXAMPLES_SHOWN);
+  const hidden = ordered.slice(EXAMPLES_SHOWN);
+  return {
+    examples: shown.map((b) => ({
+      shape: `${b.severity} — ${b.categories.join(", ")}`,
+      title: `Table \`${b.table}\``,
+      location: b.table,
+      occurrences: b.columns,
+    })),
+    totalFindings: bands.reduce((sum, b) => sum + b.columns, 0),
+    totalShapes: bands.length,
+    hiddenShapes: hidden.length,
+    hiddenFindings: hidden.reduce((sum, b) => sum + b.columns, 0),
+    capped: hidden.length > 0,
   };
 }
 
@@ -209,7 +356,7 @@ export interface DuplicationMeasure {
 export interface ScorecardInput {
   // M1's hygiene grade, computed by src/quick-scan.ts on its own severity-weighted curve and passed
   // in verbatim — this module never re-grades M1, so the #244/#996 pinned promises stay pinned.
-  m1: { grade: Grade; score: number; gradedCount: number; indicatorCount: number };
+  m1: { grade: Grade; score: number; gradedCount: number; indicatorCount: number; findings?: Finding[] };
   // The target's FULL source set, exactly as loadSources returns it — test files included. This
   // module splits it itself rather than taking a pre-filtered list: M5/M7/M9 must see PRODUCT code
   // only (a perf finding in a test file is not an audit finding — the rule every other consumer of
@@ -225,6 +372,7 @@ export interface ScorecardInput {
   // saying so rather than a silent omission.
   duplication?: DuplicationMeasure;
   duplicationGap?: string;
+  duplicationFindings?: Finding[]; // jscpdToFindings' output, for M4's capped example rollup
   // M6: the hand-rolled indicator rollup the free report already carries (#267).
   handrolledClasses: number;
   handrolledTotal: number;
@@ -233,7 +381,7 @@ export interface ScorecardInput {
   testRunnerDeclared?: boolean;
   // M10: tables carrying at least one classified PII/PHI/PCI column, and whether any schema was
   // readable at all — the difference between "no sensitive data" and "no schema to read".
-  pii?: { tables: number; columns: number };
+  pii?: { tables: number; columns: number; tableBands?: PiiTableBand[] };
   piiGap?: string;
 }
 
@@ -258,6 +406,7 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
       "Mechanically-verifiable hygiene only — dependency, secret and dangerous-config classes. " +
       "Tenant isolation and authorization are NOT graded from source; they ride as indicators below " +
       `(${input.m1.indicatorCount}) and are confirmed or cleared only by the deep scan. Severity-weighted, not density: one verified Critical is an F.`,
+    ...(input.m1.findings ? { evidence: rollupExamples(input.m1.findings) } : {}),
   });
 
   dimensions.push(
@@ -287,6 +436,7 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
       count: input.duplication.duplicatedLines,
       measure: `${input.duplication.percentage}% duplicated (${input.duplication.duplicatedLines.toLocaleString("en-US")} of ${input.duplication.totalLines.toLocaleString("en-US")} comparable lines)`,
       scope: `Copy-paste clones across your source, excluding generated/vendored paths. A factual measurement — no exploitability judgment is involved. Banding: ${DUPLICATION_BAND_TEXT}.`,
+      ...(input.duplicationFindings ? { evidence: rollupExamples(input.duplicationFindings) } : {}),
     });
   } else {
     dimensions.push(
@@ -371,21 +521,33 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
     ),
   );
 
-  // M10 — source-measurable but NOT source-gradable: a schema declares WHICH columns hold sensitive
-  // data, which is a fact; whether each is adequately protected is a live-database question
-  // (src/pii-protection-review.ts, connected tier). Reporting a letter here would assert a
-  // protection verdict that is measured on the connected tier, so it is surfaced as an indicator with
-  // the count stated. Deviation from the correction's "source-gradable" bucket, stated on the row.
+  // M10 — a RISK BAND, not a letter and not a bare indicator (operator ruling 2026-07-28 on #1305).
+  // A letter would read as a protection verdict only the connected tier can support; a bare
+  // indicator conveys no magnitude and under-delivers against the 2026-07-12 correction. The band
+  // states how much sensitive data exists and how sensitive it is — exposure surface — and every
+  // input to it is something the SOURCE can see. It is never composed into the letter grade.
   if (input.pii) {
+    const { band, derivation } = riskBandOf(input.pii);
     dimensions.push({
       ...spec("M10"),
-      status: "indicator-only",
+      status: "risk-band",
+      band,
       count: input.pii.tables,
       measure: `${input.pii.tables} table(s) holding ${input.pii.columns} classified PII/PHI/PCI column(s)`,
+      bandDerivation: derivation,
+      bandCaveat:
+        "What this band does NOT mean: it is NOT a statement that your data has been exposed, " +
+        "breached, or accessed. It is NOT a verdict on your access controls — a `Critical` band on a " +
+        "properly-locked-down database is normal and expected, and a `Low` band does NOT mean your " +
+        "data is protected. It measures ONE thing: how much sensitive data your schema holds and how " +
+        "sensitive it is. Whether each column is actually protected is a live-database question the " +
+        "deep scan answers.",
       scope:
-        "Which of your tables hold sensitive data, classified from your migrations. This is an " +
-        "inventory, not a grade: whether each column is adequately protected is a live-database " +
-        "question the deep scan answers, so no letter is assigned here.",
+        "Which of your tables hold sensitive data, and how sensitive, classified from your " +
+        "migrations. Rated Low/Medium/High/Critical for EXPOSURE SURFACE, deliberately not A–F: a " +
+        "letter would imply a protection verdict this tier does not measure, so this band is reported " +
+        "beside the graded dimensions and never averaged into them.",
+      ...(input.pii.tableBands ? { evidence: piiEvidence(input.pii.tableBands) } : {}),
     });
   } else {
     dimensions.push(
@@ -403,14 +565,20 @@ export function buildHealthScorecard(input: ScorecardInput): HealthScorecard {
   // the exact inversion #1305 exists to stop.
   const score = graded.length === 0 ? 0 : Math.round(graded.reduce((sum, d) => sum + (d.score ?? 0), 0) / graded.length);
   const unassessed = dimensions.filter((d) => d.status === "not-assessed").map((d) => d.module);
-  const indicatorOnly = dimensions.filter((d) => d.status === "indicator-only").map((d) => d.module);
 
+  const banded = dimensions.filter((d) => d.status === "risk-band");
+  // The risk band is named on its own: folding it into "indicators" would hide that M10 carries a
+  // real Low/Medium/High/Critical rating, which is the whole point of the 2026-07-28 ruling.
+  const bandClause = banded.length
+    ? ` ${banded.map((d) => `${d.module} carries a ${d.band} data-exposure rating, reported beside the letter grades rather than averaged into them`).join("; ")}.`
+    : "";
+  const notGraded = dimensions.filter((d) => d.status === "indicator-only").map((d) => d.module);
   const scopeSentence =
     unassessed.length === 0
-      ? `All ten modules were assessed by this scan (${indicatorOnly.length} as indicators only).`
-      : `${unassessed.length} of the 10 audit modules were NOT run by this free scan (${unassessed.join(", ")}), ` +
-        `and ${indicatorOnly.length} more (${indicatorOnly.join(", ")}) produced indicators that are deliberately not graded. ` +
-        `Absence of a result for those is NOT evidence that they are clean — each row below says what it would take to answer it.`;
+      ? `All ten modules were assessed by this scan${notGraded.length ? ` (${notGraded.join(", ")} as indicators only)` : ""}.${bandClause}`
+      : `${unassessed.length} of the 10 audit modules were NOT run by this free scan (${unassessed.join(", ")})` +
+        (notGraded.length ? `, and ${notGraded.length} more (${notGraded.join(", ")}) produced indicators that are deliberately not graded` : "") +
+        `. Absence of a result for those is NOT evidence that they are clean — each row below says what it would take to answer it.${bandClause}`;
 
   return {
     dimensions,

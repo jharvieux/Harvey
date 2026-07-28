@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildHealthScorecard, densityScore, duplicationScore, type ScorecardInput } from "./health-scorecard.js";
+import { buildHealthScorecard, densityScore, duplicationScore, riskBandOf, rollupExamples, EXAMPLES_SHOWN, type PiiTableBand, type ScorecardInput } from "./health-scorecard.js";
+import type { Finding } from "./findings.js";
 
 // A target with nothing detectable in it, so each test controls exactly one dimension.
 const EMPTY_SOURCE = [{ path: "app/page.tsx", text: "export default function Page() {\n  return null;\n}\n" }];
@@ -88,11 +89,12 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
     expect(m4.score).toBeUndefined();
   });
 
-  it("reports M10 as an inventory, never a letter — protection is a live-database question", () => {
+  it("reports M10 as a risk band, never a letter — protection is a live-database question", () => {
     const s = buildHealthScorecard(input({ pii: { tables: 4, columns: 19 } }));
     const m10 = s.dimensions.find((d) => d.module === "M10")!;
-    expect(m10.status).toBe("indicator-only");
+    expect(m10.status).toBe("risk-band");
     expect(m10.grade).toBeUndefined();
+    expect(m10.band).toBeDefined();
     expect(m10.measure).toContain("4 table(s)");
     expect(s.gradedModules).not.toContain("M10");
   });
@@ -103,7 +105,8 @@ describe("health scorecard — the #1305 per-dimension decomposition", () => {
     expect(noSchema.reason).toContain("No schema");
 
     const cleanSchema = buildHealthScorecard(input({ pii: { tables: 0, columns: 0 } })).dimensions.find((d) => d.module === "M10")!;
-    expect(cleanSchema.status).toBe("indicator-only");
+    expect(cleanSchema.status).toBe("risk-band");
+    expect(cleanSchema.band).toBe("Low");
     expect(cleanSchema.measure).toContain("0 table(s)");
   });
 
@@ -185,5 +188,147 @@ describe("the product/test split — the scorecard owns it so no caller can get 
       expect(s.dimensions.find((d) => d.module === m)!.count, `${m} counted a test file`).toBe(0);
     }
     expect(s.dimensions.find((d) => d.module === "M8")!.status).toBe("indicator-only");
+  });
+});
+
+// ── Operator ruling 2026-07-28 (a): M10 is a Low/Medium/High/Critical EXPOSURE band ────────────
+const band = (severity: string, over: Partial<PiiTableBand> = {}): PiiTableBand => ({
+  table: `t_${severity}`,
+  severity,
+  categories: ["PII"],
+  columns: 3,
+  ...over,
+});
+
+describe("M10 risk band — exposure surface, never a protection verdict", () => {
+  it("takes the highest per-table sensitivity as the band", () => {
+    expect(riskBandOf({ tables: 2, columns: 6, tableBands: [band("Low"), band("High")] }).band).toBe("High");
+    expect(riskBandOf({ tables: 2, columns: 6, tableBands: [band("Low"), band("Medium")] }).band).toBe("Medium");
+  });
+
+  it("raises the band one step on volume — the operator's third named input", () => {
+    const bands = Array.from({ length: 12 }, (_, i) => band("Medium", { table: `t${i}` }));
+    const r = riskBandOf({ tables: 12, columns: 36, tableBands: bands });
+    expect(r.band).toBe("High");
+    expect(r.derivation).toContain("raises the band one step");
+  });
+
+  it("never escalates past Critical, and says so truthfully instead of claiming the volume was low", () => {
+    // The bug this pins: an at-ceiling band took the "below the threshold" branch and printed a
+    // sentence that was simply false about the target's own table count.
+    const bands = Array.from({ length: 18 }, (_, i) => band(i === 0 ? "Critical" : "Low", { table: `t${i}` }));
+    const r = riskBandOf({ tables: 18, columns: 40, tableBands: bands });
+    expect(r.band).toBe("Critical");
+    expect(r.derivation).toContain("at or above the 10-table volume threshold");
+    expect(r.derivation).not.toContain("below the 10-table volume threshold");
+  });
+
+  it("rates a schema with no classified columns Low, and says why", () => {
+    const r = riskBandOf({ tables: 0, columns: 40, tableBands: [] });
+    expect(r.band).toBe("Low");
+    expect(r.derivation).toContain("No table in your schema");
+  });
+
+  it("states in the output what the band does NOT mean", () => {
+    // A client must not read `Critical` as "you have been breached" or `Low` as "your PII is safe".
+    const m10 = buildHealthScorecard(input({ pii: { tables: 3, columns: 9, tableBands: [band("Critical")] } })).dimensions.find((d) => d.module === "M10")!;
+    expect(m10.bandCaveat).toContain("NOT a statement that your data has been");
+    expect(m10.bandCaveat).toContain("NOT a verdict on your access controls");
+    expect(m10.bandCaveat).toMatch(/`Low` band does NOT mean your data is protected/);
+    expect(m10.bandDerivation).toBeTruthy();
+  });
+
+  it("sits beside the letter grades and is never averaged into them", () => {
+    const clean = buildHealthScorecard(input({ duplication: { percentage: 0, duplicatedLines: 0, totalLines: 9000 } }));
+    const withCritical = buildHealthScorecard(
+      input({ duplication: { percentage: 0, duplicatedLines: 0, totalLines: 9000 }, pii: { tables: 3, columns: 9, tableBands: [band("Critical")] } }),
+    );
+    expect(withCritical.dimensions.find((d) => d.module === "M10")!.band).toBe("Critical");
+    expect(withCritical.score).toBe(clean.score); // a Critical band moved the composite by nothing
+    expect(withCritical.gradedModules).not.toContain("M10");
+    expect(withCritical.scopeSentence).toContain("Critical data-exposure rating");
+  });
+});
+
+// ── Operator ruling 2026-07-28 (b): 5 examples per dimension, as a DISCLOSED rollup ────────────
+const f = (taxonomy: string, location: string): Finding => ({
+  id: `${taxonomy}-${location}`, title: `${taxonomy} title`, severity: "Low", confidence: "Confirmed",
+  category: "c", taxonomy, location, status: "Open", evidence: "e", impact: "i", fix: "x",
+  value: 1, ease: 1, safety: 1,
+});
+
+describe("the evidence cap is a DISCLOSED ROLLUP, not a truncation", () => {
+  const many = [
+    ...Array.from({ length: 23 }, (_, i) => f("shape-a", `a${i}.ts:1`)),
+    ...Array.from({ length: 10 }, (_, i) => f("shape-b", `b${i}.ts:1`)),
+    ...Array.from({ length: 6 }, (_, i) => f(`shape-c${i}`, `c${i}.ts:1`)),
+    ...Array.from({ length: 8 }, (_, i) => f(`shape-d${i}`, `d${i}.ts:1`)),
+  ];
+
+  it("shows at most 5 shapes but reports the TRUE totals beside them", () => {
+    const r = rollupExamples(many);
+    expect(r.examples).toHaveLength(EXAMPLES_SHOWN);
+    expect(r.totalFindings).toBe(47); // 23 + 10 + 6 + 8 — the real number, not the shown one
+    expect(r.totalShapes).toBe(16);
+    expect(r.capped).toBe(true);
+    expect(r.hiddenShapes + r.examples.length).toBe(r.totalShapes);
+    expect(r.hiddenFindings + r.examples.reduce((sum, e) => sum + e.occurrences, 0)).toBe(r.totalFindings);
+  });
+
+  it("collapses duplicates to ONE row carrying its real count", () => {
+    const r = rollupExamples(many);
+    const a = r.examples.find((e) => e.shape === "shape-a")!;
+    expect(a.occurrences).toBe(23); // not 1, and not 5
+    expect(r.examples.filter((e) => e.shape === "shape-a")).toHaveLength(1);
+  });
+
+  it("says it is showing everything when there is nothing to hide, rather than padding", () => {
+    const r = rollupExamples([f("only", "x.ts:1"), f("only", "y.ts:2")]);
+    expect(r.capped).toBe(false);
+    expect(r.totalShapes).toBe(1);
+    expect(r.hiddenShapes).toBe(0);
+    expect(r.examples[0]!.occurrences).toBe(2);
+  });
+
+  it("orders by frequency so the cap keeps the shapes that matter most, deterministically", () => {
+    expect(rollupExamples(many).examples.map((e) => e.occurrences)).toEqual([23, 10, 1, 1, 1]);
+    expect(rollupExamples([...many].reverse()).examples.map((e) => e.shape)).toEqual(rollupExamples(many).examples.map((e) => e.shape));
+  });
+
+  it("GRADES ON THE FULL SET, never on the five shown rows — the easiest way to get this wrong", () => {
+    // 47 findings in 1k lines is F-territory; the same dimension scored on the 5 SHOWN rows would
+    // read as an A. If these two ever agree, the grade has started following the truncated view.
+    const dim = buildHealthScorecard(input({ m1: { grade: "A", score: 100, gradedCount: 47, indicatorCount: 0, findings: many } })).dimensions.find(
+      (d) => d.module === "M1",
+    )!;
+    expect(dim.evidence!.totalFindings).toBe(47);
+    expect(dim.evidence!.examples).toHaveLength(EXAMPLES_SHOWN);
+    // M1's own grade is passed through verbatim, so assert the density path directly too:
+    expect(densityScore(47, 1)).toBeLessThan(densityScore(EXAMPLES_SHOWN, 1));
+    expect(densityScore(47, 1)).toBeLessThan(60);
+  });
+
+  it("fails if the cap is ever applied silently — the true total must survive into the row", () => {
+    // The regression this exists for: someone slices the list and the totals slice with it, so the
+    // report says "5 findings" when 47 exist. That reads as a clean bill of health.
+    const dim = buildHealthScorecard(input({ m1: { grade: "F", score: 0, gradedCount: 47, indicatorCount: 0, findings: many } })).dimensions.find(
+      (d) => d.module === "M1",
+    )!;
+    const e = dim.evidence!;
+    expect(e.totalFindings).toBeGreaterThan(e.examples.length);
+    expect(e.totalShapes).toBeGreaterThan(e.examples.length);
+    expect(e.capped).toBe(true);
+    expect(e.hiddenFindings).toBeGreaterThan(0);
+  });
+
+  it("caps M5/M7/M9 the same way, from the same full set the density was computed on", () => {
+    const slop = Array.from({ length: 30 }, (_, i) => ({ path: `lib/f${i}.ts`, text: "export function g(a) { return 1; }\n" }));
+    const s = buildHealthScorecard(input({ sources: slop, kloc: 1 }));
+    for (const m of ["M5", "M7", "M9"]) {
+      const d = s.dimensions.find((x) => x.module === m)!;
+      expect(d.evidence, `${m} must disclose its evidence rollup`).toBeDefined();
+      expect(d.evidence!.examples.length).toBeLessThanOrEqual(EXAMPLES_SHOWN);
+      expect(d.evidence!.totalFindings).toBe(d.count);
+    }
   });
 });

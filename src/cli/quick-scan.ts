@@ -44,9 +44,9 @@ import { runMechanicalScan } from "../scan/mechanical.js";
 import { relativizeScanScope } from "../scan/scan-scope.js";
 import { CI_PIPELINE_CATEGORY } from "../scan/semgrep.js";
 import { buildSbom } from "../sbom.js";
-import { buildHealthScorecard, type HealthScorecard, type ScorecardInput } from "../health-scorecard.js";
-import { duplicationSummary } from "../quality-scan.js";
-import { buildQuickScanReport, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
+import { buildHealthScorecard, type HealthDimension, type HealthScorecard, type PiiTableBand, type ScorecardInput } from "../health-scorecard.js";
+import { duplicationSummary, jscpdToFindings } from "../quality-scan.js";
+import { buildQuickScanReport, selectGradedFindings, HANDROLLED_FILES_SHOWN, HANDROLLED_SECTION_BLURB, HANDROLLED_SECTION_TITLE, type QuickScanReport } from "../quick-scan.js";
 import { toSarif } from "../sarif.js";
 
 // What a quick-scan SARIF export does and does not cover. Stated in the export itself because a
@@ -68,7 +68,13 @@ function quickScanSarifScope(scorecard: HealthScorecard): string {
     "This is a free quick-scan, not a Harvey audit, and THIS EXPORT carries the M1 mechanical " +
     "results only (dependency, secret and dangerous-config hygiene plus static indicators). " +
     `The free scan also graded ${scorecard.gradedModules.filter((m) => m !== "M1").join(", ")} and produced indicators for ` +
-    `${scorecard.dimensions.filter((d) => d.status === "indicator-only").map((d) => d.module).join(", ")}; ` +
+    `${scorecard.dimensions.filter((d) => d.status === "indicator-only").map((d) => d.module).join(", ")}` +
+    // The risk band is a rating, not an indicator: naming it separately keeps the export's own scope
+    // note from under-reporting what the scan actually established about the target's data surface.
+    `${scorecard.dimensions
+      .filter((d) => d.status === "risk-band")
+      .map((d) => `, plus a ${d.band} data-exposure rating for ${d.module}`)
+      .join("")}; ` +
     "those results are in the report (`--json` / terminal output), NOT in this SARIF file. " +
     `${scorecard.unassessedModules.join(", ")} were not run at all. ` +
     "Absence of a result here is not evidence of absence of a problem. " +
@@ -115,16 +121,25 @@ function readSchemaSql(dir: string): string {
 // M10's source-side inventory: which tables hold classified PII/PHI/PCI. SQL migrations first, then
 // a schema.prisma — a Prisma app has no supabase/migrations at all, and reading only the first would
 // report "no schema" on a target whose schema is right there (the #757 detection-gating rule).
-function classifySchema(dir: string): { tables: number; columns: number } | { gap: string } {
+type PiiDataMap = Record<string, { severity: string; categories: string[]; columns: unknown[] }>;
+
+// The classifier's own per-table verdict, reshaped for the scorecard's risk band. Reused rather than
+// recomputed: tools/pii-classify.mjs already derives Low/Medium/High/Critical per table from the
+// source classification, and a second sensitivity scale here could disagree with M10's own findings.
+function tableBands(dataMap: PiiDataMap): PiiTableBand[] {
+  return Object.entries(dataMap).map(([table, e]) => ({ table, severity: e.severity, categories: e.categories, columns: e.columns.length }));
+}
+
+function classifySchema(dir: string): { tables: number; columns: number; tableBands: PiiTableBand[] } | { gap: string } {
   const sql = readSchemaSql(dir);
   if (sql.trim()) {
     const { dataMap, columns } = classifyMigrationSql(sql);
-    return { tables: Object.keys(dataMap).length, columns: columns.length };
+    return { tables: Object.keys(dataMap).length, columns: columns.length, tableBands: tableBands(dataMap as PiiDataMap) };
   }
   const prismaSchema = join(dir, "prisma", "schema.prisma");
   if (existsSync(prismaSchema)) {
     const { dataMap, columns } = classifyPrismaSchema(readFileSync(prismaSchema, "utf8"));
-    return { tables: Object.keys(dataMap).length, columns: columns.length };
+    return { tables: Object.keys(dataMap).length, columns: columns.length, tableBands: tableBands(dataMap as PiiDataMap) };
   }
   return { gap: "No SQL migrations under supabase/migrations and no prisma/schema.prisma were found, so there was no schema to classify." };
 }
@@ -141,11 +156,11 @@ function declaresTestScript(dir: string): boolean {
   }
 }
 
-function measureDuplication(dir: string, sourceFileCount: number): Pick<ScorecardInput, "duplication" | "duplicationGap"> {
+function measureDuplication(dir: string, sourceFileCount: number): Pick<ScorecardInput, "duplication" | "duplicationGap" | "duplicationFindings"> {
   try {
     const report = runJscpd(dir, { timeoutMs: JSCPD_TIMEOUT_MS, sourceFileCount: () => sourceFileCount });
     const { percentage, duplicatedLines, totalLines } = duplicationSummary(report);
-    return { duplication: { percentage, duplicatedLines, totalLines } };
+    return { duplication: { percentage, duplicatedLines, totalLines }, duplicationFindings: jscpdToFindings(report) };
   } catch (err) {
     // Same three shapes src/cli/quality-scan.ts distinguishes: our own SIGKILL, a missing binary,
     // and anything else. Every one becomes a stated reason on the row — never a silent clean 0%.
@@ -180,6 +195,36 @@ function wrap(text: string, indent: string): string[] {
 // 2026-07-12 correction made visible — every module M1–M10 gets a row, so the fact that most of them
 // were not run is stated in the artifact a prospect actually reads, not only inside --sarif-out.
 // buildHealthScorecard guarantees the ten rows; this function must never filter them.
+// The DISCLOSED ROLLUP (operator ruling 2026-07-28 on #1305): at most five examples per dimension,
+// duplicates collapsed to one row plus a count. Every number a reader could mistake for a total is
+// printed as a ratio — "showing 3 of 12 distinct shapes (41 findings in total)" — because a capped
+// list that reads as complete is the silent-omission shape CLAUDE.md ranks worse than a wrong status.
+// The grade is computed upstream on the full set; nothing here feeds back into it.
+function renderEvidence(d: HealthDimension): string[] {
+  const e = d.evidence;
+  if (!e) return [];
+  const unit = d.status === "risk-band" ? "table" : "shape";
+  if (e.totalFindings === 0) return [`         Examples: none — this dimension produced no findings.`];
+  const header = e.capped
+    ? `Examples — showing ${e.examples.length} of ${e.totalShapes} distinct ${unit}s (${e.totalFindings} in total):`
+    : `Examples — all ${e.totalShapes} ${unit}${e.totalShapes === 1 ? "" : "s"} found (${e.totalFindings} in total):`;
+  const lines = [`         ${header}`];
+  for (const ex of e.examples) {
+    // Always print the count, including "1 time": a collapsed row with no count reads as singular,
+    // leaving "one occurrence" and "one shown of twenty-three" indistinguishable to a reader.
+    lines.push(`           • ${ex.shape} — ${ex.location}  (appears ${ex.occurrences} time${ex.occurrences === 1 ? "" : "s"})`);
+  }
+  if (e.capped) {
+    lines.push(
+      ...wrap(
+        `… and ${e.hiddenShapes} further ${unit}${e.hiddenShapes === 1 ? "" : "s"} (${e.hiddenFindings} more) are NOT listed here — every one of them, with all its locations, is in the paid report.`,
+        "           ",
+      ),
+    );
+  }
+  return lines;
+}
+
 function renderScorecard(s: HealthScorecard): string[] {
   const lines: string[] = [];
   lines.push(`  Harvey Quick Scan — Codebase Health ${s.grade}  (${s.score}/100)`);
@@ -192,15 +237,20 @@ function renderScorecard(s: HealthScorecard): string[] {
     const head =
       d.status === "graded"
         ? `${d.grade} (${d.score}/100)`
-        : d.status === "indicator-only"
-          ? "indicators only — not graded"
-          : "NOT ASSESSED by this scan";
+        : d.status === "risk-band"
+          ? `${d.band} data-exposure risk (not a letter grade)`
+          : d.status === "indicator-only"
+            ? "indicators only — not graded"
+            : "NOT ASSESSED by this scan";
     lines.push(`    ${d.module.padEnd(4)} ${d.label} — ${head}`);
     if (d.measure) lines.push(`         ${d.measure}`);
+    if (d.bandDerivation) lines.push(...wrap(`How this band was set: ${d.bandDerivation}`, "         "));
     if (d.reason) lines.push(...wrap(`Why: ${d.reason}`, "         "));
     if (d.needs) lines.push(`         Answered by: ${d.needs}`);
     if (d.notAssessedRows) lines.push(`         (${d.notAssessedRows} coverage row(s) inside this dimension state what it could not read — see --json)`);
     lines.push(...wrap(d.scope, "         "));
+    if (d.bandCaveat) lines.push(...wrap(d.bandCaveat, "         "));
+    if (d.evidence) lines.push(...renderEvidence(d));
     lines.push("");
   }
   lines.push(...wrap(`How the grade was composed: ${s.composition}`, "  "));
@@ -388,7 +438,7 @@ async function main(): Promise<void> {
   const sources = loadSources(absDir);
   const pii = classifySchema(absDir);
   const scorecard = buildHealthScorecard({
-    m1: { grade: report.grade, score: report.score, gradedCount: report.total, indicatorCount: report.indicators.length },
+    m1: { grade: report.grade, score: report.score, gradedCount: report.total, indicatorCount: report.indicators.length, findings: selectGradedFindings(rawFindings) },
     sources,
     kloc: size.loc / 1000,
     framework: detectTargetFramework(absDir),
