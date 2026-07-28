@@ -144,16 +144,18 @@ describe("scoreExternalBaseline", () => {
 
   it("ignores Info findings, so the demoted exhaustive-deps class can't re-enter the count", () => {
     // #230 demoted exhaustive-deps to Info rather than deleting it. If a future change promotes
-    // it back to a graded severity, proposit's M7 jumps 42 -> 72 and this scorer must catch it.
+    // it back to a graded severity, proposit's M7 jumps 36 -> 71 and this scorer must catch it.
+    // #1475 gave the class a second Info member on the same principle: state sprawl still emits
+    // and still ships, but its render-count claim was false on React >= 18, so it is Info here too.
     const rows = scoreExternalBaseline(target("mvp-boilerplate"), [
       finding("M7 — Unbounded select"),
-      finding("M7 — State sprawl"),
+      finding("M7 — State sprawl", "Info"),
       finding("M7 — Client fetch in useEffect"),
       finding("M7 — Client fetch in useEffect"),
       finding("M7 — Nested-loop join"),
       finding("M7 — Missing hook dependencies", "Info"),
     ]);
-    expect(rows.find((r) => r.module === "M7")).toMatchObject({ pass: true, actual: 5 });
+    expect(rows.find((r) => r.module === "M7")).toMatchObject({ pass: true, actual: 4 });
   });
 
   it("keeps the #360 diverged-clone pass out of M4's jscpd baseline — shared 'M4 —' prefix, separate modules", () => {

@@ -1,0 +1,6 @@
+// A request entry point, so the reachability question has something to be answered FROM.
+import { buildReport } from "../services/reports.service";
+
+export async function GET() {
+  return Response.json(await buildReport());
+}

@@ -45,7 +45,13 @@ export const isGeneratedSource = (name: string, text: string): boolean => {
 // tsconfig/jsconfig are loaded so the M9 App Router pass can resolve `paths` aliases
 // (`@/…` imports) — without the file that defines what `@/` maps to, aliased imports are
 // invisible to the server→client-leak and server-only-guard cross-file resolution (#380).
-export const CONFIG_FILE = /^(next\.config\.(js|mjs|cjs|ts)|\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs)|package\.json|tsconfig\.json|jsconfig\.json)$/;
+// #1479: the VARIANT names (`tsconfig.base.json`, `tsconfig.app.json`) are matched too. An Nx
+// monorepo puts its whole `paths` map in tsconfig.base.json and ships no plain tsconfig.json at
+// the root, so ghostfolio's `@ghostfolio/*` aliases resolved to nothing and collectPathAliases
+// fell back to its bare `@/` default — leaving every cross-file import graph on such a repo
+// (M9's leak/guard resolution, #1344's request-reachability gate, and #1479's) disconnected,
+// silently, with no row saying so. MEASURED 2026-07-28 on ghostfolio (pinned 7bd6ca6d).
+export const CONFIG_FILE = /^(next\.config\.(js|mjs|cjs|ts)|\.babelrc|\.babelrc\.json|babel\.config\.(js|json|mjs|cjs)|package\.json|tsconfig(\.[\w.-]+)?\.json|jsconfig(\.[\w.-]+)?\.json)$/;
 export const EXCLUDED_DIR = /^(node_modules|\.next|\.git|dist|build|coverage|out|\.turbo|\.vercel|\.svelte-kit|\.nuxt|\.output)$/;
 
 // Test/story/fixture files — excluded from the product-code detectors (perf, boundary, and

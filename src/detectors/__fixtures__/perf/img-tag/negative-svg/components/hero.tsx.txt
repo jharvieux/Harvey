@@ -1,0 +1,4 @@
+// SCOPE CONTROL — a raster <img> in the same fixture dir that MUST still fire.
+export function Hero() {
+  return <img src="/hero-photo.png" alt="Hero" />;
+}

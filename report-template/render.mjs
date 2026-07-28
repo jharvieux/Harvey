@@ -284,7 +284,18 @@ const MODULE_LIMITATIONS = {
   // every graded row then read against its own source; method and per-class splits are recorded
   // in src/scan/external-corpus.ts's M7 notes. Re-measure and re-date this sentence whenever an
   // M7 code-tier detector or guard changes.
-  M7: { name: "Performance", note: "Code-tier findings are AST pattern matches and a measured share do not survive review: read against source on six pinned open-source codebases (2026-07-28), 47 of 65 graded findings held — 72%; a 40-row random sample drawn from 858 graded findings on four larger codebases held 78%. Treat the code-tier list as roughly three-in-four, not as a verified defect list. The misses concentrate in the low-severity classes, and per-class precision is NOT stated for classes with too few field instances to measure — an unquoted class is unmeasured, not clean. Info-severity hook-dependency notes are excluded from that count and are not graded. DB advisor findings reflect the platform's own heuristics, not independently re-verified. Core Web Vitals/Lighthouse figures are a single LAB run, not field/real-user data." },
+  //
+  // RE-MEASURED 2026-07-28 after #1475-#1480, which fixed six of the false-positive families that
+  // 72% was made of. Same six clones, same pins, same rubric, one variable (that change set): 15
+  // of the 18 rows the triage graded false no longer emit, and a pristine-main control worktree
+  // reprints the original 65 exactly. The number below is therefore a BEFORE/AFTER on identical
+  // inputs, not a re-grading — deliberately, because re-scoring the surviving rows under a fresh
+  // reading would make the delta unreadable. Two caveats travel with it and belong in the next
+  // re-measure, not in this sentence: the residual is a SMALL denominator (50 rows), and the
+  // nested-loop-join class is the one place this executor's own reading disagreed with the
+  // recorded triage in the FP direction (#1488) — so read 96% as "the six named families are
+  // fixed", never as the scanner's settled precision.
+  M7: { name: "Performance", note: "Code-tier findings are AST pattern matches and a share of them do not survive review. Read against source on six pinned open-source codebases: 47 of 65 graded findings held (2026-07-28, 72%); after six named false-positive families were fixed, 48 of the 50 findings that still emit hold — but on a residual of only 50 rows, and one class (nested-loop join) has a recorded open disagreement about its true rate. A 40-row random sample drawn from 858 graded findings on four larger codebases held 78% before those fixes and has not been re-sampled since. Treat the code-tier list as a strong lead list that still needs reading, not as a verified defect list. Per-class precision is NOT stated for classes with too few field instances to measure — an unquoted class is unmeasured, not clean. Info-severity notes (hook dependencies, and since 2026-07-28 the state-sprawl maintainability observation) are excluded from these counts and are not graded. DB advisor findings reflect the platform's own heuristics, not independently re-verified. Core Web Vitals/Lighthouse figures are a single LAB run, not field/real-user data." },
   M8: { name: "Test quality", note: "A mutation score is only as good as its stated scope — a scoped run is not a whole-repo coverage claim (see Test quality below when present)." },
   M9: { name: "App Router boundary/rendering", note: "AST pattern coverage of App Router conventions, not full framework-semantics execution." },
   M10: { name: "Data classification (PII/PHI/PCI)", note: "Classification is derived from column/schema naming and structure. A JSON/JSONB container is flagged for review, not asserted, and its actual contents are not read." },

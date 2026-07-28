@@ -1,0 +1,6 @@
+"use client";
+// A client entry, so "no client entry point reaches the service" is a measured answer and not
+// an unanswerable one.
+export function Dashboard() {
+  return <div>dashboard</div>;
+}

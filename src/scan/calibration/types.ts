@@ -107,5 +107,12 @@ export interface HeuristicEntry {
   // scanned and correctly cleared — CLAUDE.md's rule (3), which until now had no way to be
   // enforced here, only followed by hand.
   scopeControl?: string;
+  // #1475 — POSITIVES ONLY. The Severity every matched finding must carry. Mirrors CorpusEntry's
+  // field of the same name and exists for the same reason: "it fired" is not "it was rated right",
+  // and a decision expressed as a severity band has no other way to be pinned here. The state
+  // sprawl pair is the first user — the class is Info on React >= 18 (the render-count cost
+  // automatic batching removed) and counted Low below it, and without this the two fixtures score
+  // identically while the decision silently regresses.
+  expectedSeverity?: Severity;
   note: string;
 }

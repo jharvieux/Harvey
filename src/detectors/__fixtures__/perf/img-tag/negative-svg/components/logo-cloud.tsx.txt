@@ -1,0 +1,11 @@
+// Every <img> here is an SVG. No image pipeline re-encodes an SVG (next/image needs
+// dangerouslyAllowSVG; vite-imagetools emits nothing), so the bytes/format claim does not hold.
+export default function LogoCloud() {
+  return (
+    <div>
+      <img src="/vercel.svg" alt="Vercel" className="h-6" />
+      <img src="/nextjs.svg" alt="Next.js" className="h-6" />
+      <img src={"/carbon-mark-light.svg"} alt="Carbon" className="h-6" />
+    </div>
+  );
+}
