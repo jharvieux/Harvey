@@ -80,9 +80,11 @@ exercise `detectOrm` routing, the Prisma tenant-scope/BOLA detector (#760), M7 F
   Prisma side; the current corpus's largest real suite is boxyhq's 8. **Measured:** 305 M8-intent
   findings (100× the corpus's previous maximum) and 40 M9 findings — re-measured 2026-07-24 after
   #964's SSR precision fix dropped 12 FPs from the original 52 — the largest App Router boundary
-  surface pinned. The *mutation* tier is still not scoreable on it — `npm install` on a pnpm workspace
-  resolves only root packages, so `corpus-m8.yml` has no runner to drive; recorded not-run with that
-  reason.
+  surface pinned. The *mutation* tier scores for real since #1268 (2026-07-28): `corpus-m8.yml` now
+  installs with the target's own lockfile-implied package manager, and inbox-zero carries a MEASURED
+  76.00% baseline over `utils/similarity-score.ts` (80 killed + 15 timeout of 125 valid mutants,
+  reproduced byte-identically across two runs). The old blocker — "`npm install` on a pnpm workspace
+  resolves only root packages" — no longer holds.
 - `calcom/cal.com` **was renamed to `calcom/cal.diy`** — fix the URL anywhere it is still stored.
 
 ## Bucket C — Calibration and ground truth

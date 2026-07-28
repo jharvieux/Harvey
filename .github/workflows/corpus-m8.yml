@@ -2,7 +2,8 @@
 #
 # WHY THIS IS A SEPARATE WORKFLOW FROM corpus-drift.yml, which scores every other module of the same
 # targets: cost. corpus-drift's job is ~2 minutes because it clones and reads source. This one runs
-# `npm install` per target and then re-runs the target's whole test suite once per mutant — minutes
+# a per-target install (the target's own lockfile-implied package manager, since #1268) and then
+# re-runs the target's whole test suite once per mutant — minutes
 # per target, and the timeout has to be sized for the suite, not the scan. Folding it into the
 # weekly drift job would make the fast check as slow as the slow one, and a timeout bump there would
 # be paying M8's cost on every module.
@@ -52,8 +53,9 @@ jobs:
   mutation:
     name: install target deps + score M8 mutation baselines
     runs-on: ubuntu-latest
-    # proposit/boxyhq: ~1s of Stryker each (21/35 mutants) on top of two npm installs of
-    # ~1000-1700 packages. inbox-zero/rallly (#1268): pnpm workspace installs (~35-70s each,
+    # proposit/boxyhq: ~1s of Stryker each (21/35 mutants) on top of two non-workspace installs of
+    # ~1000-1700 packages — each with its own lockfile-implied package manager since #1268, which
+    # for proposit is pnpm, not npm. inbox-zero/rallly (#1268): pnpm workspace installs (~35-70s each,
     # MEASURED) plus a real Stryker run each (~100s for inbox-zero's 125 mutants, ~10s for rallly's
     # 30) — still low single-digit minutes total. The headroom is for the installs and for suites
     # that grow, not for the current mutant counts — a Stryker run that somehow hangs should die

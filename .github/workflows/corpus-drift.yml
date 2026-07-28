@@ -59,7 +59,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-    # 30m still holds with #251's six `npm install`s added: measured locally they total ~1m
+    # 30m still holds with #251's six per-target installs added: measured locally they total ~1m
     # (largest: proposit's 1010 packages in 33s), and CI's cold npm cache is the slack this covers.
     # M8's mutation runs are what genuinely didn't fit here — those are corpus-m8.yml.
     timeout-minutes: 30
@@ -104,7 +104,8 @@ jobs:
             | tar -xz -C "$HOME/.local/bin" gitleaks
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      # --install (#251): `npm install` in each clone before the scanners, which is what lets knip
+      # --install (#251): installs each clone's own dependency tree before the scanners — with the
+      # package manager that clone's lockfile implies, since #1268 — which is what lets knip
       # resolve each target's config (CLAUDE.md's M5 prereq) — without it M5-knip scores on 2 of 6
       # targets instead of 4. It is what pushes this job past its old ~2m: six real installs.
       - name: Score the corpus against its baselines
