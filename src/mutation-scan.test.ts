@@ -33,6 +33,7 @@ import {
   testQualityFromArtifact,
   toReportRows,
   TS7_TSCONFIG_BYPASS_FILENAME,
+  unverifiableScopeModuleRecord,
   vacuousTestFiles,
   vacuousTestFindings,
   verifyMutationScope,
@@ -647,6 +648,17 @@ describe("detectTestRunner / scaffoldStrykerConfig (#513)", () => {
     expect(cfg.jsonReporter).toEqual({ fileName: "reports/mutation/mutation.json" });
   });
 
+  // #1284: Stryker's default plugin discovery (`plugins: ["@stryker-mutator/*"]`) globs relative to
+  // wherever @stryker-mutator/core itself resolved from — MEASURED against the installed 9.6.1
+  // source, that does not reliably reach a sibling runner package under pnpm's content-addressable
+  // node_modules layout, even though the plugin is genuinely installed and resolves fine as a bare
+  // import. Naming it explicitly skips the glob (and the layout it depends on) entirely.
+  it("names the runner plugin explicitly rather than relying on Stryker's default glob discovery", () => {
+    expect(scaffoldStrykerConfig("jest", ["src"]).plugins).toEqual(["@stryker-mutator/jest-runner"]);
+    expect(scaffoldStrykerConfig("vitest", []).plugins).toEqual(["@stryker-mutator/vitest-runner"]);
+    expect(scaffoldStrykerConfig("mocha", ["src"]).plugins).toEqual(["@stryker-mutator/mocha-runner"]);
+  });
+
   it("builds mutate globs only from source dirs that exist, excluding tests/types/node_modules", () => {
     const cfg = scaffoldStrykerConfig("vitest", ["src", "app"]);
     expect(cfg.mutate).toEqual([
@@ -755,6 +767,22 @@ describe("verifyMutationScope (#504)", () => {
     expect(scope.note).toContain("!(*.spec)");
   });
 
+  // #1309: the branch #504's own tests skipped — verified: false is neither a proven full run nor
+  // a proven subset, so it needs its OWN moduleRecord (the caller in src/cli/mutation-scan.ts wires
+  // this in whenever scope.verified is false), never silence that lets a full `ran` stand.
+  it("unverifiableScopeModuleRecord is partial and carries the scope's own unverifiable note", () => {
+    const noGlobs = verifyMutationScope(["src/a.ts"], undefined, ["src/a.ts", "src/b.ts"]);
+    expect(noGlobs).toMatchObject({ verified: false, scoped: false });
+    const record = unverifiableScopeModuleRecord(noGlobs);
+    expect(record.status).toBe("partial");
+    expect(record.note).toMatch(/#1309/);
+    expect(record.note).toMatch(/not statically readable/);
+
+    const badGlob = verifyMutationScope(["src/auth.ts"], ["src/**/!(*.spec).ts"], SOURCES);
+    const record2 = unverifiableScopeModuleRecord(badGlob);
+    expect(record2.note).toContain("!(*.spec)");
+  });
+
   it("scopedRunModuleRecord is partial and says a subset is never the module's measurement", () => {
     const scope = verifyMutationScope(["src/auth.ts"], GLOBS, SOURCES);
     const record = scopedRunModuleRecord(scope);
@@ -819,6 +847,20 @@ describe("detectDryRunFailure / dry-run-failure verdict (#503)", () => {
 
   it("does not fire on ordinary Stryker output (break-threshold exit, score table)", () => {
     expect(detectDryRunFailure("Final mutation score of 42.00 is lower than break threshold").failed).toBe(false);
+  });
+
+  // #1284: MEASURED against the installed Stryker 9.6.1 source
+  // (@stryker-mutator/core/dist/src/process/3-dry-run-executor.js's validateResultCompleted) — a
+  // dry run that ERRORS or TIMES OUT (DryRunStatus.Error/Timeout, as opposed to running tests that
+  // then fail) throws the plain "Something went wrong in the initial test run", not either phrase
+  // the regex previously recognized. Before this fix that phrase went unmatched, and the CLI's
+  // "report not found" fallback wrote NO artifact at all — a real Stryker 9.6.1 run against a
+  // TypeScript-7 target hit exactly this in #773's own verification.
+  it("recognizes Stryker 9.6.1's actual 'something went wrong' phrasing for an errored/timed-out dry run", () => {
+    const STRYKER_961_ERROR = ["12:03:44 (5678) ERROR StrykerJS One or more tests resulted in an error:", "\tTypeError: Cannot read properties of undefined", "12:03:44 (5678) ERROR StrykerJS Something went wrong in the initial test run"].join("\n");
+    const verdict = detectDryRunFailure(STRYKER_961_ERROR);
+    expect(verdict.failed).toBe(true);
+    expect(verdict.detail).toContain("Something went wrong in the initial test run");
   });
 
   it("emits an M8-03 finding naming the applied env and the failing test", () => {

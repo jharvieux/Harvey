@@ -632,6 +632,34 @@ describe("probes derive status from evidence, not the exit code (#350)", () => {
     expect(m8?.reason).toMatch(/263 file/);
   });
 
+  // #1309: the branch #504's own tests skipped — verifyMutationScope returning `verified: false`
+  // (a non-JSON Stryker config, or an unsupported glob: neither a proven full run nor a proven
+  // subset) used to carry NO moduleRecord at all (scopedRunModuleRecord only fires on `scoped:
+  // true`), so mutationVerdict fell through to `summary` present → `ran` — a full pass banked over
+  // a scope nobody verified. src/cli/mutation-scan.ts now emits unverifiableScopeModuleRecord on
+  // that branch too.
+  it("M8 — an unverifiable mutate scope (verified:false, scoped:false) scores partial, never ran (#1309)", () => {
+    const unverifiableRun = {
+      exec: (_c: string, argv: string[]) =>
+        argv.includes("mutation-scan")
+          ? {
+              ok: true,
+              output: JSON.stringify({
+                summary: { overall: { mutationScore: 88 } },
+                reportRows: [],
+                scope: { mutatedFileCount: 1, verified: false, scoped: false, note: "configured mutate scope not statically readable (no JSON Stryker config with a mutate array) — full-scope coverage is unverified, treat the score as covering only the listed files" },
+                moduleRecord: { status: "partial", note: "Mutate scope could not be verified — configured mutate scope not statically readable (no JSON Stryker config with a mutate array) — full-scope coverage is unverified, treat the score as covering only the listed files. The run is recorded partial rather than a full measurement (#1309): the ledger must not read a full 'ran' over a scope nobody confirmed covers the target's configured mutate set." },
+              }),
+            }
+          : cleanRun(argv),
+    };
+    const m8 = status(AUDIT_RUNNERS, unverifiableRun, "M8");
+    expect(m8?.status).not.toBe("ran");
+    expect(m8?.status).toBe("partial");
+    expect(m8?.reason).toMatch(/#1309/);
+    expect(m8?.reason).toMatch(/could not be verified/);
+  });
+
   // #503: a failed Stryker dry run (the target's own suite failing unmutated) emits the same
   // machine-readable moduleRecord shape — the probe must surface its distinct reason, not a
   // generic requires-live-run and never a silent zero.
