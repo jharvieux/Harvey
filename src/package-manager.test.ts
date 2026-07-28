@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { detectPackageManager, installAllCommand, installExtraCommand, withRestoredManifest } from "./package-manager.js";
+import { detectPackageManager, installAllCommand, installExtraCommand, npmOnlyFlags, withRestoredManifest } from "./package-manager.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -67,6 +67,14 @@ describe("installAllCommand / installExtraCommand (#1284/#1268)", () => {
 
   it("installAllCommand forwards caller flags (e.g. --frozen-lockfile) unchanged", () => {
     expect(installAllCommand("pnpm", ["--frozen-lockfile"]).args).toEqual(["install", "--frozen-lockfile"]);
+  });
+});
+
+describe("npmOnlyFlags (#1268 — CI run 30362638379)", () => {
+  it("reaches npm and is withheld from pnpm/yarn, which exit 1 on an unknown option", () => {
+    expect(npmOnlyFlags("npm", ["--legacy-peer-deps"])).toEqual(["--legacy-peer-deps"]);
+    expect(npmOnlyFlags("pnpm", ["--legacy-peer-deps"])).toEqual([]);
+    expect(npmOnlyFlags("yarn", ["--legacy-peer-deps"])).toEqual([]);
   });
 });
 

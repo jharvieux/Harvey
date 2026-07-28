@@ -21,8 +21,11 @@ export interface M8CorpusConfig {
   // manifest/lockfile (npm's --no-save natively, pnpm/yarn via src/package-manager.ts's
   // withRestoredManifest — #1268).
   strykerPackages: string[];
-  // Package-manager install flags the target's own dep graph requires. Measured, not defensive —
-  // npm-specific flags (e.g. --legacy-peer-deps) only apply when the target resolves via npm.
+  // NPM install flags the target's own dep graph requires. Measured, not defensive. They reach the
+  // install ONLY when the target resolves via npm — src/package-manager.ts's npmOnlyFlags withholds
+  // them otherwise, because pnpm 11 and yarn exit 1 on an unrecognised option rather than ignoring
+  // it (CI run 30362638379: proposit, a pnpm-lockfile repo, failed both installs on
+  // `Unknown option: 'legacy-peer-deps'`).
   installFlags: string[];
   // Written to <target[/appPath]>/stryker.conf.json by the job. JSON (not .mjs) so mutation-scan's
   // warnIfNotPerTest can actually read it back.
@@ -36,13 +39,21 @@ export interface M8CorpusConfig {
 
 export const M8_CORPUS_CONFIGS: Record<string, M8CorpusConfig> = {
   proposit: {
-    // react 19 vs @ai-sdk/react's peer range: npm refuses the install outright without this.
+    // react 19 vs @ai-sdk/react's peer range: npm refuses the install outright without this. Kept
+    // even though this repo's own lockfile is pnpm's (so #1284 now resolves it to pnpm, which does
+    // not enforce peer ranges and never sees the flag) — the flag records what npm needs here, and
+    // an upstream switch back to a package-lock would need it again.
     installFlags: ["--legacy-peer-deps"],
     strykerPackages: ["@stryker-mutator/core@9", "@stryker-mutator/vitest-runner@9"],
     config: {
       testRunner: "vitest",
       coverageAnalysis: "perTest",
       reporters: ["json", "clear-text"],
+      // MEASURED 2026-07-28 on the pinned clone: Stryker's default plugin discovery is a
+      // `@stryker-mutator/*` glob over a FLAT node_modules, so it resolved the runner under npm and
+      // failed to under the pnpm install #1284 now routes this target to (Stryker's own error names
+      // zero loaded TestRunner plugins). inbox-zero/rallly name it for the same reason.
+      plugins: ["@stryker-mutator/vitest-runner"],
       // lib/pdf/launch.ts is this repo's ONLY file with real test coverage (its one spec is
       // lib/pdf/__tests__/launch.test.ts).
       mutate: ["lib/pdf/launch.ts"],

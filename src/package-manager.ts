@@ -42,6 +42,17 @@ export function installExtraCommand(pm: PackageManager, packages: readonly strin
   return { bin: "npm", args: ["install", "--no-save", "--no-audit", "--no-fund", "-D", ...packages] };
 }
 
+// Flags a caller recorded against npm — `--legacy-peer-deps` and friends, which exist because npm
+// REFUSES an install on a peer-range conflict. MEASURED (CI run 30362638379, 2026-07-28): pnpm 11
+// and yarn do not ignore an unknown option, they exit 1 on it ("Unknown option: 'legacy-peer-deps'"),
+// so detecting the right package manager and then handing it another one's command line provisions
+// nothing at all — worse than the npm-everywhere default it replaced. Dropping them is the correct
+// resolution rather than a translation: neither pnpm nor yarn has npm's peer-conflict error class
+// to suppress in the first place.
+export function npmOnlyFlags(pm: PackageManager, flags: readonly string[]): string[] {
+  return pm === "npm" ? [...flags] : [];
+}
+
 // The lockfile (if any) `installExtraCommand` writes to for a given package manager — used by
 // withRestoredManifest to know which second file (besides package.json) to snapshot/restore.
 function lockfileFor(pm: PackageManager): string | undefined {

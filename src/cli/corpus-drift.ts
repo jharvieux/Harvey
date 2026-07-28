@@ -43,7 +43,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Finding } from "../findings.js";
-import { detectPackageManager, installAllCommand, installExtraCommand, withRestoredManifest } from "../package-manager.js";
+import { detectPackageManager, installAllCommand, installExtraCommand, npmOnlyFlags, withRestoredManifest } from "../package-manager.js";
 import { buildQuickScanReport } from "../quick-scan.js";
 import { cloneAtPin } from "../scan/corpus-clone.js";
 import { runMechanicalScan } from "../scan/mechanical.js";
@@ -126,7 +126,7 @@ function disableGlobalVirtualStoreIfSet(dir: string): void {
 function installTargetDeps(dir: string, flags: readonly string[]): void {
   const pm = detectPackageManager(dir);
   if (pm === "pnpm") disableGlobalVirtualStoreIfSet(dir);
-  const { bin, args } = installAllCommand(pm, flags);
+  const { bin, args } = installAllCommand(pm, npmOnlyFlags(pm, flags));
   try {
     execFileSync(bin, args, { cwd: dir, stdio: ["ignore", "ignore", "inherit"], env: { ...process.env, CI: "true" } });
   } catch {
@@ -175,7 +175,7 @@ function runMutationScan(dir: string, cfg: M8CorpusConfig): { mutationScore: num
   // package.json, which this does not restore — a no-op gap here since `dir` is a disposable temp
   // clone discarded after this run, not the client's real repo (see mutation-scan.ts's --install
   // rung, which DOES need the full restore and runs at a single directory, never a sub-app).
-  withRestoredManifest(dir, pm, () => execFileSync(bin, [...args, ...cfg.installFlags], { cwd: appDir, stdio: ["ignore", "ignore", "inherit"] }));
+  withRestoredManifest(dir, pm, () => execFileSync(bin, [...args, ...npmOnlyFlags(pm, cfg.installFlags)], { cwd: appDir, stdio: ["ignore", "ignore", "inherit"] }));
   writeFileSync(join(appDir, "stryker.conf.json"), `${JSON.stringify(cfg.config, null, 2)}\n`);
 
   const out = join(mkdtempSync(join(tmpdir(), "harvey-m8-")), "m8.json");
