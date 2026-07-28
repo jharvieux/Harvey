@@ -21,8 +21,9 @@
 // regulated" route into Enterprise is an operator judgement this tool does not make, and the report
 // says so rather than letting a small-LOC regulated app read as a settled Small quote.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { JSCPD_IGNORE_GLOBS } from "../quality-scan.js";
 
 export type SizeBand = "small" | "medium" | "large" | "enterprise";
@@ -83,11 +84,7 @@ export function measureCodebaseSize(root: string): CodebaseSize {
   // near the END of quick-scan, so the throw discarded a completed M1 pass: 118–235 s of semgrep,
   // secrets and dependency work, and every finding it produced, on 3 of 15 wild repos.
   const walk = (dir: string, excluded: boolean): void => {
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
-      const entry = e.name;
-      const full = join(dir, entry);
-      if (e.isSymbolicLink() && !existsSync(full)) continue;
-      const isDir = e.isDirectory() || (e.isSymbolicLink() && statSync(full).isDirectory());
+    for (const { name: entry, path: full, isDirectory: isDir } of readEntriesSafe(dir).entries) {
       if (isDir && BUILD_OUTPUT_DIRS.has(entry)) continue;
       const rel = relative(root, full).split(sep).join("/");
       const skip = excluded || EXCLUDED.some((re) => re.test(rel));

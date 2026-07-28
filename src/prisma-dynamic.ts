@@ -7,8 +7,9 @@
 // injected PrismaStandUpRunner seam (src/pentest/prisma-standup.ts) so the decision logic runs
 // offline. Routing between this and the Supabase path is by detectOrm (src/scan/framework-detect.ts).
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { readNamesSafe } from "./fs-walk.js";
 import { buildPassArtifact, writePassArtifact } from "./audit-pass-artifact.js";
 import type { Coverage, DynamicValidationResult, StandUpResult } from "./dynamic-validate.js";
 import type { Finding } from "./findings.js";
@@ -31,7 +32,7 @@ const PRISMA_SCHEMA_CANDIDATES = ["prisma/schema.prisma", "schema.prisma"];
 export function hasCommittedMigrations(migrationsDir: string): boolean {
   let children: string[];
   try {
-    children = readdirSync(migrationsDir);
+    children = readNamesSafe(migrationsDir);
   } catch {
     return false;
   }

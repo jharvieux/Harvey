@@ -2,8 +2,9 @@
 // returns SourceInput[] for the detector modules. Extracted from src/cli/static-detect.ts
 // when the M6 free-tier indicator pass (#267) made runMechanicalScan a second consumer.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import type { SourceInput } from "./common.js";
 
 // #1065: plain .js/.cjs (and .mts/.cts) were absent here until 2026-07-25, so every
@@ -55,10 +56,8 @@ export const NON_PRODUCT = /\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)(__tests__|__mock
 export function loadSources(root: string): SourceInput[] {
   const files: SourceInput[] = [];
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      const stat = statSync(full);
-      if (stat.isDirectory()) {
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      if (isDirectory) {
         if (!EXCLUDED_DIR.test(entry)) walk(full);
       } else if (SOURCE_FILE.test(entry) || CONFIG_FILE.test(entry)) {
         const path = relative(root, full).split(sep).join("/");

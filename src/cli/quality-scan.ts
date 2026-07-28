@@ -29,9 +29,10 @@
 // M4-99 gap, never a silent under-count.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { divergedCloneFindings, divergedScopeFinding, type SecurityPathFile, wholeRepoDivergedCloneFindings } from "../diverged-clones.js";
 import type { Finding } from "../findings.js";
@@ -74,8 +75,8 @@ const knipBin = join(repoRoot, "node_modules", ".bin", "knip");
 // loud, never a silent degrade.
 function knipPluginNames(): string[] {
   try {
-    return readdirSync(join(repoRoot, "node_modules", "knip", "dist", "plugins"), { withFileTypes: true })
-      .filter((e) => e.isDirectory() && !e.name.startsWith("_"))
+    return readEntriesSafe(join(repoRoot, "node_modules", "knip", "dist", "plugins")).entries
+      .filter((e) => e.isDirectory && !e.name.startsWith("_"))
       .map((e) => e.name);
   } catch {
     return [];
@@ -345,9 +346,9 @@ const SKIP_FILE = /(\.gen\.ts|\.test\.|\.spec\.)|^(database\.types|types_db)\.ts
 
 function securityPathFiles(dir: string, rel = ""): SecurityPathFile[] {
   const files: SecurityPathFile[] = [];
-  for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+  for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
+    if (entry.isDirectory) {
       if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...securityPathFiles(dir, relPath));
     } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       if (touchesSecurityPath(relPath)) {
@@ -367,9 +368,9 @@ function securityPathFiles(dir: string, rel = ""): SecurityPathFile[] {
 // same family once under each taxonomy.
 function allSourceFiles(dir: string, rel = ""): SecurityPathFile[] {
   const files: SecurityPathFile[] = [];
-  for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+  for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
+    if (entry.isDirectory) {
       if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) files.push(...allSourceFiles(dir, relPath));
     } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       files.push({ path: relPath, source: readFileSync(join(dir, relPath), "utf8") });
@@ -384,9 +385,9 @@ function allSourceFiles(dir: string, rel = ""): SecurityPathFile[] {
 // plausibly have scanned.
 function countSourceFiles(dir: string, rel = ""): number {
   let count = 0;
-  for (const entry of readdirSync(join(dir, rel), { withFileTypes: true })) {
+  for (const entry of readEntriesSafe(join(dir, rel)).entries) {
     const relPath = rel ? `${rel}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
+    if (entry.isDirectory) {
       if (!SKIP_DIRS.has(entry.name) && !entry.name.includes("demo")) count += countSourceFiles(dir, relPath);
     } else if (SOURCE_EXT.test(entry.name) && !SKIP_FILE.test(entry.name)) {
       count += 1;
@@ -405,9 +406,9 @@ const GLOB_TALLY_SKIP_DIRS = new Set(["node_modules", "dist", ".next", ".git"]);
 function tallyJscpdIgnoredFiles(dir: string, rel = ""): JscpdGlobMatch[] {
   const counts = new Map<string, { count: number; example?: string }>(JSCPD_DISCLOSED_GLOBS.map((g) => [g, { count: 0 }]));
   const walk = (curRel: string): void => {
-    for (const entry of readdirSync(join(dir, curRel), { withFileTypes: true })) {
+    for (const entry of readEntriesSafe(join(dir, curRel)).entries) {
       const relPath = curRel ? `${curRel}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
+      if (entry.isDirectory) {
         if (!GLOB_TALLY_SKIP_DIRS.has(entry.name)) walk(relPath);
         continue;
       }

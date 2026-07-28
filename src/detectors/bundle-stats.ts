@@ -25,8 +25,9 @@
 // JSON, so the budgets here are independently calibrated on uncompressed bytes and are NOT
 // directly comparable to the gzip-based M7B-01/02 budgets above.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
+import { readNamesSafe, readRecursiveSafe } from "../fs-walk.js";
 import { gzipSync } from "node:zlib";
 import type { Finding } from "../findings.js";
 
@@ -101,7 +102,7 @@ const CHUNK_REF = /"(static\/chunks\/[^"]+\.js)"/g;
 function findClientReferenceManifests(buildDir: string): string[] {
   const appDir = join(buildDir, "server", "app");
   if (!existsSync(appDir)) return [];
-  return readdirSync(appDir, { recursive: true, encoding: "utf8" })
+  return readRecursiveSafe(appDir)
     .filter((f) => f.endsWith(MANIFEST_SUFFIX))
     .map((f) => join(appDir, f));
 }
@@ -500,7 +501,7 @@ export function parseViteBundleStats(distDir: string, options?: ViteBundleOption
   // gap and report total shipped JS rather than pretending the tier is clean.
   const assetsDir = join(distDir, "assets");
   if (!existsSync(assetsDir)) return [];
-  const jsFiles = readdirSync(assetsDir).filter((f) => f.endsWith(".js"));
+  const jsFiles = readNamesSafe(assetsDir).filter((f) => f.endsWith(".js"));
   if (jsFiles.length === 0) return [];
   const totalBytes = jsFiles.reduce((sum, f) => sum + gzipSync(readFileSync(join(assetsDir, f))).length, 0);
   return [

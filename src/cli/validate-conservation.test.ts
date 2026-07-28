@@ -33,9 +33,10 @@
 // fix #1133 applied to run-audit.test.ts, applied here to the same failure mode.
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -68,7 +69,7 @@ function vitalsAvailable(): boolean {
   const plugins = resolve(homedir(), ".claude/plugins");
   if (existsSync(resolve(plugins, "marketplaces/vitals/scripts/vitals_cli.py"))) return true;
   const cache = resolve(plugins, "cache/vitals");
-  return existsSync(cache) && readdirSync(cache).some((v) => existsSync(resolve(cache, v, "vitals/scripts/vitals_cli.py")));
+  return existsSync(cache) && readNamesSafe(cache).some((v) => existsSync(resolve(cache, v, "vitals/scripts/vitals_cli.py")));
 }
 
 // REASON: this end-to-end block cannot run under the CI `verify` job — beyond the mechanical tier it asserts M3's plant, and M3's truck-factor-1 signal comes from the `vitals` plugin, which is a Claude Code plugin rather than a package `pnpm install` brings in

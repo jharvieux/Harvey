@@ -2,8 +2,9 @@
 // cleared benign negative, mirroring the app-router.test.ts fixture discipline (issue #61's
 // rule, enforced here through `pnpm verify` since these detectors run outside runMechanicalScan).
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { readEntriesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { detectPerfCodeFindings, reactCompilerEnabled, type SourceInput } from "./perf-code.js";
@@ -16,9 +17,8 @@ function loadFixtureDir(relDir: string): SourceInput[] {
   const root = join(FIXTURES_ROOT, relDir);
   const files: SourceInput[] = [];
   const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
+    for (const { name: entry, path: full, isDirectory } of readEntriesSafe(dir).entries) {
+      if (isDirectory) {
         walk(full);
       } else if (entry.endsWith(".txt")) {
         const path = relative(root, full).replace(/\.txt$/, "").split(sep).join("/");

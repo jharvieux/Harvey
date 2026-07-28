@@ -1,5 +1,6 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { readNamesSafe } from "../fs-walk.js";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
@@ -63,7 +64,7 @@ function readEnvelope(file: string): Record<string, unknown> {
 }
 
 describe("committed breadth-sweep artifacts are ungraded on their face", () => {
-  const files = readdirSync(ungradedDir).filter((f) => f.endsWith(".json.gz") || f === "INDEX.json");
+  const files = readNamesSafe(ungradedDir).filter((f) => f.endsWith(".json.gz") || f === "INDEX.json");
 
   // A zero-file glob passes every assertion below vacuously — the same shape as a fixture the
   // scanner never read reporting zero findings. Assert the population first.
