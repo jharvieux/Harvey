@@ -10,7 +10,11 @@ enabled = true
 port = 54321
 # Schemas to expose in your API. Tables, views and stored procedures in this schema will get API
 # endpoints. `public` and `graphql_public` schemas are included by default.
-schemas = ["public", "graphql_public"]
+# P-API-SCHEMA-WIDE (#141, via #1299): `internal_ops` is the planted third schema — this list is
+# what PostgREST turns into its `db-schema` setting, which is the ONLY thing checkExposedSchemas
+# reads (it is not queryable from Postgres, hence SB-SCOPE-00 in local mode). `analytics_private`,
+# created by the same migration, is deliberately NOT here — it is the boundary negative.
+schemas = ["public", "graphql_public", "internal_ops"]
 # Extra schemas to add to the search_path of every request.
 extra_search_path = ["public", "extensions"]
 # The maximum number of rows returns from a view, table, or stored procedure. Limits payload size

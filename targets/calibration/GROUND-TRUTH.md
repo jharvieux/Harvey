@@ -2632,3 +2632,48 @@ that was scanned and missed. Without the control, "six measured gaps" is an unfa
 **If this row ever goes quiet, every React gap row is unproven and must be re-measured before it is
 believed.** The same reasoning is why `M1-EXT-00` (#1065) reports files LOADED against files PRESENT:
 a scan that silently shrinks looks exactly like a codebase that is clean.
+
+## Batch B24 (#1299, finishing #140/#141/#142) — connected-tier PostgREST / pg_graphql / Realtime
+
+Fixtures: `supabase/migrations/20260728000001_connected_postgrest_realtime.sql` plus `[api] schemas`
+in `supabase/config.toml`. Answer key: `src/scan/calibration/b24-connected-postgrest-realtime.entries.ts`.
+
+**These plants are invisible to the static gate BY CONSTRUCTION, and that is the correct result.**
+All three checks read a live database or the hosted PostgREST config, never committed SQL — two of
+them are the classes a local-mode scan cannot reach at all and now discloses as `SB-SCOPE-00`. Their
+corpus rows are `expectedTier: "connected"` (scored N/A). Do not read the zero as a miss.
+
+### B24 positives — the stack states a connected scan must flag
+
+| id | Plant | Detector | Expected |
+|---|---|---|---|
+| `P-API-SCHEMA-WIDE` | `internal_ops` is in `[api] schemas` (config.toml) and `internal_ops.job_queue` exists behind it | `checkExposedSchemas` | `SB-API-SCHEMA-internal_ops`, review, Medium |
+| `P-GRAPHQL-INTROSPECTION` | `create extension pg_graphql` + `graphql_public` already in the allow-list | `checkGraphqlIntrospection` | `SB-GRAPHQL-INTROSPECTION`, review, Medium |
+| `P-REALTIME-NO-AUTHZ` | `alter table realtime.messages disable row level security` | `checkRealtimeAuthorization` | `SB-REALTIME-NO-AUTHZ`, review, High |
+
+Each plant was MEASURED against a stock `supabase start` stack (CLI 2.102.0, 2026-07-28) before it
+was written — including the two that looked impossible: `pg_graphql` is available-but-not-installed
+by default so a migration can install it, and `postgres` is a member of `supabase_realtime_admin` so
+a migration can disable RLS on `realtime.messages`. psql transcript:
+`docs/runbooks/dry-run-calibration.md` §11.3.
+
+### B24 negative — benign lookalike (must NOT be flagged)
+
+| id | Plant | Why it must stay silent |
+|---|---|---|
+| `N-API-SCHEMA-INTERNAL` | `analytics_private.rollup_daily` — identical shape to `internal_ops.job_queue`, RLS on, tenant-scoped, and deliberately **absent** from `[api] schemas` | `checkExposedSchemas` reads PostgREST's allow-list, not `pg_namespace`. The discriminator is the config file, not the SQL. Left untiered on purpose so this one row is genuinely scored by the static gate. |
+
+### B24 scope control
+
+The migration yields zero static findings, which is also what an unread file yields. Readership was
+proven, not assumed: a temporary `create policy tmp_probe_using_true on public.notes for select
+using (true);` appended to it emitted `SB-RLS-POLICY-public.notes.tmp_probe_using_true` at line 65
+of that file, then was removed (MEASURED 2026-07-28).
+
+### B24 residual — not fixed here
+
+`supabase start` on this target aborts at `20260719000002_plpgsql_injection_definer.sql`
+(`public.nocode_tickets` does not exist), so this migration — like every one after `20260719000002` —
+has never been applied to a stack, and the B24 positives have no scored **live** run yet. Tracked as
+**#1424**. The same probe also showed the static tier cannot see `disable row level security` at all:
+**#1425**.
