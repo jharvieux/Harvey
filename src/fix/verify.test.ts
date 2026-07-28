@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeGreen, discoverVerifyCommands, runCommand, scrubSecrets, type CommandRun } from "./verify.js";
+import { computeGreen, detectorHalfClean, discoverVerifyCommands, runCommand, scrubSecrets, type CommandRun, type DetectorRun } from "./verify.js";
 
 const node = process.execPath;
 
@@ -92,5 +92,31 @@ describe("computeGreen", () => {
         clientChecks: [check({ exitCode: 1, skipped: "pre-existing-failure-on-baseline" }), check({ skipped: "needs-ci" })],
       }),
     ).toBe(true);
+  });
+
+  // #1272, the vacuous-truth defect. `[].every(...)` is true, so for as long as the only production
+  // assembler hardcoded `clientChecks: []` the client half of this decision silently PASSED — a fix
+  // that broke the client's own suite could be reported verified. Pinned here because the failure mode
+  // is invisible by construction: nothing about an empty array looks like a missing measurement.
+  it("is NOT green on an empty clientChecks — nothing ran, so nothing passed", () => {
+    expect(computeGreen({ detectorAfter: { detectorId: "d", fired: false, output: "" }, clientChecks: [] })).toBe(false);
+  });
+
+  it("the empty case is the ONLY thing separating it from the detector half — which is a named function", () => {
+    // Guards the split: a caller that legitimately scores only the detector half (runFixAcceptance
+    // over a single-file corpus) must say so by calling detectorHalfClean, not by passing [].
+    const clean: DetectorRun = { detectorId: "d", fired: false, output: "" };
+    expect(detectorHalfClean(clean)).toBe(true);
+    expect(computeGreen({ detectorAfter: clean, clientChecks: [] })).toBe(false);
+    expect(detectorHalfClean({ ...clean, notRun: "no resolver" })).toBe(false);
+    expect(detectorHalfClean({ ...clean, fired: true })).toBe(false);
+  });
+});
+
+describe("runCommand — the timeout bound", () => {
+  it("kills a command that overruns and reports the kill in its own output, never a silent 0", () => {
+    const slow = runCommand(`${node} -e "setTimeout(() => {}, 5000)"`, process.cwd(), 300);
+    expect(slow.exitCode).not.toBe(0);
+    expect(slow.outputTail).toContain("exceeded the client-check timeout");
   });
 });
