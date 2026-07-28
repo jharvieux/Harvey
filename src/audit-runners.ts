@@ -724,15 +724,17 @@ const M7_LIGHTHOUSE_NOT_RUN =
 // tests with a mocked ctx.exec, but the real `pnpm perf-scan <ref>` this probe shells out to has
 // never itself completed a token-authenticated fetch against a hosted project. #815 verified the
 // endpoint PATH (against the published OpenAPI spec) and that `parseAdvisorFindings()` parses a real
-// captured payload — but its own header says the raw `fetch()` in `fetchPerformanceAdvisors` "is
-// unexercised end-to-end" (`src/cli/perf-scan.ts`), and the one real connected engagement since
+// captured payload — but #815's own write-up says the raw `fetch()` in `fetchPerformanceAdvisors`
+// "is unexercised end-to-end" (`docs/m7-performance.md:63`; note `src/cli/perf-scan.ts`'s header
+// records only the verified half, "Verified live against real Supabase projects (#815)", so it is
+// the doc and not the CLI header that carries this bound), and the one real connected engagement since
 // (`docs/design/aop-audit-2026-07-18.md`) got its advisor data through the `get_advisors` MCP tool,
 // not through this CLI/probe path. It fails honestly today; that a success stays honest is still not
 // measured.
 //
 // REASON: the orchestrator's own `pnpm perf-scan <ref>` invocation has never completed a real token-authenticated fetch against a hosted Supabase project — only the URL path and the payload parser have been verified live (#815), and the one real connected engagement used the get_advisors MCP tool instead of this CLI path
 // KIND: empirical
-// PROVENANCE: TRIED 2026-07-28 — attempted a live connected run this session (`supabase projects list`) and got "Access token not provided" (no SUPABASE_ACCESS_TOKEN available here); read src/cli/perf-scan.ts's header and docs/m7-performance.md:57 (#815 verified only the URL path and parseAdvisorFindings(), explicitly noting the fetch() itself is unexercised end-to-end) and docs/design/aop-audit-2026-07-18.md (the one real connected engagement's advisor data came from the MCP get_advisors tool, not this CLI)
+// PROVENANCE: TRIED 2026-07-28 — attempted a live connected run this session (`supabase projects list`) and got "Access token not provided" (no SUPABASE_ACCESS_TOKEN available here); read docs/m7-performance.md:57-64, whose #815 bullet verifies only the URL path and parseAdvisorFindings() and states at :63 that the fetch() itself "is unexercised end-to-end" (src/cli/perf-scan.ts's own header records only the verified half — "Verified live against real Supabase projects (#815)" — so it is not the source of this bound), and docs/design/aop-audit-2026-07-18.md (the one real connected engagement's advisor data came from the MCP get_advisors tool, not this CLI)
 // FALSIFIER: SUPABASE_ACCESS_TOKEN=<supabase-pat> pnpm perf-scan <supabase-project-ref> --out /tmp/harvey-m7-live-falsifier.json
 // FALSIFIER-TIER: supabase-connected
 // TOUCHES: src/audit-runners.ts, src/cli/perf-scan.ts

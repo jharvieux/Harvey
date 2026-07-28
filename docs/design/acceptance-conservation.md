@@ -103,8 +103,8 @@ what remains: a bound stated as an assertion closes the file, so an untested one
   <!--
   REASON: the pnpm-backtick narrowing in citedScripts skips the truth check on any unbackticked pnpm reference, which would under-serve a real case if a genuine `pnpm <script>` citation ever went unbackticked in practice
   KIND: empirical
-  PROVENANCE: MEASURED 2026-07-28 — `gh pr list --repo jharvieux/Harvey --state merged --limit 200 --json number,body | pnpm exec tsx src/cli/measure-pnpm-evidence.ts` over 200 merged PRs / 60 `met` lines / 19 pnpm mentions found 0 unbackticked-but-real script references (up from the original 3-reference/2-PR sample)
-  FALSIFIER: gh pr list --repo jharvieux/Harvey --state merged --limit 200 --json number,body | pnpm exec tsx src/cli/measure-pnpm-evidence.ts
+  PROVENANCE: MEASURED 2026-07-28 — the falsifier below, run as committed, found 0 unbackticked-but-real script references and exited 1, twice on a growing live population the same day (200 merged PRs / 60 `met` lines / 19 pnpm mentions, then 200 / 75 / 22 on re-run; up from the original 3-reference/2-PR sample). Exercised in all three directions: exit 0 against a seeded population carrying an unbackticked `pnpm verify` citation (blocker gone), exit 1 as committed (blocker holds), exit 127 when `gh` cannot answer or stdin is empty/garbled/an empty array (cannot run) — it does NOT exit 1 on a failed lookup, which `revalidateReasons` would read as "the blocker still holds"
+  FALSIFIER: gh pr list --repo jharvieux/Harvey --state merged --limit 200 --json number,body > /tmp/harvey-pnpm-evidence.json 2>/dev/null || exit 127; pnpm exec tsx src/cli/measure-pnpm-evidence.ts < /tmp/harvey-pnpm-evidence.json
   TOUCHES: src/acceptance-conservation.ts, src/cli/measure-pnpm-evidence.ts
   -->
 
@@ -318,9 +318,20 @@ has watched exit 0 is indistinguishable from one that cannot. **The remaining bo
 (the refuse-on-plain-prose asymmetry, the shallowest-indent convention, the section-boundary rule,
 the unresolvable-closing-reference disclosure, negation-blindness) — re-testing a product ruling by
 command is a category error and the reason gate refuses it, so each is instead a `KIND: decisional`
-block, inline above, naming its `OWNER` (operator) and the `DECISION` record. `pnpm exec tsx
-src/cli/validate-reasons.ts --census` reports no claim-shaped line in this file outside a block as of
-#1349.
+block, inline above, naming its `OWNER` (operator) and the `DECISION` record.
+
+`pnpm exec tsx src/cli/validate-reasons.ts --census` reports **8** claim-shaped lines in this file
+outside a block (measured 2026-07-28; an earlier draft of this paragraph said none, which the tool
+contradicts). Each is named here, because a count nobody has triaged is the shape this census exists
+to end. `:57` and `:240` are struck-through text the #1320 audit FALSIFIED, kept visible beside its
+replacement rather than deleted. `:111` and `:201` are prose lead-ins of bounds whose registry blocks
+carry the real claim — `:111`'s is the block immediately below it, `:201`'s sits beside
+`checkRemainder` in `src/acceptance-conservation.ts`. `:43` is motivation in **The mechanism**,
+describing the defect class this gate exists for rather than a bound of it. `:317` sits in the
+paragraph directly above, on the falsifier-exercising rule. `:439` and `:443` state the
+`acceptance-close.yml` trigger bound, which is discharged by running that workflow once and recording
+the run — see **Wiring, and the bound** — so it carries a dispatch command rather than a
+`FALSIFIER:`.
 
 Exit codes are three-valued on purpose: `0` pass or green no-op, `1` gate failed, `2` gate could not
 run. A control that accepted any non-zero code would go green on exit 2 — the #1246 shape, where five
