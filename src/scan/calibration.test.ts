@@ -172,6 +172,52 @@ describe("scoreEntry", () => {
     expect(row.pass).toBe(false);
     expect(row.caughtTier).toBeUndefined();
   });
+
+  // #1190/#1194's own answer key had the self-match hole: a finding's id derives from its FILE
+  // PATH, so a match keyword that is a substring of the entry's own location makes ANY finding on
+  // that fixture satisfy the entry. Scored against the REAL corpus row, not a synthetic one, so a
+  // future edit that re-widens the phrase fails here rather than going quiet in the gate.
+  const clientTenant = () => {
+    const e = CORPUS.find((x) => x.id === "P-OWASP-MT-CLIENT-TENANT");
+    if (!e) throw new Error("P-OWASP-MT-CLIENT-TENANT missing from the corpus");
+    return e;
+  };
+  const onClientTenantFixture = (partial: Partial<Finding>) =>
+    finding({ location: "targets/calibration/src/owasp-mt/client-supplied-tenant.ts:42", precisionTier: "high", ...partial });
+
+  it("is not satisfied by an unrelated finding that merely lands on the client-supplied-tenant fixture", () => {
+    const row = scoreEntry(clientTenant(), [
+      onClientTenantFixture({ id: "SEC-XSS-src-owasp-mt-client-supplied-tenant-ts-42", title: "Reflected XSS", taxonomy: "Cross-site scripting", evidence: "res.send(`<p>${q}</p>`)" }),
+    ]);
+    expect(row.pass).toBe(false);
+    expect(row.caughtTier).toBeUndefined();
+  });
+
+  it("is not satisfied by its Supabase sibling's finding, which shares the fixture and the taxonomy", () => {
+    // P-OWASP-MT-CLIENT-TENANT-SUPABASE is a SEPARATE row for the .eq() builder sink. If this row
+    // accepted that finding, the Prisma/Drizzle object-key detection could go silent with the gate
+    // green — one probe's finding standing in for another's (#1062).
+    const row = scoreEntry(clientTenant(), [
+      onClientTenantFixture({
+        id: "AUTH-client-supplied-tenant-tenant_id-src-owasp-mt-client-supplied-tenant-ts-1088",
+        taxonomy: "Object-level authorization gap: tenant predicate populated from the request",
+        evidence: 'Heuristic "client-supplied-tenant": `.eq("tenant_id", …)` scopes on `tenant_id`, and that value traces to `req.json()`.',
+      }),
+    ]);
+    expect(row.pass).toBe(false);
+  });
+
+  it("still catches the Prisma object-key finding it exists to score", () => {
+    const row = scoreEntry(clientTenant(), [
+      onClientTenantFixture({
+        id: "AUTH-client-supplied-tenant-tenantId-src-owasp-mt-client-supplied-tenant-ts-553",
+        taxonomy: "Object-level authorization gap: tenant predicate populated from the request",
+        evidence: 'Heuristic "client-supplied-tenant": `prisma.invoice.findMany` scopes on `tenantId`, and that value traces to `req.json()`.',
+      }),
+    ]);
+    expect(row.pass).toBe(true);
+    expect(row.caughtTier).toBe("high");
+  });
 });
 
 describe("Batch B1 secrets corpus (recorded gitleaks output → tier mapping)", () => {
