@@ -14,7 +14,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { arg, assertKnownFlags } from "./args.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, type MatrixRow } from "../scan/calibration.js";
+import { AUDIT_MODULES, buildCoverageMatrix, CORPUS, formatSelfMatchingKeys, mechanicalCorpus, MIN_NEGATIVES_PER_MODULE, MIN_POSITIVES_PER_MODULE, moduleCensus, parityVerdict, scoreEntry, selfMatchingMatchKeys, validateParityExemptions, type MatrixRow } from "../scan/calibration.js";
 import { formatMetrics } from "../scan/detection-metrics.js";
 import { measureHeuristicPrecision } from "../scan/heuristic-precision.js";
 import { SEVERITIES, type Finding, type Severity } from "../findings.js";
@@ -149,7 +149,19 @@ for (const c of census) {
   console.log(`  ${c.module.padEnd(4)} positives=${String(c.positivesStatic).padEnd(3)}${connected.padEnd(14)} negatives=${String(c.negatives).padEnd(3)}  ${where}${flag}`);
 }
 console.log(`  parity minimum: ${MIN_POSITIVES_PER_MODULE} positives + ${MIN_NEGATIVES_PER_MODULE} boundary negative per module, over all ${AUDIT_MODULES.length} modules (#427/#1314) — ${parityThin.length ? `THIN: ${parityThin.map((c) => `${c.module} (${c.missing})`).join(", ")}` : "every non-exempt module meets it"}`);
-for (const e of parity.exempt) console.log(`  EXEMPT ${e.module}: ${e.reason}`);
+// #1454: an exemption renders with its KIND and PROVENANCE, never as a bare sentence. All three
+// possible provenances used to print identically — a measured technical fact, an operator ruling,
+// and one executor's untested guess — and the operator read a product decision they had never made
+// off that line. A decisional row shows WHO rules and WHERE they were asked; an empirical row shows
+// the command that would falsify it, which `pnpm validate-reasons --revalidate` re-runs.
+for (const e of parity.exempt) {
+  const r = e.exemption.reason;
+  console.log(`  EXEMPT ${e.module} [${r.kind.toUpperCase()}] — ${r.claim}`);
+  console.log(`    PROVENANCE: ${r.provenance}`);
+  console.log(`    ${r.kind === "empirical" ? `FALSIFIER (exits 0 when this is no longer true): ${r.falsifier}` : `RULED BY: ${r.owner} — ${r.decision}`}`);
+  console.log(`    SUBSTITUTE GATE: ${e.exemption.substituteGate}`);
+}
+const exemptionErrors = validateParityExemptions(undefined, (p) => existsSync(join(repoRoot, p)));
 if (parity.stale.length) console.log(`  STALE EXEMPTION: ${parity.stale.join(", ")} now meet(s) the minimum on real fixtures — delete the PARITY_EXEMPTIONS row so the corpus, not the substitute gate, is what the module stands on.`);
 // #881: fixture counts are not performance. Name the modules that actually have a scored
 // precision/recall metric, so the M1 metric block below cannot be read as a suite-wide figure.
@@ -285,7 +297,7 @@ const unpaired = pairings.filter((p) => p.unpaired);
 console.log(`\nRULE ↔ CORPUS PAIRING (#1301), scored against this run: ${pairings.length - unpaired.length}/${pairings.length} harvey-* rules have a positive they caught and a benign twin they stayed silent on`);
 for (const p of unpaired) console.log(`  UNPAIRED  ${p.rule} — ${p.unpaired}`);
 
-const gatePass = unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok;
+const gatePass = exemptionErrors.length === 0 && unpaired.length === 0 && parityControl.ok && parity.stale.length === 0 && selfMatching.length === 0 && negFps.length === 0 && negReviewDrift.length === 0 && highMisses.length === 0 && noRuleBroken.length === 0 && gitHistoryGate.pass && parityThin.length === 0 && heuristic.ok && severityMismatches.length === 0 && severityControl.ok && reviewRatchetControl.ok;
 if (!gatePass) {
   if (unpaired.length) console.log(`\nGATE FAIL — unvalidated rule (#1301): ${unpaired.map((p) => `${p.rule} (${p.unpaired})`).join(", ")}. A rule with no corpus pair can enter a client's free count and grade with no evidence it works.`);
   if (selfMatching.length) console.log(`\nGATE FAIL — corpus self-match (#1355): ${selfMatching.map((r) => r.id).join(", ")} — a key that is a substring of its own location scores every finding on that fixture`);
@@ -297,6 +309,7 @@ if (!gatePass) {
   if (!gitHistoryGate.pass) console.log("GATE FAIL — git-history secret gate (#129) did not pass, see detail above");
   if (parityThin.length) console.log(`GATE FAIL — parity minimum (#427/#1314): ${parityThin.map((c) => `${c.module} has ${c.missing}`).join(", ")}. Add fixtures, or add a PARITY_EXEMPTIONS row naming the gate that covers the module instead.`);
   if (parity.stale.length) console.log(`GATE FAIL — stale parity exemption (#1314): ${parity.stale.join(", ")} now meet the minimum on real fixtures; the exemption is a claim that they cannot, and it is no longer true`);
+  for (const e of exemptionErrors) console.log(`GATE FAIL — malformed parity exemption (#1454) ${e.module}:\n${e.errors.map((x) => `      • ${x}`).join("\n")}`);
   if (!parityControl.ok) console.log(`GATE FAIL — the #1314 parity negative control did not fire: ${parityControl.detail} — a module's fixtures could be deleted without the gate noticing`);
   if (severityMismatches.length) console.log(`GATE FAIL — delivered severity != answer key (#1157): ${severityMismatches.map((r) => `${r.id} (expected ${r.expectedSeverity}, got ${r.deliveredSeverities?.join("/") || "none"})`).join(", ")}`);
   if (!reviewRatchetControl.ok) console.log(`GATE FAIL — the #1344 review-tier ratchet did not fire on its negative control: ${reviewRatchetControl.detail} — a widened rule could light up a planted negative unseen again`);

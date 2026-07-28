@@ -114,6 +114,7 @@ export const NOT_SCORED: readonly { readonly id: string; readonly why: string }[
   { id: "validate-disclosure-venue", why: "structural — checks a rule's recorded bound reaches its own message" },
   { id: "validate-findings", why: "schema validation of a findings file" },
   { id: "validate-reasons", why: "structural — checks recorded reasons are well-formed and re-tests their falsifiers" },
+  { id: "validate-render-fidelity", why: "structural — checks a finding's own words survive the render seam into report.html (#1435); the standing gate is src/render-fidelity.test.ts inside `pnpm verify`, this CLI points the same check at a real engagement deliverable" },
   { id: "validate-scored-gates", why: "this gate — checks the scored gates above still have a cadence" },
   { id: "validate-test-only-exports", why: "ratchet over exports whose only consumer is their own test" },
 ];
